@@ -12,8 +12,8 @@ use crate::theme;
 use crate::wheel_passthrough::WheelPassthrough;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
-    button, checkbox, column, container, markdown, pick_list, progress_bar, radio, row, rule,
-    scrollable, slider, space, stack, svg, text, text_editor, text_input, toggler, tooltip,
+    button, checkbox, column, container, markdown, mouse_area, pick_list, progress_bar, radio, row,
+    rule, scrollable, slider, space, stack, svg, text, text_editor, text_input, toggler, tooltip,
 };
 use iced::window;
 use iced::{Center, Element, Fill, FillPortion, Pixels, Subscription, Task, Theme};
@@ -81,6 +81,34 @@ const DIFF_EMPTY_BODY_HEIGHT: f32 = 40.0;
 /// 合并后 diff 行号使用的共享 gutter 宽度。
 const DIFF_GUTTER_WIDTH: f32 = 54.0;
 
+/// Shared arrow column width used by the hovered-line indicator in the diff gutter.
+/// Diff gutter 中悬停行指示箭头使用的共享列宽。
+const DIFF_GUTTER_ARROW_WIDTH: f32 = 12.0;
+
+/// Shared horizontal padding used inside diff code editor containers.
+/// Diff 代码编辑器容器内部使用的共享水平内边距。
+const DIFF_CODE_EDITOR_HORIZONTAL_PADDING: u16 = 8;
+
+/// Shared glyph-width ratio used to estimate wrapped code columns for monospace diff rendering.
+/// 用于估算等宽 Diff 渲染折行列数的共享字宽比例。
+const DIFF_WRAP_GLYPH_WIDTH_RATIO: f32 = 0.56;
+
+/// Shared minimal wrapped column count used to avoid over-fragmenting narrow diff panes.
+/// 用于避免窄 Diff 面板过度碎裂的共享最小折行列数。
+const DIFF_MIN_WRAP_COLUMNS: usize = 24;
+
+/// Shared horizontal frame padding reserved by top-level windows before pane content begins.
+/// 顶层窗口在面板内容开始前预留的共享水平框架内边距。
+const WINDOW_FRAME_HORIZONTAL_PADDING: f32 = 32.0;
+
+/// Shared horizontal padding consumed by the diff file code container before hunk blocks begin.
+/// Diff 文件代码容器在 hunk 区块开始前消耗的共享水平内边距。
+const DIFF_FILE_CODE_HORIZONTAL_PADDING: f32 = 20.0;
+
+/// Shared extra width budget reserved for borders and scrollbars when estimating diff editor columns.
+/// 估算 Diff 编辑器列数时为边框和滚动条预留的共享额外宽度预算。
+const DIFF_WRAP_RESERVED_WIDTH: f32 = 28.0;
+
 /// Launches the GUI application using the official iced crate.
 /// 使用官方 iced crate 启动图形界面应用。
 pub fn run() -> iced::Result {
@@ -95,6 +123,9 @@ pub fn run() -> iced::Result {
     .default_font(theme::ui_font())
     .font(theme::ui_font_bytes())
     .font(theme::code_font_bytes())
+    .font(theme::code_italic_font_bytes())
+    .font(theme::cjk_code_font_bytes())
+    .font(theme::cjk_code_italic_font_bytes())
     .run()
 }
 
@@ -108,6 +139,12 @@ pub struct VulcanWorkbench {
     /// Dedicated diff preview window identifier.
     /// 独立 Diff 预览窗口标识。
     diff_window_id: Option<window::Id>,
+    /// Current size of the main workbench window.
+    /// 当前主工作台窗口尺寸。
+    main_window_size: iced::Size,
+    /// Current size of the dedicated diff preview window.
+    /// 当前独立 Diff 预览窗口尺寸。
+    diff_window_size: iced::Size,
     /// Pane grid state describing the high-level application layout.
     /// 描述应用高层布局的分栏网格状态。
     panes: pane_grid::State<PaneKind>,
@@ -135,6 +172,9 @@ pub struct VulcanWorkbench {
     /// Read-only text editor buffers used by diff file editors.
     /// Diff 文件编辑器使用的只读文本编辑器缓冲区。
     diff_code_buffers: BTreeMap<String, text_editor::Content>,
+    /// Currently hovered visual line inside one diff hunk body.
+    /// 当前在某个 diff hunk 主体中悬停的可视行。
+    hovered_diff_line: Option<HoveredDiffLine>,
     /// Markdown content rendered in the inspector guide.
     /// 渲染在检查面板指引中的 Markdown 内容。
     quick_guide: markdown::Content,
@@ -185,6 +225,18 @@ pub struct VulcanWorkbench {
     status_message: String,
 }
 
+/// Hover state describing the active visual line in one diff hunk.
+/// 描述某个 diff hunk 中当前激活可视行的悬停状态。
+#[derive(Debug, Clone)]
+struct HoveredDiffLine {
+    /// Stable hunk buffer key owning the hovered visual line.
+    /// 拥有当前悬停可视行的稳定 hunk 缓冲区键。
+    file_key: String,
+    /// Zero-based visual line index inside the current diff hunk body.
+    /// 当前 diff hunk 主体内从零开始的可视行索引。
+    line_index: usize,
+}
+
 /// Messages emitted by iced widgets in the first prototype.
 /// 首版原型中由 iced 控件发出的消息集合。
 #[derive(Debug, Clone)]
@@ -201,6 +253,9 @@ enum Message {
     /// A window was closed by the user or the runtime.
     /// 某个窗口已被用户或运行时关闭。
     WindowClosed(window::Id),
+    /// A window was resized by the runtime.
+    /// 某个窗口的尺寸已被运行时更新。
+    WindowResized(window::Id, iced::Size),
     /// Workspace path changed from the text input.
     /// 工作区路径在文本输入框中发生变化。
     WorkspacePathChanged(String),
@@ -252,6 +307,12 @@ enum Message {
     /// Applies a read-only text editor action to one diff file editor.
     /// 向某个 diff 文件编辑器应用只读文本编辑器动作。
     DiffCodeAction(String, text_editor::Action),
+    /// Updates the currently hovered visual line inside one diff hunk body.
+    /// 更新某个 diff hunk 主体内当前悬停的可视行。
+    DiffCodeHoverMoved(String, usize),
+    /// Clears the hovered visual line when the cursor leaves one diff hunk body.
+    /// 当光标离开某个 diff hunk 主体时清除悬停可视行。
+    DiffCodeHoverExited(String),
     /// Primary execution action requested.
     /// 请求执行主任务动作。
     StartRun,
@@ -312,6 +373,8 @@ impl VulcanWorkbench {
             Self {
                 main_window_id: Some(main_window_id),
                 diff_window_id: None,
+                main_window_size: main_window_settings().size,
+                diff_window_size: diff_window_settings().size,
                 panes,
                 focus,
                 workspace_path: String::from("D:/openvulcan/vulcan-code"),
@@ -321,6 +384,7 @@ impl VulcanWorkbench {
                 diff_panel: placeholder_diff_panel,
                 collapsed_diff_files: BTreeSet::new(),
                 diff_code_buffers: BTreeMap::new(),
+                hovered_diff_line: None,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
                 sessions: SessionSummary::seeded(),
                 selected_session: 1,
@@ -352,6 +416,7 @@ impl VulcanWorkbench {
             }
             Message::DiffWindowOpened(window_id) => {
                 self.diff_window_id = Some(window_id);
+                self.rebuild_diff_code_buffers_for_current_wrap();
                 self.status_message = String::from("Diff 预览窗口已打开，可独立调整面板结构。");
                 Task::none()
             }
@@ -378,11 +443,31 @@ impl VulcanWorkbench {
                     self.status_message = String::from("Diff 预览窗口已关闭。");
                 }
 
+                if self.main_window_id.is_some() {
+                    self.rebuild_diff_code_buffers_for_current_wrap();
+                }
+
                 if self.main_window_id.is_none() && self.diff_window_id.is_none() {
                     iced::exit()
                 } else {
                     Task::none()
                 }
+            }
+            Message::WindowResized(window_id, size) => {
+                if self.main_window_id == Some(window_id) {
+                    self.main_window_size = size;
+                }
+
+                if self.diff_window_id == Some(window_id) {
+                    self.diff_window_size = size;
+                }
+
+                if self.main_window_id == Some(window_id) || self.diff_window_id == Some(window_id)
+                {
+                    self.rebuild_diff_code_buffers_for_current_wrap();
+                }
+
+                Task::none()
             }
             Message::WorkspacePathChanged(value) => {
                 self.workspace_path = value;
@@ -483,7 +568,8 @@ impl VulcanWorkbench {
 
                 self.diff_summary = diff_preview.summary.clone();
                 self.diff_panel = diff_preview.panel.clone();
-                self.diff_code_buffers = rebuild_diff_code_buffers(&self.diff_panel);
+                self.rebuild_diff_code_buffers_for_current_wrap();
+                self.hovered_diff_line = None;
                 let available_diff_file_keys = self
                     .diff_panel
                     .files
@@ -514,8 +600,9 @@ impl VulcanWorkbench {
                 if self.collapsed_diff_files.contains(&file_key) {
                     self.collapsed_diff_files.remove(&file_key);
                 } else {
-                    self.collapsed_diff_files.insert(file_key);
+                    self.collapsed_diff_files.insert(file_key.clone());
                 }
+                self.hovered_diff_line = None;
 
                 Task::none()
             }
@@ -529,7 +616,23 @@ impl VulcanWorkbench {
                         content.perform(action);
                     }
                 }
-
+                Task::none()
+            }
+            Message::DiffCodeHoverMoved(file_key, line_index) => {
+                self.hovered_diff_line = Some(HoveredDiffLine {
+                    file_key,
+                    line_index,
+                });
+                Task::none()
+            }
+            Message::DiffCodeHoverExited(file_key) => {
+                if self
+                    .hovered_diff_line
+                    .as_ref()
+                    .is_some_and(|hovered| hovered.file_key == file_key)
+                {
+                    self.hovered_diff_line = None;
+                }
                 Task::none()
             }
             Message::StartRun => {
@@ -577,6 +680,7 @@ impl VulcanWorkbench {
             }
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
+                self.rebuild_diff_code_buffers_for_current_wrap();
                 Task::none()
             }
             Message::GuideLinkClicked(uri) => {
@@ -718,7 +822,11 @@ impl VulcanWorkbench {
     /// Subscribes to native window close events so multi-window state stays consistent.
     /// 订阅原生窗口关闭事件，以保持多窗口状态一致。
     fn subscription(&self) -> Subscription<Message> {
-        window::close_events().map(Message::WindowClosed)
+        Subscription::batch([
+            window::close_events().map(Message::WindowClosed),
+            window::resize_events()
+                .map(|(window_id, size)| Message::WindowResized(window_id, size)),
+        ])
     }
 
     /// Renders the branded header with global workbench actions.
@@ -919,8 +1027,15 @@ impl VulcanWorkbench {
                     .padding(14)
                     .size(CODE_EDITOR_TEXT_SIZE)
                     .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .wrapping(iced::advanced::text::Wrapping::None)
                     .font(theme::code_font())
-                    .highlight("rust", theme::code_theme(&self.app_theme))
+                    .highlight_with::<iced::highlighter::Highlighter>(
+                        iced::highlighter::Settings {
+                            theme: theme::code_theme(&self.app_theme),
+                            token: String::from("rust"),
+                        },
+                        theme::code_highlight_format,
+                    )
                     .on_action(Message::EditorActionPerformed),
             ]
             .spacing(12)
@@ -1111,11 +1226,9 @@ impl VulcanWorkbench {
     /// Renders one file-level diff body using the same editor foundation as the home page.
     /// 使用与首页相同的编辑器基础渲染文件级 diff 主体。
     fn view_diff_file_code<'a>(&'a self, file: &'a DiffFile) -> Element<'a, Message> {
-        // Flatten all visible diff lines into one editor buffer so selection and cursor movement stay continuous.
-        // 将所有可见 diff 行拍平成一个编辑器缓冲区，保证选区与光标移动保持连续。
-        let line_count = diff_file_line_count(file);
-
-        if line_count == 0 {
+        // Render a compact fallback when the file has no visible hunk payload.
+        // 当文件没有可见 hunk 载荷时渲染紧凑回退提示。
+        if file.hunks.is_empty() {
             return container(text("当前文件暂无可展示的文本 Diff。").size(13))
                 .padding([10, 12])
                 .height(DIFF_EMPTY_BODY_HEIGHT)
@@ -1123,27 +1236,98 @@ impl VulcanWorkbench {
                 .into();
         }
 
-        let buffer_key = file.key();
+        // Split the file into hunk cards and omission cards so discontinuous change regions are visually stable.
+        // 将文件拆成 hunk 卡片与省略卡片，使不连续的变更区在视觉上更稳定。
+        let file_key = file.key();
+        let mut hunk_flow = column![].spacing(1);
+
+        for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+            if hunk_index > 0 {
+                let omitted_lines = omitted_context_line_count(&file.hunks[hunk_index - 1], hunk);
+                hunk_flow = hunk_flow.push(self.view_diff_gap_block(omitted_lines));
+            }
+
+            hunk_flow =
+                hunk_flow.push(self.view_diff_hunk_block(file, &file_key, hunk_index, hunk));
+        }
+
+        container(hunk_flow).padding([8, 10]).width(Fill).into()
+    }
+
+    /// Renders one omission block inserted between separated hunk editors.
+    /// 渲染插入在分离 hunk 编辑器之间的省略块。
+    fn view_diff_gap_block(&self, omitted_lines: usize) -> Element<'_, Message> {
+        let label = if omitted_lines > 0 {
+            format!("… 省略 {omitted_lines} 行未变化的内容")
+        } else {
+            String::from("… 分隔下一个变更片区")
+        };
+
+        container(
+            row![
+                space().width(diff_gutter_block_width()),
+                container(text(label).size(12))
+                    .padding([2, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
+                    .width(Fill),
+            ]
+            .spacing(0)
+            .width(Fill),
+        )
+        .width(Fill)
+        .style(style::diff_block_style)
+        .into()
+    }
+
+    /// Renders one hunk-level diff block with its own editor and gutter.
+    /// 渲染带有独立编辑器与 gutter 的单个 hunk 级 diff 区块。
+    fn view_diff_hunk_block<'a>(
+        &'a self,
+        file: &'a DiffFile,
+        file_key: &str,
+        hunk_index: usize,
+        hunk: &'a crate::diff::DiffHunk,
+    ) -> Element<'a, Message> {
+        let wrap_columns = self.current_diff_wrap_columns();
+        let wrapped_hunk = code_view::wrap_diff_hunk(hunk, wrap_columns);
+        let line_count = wrapped_hunk.visual_lines.len();
+
+        if line_count == 0 {
+            return space().height(0).into();
+        }
+
+        let buffer_key = diff_hunk_buffer_key(file_key, hunk_index);
         let content = self
             .diff_code_buffers
             .get(&buffer_key)
-            .expect("Diff code buffer must exist before rendering");
+            .expect("Diff hunk buffer must exist before rendering");
         let syntax_token = code_view::syntax_token(&file.path);
+        let action_buffer_key = buffer_key.clone();
+        let hover_buffer_key = buffer_key.clone();
         let editor_font = theme::code_font();
         let block_height = line_count as f32 * CODE_EDITOR_LINE_HEIGHT;
-        let gutter_block_width = DIFF_GUTTER_WIDTH + 5.0;
+        let gutter_block_width = diff_gutter_block_width();
         let mut line_bars = column![].spacing(0);
+        let mut line_arrow_column = column![].spacing(0);
         let mut line_number_backgrounds = column![].spacing(0);
         let mut line_number_column = column![].spacing(0);
         let mut current_bar_kind = None;
         let mut current_bar_count = 0usize;
         let mut current_gutter_kind = None;
         let mut current_gutter_count = 0usize;
-
-        for line in file.hunks.iter().flat_map(|hunk| hunk.lines.iter()) {
-            // Merge consecutive semantic rows into one bar block so the left marker remains continuous.
-            // 将连续的同类语义行合并成一个色块，保证左侧标记保持连体效果。
-            if current_bar_kind == Some(line.kind) {
+        let hover_anchor_indices = wrapped_hunk
+            .visual_lines
+            .iter()
+            .map(|line| line.anchor_index)
+            .collect::<Vec<_>>();
+        let hovered_line_index = self.hovered_diff_line.as_ref().and_then(|hovered| {
+            if hovered.file_key == buffer_key {
+                Some(hovered.line_index)
+            } else {
+                None
+            }
+        });
+        for (visual_line_index, visual_line) in wrapped_hunk.visual_lines.iter().enumerate() {
+            if current_bar_kind == Some(visual_line.kind) {
                 current_bar_count += 1;
             } else {
                 if let Some(previous_kind) = current_bar_kind {
@@ -1157,13 +1341,11 @@ impl VulcanWorkbench {
                     );
                 }
 
-                current_bar_kind = Some(line.kind);
+                current_bar_kind = Some(visual_line.kind);
                 current_bar_count = 1;
             }
 
-            // Merge consecutive semantic rows into one gutter block so the line-number area keeps its soft state color.
-            // 将连续的同类语义行合并成一个 gutter 区块，保证行号区域保持柔和的状态底色。
-            if current_gutter_kind == Some(line.kind) {
+            if current_gutter_kind == Some(visual_line.kind) {
                 current_gutter_count += 1;
             } else {
                 if let Some(previous_kind) = current_gutter_kind {
@@ -1179,19 +1361,39 @@ impl VulcanWorkbench {
                     );
                 }
 
-                current_gutter_kind = Some(line.kind);
+                current_gutter_kind = Some(visual_line.kind);
                 current_gutter_count = 1;
             }
 
-            // Render merged line numbers with per-line semantic colors while keeping gutter width compact.
-            // 渲染带语义颜色的合并行号，并保持 gutter 宽度紧凑。
+            line_arrow_column = line_arrow_column.push(
+                container(
+                    text(
+                        if hovered_line_index == Some(visual_line.anchor_index)
+                            && visual_line.anchor_index == visual_line_index
+                        {
+                            "▶"
+                        } else {
+                            ""
+                        },
+                    )
+                    .size(10)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .color(iced::color!(0x24292F)),
+                )
+                .center_x(DIFF_GUTTER_ARROW_WIDTH)
+                .height(CODE_EDITOR_LINE_HEIGHT),
+            );
+
             line_number_column = line_number_column.push(
                 container(
-                    text(format_diff_line_number(line.old_number, line.new_number))
-                        .size(CODE_EDITOR_TEXT_SIZE)
-                        .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
-                        .font(editor_font)
-                        .color(style::diff_line_number_color(line.kind)),
+                    text(format_diff_line_number(
+                        visual_line.old_number,
+                        visual_line.new_number,
+                    ))
+                    .size(CODE_EDITOR_TEXT_SIZE)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .font(editor_font)
+                    .color(style::diff_line_number_color(visual_line.kind)),
                 )
                 .width(DIFF_GUTTER_WIDTH)
                 .height(CODE_EDITOR_LINE_HEIGHT)
@@ -1202,8 +1404,6 @@ impl VulcanWorkbench {
         if let Some(previous_kind) = current_bar_kind {
             let run_height = current_bar_count as f32 * CODE_EDITOR_LINE_HEIGHT;
 
-            // Flush the trailing bar run so the final semantic block also stays visually continuous.
-            // 刷出最后一个色块区段，保证末尾语义区块同样保持视觉连贯。
             line_bars = line_bars.push(
                 container(space())
                     .width(3)
@@ -1215,8 +1415,6 @@ impl VulcanWorkbench {
         if let Some(previous_kind) = current_gutter_kind {
             let run_height = current_gutter_count as f32 * CODE_EDITOR_LINE_HEIGHT;
 
-            // Flush the trailing gutter run so the final line-number block also keeps its semantic background.
-            // 刷出最后一个 gutter 区段，保证最后的行号块同样保留语义背景色。
             line_number_backgrounds = line_number_backgrounds.push(
                 container(space())
                     .width(gutter_block_width)
@@ -1225,23 +1423,29 @@ impl VulcanWorkbench {
             );
         }
 
-        // Reuse the home-page text editor foundation so code style, selection, and syntax highlighting stay consistent.
-        // 复用首页文本编辑器基础能力，保证代码样式、选区与语法高亮保持一致。
         let file_editor = WheelPassthrough::new(
             text_editor(content)
                 .size(CODE_EDITOR_TEXT_SIZE)
                 .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                .wrapping(iced::advanced::text::Wrapping::None)
                 .min_height(block_height)
                 .max_height(block_height)
                 .height(block_height)
                 .padding(0)
                 .font(editor_font)
-                .highlight(&syntax_token, theme::code_theme(&self.app_theme))
-                .on_action(move |action| Message::DiffCodeAction(buffer_key.clone(), action)),
+                .style(style::diff_code_editor_style)
+                .highlight_with::<iced::highlighter::Highlighter>(
+                    iced::highlighter::Settings {
+                        theme: theme::code_theme(&self.app_theme),
+                        token: syntax_token.clone(),
+                    },
+                    theme::code_highlight_format,
+                )
+                .on_action(move |action| {
+                    Message::DiffCodeAction(action_buffer_key.clone(), action)
+                }),
         );
 
-        // Stack one continuous gutter background under the bar, line numbers, and separator.
-        // 将一整块连续 gutter 背景叠在色条、行号与分隔线下方。
         let gutter_layer = container(stack([
             container(line_number_backgrounds)
                 .width(gutter_block_width)
@@ -1250,6 +1454,7 @@ impl VulcanWorkbench {
             row![
                 line_bars,
                 line_number_column,
+                line_arrow_column,
                 container(space())
                     .width(2)
                     .height(Fill)
@@ -1264,17 +1469,38 @@ impl VulcanWorkbench {
         .height(block_height);
 
         container(
-            row![
-                gutter_layer,
-                container(file_editor)
-                    .padding([0, 8])
-                    .height(block_height)
-                    .width(Fill),
-            ]
-            .spacing(0)
-            .height(block_height)
-            .width(Fill),
+            mouse_area(
+                row![
+                    gutter_layer,
+                    container(file_editor)
+                        .padding([0, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
+                        .height(block_height)
+                        .width(Fill),
+                ]
+                .spacing(0)
+                .height(block_height)
+                .width(Fill),
+            )
+            .on_move({
+                let buffer_key = hover_buffer_key.clone();
+                let hover_anchor_indices = hover_anchor_indices.clone();
+
+                move |position| {
+                    let raw_line_index =
+                        hovered_diff_line_index_from_cursor(position.y, hover_anchor_indices.len());
+                    let anchor_line_index = hover_anchor_indices
+                        .get(raw_line_index)
+                        .copied()
+                        .unwrap_or(raw_line_index);
+
+                    Message::DiffCodeHoverMoved(buffer_key.clone(), anchor_line_index)
+                }
+            })
+            .on_exit(Message::DiffCodeHoverExited(hover_buffer_key)),
         )
+        .style(style::diff_block_style)
+        .clip(true)
+        .width(Fill)
         .into()
     }
 
@@ -1479,6 +1705,34 @@ impl VulcanWorkbench {
         self.sessions
             .iter_mut()
             .find(|session| session.id == self.selected_session)
+    }
+
+    /// Rebuilds all diff editor buffers using the current wrapped-column estimate.
+    /// 使用当前折行列数估算结果重建全部 diff 编辑器缓冲区。
+    fn rebuild_diff_code_buffers_for_current_wrap(&mut self) {
+        self.diff_code_buffers =
+            rebuild_diff_code_buffers(&self.diff_panel, self.current_diff_wrap_columns());
+    }
+
+    /// Estimates the wrapped code column budget used by diff hunk editors in the current layout.
+    /// 估算当前布局下 diff hunk 编辑器使用的代码折行列预算。
+    fn current_diff_wrap_columns(&self) -> usize {
+        let pane_width = if self.diff_window_id.is_some() {
+            self.diff_window_size.width - WINDOW_FRAME_HORIZONTAL_PADDING
+        } else {
+            let workbench_ratio = (1.0 - 0.22) * 0.68;
+            (self.main_window_size.width - WINDOW_FRAME_HORIZONTAL_PADDING) * workbench_ratio
+        }
+        .max(320.0);
+
+        let available_code_width = pane_width
+            - DIFF_FILE_CODE_HORIZONTAL_PADDING
+            - diff_gutter_block_width()
+            - (DIFF_CODE_EDITOR_HORIZONTAL_PADDING as f32 * 2.0)
+            - DIFF_WRAP_RESERVED_WIDTH;
+        let estimated_glyph_width = (CODE_EDITOR_TEXT_SIZE * DIFF_WRAP_GLYPH_WIDTH_RATIO).max(1.0);
+
+        ((available_code_width / estimated_glyph_width).floor() as usize).max(DIFF_MIN_WRAP_COLUMNS)
     }
 
     /// Pushes a new activity entry while keeping the most recent items first.
@@ -1847,16 +2101,25 @@ fn combine_diff_sections(tracked_diff_output: &str, untracked_diff_output: &str)
     }
 }
 
-/// Rebuilds the read-only text editor buffers for every visible diff file.
-/// 为每个可见的 diff 文件重建只读文本编辑器缓冲区。
-fn rebuild_diff_code_buffers(panel: &WorkspaceDiffPanel) -> BTreeMap<String, text_editor::Content> {
+/// Rebuilds the read-only text editor buffers for every visible diff hunk.
+/// 为每个可见的 diff hunk 重建只读文本编辑器缓冲区。
+fn rebuild_diff_code_buffers(
+    panel: &WorkspaceDiffPanel,
+    wrap_columns: usize,
+) -> BTreeMap<String, text_editor::Content> {
     let mut buffers = BTreeMap::new();
 
     for file in &panel.files {
-        buffers.insert(
-            file.key(),
-            text_editor::Content::with_text(&code_view::diff_file_text(file)),
-        );
+        let file_key = file.key();
+
+        for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+            let wrapped_hunk = code_view::wrap_diff_hunk(hunk, wrap_columns);
+
+            buffers.insert(
+                diff_hunk_buffer_key(&file_key, hunk_index),
+                text_editor::Content::with_text(&wrapped_hunk.text),
+            );
+        }
     }
 
     buffers
@@ -1870,12 +2133,56 @@ fn format_diff_line_number(
 ) -> String {
     old_line_number
         .or(new_line_number)
-        .map(|value| format!("{value:>5}"))
-        .unwrap_or_else(|| " ".repeat(5))
+        .map(|value| value.to_string())
+        .unwrap_or_default()
 }
 
-/// Counts all visible diff lines from one file in visual order.
-/// 以视觉顺序统计单个文件中的全部可见 diff 行数量。
-fn diff_file_line_count(file: &DiffFile) -> usize {
-    file.hunks.iter().map(|hunk| hunk.lines.len()).sum()
+/// Resolves the zero-based hovered visual line index from one local cursor Y position.
+/// 根据局部鼠标 Y 坐标解析从零开始的悬停可视行索引。
+fn hovered_diff_line_index_from_cursor(local_y: f32, line_count: usize) -> usize {
+    let raw_index = (local_y / CODE_EDITOR_LINE_HEIGHT).floor().max(0.0) as usize;
+
+    raw_index.min(line_count.saturating_sub(1))
+}
+
+/// Builds the stable buffer key for one hunk editor inside a diff file.
+/// 为 diff 文件中的单个 hunk 编辑器构建稳定缓冲区键。
+fn diff_hunk_buffer_key(file_key: &str, hunk_index: usize) -> String {
+    format!("{file_key}::hunk::{hunk_index}")
+}
+
+/// Returns the total leading gutter width reserved before one diff code editor block.
+/// 返回单个 diff 代码编辑器区块前方预留的总 gutter 宽度。
+fn diff_gutter_block_width() -> f32 {
+    DIFF_GUTTER_ARROW_WIDTH + DIFF_GUTTER_WIDTH + 5.0
+}
+
+/// Estimates the omitted unchanged line count between two adjacent hunks.
+/// 估算两个相邻 hunk 之间被省略的未变化行数量。
+fn omitted_context_line_count(
+    previous_hunk: &crate::diff::DiffHunk,
+    next_hunk: &crate::diff::DiffHunk,
+) -> usize {
+    let previous_end = previous_hunk
+        .lines
+        .iter()
+        .rev()
+        .find_map(preferred_display_line_number);
+    let next_start = next_hunk
+        .lines
+        .iter()
+        .find_map(preferred_display_line_number);
+
+    match (previous_end, next_start) {
+        (Some(previous_end), Some(next_start)) if next_start > previous_end => {
+            next_start.saturating_sub(previous_end + 1)
+        }
+        _ => 0,
+    }
+}
+
+/// Picks the most useful visual line number for omission calculations.
+/// 为省略行计算选择最有用的可视行号。
+fn preferred_display_line_number(line: &crate::diff::DiffLine) -> Option<usize> {
+    line.new_number.or(line.old_number)
 }

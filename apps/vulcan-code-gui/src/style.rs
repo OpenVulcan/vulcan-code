@@ -2,8 +2,8 @@
 //! GUI 工作台共享的视觉样式定义。
 
 use crate::diff::DiffLineKind;
-use iced::widget::container;
-use iced::{Color, Theme};
+use iced::widget::{container, text_editor};
+use iced::{Background, Border, Color, Theme};
 
 /// Returns the gutter background style for a semantic diff line kind.
 /// 返回某个语义 diff 行类型对应的 gutter 背景样式。
@@ -64,5 +64,39 @@ pub fn diff_gutter_separator_style(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(iced::color!(0xD0D7DE).into()),
         ..Default::default()
+    }
+}
+
+/// Returns the square-corner container style used by diff hunk and gap blocks.
+/// 返回 diff hunk 与省略块使用的直角容器样式。
+pub fn diff_block_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        border: Border {
+            radius: 0.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the borderless text editor style used inside diff code blocks.
+/// 返回 diff 代码区内部使用的无边框文本编辑器样式。
+pub fn diff_code_editor_style(theme: &Theme, _status: text_editor::Status) -> text_editor::Style {
+    let palette = theme.extended_palette();
+
+    text_editor::Style {
+        background: Background::Color(Color::TRANSPARENT),
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        placeholder: palette.secondary.base.color,
+        value: palette.background.base.text,
+        selection: palette.primary.weak.color,
     }
 }
