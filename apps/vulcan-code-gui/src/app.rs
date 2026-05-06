@@ -10,6 +10,7 @@ use crate::model::{
 use crate::style;
 use crate::theme;
 use crate::wheel_passthrough::WheelPassthrough;
+use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
     button, checkbox, column, container, markdown, mouse_area, pick_list, progress_bar, radio, row,
@@ -69,6 +70,14 @@ const CODE_EDITOR_LINE_HEIGHT: f32 = 20.0;
 /// 每个 diff 文件头部行使用的共享固定高度。
 const DIFF_FILE_HEADER_HEIGHT: f32 = 50.0;
 
+/// Shared compact height used by the external current-file bar above the diff review flow.
+/// Diff 审查流上方外置当前文件条使用的共享紧凑高度。
+const DIFF_CURRENT_FILE_BAR_HEIGHT: f32 = 42.0;
+
+/// Shared fold-arrow text size used by diff file headers and the current-file bar.
+/// Diff 文件头与当前文件条共用的折叠箭头字号。
+const DIFF_FOLD_ARROW_SIZE: f32 = 16.0;
+
 /// Shared spacing inserted between file cards in the review flow.
 /// 审查流中文件卡片之间插入的共享间距。
 const DIFF_FILE_CARD_SPACING: f32 = 12.0;
@@ -108,6 +117,22 @@ const DIFF_FILE_CODE_HORIZONTAL_PADDING: f32 = 20.0;
 /// Shared extra width budget reserved for borders and scrollbars when estimating diff editor columns.
 /// 估算 Diff 编辑器列数时为边框和滚动条预留的共享额外宽度预算。
 const DIFF_WRAP_RESERVED_WIDTH: f32 = 28.0;
+
+/// Shared fixed height used by omission cards inserted between separated diff hunks.
+/// 插入在分离 diff hunk 之间的省略卡片使用的共享固定高度。
+const DIFF_GAP_BLOCK_HEIGHT: f32 = 20.0;
+
+/// Shared spacing used between adjacent diff hunk and gap blocks inside one file body.
+/// 单个文件主体内部相邻 diff hunk 与省略块之间使用的共享间距。
+const DIFF_HUNK_FLOW_SPACING: f32 = 1.0;
+
+/// Shared vertical padding contributed by the file-level diff body container.
+/// 文件级 diff 主体容器贡献的共享垂直内边距。
+const DIFF_FILE_BODY_VERTICAL_PADDING: f32 = 16.0;
+
+/// Stable scrollable identifier used by the structured diff review flow.
+/// 结构化 diff 审查流使用的稳定滚动容器标识。
+const DIFF_PANEL_SCROLLABLE_ID: &str = "vulcan-code.diff-panel-scrollable";
 
 /// Launches the GUI application using the official iced crate.
 /// 使用官方 iced crate 启动图形界面应用。
@@ -175,6 +200,9 @@ pub struct VulcanWorkbench {
     /// Currently hovered visual line inside one diff hunk body.
     /// 当前在某个 diff hunk 主体中悬停的可视行。
     hovered_diff_line: Option<HoveredDiffLine>,
+    /// Current vertical scroll offset captured from the diff review flow.
+    /// 从 diff 审查流捕获的当前纵向滚动偏移量。
+    diff_scroll_offset: f32,
     /// Markdown content rendered in the inspector guide.
     /// 渲染在检查面板指引中的 Markdown 内容。
     quick_guide: markdown::Content,
@@ -235,6 +263,18 @@ struct HoveredDiffLine {
     /// Zero-based visual line index inside the current diff hunk body.
     /// 当前 diff hunk 主体内从零开始的可视行索引。
     line_index: usize,
+}
+
+/// Active diff file descriptor derived from the current review scroll position.
+/// 根据当前审查滚动位置推导出的激活 diff 文件描述。
+#[derive(Debug, Clone, Copy)]
+struct ActiveDiffFile<'a> {
+    /// Active file payload currently closest to the top of the review viewport.
+    /// 当前最接近审查视口顶部的激活文件载荷。
+    file: &'a DiffFile,
+    /// Whether the active file card is currently collapsed.
+    /// 当前激活文件卡片是否处于折叠状态。
+    is_collapsed: bool,
 }
 
 /// Messages emitted by iced widgets in the first prototype.
@@ -307,6 +347,12 @@ enum Message {
     /// Applies a read-only text editor action to one diff file editor.
     /// 向某个 diff 文件编辑器应用只读文本编辑器动作。
     DiffCodeAction(String, text_editor::Action),
+    /// Records the current viewport of the structured diff review flow.
+    /// 记录结构化 diff 审查流的当前视口状态。
+    DiffPanelScrolled(scrollable::Viewport),
+    /// Toggles one diff file card and then scrolls back to its header position.
+    /// 切换某个 diff 文件卡片后回滚到它的头部位置。
+    ToggleAndFocusDiffFile(String),
     /// Updates the currently hovered visual line inside one diff hunk body.
     /// 更新某个 diff hunk 主体内当前悬停的可视行。
     DiffCodeHoverMoved(String, usize),
@@ -385,6 +431,7 @@ impl VulcanWorkbench {
                 collapsed_diff_files: BTreeSet::new(),
                 diff_code_buffers: BTreeMap::new(),
                 hovered_diff_line: None,
+                diff_scroll_offset: 0.0,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
                 sessions: SessionSummary::seeded(),
                 selected_session: 1,
@@ -597,14 +644,27 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ToggleDiffFile(file_key) => {
-                if self.collapsed_diff_files.contains(&file_key) {
-                    self.collapsed_diff_files.remove(&file_key);
-                } else {
-                    self.collapsed_diff_files.insert(file_key.clone());
-                }
-                self.hovered_diff_line = None;
-
+                self.toggle_diff_file_collapsed(&file_key);
                 Task::none()
+            }
+            Message::DiffPanelScrolled(viewport) => {
+                self.diff_scroll_offset = viewport.absolute_offset().y;
+                Task::none()
+            }
+            Message::ToggleAndFocusDiffFile(file_key) => {
+                let target_offset = self
+                    .diff_file_scroll_offset(&file_key)
+                    .unwrap_or(self.diff_scroll_offset);
+                self.toggle_diff_file_collapsed(&file_key);
+                self.diff_scroll_offset = target_offset;
+
+                operation::scroll_to(
+                    DIFF_PANEL_SCROLLABLE_ID,
+                    scrollable::AbsoluteOffset {
+                        x: 0.0,
+                        y: target_offset,
+                    },
+                )
             }
             Message::DiffCodeAction(buffer_key, action) => {
                 if matches!(action, text_editor::Action::Scroll { .. }) {
@@ -1136,7 +1196,74 @@ impl VulcanWorkbench {
                 list.push(self.view_diff_file_card(file))
             });
 
-        scrollable(review_flow).height(Fill).spacing(8).into()
+        let current_file_bar = self.view_current_diff_file_bar();
+
+        column![
+            current_file_bar,
+            scrollable(review_flow)
+                .id(DIFF_PANEL_SCROLLABLE_ID)
+                .on_scroll(Message::DiffPanelScrolled)
+                .height(Fill)
+                .spacing(8)
+        ]
+        .spacing(8)
+        .height(Fill)
+        .into()
+    }
+
+    /// Renders the external current-file bar that mirrors the review scroll position.
+    /// 渲染镜像审查滚动位置的外置当前文件提示条。
+    fn view_current_diff_file_bar(&self) -> Element<'_, Message> {
+        let Some(active_file) = self.active_diff_file() else {
+            return space().height(0).into();
+        };
+
+        let file_key = active_file.file.key();
+        let toggle_file_key = file_key.clone();
+        let new_file_marker: Element<'_, Message> = if active_file.file.is_new_file() {
+            text("●").size(11).color(iced::color!(0x218BFF)).into()
+        } else {
+            space().width(11).into()
+        };
+
+        container(
+            button(
+                row![
+                    text("当前文件").size(11),
+                    row![
+                        new_file_marker,
+                        column![
+                            text(active_file.file.header_title()).size(14),
+                            text(
+                                active_file
+                                    .file
+                                    .full_path_label(&self.diff_panel.repository_root)
+                            )
+                            .size(10),
+                        ]
+                        .spacing(0),
+                    ]
+                    .spacing(8)
+                    .align_y(Center),
+                    space::horizontal(),
+                    self.view_diff_file_header_metrics(
+                        active_file.file.additions,
+                        active_file.file.deletions,
+                        active_file.is_collapsed,
+                    ),
+                ]
+                .spacing(10)
+                .align_y(Center),
+            )
+            .width(Fill)
+            .height(DIFF_CURRENT_FILE_BAR_HEIGHT)
+            .padding([4, 12])
+            .style(button::text)
+            .on_press(Message::ToggleAndFocusDiffFile(toggle_file_key)),
+        )
+        .style(container::bordered_box)
+        .width(Fill)
+        .into()
     }
 
     /// Renders one file card in the Git diff review flow.
@@ -1207,18 +1334,30 @@ impl VulcanWorkbench {
             .spacing(8)
             .align_y(Center),
             space::horizontal(),
-            row![
-                text(format!("+{}", file.additions))
-                    .size(15)
-                    .color(style::diff_bar_color(crate::diff::DiffLineKind::Added)),
-                text(format!("-{}", file.deletions))
-                    .size(15)
-                    .color(style::diff_bar_color(crate::diff::DiffLineKind::Removed)),
-                text(if is_collapsed { "▸" } else { "▾" }).size(13),
-            ]
-            .spacing(10)
-            .align_y(Center),
+            self.view_diff_file_header_metrics(file.additions, file.deletions, is_collapsed),
         ]
+        .align_y(Center)
+        .into()
+    }
+
+    /// Renders the shared trailing metrics cluster used by diff file headers and the current-file bar.
+    /// 渲染 diff 文件头与当前文件条共用的尾部统计区块。
+    fn view_diff_file_header_metrics(
+        &self,
+        additions: usize,
+        deletions: usize,
+        is_collapsed: bool,
+    ) -> Element<'_, Message> {
+        row![
+            text(format!("+{additions}"))
+                .size(15)
+                .color(style::diff_bar_color(crate::diff::DiffLineKind::Added)),
+            text(format!("-{deletions}"))
+                .size(15)
+                .color(style::diff_bar_color(crate::diff::DiffLineKind::Removed)),
+            text(if is_collapsed { "▸" } else { "▾" }).size(DIFF_FOLD_ARROW_SIZE),
+        ]
+        .spacing(10)
         .align_y(Center)
         .into()
     }
@@ -1264,16 +1403,21 @@ impl VulcanWorkbench {
         };
 
         container(
-            row![
-                space().width(diff_gutter_block_width()),
-                container(text(label).size(12))
-                    .padding([2, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
-                    .width(Fill),
-            ]
-            .spacing(0)
-            .width(Fill),
+            container(
+                row![
+                    space().width(diff_gutter_block_width()),
+                    container(text(label).size(12))
+                        .padding([2, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
+                        .width(Fill),
+                ]
+                .spacing(0)
+                .width(Fill),
+            )
+            .center_y(DIFF_GAP_BLOCK_HEIGHT)
+            .height(DIFF_GAP_BLOCK_HEIGHT),
         )
         .width(Fill)
+        .height(DIFF_GAP_BLOCK_HEIGHT)
         .style(style::diff_block_style)
         .into()
     }
@@ -1733,6 +1877,111 @@ impl VulcanWorkbench {
         let estimated_glyph_width = (CODE_EDITOR_TEXT_SIZE * DIFF_WRAP_GLYPH_WIDTH_RATIO).max(1.0);
 
         ((available_code_width / estimated_glyph_width).floor() as usize).max(DIFF_MIN_WRAP_COLUMNS)
+    }
+
+    /// Toggles one diff file between collapsed and expanded state.
+    /// 在折叠与展开状态之间切换单个 diff 文件。
+    fn toggle_diff_file_collapsed(&mut self, file_key: &str) {
+        if self.collapsed_diff_files.contains(file_key) {
+            self.collapsed_diff_files.remove(file_key);
+        } else {
+            self.collapsed_diff_files.insert(file_key.to_owned());
+        }
+
+        self.hovered_diff_line = None;
+    }
+
+    /// Resolves the currently active diff file from the review scroll offset.
+    /// 根据审查滚动偏移量解析当前激活的 diff 文件。
+    fn active_diff_file(&self) -> Option<ActiveDiffFile<'_>> {
+        let mut running_offset = 0.0;
+        let target_offset = self.diff_scroll_offset.max(0.0) + 1.0;
+        let mut last_candidate = None;
+
+        for (index, file) in self.diff_panel.files.iter().enumerate() {
+            if index > 0 {
+                running_offset += DIFF_FILE_CARD_SPACING;
+            }
+
+            let file_top_offset = running_offset;
+            let file_height = self.diff_file_card_height(file);
+            let file_key = file.key();
+            let is_collapsed = self.collapsed_diff_files.contains(&file_key);
+
+            let candidate = ActiveDiffFile { file, is_collapsed };
+            last_candidate = Some(candidate);
+
+            if target_offset < file_top_offset + file_height {
+                return Some(candidate);
+            }
+
+            running_offset += file_height;
+        }
+
+        last_candidate
+    }
+
+    /// Resolves the vertical scroll offset pointing at the top edge of one diff file card.
+    /// 解析指向单个 diff 文件卡片顶部边缘的纵向滚动偏移量。
+    fn diff_file_scroll_offset(&self, target_file_key: &str) -> Option<f32> {
+        let mut running_offset = 0.0;
+
+        for (index, file) in self.diff_panel.files.iter().enumerate() {
+            if index > 0 {
+                running_offset += DIFF_FILE_CARD_SPACING;
+            }
+
+            if file.key() == target_file_key {
+                return Some(running_offset);
+            }
+
+            running_offset += self.diff_file_card_height(file);
+        }
+
+        None
+    }
+
+    /// Estimates the rendered height of one diff file card in the current layout.
+    /// 估算当前布局下单个 diff 文件卡片的渲染高度。
+    fn diff_file_card_height(&self, file: &DiffFile) -> f32 {
+        let is_collapsed = self.collapsed_diff_files.contains(&file.key());
+
+        DIFF_FILE_HEADER_HEIGHT
+            + if is_collapsed {
+                0.0
+            } else {
+                self.diff_file_body_height(file)
+            }
+    }
+
+    /// Estimates the rendered body height of one expanded diff file card.
+    /// 估算单个展开 diff 文件卡片主体的渲染高度。
+    fn diff_file_body_height(&self, file: &DiffFile) -> f32 {
+        if file.hunks.is_empty() {
+            return DIFF_EMPTY_BODY_HEIGHT;
+        }
+
+        let wrap_columns = self.current_diff_wrap_columns();
+        let hunk_count = file.hunks.len();
+        let gap_count = hunk_count.saturating_sub(1);
+        let block_count = hunk_count + gap_count;
+        let hunk_heights = file
+            .hunks
+            .iter()
+            .map(|hunk| self.diff_hunk_block_height(hunk, wrap_columns))
+            .sum::<f32>();
+        let gap_heights = gap_count as f32 * DIFF_GAP_BLOCK_HEIGHT;
+        let inter_block_spacing = block_count.saturating_sub(1) as f32 * DIFF_HUNK_FLOW_SPACING;
+
+        DIFF_FILE_BODY_VERTICAL_PADDING + hunk_heights + gap_heights + inter_block_spacing
+    }
+
+    /// Estimates the rendered height of one hunk block after wrapping under the current column budget.
+    /// 估算当前列预算下单个 hunk 区块折行后的渲染高度。
+    fn diff_hunk_block_height(&self, hunk: &crate::diff::DiffHunk, wrap_columns: usize) -> f32 {
+        let wrapped_hunk = code_view::wrap_diff_hunk(hunk, wrap_columns);
+
+        wrapped_hunk.visual_lines.len() as f32 * CODE_EDITOR_LINE_HEIGHT
     }
 
     /// Pushes a new activity entry while keeping the most recent items first.
