@@ -1,0 +1,13 @@
+[package]
+name = "vulcan-code-gui"
+description = "Rust + iced based AI coding desktop foundation."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+iced.workspace = true
