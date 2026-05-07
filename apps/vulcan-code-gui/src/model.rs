@@ -1,11 +1,13 @@
 //! Domain models for the AI coding desktop scaffold.
 //! AI 编程桌面骨架的领域模型定义。
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Available model providers for the workbench.
-/// 工作台可选的模型提供方。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Available provider kinds supported by the workbench catalog.
+/// 工作台目录中支持的供应商类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Provider {
     /// OpenAI hosted models.
     /// OpenAI 托管模型。
@@ -13,69 +15,144 @@ pub enum Provider {
     /// Anthropic hosted models.
     /// Anthropic 托管模型。
     Anthropic,
-    /// Local runtime backed models.
-    /// 本地运行时托管模型。
-    Local,
+    /// Azure OpenAI hosted models.
+    /// Azure OpenAI 托管模型。
+    AzureOpenAi,
+    /// ChatGPT first-party consumer surface.
+    /// ChatGPT 官方消费端接口。
+    ChatGpt,
+    /// Cohere hosted models.
+    /// Cohere 托管模型。
+    Cohere,
+    /// GitHub Copilot model surface.
+    /// GitHub Copilot 模型接口。
+    Copilot,
+    /// DeepSeek hosted models.
+    /// DeepSeek 托管模型。
+    DeepSeek,
+    /// Galadriel hosted models.
+    /// Galadriel 托管模型。
+    Galadriel,
+    /// Google Gemini hosted models.
+    /// Google Gemini 托管模型。
+    Gemini,
+    /// Groq hosted models.
+    /// Groq 托管模型。
+    Groq,
+    /// Hugging Face inference models.
+    /// Hugging Face 推理模型。
+    HuggingFace,
+    /// Hyperbolic hosted models.
+    /// Hyperbolic 托管模型。
+    Hyperbolic,
+    /// Llamafile local-compatible models.
+    /// Llamafile 本地兼容模型。
+    Llamafile,
+    /// MiniMax hosted models.
+    /// MiniMax 托管模型。
+    MiniMax,
+    /// Mira hosted models.
+    /// Mira 托管模型。
+    Mira,
+    /// Mistral hosted models.
+    /// Mistral 托管模型。
+    Mistral,
+    /// Moonshot hosted models.
+    /// Moonshot 托管模型。
+    Moonshot,
+    /// Ollama local models.
+    /// Ollama 本地模型。
+    Ollama,
+    /// OpenRouter brokered models.
+    /// OpenRouter 聚合模型。
+    OpenRouter,
+    /// Perplexity hosted models.
+    /// Perplexity 托管模型。
+    Perplexity,
+    /// Together hosted models.
+    /// Together 托管模型。
+    Together,
+    /// VoyageAI embedding-first models.
+    /// VoyageAI 以向量为主的模型。
+    VoyageAi,
+    /// xAI hosted models.
+    /// xAI 托管模型。
+    Xai,
+    /// Xiaomi Mimo hosted models.
+    /// Xiaomi Mimo 托管模型。
+    XiaomiMimo,
+    /// Z.ai hosted models.
+    /// Z.ai 托管模型。
+    ZAi,
+    /// Local or self-hosted OpenAI-compatible gateways.
+    /// 本地或自托管 OpenAI 兼容网关。
+    OpenAiCompatibleLocal,
 }
 
 impl Provider {
-    /// All supported providers for the selection component.
-    /// 供选择组件使用的全部提供方列表。
-    pub const ALL: [Self; 3] = [Self::OpenAi, Self::Anthropic, Self::Local];
+    /// All supported provider kinds exposed in the configuration selector.
+    /// 配置选择器中暴露的全部供应商类型。
+    pub const ALL: [Self; 26] = [
+        Self::OpenAi,
+        Self::Anthropic,
+        Self::AzureOpenAi,
+        Self::ChatGpt,
+        Self::Cohere,
+        Self::Copilot,
+        Self::DeepSeek,
+        Self::Galadriel,
+        Self::Gemini,
+        Self::Groq,
+        Self::HuggingFace,
+        Self::Hyperbolic,
+        Self::Llamafile,
+        Self::MiniMax,
+        Self::Mira,
+        Self::Mistral,
+        Self::Moonshot,
+        Self::Ollama,
+        Self::OpenRouter,
+        Self::Perplexity,
+        Self::Together,
+        Self::VoyageAi,
+        Self::Xai,
+        Self::XiaomiMimo,
+        Self::ZAi,
+        Self::OpenAiCompatibleLocal,
+    ];
 }
 
 impl fmt::Display for Provider {
     /// Renders a user-facing provider label.
-    /// 渲染面向用户的提供方标签。
+    /// 渲染面向用户的供应商标签。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
             Self::OpenAi => "OpenAI",
             Self::Anthropic => "Anthropic",
-            Self::Local => "Local Runtime",
-        };
-
-        formatter.write_str(label)
-    }
-}
-
-/// Curated model presets for the first GUI foundation.
-/// 首版 GUI 基础设施内置的模型预设。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelPreset {
-    /// GPT-5.5 balanced coding preset.
-    /// GPT-5.5 平衡编码预设。
-    Gpt55Coder,
-    /// Claude Sonnet long-context preset.
-    /// Claude Sonnet 长上下文预设。
-    ClaudeSonnet,
-    /// DeepSeek reasoning-oriented preset.
-    /// DeepSeek 推理优先预设。
-    DeepSeekR1,
-    /// Local Qwen coding preset.
-    /// 本地 Qwen 编码预设。
-    QwenCoder,
-}
-
-impl ModelPreset {
-    /// All model presets shown in the pick list.
-    /// 选择框中展示的全部模型预设。
-    pub const ALL: [Self; 4] = [
-        Self::Gpt55Coder,
-        Self::ClaudeSonnet,
-        Self::DeepSeekR1,
-        Self::QwenCoder,
-    ];
-}
-
-impl fmt::Display for ModelPreset {
-    /// Renders a user-facing model label.
-    /// 渲染面向用户的模型标签。
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            Self::Gpt55Coder => "GPT-5.5 Coder",
-            Self::ClaudeSonnet => "Claude Sonnet",
-            Self::DeepSeekR1 => "DeepSeek R1",
-            Self::QwenCoder => "Qwen Coder",
+            Self::AzureOpenAi => "Azure OpenAI",
+            Self::ChatGpt => "ChatGPT",
+            Self::Cohere => "Cohere",
+            Self::Copilot => "GitHub Copilot",
+            Self::DeepSeek => "DeepSeek",
+            Self::Galadriel => "Galadriel",
+            Self::Gemini => "Gemini",
+            Self::Groq => "Groq",
+            Self::HuggingFace => "Hugging Face",
+            Self::Hyperbolic => "Hyperbolic",
+            Self::Llamafile => "Llamafile",
+            Self::MiniMax => "MiniMax",
+            Self::Mira => "Mira",
+            Self::Mistral => "Mistral",
+            Self::Moonshot => "Moonshot",
+            Self::Ollama => "Ollama",
+            Self::OpenRouter => "OpenRouter",
+            Self::Perplexity => "Perplexity",
+            Self::Together => "Together",
+            Self::VoyageAi => "VoyageAI",
+            Self::Xai => "xAI",
+            Self::XiaomiMimo => "Xiaomi Mimo",
+            Self::ZAi => "Z.ai",
+            Self::OpenAiCompatibleLocal => "OpenAI-Compatible Local",
         };
 
         formatter.write_str(label)

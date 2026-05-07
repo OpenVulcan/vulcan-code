@@ -5,6 +5,8 @@ mod app;
 mod code_view;
 mod diff;
 mod model;
+mod model_config;
+mod rig_runtime;
 mod style;
 mod theme;
 mod wheel_passthrough;

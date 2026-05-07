@@ -4,9 +4,15 @@
 use crate::code_view;
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, ModelPreset, PaneKind, Provider, SessionState,
-    SessionSummary,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, Provider, SessionState, SessionSummary,
 };
+use crate::model_config::{
+    ConfiguredModel, ConfiguredProvider, FetchStrategy, ModelRegistryConfig,
+    ProviderModelFetchRequest, ProviderModelFetchResponse, default_base_url_hint,
+    fetch_provider_models, fetch_strategy_for_provider, provider_configuration_hint,
+    slugify_identifier,
+};
+use crate::rig_runtime::{RigIntegrationScaffold, ToolPolicy};
 use crate::style;
 use crate::theme;
 use crate::wheel_passthrough::WheelPassthrough;
@@ -203,6 +209,12 @@ pub struct VulcanWorkbench {
     /// Current vertical scroll offset captured from the diff review flow.
     /// 从 diff 审查流捕获的当前纵向滚动偏移量。
     diff_scroll_offset: f32,
+    /// Rig-core integration scaffold reserved for future multi-role orchestration.
+    /// 为未来多角色编排预留的 Rig-core 接入骨架。
+    rig_scaffold: RigIntegrationScaffold,
+    /// Persistent user model registry loaded from the shared configuration file.
+    /// 从共享配置文件加载的用户模型注册表。
+    model_registry: ModelRegistryConfig,
     /// Markdown content rendered in the inspector guide.
     /// 渲染在检查面板指引中的 Markdown 内容。
     quick_guide: markdown::Content,
@@ -218,12 +230,36 @@ pub struct VulcanWorkbench {
     /// Identifier seed for newly created sessions.
     /// 新建会话使用的自增标识种子。
     next_session_id: usize,
-    /// Selected model provider.
-    /// 当前选择的模型提供方。
-    provider: Provider,
-    /// Selected model preset.
-    /// 当前选择的模型预设。
-    model: ModelPreset,
+    /// Selected configured provider instance identifier.
+    /// 当前选中的已配置供应商实例标识。
+    selected_provider_id: Option<String>,
+    /// Selected configured model identifier under the active provider.
+    /// 当前活跃供应商下选中的已配置模型标识。
+    selected_model_id: Option<String>,
+    /// Provider kind currently chosen inside the configuration form.
+    /// 当前在配置表单中选中的供应商类型。
+    provider_draft_kind: Provider,
+    /// Provider instance name currently edited inside the configuration form.
+    /// 当前在配置表单中编辑的供应商实例名称。
+    provider_draft_name: String,
+    /// Base URL currently edited inside the configuration form.
+    /// 当前在配置表单中编辑的基础 URL。
+    provider_draft_base_url: String,
+    /// API key currently edited inside the configuration form.
+    /// 当前在配置表单中编辑的 API Key。
+    provider_draft_api_key: String,
+    /// Manual model identifier currently edited inside the configuration form.
+    /// 当前在配置表单中编辑的手动模型标识。
+    provider_draft_manual_model_id: String,
+    /// Manual model display name currently edited inside the configuration form.
+    /// 当前在配置表单中编辑的手动模型展示名称。
+    provider_draft_manual_model_name: String,
+    /// Most recent discovered model list returned by the fetch action.
+    /// 最近一次通过拉取动作返回的发现模型列表。
+    fetched_models: Vec<ConfiguredModel>,
+    /// Inline status text shown under the provider configuration form.
+    /// 展示在供应商配置表单下方的行内状态文本。
+    provider_fetch_status: String,
     /// Selected execution mode.
     /// 当前选择的执行模式。
     execution_mode: ExecutionMode,
@@ -277,6 +313,46 @@ struct ActiveDiffFile<'a> {
     is_collapsed: bool,
 }
 
+/// One configured provider option rendered by the inspector pick list.
+/// 由检查面板下拉框渲染的单个已配置供应商选项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfiguredProviderOption {
+    /// Stable provider instance identifier used for state synchronization.
+    /// 用于状态同步的稳定供应商实例标识。
+    id: String,
+    /// Human-readable provider option label.
+    /// 人类可读的供应商选项标签。
+    label: String,
+}
+
+impl std::fmt::Display for ConfiguredProviderOption {
+    /// Renders the provider option label inside the pick list.
+    /// 在下拉框中渲染供应商选项标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+/// One configured model option rendered by the inspector pick list.
+/// 由检查面板下拉框渲染的单个已配置模型选项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfiguredModelOption {
+    /// Stable model identifier used for state synchronization.
+    /// 用于状态同步的稳定模型标识。
+    id: String,
+    /// Human-readable model option label.
+    /// 人类可读的模型选项标签。
+    label: String,
+}
+
+impl std::fmt::Display for ConfiguredModelOption {
+    /// Renders the model option label inside the pick list.
+    /// 在下拉框中渲染模型选项标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
 /// Messages emitted by iced widgets in the first prototype.
 /// 首版原型中由 iced 控件发出的消息集合。
 #[derive(Debug, Clone)]
@@ -305,12 +381,39 @@ enum Message {
     /// Embedded editor emitted an editing action.
     /// 嵌入式编辑器发出了编辑动作。
     EditorActionPerformed(text_editor::Action),
-    /// Model provider selected from the radio group.
-    /// 从单选组中选择了模型提供方。
-    ProviderSelected(Provider),
-    /// Model preset selected from the pick list.
-    /// 从下拉选择框中选择了模型预设。
-    ModelSelected(ModelPreset),
+    /// Configured provider instance selected from the pick list.
+    /// 从下拉选择框中选择了已配置供应商实例。
+    ConfiguredProviderSelected(ConfiguredProviderOption),
+    /// Configured model selected from the pick list.
+    /// 从下拉选择框中选择了已配置模型。
+    ConfiguredModelSelected(ConfiguredModelOption),
+    /// Provider kind selected inside the configuration form.
+    /// 在配置表单中选择了供应商类型。
+    ProviderDraftKindSelected(Provider),
+    /// Provider instance name changed inside the configuration form.
+    /// 在配置表单中修改了供应商实例名称。
+    ProviderDraftNameChanged(String),
+    /// Provider base URL changed inside the configuration form.
+    /// 在配置表单中修改了供应商基础 URL。
+    ProviderDraftBaseUrlChanged(String),
+    /// Provider API key changed inside the configuration form.
+    /// 在配置表单中修改了供应商 API Key。
+    ProviderDraftApiKeyChanged(String),
+    /// Manual model identifier changed inside the configuration form.
+    /// 在配置表单中修改了手动模型标识。
+    ProviderDraftManualModelIdChanged(String),
+    /// Manual model display name changed inside the configuration form.
+    /// 在配置表单中修改了手动模型展示名称。
+    ProviderDraftManualModelNameChanged(String),
+    /// Provider model-list fetch action requested.
+    /// 请求拉取供应商模型列表。
+    FetchProviderModels,
+    /// Provider model-list fetch action finished.
+    /// 供应商模型列表拉取动作已完成。
+    ProviderModelsFetched(Result<ProviderModelFetchResponse, String>),
+    /// Provider configuration save action requested.
+    /// 请求保存供应商配置。
+    SaveProviderConfig,
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
@@ -401,6 +504,30 @@ impl VulcanWorkbench {
     /// Builds the initial state, seeded UI data, and pane layout.
     /// 构建初始状态、种子界面数据与面板布局。
     fn new() -> (Self, Task<Message>) {
+        let (model_registry, model_registry_status) = ModelRegistryConfig::load_with_status();
+        let selected_provider_id = model_registry
+            .default_selection()
+            .map(|(provider_id, _)| provider_id)
+            .or_else(|| model_registry.first_provider_id());
+        let selected_model_id = selected_provider_id
+            .as_deref()
+            .and_then(|provider_id| {
+                model_registry
+                    .default_selection()
+                    .and_then(|(selected_provider_id, model_id)| {
+                        if selected_provider_id == provider_id {
+                            Some(model_id)
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .or_else(|| {
+                selected_provider_id
+                    .as_deref()
+                    .and_then(|provider_id| model_registry.first_model_id_for_provider(provider_id))
+            });
+
         // Create the fixed three-column workbench layout for the first prototype.
         // 为首版原型创建固定的三栏工作台布局。
         let panes = pane_grid::State::with_configuration(pane_layout());
@@ -432,13 +559,27 @@ impl VulcanWorkbench {
                 diff_code_buffers: BTreeMap::new(),
                 hovered_diff_line: None,
                 diff_scroll_offset: 0.0,
+                rig_scaffold: RigIntegrationScaffold::seeded(),
+                model_registry,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
                 sessions: SessionSummary::seeded(),
                 selected_session: 1,
                 activities: ActivityEntry::seeded(),
                 next_session_id: 4,
-                provider: Provider::OpenAi,
-                model: ModelPreset::Gpt55Coder,
+                selected_provider_id,
+                selected_model_id,
+                provider_draft_kind: Provider::OpenAiCompatibleLocal,
+                provider_draft_name: String::from("本地兼容网关"),
+                provider_draft_base_url: String::from(default_base_url_hint(
+                    Provider::OpenAiCompatibleLocal,
+                )),
+                provider_draft_api_key: String::new(),
+                provider_draft_manual_model_id: String::new(),
+                provider_draft_manual_model_name: String::new(),
+                fetched_models: Vec::new(),
+                provider_fetch_status: model_registry_status.unwrap_or_else(|| {
+                    String::from("请先在右侧配置供应商实例，再获取模型列表并加入配置。")
+                }),
                 execution_mode: ExecutionMode::Plan,
                 app_theme: theme::default_theme(),
                 temperature: 0.25,
@@ -447,7 +588,9 @@ impl VulcanWorkbench {
                 run_cargo_check: true,
                 persist_memory: true,
                 auto_approve: false,
-                status_message: String::from("工作台已准备，可继续接入真实 AI 编排与命令执行。"),
+                status_message: String::from(
+                    "工作台已准备，可继续配置模型供应商并接入真实 AI 编排。",
+                ),
             },
             open_main_window.map(Message::MainWindowOpened),
         )
@@ -528,14 +671,186 @@ impl VulcanWorkbench {
                 self.editor_content.perform(action);
                 Task::none()
             }
-            Message::ProviderSelected(provider) => {
-                self.provider = provider;
-                self.status_message = format!("模型提供方已切换为 {provider}。");
+            Message::ConfiguredProviderSelected(provider_option) => {
+                self.selected_provider_id = Some(provider_option.id.clone());
+                self.selected_model_id = self
+                    .model_registry
+                    .first_model_id_for_provider(&provider_option.id);
+
+                if let Some(model_id) = self.selected_model_id.clone() {
+                    self.model_registry
+                        .set_default_selection(&provider_option.id, &model_id);
+                    let _ = self.model_registry.save();
+                }
+
+                self.status_message = format!("当前模型实例已切换为 {}。", provider_option.label);
                 Task::none()
             }
-            Message::ModelSelected(model) => {
-                self.model = model;
-                self.status_message = format!("模型预设已切换为 {model}。");
+            Message::ConfiguredModelSelected(model_option) => {
+                self.selected_model_id = Some(model_option.id.clone());
+
+                if let Some(provider_id) = self.selected_provider_id.clone() {
+                    self.model_registry
+                        .set_default_selection(&provider_id, &model_option.id);
+                    let _ = self.model_registry.save();
+                }
+
+                self.status_message = format!("当前模型已切换为 {}。", model_option.label);
+                Task::none()
+            }
+            Message::ProviderDraftKindSelected(provider_kind) => {
+                self.provider_draft_kind = provider_kind;
+
+                if self.provider_draft_name.trim().is_empty() {
+                    self.provider_draft_name = provider_kind.to_string();
+                }
+
+                if self.provider_draft_base_url.trim().is_empty() {
+                    self.provider_draft_base_url =
+                        String::from(default_base_url_hint(provider_kind));
+                }
+
+                self.provider_fetch_status =
+                    String::from(provider_configuration_hint(provider_kind));
+                self.fetched_models.clear();
+                Task::none()
+            }
+            Message::ProviderDraftNameChanged(value) => {
+                self.provider_draft_name = value;
+                Task::none()
+            }
+            Message::ProviderDraftBaseUrlChanged(value) => {
+                self.provider_draft_base_url = value;
+                Task::none()
+            }
+            Message::ProviderDraftApiKeyChanged(value) => {
+                self.provider_draft_api_key = value;
+                Task::none()
+            }
+            Message::ProviderDraftManualModelIdChanged(value) => {
+                self.provider_draft_manual_model_id = value;
+                Task::none()
+            }
+            Message::ProviderDraftManualModelNameChanged(value) => {
+                self.provider_draft_manual_model_name = value;
+                Task::none()
+            }
+            Message::FetchProviderModels => {
+                let request = ProviderModelFetchRequest {
+                    kind: self.provider_draft_kind,
+                    name: self.provider_draft_name.trim().to_string(),
+                    base_url: self.provider_draft_base_url.trim().to_string(),
+                    api_key: self.provider_draft_api_key.trim().to_string(),
+                };
+
+                self.provider_fetch_status = format!(
+                    "正在按 {} 策略获取 {} 的模型列表。",
+                    fetch_strategy_for_provider(self.provider_draft_kind),
+                    self.provider_draft_kind
+                );
+                self.fetched_models.clear();
+
+                Task::perform(
+                    fetch_provider_models(request),
+                    Message::ProviderModelsFetched,
+                )
+            }
+            Message::ProviderModelsFetched(result) => {
+                match result {
+                    Ok(response) => {
+                        self.provider_draft_kind = response.kind;
+                        self.provider_draft_name = response.name.clone();
+                        self.provider_draft_base_url = response.base_url.clone();
+                        self.fetched_models = response.models;
+                        self.provider_fetch_status = format!(
+                            "已通过 {} 策略获取到 {} 个模型，可直接加入配置。",
+                            response.strategy,
+                            self.fetched_models.len()
+                        );
+                    }
+                    Err(error) => {
+                        self.fetched_models.clear();
+                        self.provider_fetch_status = error.clone();
+                        self.status_message = format!("模型列表获取失败：{error}");
+                    }
+                }
+
+                Task::none()
+            }
+            Message::SaveProviderConfig => {
+                let provider_name = if self.provider_draft_name.trim().is_empty() {
+                    self.provider_draft_kind.to_string()
+                } else {
+                    self.provider_draft_name.trim().to_string()
+                };
+                let provider_id = slugify_identifier(&provider_name);
+                let models = if self.fetched_models.is_empty() {
+                    let manual_model_id = self.provider_draft_manual_model_id.trim();
+
+                    if manual_model_id.is_empty() {
+                        self.provider_fetch_status = String::from(
+                            "当前没有可保存的模型，请先获取模型列表，或手动填写至少一个模型标识。",
+                        );
+                        return Task::none();
+                    }
+
+                    vec![ConfiguredModel {
+                        id: manual_model_id.to_string(),
+                        name: if self.provider_draft_manual_model_name.trim().is_empty() {
+                            manual_model_id.to_string()
+                        } else {
+                            self.provider_draft_manual_model_name.trim().to_string()
+                        },
+                        context_limit: None,
+                        output_limit: None,
+                        supports_tools: None,
+                        supports_reasoning: None,
+                    }]
+                } else {
+                    self.fetched_models.clone()
+                };
+
+                let configured_provider = ConfiguredProvider {
+                    id: provider_id.clone(),
+                    name: provider_name.clone(),
+                    kind: self.provider_draft_kind,
+                    base_url: self.provider_draft_base_url.trim().to_string(),
+                    api_key: self.provider_draft_api_key.trim().to_string(),
+                    models,
+                };
+
+                self.model_registry.upsert_provider(configured_provider);
+
+                let selected_model_id = self
+                    .model_registry
+                    .first_model_id_for_provider(&provider_id)
+                    .unwrap_or_default();
+
+                if !selected_model_id.is_empty() {
+                    self.model_registry
+                        .set_default_selection(&provider_id, &selected_model_id);
+                    self.selected_model_id = Some(selected_model_id);
+                }
+
+                self.selected_provider_id = Some(provider_id.clone());
+
+                match self.model_registry.save() {
+                    Ok(()) => {
+                        self.provider_fetch_status = format!(
+                            "供应商实例 {} 已写入配置文件，可直接用于后续 Rig 运行时绑定。",
+                            provider_name
+                        );
+                        self.status_message = format!(
+                            "模型配置已保存到 {}。",
+                            ModelRegistryConfig::path().display()
+                        );
+                    }
+                    Err(error) => {
+                        self.provider_fetch_status = error.clone();
+                        self.status_message = format!("模型配置保存失败：{error}");
+                    }
+                }
+
                 Task::none()
             }
             Message::ThemeSelected(theme) => {
@@ -704,17 +1019,19 @@ impl VulcanWorkbench {
                 }
 
                 self.context_usage = (self.context_usage + 6.0).min(100.0);
+                let active_provider_label = self.active_provider_label();
+                let active_model_label = self.active_model_label();
                 self.status_message = format!(
                     "已按 {mode} 模式启动执行准备，当前模型为 {model}。",
                     mode = self.execution_mode,
-                    model = self.model
+                    model = active_model_label.clone()
                 );
                 self.push_activity(
                     ActivityLevel::Success,
                     "执行编排已启动",
                     format!(
                         "提供方：{}，模型：{}，温度：{:.2}。",
-                        self.provider, self.model, self.temperature
+                        active_provider_label, active_model_label, self.temperature
                     ),
                 );
                 Task::none()
@@ -1077,7 +1394,8 @@ impl VulcanWorkbench {
                     space::horizontal(),
                     text(format!(
                         "Provider: {} | Model: {}",
-                        self.provider, self.model
+                        self.active_provider_label(),
+                        self.active_model_label()
                     ))
                     .size(13),
                 ]
@@ -1651,35 +1969,130 @@ impl VulcanWorkbench {
     /// Renders the inspector pane with runtime controls, guidance, and logs.
     /// 渲染包含运行控制、指引与日志的检查面板。
     fn view_inspector(&self) -> Element<'_, Message> {
-        // Build the provider radio group so backend routing stays explicit and easy to extend.
-        // 构建提供方单选组，让后端路由保持显式且易于扩展。
-        let provider_controls = container(
-            column![
-                text("模型提供方").size(18),
-                column(Provider::ALL.iter().copied().map(|provider| {
-                    radio(
-                        provider.to_string(),
-                        provider,
-                        Some(self.provider),
-                        Message::ProviderSelected,
+        let selected_provider_option = self.selected_provider_option();
+        let selected_model_option = self.selected_model_option();
+        let provider_options = self.configured_provider_options();
+        let model_options = self.configured_model_options();
+        let fetch_strategy = fetch_strategy_for_provider(self.provider_draft_kind);
+        let mut fetched_models_preview: iced::widget::Column<'_, Message, Theme, iced::Renderer> =
+            column![text("待写入模型").size(14)].spacing(6);
+
+        for model in &self.fetched_models {
+            fetched_models_preview = fetched_models_preview.push(
+                text(format!(
+                    "{}{}",
+                    model.id,
+                    if model.name != model.id {
+                        format!(" · {}", model.name)
+                    } else {
+                        String::new()
+                    }
+                ))
+                .size(12),
+            );
+        }
+        let fetched_models_body: Element<'_, Message> = if self.fetched_models.is_empty() {
+            text("尚未获取模型列表。").size(12).into()
+        } else {
+            fetched_models_preview.into()
+        };
+        let provider_model_entry_panel: Element<'_, Message> =
+            if fetch_strategy == FetchStrategy::ManualOnly {
+                column![
+                    text_input("手动模型标识", &self.provider_draft_manual_model_id)
+                        .on_input(Message::ProviderDraftManualModelIdChanged)
+                        .width(Fill),
+                    text_input(
+                        "手动模型名称（可选）",
+                        &self.provider_draft_manual_model_name
                     )
-                    .into()
-                }))
-                .spacing(10),
+                    .on_input(Message::ProviderDraftManualModelNameChanged)
+                    .width(Fill),
+                ]
+                .spacing(12)
+                .into()
+            } else {
+                column![
+                    button("获取模型列表").on_press(Message::FetchProviderModels),
+                    fetched_models_body,
+                ]
+                .spacing(12)
+                .into()
+            };
+
+        // Build the configured-runtime selector so active model bindings are driven by persisted configuration.
+        // 构建已配置运行时选择器，让当前模型绑定由持久化配置驱动。
+        let configured_runtime = container(
+            column![
+                text("当前模型配置").size(18),
+                pick_list(
+                    provider_options,
+                    selected_provider_option,
+                    Message::ConfiguredProviderSelected
+                )
+                .width(Fill)
+                .placeholder("选择已配置供应商实例"),
+                pick_list(
+                    model_options,
+                    selected_model_option,
+                    Message::ConfiguredModelSelected
+                )
+                .width(Fill)
+                .placeholder("选择已配置模型"),
+                text(format!(
+                    "配置文件：{}",
+                    ModelRegistryConfig::path().display()
+                ))
+                .size(12),
+                text(format!(
+                    "当前共维护 {} 个供应商实例、{} 个模型条目。",
+                    self.model_registry.provider_count(),
+                    self.model_registry.model_count()
+                ))
+                .size(12),
             ]
             .spacing(12),
         )
         .padding(16)
         .style(container::bordered_box);
 
-        // Build the model and theme selector card to centralize visual and runtime tuning.
-        // 构建模型与主题选择卡片，以集中管理视觉和运行参数。
+        // Build the provider configurator card so users can fetch and persist provider-backed model lists.
+        // 构建供应商配置器卡片，让用户可以拉取并持久化供应商模型列表。
+        let provider_configurator = container(
+            column![
+                text("模型配置器").size(18),
+                pick_list(
+                    Provider::ALL,
+                    Some(self.provider_draft_kind),
+                    Message::ProviderDraftKindSelected
+                )
+                .width(Fill)
+                .placeholder("选择供应商类型"),
+                text_input("供应商实例名称", &self.provider_draft_name)
+                    .on_input(Message::ProviderDraftNameChanged)
+                    .width(Fill),
+                text_input("基础 URL", &self.provider_draft_base_url)
+                    .on_input(Message::ProviderDraftBaseUrlChanged)
+                    .width(Fill),
+                text_input("API Key", &self.provider_draft_api_key)
+                    .secure(true)
+                    .on_input(Message::ProviderDraftApiKeyChanged)
+                    .width(Fill),
+                text(provider_configuration_hint(self.provider_draft_kind)).size(12),
+                provider_model_entry_panel,
+                button("加入到配置").on_press(Message::SaveProviderConfig),
+                text(&self.provider_fetch_status).size(12),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box);
+
+        // Build the runtime selector card to centralize visual and execution tuning.
+        // 构建运行参数卡片，以集中管理视觉与执行调优参数。
         let selectors = container(
             column![
                 text("运行参数").size(18),
-                pick_list(ModelPreset::ALL, Some(self.model), Message::ModelSelected)
-                    .width(Fill)
-                    .placeholder("选择模型"),
                 pick_list(
                     Theme::ALL,
                     Some(self.app_theme.clone()),
@@ -1718,6 +2131,10 @@ impl VulcanWorkbench {
         .padding(16)
         .style(container::bordered_box);
 
+        // Build the Rig integration card so the GUI exposes the future orchestration runtime boundary explicitly.
+        // 构建 Rig 接入卡片，让 GUI 显式暴露未来编排运行时的边界与状态。
+        let rig_integration = self.view_rig_integration_card();
+
         // Build the markdown guide card to demonstrate structured documentation rendering.
         // 构建 Markdown 指引卡片，用于展示结构化文档渲染能力。
         let guide = container(
@@ -1740,10 +2157,261 @@ impl VulcanWorkbench {
         .padding(16)
         .style(container::bordered_box);
 
-        scrollable(column![provider_controls, selectors, policies, guide, activity_log].spacing(14))
-            .height(Fill)
-            .spacing(8)
+        scrollable(
+            column![
+                configured_runtime,
+                provider_configurator,
+                selectors,
+                policies,
+                rig_integration,
+                guide,
+                activity_log
+            ]
+            .spacing(14),
+        )
+        .height(Fill)
+        .spacing(8)
+        .into()
+    }
+
+    /// Renders the Rig integration summary card reserved for future multi-role orchestration growth.
+    /// 渲染为未来多角色编排扩展预留的 Rig 接入摘要卡片。
+    fn view_rig_integration_card(&self) -> Element<'_, Message> {
+        let active_provider = self.selected_provider_instance();
+        let active_model = self.selected_configured_model();
+        let current_provider_line: Element<'_, Message> = if let Some(provider) = active_provider {
+            text(format!(
+                "当前实例：{} · {} · 基础 URL：{}",
+                provider.name, provider.kind, provider.base_url
+            ))
+            .size(12)
             .into()
+        } else {
+            text("当前尚未选择已配置供应商实例。").size(12).into()
+        };
+        let current_model_line: Element<'_, Message> = if let Some(model) = active_model {
+            text(format!("当前模型：{} · 标识：{}", model.name, model.id))
+                .size(12)
+                .into()
+        } else {
+            text("当前尚未选择已配置模型。").size(12).into()
+        };
+        let feature_line = self.rig_scaffold.feature_recommendations().iter().fold(
+            column![text("建议启用特性").size(14)].spacing(6),
+            |list, feature| {
+                list.push(
+                    text(format!(
+                        "{} · {} · {} · {}",
+                        if feature.enabled_now {
+                            "已启用"
+                        } else {
+                            "未启用"
+                        },
+                        feature.name,
+                        feature.stage,
+                        feature.summary
+                    ))
+                    .size(12),
+                )
+            },
+        );
+        let provider_line = self.rig_scaffold.providers().iter().fold(
+            column![text("已预留提供方").size(14)].spacing(6),
+            |list, provider| {
+                list.push(
+                    text(format!(
+                        "{} · {} · {} · ENV: {}",
+                        provider.kind,
+                        provider.surfaces,
+                        provider.summary,
+                        provider.required_env.join(", ")
+                    ))
+                    .size(12),
+                )
+            },
+        );
+        let role_line = self.rig_scaffold.roles().iter().fold(
+            column![text("已种子角色").size(14)].spacing(8),
+            |list, role| {
+                let preamble_length = self
+                    .rig_scaffold
+                    .compose_preamble(role.id)
+                    .map(|preamble| preamble.chars().count())
+                    .unwrap_or_default();
+                let enabled_prompt_outline = role
+                    .prompt_nodes
+                    .iter()
+                    .filter(|node| node.enabled)
+                    .map(|node| format!("{}<{}>·{}", node.title, node.id, node.kind))
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+
+                list.push(
+                    container(
+                        column![
+                            row![
+                                text(format!("{} ({})", role.name, role.id)).size(13),
+                                space::horizontal(),
+                                text(format!(
+                                    "{} · {}",
+                                    role.suggested_provider, role.suggested_model_hint
+                                ))
+                                .size(12),
+                            ]
+                            .align_y(Center),
+                            text(role.description).size(12),
+                            text(format!(
+                                "提示节点: {} | 前导字数: {} | 工具策略: {} | 可委派: {}",
+                                role.prompt_nodes.iter().filter(|node| node.enabled).count(),
+                                preamble_length,
+                                format_tool_policy(&role.tool_policy),
+                                if role.delegation_targets.is_empty() {
+                                    String::from("无")
+                                } else {
+                                    role.delegation_targets.join(", ")
+                                }
+                            ))
+                            .size(12),
+                            text(format!("启用节点详情: {}", enabled_prompt_outline)).size(12),
+                        ]
+                        .spacing(4),
+                    )
+                    .padding(10)
+                    .style(container::rounded_box),
+                )
+            },
+        );
+
+        container(
+            column![
+                text("Rig 编排内核").size(18),
+                text("当前先接入 rig-core，角色、提示节点与工具策略先按未来多代理结构建模，同时把模型来源改成外部配置文件驱动。")
+                    .size(13),
+                row![
+                    text(format!(
+                        "Rig 目录提供方: {}",
+                        self.rig_scaffold.provider_count()
+                    ))
+                    .size(12),
+                    text(format!("角色数量: {}", self.rig_scaffold.role_count())).size(12),
+                    text(format!(
+                        "已配置模型: {}",
+                        self.model_registry.model_count()
+                    ))
+                    .size(12),
+                    text(format!(
+                        "启用提示节点: {}",
+                        self.rig_scaffold.enabled_prompt_node_count()
+                    ))
+                    .size(12),
+                ]
+                .spacing(12),
+                text(format!(
+                    "配置文件位置：{}",
+                    ModelRegistryConfig::path().display()
+                ))
+                .size(12),
+                current_provider_line,
+                current_model_line,
+                feature_line,
+                provider_line,
+                role_line,
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds the configured provider options rendered by the inspector selector.
+    /// 构建由检查面板选择器渲染的已配置供应商选项列表。
+    fn configured_provider_options(&self) -> Vec<ConfiguredProviderOption> {
+        self.model_registry
+            .providers
+            .iter()
+            .map(|provider| ConfiguredProviderOption {
+                id: provider.id.clone(),
+                label: format!("{} · {}", provider.name, provider.kind),
+            })
+            .collect()
+    }
+
+    /// Builds the configured model options rendered by the inspector selector.
+    /// 构建由检查面板选择器渲染的已配置模型选项列表。
+    fn configured_model_options(&self) -> Vec<ConfiguredModelOption> {
+        self.selected_provider_id
+            .as_deref()
+            .and_then(|provider_id| self.model_registry.provider(provider_id))
+            .map(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .map(|model| ConfiguredModelOption {
+                        id: model.id.clone(),
+                        label: format!("{} · {}", model.name, model.id),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Resolves the selected provider option from the current application state.
+    /// 从当前应用状态中解析已选中的供应商选项。
+    fn selected_provider_option(&self) -> Option<ConfiguredProviderOption> {
+        self.selected_provider_id
+            .as_deref()
+            .and_then(|provider_id| self.model_registry.provider(provider_id))
+            .map(|provider| ConfiguredProviderOption {
+                id: provider.id.clone(),
+                label: format!("{} · {}", provider.name, provider.kind),
+            })
+    }
+
+    /// Resolves the selected model option from the current application state.
+    /// 从当前应用状态中解析已选中的模型选项。
+    fn selected_model_option(&self) -> Option<ConfiguredModelOption> {
+        self.selected_provider_id
+            .as_deref()
+            .zip(self.selected_model_id.as_deref())
+            .and_then(|(provider_id, model_id)| self.model_registry.model(provider_id, model_id))
+            .map(|model| ConfiguredModelOption {
+                id: model.id.clone(),
+                label: format!("{} · {}", model.name, model.id),
+            })
+    }
+
+    /// Resolves the selected configured provider instance from the registry.
+    /// 从注册表中解析当前选中的已配置供应商实例。
+    fn selected_provider_instance(&self) -> Option<&ConfiguredProvider> {
+        self.selected_provider_id
+            .as_deref()
+            .and_then(|provider_id| self.model_registry.provider(provider_id))
+    }
+
+    /// Resolves the selected configured model from the registry.
+    /// 从注册表中解析当前选中的已配置模型。
+    fn selected_configured_model(&self) -> Option<&ConfiguredModel> {
+        self.selected_provider_id
+            .as_deref()
+            .zip(self.selected_model_id.as_deref())
+            .and_then(|(provider_id, model_id)| self.model_registry.model(provider_id, model_id))
+    }
+
+    /// Returns a concise provider label for status messages and headers.
+    /// 返回供状态消息与标题使用的精简供应商标签。
+    fn active_provider_label(&self) -> String {
+        self.selected_provider_instance()
+            .map(|provider| format!("{} · {}", provider.name, provider.kind))
+            .unwrap_or_else(|| String::from("未配置供应商"))
+    }
+
+    /// Returns a concise model label for status messages and headers.
+    /// 返回供状态消息与标题使用的精简模型标签。
+    fn active_model_label(&self) -> String {
+        self.selected_configured_model()
+            .map(|model| format!("{} ({})", model.name, model.id))
+            .unwrap_or_else(|| String::from("未配置模型"))
     }
 
     /// Renders a single session card in the navigation pane.
@@ -2434,4 +3102,14 @@ fn omitted_context_line_count(
 /// 为省略行计算选择最有用的可视行号。
 fn preferred_display_line_number(line: &crate::diff::DiffLine) -> Option<usize> {
     line.new_number.or(line.old_number)
+}
+
+/// Formats one Rig tool policy into a compact human-readable label for the inspector card.
+/// 将单个 Rig 工具策略格式化为供检查卡片显示的紧凑可读标签。
+fn format_tool_policy(policy: &ToolPolicy) -> String {
+    match policy {
+        ToolPolicy::InheritWorkbench => String::from("继承工作台"),
+        ToolPolicy::AllowGroups(groups) => format!("白名单({})", groups.join(", ")),
+        ToolPolicy::DenyAll => String::from("禁用全部工具"),
+    }
 }
