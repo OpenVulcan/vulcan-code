@@ -23,9 +23,12 @@ use iced::widget::{
 use iced::window;
 use iced::{Center, Element, Fill, FillPortion, Pixels, Subscription, Task, Theme, keyboard};
 use iced_aw::ContextMenu;
-use iced_fonts::{CODICON_FONT_BYTES, codicon};
+use iced_fonts::{
+    CODICON_FONT_BYTES, FONTAWESOME_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, fontawesome, lucide,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
 
@@ -258,6 +261,8 @@ pub fn run() -> iced::Result {
     .font(theme::cjk_code_font_bytes())
     .font(theme::cjk_code_italic_font_bytes())
     .font(CODICON_FONT_BYTES)
+    .font(FONTAWESOME_FONT_BYTES)
+    .font(LUCIDE_FONT_BYTES)
     .run()
 }
 
@@ -670,11 +675,11 @@ enum MainDisplayPanel {
     /// Default workbench panel containing the pane-grid workspace.
     /// 包含分栏工作区的默认主面板。
     Main,
-    /// Prompt-skill panel placeholder used to host prompt and skill orchestration later.
-    /// 用于后续承载提示词与技能编排的提示词技能面板占位。
+    /// Regular-skill panel placeholder used to host general prompt and skill orchestration later.
+    /// 用于后续承载常规提示词与技能编排的技能（常规）面板占位。
     PromptSkills,
-    /// Lua-skill panel placeholder used to host Lua-based capabilities later.
-    /// 用于后续承载基于 Lua 的能力配置的 Lua 技能面板占位。
+    /// LuaSkills panel placeholder used to host Lua-based capabilities later.
+    /// 用于后续承载基于 LuaSkills 的能力配置的技能（LuaSkills）面板占位。
     LuaSkills,
     /// Automation panel placeholder used to host recurring and scheduled flows later.
     /// 用于后续承载定时与自动化流程的自动化面板占位。
@@ -685,6 +690,9 @@ enum MainDisplayPanel {
     /// Plugin panel placeholder used to host plugin management later.
     /// 用于后续承载插件管理的插件面板占位。
     Plugins,
+    /// VulcanMemoryMesh panel placeholder used to host memory-mesh capabilities later.
+    /// 用于后续承载 VulcanMemoryMesh 记忆网络能力的面板占位。
+    VulcanMemoryMesh,
     /// Example panel that wraps the current workspace surface for iterative redesign.
     /// 用于包裹当前工作区主体并便于重构迭代的示例面板。
     Example,
@@ -699,11 +707,12 @@ impl MainDisplayPanel {
     const fn label(self) -> &'static str {
         match self {
             Self::Main => "工作台",
-            Self::PromptSkills => "提示词技能",
-            Self::LuaSkills => "Lua 技能",
+            Self::PromptSkills => "技能（常规）",
+            Self::LuaSkills => "技能（LuaSkills）",
             Self::Automation => "自动化",
             Self::Agents => "代理",
             Self::Plugins => "插件",
+            Self::VulcanMemoryMesh => "VulcanMemoryMesh",
             Self::Example => "示例面板",
             Self::Settings => "设置",
         }
@@ -714,11 +723,12 @@ impl MainDisplayPanel {
     const fn description(self) -> &'static str {
         match self {
             Self::Main => "承载任务抽屉与主工作区，是后续 AI Coding 主入口所在位置。",
-            Self::PromptSkills => "承载提示词模板、技能节点与后续编排入口的占位面板。",
-            Self::LuaSkills => "承载 Lua 技能目录、配置与执行入口的占位面板。",
+            Self::PromptSkills => "承载常规提示词模板、技能节点与后续编排入口的占位面板。",
+            Self::LuaSkills => "承载 LuaSkills 技能目录、配置与执行入口的占位面板。",
             Self::Automation => "承载自动化任务、定时策略与唤醒流程的占位面板。",
             Self::Agents => "承载多代理定义、分工关系与运行策略的占位面板。",
             Self::Plugins => "承载插件能力、扩展安装与版本管理的占位面板。",
+            Self::VulcanMemoryMesh => "承载记忆网格、关联记忆与长期上下文能力的占位面板。",
             Self::Example => "承载当前工作区主体与交互示例，便于持续重构布局。",
             Self::Settings => "集中呈现供应商配置与运行参数，不混入全局动作。",
         }
@@ -729,11 +739,12 @@ impl MainDisplayPanel {
     const fn section_title(self) -> &'static str {
         match self {
             Self::Main => "工作台",
-            Self::PromptSkills => "提示词技能",
-            Self::LuaSkills => "Lua 技能",
+            Self::PromptSkills => "技能（常规）",
+            Self::LuaSkills => "技能（LuaSkills）",
             Self::Automation => "自动化",
             Self::Agents => "代理",
             Self::Plugins => "插件",
+            Self::VulcanMemoryMesh => "VulcanMemoryMesh",
             Self::Example => "示例面板",
             Self::Settings => "设置",
         }
@@ -749,8 +760,9 @@ impl MainDisplayPanel {
             Self::Automation => "4",
             Self::Agents => "5",
             Self::Plugins => "6",
-            Self::Example => "7",
-            Self::Settings => "8",
+            Self::VulcanMemoryMesh => "7",
+            Self::Example => "8",
+            Self::Settings => "9",
         }
     }
 
@@ -764,8 +776,9 @@ impl MainDisplayPanel {
             '4' => Some(Self::Automation),
             '5' => Some(Self::Agents),
             '6' => Some(Self::Plugins),
-            '7' => Some(Self::Example),
-            '8' => Some(Self::Settings),
+            '7' => Some(Self::VulcanMemoryMesh),
+            '8' => Some(Self::Example),
+            '9' => Some(Self::Settings),
             _ => None,
         }
     }
@@ -919,6 +932,9 @@ enum Message {
     /// Creates a new session under one project node inside the main task-drawer tree.
     /// 在主任务抽屉树中的某个项目节点下创建新会话。
     CreateTaskProjectSession(String),
+    /// Adds one new project node by picking a folder from the host file system.
+    /// 通过从宿主文件系统选择目录来新增一个项目节点。
+    AddTaskProjectFromFolder,
     /// Pins or unpins one project node inside the main task-drawer tree.
     /// 置顶或取消置顶主任务抽屉树中的某个项目节点。
     PinTaskProject(String),
@@ -976,6 +992,9 @@ enum Message {
 /// 任务抽屉树悬停动作按钮使用的图标类型。
 #[derive(Debug, Clone, Copy)]
 enum TaskTreeActionIcon {
+    /// Adds one new project node by selecting a folder from disk.
+    /// 通过从磁盘选择文件夹来新增一个项目节点。
+    AddProjectFromFolder,
     /// Creates a new child session under the current project node.
     /// 在当前项目节点下创建新的子会话。
     AddSession,
@@ -1242,10 +1261,10 @@ impl VulcanWorkbench {
                         String::from("已切换到工作台，当前聚焦任务抽屉与主工作区。")
                     }
                     MainDisplayPanel::PromptSkills => {
-                        String::from("已切换到提示词技能面板，当前显示占位内容。")
+                        String::from("已切换到技能（常规）面板，当前显示占位内容。")
                     }
                     MainDisplayPanel::LuaSkills => {
-                        String::from("已切换到 Lua 技能面板，当前显示占位内容。")
+                        String::from("已切换到技能（LuaSkills）面板，当前显示占位内容。")
                     }
                     MainDisplayPanel::Automation => {
                         String::from("已切换到自动化面板，当前显示占位内容。")
@@ -1255,6 +1274,9 @@ impl VulcanWorkbench {
                     }
                     MainDisplayPanel::Plugins => {
                         String::from("已切换到插件面板，当前显示占位内容。")
+                    }
+                    MainDisplayPanel::VulcanMemoryMesh => {
+                        String::from("已切换到 VulcanMemoryMesh 面板，当前显示占位内容。")
                     }
                     MainDisplayPanel::Example => {
                         String::from("已切换到示例面板，主工作区主体现以独立面板形式展示。")
@@ -1716,6 +1738,20 @@ impl VulcanWorkbench {
                 self.create_task_project_session(&project_id);
                 Task::none()
             }
+            Message::AddTaskProjectFromFolder => {
+                match pick_task_project_folder(self.workspace_path.trim()) {
+                    Ok(Some(selected_path)) => {
+                        self.add_task_project_from_folder(&selected_path);
+                    }
+                    Ok(None) => {
+                        self.status_message = String::from("已取消从文件夹添加项目。");
+                    }
+                    Err(error) => {
+                        self.status_message = format!("从文件夹添加项目失败：{error}");
+                    }
+                }
+                Task::none()
+            }
             Message::PinTaskProject(project_id) => {
                 if let Some(project) = self.task_project_by_id_mut(&project_id) {
                     project.pinned = !project.pinned;
@@ -1995,13 +2031,9 @@ impl VulcanWorkbench {
                                 .width(MAIN_PANEL_ACTIVITY_BAR_WIDTH)
                                 .height(Fill)
                                 .style(style::activity_bar_style),
-                            rule::vertical(1),
-                            container(self.view_active_main_panel())
-                                .width(Fill)
-                                .height(Fill),
+                            self.view_main_display_region(),
                         ]
                         .height(Fill),
-                        rule::horizontal(1),
                         self.view_status_bar(),
                     ]
                     .spacing(0)
@@ -2011,6 +2043,39 @@ impl VulcanWorkbench {
             .spacing(0)
             .into(),
         )
+    }
+
+    /// Builds the framed main display region with dedicated top, left, and bottom separators.
+    /// 构建带独立上侧、左侧、下侧分隔线的主显示区域。
+    fn view_main_display_region(&self) -> Element<'_, Message> {
+        container(
+            column![
+                container(space())
+                    .width(Fill)
+                    .height(1)
+                    .style(style::main_display_top_separator_style),
+                row![
+                    container(space())
+                        .width(1)
+                        .height(Fill)
+                        .style(style::main_display_left_separator_style),
+                    container(self.view_active_main_panel())
+                        .width(Fill)
+                        .height(Fill),
+                ]
+                .spacing(0)
+                .height(Fill),
+                container(space())
+                    .width(Fill)
+                    .height(1)
+                    .style(style::main_display_bottom_separator_style),
+            ]
+            .spacing(0)
+            .height(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .into()
     }
 
     /// Builds the currently selected top-level panel shown inside the main display region.
@@ -2030,6 +2095,9 @@ impl VulcanWorkbench {
             MainDisplayPanel::Agents => self.view_placeholder_main_panel(MainDisplayPanel::Agents),
             MainDisplayPanel::Plugins => {
                 self.view_placeholder_main_panel(MainDisplayPanel::Plugins)
+            }
+            MainDisplayPanel::VulcanMemoryMesh => {
+                self.view_placeholder_main_panel(MainDisplayPanel::VulcanMemoryMesh)
             }
             MainDisplayPanel::Example => self.view_example_panel(),
             MainDisplayPanel::Settings => self.view_settings_panel(),
@@ -2073,6 +2141,7 @@ impl VulcanWorkbench {
             self.view_main_activity_button(MainDisplayPanel::Automation),
             self.view_main_activity_button(MainDisplayPanel::Agents),
             self.view_main_activity_button(MainDisplayPanel::Plugins),
+            self.view_main_activity_button(MainDisplayPanel::VulcanMemoryMesh),
             self.view_main_activity_button(MainDisplayPanel::Example),
             self.view_main_activity_button(MainDisplayPanel::Settings),
             space::vertical().height(Fill),
@@ -2110,18 +2179,19 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Builds one codicon glyph used by the vertical top-level panel activity bar.
-    /// 构建竖向顶层面板活动条使用的单个 codicon 图标。
+    /// Builds one icon glyph used by the vertical top-level panel activity bar.
+    /// 构建竖向顶层面板活动条使用的单个图标字形。
     fn view_main_activity_icon(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
         let icon_widget = match panel {
             MainDisplayPanel::Main => codicon::layout_panel_left(),
-            MainDisplayPanel::PromptSkills => codicon::comment_discussion(),
-            MainDisplayPanel::LuaSkills => codicon::code(),
-            MainDisplayPanel::Automation => codicon::symbol_event(),
-            MainDisplayPanel::Agents => codicon::hubot(),
-            MainDisplayPanel::Plugins => codicon::extensions(),
-            MainDisplayPanel::Example => codicon::editor_layout(),
-            MainDisplayPanel::Settings => codicon::settings_gear(),
+            MainDisplayPanel::PromptSkills => lucide::hammer(),
+            MainDisplayPanel::LuaSkills => lucide::wrench(),
+            MainDisplayPanel::Automation => lucide::timer(),
+            MainDisplayPanel::Agents => lucide::bot(),
+            MainDisplayPanel::Plugins => lucide::layout_grid(),
+            MainDisplayPanel::VulcanMemoryMesh => fontawesome::brain(),
+            MainDisplayPanel::Example => lucide::panels_left_bottom(),
+            MainDisplayPanel::Settings => lucide::settings(),
         }
         .size(MAIN_PANEL_ACTIVITY_ICON_SIZE)
         .line_height(1.0);
@@ -2324,7 +2394,7 @@ impl VulcanWorkbench {
 
         if has_pinned {
             tree = tree
-                .push(self.view_main_task_group_label("置顶"))
+                .push(self.view_main_task_group_label("置顶", false))
                 .push(
                     pinned_projects.fold(column![].spacing(1).width(Fill), |column, project| {
                         column.push(self.view_main_task_project_tree_row(project))
@@ -2334,11 +2404,13 @@ impl VulcanWorkbench {
                 .push(space::vertical().height(6));
         }
 
-        tree = tree.push(self.view_main_task_group_label("项目")).push(
-            regular_projects.fold(column![].spacing(1).width(Fill), |column, project| {
-                column.push(self.view_main_task_project_tree_row(project))
-            }),
-        );
+        tree = tree
+            .push(self.view_main_task_group_label("项目", true))
+            .push(
+                regular_projects.fold(column![].spacing(1).width(Fill), |column, project| {
+                    column.push(self.view_main_task_project_tree_row(project))
+                }),
+            );
 
         tree = tree.push(self.view_main_task_project_section_tail(false));
 
@@ -2347,13 +2419,39 @@ impl VulcanWorkbench {
 
     /// Builds one compact section label used inside the project tree.
     /// 构建展示在项目树内部的紧凑分区标签。
-    fn view_main_task_group_label(&self, label: &'static str) -> Element<'_, Message> {
+    fn view_main_task_group_label(
+        &self,
+        label: &'static str,
+        show_add_project_button: bool,
+    ) -> Element<'_, Message> {
+        let trailing_action: Element<'_, Message> = if show_add_project_button {
+            tooltip(
+                Self::view_main_task_tree_icon_action_button(
+                    TaskTreeActionIcon::AddProjectFromFolder,
+                    Message::AddTaskProjectFromFolder,
+                    true,
+                ),
+                text("从文件夹添加项目"),
+                tooltip::Position::Bottom,
+            )
+            .style(container::rounded_box)
+            .into()
+        } else {
+            space::horizontal()
+                .width(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+                .into()
+        };
+
         container(
-            row![text(label).size(15).style(|theme: &Theme| {
-                iced::widget::text::Style {
-                    color: Some(theme.extended_palette().background.base.text),
-                }
-            })]
+            row![
+                text(label).size(15).style(|theme: &Theme| {
+                    iced::widget::text::Style {
+                        color: Some(theme.extended_palette().background.base.text),
+                    }
+                }),
+                space::horizontal(),
+                trailing_action,
+            ]
             .align_y(Center),
         )
         .padding(iced::Padding {
@@ -2839,10 +2937,11 @@ impl VulcanWorkbench {
     ) -> Element<'static, Message> {
         let icon_alpha = if is_visible { 0.88 } else { 0.0 };
         let icon_widget = match icon {
-            TaskTreeActionIcon::AddSession => codicon::edit(),
+            TaskTreeActionIcon::AddProjectFromFolder => lucide::folder_plus(),
+            TaskTreeActionIcon::AddSession => lucide::square_pen(),
             TaskTreeActionIcon::Archive => codicon::archive(),
         }
-        .size(13)
+        .size(14.5)
         .line_height(1.0)
         .style(move |theme: &Theme| iced::widget::text::Style {
             color: Some(
@@ -5336,6 +5435,63 @@ impl VulcanWorkbench {
         );
     }
 
+    /// Adds one new project node from the selected folder path or focuses the existing node when it already exists.
+    /// 从选中的文件夹路径新增一个项目节点，若已存在则聚焦已有节点。
+    fn add_task_project_from_folder(&mut self, selected_path: &Path) {
+        let normalized_path = normalize_task_project_path(selected_path);
+        let normalized_path_text = normalized_path.to_string_lossy().replace('\\', "/");
+
+        if let Some(existing_project) = self.task_projects.iter().find(|project| {
+            normalize_task_project_path(Path::new(&project.path))
+                .to_string_lossy()
+                .replace('\\', "/")
+                == normalized_path_text
+        }) {
+            self.expanded_task_projects
+                .insert(existing_project.id.clone());
+            self.hovered_task_project = Some(existing_project.id.clone());
+            self.status_message = format!(
+                "项目 `{}` 已存在，已定位到当前节点。",
+                existing_project.title
+            );
+            return;
+        }
+
+        let title = normalized_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| normalized_path_text.clone());
+        let order = self
+            .task_projects
+            .iter()
+            .filter(|project| !project.pinned)
+            .map(|project| project.order)
+            .max()
+            .map(|order| order + 1)
+            .unwrap_or(0);
+        let project_id = self.build_task_project_id(&title, &normalized_path_text);
+
+        self.task_projects.push(TaskProjectSummary::new(
+            project_id.clone(),
+            title.clone(),
+            normalized_path_text.clone(),
+            false,
+            order,
+            vec![],
+        ));
+        self.normalize_task_project_orders();
+        self.expanded_task_projects.insert(project_id.clone());
+        self.hovered_task_project = Some(project_id);
+        self.status_message = format!("已从文件夹新增项目 `{title}`。");
+        self.push_activity(
+            ActivityLevel::Info,
+            format!("新增项目 `{title}`"),
+            format!("已将目录 `{normalized_path_text}` 添加到项目树。"),
+        );
+    }
+
     /// Ensures the selected session still points to a valid session after tree-level archive operations.
     /// 在树级归档操作后确保当前选中会话仍然指向有效节点。
     fn ensure_valid_selected_session(&mut self) {
@@ -5345,6 +5501,35 @@ impl VulcanWorkbench {
             .all(|session| session.id != self.selected_session)
         {
             self.selected_session = self.sessions.first().map(|session| session.id).unwrap_or(0);
+        }
+    }
+
+    /// Builds one stable project identifier from a title and path while avoiding collisions in the current tree.
+    /// 基于标题与路径构建稳定项目标识，并避免与当前树中的已有节点冲突。
+    fn build_task_project_id(&self, title: &str, normalized_path_text: &str) -> String {
+        let base_slug = slugify_task_project_title(title);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        normalized_path_text.hash(&mut hasher);
+        let path_suffix = format!("{:x}", hasher.finish());
+        let path_suffix = &path_suffix[..path_suffix.len().min(8)];
+
+        let candidate = if base_slug.is_empty() {
+            format!("project-{path_suffix}")
+        } else {
+            format!("{base_slug}-{path_suffix}")
+        };
+
+        if self.task_project_by_id(&candidate).is_none() {
+            return candidate;
+        }
+
+        let mut counter = 2usize;
+        loop {
+            let next_candidate = format!("{candidate}-{counter}");
+            if self.task_project_by_id(&next_candidate).is_none() {
+                return next_candidate;
+            }
+            counter += 1;
         }
     }
 }
@@ -5433,6 +5618,47 @@ fn char_display_width_px(character: char) -> f32 {
 /// 为狭窄任务树尾部槽位压缩相对时间标签。
 fn compact_relative_label(value: &str) -> String {
     value.replace(' ', "").trim_end_matches('前').to_string()
+}
+
+/// Opens one native folder-picker dialog and returns the selected path when the user confirms.
+/// 打开一个原生文件夹选择对话框，并在用户确认时返回所选路径。
+fn pick_task_project_folder(initial_directory: &str) -> Result<Option<std::path::PathBuf>, String> {
+    let mut dialog = rfd::FileDialog::new().set_title("选择要添加到项目树的目录");
+    let trimmed_directory = initial_directory.trim();
+
+    if !trimmed_directory.is_empty() {
+        let initial_path = Path::new(trimmed_directory);
+        if initial_path.exists() && initial_path.is_dir() {
+            dialog = dialog.set_directory(initial_path);
+        }
+    }
+
+    Ok(dialog.pick_folder())
+}
+
+/// Normalizes one project path to a canonical form when the platform can resolve it.
+/// 当平台能够解析时，将某个项目路径规范化为标准形式。
+fn normalize_task_project_path(path: &Path) -> std::path::PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Builds one compact ASCII slug from the project title so generated identifiers stay readable.
+/// 从项目标题构建紧凑的 ASCII slug，保证生成标识保持可读。
+fn slugify_task_project_title(title: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+
+    for character in title.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            slug.push('-');
+            last_was_separator = true;
+        }
+    }
+
+    slug.trim_matches('-').to_string()
 }
 
 /// Opens one filesystem path with the host operating system file manager.

@@ -125,6 +125,69 @@ pub fn activity_bar_style(theme: &Theme) -> container::Style {
     }
 }
 
+/// Returns the top separator style used by the framed main display region.
+/// 返回主显示区域顶部独立分隔线使用的样式。
+pub fn main_display_top_separator_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.strong.color.scale_alpha(0.22).into()),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 2.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the left separator style used by the framed main display region.
+/// 返回主显示区域左侧独立分隔线使用的样式。
+pub fn main_display_left_separator_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.strong.color.scale_alpha(0.22).into()),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 2.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 2.0,
+            },
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the bottom separator style used by the framed main display region.
+/// 返回主显示区域底部独立分隔线使用的样式。
+pub fn main_display_bottom_separator_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.strong.color.scale_alpha(0.22).into()),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 0.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 2.0,
+            },
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the icon-button style used by one item inside the fixed left activity bar.
 /// 返回固定左侧活动条中某个图标按钮使用的样式。
 pub fn activity_bar_button_style(
