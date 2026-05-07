@@ -245,6 +245,9 @@ pub struct VulcanWorkbench {
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
+    /// Currently selected top-level panel shown in the main display region.
+    /// 当前显示在主显示区域中的顶层面板类型。
+    active_main_panel: MainDisplayPanel,
     /// Currently selected provider entry inside the configuration page.
     /// 当前在配置页面中选中的供应商条目。
     selected_provider: ProviderChoice,
@@ -436,6 +439,33 @@ impl ProviderFormState {
     }
 }
 
+/// Top-level panels that can be displayed inside the main workbench region.
+/// 可以显示在主工作台区域中的顶层面板类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainDisplayPanel {
+    /// Default workbench panel containing the pane-grid workspace.
+    /// 包含分栏工作区的默认主面板。
+    Main,
+    /// Example panel that wraps the current workspace surface for iterative redesign.
+    /// 用于包裹当前工作区主体并便于重构迭代的示例面板。
+    Example,
+    /// Settings panel that focuses on provider configuration and runtime tuning.
+    /// 聚焦供应商配置与运行调优的设置面板。
+    Settings,
+}
+
+impl MainDisplayPanel {
+    /// Returns the user-facing label shown in the top-level panel switcher.
+    /// 返回展示在顶层面板切换器中的面向用户标签。
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Main => "主面板",
+            Self::Example => "示例面板",
+            Self::Settings => "设置",
+        }
+    }
+}
+
 /// Messages emitted by iced widgets in the first prototype.
 /// 首版原型中由 iced 控件发出的消息集合。
 #[derive(Debug, Clone)]
@@ -449,6 +479,9 @@ enum Message {
     /// Requests opening or focusing the dedicated diff preview window.
     /// 请求打开或聚焦独立 Diff 预览窗口。
     OpenDiffWindow,
+    /// Switches the active top-level panel shown inside the main display region.
+    /// 切换显示在主显示区域中的顶层面板。
+    MainDisplayPanelSelected(MainDisplayPanel),
     /// A window was closed by the user or the runtime.
     /// 某个窗口已被用户或运行时关闭。
     WindowClosed(window::Id),
@@ -645,6 +678,7 @@ impl VulcanWorkbench {
                 activities: ActivityEntry::seeded(),
                 next_session_id: 4,
                 provider_configuration,
+                active_main_panel: MainDisplayPanel::Main,
                 selected_provider,
                 provider_form,
                 provider_notice,
@@ -688,6 +722,21 @@ impl VulcanWorkbench {
 
                     open_diff_window.map(Message::DiffWindowOpened)
                 }
+            }
+            Message::MainDisplayPanelSelected(panel) => {
+                self.active_main_panel = panel;
+                self.status_message = match panel {
+                    MainDisplayPanel::Main => {
+                        String::from("已切换到主面板，显示默认工作区与分栏内容。")
+                    }
+                    MainDisplayPanel::Example => {
+                        String::from("已切换到示例面板，主工作区主体现以独立面板形式展示。")
+                    }
+                    MainDisplayPanel::Settings => {
+                        String::from("已切换到设置面板，当前聚焦供应商配置与运行参数。")
+                    }
+                };
+                Task::none()
             }
             Message::WindowClosed(window_id) => {
                 if self.main_window_id == Some(window_id) {
@@ -1125,6 +1174,40 @@ impl VulcanWorkbench {
     /// Builds the main workbench window view by composing header, panes, and footer.
     /// 通过组合头部、分栏和底部状态栏构建主工作台窗口视图。
     fn view_main_window(&self) -> Element<'_, Message> {
+        column![
+            self.view_header(),
+            rule::horizontal(1),
+            container(self.view_active_main_panel()).height(Fill),
+            rule::horizontal(1),
+            self.view_status_bar(),
+        ]
+        .spacing(12)
+        .padding(16)
+        .into()
+    }
+
+    /// Builds the currently selected top-level panel shown inside the main display region.
+    /// 构建当前显示在主显示区域中的顶层面板内容。
+    fn view_active_main_panel(&self) -> Element<'_, Message> {
+        match self.active_main_panel {
+            MainDisplayPanel::Main => self.view_empty_main_panel(),
+            MainDisplayPanel::Example => self.view_example_panel(),
+            MainDisplayPanel::Settings => self.view_settings_panel(),
+        }
+    }
+
+    /// Builds the intentionally empty main panel surface.
+    /// 构建刻意保持为空白的主面板内容。
+    fn view_empty_main_panel(&self) -> Element<'_, Message> {
+        container(space().width(Fill).height(Fill))
+            .width(Fill)
+            .height(Fill)
+            .into()
+    }
+
+    /// Builds the reusable workspace surface shown by the example panel.
+    /// 构建由示例面板承载的可复用工作区主体。
+    fn view_workspace_surface(&self) -> Element<'_, Message> {
         // Capture the current focus so the pane closure can render focus hints without borrowing issues.
         // 捕获当前焦点状态，使面板闭包可以在不引发借用冲突的情况下渲染焦点提示。
         let focus = self.focus;
@@ -1164,16 +1247,19 @@ impl VulcanWorkbench {
         .on_click(Message::PaneFocused)
         .on_resize(8, Message::PaneResized);
 
-        column![
-            self.view_header(),
-            rule::horizontal(1),
-            container(pane_grid).height(Fill),
-            rule::horizontal(1),
-            self.view_status_bar(),
-        ]
-        .spacing(12)
-        .padding(16)
-        .into()
+        container(pane_grid).height(Fill).into()
+    }
+
+    /// Builds the example panel content using the shared workspace surface without an extra outer frame.
+    /// 使用共享工作区主体构建示例面板内容，并且不再额外包裹外层边框。
+    fn view_example_panel(&self) -> Element<'_, Message> {
+        self.view_workspace_surface()
+    }
+
+    /// Builds the settings panel content without adding an extra outer frame layer.
+    /// 构建设置面板内容，并且不再增加额外的外层边框层级。
+    fn view_settings_panel(&self) -> Element<'_, Message> {
+        self.view_inspector()
     }
 
     /// Builds the dedicated diff preview window so the panel can be iterated independently.
@@ -1265,6 +1351,20 @@ impl VulcanWorkbench {
         .spacing(12)
         .align_y(Center);
 
+        // Build the isolated top-level panel switcher so the main display region can swap between workbench views.
+        // 构建独立的顶层面板切换器，使主显示区域可以在不同工作视图之间切换。
+        let panel_switcher = container(
+            row![
+                self.view_panel_switch_button(MainDisplayPanel::Main),
+                self.view_panel_switch_button(MainDisplayPanel::Example),
+                self.view_panel_switch_button(MainDisplayPanel::Settings),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        )
+        .padding([8, 10])
+        .style(container::bordered_box);
+
         // Build the right-side action cluster to surface common orchestration actions at the top level.
         // 构建右侧动作区，把常用编排动作直接暴露在全局顶部。
         let actions = row![
@@ -1305,8 +1405,22 @@ impl VulcanWorkbench {
         .spacing(10)
         .align_y(Center);
 
-        row![brand, space::horizontal(), actions]
+        row![brand, panel_switcher, space::horizontal(), actions]
             .align_y(Center)
+            .into()
+    }
+
+    /// Renders one top-level panel switch button inside the isolated header switcher group.
+    /// 渲染独立顶部切换器分组中的单个顶层面板切换按钮。
+    fn view_panel_switch_button(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
+        button(panel.label())
+            .padding([10, 14])
+            .style(if self.active_main_panel == panel {
+                button::primary
+            } else {
+                button::secondary
+            })
+            .on_press(Message::MainDisplayPanelSelected(panel))
             .into()
     }
 
