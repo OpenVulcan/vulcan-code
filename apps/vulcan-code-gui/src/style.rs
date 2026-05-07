@@ -137,7 +137,7 @@ pub fn activity_bar_button_style(
         background: Some(Background::Color(palette.primary.weak.color)),
         text_color: palette.primary.strong.text,
         border: Border {
-            radius: 10.0.into(),
+            radius: 2.0.into(),
             width: 1.0,
             color: palette.primary.strong.color.scale_alpha(0.20),
         },
@@ -148,7 +148,7 @@ pub fn activity_bar_button_style(
         background: Some(Background::Color(Color::TRANSPARENT)),
         text_color: palette.background.base.text.scale_alpha(0.82),
         border: Border {
-            radius: 10.0.into(),
+            radius: 2.0.into(),
             width: 1.0,
             color: Color::TRANSPARENT,
         },
@@ -292,7 +292,7 @@ pub fn main_task_tree_session_button_style(
         background: Some(Background::Color(Color::TRANSPARENT)),
         text_color: palette.background.base.text,
         border: Border {
-            radius: 8.0.into(),
+            radius: 2.0.into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         },
@@ -305,7 +305,7 @@ pub fn main_task_tree_session_button_style(
         )),
         text_color: palette.background.base.text,
         border: Border {
-            radius: 8.0.into(),
+            radius: 2.0.into(),
             width: 1.0,
             color: palette.primary.strong.color.scale_alpha(0.16),
         },
@@ -371,13 +371,13 @@ pub fn main_task_tree_project_row_style(
     };
     let border = if is_drag_source {
         Border {
-            radius: 8.0.into(),
+            radius: 2.0.into(),
             width: 1.0,
             color: palette.primary.base.color.scale_alpha(0.34),
         }
     } else {
         Border {
-            radius: 8.0.into(),
+            radius: 2.0.into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         }
@@ -425,7 +425,7 @@ pub fn main_task_tree_drag_preview_style(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(palette.background.base.color.scale_alpha(0.84).into()),
         border: Border {
-            radius: 8.0.into(),
+            radius: 2.0.into(),
             width: 1.0,
             color: palette.primary.base.color.scale_alpha(0.72),
         },
@@ -449,7 +449,7 @@ pub fn main_task_tree_menu_style(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(palette.background.base.color.into()),
         border: Border {
-            radius: 8.0.into(),
+            radius: 2.0.into(),
             width: 1.0,
             color: palette.background.strong.color.scale_alpha(0.22),
         },
@@ -473,7 +473,7 @@ pub fn main_task_tree_menu_button_style(theme: &Theme, status: button::Status) -
         background: Some(Background::Color(Color::TRANSPARENT)),
         text_color: palette.background.base.text.scale_alpha(0.90),
         border: Border {
-            radius: 6.0.into(),
+            radius: 2.0.into(),
             width: 0.0,
             color: Color::TRANSPARENT,
         },

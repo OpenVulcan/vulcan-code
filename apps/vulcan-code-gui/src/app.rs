@@ -126,10 +126,10 @@ const MAIN_PANEL_ACTIVITY_BUTTON_SIZE: f32 = 32.0;
 
 /// Shared icon size used by each activity-bar navigation glyph.
 /// 每个活动条导航图标使用的共享尺寸。
-const MAIN_PANEL_ACTIVITY_ICON_SIZE: f32 = 18.0;
+const MAIN_PANEL_ACTIVITY_ICON_SIZE: f32 = 20.0;
 
-/// Shared fixed width reserved by the project-row action cluster to avoid hover jitter.
-/// 项目行右侧动作簇预留的共享固定宽度，用于避免悬停抖动。
+/// Shared fixed width reserved by the project-row action button cluster.
+/// 项目行右侧动作按钮簇预留的共享固定宽度。
 const MAIN_TASK_PROJECT_ACTIONS_WIDTH: f32 = 18.0;
 
 /// Shared width reserved by the project-row fold arrow at the far right edge.
@@ -147,6 +147,10 @@ const MAIN_TASK_PROJECT_ROW_HEIGHT: f32 = 30.0;
 /// Shared fixed height used by one session row inside the main task drawer tree.
 /// 主任务抽屉树内单条会话行使用的共享固定高度。
 const MAIN_TASK_SESSION_ROW_HEIGHT: f32 = 28.0;
+
+/// Shared horizontal padding used by project rows and tree section headers.
+/// 项目行与树分区头共用的水平内边距。
+const MAIN_TASK_TREE_SECTION_LEFT_PADDING: f32 = 11.0;
 
 /// Shared square size used by compact task-tree hover action buttons.
 /// 任务树紧凑悬停动作按钮使用的共享方形尺寸。
@@ -666,6 +670,21 @@ enum MainDisplayPanel {
     /// Default workbench panel containing the pane-grid workspace.
     /// 包含分栏工作区的默认主面板。
     Main,
+    /// Prompt-skill panel placeholder used to host prompt and skill orchestration later.
+    /// 用于后续承载提示词与技能编排的提示词技能面板占位。
+    PromptSkills,
+    /// Lua-skill panel placeholder used to host Lua-based capabilities later.
+    /// 用于后续承载基于 Lua 的能力配置的 Lua 技能面板占位。
+    LuaSkills,
+    /// Automation panel placeholder used to host recurring and scheduled flows later.
+    /// 用于后续承载定时与自动化流程的自动化面板占位。
+    Automation,
+    /// Agent panel placeholder used to host multi-agent configuration later.
+    /// 用于后续承载多代理配置的代理面板占位。
+    Agents,
+    /// Plugin panel placeholder used to host plugin management later.
+    /// 用于后续承载插件管理的插件面板占位。
+    Plugins,
     /// Example panel that wraps the current workspace surface for iterative redesign.
     /// 用于包裹当前工作区主体并便于重构迭代的示例面板。
     Example,
@@ -680,6 +699,11 @@ impl MainDisplayPanel {
     const fn label(self) -> &'static str {
         match self {
             Self::Main => "工作台",
+            Self::PromptSkills => "提示词技能",
+            Self::LuaSkills => "Lua 技能",
+            Self::Automation => "自动化",
+            Self::Agents => "代理",
+            Self::Plugins => "插件",
             Self::Example => "示例面板",
             Self::Settings => "设置",
         }
@@ -690,6 +714,11 @@ impl MainDisplayPanel {
     const fn description(self) -> &'static str {
         match self {
             Self::Main => "承载任务抽屉与主工作区，是后续 AI Coding 主入口所在位置。",
+            Self::PromptSkills => "承载提示词模板、技能节点与后续编排入口的占位面板。",
+            Self::LuaSkills => "承载 Lua 技能目录、配置与执行入口的占位面板。",
+            Self::Automation => "承载自动化任务、定时策略与唤醒流程的占位面板。",
+            Self::Agents => "承载多代理定义、分工关系与运行策略的占位面板。",
+            Self::Plugins => "承载插件能力、扩展安装与版本管理的占位面板。",
             Self::Example => "承载当前工作区主体与交互示例，便于持续重构布局。",
             Self::Settings => "集中呈现供应商配置与运行参数，不混入全局动作。",
         }
@@ -700,6 +729,11 @@ impl MainDisplayPanel {
     const fn section_title(self) -> &'static str {
         match self {
             Self::Main => "工作台",
+            Self::PromptSkills => "提示词技能",
+            Self::LuaSkills => "Lua 技能",
+            Self::Automation => "自动化",
+            Self::Agents => "代理",
+            Self::Plugins => "插件",
             Self::Example => "示例面板",
             Self::Settings => "设置",
         }
@@ -710,8 +744,13 @@ impl MainDisplayPanel {
     const fn shortcut_digit(self) -> &'static str {
         match self {
             Self::Main => "1",
-            Self::Example => "2",
-            Self::Settings => "3",
+            Self::PromptSkills => "2",
+            Self::LuaSkills => "3",
+            Self::Automation => "4",
+            Self::Agents => "5",
+            Self::Plugins => "6",
+            Self::Example => "7",
+            Self::Settings => "8",
         }
     }
 
@@ -720,8 +759,13 @@ impl MainDisplayPanel {
     const fn from_shortcut_digit(digit: char) -> Option<Self> {
         match digit {
             '1' => Some(Self::Main),
-            '2' => Some(Self::Example),
-            '3' => Some(Self::Settings),
+            '2' => Some(Self::PromptSkills),
+            '3' => Some(Self::LuaSkills),
+            '4' => Some(Self::Automation),
+            '5' => Some(Self::Agents),
+            '6' => Some(Self::Plugins),
+            '7' => Some(Self::Example),
+            '8' => Some(Self::Settings),
             _ => None,
         }
     }
@@ -884,6 +928,9 @@ enum Message {
     /// Archives one project node inside the main task-drawer tree.
     /// 归档主任务抽屉树中的某个项目节点。
     ArchiveTaskProject(String),
+    /// Renames one session row inside the main task-drawer tree using a lightweight placeholder flow.
+    /// 使用轻量占位流程重命名主任务抽屉树中的某个会话行。
+    RenameTaskSession(usize),
     /// Archives one session row inside the main task-drawer tree.
     /// 归档主任务抽屉树中的某个会话行。
     ArchiveTaskSession(usize),
@@ -1193,6 +1240,21 @@ impl VulcanWorkbench {
                 self.status_message = match panel {
                     MainDisplayPanel::Main => {
                         String::from("已切换到工作台，当前聚焦任务抽屉与主工作区。")
+                    }
+                    MainDisplayPanel::PromptSkills => {
+                        String::from("已切换到提示词技能面板，当前显示占位内容。")
+                    }
+                    MainDisplayPanel::LuaSkills => {
+                        String::from("已切换到 Lua 技能面板，当前显示占位内容。")
+                    }
+                    MainDisplayPanel::Automation => {
+                        String::from("已切换到自动化面板，当前显示占位内容。")
+                    }
+                    MainDisplayPanel::Agents => {
+                        String::from("已切换到代理面板，当前显示占位内容。")
+                    }
+                    MainDisplayPanel::Plugins => {
+                        String::from("已切换到插件面板，当前显示占位内容。")
                     }
                     MainDisplayPanel::Example => {
                         String::from("已切换到示例面板，主工作区主体现以独立面板形式展示。")
@@ -1535,7 +1597,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::TaskProjectHovered(project_id) => {
-                if project_id.is_none() {
+                if project_id.is_none() && self.dragging_task_project.is_none() {
                     self.active_task_project_drop_target = None;
                 }
                 self.hovered_task_project = if self.dragging_task_project.is_some() {
@@ -1548,6 +1610,18 @@ impl VulcanWorkbench {
             Message::TaskProjectDropPreviewMoved(project_id, position) => {
                 if let Some(dragged_project_id) = self.dragging_task_project.as_ref() {
                     if dragged_project_id == &project_id {
+                        self.active_task_project_drop_target = None;
+                        return Task::none();
+                    }
+
+                    let dragging_section_is_pinned = self
+                        .task_project_by_id(dragged_project_id)
+                        .map(|project| project.pinned);
+                    let hovered_section_is_pinned = self
+                        .task_project_by_id(&project_id)
+                        .map(|project| project.pinned);
+
+                    if dragging_section_is_pinned != hovered_section_is_pinned {
                         self.active_task_project_drop_target = None;
                         return Task::none();
                     }
@@ -1688,6 +1762,24 @@ impl VulcanWorkbench {
                     self.dragging_task_project = None;
                     self.ensure_valid_selected_session();
                     self.status_message = format!("已归档项目 `{}`。", project.title);
+                }
+                Task::none()
+            }
+            Message::RenameTaskSession(session_id) => {
+                if let Some(session) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
+                    let original_title = session.title.clone();
+                    if session.title.ends_with("（重命名）") {
+                        session.title = session.title.trim_end_matches("（重命名）").to_string();
+                    } else {
+                        session.title = format!("{}（重命名）", session.title);
+                    }
+                    let renamed_title = session.title.clone();
+                    self.status_message =
+                        format!("已示例性重命名会话：`{original_title}` -> `{renamed_title}`。");
                 }
                 Task::none()
             }
@@ -1926,6 +2018,19 @@ impl VulcanWorkbench {
     fn view_active_main_panel(&self) -> Element<'_, Message> {
         match self.active_main_panel {
             MainDisplayPanel::Main => self.view_empty_main_panel(),
+            MainDisplayPanel::PromptSkills => {
+                self.view_placeholder_main_panel(MainDisplayPanel::PromptSkills)
+            }
+            MainDisplayPanel::LuaSkills => {
+                self.view_placeholder_main_panel(MainDisplayPanel::LuaSkills)
+            }
+            MainDisplayPanel::Automation => {
+                self.view_placeholder_main_panel(MainDisplayPanel::Automation)
+            }
+            MainDisplayPanel::Agents => self.view_placeholder_main_panel(MainDisplayPanel::Agents),
+            MainDisplayPanel::Plugins => {
+                self.view_placeholder_main_panel(MainDisplayPanel::Plugins)
+            }
             MainDisplayPanel::Example => self.view_example_panel(),
             MainDisplayPanel::Settings => self.view_settings_panel(),
         }
@@ -1963,6 +2068,11 @@ impl VulcanWorkbench {
     fn view_main_activity_bar(&self) -> Element<'_, Message> {
         column![
             self.view_main_activity_button(MainDisplayPanel::Main),
+            self.view_main_activity_button(MainDisplayPanel::PromptSkills),
+            self.view_main_activity_button(MainDisplayPanel::LuaSkills),
+            self.view_main_activity_button(MainDisplayPanel::Automation),
+            self.view_main_activity_button(MainDisplayPanel::Agents),
+            self.view_main_activity_button(MainDisplayPanel::Plugins),
             self.view_main_activity_button(MainDisplayPanel::Example),
             self.view_main_activity_button(MainDisplayPanel::Settings),
             space::vertical().height(Fill),
@@ -2005,6 +2115,11 @@ impl VulcanWorkbench {
     fn view_main_activity_icon(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
         let icon_widget = match panel {
             MainDisplayPanel::Main => codicon::layout_panel_left(),
+            MainDisplayPanel::PromptSkills => codicon::comment_discussion(),
+            MainDisplayPanel::LuaSkills => codicon::code(),
+            MainDisplayPanel::Automation => codicon::symbol_event(),
+            MainDisplayPanel::Agents => codicon::hubot(),
+            MainDisplayPanel::Plugins => codicon::extensions(),
             MainDisplayPanel::Example => codicon::editor_layout(),
             MainDisplayPanel::Settings => codicon::settings_gear(),
         }
@@ -2030,17 +2145,7 @@ impl VulcanWorkbench {
                     .scroller_width(6),
             ));
 
-        let panel_body = column![
-            container(text("项目").size(14)).padding(iced::Padding {
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
-                left: 2.0,
-            }),
-            session_tree
-        ]
-        .spacing(10)
-        .height(Fill);
+        let panel_body = column![session_tree].spacing(0).height(Fill);
 
         let body: Element<'_, Message> = if let Some(preview) = self.view_main_task_drag_preview() {
             stack([panel_body.into(), preview]).into()
@@ -2073,7 +2178,7 @@ impl VulcanWorkbench {
 
         let preview_title = truncate_with_ellipsis(
             &dragged_project.title,
-            self.main_task_project_title_limit_chars(),
+            self.main_task_project_title_limit_width(),
         );
         let preview_card = container(
             row![
@@ -2229,7 +2334,7 @@ impl VulcanWorkbench {
                 .push(space::vertical().height(6));
         }
 
-        tree = tree.push(
+        tree = tree.push(self.view_main_task_group_label("项目")).push(
             regular_projects.fold(column![].spacing(1).width(Fill), |column, project| {
                 column.push(self.view_main_task_project_tree_row(project))
             }),
@@ -2243,25 +2348,23 @@ impl VulcanWorkbench {
     /// Builds one compact section label used inside the project tree.
     /// 构建展示在项目树内部的紧凑分区标签。
     fn view_main_task_group_label(&self, label: &'static str) -> Element<'_, Message> {
-        container(text(label).size(12).style(|theme: &Theme| {
-            iced::widget::text::Style {
-                color: Some(
-                    theme
-                        .extended_palette()
-                        .background
-                        .base
-                        .text
-                        .scale_alpha(0.52),
-                ),
-            }
-        }))
+        container(
+            row![text(label).size(15).style(|theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(theme.extended_palette().background.base.text),
+                }
+            })]
+            .align_y(Center),
+        )
         .padding(iced::Padding {
-            top: 8.0,
-            right: 2.0,
-            bottom: 4.0,
-            left: 2.0,
+            top: 3.0,
+            right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            bottom: 3.0,
+            left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
         })
+        .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
         .width(Fill)
+        .style(|theme| style::main_task_tree_project_row_style(theme, false, false))
         .into()
     }
 
@@ -2345,7 +2448,7 @@ impl VulcanWorkbench {
             container(space::horizontal()).height(10.0).width(Fill)
         })
         .interaction(if self.dragging_task_project.is_some() {
-            iced::mouse::Interaction::Grabbing
+            iced::mouse::Interaction::Move
         } else {
             iced::mouse::Interaction::default()
         })
@@ -2401,7 +2504,7 @@ impl VulcanWorkbench {
         let is_drag_source = self.dragging_task_project.as_deref() == Some(project.id.as_str());
         let source_alpha = if is_drag_source { 0.46 } else { 1.0 };
         let project_title =
-            truncate_with_ellipsis(&project.title, self.main_task_project_title_limit_chars());
+            truncate_with_ellipsis(&project.title, self.main_task_project_title_limit_width());
         let project_label = text(project_title)
             .size(15)
             .width(Fill)
@@ -2456,11 +2559,10 @@ impl VulcanWorkbench {
             row![
                 folder_icon,
                 project_label,
-                space::horizontal(),
                 container(Self::view_main_task_tree_icon_action_button(
                     TaskTreeActionIcon::AddSession,
                     Message::CreateTaskProjectSession(project.id.clone()),
-                    is_active,
+                    true,
                 ))
                 .width(MAIN_TASK_PROJECT_ACTIONS_WIDTH)
                 .center_y(Fill),
@@ -2477,7 +2579,12 @@ impl VulcanWorkbench {
             .spacing(8)
             .align_y(Center),
         )
-        .padding([3, 11])
+        .padding(iced::Padding {
+            top: 3.0,
+            right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            bottom: 3.0,
+            left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+        })
         .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
         .width(Fill)
         .style(move |theme| {
@@ -2487,9 +2594,9 @@ impl VulcanWorkbench {
         ContextMenu::new(
             mouse_area(header)
                 .interaction(if self.dragging_task_project.is_some() {
-                    iced::mouse::Interaction::Grabbing
+                    iced::mouse::Interaction::Move
                 } else {
-                    iced::mouse::Interaction::Grab
+                    iced::mouse::Interaction::default()
                 })
                 .on_press(Message::StartTaskProjectInteraction(project.id.clone()))
                 .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
@@ -2559,7 +2666,7 @@ impl VulcanWorkbench {
             self.dragging_task_project.is_none() && self.hovered_task_session == Some(session.id);
         let compact_meta = compact_relative_label(&session.last_updated_label);
         let session_title =
-            truncate_with_ellipsis(&session.title, self.main_task_session_title_limit_chars());
+            truncate_with_ellipsis(&session.title, self.main_task_session_title_limit_width());
         let session_label = text(session_title)
             .size(14)
             .width(Fill)
@@ -2625,13 +2732,16 @@ impl VulcanWorkbench {
         })
         .on_press(Message::SessionSelected(session.id));
 
-        mouse_area(
-            container(session_button)
-                .height(MAIN_TASK_SESSION_ROW_HEIGHT)
-                .width(Fill),
+        ContextMenu::new(
+            mouse_area(
+                container(session_button)
+                    .height(MAIN_TASK_SESSION_ROW_HEIGHT)
+                    .width(Fill),
+            )
+            .on_enter(Message::TaskSessionHovered(Some(session.id)))
+            .on_exit(Message::TaskSessionHovered(None)),
+            move || self.view_main_task_session_menu(session),
         )
-        .on_enter(Message::TaskSessionHovered(Some(session.id)))
-        .on_exit(Message::TaskSessionHovered(None))
         .into()
     }
 
@@ -2641,6 +2751,9 @@ impl VulcanWorkbench {
         &'a self,
         project: &'a TaskProjectSummary,
     ) -> Element<'a, Message> {
+        let _project = project;
+        let menu_width = 200.0;
+
         container(
             column![
                 Self::view_main_task_tree_menu_button(
@@ -2665,10 +2778,39 @@ impl VulcanWorkbench {
                 ),
             ]
             .spacing(2)
-            .width(iced::Length::Shrink),
+            .width(menu_width),
         )
         .padding([6, 6])
-        .width(iced::Length::Shrink)
+        .width(menu_width)
+        .style(style::main_task_tree_menu_style)
+        .into()
+    }
+
+    /// Builds the overflow menu displayed beneath one session row.
+    /// 构建显示在某个会话行下方的溢出菜单。
+    fn view_main_task_session_menu<'a>(
+        &'a self,
+        session: &'a SessionSummary,
+    ) -> Element<'a, Message> {
+        let _session = session;
+        let menu_width = 200.0;
+
+        container(
+            column![
+                Self::view_main_task_tree_menu_button(
+                    "重命名",
+                    Message::RenameTaskSession(session.id),
+                ),
+                Self::view_main_task_tree_menu_button(
+                    "归档",
+                    Message::ArchiveTaskSession(session.id),
+                ),
+            ]
+            .spacing(2)
+            .width(menu_width),
+        )
+        .padding([6, 6])
+        .width(menu_width)
         .style(style::main_task_tree_menu_style)
         .into()
     }
@@ -2688,8 +2830,8 @@ impl VulcanWorkbench {
         container(icon).width(16).center_y(Fill).into()
     }
 
-    /// Builds one compact icon-only action button used by the task-drawer tree hover actions.
-    /// 构建任务抽屉树悬停动作使用的紧凑纯图标按钮。
+    /// Builds one compact icon-only action button used by the task-drawer tree actions.
+    /// 构建任务抽屉树动作使用的紧凑纯图标按钮。
     fn view_main_task_tree_icon_action_button(
         icon: TaskTreeActionIcon,
         message: Message,
@@ -2697,7 +2839,7 @@ impl VulcanWorkbench {
     ) -> Element<'static, Message> {
         let icon_alpha = if is_visible { 0.88 } else { 0.0 };
         let icon_widget = match icon {
-            TaskTreeActionIcon::AddSession => codicon::add(),
+            TaskTreeActionIcon::AddSession => codicon::edit(),
             TaskTreeActionIcon::Archive => codicon::archive(),
         }
         .size(13)
@@ -2741,9 +2883,9 @@ impl VulcanWorkbench {
         label: &'static str,
         message: Message,
     ) -> Element<'static, Message> {
-        button(container(text(label).size(13)).padding([6, 10]))
+        button(container(text(label).size(13)).padding([6, 10]).width(Fill))
             .padding(0)
-            .width(iced::Length::Shrink)
+            .width(Fill)
             .style(style::main_task_tree_menu_button_style)
             .on_press(message)
             .into()
@@ -2871,6 +3013,24 @@ impl VulcanWorkbench {
             self.view_workspace_surface(),
         ]
         .spacing(12)
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds one shared placeholder panel for not-yet-implemented top-level feature areas.
+    /// 为尚未实现的顶层功能区域构建共享占位面板。
+    fn view_placeholder_main_panel(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
+        container(
+            column![
+                text(panel.section_title()).size(24),
+                text(panel.description()).size(13),
+                text("空面板").size(14),
+            ]
+            .spacing(10)
+            .align_x(iced::Alignment::Start),
+        )
+        .padding([18, 20])
+        .width(Fill)
         .height(Fill)
         .into()
     }
@@ -5109,27 +5269,29 @@ impl VulcanWorkbench {
         self.sort_task_projects();
     }
 
-    /// Estimates a stable single-line character budget for one project title inside the task drawer header.
-    /// 估算任务抽屉头部中单行项目标题可使用的稳定字符预算。
-    fn main_task_project_title_limit_chars(&self) -> usize {
-        let trailing_actions_width =
-            MAIN_TASK_PROJECT_ACTIONS_WIDTH + MAIN_TASK_PROJECT_ARROW_WIDTH;
-        let structural_overhead = 42.0;
-        let usable_width =
-            (self.main_task_panel_width - trailing_actions_width - structural_overhead).max(128.0);
-
-        ((usable_width / 7.2).floor() as usize).clamp(12, 64)
+    /// Estimates a stable single-line pixel budget for one project title inside the task drawer header.
+    /// 估算任务抽屉头部中单行项目标题可使用的稳定像素宽度预算。
+    fn main_task_project_title_limit_width(&self) -> f32 {
+        let horizontal_padding = 22.0;
+        let leading_folder_width = 16.0;
+        let inter_item_spacing = 24.0;
+        let trailing_width = MAIN_TASK_PROJECT_ACTIONS_WIDTH + MAIN_TASK_PROJECT_ARROW_WIDTH;
+        let title_compensation = 26.0;
+        (self.main_task_panel_width
+            - horizontal_padding
+            - leading_folder_width
+            - inter_item_spacing
+            - trailing_width
+            - title_compensation)
+            .max(144.0)
     }
 
-    /// Estimates a stable single-line character budget for one session title inside the task drawer.
-    /// 估算任务抽屉内部单条会话标题可使用的稳定单行字符预算。
-    fn main_task_session_title_limit_chars(&self) -> usize {
+    /// Estimates a stable single-line pixel budget for one session title inside the task drawer.
+    /// 估算任务抽屉内部单条会话标题可使用的稳定单行像素宽度预算。
+    fn main_task_session_title_limit_width(&self) -> f32 {
         let trailing_slot_width = MAIN_TASK_SESSION_TRAILING_WIDTH;
-        let structural_overhead = 82.0;
-        let usable_width =
-            (self.main_task_panel_width - trailing_slot_width - structural_overhead).max(112.0);
-
-        ((usable_width / 7.0).floor() as usize).clamp(10, 60)
+        let structural_overhead = 84.0;
+        (self.main_task_panel_width - trailing_slot_width - structural_overhead).max(112.0)
     }
 
     /// Creates one new session under the target project and updates all related prototype state.
@@ -5205,19 +5367,66 @@ fn pane_layout() -> Configuration<PaneKind> {
 
 /// Truncates one label to a compact single-line representation with a trailing ellipsis when needed.
 /// 在需要时将标签截断为带尾部省略号的紧凑单行表示。
-fn truncate_with_ellipsis(value: &str, max_chars: usize) -> String {
-    let char_count = value.chars().count();
+fn truncate_with_ellipsis(value: &str, max_width_px: f32) -> String {
+    let display_width = value.chars().map(char_display_width_px).sum::<f32>();
+    let ellipsis = "…";
+    let ellipsis_width = 6.4_f32;
 
-    if char_count <= max_chars {
+    if display_width <= max_width_px {
         return value.to_string();
     }
 
-    if max_chars <= 3 {
-        return String::from("...");
+    if max_width_px <= ellipsis_width {
+        return String::from(ellipsis);
     }
 
-    let visible: String = value.chars().take(max_chars - 3).collect();
-    format!("{visible}...")
+    let mut visible = String::new();
+    let mut used_width = 0.0_f32;
+    let allowed_width = max_width_px - ellipsis_width;
+
+    for character in value.chars() {
+        let character_width = char_display_width_px(character);
+
+        if used_width + character_width > allowed_width {
+            break;
+        }
+
+        visible.push(character);
+        used_width += character_width;
+    }
+
+    format!("{visible}{ellipsis}")
+}
+
+/// Estimates the visual width in pixels consumed by one character in compact single-line labels.
+/// 估算单个字符在紧凑单行标签中消耗的视觉像素宽度。
+fn char_display_width_px(character: char) -> f32 {
+    if character.is_ascii_whitespace() {
+        3.6
+    } else if character.is_ascii_punctuation() {
+        4.9
+    } else if character.is_ascii_digit() || character.is_ascii_uppercase() {
+        7.9
+    } else if character.is_ascii_lowercase() {
+        7.0
+    } else if matches!(
+        character as u32,
+        0x1100..=0x115F
+            | 0x2329..=0x232A
+            | 0x2E80..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE19
+            | 0xFE30..=0xFE6F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x1F300..=0x1FAFF
+            | 0x20000..=0x3FFFD
+    ) {
+        12.8
+    } else {
+        7.8
+    }
 }
 
 /// Compacts one relative-time label for narrow task-tree trailing slots.
