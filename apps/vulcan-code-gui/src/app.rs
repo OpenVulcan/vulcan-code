@@ -133,6 +133,18 @@ const DIFF_HUNK_FLOW_SPACING: f32 = 1.0;
 /// 文件级 diff 主体容器贡献的共享垂直内边距。
 const DIFF_FILE_BODY_VERTICAL_PADDING: f32 = 16.0;
 
+/// Shared top and bottom inset used inside one expanded diff file body container.
+/// 单个展开 Diff 文件主体容器内上下共用的边距。
+const DIFF_FILE_BODY_VERTICAL_INSET: f32 = DIFF_FILE_BODY_VERTICAL_PADDING / 2.0;
+
+/// Shared vertical overscan budget used by file-card virtualization.
+/// 文件卡片虚拟化使用的共享纵向预渲染预算。
+const DIFF_FILE_VIRTUAL_OVERSCAN: f32 = 640.0;
+
+/// Shared visual-line overscan count used by hunk-level virtualization.
+/// Hunk 级虚拟化使用的共享可视行预渲染数量。
+const DIFF_HUNK_VIRTUAL_OVERSCAN_LINES: usize = 48;
+
 /// Stable scrollable identifier used by the structured diff review flow.
 /// 结构化 diff 审查流使用的稳定滚动容器标识。
 const DIFF_PANEL_SCROLLABLE_ID: &str = "vulcan-code.diff-panel-scrollable";
@@ -200,12 +212,21 @@ pub struct VulcanWorkbench {
     /// Read-only text editor buffers used by diff file editors.
     /// Diff 文件编辑器使用的只读文本编辑器缓冲区。
     diff_code_buffers: BTreeMap<String, text_editor::Content>,
+    /// Cached wrapped hunk payloads reused by virtualized diff rendering.
+    /// 供虚拟化 Diff 渲染复用的已缓存折行 hunk 载荷。
+    diff_wrapped_hunks: BTreeMap<String, code_view::WrappedDiffHunk>,
+    /// Visible visual-line slices currently materialized into read-only editor buffers.
+    /// 当前已物化为只读编辑器缓冲区的可视行切片范围。
+    diff_buffer_slices: BTreeMap<String, DiffVisualSliceRange>,
     /// Currently hovered visual line inside one diff hunk body.
     /// 当前在某个 diff hunk 主体中悬停的可视行。
     hovered_diff_line: Option<HoveredDiffLine>,
     /// Current vertical scroll offset captured from the diff review flow.
     /// 从 diff 审查流捕获的当前纵向滚动偏移量。
     diff_scroll_offset: f32,
+    /// Current viewport height captured from the diff review flow.
+    /// 从 diff 审查流捕获的当前视口高度。
+    diff_viewport_height: f32,
     /// Markdown content rendered in the inspector guide.
     /// 渲染在检查面板指引中的 Markdown 内容。
     quick_guide: markdown::Content,
@@ -272,6 +293,71 @@ struct HoveredDiffLine {
     /// Zero-based visual line index inside the current diff hunk body.
     /// 当前 diff hunk 主体内从零开始的可视行索引。
     line_index: usize,
+}
+
+/// Materialized visual-line slice range for one virtualized diff hunk editor.
+/// 单个虚拟化 Diff hunk 编辑器已物化的可视行切片范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiffVisualSliceRange {
+    /// Inclusive start index of the visible visual-line slice.
+    /// 可视行切片的起始索引（包含）。
+    start: usize,
+    /// Exclusive end index of the visible visual-line slice.
+    /// 可视行切片的结束索引（不包含）。
+    end: usize,
+}
+
+impl DiffVisualSliceRange {
+    /// Builds one normalized slice range constrained by the total visual-line count.
+    /// 根据总可视行数量构建一个规范化切片范围。
+    fn new(start: usize, end: usize, total_lines: usize) -> Self {
+        let bounded_start = start.min(total_lines);
+        let bounded_end = end.max(bounded_start).min(total_lines);
+
+        Self {
+            start: bounded_start,
+            end: bounded_end,
+        }
+    }
+
+    /// Returns the number of visual lines covered by the slice.
+    /// 返回该切片覆盖的可视行数量。
+    fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+}
+
+/// Visible virtualized range of diff file cards inside the current review viewport.
+/// 当前审查视口内可见的虚拟化 Diff 文件卡片范围。
+#[derive(Debug, Clone, Copy)]
+struct VisibleDiffFileRange {
+    /// Inclusive start index of the visible file-card slice.
+    /// 可见文件卡片切片的起始索引（包含）。
+    start: usize,
+    /// Exclusive end index of the visible file-card slice.
+    /// 可见文件卡片切片的结束索引（不包含）。
+    end: usize,
+    /// Height spacer inserted before the first rendered file card.
+    /// 插入在首个渲染文件卡片之前的高度占位。
+    top_spacer_height: f32,
+    /// Height spacer inserted after the last rendered file card.
+    /// 插入在最后一个渲染文件卡片之后的高度占位。
+    bottom_spacer_height: f32,
+}
+
+/// One visible hunk slice together with the hidden-height spacers surrounding it.
+/// 单个可见 hunk 切片及其上下隐藏高度占位描述。
+#[derive(Debug, Clone, Copy)]
+struct VisibleDiffHunkSlice {
+    /// Visual-line slice range currently rendered inside the hunk editor.
+    /// 当前在 hunk 编辑器中渲染的可视行切片范围。
+    range: DiffVisualSliceRange,
+    /// Hidden height above the visible slice inside the full hunk block.
+    /// 整个 hunk 区块内位于可视切片上方的隐藏高度。
+    top_hidden_height: f32,
+    /// Hidden height below the visible slice inside the full hunk block.
+    /// 整个 hunk 区块内位于可视切片下方的隐藏高度。
+    bottom_hidden_height: f32,
 }
 
 /// Active diff file descriptor derived from the current review scroll position.
@@ -541,8 +627,11 @@ impl VulcanWorkbench {
                 diff_panel: placeholder_diff_panel,
                 collapsed_diff_files: BTreeSet::new(),
                 diff_code_buffers: BTreeMap::new(),
+                diff_wrapped_hunks: BTreeMap::new(),
+                diff_buffer_slices: BTreeMap::new(),
                 hovered_diff_line: None,
                 diff_scroll_offset: 0.0,
+                diff_viewport_height: 0.0,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
                 sessions: SessionSummary::seeded(),
                 selected_session: 1,
@@ -877,7 +966,7 @@ impl VulcanWorkbench {
 
                 self.diff_summary = diff_preview.summary.clone();
                 self.diff_panel = diff_preview.panel.clone();
-                self.rebuild_diff_code_buffers_for_current_wrap();
+                self.diff_scroll_offset = 0.0;
                 self.hovered_diff_line = None;
                 let available_diff_file_keys = self
                     .diff_panel
@@ -887,6 +976,7 @@ impl VulcanWorkbench {
                     .collect::<BTreeSet<_>>();
                 self.collapsed_diff_files
                     .retain(|key| available_diff_file_keys.contains(key));
+                self.rebuild_diff_code_buffers_for_current_wrap();
                 self.status_message = diff_preview.status_message.clone();
 
                 // Reflect the detected change count into the selected session card so the left queue stays informative.
@@ -911,6 +1001,8 @@ impl VulcanWorkbench {
             }
             Message::DiffPanelScrolled(viewport) => {
                 self.diff_scroll_offset = viewport.absolute_offset().y;
+                self.diff_viewport_height = viewport.bounds().height.max(0.0);
+                self.refresh_visible_diff_buffers();
                 Task::none()
             }
             Message::ToggleAndFocusDiffFile(file_key) => {
@@ -919,6 +1011,7 @@ impl VulcanWorkbench {
                     .unwrap_or(self.diff_scroll_offset);
                 self.toggle_diff_file_collapsed(&file_key);
                 self.diff_scroll_offset = target_offset;
+                self.refresh_visible_diff_buffers();
 
                 operation::scroll_to(
                     DIFF_PANEL_SCROLLABLE_ID,
@@ -1453,13 +1546,27 @@ impl VulcanWorkbench {
 
         // Build the file review flow so users can scan changed files top-to-bottom like a code review panel.
         // 构建文件级审查流，使用户可以像代码审查面板一样自上而下浏览改动。
-        let review_flow = self
-            .diff_panel
-            .files
-            .iter()
-            .fold(column![].spacing(DIFF_FILE_CARD_SPACING), |list, file| {
-                list.push(self.view_diff_file_card(file))
-            });
+        let visible_range = self.visible_diff_file_range();
+        let mut review_flow = column![].spacing(0);
+
+        if visible_range.top_spacer_height > 0.0 {
+            review_flow = review_flow.push(space().height(visible_range.top_spacer_height));
+        }
+
+        for file_index in visible_range.start..visible_range.end {
+            if file_index > visible_range.start {
+                review_flow = review_flow.push(space().height(DIFF_FILE_CARD_SPACING));
+            }
+
+            if let Some(file) = self.diff_panel.files.get(file_index) {
+                review_flow = review_flow
+                    .push(self.view_diff_file_card(file, self.diff_file_top_offset(file_index)));
+            }
+        }
+
+        if visible_range.bottom_spacer_height > 0.0 {
+            review_flow = review_flow.push(space().height(visible_range.bottom_spacer_height));
+        }
 
         let current_file_bar = self.view_current_diff_file_bar();
 
@@ -1533,7 +1640,11 @@ impl VulcanWorkbench {
 
     /// Renders one file card in the Git diff review flow.
     /// 在 Git diff 审查流中渲染单个文件卡片。
-    fn view_diff_file_card<'a>(&'a self, file: &'a DiffFile) -> Element<'a, Message> {
+    fn view_diff_file_card<'a>(
+        &'a self,
+        file: &'a DiffFile,
+        file_top_offset: f32,
+    ) -> Element<'a, Message> {
         // Resolve the stable file key so collapse state survives rerenders and repeat scans.
         // 解析稳定文件键，保证折叠状态在重渲染和重复扫描后依然可追踪。
         let file_key = file.key();
@@ -1544,7 +1655,9 @@ impl VulcanWorkbench {
         let file_body: Element<'a, Message> = if is_collapsed {
             column![].into()
         } else {
-            container(self.view_diff_file_code(file)).width(Fill).into()
+            container(self.view_diff_file_code(file, file_top_offset))
+                .width(Fill)
+                .into()
         };
 
         container(column![file_header, file_body,].spacing(0))
@@ -1629,7 +1742,11 @@ impl VulcanWorkbench {
 
     /// Renders one file-level diff body using the same editor foundation as the home page.
     /// 使用与首页相同的编辑器基础渲染文件级 diff 主体。
-    fn view_diff_file_code<'a>(&'a self, file: &'a DiffFile) -> Element<'a, Message> {
+    fn view_diff_file_code<'a>(
+        &'a self,
+        file: &'a DiffFile,
+        file_top_offset: f32,
+    ) -> Element<'a, Message> {
         // Render a compact fallback when the file has no visible hunk payload.
         // 当文件没有可见 hunk 载荷时渲染紧凑回退提示。
         if file.hunks.is_empty() {
@@ -1644,15 +1761,32 @@ impl VulcanWorkbench {
         // 将文件拆成 hunk 卡片与省略卡片，使不连续的变更区在视觉上更稳定。
         let file_key = file.key();
         let mut hunk_flow = column![].spacing(1);
+        let mut hunk_top_offset =
+            file_top_offset + DIFF_FILE_HEADER_HEIGHT + DIFF_FILE_BODY_VERTICAL_INSET;
 
         for (hunk_index, hunk) in file.hunks.iter().enumerate() {
             if hunk_index > 0 {
                 let omitted_lines = omitted_context_line_count(&file.hunks[hunk_index - 1], hunk);
                 hunk_flow = hunk_flow.push(self.view_diff_gap_block(omitted_lines));
+                hunk_top_offset += DIFF_HUNK_FLOW_SPACING;
+                hunk_top_offset += DIFF_GAP_BLOCK_HEIGHT;
+                hunk_top_offset += DIFF_HUNK_FLOW_SPACING;
             }
 
-            hunk_flow =
-                hunk_flow.push(self.view_diff_hunk_block(file, &file_key, hunk_index, hunk));
+            hunk_flow = hunk_flow.push(self.view_diff_hunk_block(
+                file,
+                &file_key,
+                hunk_index,
+                hunk,
+                hunk_top_offset,
+            ));
+
+            let wrapped_key = diff_hunk_buffer_key(&file_key, hunk_index);
+            if let Some(wrapped_hunk) = self.diff_wrapped_hunks.get(&wrapped_key) {
+                hunk_top_offset += wrapped_hunk.visual_lines.len() as f32 * CODE_EDITOR_LINE_HEIGHT;
+            } else {
+                hunk_top_offset += self.diff_hunk_block_height(&file_key, hunk_index, hunk);
+            }
         }
 
         container(hunk_flow).padding([8, 10]).width(Fill).into()
@@ -1694,17 +1828,30 @@ impl VulcanWorkbench {
         file: &'a DiffFile,
         file_key: &str,
         hunk_index: usize,
-        hunk: &'a crate::diff::DiffHunk,
+        _hunk: &'a crate::diff::DiffHunk,
+        _hunk_top_offset: f32,
     ) -> Element<'a, Message> {
-        let wrap_columns = self.current_diff_wrap_columns();
-        let wrapped_hunk = code_view::wrap_diff_hunk(hunk, wrap_columns);
-        let line_count = wrapped_hunk.visual_lines.len();
+        let buffer_key = diff_hunk_buffer_key(file_key, hunk_index);
+        let Some(wrapped_hunk) = self.diff_wrapped_hunks.get(&buffer_key) else {
+            return space().height(0).into();
+        };
+        let total_line_count = wrapped_hunk.visual_lines.len();
+        let block_height = total_line_count as f32 * CODE_EDITOR_LINE_HEIGHT;
+        let Some(slice_range) = self.diff_buffer_slices.get(&buffer_key).copied() else {
+            return space().height(block_height).into();
+        };
+        let line_count = slice_range.len();
+        let visible_slice = VisibleDiffHunkSlice {
+            range: slice_range,
+            top_hidden_height: slice_range.start as f32 * CODE_EDITOR_LINE_HEIGHT,
+            bottom_hidden_height: (total_line_count.saturating_sub(slice_range.end)) as f32
+                * CODE_EDITOR_LINE_HEIGHT,
+        };
 
         if line_count == 0 {
-            return space().height(0).into();
+            return space().height(block_height).into();
         }
 
-        let buffer_key = diff_hunk_buffer_key(file_key, hunk_index);
         let content = self
             .diff_code_buffers
             .get(&buffer_key)
@@ -1713,7 +1860,7 @@ impl VulcanWorkbench {
         let action_buffer_key = buffer_key.clone();
         let hover_buffer_key = buffer_key.clone();
         let editor_font = theme::code_font();
-        let block_height = line_count as f32 * CODE_EDITOR_LINE_HEIGHT;
+        let visible_height = line_count as f32 * CODE_EDITOR_LINE_HEIGHT;
         let gutter_block_width = diff_gutter_block_width();
         let mut line_bars = column![].spacing(0);
         let mut line_arrow_column = column![].spacing(0);
@@ -1726,6 +1873,8 @@ impl VulcanWorkbench {
         let hover_anchor_indices = wrapped_hunk
             .visual_lines
             .iter()
+            .skip(visible_slice.range.start)
+            .take(line_count)
             .map(|line| line.anchor_index)
             .collect::<Vec<_>>();
         let hovered_line_index = self.hovered_diff_line.as_ref().and_then(|hovered| {
@@ -1735,7 +1884,14 @@ impl VulcanWorkbench {
                 None
             }
         });
-        for (visual_line_index, visual_line) in wrapped_hunk.visual_lines.iter().enumerate() {
+        for (visible_line_offset, visual_line) in wrapped_hunk
+            .visual_lines
+            .iter()
+            .enumerate()
+            .skip(visible_slice.range.start)
+            .take(line_count)
+        {
+            let absolute_visual_line_index = visible_line_offset;
             if current_bar_kind == Some(visual_line.kind) {
                 current_bar_count += 1;
             } else {
@@ -1778,7 +1934,7 @@ impl VulcanWorkbench {
                 container(
                     text(
                         if hovered_line_index == Some(visual_line.anchor_index)
-                            && visual_line.anchor_index == visual_line_index
+                            && visual_line.anchor_index == absolute_visual_line_index
                         {
                             "▶"
                         } else {
@@ -1837,9 +1993,9 @@ impl VulcanWorkbench {
                 .size(CODE_EDITOR_TEXT_SIZE)
                 .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
                 .wrapping(iced::advanced::text::Wrapping::None)
-                .min_height(block_height)
-                .max_height(block_height)
-                .height(block_height)
+                .min_height(visible_height)
+                .max_height(visible_height)
+                .height(visible_height)
                 .padding(0)
                 .font(editor_font)
                 .style(style::diff_code_editor_style)
@@ -1858,7 +2014,7 @@ impl VulcanWorkbench {
         let gutter_layer = container(stack([
             container(line_number_backgrounds)
                 .width(gutter_block_width)
-                .height(block_height)
+                .height(visible_height)
                 .into(),
             row![
                 line_bars,
@@ -1871,42 +2027,51 @@ impl VulcanWorkbench {
             ]
             .spacing(0)
             .width(gutter_block_width)
-            .height(block_height)
+            .height(visible_height)
             .into(),
         ]))
         .width(gutter_block_width)
-        .height(block_height);
+        .height(visible_height);
+
+        let visible_row = mouse_area(
+            row![
+                gutter_layer,
+                container(file_editor)
+                    .padding([0, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
+                    .height(visible_height)
+                    .width(Fill),
+            ]
+            .spacing(0)
+            .height(visible_height)
+            .width(Fill),
+        )
+        .on_move({
+            let buffer_key = hover_buffer_key.clone();
+            let hover_anchor_indices = hover_anchor_indices.clone();
+
+            move |position| {
+                let raw_line_index =
+                    hovered_diff_line_index_from_cursor(position.y, hover_anchor_indices.len());
+                let anchor_line_index = hover_anchor_indices
+                    .get(raw_line_index)
+                    .copied()
+                    .unwrap_or(raw_line_index);
+
+                Message::DiffCodeHoverMoved(buffer_key.clone(), anchor_line_index)
+            }
+        })
+        .on_exit(Message::DiffCodeHoverExited(hover_buffer_key));
 
         container(
-            mouse_area(
-                row![
-                    gutter_layer,
-                    container(file_editor)
-                        .padding([0, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
-                        .height(block_height)
-                        .width(Fill),
-                ]
-                .spacing(0)
-                .height(block_height)
-                .width(Fill),
-            )
-            .on_move({
-                let buffer_key = hover_buffer_key.clone();
-                let hover_anchor_indices = hover_anchor_indices.clone();
-
-                move |position| {
-                    let raw_line_index =
-                        hovered_diff_line_index_from_cursor(position.y, hover_anchor_indices.len());
-                    let anchor_line_index = hover_anchor_indices
-                        .get(raw_line_index)
-                        .copied()
-                        .unwrap_or(raw_line_index);
-
-                    Message::DiffCodeHoverMoved(buffer_key.clone(), anchor_line_index)
-                }
-            })
-            .on_exit(Message::DiffCodeHoverExited(hover_buffer_key)),
+            column![
+                space().height(visible_slice.top_hidden_height),
+                visible_row,
+                space().height(visible_slice.bottom_hidden_height),
+            ]
+            .spacing(0)
+            .width(Fill),
         )
+        .height(block_height)
         .style(style::diff_block_style)
         .clip(true)
         .width(Fill)
@@ -2411,11 +2576,65 @@ impl VulcanWorkbench {
             .find(|session| session.id == self.selected_session)
     }
 
-    /// Rebuilds all diff editor buffers using the current wrapped-column estimate.
-    /// 使用当前折行列数估算结果重建全部 diff 编辑器缓冲区。
+    /// Rebuilds all wrapped hunk caches under the current column estimate and refreshes visible buffers.
+    /// 在当前列宽估算下重建全部 hunk 折行缓存，并刷新可见缓冲区。
     fn rebuild_diff_code_buffers_for_current_wrap(&mut self) {
-        self.diff_code_buffers =
-            rebuild_diff_code_buffers(&self.diff_panel, self.current_diff_wrap_columns());
+        self.diff_wrapped_hunks =
+            rebuild_wrapped_diff_hunks(&self.diff_panel, self.current_diff_wrap_columns());
+        self.refresh_visible_diff_buffers();
+    }
+
+    /// Refreshes only the diff editor buffers currently needed by the visible virtualized viewport.
+    /// 仅刷新当前虚拟化视口真正需要的 Diff 编辑器缓冲区。
+    fn refresh_visible_diff_buffers(&mut self) {
+        let visible_file_range = self.visible_diff_file_range();
+        let mut next_buffers = BTreeMap::new();
+        let mut next_slices = BTreeMap::new();
+
+        for file_index in visible_file_range.start..visible_file_range.end {
+            let Some(file) = self.diff_panel.files.get(file_index) else {
+                continue;
+            };
+
+            if self.collapsed_diff_files.contains(&file.key()) {
+                continue;
+            }
+
+            let file_top_offset = self.diff_file_top_offset(file_index);
+            let mut hunk_top_offset =
+                file_top_offset + DIFF_FILE_HEADER_HEIGHT + DIFF_FILE_BODY_VERTICAL_INSET;
+            let file_key = file.key();
+
+            for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+                if hunk_index > 0 {
+                    hunk_top_offset += DIFF_HUNK_FLOW_SPACING;
+                    hunk_top_offset += DIFF_GAP_BLOCK_HEIGHT;
+                    hunk_top_offset += DIFF_HUNK_FLOW_SPACING;
+                }
+
+                let wrapped_key = diff_hunk_buffer_key(&file_key, hunk_index);
+                let Some(wrapped_hunk) = self.diff_wrapped_hunks.get(&wrapped_key) else {
+                    hunk_top_offset += self.diff_hunk_block_height(&file_key, hunk_index, hunk);
+                    continue;
+                };
+
+                let visible_slice =
+                    self.visible_diff_hunk_slice(hunk_top_offset, wrapped_hunk.visual_lines.len());
+
+                if visible_slice.range.len() > 0 {
+                    next_slices.insert(wrapped_key.clone(), visible_slice.range);
+                    next_buffers.insert(
+                        wrapped_key.clone(),
+                        build_diff_slice_buffer(wrapped_hunk, visible_slice.range),
+                    );
+                }
+
+                hunk_top_offset += wrapped_hunk.visual_lines.len() as f32 * CODE_EDITOR_LINE_HEIGHT;
+            }
+        }
+
+        self.diff_code_buffers = next_buffers;
+        self.diff_buffer_slices = next_slices;
     }
 
     /// Estimates the wrapped code column budget used by diff hunk editors in the current layout.
@@ -2439,6 +2658,133 @@ impl VulcanWorkbench {
         ((available_code_width / estimated_glyph_width).floor() as usize).max(DIFF_MIN_WRAP_COLUMNS)
     }
 
+    /// Returns the current diff viewport height, preferring the real scroll viewport and falling back to layout estimates.
+    /// 返回当前 Diff 视口高度，优先使用真实滚动视口高度，不足时回退到布局估算。
+    fn current_diff_viewport_height(&self) -> f32 {
+        let dedicated_window_height = if self.diff_window_id.is_some() {
+            (self.diff_window_size.height - 180.0).max(240.0)
+        } else {
+            0.0
+        };
+        let main_panel_height = (self.main_window_size.height * 0.42).max(220.0);
+
+        self.diff_viewport_height
+            .max(dedicated_window_height.max(main_panel_height))
+    }
+
+    /// Returns the overscanned vertical window used by diff virtualization.
+    /// 返回 Diff 虚拟化使用的带预加载区域的纵向窗口。
+    fn diff_virtual_window(&self) -> (f32, f32) {
+        let viewport_height = self.current_diff_viewport_height();
+        let start = (self.diff_scroll_offset - DIFF_FILE_VIRTUAL_OVERSCAN).max(0.0);
+        let end = self.diff_scroll_offset + viewport_height + DIFF_FILE_VIRTUAL_OVERSCAN;
+
+        (start, end)
+    }
+
+    /// Resolves the currently visible file-card range for virtualized diff rendering.
+    /// 解析当前虚拟化 Diff 渲染需要展示的文件卡片范围。
+    fn visible_diff_file_range(&self) -> VisibleDiffFileRange {
+        if self.diff_panel.files.is_empty() {
+            return VisibleDiffFileRange {
+                start: 0,
+                end: 0,
+                top_spacer_height: 0.0,
+                bottom_spacer_height: 0.0,
+            };
+        }
+
+        let (window_top, window_bottom) = self.diff_virtual_window();
+        let mut running_offset = 0.0;
+        let mut first_visible = None;
+        let mut last_visible = None;
+        let mut last_file_bottom = 0.0;
+
+        for (index, file) in self.diff_panel.files.iter().enumerate() {
+            let file_top = running_offset;
+            let file_bottom = file_top + self.diff_file_card_height(file);
+
+            if file_bottom >= window_top && file_top <= window_bottom {
+                first_visible.get_or_insert(index);
+                last_visible = Some(index);
+            }
+
+            last_file_bottom = file_bottom;
+            running_offset = file_bottom;
+
+            if index + 1 < self.diff_panel.files.len() {
+                running_offset += DIFF_FILE_CARD_SPACING;
+            }
+        }
+
+        let (start, end) = match (first_visible, last_visible) {
+            (Some(start), Some(end)) => (start, end + 1),
+            _ => {
+                let fallback_index = self.diff_panel.files.len().saturating_sub(1);
+                (fallback_index, fallback_index + 1)
+            }
+        };
+        let top_spacer_height = self.diff_file_top_offset(start);
+        let bottom_spacer_height = (last_file_bottom
+            - (self.diff_file_top_offset(end - 1)
+                + self.diff_file_card_height(&self.diff_panel.files[end - 1])))
+        .max(0.0);
+
+        VisibleDiffFileRange {
+            start,
+            end,
+            top_spacer_height,
+            bottom_spacer_height,
+        }
+    }
+
+    /// Resolves the visible virtualized slice for one wrapped hunk block under the current viewport.
+    /// 解析当前视口下单个已折行 hunk 区块的可见虚拟化切片。
+    fn visible_diff_hunk_slice(
+        &self,
+        hunk_top_offset: f32,
+        total_visual_lines: usize,
+    ) -> VisibleDiffHunkSlice {
+        let total_height = total_visual_lines as f32 * CODE_EDITOR_LINE_HEIGHT;
+
+        if total_visual_lines == 0 {
+            return VisibleDiffHunkSlice {
+                range: DiffVisualSliceRange::new(0, 0, 0),
+                top_hidden_height: 0.0,
+                bottom_hidden_height: 0.0,
+            };
+        }
+
+        let (window_top, window_bottom) = self.diff_virtual_window();
+        let hunk_bottom_offset = hunk_top_offset + total_height;
+
+        if hunk_bottom_offset < window_top || hunk_top_offset > window_bottom {
+            return VisibleDiffHunkSlice {
+                range: DiffVisualSliceRange::new(0, 0, total_visual_lines),
+                top_hidden_height: 0.0,
+                bottom_hidden_height: total_height,
+            };
+        }
+
+        let visible_top = (window_top - hunk_top_offset).max(0.0);
+        let visible_bottom = (window_bottom - hunk_top_offset).min(total_height).max(0.0);
+        let start_line = ((visible_top / CODE_EDITOR_LINE_HEIGHT).floor() as usize)
+            .saturating_sub(DIFF_HUNK_VIRTUAL_OVERSCAN_LINES);
+        let end_line = ((visible_bottom / CODE_EDITOR_LINE_HEIGHT).ceil() as usize)
+            .saturating_add(DIFF_HUNK_VIRTUAL_OVERSCAN_LINES)
+            .min(total_visual_lines);
+        let range = DiffVisualSliceRange::new(start_line, end_line, total_visual_lines);
+        let top_hidden_height = range.start as f32 * CODE_EDITOR_LINE_HEIGHT;
+        let bottom_hidden_height =
+            (total_visual_lines.saturating_sub(range.end)) as f32 * CODE_EDITOR_LINE_HEIGHT;
+
+        VisibleDiffHunkSlice {
+            range,
+            top_hidden_height,
+            bottom_hidden_height,
+        }
+    }
+
     /// Toggles one diff file between collapsed and expanded state.
     /// 在折叠与展开状态之间切换单个 diff 文件。
     fn toggle_diff_file_collapsed(&mut self, file_key: &str) {
@@ -2449,6 +2795,7 @@ impl VulcanWorkbench {
         }
 
         self.hovered_diff_line = None;
+        self.refresh_visible_diff_buffers();
     }
 
     /// Resolves the currently active diff file from the review scroll offset.
@@ -2501,6 +2848,26 @@ impl VulcanWorkbench {
         None
     }
 
+    /// Resolves the top edge offset of one diff file card inside the virtualized review flow.
+    /// 解析虚拟化审查流中单个 Diff 文件卡片的顶部偏移。
+    fn diff_file_top_offset(&self, target_index: usize) -> f32 {
+        let mut running_offset = 0.0;
+
+        for (index, file) in self.diff_panel.files.iter().enumerate() {
+            if index == target_index {
+                return running_offset;
+            }
+
+            running_offset += self.diff_file_card_height(file);
+
+            if index + 1 < self.diff_panel.files.len() {
+                running_offset += DIFF_FILE_CARD_SPACING;
+            }
+        }
+
+        running_offset
+    }
+
     /// Estimates the rendered height of one diff file card in the current layout.
     /// 估算当前布局下单个 diff 文件卡片的渲染高度。
     fn diff_file_card_height(&self, file: &DiffFile) -> f32 {
@@ -2521,14 +2888,15 @@ impl VulcanWorkbench {
             return DIFF_EMPTY_BODY_HEIGHT;
         }
 
-        let wrap_columns = self.current_diff_wrap_columns();
+        let file_key = file.key();
         let hunk_count = file.hunks.len();
         let gap_count = hunk_count.saturating_sub(1);
         let block_count = hunk_count + gap_count;
         let hunk_heights = file
             .hunks
             .iter()
-            .map(|hunk| self.diff_hunk_block_height(hunk, wrap_columns))
+            .enumerate()
+            .map(|(hunk_index, hunk)| self.diff_hunk_block_height(&file_key, hunk_index, hunk))
             .sum::<f32>();
         let gap_heights = gap_count as f32 * DIFF_GAP_BLOCK_HEIGHT;
         let inter_block_spacing = block_count.saturating_sub(1) as f32 * DIFF_HUNK_FLOW_SPACING;
@@ -2538,10 +2906,21 @@ impl VulcanWorkbench {
 
     /// Estimates the rendered height of one hunk block after wrapping under the current column budget.
     /// 估算当前列预算下单个 hunk 区块折行后的渲染高度。
-    fn diff_hunk_block_height(&self, hunk: &crate::diff::DiffHunk, wrap_columns: usize) -> f32 {
-        let wrapped_hunk = code_view::wrap_diff_hunk(hunk, wrap_columns);
-
-        wrapped_hunk.visual_lines.len() as f32 * CODE_EDITOR_LINE_HEIGHT
+    fn diff_hunk_block_height(
+        &self,
+        file_key: &str,
+        hunk_index: usize,
+        hunk: &crate::diff::DiffHunk,
+    ) -> f32 {
+        self.diff_wrapped_hunks
+            .get(&diff_hunk_buffer_key(file_key, hunk_index))
+            .map(|wrapped_hunk| wrapped_hunk.visual_lines.len() as f32 * CODE_EDITOR_LINE_HEIGHT)
+            .unwrap_or_else(|| {
+                code_view::wrap_diff_hunk(hunk, self.current_diff_wrap_columns())
+                    .visual_lines
+                    .len() as f32
+                    * CODE_EDITOR_LINE_HEIGHT
+            })
     }
 
     /// Pushes a new activity entry while keeping the most recent items first.
@@ -2808,6 +3187,8 @@ fn run_git_command(path: &Path, arguments: &[&str]) -> Result<String, String> {
     // Execute Git without involving a shell so paths containing spaces remain safe and predictable.
     // 直接执行 Git 而不经过 shell，保证包含空格的路径依然安全且可预测。
     let output = Command::new("git")
+        .args(["-c", "core.quotepath=false"])
+        .args(["-c", "i18n.logOutputEncoding=utf-8"])
         .arg("-C")
         .arg(path)
         .args(arguments)
@@ -2910,28 +3291,37 @@ fn combine_diff_sections(tracked_diff_output: &str, untracked_diff_output: &str)
     }
 }
 
-/// Rebuilds the read-only text editor buffers for every visible diff hunk.
-/// 为每个可见的 diff hunk 重建只读文本编辑器缓冲区。
-fn rebuild_diff_code_buffers(
+/// Rebuilds wrapped diff-hunk payloads for the current wrap-column estimate.
+/// 根据当前折行列数估算结果重建 Diff hunk 折行载荷。
+fn rebuild_wrapped_diff_hunks(
     panel: &WorkspaceDiffPanel,
     wrap_columns: usize,
-) -> BTreeMap<String, text_editor::Content> {
-    let mut buffers = BTreeMap::new();
+) -> BTreeMap<String, code_view::WrappedDiffHunk> {
+    let mut wrapped_hunks = BTreeMap::new();
 
     for file in &panel.files {
         let file_key = file.key();
 
         for (hunk_index, hunk) in file.hunks.iter().enumerate() {
-            let wrapped_hunk = code_view::wrap_diff_hunk(hunk, wrap_columns);
-
-            buffers.insert(
+            wrapped_hunks.insert(
                 diff_hunk_buffer_key(&file_key, hunk_index),
-                text_editor::Content::with_text(&wrapped_hunk.text),
+                code_view::wrap_diff_hunk(hunk, wrap_columns),
             );
         }
     }
 
-    buffers
+    wrapped_hunks
+}
+
+/// Builds one read-only text editor buffer from a virtualized wrapped-hunk slice.
+/// 根据虚拟化后的折行 hunk 切片构建只读文本编辑器缓冲区。
+fn build_diff_slice_buffer(
+    wrapped_hunk: &code_view::WrappedDiffHunk,
+    slice_range: DiffVisualSliceRange,
+) -> text_editor::Content {
+    let sliced_text = wrapped_hunk.text_lines[slice_range.start..slice_range.end].join("\n");
+
+    text_editor::Content::with_text(&sliced_text)
 }
 
 /// Formats merged diff line numbers for the shared gutter.

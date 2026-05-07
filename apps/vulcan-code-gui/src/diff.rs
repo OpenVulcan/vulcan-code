@@ -117,14 +117,16 @@ impl WorkspaceDiffPanel {
                 }
 
                 if raw_line.starts_with("rename from ") {
-                    file.previous_path =
-                        Some(raw_line.trim_start_matches("rename from ").to_string());
+                    file.previous_path = Some(normalize_git_path(
+                        raw_line.trim_start_matches("rename from ").trim(),
+                    ));
                     file.metadata.push(String::from("RENAME"));
                     continue;
                 }
 
                 if raw_line.starts_with("rename to ") {
-                    file.path = raw_line.trim_start_matches("rename to ").to_string();
+                    file.path =
+                        normalize_git_path(raw_line.trim_start_matches("rename to ").trim());
                     continue;
                 }
 
@@ -362,9 +364,9 @@ pub enum DiffLineKind {
 /// 将 `diff --git` 头部行解析为旧路径与新路径。
 fn parse_diff_git_header(header: &str) -> (String, String) {
     let raw_paths = header.trim_start_matches("diff --git ").trim();
-    let mut parts = raw_paths.split_whitespace();
-    let previous_path = normalize_git_path(parts.next().unwrap_or_default());
-    let current_path = normalize_git_path(parts.next().unwrap_or_default());
+    let parsed_paths = parse_git_header_paths(raw_paths);
+    let previous_path = normalize_git_path(parsed_paths.first().map_or("", String::as_str));
+    let current_path = normalize_git_path(parsed_paths.get(1).map_or("", String::as_str));
 
     (
         previous_path.clone(),
@@ -374,6 +376,46 @@ fn parse_diff_git_header(header: &str) -> (String, String) {
             current_path
         },
     )
+}
+
+/// Parses the path tokens inside one `diff --git` header while preserving quoted UTF paths.
+/// 解析单个 `diff --git` 头部中的路径标记，并保留带引号的 UTF 路径。
+fn parse_git_header_paths(raw_paths: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut current = String::new();
+    let mut inside_quotes = false;
+    let mut escape_next = false;
+
+    for character in raw_paths.chars() {
+        if escape_next {
+            current.push(character);
+            escape_next = false;
+            continue;
+        }
+
+        match character {
+            '\\' if inside_quotes => {
+                escape_next = true;
+            }
+            '"' => {
+                inside_quotes = !inside_quotes;
+                current.push(character);
+            }
+            ' ' | '\t' if !inside_quotes => {
+                if !current.is_empty() {
+                    paths.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => current.push(character),
+        }
+    }
+
+    if !current.is_empty() {
+        paths.push(current);
+    }
+
+    paths
 }
 
 /// Parses the unified hunk header into the starting line number cursor.

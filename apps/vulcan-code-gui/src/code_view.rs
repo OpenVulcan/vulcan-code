@@ -64,9 +64,9 @@ pub fn syntax_token(path: &str) -> String {
 /// 单个 hunk 级 diff 编辑器使用的折行展示载荷。
 #[derive(Debug, Clone)]
 pub struct WrappedDiffHunk {
-    /// Pre-wrapped text rendered by the read-only editor.
-    /// 供只读编辑器渲染的预折行文本。
-    pub text: String,
+    /// Pre-wrapped visual text lines used by virtualized hunk slices.
+    /// 供虚拟化 hunk 切片使用的预折行文本列表。
+    pub text_lines: Vec<String>,
     /// Visual lines generated after wrapping the original diff rows.
     /// 对原始 diff 行折行后生成的可视行列表。
     pub visual_lines: Vec<WrappedDiffVisualLine>,
@@ -114,7 +114,7 @@ pub fn wrap_diff_hunk(hunk: &DiffHunk, wrap_columns: usize) -> WrappedDiffHunk {
     }
 
     WrappedDiffHunk {
-        text: text_lines.join("\n"),
+        text_lines,
         visual_lines,
     }
 }
