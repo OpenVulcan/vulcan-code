@@ -26,3 +26,5 @@ target
 /target
 /third_party
 /.qwen
+/docs/plan/
+/docs/completed/
