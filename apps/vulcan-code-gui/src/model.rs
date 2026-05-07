@@ -128,6 +128,9 @@ pub struct SessionSummary {
     /// Number of queued execution steps.
     /// 已排队的执行步骤数量。
     pub queued_steps: u8,
+    /// Relative last-updated label shown in compact tree views.
+    /// 展示在紧凑树视图中的相对更新时间标签。
+    pub last_updated_label: String,
 }
 
 impl SessionSummary {
@@ -140,6 +143,7 @@ impl SessionSummary {
         status: SessionState,
         changed_files: u8,
         queued_steps: u8,
+        last_updated_label: impl Into<String>,
     ) -> Self {
         Self {
             id,
@@ -148,6 +152,7 @@ impl SessionSummary {
             status,
             changed_files,
             queued_steps,
+            last_updated_label: last_updated_label.into(),
         }
     }
 
@@ -157,27 +162,116 @@ impl SessionSummary {
         vec![
             Self::new(
                 1,
-                "Rust + iced 基础设施搭建",
-                "工作区、组件接入与界面骨架",
+                "重命名中枢系统",
+                "收敛工作台命名与主入口语义",
                 SessionState::Running,
                 7,
                 4,
+                "1天前",
             ),
             Self::new(
                 2,
-                "后续能力规划",
-                "命令执行、文件树与流式响应",
+                "评估 LuaSkills 会话声明机制",
+                "梳理技能、工具与角色接入策略",
                 SessionState::Completed,
                 3,
                 2,
+                "3天前",
             ),
             Self::new(
                 3,
-                "设计风险核对",
-                "跨平台窗口与本地沙箱策略",
+                "检查构建脚本异常相关问题",
+                "核对桌面窗口、打包与启动细节",
                 SessionState::Blocked,
                 2,
                 1,
+                "3周前",
+            ),
+            Self::new(
+                4,
+                "为 opencode.json 引用安装",
+                "梳理供应商配置读取与安装体验",
+                SessionState::Draft,
+                1,
+                2,
+                "26天前",
+            ),
+        ]
+    }
+}
+
+/// Lightweight project node shown by the main task-drawer tree.
+/// 主任务抽屉树中展示的轻量级项目节点。
+#[derive(Debug, Clone)]
+pub struct TaskProjectSummary {
+    /// Stable project identifier used by the tree state.
+    /// 供树状态使用的稳定项目标识。
+    pub id: String,
+    /// Project display title.
+    /// 项目展示标题。
+    pub title: String,
+    /// Absolute project path used when opening the directory.
+    /// 用于打开目录的项目绝对路径。
+    pub path: String,
+    /// Whether the project is currently pinned in the tree.
+    /// 当前项目是否已在树中置顶。
+    pub pinned: bool,
+    /// Stable order used inside the current project section.
+    /// 当前项目所在分区内部使用的稳定顺序值。
+    pub order: usize,
+    /// Session identifiers nested under the project node.
+    /// 挂载在项目节点下的会话标识集合。
+    pub session_ids: Vec<usize>,
+}
+
+impl TaskProjectSummary {
+    /// Creates one project node with explicit metadata and child-session bindings.
+    /// 使用明确元数据与子会话绑定创建一个项目节点。
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        path: impl Into<String>,
+        pinned: bool,
+        order: usize,
+        session_ids: Vec<usize>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            path: path.into(),
+            pinned,
+            order,
+            session_ids,
+        }
+    }
+
+    /// Builds seed project-tree data for the workbench task drawer prototype.
+    /// 为工作台任务抽屉原型构建种子项目树数据。
+    pub fn seeded() -> Vec<Self> {
+        vec![
+            Self::new(
+                "vulcan-luaskills",
+                "LuaSkills",
+                "D:/projects/LuaSkills",
+                false,
+                0,
+                vec![1, 2],
+            ),
+            Self::new(
+                "vulcan-memory-mesh",
+                "VulcanMemoryMesh",
+                "D:/projects/VulcanMemoryMesh",
+                false,
+                1,
+                vec![3, 4],
+            ),
+            Self::new(
+                "vulcan-plugins-opencode",
+                "vulcan-plugins-opencode",
+                "D:/projects/vulcan-plugins-opencode",
+                false,
+                2,
+                vec![],
             ),
         ]
     }

@@ -5,6 +5,7 @@ use crate::code_view;
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
 use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionState, SessionSummary,
+    TaskProjectSummary,
 };
 use crate::provider_config::{
     self, ModelChoice, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
@@ -20,7 +21,9 @@ use iced::widget::{
     rule, scrollable, slider, space, stack, svg, text, text_editor, text_input, toggler, tooltip,
 };
 use iced::window;
-use iced::{Center, Element, Fill, FillPortion, Pixels, Subscription, Task, Theme};
+use iced::{Center, Element, Fill, FillPortion, Pixels, Subscription, Task, Theme, keyboard};
+use iced_aw::ContextMenu;
+use iced_fonts::{CODICON_FONT_BYTES, codicon};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -76,6 +79,90 @@ const DIFF_FILE_HEADER_HEIGHT: f32 = 50.0;
 /// Shared compact height used by the external current-file bar above the diff review flow.
 /// Diff 审查流上方外置当前文件条使用的共享紧凑高度。
 const DIFF_CURRENT_FILE_BAR_HEIGHT: f32 = 42.0;
+
+/// Shared fixed height used by the custom undecorated window title bar.
+/// 自定义无系统装饰窗口标题栏使用的共享固定高度。
+const WINDOW_TITLE_BAR_HEIGHT: f32 = 40.0;
+
+/// Shared movement threshold used before one pressed title bar turns into a native drag action.
+/// 某次标题栏按下在转化为原生拖动动作前需要达到的共享移动阈值。
+const WINDOW_TITLE_BAR_DRAG_THRESHOLD: f32 = 4.0;
+
+/// Shared fixed width used by the vertical activity bar that switches top-level panels.
+/// 用于切换顶层面板的竖向活动条使用的共享固定宽度。
+const MAIN_PANEL_ACTIVITY_BAR_WIDTH: f32 = 42.0;
+
+/// Shared default width used by the left task drawer in the main workbench panel.
+/// 主工作台面板左侧任务抽屉使用的共享默认宽度。
+const MAIN_TASK_PANEL_DEFAULT_WIDTH: f32 = 340.0;
+
+/// Shared minimal width used by the left task drawer in the main workbench panel.
+/// 主工作台面板左侧任务抽屉使用的共享最小宽度。
+const MAIN_TASK_PANEL_MIN_WIDTH: f32 = 300.0;
+
+/// Shared maximal width used by the left task drawer in the main workbench panel.
+/// 主工作台面板左侧任务抽屉使用的共享最大宽度。
+const MAIN_TASK_PANEL_MAX_WIDTH: f32 = 520.0;
+
+/// Shared width used by the drag handle between the main task drawer and the workbench canvas.
+/// 主任务抽屉与工作台画布之间拖拽分隔柄使用的共享宽度。
+const MAIN_TASK_PANEL_RESIZE_HANDLE_WIDTH: f32 = 14.0;
+
+/// Shared width used by the subtle restore rail shown when the main task drawer is collapsed.
+/// 主任务抽屉折叠后显示的轻量恢复导轨使用的共享宽度。
+const MAIN_TASK_PANEL_RESTORE_RAIL_WIDTH: f32 = 14.0;
+
+/// Shared height used by the compact fold and restore toggle button attached to the task drawer edge.
+/// 附着在任务抽屉边缘上的紧凑折叠与恢复按钮使用的共享高度。
+const MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT: f32 = 20.0;
+
+/// Shared width used by the compact fold and restore toggle button attached to the task drawer edge.
+/// 附着在任务抽屉边缘上的紧凑折叠与恢复按钮使用的共享宽度。
+const MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH: f32 = 14.0;
+
+/// Shared square size used by each icon button inside the vertical activity bar.
+/// 竖向活动条内部每个图标按钮使用的共享方形尺寸。
+const MAIN_PANEL_ACTIVITY_BUTTON_SIZE: f32 = 32.0;
+
+/// Shared icon size used by each activity-bar navigation glyph.
+/// 每个活动条导航图标使用的共享尺寸。
+const MAIN_PANEL_ACTIVITY_ICON_SIZE: f32 = 18.0;
+
+/// Shared fixed width reserved by the project-row action cluster to avoid hover jitter.
+/// 项目行右侧动作簇预留的共享固定宽度，用于避免悬停抖动。
+const MAIN_TASK_PROJECT_ACTIONS_WIDTH: f32 = 18.0;
+
+/// Shared width reserved by the project-row fold arrow at the far right edge.
+/// 项目行最右侧折叠箭头预留的共享宽度。
+const MAIN_TASK_PROJECT_ARROW_WIDTH: f32 = 14.0;
+
+/// Shared width reserved by one session-row trailing slot for compact time labels or hover actions.
+/// 单条会话行尾部为紧凑时间标签或悬停动作预留的共享宽度。
+const MAIN_TASK_SESSION_TRAILING_WIDTH: f32 = 40.0;
+
+/// Shared fixed height used by one project row inside the main task drawer tree.
+/// 主任务抽屉树内单条项目行使用的共享固定高度。
+const MAIN_TASK_PROJECT_ROW_HEIGHT: f32 = 30.0;
+
+/// Shared fixed height used by one session row inside the main task drawer tree.
+/// 主任务抽屉树内单条会话行使用的共享固定高度。
+const MAIN_TASK_SESSION_ROW_HEIGHT: f32 = 28.0;
+
+/// Shared square size used by compact task-tree hover action buttons.
+/// 任务树紧凑悬停动作按钮使用的共享方形尺寸。
+const MAIN_TASK_TREE_ACTION_BUTTON_SIZE: f32 = 18.0;
+
+/// Shared width used by each custom window control button.
+/// 每个自定义窗口控制按钮使用的共享宽度。
+const WINDOW_CONTROL_BUTTON_WIDTH: f32 = 46.0;
+
+/// Shared icon size used by custom window control glyphs.
+/// 自定义窗口控制图标使用的共享尺寸。
+const WINDOW_CONTROL_ICON_SIZE: f32 = 18.0;
+
+/// Shared thickness used by invisible resize handles around undecorated windows.
+/// 无系统装饰窗口四周不可见缩放热区使用的共享厚度。
+const WINDOW_RESIZE_HANDLE_THICKNESS: f32 = 6.0;
 
 /// Shared fold-arrow text size used by diff file headers and the current-file bar.
 /// Diff 文件头与当前文件条共用的折叠箭头字号。
@@ -166,6 +253,7 @@ pub fn run() -> iced::Result {
     .font(theme::code_italic_font_bytes())
     .font(theme::cjk_code_font_bytes())
     .font(theme::cjk_code_italic_font_bytes())
+    .font(CODICON_FONT_BYTES)
     .run()
 }
 
@@ -182,9 +270,36 @@ pub struct VulcanWorkbench {
     /// Current size of the main workbench window.
     /// 当前主工作台窗口尺寸。
     main_window_size: iced::Size,
+    /// Whether the main workbench window is currently maximized.
+    /// 当前主工作台窗口是否处于最大化状态。
+    main_window_maximized: bool,
     /// Current size of the dedicated diff preview window.
     /// 当前独立 Diff 预览窗口尺寸。
     diff_window_size: iced::Size,
+    /// Whether the dedicated diff preview window is currently maximized.
+    /// 当前独立 Diff 预览窗口是否处于最大化状态。
+    diff_window_maximized: bool,
+    /// Latest cursor position tracked inside the main workbench window.
+    /// 最近一次在主工作台窗口中追踪到的鼠标位置。
+    main_window_cursor_position: Option<iced::Point>,
+    /// Latest cursor position tracked inside one custom title bar drag region.
+    /// 最近一次在某个自定义标题栏拖拽区域内记录到的鼠标位置。
+    title_bar_pointer_position: Option<WindowTitleBarPointer>,
+    /// Pending custom title bar drag candidate waiting for enough pointer movement.
+    /// 等待足够鼠标位移后再触发的自定义标题栏拖拽候选状态。
+    pending_title_bar_drag: Option<PendingWindowTitleBarDrag>,
+    /// Current width used by the left task drawer shown inside the main workbench panel.
+    /// 当前主工作台面板左侧任务抽屉使用的宽度。
+    main_task_panel_width: f32,
+    /// Whether the left task drawer in the main workbench panel is currently expanded.
+    /// 当前主工作台面板左侧任务抽屉是否处于展开状态。
+    main_task_panel_expanded: bool,
+    /// Pending resize candidate for the left task drawer in the main workbench panel.
+    /// 主工作台面板左侧任务抽屉的待确认缩放候选状态。
+    pending_main_task_panel_resize: Option<PendingMainTaskPanelResize>,
+    /// Whether the task-drawer resize handle is currently hovered.
+    /// 任务抽屉缩放柄当前是否处于悬停状态。
+    main_task_panel_resize_handle_hovered: bool,
     /// Pane grid state describing the high-level application layout.
     /// 描述应用高层布局的分栏网格状态。
     panes: pane_grid::State<PaneKind>,
@@ -233,6 +348,30 @@ pub struct VulcanWorkbench {
     /// Session summaries rendered in the navigator pane.
     /// 渲染在导航面板中的会话摘要列表。
     sessions: Vec<SessionSummary>,
+    /// Project nodes rendered by the main task-drawer tree.
+    /// 由主任务抽屉树渲染的项目节点集合。
+    task_projects: Vec<TaskProjectSummary>,
+    /// Expanded project identifiers inside the main task-drawer tree.
+    /// 主任务抽屉树内部已展开的项目标识集合。
+    expanded_task_projects: BTreeSet<String>,
+    /// Project identifier currently hovered inside the main task-drawer tree.
+    /// 当前在主任务抽屉树中悬停的项目标识。
+    hovered_task_project: Option<String>,
+    /// Session identifier currently hovered inside the main task-drawer tree.
+    /// 当前在主任务抽屉树中悬停的会话标识。
+    hovered_task_session: Option<usize>,
+    /// Current drop target preview shown while one project card is being reordered.
+    /// 当前在项目卡片重排期间展示的插入目标预览。
+    active_task_project_drop_target: Option<TaskProjectDropTarget>,
+    /// Whether session hover should stay suppressed until the cursor fully leaves the list once.
+    /// 当前是否应持续抑制会话悬停，直到鼠标完整离开列表一次为止。
+    suppress_task_session_hover: bool,
+    /// Pending click-or-drag interaction captured from one project row press.
+    /// 从某次项目行按下动作中捕获的待判定点击或拖拽交互状态。
+    pending_task_project_interaction: Option<PendingTaskProjectInteraction>,
+    /// Project identifier currently being reordered through drag interaction.
+    /// 当前正在通过拖拽交互调整顺序的项目标识。
+    dragging_task_project: Option<String>,
     /// Currently selected session identifier.
     /// 当前被选中的会话标识。
     selected_session: usize,
@@ -310,6 +449,69 @@ struct DiffVisualSliceRange {
     end: usize,
 }
 
+/// Latest pointer position tracked inside one custom title bar drag region.
+/// 在某个自定义标题栏拖拽区域内追踪到的最近鼠标位置。
+#[derive(Debug, Clone, Copy)]
+struct WindowTitleBarPointer {
+    /// Window identifier owning the tracked title bar pointer position.
+    /// 拥有当前标题栏鼠标位置的窗口标识。
+    window_id: window::Id,
+    /// Latest pointer position relative to the title bar drag region.
+    /// 相对于标题栏拖拽区域的最近鼠标位置。
+    position: iced::Point,
+}
+
+/// Pending drag candidate captured from one custom title bar press.
+/// 从某次自定义标题栏按下动作中捕获的待确认拖动候选状态。
+#[derive(Debug, Clone, Copy)]
+struct PendingWindowTitleBarDrag {
+    /// Window identifier targeted by the future native drag request.
+    /// 未来原生拖动请求将作用到的窗口标识。
+    window_id: window::Id,
+    /// Pointer origin captured when the title bar was pressed.
+    /// 标题栏被按下时捕获到的鼠标起始位置。
+    origin: iced::Point,
+}
+
+/// Pending resize candidate captured from the main task drawer divider.
+/// 从主任务抽屉分隔柄捕获的待确认缩放候选状态。
+#[derive(Debug, Clone, Copy)]
+struct PendingMainTaskPanelResize {
+    /// Cursor x position captured when the drawer resize interaction started.
+    /// 任务抽屉缩放交互开始时捕获到的鼠标横向位置。
+    origin_x: f32,
+    /// Drawer width captured when the resize interaction started.
+    /// 任务抽屉缩放交互开始时捕获到的抽屉宽度。
+    initial_width: f32,
+}
+
+/// Pending interaction candidate captured from one project-row press inside the task tree.
+/// 从任务树某个项目行按下动作中捕获的待判定交互候选状态。
+#[derive(Debug, Clone)]
+struct PendingTaskProjectInteraction {
+    /// Stable identifier of the pressed project row.
+    /// 当前被按下项目行的稳定标识。
+    project_id: String,
+    /// Cursor origin captured when the interaction started.
+    /// 交互开始时捕获到的鼠标起始位置。
+    origin: iced::Point,
+}
+
+/// Drop-target previews used while the task-tree project cards are being reordered.
+/// 任务树项目卡片重排期间使用的插入目标预览类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TaskProjectDropTarget {
+    /// Inserts the dragged project before one concrete project row.
+    /// 将正在拖拽的项目插入到某个具体项目行之前。
+    Before(String),
+    /// Inserts the dragged pinned project at the end of the pinned section.
+    /// 将正在拖拽的置顶项目插入到置顶分区末尾。
+    EndOfPinned,
+    /// Inserts the dragged regular project at the end of the regular section.
+    /// 将正在拖拽的普通项目插入到普通分区末尾。
+    EndOfRegular,
+}
+
 impl DiffVisualSliceRange {
     /// Builds one normalized slice range constrained by the total visual-line count.
     /// 根据总可视行数量构建一个规范化切片范围。
@@ -373,6 +575,24 @@ struct ActiveDiffFile<'a> {
     /// Whether the active file card is currently collapsed.
     /// 当前激活文件卡片是否处于折叠状态。
     is_collapsed: bool,
+}
+
+/// Semantic icon kind rendered inside one custom window control button.
+/// 渲染在单个自定义窗口控制按钮中的语义图标类型。
+#[derive(Debug, Clone, Copy)]
+enum WindowControlIcon {
+    /// Minimize-window affordance icon.
+    /// 最小化窗口操作图标。
+    Minimize,
+    /// Maximize-window affordance icon.
+    /// 最大化窗口操作图标。
+    Maximize,
+    /// Restore-window affordance icon displayed while maximized.
+    /// 窗口已最大化时显示的还原操作图标。
+    Restore,
+    /// Close-window affordance icon.
+    /// 关闭窗口操作图标。
+    Close,
 }
 
 /// Editable provider form state kept in sync with the persisted provider configuration file.
@@ -456,12 +676,53 @@ enum MainDisplayPanel {
 
 impl MainDisplayPanel {
     /// Returns the user-facing label shown in the top-level panel switcher.
-    /// 返回展示在顶层面板切换器中的面向用户标签。
+    /// 返回展示在顶层面板切换入口中的面向用户标签。
     const fn label(self) -> &'static str {
         match self {
-            Self::Main => "主面板",
+            Self::Main => "工作台",
             Self::Example => "示例面板",
             Self::Settings => "设置",
+        }
+    }
+
+    /// Returns the contextual caption shown beside the top-level panel switcher.
+    /// 返回展示在顶层面板切换器旁侧的上下文说明文本。
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Main => "承载任务抽屉与主工作区，是后续 AI Coding 主入口所在位置。",
+            Self::Example => "承载当前工作区主体与交互示例，便于持续重构布局。",
+            Self::Settings => "集中呈现供应商配置与运行参数，不混入全局动作。",
+        }
+    }
+
+    /// Returns the local title rendered inside one top-level panel body.
+    /// 返回渲染在某个顶层面板主体内部的局部标题。
+    const fn section_title(self) -> &'static str {
+        match self {
+            Self::Main => "工作台",
+            Self::Example => "示例面板",
+            Self::Settings => "设置",
+        }
+    }
+
+    /// Returns the keyboard shortcut digit used by one top-level panel.
+    /// 返回某个顶层面板使用的键盘快捷数字。
+    const fn shortcut_digit(self) -> &'static str {
+        match self {
+            Self::Main => "1",
+            Self::Example => "2",
+            Self::Settings => "3",
+        }
+    }
+
+    /// Resolves one top-level panel from its keyboard shortcut digit.
+    /// 根据键盘快捷数字解析对应的顶层面板。
+    const fn from_shortcut_digit(digit: char) -> Option<Self> {
+        match digit {
+            '1' => Some(Self::Main),
+            '2' => Some(Self::Example),
+            '3' => Some(Self::Settings),
+            _ => None,
         }
     }
 }
@@ -479,6 +740,42 @@ enum Message {
     /// Requests opening or focusing the dedicated diff preview window.
     /// 请求打开或聚焦独立 Diff 预览窗口。
     OpenDiffWindow,
+    /// Records that one custom title bar drag region has been pressed.
+    /// 记录某个自定义标题栏拖拽区域已被按下。
+    WindowTitleBarPressed(window::Id),
+    /// Updates the latest pointer position inside one custom title bar drag region.
+    /// 更新某个自定义标题栏拖拽区域内的最新鼠标位置。
+    WindowTitleBarPointerMoved(window::Id, iced::Point),
+    /// Clears the pending drag candidate after one custom title bar release.
+    /// 在某次自定义标题栏释放后清理待确认拖动候选状态。
+    WindowTitleBarReleased(window::Id),
+    /// Clears the tracked pointer state after the cursor exits one custom title bar drag region.
+    /// 在鼠标离开某个自定义标题栏拖拽区域后清理追踪状态。
+    WindowTitleBarExited(window::Id),
+    /// Requests minimizing the target window from the custom title bar.
+    /// 请求从自定义标题栏最小化目标窗口。
+    MinimizeWindow(window::Id),
+    /// Requests starting native window resize from one undecorated edge or corner.
+    /// 请求从无系统装饰窗口的某个边缘或角开始原生缩放。
+    StartWindowResize(window::Id, window::Direction),
+    /// Requests toggling maximized state for the target window from the custom title bar.
+    /// 请求从自定义标题栏切换目标窗口的最大化状态。
+    ToggleMaximizeWindow(window::Id),
+    /// Requests closing the target window from the custom title bar.
+    /// 请求从自定义标题栏关闭目标窗口。
+    CloseWindow(window::Id),
+    /// Toggles the left task drawer shown inside the main workbench panel.
+    /// 切换显示在主工作台面板中的左侧任务抽屉。
+    ToggleMainTaskPanel,
+    /// Starts resizing the left task drawer shown inside the main workbench panel.
+    /// 开始缩放显示在主工作台面板中的左侧任务抽屉。
+    StartMainTaskPanelResize,
+    /// Updates whether the task-drawer resize handle is currently hovered.
+    /// 更新任务抽屉缩放柄当前是否处于悬停状态。
+    MainTaskPanelResizeHandleHovered(bool),
+    /// Reports the latest maximized state of one tracked window.
+    /// 回传某个受跟踪窗口当前最新的最大化状态。
+    WindowMaximizedStateChanged(window::Id, bool),
     /// Switches the active top-level panel shown inside the main display region.
     /// 切换显示在主显示区域中的顶层面板。
     MainDisplayPanelSelected(MainDisplayPanel),
@@ -488,6 +785,12 @@ enum Message {
     /// A window was resized by the runtime.
     /// 某个窗口的尺寸已被运行时更新。
     WindowResized(window::Id, iced::Size),
+    /// Reports a pointer move tracked at the window level.
+    /// 回传在窗口级别追踪到的鼠标移动事件。
+    WindowPointerMoved(window::Id, iced::Point),
+    /// Reports that the left mouse button was released at the window level.
+    /// 回传在窗口级别追踪到的鼠标左键释放事件。
+    WindowLeftButtonReleased(window::Id),
     /// Workspace path changed from the text input.
     /// 工作区路径在文本输入框中发生变化。
     WorkspacePathChanged(String),
@@ -551,6 +854,39 @@ enum Message {
     /// Create-session action requested.
     /// 请求创建新会话。
     CreateSession,
+    /// Updates the hovered project node inside the main task-drawer tree.
+    /// 更新主任务抽屉树中当前悬停的项目节点。
+    TaskProjectHovered(Option<String>),
+    /// Updates the drag-drop preview target inside one project row using local pointer movement.
+    /// 使用项目行内部的局部鼠标移动更新拖拽插入目标预览。
+    TaskProjectDropPreviewMoved(String, iced::Point),
+    /// Updates the drop-target preview near the tail of one project section while dragging.
+    /// 在拖拽期间更新某个项目分区尾部附近的插入目标预览。
+    TaskProjectSectionTailHovered(Option<bool>),
+    /// Updates the hovered session row inside the main task-drawer tree.
+    /// 更新主任务抽屉树中当前悬停的会话行。
+    TaskSessionHovered(Option<usize>),
+    /// Starts one click-or-drag interaction from a project row inside the main task-drawer tree.
+    /// 从主任务抽屉树中的某个项目行启动一次点击或拖拽交互。
+    StartTaskProjectInteraction(String),
+    /// Opens one project directory with the host operating system.
+    /// 使用宿主操作系统打开某个项目目录。
+    OpenTaskProjectDirectory(String),
+    /// Creates a new session under one project node inside the main task-drawer tree.
+    /// 在主任务抽屉树中的某个项目节点下创建新会话。
+    CreateTaskProjectSession(String),
+    /// Pins or unpins one project node inside the main task-drawer tree.
+    /// 置顶或取消置顶主任务抽屉树中的某个项目节点。
+    PinTaskProject(String),
+    /// Renames one project node inside the main task-drawer tree using a lightweight placeholder flow.
+    /// 使用轻量占位流程重命名主任务抽屉树中的某个项目节点。
+    RenameTaskProject(String),
+    /// Archives one project node inside the main task-drawer tree.
+    /// 归档主任务抽屉树中的某个项目节点。
+    ArchiveTaskProject(String),
+    /// Archives one session row inside the main task-drawer tree.
+    /// 归档主任务抽屉树中的某个会话行。
+    ArchiveTaskSession(usize),
     /// Workspace scan action requested.
     /// 请求扫描工作区。
     ScanWorkspace,
@@ -587,6 +923,18 @@ enum Message {
     /// Markdown guide emitted a link interaction.
     /// Markdown 指引发出了链接交互事件。
     GuideLinkClicked(markdown::Uri),
+}
+
+/// Icon kinds used by the hover action buttons inside the task-drawer tree.
+/// 任务抽屉树悬停动作按钮使用的图标类型。
+#[derive(Debug, Clone, Copy)]
+enum TaskTreeActionIcon {
+    /// Creates a new child session under the current project node.
+    /// 在当前项目节点下创建新的子会话。
+    AddSession,
+    /// Archives the current session row.
+    /// 归档当前会话行。
+    Archive,
 }
 
 /// Loaded diff preview payload for the testing region.
@@ -657,7 +1005,16 @@ impl VulcanWorkbench {
                 main_window_id: Some(main_window_id),
                 diff_window_id: None,
                 main_window_size: main_window_settings().size,
+                main_window_maximized: main_window_settings().maximized,
                 diff_window_size: diff_window_settings().size,
+                diff_window_maximized: diff_window_settings().maximized,
+                main_window_cursor_position: None,
+                title_bar_pointer_position: None,
+                pending_title_bar_drag: None,
+                main_task_panel_width: MAIN_TASK_PANEL_DEFAULT_WIDTH,
+                main_task_panel_expanded: true,
+                pending_main_task_panel_resize: None,
+                main_task_panel_resize_handle_hovered: false,
                 panes,
                 focus,
                 workspace_path: String::from("D:/openvulcan/vulcan-code"),
@@ -674,9 +1031,20 @@ impl VulcanWorkbench {
                 diff_viewport_height: 0.0,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
                 sessions: SessionSummary::seeded(),
+                task_projects: TaskProjectSummary::seeded(),
+                expanded_task_projects: TaskProjectSummary::seeded()
+                    .into_iter()
+                    .map(|project| project.id)
+                    .collect(),
+                hovered_task_project: None,
+                hovered_task_session: None,
+                active_task_project_drop_target: None,
+                suppress_task_session_hover: false,
+                pending_task_project_interaction: None,
+                dragging_task_project: None,
                 selected_session: 1,
                 activities: ActivityEntry::seeded(),
-                next_session_id: 4,
+                next_session_id: 5,
                 provider_configuration,
                 active_main_panel: MainDisplayPanel::Main,
                 selected_provider,
@@ -702,13 +1070,17 @@ impl VulcanWorkbench {
         match message {
             Message::MainWindowOpened(window_id) => {
                 self.main_window_id = Some(window_id);
-                Task::none()
+                window::is_maximized(window_id).map(move |maximized| {
+                    Message::WindowMaximizedStateChanged(window_id, maximized)
+                })
             }
             Message::DiffWindowOpened(window_id) => {
                 self.diff_window_id = Some(window_id);
                 self.rebuild_diff_code_buffers_for_current_wrap();
                 self.status_message = String::from("Diff 预览窗口已打开，可独立调整面板结构。");
-                Task::none()
+                window::is_maximized(window_id).map(move |maximized| {
+                    Message::WindowMaximizedStateChanged(window_id, maximized)
+                })
             }
             Message::OpenDiffWindow => {
                 // Reuse the existing diff preview window when it is already alive to avoid duplicate reviewers.
@@ -723,11 +1095,104 @@ impl VulcanWorkbench {
                     open_diff_window.map(Message::DiffWindowOpened)
                 }
             }
+            Message::WindowTitleBarPressed(window_id) => {
+                self.pending_title_bar_drag = self
+                    .title_bar_pointer_position
+                    .filter(|pointer| pointer.window_id == window_id)
+                    .map(|pointer| PendingWindowTitleBarDrag {
+                        window_id,
+                        origin: pointer.position,
+                    });
+                Task::none()
+            }
+            Message::WindowTitleBarPointerMoved(window_id, position) => {
+                self.title_bar_pointer_position = Some(WindowTitleBarPointer {
+                    window_id,
+                    position,
+                });
+
+                if let Some(pending_drag) = self.pending_title_bar_drag {
+                    if pending_drag.window_id == window_id {
+                        let delta_x = position.x - pending_drag.origin.x;
+                        let delta_y = position.y - pending_drag.origin.y;
+                        let moved_far_enough = delta_x.abs() >= WINDOW_TITLE_BAR_DRAG_THRESHOLD
+                            || delta_y.abs() >= WINDOW_TITLE_BAR_DRAG_THRESHOLD;
+
+                        if moved_far_enough {
+                            self.pending_title_bar_drag = None;
+                            return window::drag(window_id);
+                        }
+                    }
+                }
+
+                Task::none()
+            }
+            Message::WindowTitleBarReleased(window_id) => {
+                if self
+                    .pending_title_bar_drag
+                    .is_some_and(|pending| pending.window_id == window_id)
+                {
+                    self.pending_title_bar_drag = None;
+                }
+                Task::none()
+            }
+            Message::WindowTitleBarExited(window_id) => {
+                if self
+                    .title_bar_pointer_position
+                    .is_some_and(|pointer| pointer.window_id == window_id)
+                {
+                    self.title_bar_pointer_position = None;
+                }
+
+                if self
+                    .pending_title_bar_drag
+                    .is_some_and(|pending| pending.window_id == window_id)
+                {
+                    self.pending_title_bar_drag = None;
+                }
+
+                Task::none()
+            }
+            Message::MinimizeWindow(window_id) => window::minimize(window_id, true),
+            Message::StartWindowResize(window_id, direction) => {
+                window::drag_resize(window_id, direction)
+            }
+            Message::ToggleMaximizeWindow(window_id) => {
+                if self
+                    .pending_title_bar_drag
+                    .is_some_and(|pending| pending.window_id == window_id)
+                {
+                    self.pending_title_bar_drag = None;
+                }
+
+                window::toggle_maximize(window_id)
+            }
+            Message::CloseWindow(window_id) => window::close(window_id),
+            Message::ToggleMainTaskPanel => {
+                self.main_task_panel_expanded = !self.main_task_panel_expanded;
+                self.pending_main_task_panel_resize = None;
+                self.main_task_panel_resize_handle_hovered = false;
+                Task::none()
+            }
+            Message::StartMainTaskPanelResize => {
+                if let Some(position) = self.main_window_cursor_position {
+                    self.pending_main_task_panel_resize = Some(PendingMainTaskPanelResize {
+                        origin_x: position.x,
+                        initial_width: self.main_task_panel_width,
+                    });
+                    self.main_task_panel_resize_handle_hovered = true;
+                }
+                Task::none()
+            }
+            Message::MainTaskPanelResizeHandleHovered(is_hovered) => {
+                self.main_task_panel_resize_handle_hovered = is_hovered;
+                Task::none()
+            }
             Message::MainDisplayPanelSelected(panel) => {
                 self.active_main_panel = panel;
                 self.status_message = match panel {
                     MainDisplayPanel::Main => {
-                        String::from("已切换到主面板，显示默认工作区与分栏内容。")
+                        String::from("已切换到工作台，当前聚焦任务抽屉与主工作区。")
                     }
                     MainDisplayPanel::Example => {
                         String::from("已切换到示例面板，主工作区主体现以独立面板形式展示。")
@@ -770,6 +1235,78 @@ impl VulcanWorkbench {
                 if self.main_window_id == Some(window_id) || self.diff_window_id == Some(window_id)
                 {
                     self.rebuild_diff_code_buffers_for_current_wrap();
+                }
+
+                window::is_maximized(window_id).map(move |maximized| {
+                    Message::WindowMaximizedStateChanged(window_id, maximized)
+                })
+            }
+            Message::WindowPointerMoved(window_id, position) => {
+                if self.main_window_id == Some(window_id) {
+                    self.main_window_cursor_position = Some(position);
+
+                    if let Some(pending_resize) = self.pending_main_task_panel_resize {
+                        let new_width = (pending_resize.initial_width
+                            + (position.x - pending_resize.origin_x))
+                            .clamp(MAIN_TASK_PANEL_MIN_WIDTH, MAIN_TASK_PANEL_MAX_WIDTH);
+                        self.main_task_panel_width = new_width;
+                    }
+
+                    if let Some(pending_project_interaction) =
+                        self.pending_task_project_interaction.as_ref()
+                    {
+                        if self.dragging_task_project.is_none()
+                            && ((position.x - pending_project_interaction.origin.x).abs()
+                                >= WINDOW_TITLE_BAR_DRAG_THRESHOLD
+                                || (position.y - pending_project_interaction.origin.y).abs()
+                                    >= WINDOW_TITLE_BAR_DRAG_THRESHOLD)
+                        {
+                            self.dragging_task_project =
+                                Some(pending_project_interaction.project_id.clone());
+                            self.hovered_task_project = None;
+                            self.hovered_task_session = None;
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::WindowLeftButtonReleased(window_id) => {
+                if self.main_window_id == Some(window_id) {
+                    self.pending_main_task_panel_resize = None;
+
+                    let toggled_project_id = self
+                        .pending_task_project_interaction
+                        .as_ref()
+                        .filter(|_| self.dragging_task_project.is_none())
+                        .map(|interaction| interaction.project_id.clone());
+
+                    let committed_drop = self
+                        .dragging_task_project
+                        .clone()
+                        .zip(self.active_task_project_drop_target.clone());
+
+                    self.pending_task_project_interaction = None;
+
+                    if let Some((dragged_project_id, drop_target)) = committed_drop {
+                        self.apply_task_project_drop_target(&dragged_project_id, &drop_target);
+                    }
+
+                    self.dragging_task_project = None;
+                    self.active_task_project_drop_target = None;
+
+                    if let Some(project_id) = toggled_project_id {
+                        self.toggle_task_project_expanded(&project_id);
+                    }
+                }
+                Task::none()
+            }
+            Message::WindowMaximizedStateChanged(window_id, maximized) => {
+                if self.main_window_id == Some(window_id) {
+                    self.main_window_maximized = maximized;
+                }
+
+                if self.diff_window_id == Some(window_id) {
+                    self.diff_window_maximized = maximized;
                 }
 
                 Task::none()
@@ -973,6 +1510,7 @@ impl VulcanWorkbench {
             }
             Message::SessionSelected(session_id) => {
                 self.selected_session = session_id;
+                self.hovered_task_session = Some(session_id);
 
                 // Capture the selected session title to keep footer feedback specific.
                 // 记录被选中的会话标题，保证底部反馈足够具体。
@@ -985,30 +1523,205 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::CreateSession => {
-                // Allocate a new session stub to demonstrate future multi-session orchestration.
-                // 分配新的会话占位数据，以演示未来的多会话编排能力。
-                let session_id = self.next_session_id;
-                self.next_session_id += 1;
+                let project_id = self
+                    .selected_task_project_id()
+                    .or_else(|| self.task_projects.first().map(|project| project.id.clone()));
 
-                self.sessions.insert(
-                    0,
-                    SessionSummary::new(
-                        session_id,
-                        format!("探索会话 #{session_id}"),
-                        "等待注入真实任务与上下文",
-                        SessionState::Draft,
-                        1,
-                        1,
-                    ),
-                );
+                if let Some(project_id) = project_id {
+                    self.create_task_project_session(&project_id);
+                } else {
+                    self.status_message = String::from("当前没有可承载会话的项目节点。");
+                }
+                Task::none()
+            }
+            Message::TaskProjectHovered(project_id) => {
+                if project_id.is_none() {
+                    self.active_task_project_drop_target = None;
+                }
+                self.hovered_task_project = if self.dragging_task_project.is_some() {
+                    None
+                } else {
+                    project_id
+                };
+                Task::none()
+            }
+            Message::TaskProjectDropPreviewMoved(project_id, position) => {
+                if let Some(dragged_project_id) = self.dragging_task_project.as_ref() {
+                    if dragged_project_id == &project_id {
+                        self.active_task_project_drop_target = None;
+                        return Task::none();
+                    }
 
-                self.selected_session = session_id;
-                self.status_message = format!("已创建新的探索会话 #{session_id}。");
-                self.push_activity(
-                    ActivityLevel::Info,
-                    format!("创建会话 #{session_id}"),
-                    "用于承载新的 AI Coding 任务流与上下文实验。",
-                );
+                    let drop_target = if position.y <= MAIN_TASK_PROJECT_ROW_HEIGHT / 2.0 {
+                        Some(TaskProjectDropTarget::Before(project_id.clone()))
+                    } else if let Some(next_project_id) =
+                        self.next_task_project_in_section(&project_id)
+                    {
+                        if next_project_id == *dragged_project_id {
+                            None
+                        } else {
+                            Some(TaskProjectDropTarget::Before(next_project_id))
+                        }
+                    } else {
+                        self.task_project_by_id(&project_id).map(|project| {
+                            if project.pinned {
+                                TaskProjectDropTarget::EndOfPinned
+                            } else {
+                                TaskProjectDropTarget::EndOfRegular
+                            }
+                        })
+                    };
+
+                    self.active_task_project_drop_target = drop_target;
+                }
+                Task::none()
+            }
+            Message::TaskProjectSectionTailHovered(section_is_pinned) => {
+                if let (Some(section_is_pinned), Some(dragged_project_id)) =
+                    (section_is_pinned, self.dragging_task_project.clone())
+                {
+                    let dragging_section_is_pinned = self
+                        .task_project_by_id(&dragged_project_id)
+                        .map(|project| project.pinned);
+
+                    if dragging_section_is_pinned == Some(section_is_pinned) {
+                        self.active_task_project_drop_target = Some(if section_is_pinned {
+                            TaskProjectDropTarget::EndOfPinned
+                        } else {
+                            TaskProjectDropTarget::EndOfRegular
+                        });
+                    }
+                } else if self.dragging_task_project.is_none() {
+                    self.active_task_project_drop_target = None;
+                }
+                Task::none()
+            }
+            Message::TaskSessionHovered(session_id) => {
+                if self.dragging_task_project.is_some() {
+                    self.hovered_task_session = None;
+                    return Task::none();
+                }
+
+                if session_id.is_none() {
+                    self.suppress_task_session_hover = false;
+                    self.hovered_task_session = None;
+                    return Task::none();
+                }
+
+                if self.suppress_task_session_hover {
+                    return Task::none();
+                }
+                self.hovered_task_session = session_id;
+                Task::none()
+            }
+            Message::StartTaskProjectInteraction(project_id) => {
+                if let Some(position) = self.main_window_cursor_position {
+                    self.pending_task_project_interaction = Some(PendingTaskProjectInteraction {
+                        project_id,
+                        origin: position,
+                    });
+                }
+                Task::none()
+            }
+            Message::OpenTaskProjectDirectory(project_id) => {
+                if let Some(project) = self.task_project_by_id(&project_id) {
+                    match open_path_in_system_file_manager(&project.path) {
+                        Ok(()) => {
+                            self.status_message =
+                                format!("已请求打开项目目录：{}。", project.title);
+                        }
+                        Err(error) => {
+                            self.status_message =
+                                format!("打开项目目录 `{}` 失败：{error}", project.title);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::CreateTaskProjectSession(project_id) => {
+                self.create_task_project_session(&project_id);
+                Task::none()
+            }
+            Message::PinTaskProject(project_id) => {
+                if let Some(project) = self.task_project_by_id_mut(&project_id) {
+                    project.pinned = !project.pinned;
+                    let title = project.title.clone();
+                    let pinned = project.pinned;
+                    self.sort_task_projects();
+                    self.status_message = if pinned {
+                        format!("已将项目 `{title}` 置顶。")
+                    } else {
+                        format!("已取消项目 `{title}` 的置顶状态。")
+                    };
+                }
+                Task::none()
+            }
+            Message::RenameTaskProject(project_id) => {
+                if let Some(project) = self.task_project_by_id_mut(&project_id) {
+                    let original_title = project.title.clone();
+                    if project.title.ends_with("（重命名）") {
+                        project.title = project.title.trim_end_matches("（重命名）").to_string();
+                    } else {
+                        project.title = format!("{}（重命名）", project.title);
+                    }
+                    let renamed_title = project.title.clone();
+                    self.status_message =
+                        format!("已示例性重命名项目：`{original_title}` -> `{renamed_title}`。");
+                }
+                Task::none()
+            }
+            Message::ArchiveTaskProject(project_id) => {
+                if let Some(index) = self
+                    .task_projects
+                    .iter()
+                    .position(|project| project.id == project_id)
+                {
+                    let project = self.task_projects.remove(index);
+                    let archived_session_ids = project.session_ids.clone();
+                    self.sessions
+                        .retain(|session| !archived_session_ids.contains(&session.id));
+                    self.expanded_task_projects.remove(&project.id);
+                    self.hovered_task_project = None;
+                    self.hovered_task_session = None;
+                    self.active_task_project_drop_target = None;
+                    self.pending_task_project_interaction = None;
+                    self.dragging_task_project = None;
+                    self.ensure_valid_selected_session();
+                    self.status_message = format!("已归档项目 `{}`。", project.title);
+                }
+                Task::none()
+            }
+            Message::ArchiveTaskSession(session_id) => {
+                let archived_owner_snapshot = self.task_projects.iter().find_map(|project| {
+                    project
+                        .session_ids
+                        .iter()
+                        .position(|id| *id == session_id)
+                        .map(|session_index| (project.id.clone(), session_index))
+                });
+                let archived_title = self
+                    .session_by_id(session_id)
+                    .map(|session| session.title.clone())
+                    .unwrap_or_else(|| format!("会话 #{session_id}"));
+                self.sessions.retain(|session| session.id != session_id);
+                for project in &mut self.task_projects {
+                    project.session_ids.retain(|id| *id != session_id);
+                }
+                self.hovered_task_session =
+                    archived_owner_snapshot
+                        .as_ref()
+                        .and_then(|(project_id, removed_index)| {
+                            self.task_project_by_id(project_id).and_then(|project| {
+                                project
+                                    .session_ids
+                                    .get(*removed_index)
+                                    .copied()
+                                    .or_else(|| project.session_ids.last().copied())
+                            })
+                        });
+                self.suppress_task_session_hover = false;
+                self.ensure_valid_selected_session();
+                self.status_message = format!("已归档会话 `{archived_title}`。");
                 Task::none()
             }
             Message::ScanWorkspace => {
@@ -1163,9 +1876,9 @@ impl VulcanWorkbench {
     /// 通过组合头部、分栏和底部状态栏构建完整窗口视图。
     fn view(&self, window_id: window::Id) -> Element<'_, Message> {
         if self.diff_window_id == Some(window_id) {
-            self.view_diff_window()
+            self.view_diff_window(window_id)
         } else if self.main_window_id == Some(window_id) {
-            self.view_main_window()
+            self.view_main_window(window_id)
         } else {
             space().into()
         }
@@ -1173,17 +1886,39 @@ impl VulcanWorkbench {
 
     /// Builds the main workbench window view by composing header, panes, and footer.
     /// 通过组合头部、分栏和底部状态栏构建主工作台窗口视图。
-    fn view_main_window(&self) -> Element<'_, Message> {
-        column![
-            self.view_header(),
-            rule::horizontal(1),
-            container(self.view_active_main_panel()).height(Fill),
-            rule::horizontal(1),
-            self.view_status_bar(),
-        ]
-        .spacing(12)
-        .padding(16)
-        .into()
+    fn view_main_window(&self, window_id: window::Id) -> Element<'_, Message> {
+        // Build the fixed top chrome using only the custom title bar so the main surface can move to a left activity bar pattern.
+        // 仅使用自定义标题栏构建固定顶部 chrome，使主表面可以切换到左侧活动条模式。
+        let top_chrome = container(self.view_window_title_bar(window_id, "Vulcan Code"))
+            .style(style::window_chrome_style);
+
+        self.wrap_with_window_resize_handles(
+            window_id,
+            column![
+                top_chrome,
+                container(
+                    column![
+                        row![
+                            container(self.view_main_activity_bar())
+                                .width(MAIN_PANEL_ACTIVITY_BAR_WIDTH)
+                                .height(Fill)
+                                .style(style::activity_bar_style),
+                            rule::vertical(1),
+                            container(self.view_active_main_panel())
+                                .width(Fill)
+                                .height(Fill),
+                        ]
+                        .height(Fill),
+                        rule::horizontal(1),
+                        self.view_status_bar(),
+                    ]
+                    .spacing(0)
+                )
+                .height(Fill),
+            ]
+            .spacing(0)
+            .into(),
+        )
     }
 
     /// Builds the currently selected top-level panel shown inside the main display region.
@@ -1196,13 +1931,857 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Builds the intentionally empty main panel surface.
-    /// 构建刻意保持为空白的主面板内容。
+    /// Builds the main workbench surface with a collapsible and resizable left task drawer.
+    /// 构建包含可折叠且可缩放左侧任务抽屉的主工作台表面。
     fn view_empty_main_panel(&self) -> Element<'_, Message> {
-        container(space().width(Fill).height(Fill))
+        let task_panel: Element<'_, Message> = if self.main_task_panel_expanded {
+            row![
+                container(self.view_main_task_panel())
+                    .width(Pixels(self.main_task_panel_width))
+                    .height(Fill),
+                self.view_main_task_panel_resize_handle(),
+            ]
+            .height(Fill)
+            .into()
+        } else {
+            container(self.view_main_task_panel_restore_rail())
+                .width(MAIN_TASK_PANEL_RESTORE_RAIL_WIDTH)
+                .height(Fill)
+                .into()
+        };
+
+        row![
+            task_panel,
+            container(self.view_main_canvas()).width(Fill).height(Fill)
+        ]
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds the fixed-width vertical activity bar that switches the top-level display panels.
+    /// 构建固定宽度的竖向活动条，用于切换顶层显示面板。
+    fn view_main_activity_bar(&self) -> Element<'_, Message> {
+        column![
+            self.view_main_activity_button(MainDisplayPanel::Main),
+            self.view_main_activity_button(MainDisplayPanel::Example),
+            self.view_main_activity_button(MainDisplayPanel::Settings),
+            space::vertical().height(Fill),
+        ]
+        .spacing(6)
+        .padding([10, 5])
+        .width(Fill)
+        .height(Fill)
+        .align_x(Center)
+        .into()
+    }
+
+    /// Builds one icon-only activity button shown inside the vertical top-level panel bar.
+    /// 构建展示在竖向顶层面板活动条中的单个纯图标按钮。
+    fn view_main_activity_button(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
+        let tooltip_label = format!("{}（Ctrl+{}）", panel.label(), panel.shortcut_digit());
+        let is_active = self.active_main_panel == panel;
+
+        tooltip(
+            button(
+                container(self.view_main_activity_icon(panel))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(MAIN_PANEL_ACTIVITY_BUTTON_SIZE)
+            .height(MAIN_PANEL_ACTIVITY_BUTTON_SIZE)
+            .padding(0)
+            .style(move |theme, status| style::activity_bar_button_style(theme, status, is_active))
+            .on_press(Message::MainDisplayPanelSelected(panel)),
+            text(tooltip_label),
+            tooltip::Position::Right,
+        )
+        .style(container::rounded_box)
+        .into()
+    }
+
+    /// Builds one codicon glyph used by the vertical top-level panel activity bar.
+    /// 构建竖向顶层面板活动条使用的单个 codicon 图标。
+    fn view_main_activity_icon(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
+        let icon_widget = match panel {
+            MainDisplayPanel::Main => codicon::layout_panel_left(),
+            MainDisplayPanel::Example => codicon::editor_layout(),
+            MainDisplayPanel::Settings => codicon::settings_gear(),
+        }
+        .size(MAIN_PANEL_ACTIVITY_ICON_SIZE)
+        .line_height(1.0);
+
+        container(icon_widget)
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into()
+    }
+
+    /// Builds the left task drawer shown inside the main workbench panel.
+    /// 构建显示在主工作台面板中的左侧任务抽屉。
+    fn view_main_task_panel(&self) -> Element<'_, Message> {
+        let session_tree = scrollable(self.view_main_task_session_tree())
+            .height(Fill)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(6)
+                    .margin(0)
+                    .scroller_width(6),
+            ));
+
+        let panel_body = column![
+            container(text("项目").size(14)).padding(iced::Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 2.0,
+            }),
+            session_tree
+        ]
+        .spacing(10)
+        .height(Fill);
+
+        let body: Element<'_, Message> = if let Some(preview) = self.view_main_task_drag_preview() {
+            stack([panel_body.into(), preview]).into()
+        } else {
+            panel_body.into()
+        };
+
+        container(body)
+            .padding([12, 2])
             .width(Fill)
             .height(Fill)
             .into()
+    }
+
+    /// Builds the floating ghost preview that follows the cursor while one project card is being dragged.
+    /// 构建在拖拽项目卡片期间跟随鼠标移动的浮动虚影预览。
+    fn view_main_task_drag_preview(&self) -> Option<Element<'_, Message>> {
+        let dragged_project = self
+            .dragging_task_project
+            .as_deref()
+            .and_then(|project_id| self.task_project_by_id(project_id))?;
+        let cursor = self.main_window_cursor_position?;
+
+        let preview_width = (self.main_task_panel_width - 28.0).max(180.0);
+        let local_left = (cursor.x - MAIN_PANEL_ACTIVITY_BAR_WIDTH - 12.0)
+            .clamp(2.0, (self.main_task_panel_width - preview_width).max(2.0));
+        let local_top =
+            (cursor.y - WINDOW_TITLE_BAR_HEIGHT - (MAIN_TASK_PROJECT_ROW_HEIGHT / 2.0) - 2.0)
+                .clamp(30.0, 1200.0);
+
+        let preview_title = truncate_with_ellipsis(
+            &dragged_project.title,
+            self.main_task_project_title_limit_chars(),
+        );
+        let preview_card = container(
+            row![
+                container(space::horizontal())
+                    .width(3.0)
+                    .height(Fill)
+                    .style(style::main_task_tree_drop_indicator_style),
+                row![
+                    codicon::folder_opened().size(16).line_height(1.0),
+                    text(preview_title)
+                        .size(15)
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        )
+        .padding([3, 11])
+        .width(Pixels(preview_width))
+        .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
+        .style(style::main_task_tree_drag_preview_style);
+
+        Some(
+            container(preview_card)
+                .padding(iced::Padding {
+                    top: local_top,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: local_left,
+                })
+                .width(Fill)
+                .height(Fill)
+                .into(),
+        )
+    }
+
+    /// Builds the draggable divider handle between the main task drawer and the central workbench canvas.
+    /// 构建位于主任务抽屉与中央工作区画布之间的可拖拽分隔柄。
+    fn view_main_task_panel_resize_handle(&self) -> Element<'_, Message> {
+        let is_highlighted = self.main_task_panel_resize_handle_hovered
+            || self.pending_main_task_panel_resize.is_some();
+
+        let drag_surface = mouse_area(
+            container(
+                container(space())
+                    .width(if is_highlighted { 2 } else { 1 })
+                    .height(Fill)
+                    .style(move |theme| {
+                        style::main_task_panel_resize_indicator_style(theme, is_highlighted)
+                    }),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
+        )
+        .interaction(iced::mouse::Interaction::ResizingHorizontally)
+        .on_enter(Message::MainTaskPanelResizeHandleHovered(true))
+        .on_exit(Message::MainTaskPanelResizeHandleHovered(false))
+        .on_press(Message::StartMainTaskPanelResize);
+
+        let collapse_button = tooltip(
+            button(
+                container(codicon::chevron_left().size(10).line_height(1.0))
+                    .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                    .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT)
+                    .center_x(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                    .center_y(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+            )
+            .padding(0)
+            .style(style::subtle_panel_button_style)
+            .on_press(Message::ToggleMainTaskPanel),
+            "收起任务面板",
+            tooltip::Position::Right,
+        )
+        .style(container::rounded_box);
+
+        container(stack([
+            drag_surface.into(),
+            column![
+                space::vertical().height(Fill),
+                container(collapse_button)
+                    .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                    .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+                space::vertical().height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .align_x(Center)
+            .into(),
+        ]))
+        .width(MAIN_TASK_PANEL_RESIZE_HANDLE_WIDTH)
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds the subtle restore rail shown when the main task drawer is collapsed.
+    /// 构建主任务抽屉折叠后显示的轻量恢复导轨。
+    fn view_main_task_panel_restore_rail(&self) -> Element<'_, Message> {
+        container(
+            column![
+                space::vertical().height(Fill),
+                container(
+                    tooltip(
+                        button(
+                            container(codicon::chevron_right().size(10).line_height(1.0))
+                                .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                                .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT)
+                                .center_x(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                                .center_y(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+                        )
+                        .padding(0)
+                        .style(style::subtle_panel_button_style)
+                        .on_press(Message::ToggleMainTaskPanel),
+                        "展开任务面板",
+                        tooltip::Position::Right,
+                    )
+                    .style(container::rounded_box),
+                )
+                .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+                space::vertical().height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .align_x(Center),
+        )
+        .height(Fill)
+        .style(style::main_task_panel_restore_rail_style)
+        .into()
+    }
+
+    /// Builds the tree-shaped workspace and session outline shown inside the main task drawer.
+    /// 构建展示在主任务抽屉中的树形工作空间与会话大纲。
+    fn view_main_task_session_tree(&self) -> Element<'_, Message> {
+        let mut tree = column![].spacing(1).width(Fill);
+        let pinned_projects = self.task_projects.iter().filter(|project| project.pinned);
+        let regular_projects = self.task_projects.iter().filter(|project| !project.pinned);
+
+        let has_pinned = self.task_projects.iter().any(|project| project.pinned);
+
+        if has_pinned {
+            tree = tree
+                .push(self.view_main_task_group_label("置顶"))
+                .push(
+                    pinned_projects.fold(column![].spacing(1).width(Fill), |column, project| {
+                        column.push(self.view_main_task_project_tree_row(project))
+                    }),
+                )
+                .push(self.view_main_task_project_section_tail(true))
+                .push(space::vertical().height(6));
+        }
+
+        tree = tree.push(
+            regular_projects.fold(column![].spacing(1).width(Fill), |column, project| {
+                column.push(self.view_main_task_project_tree_row(project))
+            }),
+        );
+
+        tree = tree.push(self.view_main_task_project_section_tail(false));
+
+        container(tree).width(Fill).into()
+    }
+
+    /// Builds one compact section label used inside the project tree.
+    /// 构建展示在项目树内部的紧凑分区标签。
+    fn view_main_task_group_label(&self, label: &'static str) -> Element<'_, Message> {
+        container(text(label).size(12).style(|theme: &Theme| {
+            iced::widget::text::Style {
+                color: Some(
+                    theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.52),
+                ),
+            }
+        }))
+        .padding(iced::Padding {
+            top: 8.0,
+            right: 2.0,
+            bottom: 4.0,
+            left: 2.0,
+        })
+        .width(Fill)
+        .into()
+    }
+
+    /// Builds the insertion indicator line shown before one project row while reordering.
+    /// 构建在项目重排期间显示在某个项目行之前的插入指示线。
+    fn view_main_task_project_drop_indicator(&self, is_visible: bool) -> Element<'_, Message> {
+        let height = if is_visible { 8.0 } else { 0.0 };
+        let padding = if is_visible { 2.0 } else { 0.0 };
+
+        container(
+            row![
+                container(space::horizontal())
+                    .width(7.0)
+                    .height(7.0)
+                    .style(style::main_task_tree_drop_anchor_style),
+                container(space::horizontal())
+                    .height(3.0)
+                    .width(Fill)
+                    .style(style::main_task_tree_drop_indicator_style),
+            ]
+            .spacing(4)
+            .align_y(Center),
+        )
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 6.0,
+            bottom: padding,
+            left: 6.0,
+        })
+        .height(height)
+        .width(Fill)
+        .into()
+    }
+
+    /// Builds the tail drop zone shown after one project section so dragged cards can land at the end.
+    /// 构建显示在项目分区末尾的尾部落点，以便拖拽卡片落到分区最后。
+    fn view_main_task_project_section_tail(&self, section_is_pinned: bool) -> Element<'_, Message> {
+        let dragging_matches_section = self
+            .dragging_task_project
+            .as_ref()
+            .and_then(|project_id| self.task_project_by_id(project_id))
+            .map(|project| project.pinned == section_is_pinned)
+            .unwrap_or(false);
+
+        if !dragging_matches_section {
+            return space::vertical().height(0.0).into();
+        }
+
+        let shows_drop_tail = matches!(
+            self.active_task_project_drop_target.as_ref(),
+            Some(TaskProjectDropTarget::EndOfPinned) if section_is_pinned
+        ) || matches!(
+            self.active_task_project_drop_target.as_ref(),
+            Some(TaskProjectDropTarget::EndOfRegular) if !section_is_pinned
+        );
+
+        mouse_area(if shows_drop_tail {
+            container(
+                row![
+                    container(space::horizontal())
+                        .width(7.0)
+                        .height(7.0)
+                        .style(style::main_task_tree_drop_anchor_style),
+                    container(space::horizontal())
+                        .height(3.0)
+                        .width(Fill)
+                        .style(style::main_task_tree_drop_indicator_style),
+                ]
+                .spacing(4)
+                .align_y(Center),
+            )
+            .padding(iced::Padding {
+                top: 2.0,
+                right: 6.0,
+                bottom: 0.0,
+                left: 6.0,
+            })
+            .height(10.0)
+            .width(Fill)
+        } else {
+            container(space::horizontal()).height(10.0).width(Fill)
+        })
+        .interaction(if self.dragging_task_project.is_some() {
+            iced::mouse::Interaction::Grabbing
+        } else {
+            iced::mouse::Interaction::default()
+        })
+        .on_enter(Message::TaskProjectSectionTailHovered(Some(
+            section_is_pinned,
+        )))
+        .on_exit(Message::TaskProjectSectionTailHovered(None))
+        .into()
+    }
+
+    /// Builds one project branch shown inside the main task drawer tree.
+    /// 构建显示在主任务抽屉树中的单个项目分支。
+    fn view_main_task_project_tree_row<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        let is_expanded = self.expanded_task_projects.contains(&project.id);
+        let shows_drop_before = matches!(
+            self.active_task_project_drop_target.as_ref(),
+            Some(TaskProjectDropTarget::Before(target_project_id)) if target_project_id == &project.id
+        );
+        let mut section = column![]
+            .spacing(0)
+            .width(Fill)
+            .push(self.view_main_task_project_drop_indicator(shows_drop_before))
+            .push(self.view_main_task_project_row(project, is_expanded));
+
+        if is_expanded {
+            section = section.push(
+                container(self.view_main_task_project_children(project))
+                    .padding(iced::Padding {
+                        top: 2.0,
+                        right: 2.0,
+                        bottom: 8.0,
+                        left: 1.0,
+                    })
+                    .width(Fill),
+            );
+        }
+
+        container(section).width(Fill).into()
+    }
+
+    /// Builds the clickable project row displayed at the top of one tree branch.
+    /// 构建显示在树分支顶部的可点击项目行。
+    fn view_main_task_project_row<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+        is_expanded: bool,
+    ) -> Element<'a, Message> {
+        let is_active = self.dragging_task_project.is_none()
+            && self.hovered_task_project.as_deref() == Some(project.id.as_str());
+        let is_drag_source = self.dragging_task_project.as_deref() == Some(project.id.as_str());
+        let source_alpha = if is_drag_source { 0.46 } else { 1.0 };
+        let project_title =
+            truncate_with_ellipsis(&project.title, self.main_task_project_title_limit_chars());
+        let project_label = text(project_title)
+            .size(15)
+            .width(Fill)
+            .wrapping(iced::advanced::text::Wrapping::None)
+            .style(move |theme: &Theme| iced::widget::text::Style {
+                color: Some(
+                    theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(source_alpha),
+                ),
+            });
+        let folder_icon = if is_expanded {
+            codicon::folder_opened()
+        } else {
+            codicon::folder()
+        }
+        .size(16)
+        .line_height(1.0)
+        .style(move |theme: &Theme| iced::widget::text::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.86 * source_alpha),
+            ),
+        });
+        let state_arrow: Element<'a, Message> = if is_expanded {
+            codicon::chevron_down()
+        } else {
+            codicon::chevron_right()
+        }
+        .size(14)
+        .line_height(1.0)
+        .style(move |theme: &Theme| iced::widget::text::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.72 * source_alpha),
+            ),
+        })
+        .into();
+
+        let header = container(
+            row![
+                folder_icon,
+                project_label,
+                space::horizontal(),
+                container(Self::view_main_task_tree_icon_action_button(
+                    TaskTreeActionIcon::AddSession,
+                    Message::CreateTaskProjectSession(project.id.clone()),
+                    is_active,
+                ))
+                .width(MAIN_TASK_PROJECT_ACTIONS_WIDTH)
+                .center_y(Fill),
+                container(state_arrow)
+                    .width(MAIN_TASK_PROJECT_ARROW_WIDTH)
+                    .padding(iced::Padding {
+                        top: 0.0,
+                        right: 2.0,
+                        bottom: 0.0,
+                        left: 0.0,
+                    })
+                    .center_y(Fill),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        )
+        .padding([3, 11])
+        .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
+        .width(Fill)
+        .style(move |theme| {
+            style::main_task_tree_project_row_style(theme, is_active, is_drag_source)
+        });
+
+        ContextMenu::new(
+            mouse_area(header)
+                .interaction(if self.dragging_task_project.is_some() {
+                    iced::mouse::Interaction::Grabbing
+                } else {
+                    iced::mouse::Interaction::Grab
+                })
+                .on_press(Message::StartTaskProjectInteraction(project.id.clone()))
+                .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
+                .on_move({
+                    let project_id = project.id.clone();
+                    move |position| {
+                        Message::TaskProjectDropPreviewMoved(project_id.clone(), position)
+                    }
+                })
+                .on_exit(Message::TaskProjectHovered(None)),
+            move || self.view_main_task_project_menu(project),
+        )
+        .into()
+    }
+
+    /// Builds the expanded child rows shown beneath one project header in the task drawer tree.
+    /// 构建显示在任务抽屉树某个项目头部下方的展开子行区域。
+    fn view_main_task_project_children<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        if project.session_ids.is_empty() {
+            return container(text("暂无对话").size(13).style(|theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(
+                        theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.45),
+                    ),
+                }
+            }))
+            .padding(iced::Padding {
+                top: 2.0,
+                right: 2.0,
+                bottom: 8.0,
+                left: 34.0,
+            })
+            .width(Fill)
+            .into();
+        }
+
+        project
+            .session_ids
+            .iter()
+            .fold(column![].spacing(4).width(Fill), |column, session_id| {
+                if let Some(session) = self.session_by_id(*session_id) {
+                    column.push(self.view_main_task_session_tree_row(session))
+                } else {
+                    column
+                }
+            })
+            .into()
+    }
+
+    /// Builds one tree row shown under a project node inside the main task drawer.
+    /// 构建显示在主任务抽屉某个项目节点下方的单条会话树节点。
+    fn view_main_task_session_tree_row<'a>(
+        &'a self,
+        session: &'a SessionSummary,
+    ) -> Element<'a, Message> {
+        let is_selected =
+            self.dragging_task_project.is_none() && session.id == self.selected_session;
+        let is_hovered =
+            self.dragging_task_project.is_none() && self.hovered_task_session == Some(session.id);
+        let compact_meta = compact_relative_label(&session.last_updated_label);
+        let session_title =
+            truncate_with_ellipsis(&session.title, self.main_task_session_title_limit_chars());
+        let session_label = text(session_title)
+            .size(14)
+            .width(Fill)
+            .wrapping(iced::advanced::text::Wrapping::None)
+            .style(|theme: &Theme| iced::widget::text::Style {
+                color: Some(theme.extended_palette().background.base.text),
+            });
+        let session_meta: Element<'a, Message> =
+            container(text(compact_meta).size(12).style(|theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(
+                        theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.55),
+                    ),
+                }
+            }))
+            .width(MAIN_TASK_SESSION_TRAILING_WIDTH)
+            .align_right(MAIN_TASK_SESSION_TRAILING_WIDTH)
+            .into();
+
+        let archive_action = Self::view_main_task_tree_icon_action_button(
+            TaskTreeActionIcon::Archive,
+            Message::ArchiveTaskSession(session.id),
+            is_hovered,
+        );
+        let trailing_slot: Element<'a, Message> = if is_hovered {
+            container(archive_action)
+                .width(MAIN_TASK_SESSION_TRAILING_WIDTH)
+                .align_right(MAIN_TASK_SESSION_TRAILING_WIDTH)
+                .center_y(Fill)
+                .into()
+        } else {
+            session_meta
+        };
+
+        let session_button = button(
+            container(
+                row![
+                    Self::view_main_task_session_status_icon(session.status),
+                    session_label,
+                    space::horizontal(),
+                    trailing_slot,
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding(iced::Padding {
+                top: 3.0,
+                right: 10.0,
+                bottom: 3.0,
+                left: 35.0,
+            })
+            .width(Fill),
+        )
+        .padding(0)
+        .width(Fill)
+        .style(move |theme, status| {
+            style::main_task_tree_session_button_style(theme, status, is_selected, is_hovered)
+        })
+        .on_press(Message::SessionSelected(session.id));
+
+        mouse_area(
+            container(session_button)
+                .height(MAIN_TASK_SESSION_ROW_HEIGHT)
+                .width(Fill),
+        )
+        .on_enter(Message::TaskSessionHovered(Some(session.id)))
+        .on_exit(Message::TaskSessionHovered(None))
+        .into()
+    }
+
+    /// Builds the overflow menu displayed beneath one hovered project row.
+    /// 构建显示在某个项目行下方的溢出菜单。
+    fn view_main_task_project_menu<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        container(
+            column![
+                Self::view_main_task_tree_menu_button(
+                    "从资源管理器中打开",
+                    Message::OpenTaskProjectDirectory(project.id.clone()),
+                ),
+                Self::view_main_task_tree_menu_button(
+                    if project.pinned {
+                        "取消置顶"
+                    } else {
+                        "置顶"
+                    },
+                    Message::PinTaskProject(project.id.clone()),
+                ),
+                Self::view_main_task_tree_menu_button(
+                    "重命名",
+                    Message::RenameTaskProject(project.id.clone()),
+                ),
+                Self::view_main_task_tree_menu_button(
+                    "归档",
+                    Message::ArchiveTaskProject(project.id.clone()),
+                ),
+            ]
+            .spacing(2)
+            .width(iced::Length::Shrink),
+        )
+        .padding([6, 6])
+        .width(iced::Length::Shrink)
+        .style(style::main_task_tree_menu_style)
+        .into()
+    }
+
+    /// Builds the small state icon shown before one session row inside the main task drawer tree.
+    /// 构建显示在主任务抽屉树节点会话行前方的小型状态图标。
+    fn view_main_task_session_status_icon(status: SessionState) -> Element<'static, Message> {
+        let icon = match status {
+            SessionState::Draft => codicon::history(),
+            SessionState::Running => codicon::sync(),
+            SessionState::Blocked => codicon::warning(),
+            SessionState::Completed => codicon::check(),
+        }
+        .size(14)
+        .line_height(1.0);
+
+        container(icon).width(16).center_y(Fill).into()
+    }
+
+    /// Builds one compact icon-only action button used by the task-drawer tree hover actions.
+    /// 构建任务抽屉树悬停动作使用的紧凑纯图标按钮。
+    fn view_main_task_tree_icon_action_button(
+        icon: TaskTreeActionIcon,
+        message: Message,
+        is_visible: bool,
+    ) -> Element<'static, Message> {
+        let icon_alpha = if is_visible { 0.88 } else { 0.0 };
+        let icon_widget = match icon {
+            TaskTreeActionIcon::AddSession => codicon::add(),
+            TaskTreeActionIcon::Archive => codicon::archive(),
+        }
+        .size(13)
+        .line_height(1.0)
+        .style(move |theme: &Theme| iced::widget::text::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(icon_alpha),
+            ),
+        });
+
+        if is_visible {
+            button(
+                container(icon_widget)
+                    .width(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+                    .height(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+                    .center(Fill),
+            )
+            .padding(0)
+            .width(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+            .height(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+            .style(style::subtle_panel_button_style)
+            .on_press(message)
+            .into()
+        } else {
+            container(icon_widget)
+                .width(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+                .height(MAIN_TASK_TREE_ACTION_BUTTON_SIZE)
+                .center(Fill)
+                .into()
+        }
+    }
+
+    /// Builds one compact menu button used inside the task-drawer project overflow menu.
+    /// 构建任务抽屉项目溢出菜单内部使用的紧凑菜单按钮。
+    fn view_main_task_tree_menu_button(
+        label: &'static str,
+        message: Message,
+    ) -> Element<'static, Message> {
+        button(container(text(label).size(13)).padding([6, 10]))
+            .padding(0)
+            .width(iced::Length::Shrink)
+            .style(style::main_task_tree_menu_button_style)
+            .on_press(message)
+            .into()
+    }
+
+    /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
+    /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
+    fn view_main_canvas(&self) -> Element<'_, Message> {
+        let active_session = self.selected_session();
+
+        container(
+            column![
+                text("工作台").size(28),
+                text("这里将承载后续 AI Coding 的主入口、任务流与协作状态视图。").size(14),
+                container(
+                    column![
+                        text(format!(
+                            "当前会话：{}",
+                            active_session
+                                .map(|session| session.title.as_str())
+                                .unwrap_or("未选择会话")
+                        ))
+                        .size(15),
+                        text(format!("当前模型：{}", self.active_model_summary())).size(14),
+                        text(format!("执行模式：{}", self.execution_mode)).size(14),
+                    ]
+                    .spacing(8),
+                )
+                .padding(18)
+                .style(container::bordered_box),
+                space::vertical().height(Fill),
+            ]
+            .spacing(16),
+        )
+        .padding([18, 18])
+        .width(Fill)
+        .height(Fill)
+        .into()
     }
 
     /// Builds the reusable workspace surface shown by the example panel.
@@ -1253,18 +2832,322 @@ impl VulcanWorkbench {
     /// Builds the example panel content using the shared workspace surface without an extra outer frame.
     /// 使用共享工作区主体构建示例面板内容，并且不再额外包裹外层边框。
     fn view_example_panel(&self) -> Element<'_, Message> {
-        self.view_workspace_surface()
+        let panel_header = row![
+            column![
+                text(MainDisplayPanel::Example.section_title()).size(22),
+                text(MainDisplayPanel::Example.description()).size(13),
+            ]
+            .spacing(4),
+            space::horizontal(),
+            action_button(
+                "新建会话",
+                "创建一个新的探索会话用于承载额外任务。",
+                Message::CreateSession,
+            ),
+            tooltip(
+                button("准备执行")
+                    .padding([10, 14])
+                    .style(button::primary)
+                    .on_press(Message::StartRun),
+                "根据当前模型与执行模式启动编排准备。",
+                tooltip::Position::Bottom,
+            )
+            .style(container::rounded_box),
+            tooltip(
+                button("暂停执行")
+                    .padding([10, 14])
+                    .style(button::danger)
+                    .on_press(Message::StopRun),
+                "暂停当前编排并保留调整窗口。",
+                tooltip::Position::Bottom,
+            )
+            .style(container::rounded_box),
+        ]
+        .spacing(10)
+        .align_y(Center);
+
+        column![
+            container(panel_header).padding([4, 2]),
+            self.view_workspace_surface(),
+        ]
+        .spacing(12)
+        .height(Fill)
+        .into()
     }
 
     /// Builds the settings panel content without adding an extra outer frame layer.
     /// 构建设置面板内容，并且不再增加额外的外层边框层级。
     fn view_settings_panel(&self) -> Element<'_, Message> {
-        self.view_inspector()
+        let panel_header = container(
+            column![
+                text(MainDisplayPanel::Settings.section_title()).size(22),
+                text(MainDisplayPanel::Settings.description()).size(13),
+            ]
+            .spacing(4),
+        )
+        .padding([4, 2]);
+
+        column![panel_header, self.view_inspector()]
+            .spacing(12)
+            .height(Fill)
+            .into()
+    }
+
+    /// Builds the custom undecorated window title bar used by the main and diff windows.
+    /// 构建主窗口与 Diff 窗口共用的自定义无系统装饰标题栏。
+    fn view_window_title_bar(
+        &self,
+        window_id: window::Id,
+        title: &'static str,
+    ) -> Element<'_, Message> {
+        // Resolve the current maximize state so the title bar can show restore affordances when needed.
+        // 解析当前最大化状态，使标题栏在需要时可以展示还原窗口的控制符号。
+        let maximize_icon = if self.is_window_maximized(window_id) {
+            WindowControlIcon::Restore
+        } else {
+            WindowControlIcon::Maximize
+        };
+
+        // Build the draggable identity region so the custom title bar still behaves like a native window.
+        // 构建可拖拽的身份区块，使自定义标题栏仍然保持接近原生窗口的拖动体验。
+        let drag_region = mouse_area(
+            container(
+                row![
+                    svg(LOGO_ASSET_PATH).width(20).height(20),
+                    text(title).size(14),
+                    space::horizontal(),
+                ]
+                .spacing(10)
+                .align_y(Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .padding([0, 10])
+            .center_y(Fill),
+        )
+        .on_press(Message::WindowTitleBarPressed(window_id))
+        .on_release(Message::WindowTitleBarReleased(window_id))
+        .on_move(move |position| Message::WindowTitleBarPointerMoved(window_id, position))
+        .on_exit(Message::WindowTitleBarExited(window_id))
+        .on_double_click(Message::ToggleMaximizeWindow(window_id));
+
+        // Build the standard window action cluster so the custom frame can minimize, maximize, and close.
+        // 构建标准窗口动作区，使自定义边框可以完成最小化、最大化与关闭。
+        let controls = row![
+            self.view_window_control_button(
+                WindowControlIcon::Minimize,
+                style::window_control_button_style,
+                Message::MinimizeWindow(window_id),
+            ),
+            self.view_window_control_button(
+                maximize_icon,
+                style::window_control_button_style,
+                Message::ToggleMaximizeWindow(window_id),
+            ),
+            self.view_window_control_button(
+                WindowControlIcon::Close,
+                style::window_close_button_style,
+                Message::CloseWindow(window_id),
+            ),
+        ]
+        .spacing(0)
+        .align_y(Center);
+
+        row![container(drag_region).width(Fill).height(Fill), controls]
+            .align_y(Center)
+            .height(WINDOW_TITLE_BAR_HEIGHT)
+            .into()
+    }
+
+    /// Renders one button inside the custom window title bar action cluster.
+    /// 渲染自定义窗口标题栏动作区中的单个按钮。
+    fn view_window_control_button(
+        &self,
+        icon: WindowControlIcon,
+        style: impl Fn(&Theme, button::Status) -> button::Style + Copy + 'static,
+        on_press: Message,
+    ) -> Element<'_, Message> {
+        button(
+            container(self.view_window_control_icon(icon))
+                .width(Fill)
+                .height(Fill)
+                .center(Fill),
+        )
+        .width(WINDOW_CONTROL_BUTTON_WIDTH)
+        .height(WINDOW_TITLE_BAR_HEIGHT)
+        .padding(0)
+        .style(style)
+        .on_press(on_press)
+        .into()
+    }
+
+    /// Renders one mature codicon glyph used by the custom window control cluster.
+    /// 渲染自定义窗口控制按钮组使用的单个成熟 codicon 图标。
+    fn view_window_control_icon(&self, icon: WindowControlIcon) -> Element<'_, Message> {
+        let icon_widget = match icon {
+            WindowControlIcon::Minimize => codicon::chrome_minimize(),
+            WindowControlIcon::Maximize => codicon::chrome_maximize(),
+            WindowControlIcon::Restore => codicon::chrome_restore(),
+            WindowControlIcon::Close => codicon::chrome_close(),
+        }
+        .size(WINDOW_CONTROL_ICON_SIZE)
+        .line_height(1.0);
+
+        container(icon_widget)
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into()
+    }
+
+    /// Wraps one undecorated window content tree with invisible native resize handles on every edge and corner.
+    /// 为无系统装饰窗口内容树包裹四边与四角的不可见原生缩放热区。
+    fn wrap_with_window_resize_handles<'a>(
+        &'a self,
+        window_id: window::Id,
+        content: Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        if self.is_window_maximized(window_id) {
+            return content;
+        }
+
+        let thickness = WINDOW_RESIZE_HANDLE_THICKNESS;
+
+        stack([
+            content,
+            column![
+                row![
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::NorthWest,
+                        thickness,
+                        thickness,
+                    ),
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::North,
+                        Fill,
+                        thickness,
+                    ),
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::NorthEast,
+                        thickness,
+                        thickness,
+                    ),
+                ]
+                .spacing(0)
+                .height(thickness),
+                row![
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::West,
+                        thickness,
+                        Fill,
+                    ),
+                    space::horizontal().width(Fill),
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::East,
+                        thickness,
+                        Fill,
+                    ),
+                ]
+                .spacing(0)
+                .height(Fill),
+                row![
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::SouthWest,
+                        thickness,
+                        thickness,
+                    ),
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::South,
+                        Fill,
+                        thickness,
+                    ),
+                    self.view_window_resize_handle(
+                        window_id,
+                        window::Direction::SouthEast,
+                        thickness,
+                        thickness,
+                    ),
+                ]
+                .spacing(0)
+                .height(thickness),
+            ]
+            .spacing(0)
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        ])
+        .width(Fill)
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds one invisible resize handle that forwards pointer presses to the native window-resize action.
+    /// 构建一个不可见缩放热区，将指针按下转发给原生窗口缩放动作。
+    fn view_window_resize_handle(
+        &self,
+        window_id: window::Id,
+        direction: window::Direction,
+        width: impl Into<iced::Length>,
+        height: impl Into<iced::Length>,
+    ) -> Element<'_, Message> {
+        let interaction = Self::window_resize_interaction(direction);
+
+        container(
+            mouse_area(container(space()).width(Fill).height(Fill))
+                .interaction(interaction)
+                .on_press(Message::StartWindowResize(window_id, direction)),
+        )
+        .width(width)
+        .height(height)
+        .into()
+    }
+
+    /// Maps one native resize direction to the matching cursor interaction shown on hover.
+    /// 将某个原生缩放方向映射为悬停时展示的对应鼠标光标交互。
+    fn window_resize_interaction(direction: window::Direction) -> iced::mouse::Interaction {
+        match direction {
+            window::Direction::North | window::Direction::South => {
+                iced::mouse::Interaction::ResizingVertically
+            }
+            window::Direction::East | window::Direction::West => {
+                iced::mouse::Interaction::ResizingHorizontally
+            }
+            window::Direction::NorthEast | window::Direction::SouthWest => {
+                iced::mouse::Interaction::ResizingDiagonallyUp
+            }
+            window::Direction::NorthWest | window::Direction::SouthEast => {
+                iced::mouse::Interaction::ResizingDiagonallyDown
+            }
+        }
+    }
+
+    /// Returns whether one tracked window is currently maximized.
+    /// 返回某个受跟踪窗口当前是否处于最大化状态。
+    fn is_window_maximized(&self, window_id: window::Id) -> bool {
+        if self.main_window_id == Some(window_id) {
+            self.main_window_maximized
+        } else if self.diff_window_id == Some(window_id) {
+            self.diff_window_maximized
+        } else {
+            false
+        }
     }
 
     /// Builds the dedicated diff preview window so the panel can be iterated independently.
     /// 构建独立的 Diff 预览窗口，以便面板可以脱离主工作台单独迭代。
-    fn view_diff_window(&self) -> Element<'_, Message> {
+    fn view_diff_window(&self, window_id: window::Id) -> Element<'_, Message> {
+        // Build the fixed top chrome so the diff window inherits the same custom frame language as the main workbench.
+        // 构建固定在顶部的统一 chrome 区块，使 Diff 窗口继承与主工作台一致的自定义窗口框架语言。
+        let top_chrome = container(self.view_window_title_bar(window_id, "Git Diff Review Panel"))
+            .style(style::window_chrome_style);
+
         let diff_header = container(
             row![
                 column![
@@ -1296,17 +3179,27 @@ impl VulcanWorkbench {
         .padding([10, 14])
         .style(container::rounded_box);
 
-        column![
-            diff_header,
-            diff_context,
-            container(self.view_diff_panel())
-                .height(Fill)
-                .style(container::bordered_box),
-        ]
-        .spacing(12)
-        .padding(16)
-        .height(Fill)
-        .into()
+        self.wrap_with_window_resize_handles(
+            window_id,
+            column![
+                top_chrome,
+                container(
+                    column![
+                        diff_header,
+                        diff_context,
+                        container(self.view_diff_panel())
+                            .height(Fill)
+                            .style(container::bordered_box),
+                    ]
+                    .spacing(12)
+                )
+                .padding(16)
+                .height(Fill),
+            ]
+            .spacing(0)
+            .height(Fill)
+            .into(),
+        )
     }
 
     /// Returns the window title corresponding to the target window id.
@@ -1315,7 +3208,7 @@ impl VulcanWorkbench {
         if self.diff_window_id == Some(window_id) {
             String::from("Git Diff Review Panel")
         } else {
-            String::from("Vulcan Code Workbench")
+            String::from("Vulcan Code")
         }
     }
 
@@ -1332,96 +3225,49 @@ impl VulcanWorkbench {
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
                 .map(|(window_id, size)| Message::WindowResized(window_id, size)),
+            iced::event::listen_with(Self::map_main_panel_shortcut_event),
+            iced::event::listen_with(Self::map_window_pointer_event),
         ])
     }
 
-    /// Renders the branded header with global workbench actions.
-    /// 渲染包含全局工作台动作的品牌头部区域。
-    fn view_header(&self) -> Element<'_, Message> {
-        // Build the left-side brand cluster to establish the product identity immediately.
-        // 构建左侧品牌区域，让界面在进入时立即具备产品辨识度。
-        let brand = row![
-            svg(LOGO_ASSET_PATH).width(48).height(48),
-            column![
-                text("Vulcan Code Workbench").size(28),
-                text("Rust + iced GUI foundation for AI Coding").size(14),
-            ]
-            .spacing(4),
-        ]
-        .spacing(12)
-        .align_y(Center);
-
-        // Build the isolated top-level panel switcher so the main display region can swap between workbench views.
-        // 构建独立的顶层面板切换器，使主显示区域可以在不同工作视图之间切换。
-        let panel_switcher = container(
-            row![
-                self.view_panel_switch_button(MainDisplayPanel::Main),
-                self.view_panel_switch_button(MainDisplayPanel::Example),
-                self.view_panel_switch_button(MainDisplayPanel::Settings),
-            ]
-            .spacing(8)
-            .align_y(Center),
-        )
-        .padding([8, 10])
-        .style(container::bordered_box);
-
-        // Build the right-side action cluster to surface common orchestration actions at the top level.
-        // 构建右侧动作区，把常用编排动作直接暴露在全局顶部。
-        let actions = row![
-            action_button(
-                "扫描工作区",
-                "扫描当前工作区结构并准备上下文。",
-                Message::ScanWorkspace
-            ),
-            action_button(
-                "Diff 窗口",
-                "打开或聚焦独立 Diff 预览窗口。",
-                Message::OpenDiffWindow
-            ),
-            action_button(
-                "新建会话",
-                "创建一个新的探索会话用于承载额外任务。",
-                Message::CreateSession
-            ),
-            tooltip(
-                button("准备执行")
-                    .padding([10, 14])
-                    .style(button::primary)
-                    .on_press(Message::StartRun),
-                "根据当前模型与执行模式启动编排准备。",
-                tooltip::Position::Bottom,
-            )
-            .style(container::rounded_box),
-            tooltip(
-                button("暂停执行")
-                    .padding([10, 14])
-                    .style(button::danger)
-                    .on_press(Message::StopRun),
-                "暂停当前编排并保留调整窗口。",
-                tooltip::Position::Bottom,
-            )
-            .style(container::rounded_box),
-        ]
-        .spacing(10)
-        .align_y(Center);
-
-        row![brand, panel_switcher, space::horizontal(), actions]
-            .align_y(Center)
-            .into()
+    /// Maps one raw runtime event into a top-level panel switch shortcut when the key combination matches.
+    /// 当按键组合匹配时，将某个原始运行时事件映射为顶层面板切换快捷键消息。
+    fn map_main_panel_shortcut_event(
+        event: iced::Event,
+        _status: iced::event::Status,
+        _window_id: window::Id,
+    ) -> Option<Message> {
+        match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                physical_key,
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat && modifiers.control() && !modifiers.alt() && !modifiers.logo() => {
+                MainDisplayPanel::from_shortcut_digit(key.to_latin(physical_key)?)
+                    .map(Message::MainDisplayPanelSelected)
+            }
+            _ => None,
+        }
     }
 
-    /// Renders one top-level panel switch button inside the isolated header switcher group.
-    /// 渲染独立顶部切换器分组中的单个顶层面板切换按钮。
-    fn view_panel_switch_button(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
-        button(panel.label())
-            .padding([10, 14])
-            .style(if self.active_main_panel == panel {
-                button::primary
-            } else {
-                button::secondary
-            })
-            .on_press(Message::MainDisplayPanelSelected(panel))
-            .into()
+    /// Maps one raw runtime event into a tracked window-pointer message when panel resizing needs it.
+    /// 当面板缩放需要时，将某个原始运行时事件映射为受跟踪的窗口鼠标消息。
+    fn map_window_pointer_event(
+        event: iced::Event,
+        _status: iced::event::Status,
+        window_id: window::Id,
+    ) -> Option<Message> {
+        match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::WindowPointerMoved(window_id, position))
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(Message::WindowLeftButtonReleased(window_id))
+            }
+            _ => None,
+        }
     }
 
     /// Renders the navigation pane with workspace controls and session queue.
@@ -2502,15 +4348,20 @@ impl VulcanWorkbench {
             })
             .count();
 
-        row![
-            text(&self.status_message).size(13),
-            space::horizontal(),
-            text(format!("会话数: {}", self.sessions.len())).size(13),
-            text(format!("稳定会话: {}", stabilized_sessions)).size(13),
-            text(format!("主题: {}", self.app_theme)).size(13),
-        ]
-        .spacing(16)
-        .align_y(Center)
+        container(
+            row![
+                text(&self.status_message).size(13),
+                space::horizontal(),
+                text(format!("会话数: {}", self.sessions.len())).size(13),
+                text(format!("稳定会话: {}", stabilized_sessions)).size(13),
+                text(format!("主题: {}", self.app_theme)).size(13),
+            ]
+            .spacing(16)
+            .align_y(Center),
+        )
+        .padding([10, 16])
+        .height(44)
+        .width(Fill)
         .into()
     }
 
@@ -3085,6 +4936,255 @@ impl VulcanWorkbench {
             self.activities.truncate(8);
         }
     }
+
+    /// Returns the session summary matching one identifier, if it still exists.
+    /// 返回与某个标识匹配的会话摘要（如果仍然存在）。
+    fn session_by_id(&self, session_id: usize) -> Option<&SessionSummary> {
+        self.sessions
+            .iter()
+            .find(|session| session.id == session_id)
+    }
+
+    /// Returns the project node matching one identifier, if it still exists.
+    /// 返回与某个标识匹配的项目节点（如果仍然存在）。
+    fn task_project_by_id(&self, project_id: &str) -> Option<&TaskProjectSummary> {
+        self.task_projects
+            .iter()
+            .find(|project| project.id == project_id)
+    }
+
+    /// Returns the mutable project node matching one identifier, if it still exists.
+    /// 返回与某个标识匹配的可变项目节点（如果仍然存在）。
+    fn task_project_by_id_mut(&mut self, project_id: &str) -> Option<&mut TaskProjectSummary> {
+        self.task_projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+    }
+
+    /// Resolves which project currently owns the selected session so generic actions can target the right branch.
+    /// 解析当前哪一个项目持有已选会话，以便通用动作能够命中正确分支。
+    fn selected_task_project_id(&self) -> Option<String> {
+        self.task_projects
+            .iter()
+            .find(|project| project.session_ids.contains(&self.selected_session))
+            .map(|project| project.id.clone())
+    }
+
+    /// Returns the next project identifier in the same pinned or regular section.
+    /// 返回同一置顶或普通分区中的下一个项目标识。
+    fn next_task_project_in_section(&self, project_id: &str) -> Option<String> {
+        let current_index = self
+            .task_projects
+            .iter()
+            .position(|project| project.id == project_id)?;
+        let section_is_pinned = self.task_projects.get(current_index)?.pinned;
+
+        self.task_projects
+            .iter()
+            .skip(current_index + 1)
+            .find(|project| project.pinned == section_is_pinned)
+            .map(|project| project.id.clone())
+    }
+
+    /// Toggles the expanded state of one project node inside the main task tree.
+    /// 切换主任务树中某个项目节点的展开状态。
+    fn toggle_task_project_expanded(&mut self, project_id: &str) {
+        if !self.expanded_task_projects.insert(project_id.to_string()) {
+            self.expanded_task_projects.remove(project_id);
+        }
+    }
+
+    /// Sorts projects into pinned and regular sections while preserving each section order value.
+    /// 按置顶区与普通区对项目进行排序，并保留各自分区内部的顺序值。
+    fn sort_task_projects(&mut self) {
+        self.task_projects
+            .sort_by_key(|project| (!project.pinned, project.order));
+    }
+
+    /// Reorders one dragged project before the hovered target when both belong to the same section.
+    /// 当拖拽项目与悬停目标同属一个分区时，将前者移动到后者之前。
+    fn reorder_task_project_before(&mut self, dragged_project_id: &str, target_project_id: &str) {
+        if dragged_project_id == target_project_id {
+            return;
+        }
+
+        let Some(dragged_index) = self
+            .task_projects
+            .iter()
+            .position(|project| project.id == dragged_project_id)
+        else {
+            return;
+        };
+        let Some(target_index) = self
+            .task_projects
+            .iter()
+            .position(|project| project.id == target_project_id)
+        else {
+            return;
+        };
+
+        if self.task_projects[dragged_index].pinned != self.task_projects[target_index].pinned {
+            return;
+        }
+
+        let dragged_project = self.task_projects.remove(dragged_index);
+        let insert_index = if dragged_index < target_index {
+            target_index.saturating_sub(1)
+        } else {
+            target_index
+        };
+        self.task_projects.insert(insert_index, dragged_project);
+        self.normalize_task_project_orders();
+    }
+
+    /// Reorders one dragged project to the end of its current pinned or regular section.
+    /// 将某个被拖拽的项目移动到其当前置顶或普通分区的末尾位置。
+    fn reorder_task_project_to_section_end(
+        &mut self,
+        dragged_project_id: &str,
+        section_is_pinned: bool,
+    ) {
+        let Some(dragged_index) = self
+            .task_projects
+            .iter()
+            .position(|project| project.id == dragged_project_id)
+        else {
+            return;
+        };
+
+        if self.task_projects[dragged_index].pinned != section_is_pinned {
+            return;
+        }
+
+        let dragged_project = self.task_projects.remove(dragged_index);
+        let insert_index = if section_is_pinned {
+            self.task_projects
+                .iter()
+                .take_while(|project| project.pinned)
+                .count()
+        } else {
+            self.task_projects.len()
+        };
+
+        self.task_projects.insert(insert_index, dragged_project);
+        self.normalize_task_project_orders();
+    }
+
+    /// Applies one pending drop-target preview when a dragged project card is released.
+    /// 在拖拽项目卡片释放时应用当前记录的插入目标预览。
+    fn apply_task_project_drop_target(
+        &mut self,
+        dragged_project_id: &str,
+        drop_target: &TaskProjectDropTarget,
+    ) {
+        match drop_target {
+            TaskProjectDropTarget::Before(target_project_id) => {
+                self.reorder_task_project_before(dragged_project_id, target_project_id);
+            }
+            TaskProjectDropTarget::EndOfPinned => {
+                self.reorder_task_project_to_section_end(dragged_project_id, true);
+            }
+            TaskProjectDropTarget::EndOfRegular => {
+                self.reorder_task_project_to_section_end(dragged_project_id, false);
+            }
+        }
+    }
+
+    /// Rebuilds stable order numbers after one visible project reorder.
+    /// 一次可见项目重排后重新生成稳定顺序编号。
+    fn normalize_task_project_orders(&mut self) {
+        let mut pinned_order = 0usize;
+        let mut regular_order = 0usize;
+
+        for project in &mut self.task_projects {
+            if project.pinned {
+                project.order = pinned_order;
+                pinned_order += 1;
+            } else {
+                project.order = regular_order;
+                regular_order += 1;
+            }
+        }
+
+        self.sort_task_projects();
+    }
+
+    /// Estimates a stable single-line character budget for one project title inside the task drawer header.
+    /// 估算任务抽屉头部中单行项目标题可使用的稳定字符预算。
+    fn main_task_project_title_limit_chars(&self) -> usize {
+        let trailing_actions_width =
+            MAIN_TASK_PROJECT_ACTIONS_WIDTH + MAIN_TASK_PROJECT_ARROW_WIDTH;
+        let structural_overhead = 42.0;
+        let usable_width =
+            (self.main_task_panel_width - trailing_actions_width - structural_overhead).max(128.0);
+
+        ((usable_width / 7.2).floor() as usize).clamp(12, 64)
+    }
+
+    /// Estimates a stable single-line character budget for one session title inside the task drawer.
+    /// 估算任务抽屉内部单条会话标题可使用的稳定单行字符预算。
+    fn main_task_session_title_limit_chars(&self) -> usize {
+        let trailing_slot_width = MAIN_TASK_SESSION_TRAILING_WIDTH;
+        let structural_overhead = 82.0;
+        let usable_width =
+            (self.main_task_panel_width - trailing_slot_width - structural_overhead).max(112.0);
+
+        ((usable_width / 7.0).floor() as usize).clamp(10, 60)
+    }
+
+    /// Creates one new session under the target project and updates all related prototype state.
+    /// 在目标项目下创建一个新会话，并同步更新相关原型状态。
+    fn create_task_project_session(&mut self, project_id: &str) {
+        let session_id = self.next_session_id;
+        self.next_session_id += 1;
+
+        let project_title = self
+            .task_project_by_id(project_id)
+            .map(|project| project.title.clone())
+            .unwrap_or_else(|| String::from("未命名项目"));
+
+        self.sessions.insert(
+            0,
+            SessionSummary::new(
+                session_id,
+                format!("探索会话 #{session_id}"),
+                "等待注入真实任务与上下文",
+                SessionState::Draft,
+                1,
+                1,
+                "刚刚",
+            ),
+        );
+
+        if let Some(project) = self.task_project_by_id_mut(project_id) {
+            project.session_ids.insert(0, session_id);
+        }
+
+        self.expanded_task_projects.insert(project_id.to_string());
+        self.selected_session = session_id;
+        self.hovered_task_project = Some(project_id.to_string());
+        self.hovered_task_session = Some(session_id);
+        self.suppress_task_session_hover = false;
+        self.status_message =
+            format!("已在项目 `{project_title}` 下创建新的探索会话 #{session_id}。");
+        self.push_activity(
+            ActivityLevel::Info,
+            format!("创建会话 #{session_id}"),
+            format!("项目 `{project_title}` 新增了一个等待编排的会话节点。"),
+        );
+    }
+
+    /// Ensures the selected session still points to a valid session after tree-level archive operations.
+    /// 在树级归档操作后确保当前选中会话仍然指向有效节点。
+    fn ensure_valid_selected_session(&mut self) {
+        if self
+            .sessions
+            .iter()
+            .all(|session| session.id != self.selected_session)
+        {
+            self.selected_session = self.sessions.first().map(|session| session.id).unwrap_or(0);
+        }
+    }
 }
 
 /// Builds the initial pane-grid configuration for the three-column workbench.
@@ -3103,12 +5203,68 @@ fn pane_layout() -> Configuration<PaneKind> {
     }
 }
 
+/// Truncates one label to a compact single-line representation with a trailing ellipsis when needed.
+/// 在需要时将标签截断为带尾部省略号的紧凑单行表示。
+fn truncate_with_ellipsis(value: &str, max_chars: usize) -> String {
+    let char_count = value.chars().count();
+
+    if char_count <= max_chars {
+        return value.to_string();
+    }
+
+    if max_chars <= 3 {
+        return String::from("...");
+    }
+
+    let visible: String = value.chars().take(max_chars - 3).collect();
+    format!("{visible}...")
+}
+
+/// Compacts one relative-time label for narrow task-tree trailing slots.
+/// 为狭窄任务树尾部槽位压缩相对时间标签。
+fn compact_relative_label(value: &str) -> String {
+    value.replace(' ', "").trim_end_matches('前').to_string()
+}
+
+/// Opens one filesystem path with the host operating system file manager.
+/// 使用宿主操作系统的文件管理器打开某个文件系统路径。
+fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 /// Returns the native settings used when opening the main workbench window.
 /// 返回打开主工作台窗口时使用的原生窗口配置。
 fn main_window_settings() -> window::Settings {
     window::Settings {
         size: iced::Size::new(1600.0, 960.0),
+        position: window::Position::Centered,
         min_size: Some(iced::Size::new(1280.0, 800.0)),
+        decorations: false,
+        platform_specific: custom_window_platform_settings(),
         ..window::Settings::default()
     }
 }
@@ -3118,9 +5274,30 @@ fn main_window_settings() -> window::Settings {
 fn diff_window_settings() -> window::Settings {
     window::Settings {
         size: iced::Size::new(1320.0, 900.0),
+        position: window::Position::Centered,
         min_size: Some(iced::Size::new(960.0, 640.0)),
+        decorations: false,
+        platform_specific: custom_window_platform_settings(),
         ..window::Settings::default()
     }
+}
+
+/// Returns the platform-specific settings used by custom undecorated windows.
+/// 返回自定义无系统装饰窗口使用的平台专属配置。
+#[cfg(target_os = "windows")]
+fn custom_window_platform_settings() -> window::settings::PlatformSpecific {
+    window::settings::PlatformSpecific {
+        undecorated_shadow: true,
+        corner_preference: window::settings::platform::CornerPreference::Round,
+        ..window::settings::PlatformSpecific::default()
+    }
+}
+
+/// Returns the platform-specific settings used by custom undecorated windows.
+/// 返回自定义无系统装饰窗口使用的平台专属配置。
+#[cfg(not(target_os = "windows"))]
+fn custom_window_platform_settings() -> window::settings::PlatformSpecific {
+    window::settings::PlatformSpecific::default()
 }
 
 /// Renders a tooltip-enabled secondary action button.
