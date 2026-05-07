@@ -1,0 +1,1392 @@
+{
+  "id": "siliconflow",
+  "name": "SiliconFlow",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "SILICONFLOW_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.siliconflow.com\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "baidu\/ERNIE-4.5-300B-A47B",
+      "name": "baidu\/ERNIE-4.5-300B-A47B",
+      "family": "ernie",
+      "releaseDate": "2025-07-02",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "ByteDance-Seed\/Seed-OSS-36B-Instruct",
+      "name": "ByteDance-Seed\/Seed-OSS-36B-Instruct",
+      "family": "seed",
+      "releaseDate": "2025-09-04",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-R1",
+      "name": "deepseek-ai\/DeepSeek-R1",
+      "family": "deepseek-thinking",
+      "releaseDate": "2025-05-28",
+      "contextLimit": 164000,
+      "outputLimit": 164000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-R1-Distill-Qwen-14B",
+      "name": "deepseek-ai\/DeepSeek-R1-Distill-Qwen-14B",
+      "family": "qwen",
+      "releaseDate": "2025-01-20",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-R1-Distill-Qwen-32B",
+      "name": "deepseek-ai\/DeepSeek-R1-Distill-Qwen-32B",
+      "family": "qwen",
+      "releaseDate": "2025-01-20",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-V3",
+      "name": "deepseek-ai\/DeepSeek-V3",
+      "family": "deepseek",
+      "releaseDate": "2024-12-26",
+      "contextLimit": 164000,
+      "outputLimit": 164000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-V3.1",
+      "name": "deepseek-ai\/DeepSeek-V3.1",
+      "family": "deepseek",
+      "releaseDate": "2025-08-25",
+      "contextLimit": 164000,
+      "outputLimit": 164000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-V3.1-Terminus",
+      "name": "deepseek-ai\/DeepSeek-V3.1-Terminus",
+      "family": "deepseek",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 164000,
+      "outputLimit": 164000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-V3.2",
+      "name": "deepseek-ai\/DeepSeek-V3.2",
+      "family": "deepseek",
+      "releaseDate": "2025-12-03",
+      "contextLimit": 164000,
+      "outputLimit": 164000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-V3.2-Exp",
+      "name": "deepseek-ai\/DeepSeek-V3.2-Exp",
+      "family": "deepseek",
+      "releaseDate": "2025-10-10",
+      "contextLimit": 164000,
+      "outputLimit": 164000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/deepseek-vl2",
+      "name": "deepseek-ai\/deepseek-vl2",
+      "family": "deepseek",
+      "releaseDate": "2024-12-13",
+      "contextLimit": 4000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inclusionAI\/Ling-flash-2.0",
+      "name": "inclusionAI\/Ling-flash-2.0",
+      "family": "ling",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inclusionAI\/Ling-mini-2.0",
+      "name": "inclusionAI\/Ling-mini-2.0",
+      "family": "ling",
+      "releaseDate": "2025-09-10",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inclusionAI\/Ring-flash-2.0",
+      "name": "inclusionAI\/Ring-flash-2.0",
+      "family": "ring",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/Meta-Llama-3.1-8B-Instruct",
+      "name": "meta-llama\/Meta-Llama-3.1-8B-Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-23",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "MiniMaxAI\/MiniMax-M2.1",
+      "name": "MiniMaxAI\/MiniMax-M2.1",
+      "family": "minimax",
+      "releaseDate": "2025-12-23",
+      "contextLimit": 197000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "MiniMaxAI\/MiniMax-M2.5",
+      "name": "MiniMaxAI\/MiniMax-M2.5",
+      "family": "minimax",
+      "releaseDate": "2026-02-15",
+      "contextLimit": 197000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/Kimi-K2-Instruct",
+      "name": "moonshotai\/Kimi-K2-Instruct",
+      "family": "kimi",
+      "releaseDate": "2025-07-13",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/Kimi-K2-Instruct-0905",
+      "name": "moonshotai\/Kimi-K2-Instruct-0905",
+      "family": "kimi",
+      "releaseDate": "2025-09-08",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/Kimi-K2-Thinking",
+      "name": "moonshotai\/Kimi-K2-Thinking",
+      "family": "kimi-thinking",
+      "releaseDate": "2025-11-07",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/Kimi-K2.5",
+      "name": "moonshotai\/Kimi-K2.5",
+      "family": "kimi",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/Kimi-K2.6",
+      "name": "moonshotai\/Kimi-K2.6",
+      "family": "kimi",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nex-agi\/DeepSeek-V3.1-Nex-N1",
+      "name": "nex-agi\/DeepSeek-V3.1-Nex-N1",
+      "family": "deepseek",
+      "releaseDate": "2025-01-01",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-120b",
+      "name": "openai\/gpt-oss-120b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-13",
+      "contextLimit": 131000,
+      "outputLimit": 8000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-20b",
+      "name": "openai\/gpt-oss-20b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-13",
+      "contextLimit": 131000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-14B-Instruct",
+      "name": "Qwen\/Qwen2.5-14B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2024-09-18",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-32B-Instruct",
+      "name": "Qwen\/Qwen2.5-32B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2024-09-19",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-72B-Instruct",
+      "name": "Qwen\/Qwen2.5-72B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2024-09-18",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-72B-Instruct-128K",
+      "name": "Qwen\/Qwen2.5-72B-Instruct-128K",
+      "family": "qwen",
+      "releaseDate": "2024-09-18",
+      "contextLimit": 131000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-7B-Instruct",
+      "name": "Qwen\/Qwen2.5-7B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2024-09-18",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-Coder-32B-Instruct",
+      "name": "Qwen\/Qwen2.5-Coder-32B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2024-11-11",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-VL-32B-Instruct",
+      "name": "Qwen\/Qwen2.5-VL-32B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-03-24",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-VL-72B-Instruct",
+      "name": "Qwen\/Qwen2.5-VL-72B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-01-28",
+      "contextLimit": 131000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen2.5-VL-7B-Instruct",
+      "name": "Qwen\/Qwen2.5-VL-7B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-01-28",
+      "contextLimit": 33000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-14B",
+      "name": "Qwen\/Qwen3-14B",
+      "family": "qwen",
+      "releaseDate": "2025-04-30",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-235B-A22B",
+      "name": "Qwen\/Qwen3-235B-A22B",
+      "family": "qwen",
+      "releaseDate": "2025-04-30",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-235B-A22B-Instruct-2507",
+      "name": "Qwen\/Qwen3-235B-A22B-Instruct-2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-23",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-235B-A22B-Thinking-2507",
+      "name": "Qwen\/Qwen3-235B-A22B-Thinking-2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-30B-A3B-Instruct-2507",
+      "name": "Qwen\/Qwen3-30B-A3B-Instruct-2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-30",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-30B-A3B-Thinking-2507",
+      "name": "Qwen\/Qwen3-30B-A3B-Thinking-2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-31",
+      "contextLimit": 262000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-32B",
+      "name": "Qwen\/Qwen3-32B",
+      "family": "qwen",
+      "releaseDate": "2025-04-30",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-8B",
+      "name": "Qwen\/Qwen3-8B",
+      "family": "qwen",
+      "releaseDate": "2025-04-30",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Coder-30B-A3B-Instruct",
+      "name": "Qwen\/Qwen3-Coder-30B-A3B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-08-01",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Coder-480B-A35B-Instruct",
+      "name": "Qwen\/Qwen3-Coder-480B-A35B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-07-31",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Next-80B-A3B-Instruct",
+      "name": "Qwen\/Qwen3-Next-80B-A3B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Next-80B-A3B-Thinking",
+      "name": "Qwen\/Qwen3-Next-80B-A3B-Thinking",
+      "family": "qwen",
+      "releaseDate": "2025-09-25",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Omni-30B-A3B-Captioner",
+      "name": "Qwen\/Qwen3-Omni-30B-A3B-Captioner",
+      "family": "qwen",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 66000,
+      "outputLimit": 66000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Omni-30B-A3B-Instruct",
+      "name": "Qwen\/Qwen3-Omni-30B-A3B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 66000,
+      "outputLimit": 66000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Omni-30B-A3B-Thinking",
+      "name": "Qwen\/Qwen3-Omni-30B-A3B-Thinking",
+      "family": "qwen",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 66000,
+      "outputLimit": 66000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-235B-A22B-Instruct",
+      "name": "Qwen\/Qwen3-VL-235B-A22B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-235B-A22B-Thinking",
+      "name": "Qwen\/Qwen3-VL-235B-A22B-Thinking",
+      "family": "qwen",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-30B-A3B-Instruct",
+      "name": "Qwen\/Qwen3-VL-30B-A3B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-10-05",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-30B-A3B-Thinking",
+      "name": "Qwen\/Qwen3-VL-30B-A3B-Thinking",
+      "family": "qwen",
+      "releaseDate": "2025-10-11",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-32B-Instruct",
+      "name": "Qwen\/Qwen3-VL-32B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-10-21",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-32B-Thinking",
+      "name": "Qwen\/Qwen3-VL-32B-Thinking",
+      "family": "qwen",
+      "releaseDate": "2025-10-21",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-8B-Instruct",
+      "name": "Qwen\/Qwen3-VL-8B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-8B-Thinking",
+      "name": "Qwen\/Qwen3-VL-8B-Thinking",
+      "family": "qwen",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/QwQ-32B",
+      "name": "Qwen\/QwQ-32B",
+      "family": "qwen",
+      "releaseDate": "2025-03-06",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "stepfun-ai\/Step-3.5-Flash",
+      "name": "stepfun-ai\/Step-3.5-Flash",
+      "family": "step",
+      "releaseDate": "2026-02-11",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tencent\/Hunyuan-A13B-Instruct",
+      "name": "tencent\/Hunyuan-A13B-Instruct",
+      "family": "hunyuan",
+      "releaseDate": "2025-06-30",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tencent\/Hunyuan-MT-7B",
+      "name": "tencent\/Hunyuan-MT-7B",
+      "family": "hunyuan",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 33000,
+      "outputLimit": 33000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "THUDM\/GLM-4-32B-0414",
+      "name": "THUDM\/GLM-4-32B-0414",
+      "family": "glm",
+      "releaseDate": "2025-04-18",
+      "contextLimit": 33000,
+      "outputLimit": 33000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "THUDM\/GLM-4-9B-0414",
+      "name": "THUDM\/GLM-4-9B-0414",
+      "family": "glm",
+      "releaseDate": "2025-04-18",
+      "contextLimit": 33000,
+      "outputLimit": 33000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "THUDM\/GLM-Z1-32B-0414",
+      "name": "THUDM\/GLM-Z1-32B-0414",
+      "family": "glm-z",
+      "releaseDate": "2025-04-18",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "THUDM\/GLM-Z1-9B-0414",
+      "name": "THUDM\/GLM-Z1-9B-0414",
+      "family": "glm-z",
+      "releaseDate": "2025-04-18",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-4.5",
+      "name": "zai-org\/GLM-4.5",
+      "family": "glm",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-4.5-Air",
+      "name": "zai-org\/GLM-4.5-Air",
+      "family": "glm-air",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-4.5V",
+      "name": "zai-org\/GLM-4.5V",
+      "family": "glm",
+      "releaseDate": "2025-08-13",
+      "contextLimit": 66000,
+      "outputLimit": 66000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-4.6",
+      "name": "zai-org\/GLM-4.6",
+      "family": "glm",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 205000,
+      "outputLimit": 205000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-4.6V",
+      "name": "zai-org\/GLM-4.6V",
+      "family": "glm",
+      "releaseDate": "2025-12-07",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-4.7",
+      "name": "zai-org\/GLM-4.7",
+      "family": "glm",
+      "releaseDate": "2025-12-22",
+      "contextLimit": 205000,
+      "outputLimit": 205000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-5",
+      "name": "zai-org\/GLM-5",
+      "family": "glm",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 205000,
+      "outputLimit": 205000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-5.1",
+      "name": "zai-org\/GLM-5.1",
+      "family": "glm",
+      "releaseDate": "2026-04-08",
+      "contextLimit": 205000,
+      "outputLimit": 205000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-5V-Turbo",
+      "name": "zai-org\/GLM-5V-Turbo",
+      "family": "glm",
+      "releaseDate": "2026-04-01",
+      "contextLimit": 200000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

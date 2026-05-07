@@ -1,0 +1,235 @@
+{
+  "id": "cohere",
+  "name": "Cohere",
+  "runtime": "cohere",
+  "credentialEnvKeys": [
+    "COHERE_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "native",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "c4ai-aya-expanse-32b",
+      "name": "Aya Expanse 32B",
+      "releaseDate": "2024-10-24",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "c4ai-aya-expanse-8b",
+      "name": "Aya Expanse 8B",
+      "releaseDate": "2024-10-24",
+      "contextLimit": 8000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "c4ai-aya-vision-32b",
+      "name": "Aya Vision 32B",
+      "releaseDate": "2025-03-04",
+      "contextLimit": 16000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "c4ai-aya-vision-8b",
+      "name": "Aya Vision 8B",
+      "releaseDate": "2025-03-04",
+      "contextLimit": 16000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-a-03-2025",
+      "name": "Command A",
+      "family": "command-a",
+      "releaseDate": "2025-03-13",
+      "contextLimit": 256000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-a-reasoning-08-2025",
+      "name": "Command A Reasoning",
+      "family": "command-a",
+      "releaseDate": "2025-08-21",
+      "contextLimit": 256000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-a-translate-08-2025",
+      "name": "Command A Translate",
+      "family": "command-a",
+      "releaseDate": "2025-08-28",
+      "contextLimit": 8000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-a-vision-07-2025",
+      "name": "Command A Vision",
+      "family": "command-a",
+      "releaseDate": "2025-07-31",
+      "contextLimit": 128000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-r-08-2024",
+      "name": "Command R",
+      "family": "command-r",
+      "releaseDate": "2024-08-30",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-r-plus-08-2024",
+      "name": "Command R+",
+      "family": "command-r",
+      "releaseDate": "2024-08-30",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-r7b-12-2024",
+      "name": "Command R7B",
+      "family": "command-r",
+      "releaseDate": "2024-02-27",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "command-r7b-arabic-02-2025",
+      "name": "Command R7B Arabic",
+      "family": "command-r",
+      "releaseDate": "2025-02-27",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

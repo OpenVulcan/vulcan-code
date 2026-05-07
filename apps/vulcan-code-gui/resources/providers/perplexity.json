@@ -1,0 +1,93 @@
+{
+  "id": "perplexity",
+  "name": "Perplexity",
+  "runtime": "perplexity",
+  "credentialEnvKeys": [
+    "PERPLEXITY_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "native",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "sonar",
+      "name": "Sonar",
+      "family": "sonar",
+      "releaseDate": "2024-01-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sonar-deep-research",
+      "name": "Perplexity Sonar Deep Research",
+      "releaseDate": "2025-02-01",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sonar-pro",
+      "name": "Sonar Pro",
+      "family": "sonar-pro",
+      "releaseDate": "2024-01-01",
+      "contextLimit": 200000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sonar-reasoning-pro",
+      "name": "Sonar Reasoning Pro",
+      "family": "sonar-reasoning",
+      "releaseDate": "2024-01-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

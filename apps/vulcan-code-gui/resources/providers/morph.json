@@ -1,0 +1,75 @@
+{
+  "id": "morph",
+  "name": "Morph",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "MORPH_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.morphllm.com\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "auto",
+      "name": "Auto",
+      "family": "auto",
+      "releaseDate": "2024-06-01",
+      "contextLimit": 32000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "morph-v3-fast",
+      "name": "Morph v3 Fast",
+      "family": "morph",
+      "releaseDate": "2024-08-15",
+      "contextLimit": 16000,
+      "outputLimit": 16000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "morph-v3-large",
+      "name": "Morph v3 Large",
+      "family": "morph",
+      "releaseDate": "2024-08-15",
+      "contextLimit": 32000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

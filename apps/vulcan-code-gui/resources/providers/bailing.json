@@ -1,0 +1,57 @@
+{
+  "id": "bailing",
+  "name": "Bailing",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "BAILING_API_TOKEN"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.tbox.cn\/api\/llm\/v1\/chat\/completions",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "Ling-1T",
+      "name": "Ling-1T",
+      "family": "ling",
+      "releaseDate": "2025-10",
+      "contextLimit": 128000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Ring-1T",
+      "name": "Ring-1T",
+      "family": "ring",
+      "releaseDate": "2025-10",
+      "contextLimit": 128000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,519 @@
+{
+  "id": "groq",
+  "name": "Groq",
+  "runtime": "groq",
+  "credentialEnvKeys": [
+    "GROQ_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "native",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "allam-2-7b",
+      "name": "ALLaM-2-7b",
+      "family": "allam",
+      "releaseDate": "2024-09",
+      "contextLimit": 4096,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "canopylabs\/orpheus-arabic-saudi",
+      "name": "Orpheus Arabic Saudi",
+      "family": "canopylabs",
+      "releaseDate": "2025-12-16",
+      "contextLimit": 4000,
+      "outputLimit": 50000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "audio"
+      ]
+    },
+    {
+      "id": "canopylabs\/orpheus-v1-english",
+      "name": "Orpheus V1 English",
+      "family": "canopylabs",
+      "releaseDate": "2025-12-19",
+      "contextLimit": 4000,
+      "outputLimit": 50000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "audio"
+      ]
+    },
+    {
+      "id": "deepseek-r1-distill-llama-70b",
+      "name": "DeepSeek R1 Distill Llama 70B",
+      "status": "deprecated",
+      "family": "deepseek-thinking",
+      "releaseDate": "2025-01-20",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemma2-9b-it",
+      "name": "Gemma 2 9B",
+      "status": "deprecated",
+      "family": "gemma",
+      "releaseDate": "2024-06-27",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "groq\/compound",
+      "name": "Compound",
+      "family": "groq",
+      "releaseDate": "2025-09-04",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "groq\/compound-mini",
+      "name": "Compound Mini",
+      "family": "groq",
+      "releaseDate": "2025-09-04",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-3.1-8b-instant",
+      "name": "Llama 3.1 8B Instant",
+      "family": "llama",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-3.3-70b-versatile",
+      "name": "Llama 3.3 70B Versatile",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-guard-3-8b",
+      "name": "Llama Guard 3 8B",
+      "status": "deprecated",
+      "family": "llama",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama3-70b-8192",
+      "name": "Llama 3 70B",
+      "status": "deprecated",
+      "family": "llama",
+      "releaseDate": "2024-04-18",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama3-8b-8192",
+      "name": "Llama 3 8B",
+      "status": "deprecated",
+      "family": "llama",
+      "releaseDate": "2024-04-18",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-4-maverick-17b-128e-instruct",
+      "name": "Llama 4 Maverick 17B",
+      "status": "deprecated",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-4-scout-17b-16e-instruct",
+      "name": "Llama 4 Scout 17B",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-guard-4-12b",
+      "name": "Llama Guard 4 12B",
+      "status": "deprecated",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 131072,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-prompt-guard-2-22m",
+      "name": "Llama Prompt Guard 2 22M",
+      "family": "llama",
+      "releaseDate": "2024-10-01",
+      "contextLimit": 512,
+      "outputLimit": 512,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-prompt-guard-2-86m",
+      "name": "Llama Prompt Guard 2 86M",
+      "family": "llama",
+      "releaseDate": "2024-10-01",
+      "contextLimit": 512,
+      "outputLimit": 512,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral-saba-24b",
+      "name": "Mistral Saba 24B",
+      "status": "deprecated",
+      "family": "mistral",
+      "releaseDate": "2025-02-06",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2-instruct",
+      "name": "Kimi K2 Instruct",
+      "status": "deprecated",
+      "family": "kimi",
+      "releaseDate": "2025-07-14",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2-instruct-0905",
+      "name": "Kimi K2 Instruct 0905",
+      "family": "kimi",
+      "releaseDate": "2025-09-05",
+      "contextLimit": 262144,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-20b",
+      "name": "GPT OSS 20B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-safeguard-20b",
+      "name": "Safety GPT OSS 20B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-03-05",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen-qwq-32b",
+      "name": "Qwen QwQ 32B",
+      "status": "deprecated",
+      "family": "qwen",
+      "releaseDate": "2024-11-27",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-32b",
+      "name": "Qwen3 32B",
+      "family": "qwen",
+      "releaseDate": "2024-12-23",
+      "contextLimit": 131072,
+      "outputLimit": 40960,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "whisper-large-v3",
+      "name": "Whisper Large V3",
+      "family": "whisper",
+      "releaseDate": "2023-09-01",
+      "contextLimit": 448,
+      "outputLimit": 448,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "name": "Whisper Large v3 Turbo",
+      "family": "whisper",
+      "releaseDate": "2024-10-01",
+      "contextLimit": 448,
+      "outputLimit": 448,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

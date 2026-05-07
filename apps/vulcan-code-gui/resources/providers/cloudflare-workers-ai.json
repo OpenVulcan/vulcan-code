@@ -1,0 +1,179 @@
+{
+  "id": "cloudflare-workers-ai",
+  "name": "Cloudflare Workers AI",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_API_KEY"
+  ],
+  "fields": [
+    "accountId",
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "template",
+    "template": "https:\/\/api.cloudflare.com\/client\/v4\/accounts\/{accountId}\/ai\/v1",
+    "parameter": "accountId",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "@cf\/google\/gemma-4-26b-a4b-it",
+      "name": "Gemma 4 26B A4B IT",
+      "family": "gemma",
+      "releaseDate": "2025-12-15",
+      "contextLimit": 256000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/meta\/llama-4-scout-17b-16e-instruct",
+      "name": "Llama 4 Scout 17B 16E Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/moonshotai\/kimi-k2.5",
+      "name": "Kimi K2.5",
+      "family": "kimi",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/moonshotai\/kimi-k2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi",
+      "releaseDate": "2026-04-20",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/nvidia\/nemotron-3-120b-a12b",
+      "name": "Nemotron 3 Super 120B",
+      "family": "nemotron",
+      "releaseDate": "2026-03-11",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/openai\/gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/openai\/gpt-oss-20b",
+      "name": "GPT OSS 20B",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf\/zai-org\/glm-4.7-flash",
+      "name": "GLM-4.7-Flash",
+      "family": "glm-flash",
+      "releaseDate": "2026-01-19",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

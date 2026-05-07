@@ -1,0 +1,407 @@
+{
+  "id": "fireworks-ai",
+  "name": "Fireworks AI",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "FIREWORKS_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.fireworks.ai\/inference\/v1\/",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "accounts\/fireworks\/models\/deepseek-v3p1",
+      "name": "DeepSeek V3.1",
+      "family": "deepseek",
+      "releaseDate": "2025-08-21",
+      "contextLimit": 163840,
+      "outputLimit": 163840,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/deepseek-v3p2",
+      "name": "DeepSeek V3.2",
+      "family": "deepseek",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 160000,
+      "outputLimit": 160000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/glm-4p5",
+      "name": "GLM 4.5",
+      "family": "glm",
+      "releaseDate": "2025-07-29",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/glm-4p5-air",
+      "name": "GLM 4.5 Air",
+      "family": "glm-air",
+      "releaseDate": "2025-08-01",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/glm-4p7",
+      "name": "GLM 4.7",
+      "family": "glm",
+      "releaseDate": "2025-12-22",
+      "contextLimit": 198000,
+      "outputLimit": 198000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/glm-5",
+      "name": "GLM 5",
+      "family": "glm",
+      "releaseDate": "2026-02-11",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/glm-5p1",
+      "name": "GLM 5.1",
+      "family": "glm",
+      "releaseDate": "2026-04-01",
+      "contextLimit": 202800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/gpt-oss-20b",
+      "name": "GPT OSS 20B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/kimi-k2-instruct",
+      "name": "Kimi K2 Instruct",
+      "family": "kimi",
+      "releaseDate": "2025-07-11",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/kimi-k2-thinking",
+      "name": "Kimi K2 Thinking",
+      "family": "kimi-thinking",
+      "releaseDate": "2025-11-06",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/kimi-k2p5",
+      "name": "Kimi K2.5",
+      "family": "kimi-thinking",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/kimi-k2p6",
+      "name": "Kimi K2.6",
+      "family": "kimi-thinking",
+      "releaseDate": "2026-04-17",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/minimax-m2p1",
+      "name": "MiniMax-M2.1",
+      "family": "minimax",
+      "releaseDate": "2025-12-23",
+      "contextLimit": 200000,
+      "outputLimit": 200000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/minimax-m2p5",
+      "name": "MiniMax-M2.5",
+      "family": "minimax",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 196608,
+      "outputLimit": 196608,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/minimax-m2p7",
+      "name": "MiniMax-M2.7",
+      "family": "minimax",
+      "releaseDate": "2026-04-12",
+      "contextLimit": 196608,
+      "outputLimit": 196608,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/models\/qwen3p6-plus",
+      "name": "Qwen 3.6 Plus",
+      "family": "qwen",
+      "releaseDate": "2026-04-04",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "accounts\/fireworks\/routers\/kimi-k2p5-turbo",
+      "name": "Kimi K2.5 Turbo",
+      "family": "kimi-thinking",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,251 @@
+{
+  "id": "evroc",
+  "name": "evroc",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "EVROC_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/models.think.evroc.com\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "intfloat\/multilingual-e5-large-instruct",
+      "name": "E5 Multi-Lingual Large Embeddings 0.6B",
+      "family": "text-embedding",
+      "releaseDate": "2024-06-01",
+      "contextLimit": 512,
+      "outputLimit": 512,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "KBLab\/kb-whisper-large",
+      "name": "KB Whisper",
+      "family": "whisper",
+      "releaseDate": "2024-10-01",
+      "contextLimit": 448,
+      "outputLimit": 448,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "microsoft\/Phi-4-multimodal-instruct",
+      "name": "Phi-4 15B",
+      "family": "phi",
+      "releaseDate": "2025-01-01",
+      "contextLimit": 32000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/devstral-small-2-24b-instruct-2512",
+      "name": "Devstral Small 2 24B Instruct 2512",
+      "family": "devstral",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/Magistral-Small-2509",
+      "name": "Magistral Small 1.2 24B",
+      "family": "magistral-small",
+      "releaseDate": "2025-06-01",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/Voxtral-Small-24B-2507",
+      "name": "Voxtral Small 24B",
+      "family": "voxtral",
+      "releaseDate": "2025-03-01",
+      "contextLimit": 32000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "audio",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/Kimi-K2.5",
+      "name": "Kimi K2.5",
+      "family": "kimi",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/Llama-3.3-70B-Instruct-FP8",
+      "name": "Llama 3.3 70B",
+      "family": "llama",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 65536,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/whisper-large-v3",
+      "name": "Whisper 3 Large",
+      "family": "whisper",
+      "releaseDate": "2024-10-01",
+      "contextLimit": 448,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-30B-A3B-Instruct-2507-FP8",
+      "name": "Qwen3 30B 2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-30",
+      "contextLimit": 64000,
+      "outputLimit": 64000,
+      "reasoning": false,
+      "toolCall": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-Embedding-8B",
+      "name": "Qwen3 Embedding 8B",
+      "family": "text-embedding",
+      "releaseDate": "2025-07-30",
+      "contextLimit": 40960,
+      "outputLimit": 40960,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-30B-A3B-Instruct",
+      "name": "Qwen3 VL 30B",
+      "family": "qwen",
+      "releaseDate": "2025-07-30",
+      "contextLimit": 100000,
+      "outputLimit": 100000,
+      "reasoning": false,
+      "toolCall": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

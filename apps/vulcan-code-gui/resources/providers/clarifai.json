@@ -1,0 +1,246 @@
+{
+  "id": "clarifai",
+  "name": "Clarifai",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "CLARIFAI_PAT"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.clarifai.com\/v2\/ext\/openai\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "arcee_ai\/AFM\/models\/trinity-mini",
+      "name": "Trinity Mini",
+      "family": "trinity-mini",
+      "releaseDate": "2025-12",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "clarifai\/main\/models\/mm-poly-8b",
+      "name": "MM Poly 8B",
+      "family": "mm-poly",
+      "releaseDate": "2025-06",
+      "contextLimit": 32768,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai\/deepseek-ocr\/models\/DeepSeek-OCR",
+      "name": "DeepSeek OCR",
+      "family": "deepseek",
+      "releaseDate": "2025-10-20",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimaxai\/chat-completion\/models\/MiniMax-M2_5-high-throughput",
+      "name": "MiniMax-M2.5 High Throughput",
+      "family": "minimax",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/completion\/models\/Ministral-3-14B-Reasoning-2512",
+      "name": "Ministral 3 14B Reasoning 2512",
+      "family": "ministral",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/completion\/models\/Ministral-3-3B-Reasoning-2512",
+      "name": "Ministral 3 3B Reasoning 2512",
+      "family": "ministral",
+      "releaseDate": "2025-12",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/chat-completion\/models\/Kimi-K2_6",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/chat-completion\/models\/gpt-oss-120b-high-throughput",
+      "name": "GPT OSS 120B High Throughput",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/chat-completion\/models\/gpt-oss-20b",
+      "name": "GPT OSS 20B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwenCoder\/models\/Qwen3-Coder-30B-A3B-Instruct",
+      "name": "Qwen3 Coder 30B A3B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-07-31",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwenLM\/models\/Qwen3-30B-A3B-Instruct-2507",
+      "name": "Qwen3 30B A3B Instruct 2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-30",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwenLM\/models\/Qwen3-30B-A3B-Thinking-2507",
+      "name": "Qwen3 30B A3B Thinking 2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-31",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

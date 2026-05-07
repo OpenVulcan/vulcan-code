@@ -1,0 +1,79 @@
+{
+  "id": "kimi-for-coding",
+  "name": "Kimi For Coding",
+  "runtime": "anthropic",
+  "credentialEnvKeys": [
+    "KIMI_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.kimi.com\/coding\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "k2p5",
+      "name": "Kimi K2.5",
+      "family": "kimi-thinking",
+      "releaseDate": "2026-01",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "k2p6",
+      "name": "Kimi K2.6",
+      "family": "kimi-thinking",
+      "releaseDate": "2026-04",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kimi-k2-thinking",
+      "name": "Kimi K2 Thinking",
+      "family": "kimi-thinking",
+      "releaseDate": "2025-11",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

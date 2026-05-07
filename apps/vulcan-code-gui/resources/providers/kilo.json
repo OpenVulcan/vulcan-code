@@ -1,0 +1,6372 @@
+{
+  "id": "kilo",
+  "name": "Kilo Gateway",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "KILO_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.kilo.ai\/api\/gateway",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "~anthropic\/claude-haiku-latest",
+      "name": "Anthropic: Claude Haiku Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~anthropic\/claude-opus-latest",
+      "name": "Anthropic: Claude Opus Latest",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~anthropic\/claude-sonnet-latest",
+      "name": "Anthropic: Claude Sonnet Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~google\/gemini-flash-latest",
+      "name": "Google: Gemini Flash Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~google\/gemini-pro-latest",
+      "name": "Google: Gemini Pro Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~moonshotai\/kimi-latest",
+      "name": "MoonshotAI: Kimi Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 262142,
+      "outputLimit": 262142,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~openai\/gpt-latest",
+      "name": "OpenAI: GPT Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1050000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "~openai\/gpt-mini-latest",
+      "name": "OpenAI: GPT Mini Latest",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "ai21\/jamba-large-1.7",
+      "name": "AI21: Jamba Large 1.7",
+      "releaseDate": "2025-08-09",
+      "contextLimit": 256000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "aion-labs\/aion-1.0",
+      "name": "AionLabs: Aion-1.0",
+      "releaseDate": "2025-02-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "aion-labs\/aion-1.0-mini",
+      "name": "AionLabs: Aion-1.0-Mini",
+      "releaseDate": "2025-02-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "aion-labs\/aion-2.0",
+      "name": "AionLabs: Aion-2.0",
+      "releaseDate": "2026-02-24",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "aion-labs\/aion-rp-llama-3.1-8b",
+      "name": "AionLabs: Aion-RP 1.0 (8B)",
+      "releaseDate": "2025-02-05",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "alfredpros\/codellama-7b-instruct-solidity",
+      "name": "AlfredPros: CodeLLaMa 7B Instruct Solidity",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 4096,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "alibaba\/tongyi-deepresearch-30b-a3b",
+      "name": "Tongyi DeepResearch 30B A3B",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "allenai\/olmo-3-32b-think",
+      "name": "AllenAI: Olmo 3 32B Think",
+      "releaseDate": "2025-11-22",
+      "contextLimit": 65536,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "allenai\/olmo-3.1-32b-instruct",
+      "name": "AllenAI: Olmo 3.1 32B Instruct",
+      "releaseDate": "2026-01-07",
+      "contextLimit": 65536,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "alpindale\/goliath-120b",
+      "name": "Goliath 120B",
+      "releaseDate": "2023-11-10",
+      "contextLimit": 6144,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon\/nova-2-lite-v1",
+      "name": "Amazon: Nova 2 Lite",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 1000000,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon\/nova-lite-v1",
+      "name": "Amazon: Nova Lite 1.0",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 300000,
+      "outputLimit": 5120,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon\/nova-micro-v1",
+      "name": "Amazon: Nova Micro 1.0",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 128000,
+      "outputLimit": 5120,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon\/nova-premier-v1",
+      "name": "Amazon: Nova Premier 1.0",
+      "releaseDate": "2025-11-01",
+      "contextLimit": 1000000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon\/nova-pro-v1",
+      "name": "Amazon: Nova Pro 1.0",
+      "releaseDate": "2024-12-03",
+      "contextLimit": 300000,
+      "outputLimit": 5120,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthracite-org\/magnum-v4-72b",
+      "name": "Magnum v4 72B",
+      "releaseDate": "2024-10-22",
+      "contextLimit": 16384,
+      "outputLimit": 2048,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-3-haiku",
+      "name": "Anthropic: Claude 3 Haiku",
+      "releaseDate": "2024-03-07",
+      "contextLimit": 200000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-3.5-haiku",
+      "name": "Anthropic: Claude 3.5 Haiku",
+      "releaseDate": "2024-10-22",
+      "contextLimit": 200000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-3.7-sonnet",
+      "name": "Anthropic: Claude 3.7 Sonnet",
+      "releaseDate": "2025-02-19",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-3.7-sonnet:thinking",
+      "name": "Anthropic: Claude 3.7 Sonnet (thinking)",
+      "releaseDate": "2025-02-19",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-haiku-4.5",
+      "name": "Anthropic: Claude Haiku 4.5",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-opus-4",
+      "name": "Anthropic: Claude Opus 4",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-opus-4.1",
+      "name": "Anthropic: Claude Opus 4.1",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-opus-4.5",
+      "name": "Anthropic: Claude Opus 4.5",
+      "releaseDate": "2025-11-24",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-opus-4.6",
+      "name": "Anthropic: Claude Opus 4.6",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-opus-4.6-fast",
+      "name": "Anthropic: Claude Opus 4.6 (Fast)",
+      "releaseDate": "2026-04-07",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-opus-4.7",
+      "name": "Anthropic: Claude Opus 4.7",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-sonnet-4",
+      "name": "Anthropic: Claude Sonnet 4",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-sonnet-4.5",
+      "name": "Anthropic: Claude Sonnet 4.5",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic\/claude-sonnet-4.6",
+      "name": "Anthropic: Claude Sonnet 4.6",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/coder-large",
+      "name": "Arcee AI: Coder Large",
+      "releaseDate": "2025-05-06",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/maestro-reasoning",
+      "name": "Arcee AI: Maestro Reasoning",
+      "releaseDate": "2025-05-06",
+      "contextLimit": 131072,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/spotlight",
+      "name": "Arcee AI: Spotlight",
+      "releaseDate": "2025-05-06",
+      "contextLimit": 131072,
+      "outputLimit": 65537,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/trinity-large-preview",
+      "name": "Arcee AI: Trinity Large Preview",
+      "releaseDate": "2026-01-28",
+      "contextLimit": 131000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/trinity-large-thinking",
+      "name": "Arcee AI: Trinity Large Thinking",
+      "releaseDate": "2026-04-01",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/trinity-mini",
+      "name": "Arcee AI: Trinity Mini",
+      "releaseDate": "2025-12",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-ai\/virtuoso-large",
+      "name": "Arcee AI: Virtuoso Large",
+      "releaseDate": "2025-05-06",
+      "contextLimit": 131072,
+      "outputLimit": 64000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "baidu\/ernie-4.5-21b-a3b",
+      "name": "Baidu: ERNIE 4.5 21B A3B",
+      "releaseDate": "2025-06-30",
+      "contextLimit": 120000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "baidu\/ernie-4.5-21b-a3b-thinking",
+      "name": "Baidu: ERNIE 4.5 21B A3B Thinking",
+      "releaseDate": "2025-09-19",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "baidu\/ernie-4.5-300b-a47b",
+      "name": "Baidu: ERNIE 4.5 300B A47B ",
+      "releaseDate": "2025-06-30",
+      "contextLimit": 123000,
+      "outputLimit": 12000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "baidu\/ernie-4.5-vl-28b-a3b",
+      "name": "Baidu: ERNIE 4.5 VL 28B A3B",
+      "releaseDate": "2025-06-30",
+      "contextLimit": 30000,
+      "outputLimit": 8000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "baidu\/ernie-4.5-vl-424b-a47b",
+      "name": "Baidu: ERNIE 4.5 VL 424B A47B ",
+      "releaseDate": "2025-06-30",
+      "contextLimit": 123000,
+      "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "baidu\/qianfan-ocr-fast:free",
+      "name": "Baidu: Qianfan-OCR-Fast (free)",
+      "releaseDate": "2026-04-20",
+      "contextLimit": 65536,
+      "outputLimit": 28672,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bytedance-seed\/seed-1.6",
+      "name": "ByteDance Seed: Seed 1.6",
+      "releaseDate": "2025-09",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bytedance-seed\/seed-1.6-flash",
+      "name": "ByteDance Seed: Seed 1.6 Flash",
+      "releaseDate": "2025-12-23",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bytedance-seed\/seed-2.0-lite",
+      "name": "ByteDance Seed: Seed-2.0-Lite",
+      "releaseDate": "2026-03-10",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bytedance-seed\/seed-2.0-mini",
+      "name": "ByteDance Seed: Seed-2.0-Mini",
+      "releaseDate": "2026-02-27",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bytedance\/ui-tars-1.5-7b",
+      "name": "ByteDance: UI-TARS 7B ",
+      "releaseDate": "2025-07-23",
+      "contextLimit": 128000,
+      "outputLimit": 2048,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "cohere\/command-a",
+      "name": "Cohere: Command A",
+      "releaseDate": "2025-03-13",
+      "contextLimit": 256000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "cohere\/command-r-08-2024",
+      "name": "Cohere: Command R (08-2024)",
+      "releaseDate": "2024-08-30",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "cohere\/command-r-plus-08-2024",
+      "name": "Cohere: Command R+ (08-2024)",
+      "releaseDate": "2024-08-30",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "cohere\/command-r7b-12-2024",
+      "name": "Cohere: Command R7B (12-2024)",
+      "releaseDate": "2024-02-27",
+      "contextLimit": 128000,
+      "outputLimit": 4000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepcogito\/cogito-v2.1-671b",
+      "name": "Deep Cogito: Cogito v2.1 671B",
+      "releaseDate": "2025-11-14",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-chat",
+      "name": "DeepSeek: DeepSeek V3",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 163840,
+      "outputLimit": 163840,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-chat-v3-0324",
+      "name": "DeepSeek: DeepSeek V3 0324",
+      "releaseDate": "2025-03-24",
+      "contextLimit": 163840,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-chat-v3.1",
+      "name": "DeepSeek: DeepSeek V3.1",
+      "releaseDate": "2025-08-21",
+      "contextLimit": 32768,
+      "outputLimit": 7168,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-r1",
+      "name": "DeepSeek: R1",
+      "releaseDate": "2025-01-20",
+      "contextLimit": 64000,
+      "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-r1-0528",
+      "name": "DeepSeek: R1 0528",
+      "releaseDate": "2025-05-28",
+      "contextLimit": 163840,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-r1-distill-llama-70b",
+      "name": "DeepSeek: R1 Distill Llama 70B",
+      "releaseDate": "2025-01-23",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-r1-distill-qwen-32b",
+      "name": "DeepSeek: R1 Distill Qwen 32B",
+      "releaseDate": "2025-01-01",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-v3.1-terminus",
+      "name": "DeepSeek: DeepSeek V3.1 Terminus",
+      "releaseDate": "2025-09-22",
+      "contextLimit": 163840,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-v3.2",
+      "name": "DeepSeek: DeepSeek V3.2",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 163840,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-v3.2-exp",
+      "name": "DeepSeek: DeepSeek V3.2 Exp",
+      "releaseDate": "2025-01-01",
+      "contextLimit": 163840,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-v3.2-speciale",
+      "name": "DeepSeek: DeepSeek V3.2 Speciale",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 163840,
+      "outputLimit": 163840,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-v4-flash",
+      "name": "DeepSeek: DeepSeek V4 Flash",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1048576,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek\/deepseek-v4-pro",
+      "name": "DeepSeek: DeepSeek V4 Pro",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1048576,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "essentialai\/rnj-1-instruct",
+      "name": "EssentialAI: Rnj 1 Instruct",
+      "releaseDate": "2025-12-05",
+      "contextLimit": 32768,
+      "outputLimit": 6554,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.0-flash-001",
+      "name": "Google: Gemini 2.0 Flash",
+      "releaseDate": "2024-12-11",
+      "contextLimit": 1048576,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.0-flash-lite-001",
+      "name": "Google: Gemini 2.0 Flash Lite",
+      "releaseDate": "2024-12-11",
+      "contextLimit": 1048576,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-flash",
+      "name": "Google: Gemini 2.5 Flash",
+      "releaseDate": "2025-07-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-flash-image",
+      "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
+      "releaseDate": "2025-10-08",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-flash-lite",
+      "name": "Google: Gemini 2.5 Flash Lite",
+      "releaseDate": "2025-06-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-flash-lite-preview-09-2025",
+      "name": "Google: Gemini 2.5 Flash Lite Preview 09-2025",
+      "releaseDate": "2025-09-25",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-pro",
+      "name": "Google: Gemini 2.5 Pro",
+      "releaseDate": "2025-03-20",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-pro-preview",
+      "name": "Google: Gemini 2.5 Pro Preview 06-05",
+      "releaseDate": "2025-06-05",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-2.5-pro-preview-05-06",
+      "name": "Google: Gemini 2.5 Pro Preview 05-06",
+      "releaseDate": "2025-05-06",
+      "contextLimit": 1048576,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-3-flash-preview",
+      "name": "Google: Gemini 3 Flash Preview",
+      "releaseDate": "2025-12-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-3-pro-image-preview",
+      "name": "Google: Nano Banana Pro (Gemini 3 Pro Image Preview)",
+      "releaseDate": "2025-11-20",
+      "contextLimit": 65536,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-3.1-flash-image-preview",
+      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 65536,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-3.1-flash-lite-preview",
+      "name": "Google: Gemini 3.1 Flash Lite Preview",
+      "releaseDate": "2026-03-03",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-3.1-pro-preview",
+      "name": "Google: Gemini 3.1 Pro Preview",
+      "releaseDate": "2026-02-19",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemini-3.1-pro-preview-customtools",
+      "name": "Google: Gemini 3.1 Pro Preview Custom Tools",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-2-27b-it",
+      "name": "Google: Gemma 2 27B",
+      "releaseDate": "2024-06-24",
+      "contextLimit": 8192,
+      "outputLimit": 2048,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-3-12b-it",
+      "name": "Google: Gemma 3 12B",
+      "releaseDate": "2025-03-13",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-3-27b-it",
+      "name": "Google: Gemma 3 27B",
+      "releaseDate": "2025-03-12",
+      "contextLimit": 128000,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-3-4b-it",
+      "name": "Google: Gemma 3 4B",
+      "releaseDate": "2025-03-13",
+      "contextLimit": 131072,
+      "outputLimit": 19200,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-3n-e4b-it",
+      "name": "Google: Gemma 3n 4B",
+      "releaseDate": "2025-05-20",
+      "contextLimit": 32768,
+      "outputLimit": 6554,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-4-26b-a4b-it",
+      "name": "Google: Gemma 4 26B A4B",
+      "releaseDate": "2026-04-03",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-4-31b-it",
+      "name": "Google: Gemma 4 31B",
+      "releaseDate": "2026-04-02",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/lyria-3-clip-preview",
+      "name": "Google: Lyria 3 Clip Preview",
+      "releaseDate": "2026-03-30",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "audio",
+        "text"
+      ]
+    },
+    {
+      "id": "google\/lyria-3-pro-preview",
+      "name": "Google: Lyria 3 Pro Preview",
+      "releaseDate": "2026-03-30",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "audio",
+        "text"
+      ]
+    },
+    {
+      "id": "gryphe\/mythomax-l2-13b",
+      "name": "MythoMax 13B",
+      "releaseDate": "2024-04-25",
+      "contextLimit": 4096,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "ibm-granite\/granite-4.0-h-micro",
+      "name": "IBM: Granite 4.0 Micro",
+      "releaseDate": "2025-10-20",
+      "contextLimit": 131000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "ibm-granite\/granite-4.1-8b",
+      "name": "IBM: Granite 4.1 8B",
+      "releaseDate": "2026-04-30",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inception\/mercury-2",
+      "name": "Inception: Mercury 2",
+      "releaseDate": "2026-02-24",
+      "contextLimit": 128000,
+      "outputLimit": 50000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inclusionai\/ling-2.6-1t:free",
+      "name": "inclusionAI: Ling-2.6-1T (free)",
+      "releaseDate": "2026-04-23",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inclusionai\/ling-2.6-flash",
+      "name": "inclusionAI: Ling-2.6 Flash",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inflection\/inflection-3-pi",
+      "name": "Inflection: Inflection 3 Pi",
+      "releaseDate": "2024-10-11",
+      "contextLimit": 8000,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "inflection\/inflection-3-productivity",
+      "name": "Inflection: Inflection 3 Productivity",
+      "releaseDate": "2024-10-11",
+      "contextLimit": 8000,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kilo-auto\/balanced",
+      "name": "Kilo Auto Balanced",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kilo-auto\/free",
+      "name": "Kilo Auto Free",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kilo-auto\/frontier",
+      "name": "Kilo Auto Frontier",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kilo-auto\/small",
+      "name": "Kilo Auto Small",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kwaipilot\/kat-coder-pro-v2",
+      "name": "Kwaipilot: KAT-Coder-Pro V2",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 256000,
+      "outputLimit": 80000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "liquid\/lfm-2-24b-a2b",
+      "name": "LiquidAI: LFM2-24B-A2B",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mancer\/weaver",
+      "name": "Mancer: Weaver (alpha)",
+      "releaseDate": "2023-08-02",
+      "contextLimit": 8000,
+      "outputLimit": 2000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3-70b-instruct",
+      "name": "Meta: Llama 3 70B Instruct",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 8192,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3-8b-instruct",
+      "name": "Meta: Llama 3 8B Instruct",
+      "releaseDate": "2024-04-25",
+      "contextLimit": 8192,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3.1-70b-instruct",
+      "name": "Meta: Llama 3.1 70B Instruct",
+      "releaseDate": "2024-07-16",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3.1-8b-instruct",
+      "name": "Meta: Llama 3.1 8B Instruct",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 16384,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3.2-11b-vision-instruct",
+      "name": "Meta: Llama 3.2 11B Vision Instruct",
+      "releaseDate": "2024-09-25",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3.2-1b-instruct",
+      "name": "Meta: Llama 3.2 1B Instruct",
+      "releaseDate": "2024-09-18",
+      "contextLimit": 60000,
+      "outputLimit": 12000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3.2-3b-instruct",
+      "name": "Meta: Llama 3.2 3B Instruct",
+      "releaseDate": "2024-09-18",
+      "contextLimit": 80000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-3.3-70b-instruct",
+      "name": "Meta: Llama 3.3 70B Instruct",
+      "releaseDate": "2024-08-01",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-4-maverick",
+      "name": "Meta: Llama 4 Maverick",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 1048576,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-4-scout",
+      "name": "Meta: Llama 4 Scout",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 327680,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-guard-3-8b",
+      "name": "Llama Guard 3 8B",
+      "releaseDate": "2024-04-18",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/llama-guard-4-12b",
+      "name": "Meta: Llama Guard 4 12B",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 163840,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "microsoft\/phi-4",
+      "name": "Microsoft: Phi 4",
+      "releaseDate": "2024-12-11",
+      "contextLimit": 16384,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "microsoft\/wizardlm-2-8x22b",
+      "name": "WizardLM-2 8x22B",
+      "releaseDate": "2024-04-24",
+      "contextLimit": 65535,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-01",
+      "name": "MiniMax: MiniMax-01",
+      "releaseDate": "2025-01-15",
+      "contextLimit": 1000192,
+      "outputLimit": 1000192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m1",
+      "name": "MiniMax: MiniMax M1",
+      "releaseDate": "2025-06-17",
+      "contextLimit": 1000000,
+      "outputLimit": 40000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m2",
+      "name": "MiniMax: MiniMax M2",
+      "releaseDate": "2025-10-23",
+      "contextLimit": 196608,
+      "outputLimit": 196608,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m2-her",
+      "name": "MiniMax: MiniMax M2-her",
+      "releaseDate": "2026-01-23",
+      "contextLimit": 65536,
+      "outputLimit": 2048,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m2.1",
+      "name": "MiniMax: MiniMax M2.1",
+      "releaseDate": "2025-12-23",
+      "contextLimit": 196608,
+      "outputLimit": 39322,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m2.5",
+      "name": "MiniMax: MiniMax M2.5",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 196608,
+      "outputLimit": 196608,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m2.7",
+      "name": "MiniMax: MiniMax M2.7",
+      "family": "minimax-m2.7",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/codestral-2508",
+      "name": "Mistral: Codestral 2508",
+      "releaseDate": "2025-08-01",
+      "contextLimit": 256000,
+      "outputLimit": 51200,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/devstral-2512",
+      "name": "Mistral: Devstral 2 2512",
+      "releaseDate": "2025-09-12",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/devstral-medium",
+      "name": "Mistral: Devstral Medium",
+      "releaseDate": "2025-07-10",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/devstral-small",
+      "name": "Mistral: Devstral Small 1.1",
+      "releaseDate": "2025-05-07",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/ministral-14b-2512",
+      "name": "Mistral: Ministral 3 14B 2512",
+      "releaseDate": "2025-12-16",
+      "contextLimit": 262144,
+      "outputLimit": 52429,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/ministral-3b-2512",
+      "name": "Mistral: Ministral 3 3B 2512",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/ministral-8b-2512",
+      "name": "Mistral: Ministral 3 8B 2512",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-7b-instruct-v0.1",
+      "name": "Mistral: Mistral 7B Instruct v0.1",
+      "releaseDate": "2025-04-03",
+      "contextLimit": 2824,
+      "outputLimit": 565,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-large",
+      "name": "Mistral Large",
+      "releaseDate": "2024-07-24",
+      "contextLimit": 128000,
+      "outputLimit": 25600,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-large-2407",
+      "name": "Mistral Large 2407",
+      "releaseDate": "2024-11-19",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-large-2411",
+      "name": "Mistral Large 2411",
+      "releaseDate": "2024-07-24",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-large-2512",
+      "name": "Mistral: Mistral Large 3 2512",
+      "releaseDate": "2024-11-01",
+      "contextLimit": 262144,
+      "outputLimit": 52429,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-medium-3",
+      "name": "Mistral: Mistral Medium 3",
+      "releaseDate": "2025-05-07",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-medium-3.1",
+      "name": "Mistral: Mistral Medium 3.1",
+      "releaseDate": "2025-08-12",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-nemo",
+      "name": "Mistral: Mistral Nemo",
+      "releaseDate": "2024-07-01",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-saba",
+      "name": "Mistral: Saba",
+      "releaseDate": "2025-02-17",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-small-24b-instruct-2501",
+      "name": "Mistral: Mistral Small 3",
+      "releaseDate": "2025-12-29",
+      "contextLimit": 32768,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-small-2603",
+      "name": "Mistral: Mistral Small 4",
+      "releaseDate": "2026-03-16",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-small-3.1-24b-instruct",
+      "name": "Mistral: Mistral Small 3.1 24B",
+      "releaseDate": "2025-03-17",
+      "contextLimit": 128000,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mistral-small-3.2-24b-instruct",
+      "name": "Mistral: Mistral Small 3.2 24B",
+      "releaseDate": "2025-06-20",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mixtral-8x22b-instruct",
+      "name": "Mistral: Mixtral 8x22B Instruct",
+      "releaseDate": "2024-04-17",
+      "contextLimit": 65536,
+      "outputLimit": 13108,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/mixtral-8x7b-instruct",
+      "name": "Mistral: Mixtral 8x7B Instruct",
+      "releaseDate": "2023-12-10",
+      "contextLimit": 32768,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/pixtral-large-2411",
+      "name": "Mistral: Pixtral Large 2411",
+      "releaseDate": "2024-11-19",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistralai\/voxtral-small-24b-2507",
+      "name": "Mistral: Voxtral Small 24B 2507",
+      "releaseDate": "2025-07-01",
+      "contextLimit": 32000,
+      "outputLimit": 6400,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2",
+      "name": "MoonshotAI: Kimi K2 0711",
+      "releaseDate": "2025-07-11",
+      "contextLimit": 131000,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2-0905",
+      "name": "MoonshotAI: Kimi K2 0905",
+      "releaseDate": "2025-09-05",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2-thinking",
+      "name": "MoonshotAI: Kimi K2 Thinking",
+      "releaseDate": "2025-11-06",
+      "contextLimit": 131072,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2.5",
+      "name": "MoonshotAI: Kimi K2.5",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 262144,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai\/kimi-k2.6",
+      "name": "MoonshotAI: Kimi K2.6",
+      "releaseDate": "2026-04-20",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_details"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "morph\/morph-v3-fast",
+      "name": "Morph: Morph V3 Fast",
+      "releaseDate": "2024-08-15",
+      "contextLimit": 81920,
+      "outputLimit": 38000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "morph\/morph-v3-large",
+      "name": "Morph: Morph V3 Large",
+      "releaseDate": "2024-08-15",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nex-agi\/deepseek-v3.1-nex-n1",
+      "name": "Nex AGI: DeepSeek V3.1 Nex N1",
+      "releaseDate": "2025-01-01",
+      "contextLimit": 131072,
+      "outputLimit": 163840,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nousresearch\/hermes-2-pro-llama-3-8b",
+      "name": "NousResearch: Hermes 2 Pro - Llama-3 8B",
+      "releaseDate": "2024-05-27",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nousresearch\/hermes-3-llama-3.1-405b",
+      "name": "Nous: Hermes 3 405B Instruct",
+      "releaseDate": "2024-08-16",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nousresearch\/hermes-3-llama-3.1-70b",
+      "name": "Nous: Hermes 3 70B Instruct",
+      "releaseDate": "2024-08-18",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nousresearch\/hermes-4-405b",
+      "name": "Nous: Hermes 4 405B",
+      "releaseDate": "2025-08-25",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nousresearch\/hermes-4-70b",
+      "name": "Nous: Hermes 4 70B",
+      "releaseDate": "2025-08-25",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/llama-3.1-nemotron-70b-instruct",
+      "name": "NVIDIA: Llama 3.1 Nemotron 70B Instruct",
+      "releaseDate": "2024-10-12",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/llama-3.3-nemotron-super-49b-v1.5",
+      "name": "NVIDIA: Llama 3.3 Nemotron Super 49B V1.5",
+      "releaseDate": "2025-03-16",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/nemotron-3-nano-30b-a3b",
+      "name": "NVIDIA: Nemotron 3 Nano 30B A3B",
+      "releaseDate": "2024-12",
+      "contextLimit": 262144,
+      "outputLimit": 52429,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+      "releaseDate": "2026-04-28",
+      "contextLimit": 256000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "audio",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/nemotron-3-super-120b-a12b",
+      "name": "NVIDIA: Nemotron 3 Super",
+      "releaseDate": "2026-03-11",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/nemotron-3-super-120b-a12b:free",
+      "name": "NVIDIA: Nemotron 3 Super (free)",
+      "releaseDate": "2026-03-12",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/nemotron-nano-12b-v2-vl",
+      "name": "NVIDIA: Nemotron Nano 12B 2 VL",
+      "releaseDate": "2025-10-28",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia\/nemotron-nano-9b-v2",
+      "name": "NVIDIA: Nemotron Nano 9B V2",
+      "releaseDate": "2025-08-18",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-3.5-turbo",
+      "name": "OpenAI: GPT-3.5 Turbo",
+      "releaseDate": "2023-03-01",
+      "contextLimit": 16385,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-3.5-turbo-0613",
+      "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
+      "releaseDate": "2023-06-13",
+      "contextLimit": 4095,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-3.5-turbo-16k",
+      "name": "OpenAI: GPT-3.5 Turbo 16k",
+      "releaseDate": "2023-08-28",
+      "contextLimit": 16385,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-3.5-turbo-instruct",
+      "name": "OpenAI: GPT-3.5 Turbo Instruct",
+      "releaseDate": "2023-03-01",
+      "contextLimit": 4095,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4",
+      "name": "OpenAI: GPT-4",
+      "releaseDate": "2023-03-14",
+      "contextLimit": 8191,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4-0314",
+      "name": "OpenAI: GPT-4 (older v0314)",
+      "releaseDate": "2023-05-28",
+      "contextLimit": 8191,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4-1106-preview",
+      "name": "OpenAI: GPT-4 Turbo (older v1106)",
+      "releaseDate": "2023-11-06",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4-turbo",
+      "name": "OpenAI: GPT-4 Turbo",
+      "releaseDate": "2023-09-13",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4-turbo-preview",
+      "name": "OpenAI: GPT-4 Turbo Preview",
+      "releaseDate": "2024-01-25",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4.1",
+      "name": "OpenAI: GPT-4.1",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4.1-mini",
+      "name": "OpenAI: GPT-4.1 Mini",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4.1-nano",
+      "name": "OpenAI: GPT-4.1 Nano",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o",
+      "name": "OpenAI: GPT-4o",
+      "releaseDate": "2024-05-13",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-2024-05-13",
+      "name": "OpenAI: GPT-4o (2024-05-13)",
+      "releaseDate": "2024-05-13",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-2024-08-06",
+      "name": "OpenAI: GPT-4o (2024-08-06)",
+      "releaseDate": "2024-08-06",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-2024-11-20",
+      "name": "OpenAI: GPT-4o (2024-11-20)",
+      "releaseDate": "2024-11-20",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-audio-preview",
+      "name": "OpenAI: GPT-4o Audio",
+      "releaseDate": "2025-08-15",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "audio",
+        "text"
+      ],
+      "outputModalities": [
+        "audio",
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-mini",
+      "name": "OpenAI: GPT-4o-mini",
+      "releaseDate": "2024-07-18",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-mini-2024-07-18",
+      "name": "OpenAI: GPT-4o-mini (2024-07-18)",
+      "releaseDate": "2024-07-18",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-mini-search-preview",
+      "name": "OpenAI: GPT-4o-mini Search Preview",
+      "releaseDate": "2025-01",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-4o-search-preview",
+      "name": "OpenAI: GPT-4o Search Preview",
+      "releaseDate": "2025-03-13",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5",
+      "name": "OpenAI: GPT-5",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-chat",
+      "name": "OpenAI: GPT-5 Chat",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-codex",
+      "name": "OpenAI: GPT-5 Codex",
+      "releaseDate": "2025-09-15",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-image",
+      "name": "OpenAI: GPT-5 Image",
+      "releaseDate": "2025-10-14",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-image-mini",
+      "name": "OpenAI: GPT-5 Image Mini",
+      "releaseDate": "2025-10-16",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-mini",
+      "name": "OpenAI: GPT-5 Mini",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-nano",
+      "name": "OpenAI: GPT-5 Nano",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5-pro",
+      "name": "OpenAI: GPT-5 Pro",
+      "releaseDate": "2025-10-06",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.1",
+      "name": "OpenAI: GPT-5.1",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.1-chat",
+      "name": "OpenAI: GPT-5.1 Chat",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.1-codex",
+      "name": "OpenAI: GPT-5.1-Codex",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.1-codex-max",
+      "name": "OpenAI: GPT-5.1-Codex-Max",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.1-codex-mini",
+      "name": "OpenAI: GPT-5.1-Codex-Mini",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 400000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.2",
+      "name": "OpenAI: GPT-5.2",
+      "releaseDate": "2025-12-11",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.2-chat",
+      "name": "OpenAI: GPT-5.2 Chat",
+      "releaseDate": "2025-12-11",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.2-codex",
+      "name": "OpenAI: GPT-5.2-Codex",
+      "releaseDate": "2026-01-14",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.2-pro",
+      "name": "OpenAI: GPT-5.2 Pro",
+      "releaseDate": "2025-12-11",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.3-chat",
+      "name": "OpenAI: GPT-5.3 Chat",
+      "releaseDate": "2026-03-04",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.3-codex",
+      "name": "OpenAI: GPT-5.3-Codex",
+      "releaseDate": "2026-02-25",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.4",
+      "name": "OpenAI: GPT-5.4",
+      "releaseDate": "2026-03-06",
+      "contextLimit": 1050000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.4-image-2",
+      "name": "OpenAI: GPT-5.4 Image 2",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "pdf"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.4-mini",
+      "name": "OpenAI: GPT-5.4 Mini",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.4-nano",
+      "name": "OpenAI: GPT-5.4 Nano",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.4-pro",
+      "name": "OpenAI: GPT-5.4 Pro",
+      "releaseDate": "2026-03-06",
+      "contextLimit": 1050000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.5",
+      "name": "OpenAI: GPT-5.5",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1050000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-5.5-pro",
+      "name": "OpenAI: GPT-5.5 Pro",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1050000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-audio",
+      "name": "OpenAI: GPT Audio",
+      "releaseDate": "2026-01-20",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "audio",
+        "text"
+      ],
+      "outputModalities": [
+        "audio",
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-audio-mini",
+      "name": "OpenAI: GPT Audio Mini",
+      "releaseDate": "2026-01-20",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "audio",
+        "text"
+      ],
+      "outputModalities": [
+        "audio",
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-120b",
+      "name": "OpenAI: gpt-oss-120b",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-20b",
+      "name": "OpenAI: gpt-oss-20b",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-safeguard-20b",
+      "name": "OpenAI: gpt-oss-safeguard-20b",
+      "releaseDate": "2025-10-29",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o1",
+      "name": "OpenAI: o1",
+      "releaseDate": "2024-12-05",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o1-pro",
+      "name": "OpenAI: o1-pro",
+      "releaseDate": "2025-03-19",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o3",
+      "name": "OpenAI: o3",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o3-deep-research",
+      "name": "OpenAI: o3 Deep Research",
+      "releaseDate": "2024-06-26",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o3-mini",
+      "name": "OpenAI: o3 Mini",
+      "releaseDate": "2024-12-20",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o3-mini-high",
+      "name": "OpenAI: o3 Mini High",
+      "releaseDate": "2025-01-31",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o3-pro",
+      "name": "OpenAI: o3 Pro",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o4-mini",
+      "name": "OpenAI: o4 Mini",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o4-mini-deep-research",
+      "name": "OpenAI: o4 Mini Deep Research",
+      "releaseDate": "2024-06-26",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/o4-mini-high",
+      "name": "OpenAI: o4 Mini High",
+      "releaseDate": "2025-04-17",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openrouter\/auto",
+      "name": "Auto Router",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 2000000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "openrouter\/bodybuilder",
+      "name": "Body Builder (beta)",
+      "status": "beta",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openrouter\/free",
+      "name": "Free Models Router",
+      "releaseDate": "2026-02-01",
+      "contextLimit": 200000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openrouter\/owl-alpha",
+      "name": "Owl Alpha",
+      "status": "alpha",
+      "releaseDate": "2026-04-28",
+      "contextLimit": 1048756,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openrouter\/pareto-code",
+      "name": "Pareto Code Router",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 200000,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "perplexity\/sonar",
+      "name": "Perplexity: Sonar",
+      "releaseDate": "2024-01-01",
+      "contextLimit": 127072,
+      "outputLimit": 25415,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "perplexity\/sonar-deep-research",
+      "name": "Perplexity: Sonar Deep Research",
+      "releaseDate": "2025-01-27",
+      "contextLimit": 128000,
+      "outputLimit": 25600,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "perplexity\/sonar-pro",
+      "name": "Perplexity: Sonar Pro",
+      "releaseDate": "2024-01-01",
+      "contextLimit": 200000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "perplexity\/sonar-pro-search",
+      "name": "Perplexity: Sonar Pro Search",
+      "releaseDate": "2025-10-31",
+      "contextLimit": 200000,
+      "outputLimit": 8000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "perplexity\/sonar-reasoning-pro",
+      "name": "Perplexity: Sonar Reasoning Pro",
+      "releaseDate": "2024-01-01",
+      "contextLimit": 128000,
+      "outputLimit": 25600,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "poolside\/laguna-m.1:free",
+      "name": "Poolside: Laguna M.1 (free)",
+      "releaseDate": "2026-04-28",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "poolside\/laguna-xs.2:free",
+      "name": "Poolside: Laguna XS.2 (free)",
+      "releaseDate": "2026-04-28",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "prime-intellect\/intellect-3",
+      "name": "Prime Intellect: INTELLECT-3",
+      "releaseDate": "2025-11-26",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-2.5-72b-instruct",
+      "name": "Qwen2.5 72B Instruct",
+      "releaseDate": "2024-09",
+      "contextLimit": 32768,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-2.5-7b-instruct",
+      "name": "Qwen: Qwen2.5 7B Instruct",
+      "releaseDate": "2024-09",
+      "contextLimit": 32768,
+      "outputLimit": 6554,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-2.5-coder-32b-instruct",
+      "name": "Qwen2.5 Coder 32B Instruct",
+      "releaseDate": "2024-11-11",
+      "contextLimit": 32768,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-max",
+      "name": "Qwen: Qwen-Max ",
+      "releaseDate": "2024-04-03",
+      "contextLimit": 32768,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-plus",
+      "name": "Qwen: Qwen-Plus",
+      "releaseDate": "2024-01-25",
+      "contextLimit": 1000000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-plus-2025-07-28",
+      "name": "Qwen: Qwen Plus 0728",
+      "releaseDate": "2025-09-09",
+      "contextLimit": 1000000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-plus-2025-07-28:thinking",
+      "name": "Qwen: Qwen Plus 0728 (thinking)",
+      "releaseDate": "2025-09-09",
+      "contextLimit": 1000000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-turbo",
+      "name": "Qwen: Qwen-Turbo",
+      "releaseDate": "2024-11-01",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-vl-max",
+      "name": "Qwen: Qwen VL Max",
+      "releaseDate": "2024-04-08",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen-vl-plus",
+      "name": "Qwen: Qwen VL Plus",
+      "releaseDate": "2024-01-25",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen2.5-vl-72b-instruct",
+      "name": "Qwen: Qwen2.5 VL 72B Instruct",
+      "releaseDate": "2025-02-01",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-14b",
+      "name": "Qwen: Qwen3 14B",
+      "releaseDate": "2025-04",
+      "contextLimit": 40960,
+      "outputLimit": 40960,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-235b-a22b",
+      "name": "Qwen: Qwen3 235B A22B",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-235b-a22b-2507",
+      "name": "Qwen: Qwen3 235B A22B Instruct 2507",
+      "releaseDate": "2025-04",
+      "contextLimit": 262144,
+      "outputLimit": 52429,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-235b-a22b-thinking-2507",
+      "name": "Qwen: Qwen3 235B A22B Thinking 2507",
+      "releaseDate": "2025-07-25",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-30b-a3b",
+      "name": "Qwen: Qwen3 30B A3B",
+      "releaseDate": "2025-04",
+      "contextLimit": 40960,
+      "outputLimit": 40960,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-30b-a3b-instruct-2507",
+      "name": "Qwen: Qwen3 30B A3B Instruct 2507",
+      "releaseDate": "2025-07-29",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-30b-a3b-thinking-2507",
+      "name": "Qwen: Qwen3 30B A3B Thinking 2507",
+      "releaseDate": "2025-07-29",
+      "contextLimit": 32768,
+      "outputLimit": 6554,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-32b",
+      "name": "Qwen: Qwen3 32B",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 40960,
+      "outputLimit": 40960,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-8b",
+      "name": "Qwen: Qwen3 8B",
+      "releaseDate": "2025-04",
+      "contextLimit": 40960,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-coder",
+      "name": "Qwen: Qwen3 Coder 480B A35B",
+      "releaseDate": "2025-07-23",
+      "contextLimit": 262144,
+      "outputLimit": 52429,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-coder-30b-a3b-instruct",
+      "name": "Qwen: Qwen3 Coder 30B A3B Instruct",
+      "releaseDate": "2025-07-31",
+      "contextLimit": 160000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-coder-flash",
+      "name": "Qwen: Qwen3 Coder Flash",
+      "releaseDate": "2025-07-23",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-coder-next",
+      "name": "Qwen: Qwen3 Coder Next",
+      "releaseDate": "2026-02-02",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-coder-plus",
+      "name": "Qwen: Qwen3 Coder Plus",
+      "releaseDate": "2025-07-01",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-max",
+      "name": "Qwen: Qwen3 Max",
+      "releaseDate": "2025-09-05",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-max-thinking",
+      "name": "Qwen: Qwen3 Max Thinking",
+      "releaseDate": "2026-01-23",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-next-80b-a3b-instruct",
+      "name": "Qwen: Qwen3 Next 80B A3B Instruct",
+      "releaseDate": "2025-09-11",
+      "contextLimit": 131072,
+      "outputLimit": 52429,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-next-80b-a3b-thinking",
+      "name": "Qwen: Qwen3 Next 80B A3B Thinking",
+      "releaseDate": "2025-09-11",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-235b-a22b-instruct",
+      "name": "Qwen: Qwen3 VL 235B A22B Instruct",
+      "releaseDate": "2025-09-23",
+      "contextLimit": 262144,
+      "outputLimit": 52429,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-235b-a22b-thinking",
+      "name": "Qwen: Qwen3 VL 235B A22B Thinking",
+      "releaseDate": "2025-09-24",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-30b-a3b-instruct",
+      "name": "Qwen: Qwen3 VL 30B A3B Instruct",
+      "releaseDate": "2025-10-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-30b-a3b-thinking",
+      "name": "Qwen: Qwen3 VL 30B A3B Thinking",
+      "releaseDate": "2025-10-11",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-32b-instruct",
+      "name": "Qwen: Qwen3 VL 32B Instruct",
+      "releaseDate": "2025-10-21",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-8b-instruct",
+      "name": "Qwen: Qwen3 VL 8B Instruct",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3-vl-8b-thinking",
+      "name": "Qwen: Qwen3 VL 8B Thinking",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-122b-a10b",
+      "name": "Qwen: Qwen3.5-122B-A10B",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-27b",
+      "name": "Qwen: Qwen3.5-27B",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-35b-a3b",
+      "name": "Qwen: Qwen3.5-35B-A3B",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-397b-a17b",
+      "name": "Qwen: Qwen3.5 397B A17B",
+      "releaseDate": "2026-02-15",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-9b",
+      "name": "Qwen: Qwen3.5-9B",
+      "releaseDate": "2026-03-10",
+      "contextLimit": 256000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-flash-02-23",
+      "name": "Qwen: Qwen3.5-Flash",
+      "releaseDate": "2026-02-26",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-plus-02-15",
+      "name": "Qwen: Qwen3.5 Plus 2026-02-15",
+      "releaseDate": "2026-02-15",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.5-plus-20260420",
+      "name": "Qwen: Qwen3.5 Plus 2026-04-20",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.6-27b",
+      "name": "Qwen: Qwen3.6 27B",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 256000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.6-35b-a3b",
+      "name": "Qwen: Qwen3.6 35B A3B",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.6-flash",
+      "name": "Qwen: Qwen3.6 Flash",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.6-max-preview",
+      "name": "Qwen: Qwen3.6 Max Preview",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen\/qwen3.6-plus",
+      "name": "Qwen: Qwen3.6 Plus",
+      "releaseDate": "2025-08-26",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "rekaai\/reka-edge",
+      "name": "Reka Edge",
+      "releaseDate": "2026-03-20",
+      "contextLimit": 16384,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "rekaai\/reka-flash-3",
+      "name": "Reka Flash 3",
+      "releaseDate": "2025-03-12",
+      "contextLimit": 65536,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "relace\/relace-apply-3",
+      "name": "Relace: Relace Apply 3",
+      "releaseDate": "2025-09-26",
+      "contextLimit": 256000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "relace\/relace-search",
+      "name": "Relace: Relace Search",
+      "releaseDate": "2025-12-09",
+      "contextLimit": 256000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sao10k\/l3-euryale-70b",
+      "name": "Sao10k: Llama 3 Euryale 70B v2.1",
+      "releaseDate": "2024-06-18",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sao10k\/l3-lunaris-8b",
+      "name": "Sao10K: Llama 3 8B Lunaris",
+      "releaseDate": "2024-08-13",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sao10k\/l3.1-70b-hanami-x1",
+      "name": "Sao10K: Llama 3.1 70B Hanami x1",
+      "releaseDate": "2025-01-08",
+      "contextLimit": 16000,
+      "outputLimit": 16000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sao10k\/l3.1-euryale-70b",
+      "name": "Sao10K: Llama 3.1 Euryale 70B v2.2",
+      "releaseDate": "2024-08-28",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "sao10k\/l3.3-euryale-70b",
+      "name": "Sao10K: Llama 3.3 Euryale 70B",
+      "releaseDate": "2024-12-18",
+      "contextLimit": 131072,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "stepfun\/step-3.5-flash",
+      "name": "StepFun: Step 3.5 Flash",
+      "releaseDate": "2026-01-29",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "stepfun\/step-3.5-flash:free",
+      "name": "StepFun: Step 3.5 Flash (free)",
+      "releaseDate": "2025-08-26",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "switchpoint\/router",
+      "name": "Switchpoint Router",
+      "releaseDate": "2025-07-12",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tencent\/hunyuan-a13b-instruct",
+      "name": "Tencent: Hunyuan A13B Instruct",
+      "releaseDate": "2025-06-30",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tencent\/hy3-preview:free",
+      "name": "Tencent: Hy3 Preview (free)",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "thedrummer\/cydonia-24b-v4.1",
+      "name": "TheDrummer: Cydonia 24B V4.1",
+      "releaseDate": "2025-09-27",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "thedrummer\/rocinante-12b",
+      "name": "TheDrummer: Rocinante 12B",
+      "releaseDate": "2024-09-30",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "thedrummer\/skyfall-36b-v2",
+      "name": "TheDrummer: Skyfall 36B V2",
+      "releaseDate": "2025-03-11",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "thedrummer\/unslopnemo-12b",
+      "name": "TheDrummer: UnslopNemo 12B",
+      "releaseDate": "2024-11-09",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "tngtech\/deepseek-r1t2-chimera",
+      "name": "TNG: DeepSeek R1T2 Chimera",
+      "releaseDate": "2025-07-08",
+      "contextLimit": 163840,
+      "outputLimit": 163840,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "undi95\/remm-slerp-l2-13b",
+      "name": "ReMM SLERP 13B",
+      "releaseDate": "2023-07-22",
+      "contextLimit": 6144,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "upstage\/solar-pro-3",
+      "name": "Upstage: Solar Pro 3",
+      "releaseDate": "2026-01-27",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "writer\/palmyra-x5",
+      "name": "Writer: Palmyra X5",
+      "releaseDate": "2025-04-28",
+      "contextLimit": 1040000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-3",
+      "name": "xAI: Grok 3",
+      "releaseDate": "2025-02-17",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-3-beta",
+      "name": "xAI: Grok 3 Beta",
+      "releaseDate": "2025-02-17",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-3-mini",
+      "name": "xAI: Grok 3 Mini",
+      "releaseDate": "2025-02-17",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-3-mini-beta",
+      "name": "xAI: Grok 3 Mini Beta",
+      "releaseDate": "2025-02-17",
+      "contextLimit": 131072,
+      "outputLimit": 26215,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-4",
+      "name": "xAI: Grok 4",
+      "releaseDate": "2025-07-09",
+      "contextLimit": 256000,
+      "outputLimit": 51200,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-4-fast",
+      "name": "xAI: Grok 4 Fast",
+      "releaseDate": "2025-08-19",
+      "contextLimit": 2000000,
+      "outputLimit": 30000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-4.1-fast",
+      "name": "xAI: Grok 4.1 Fast",
+      "releaseDate": "2025-11-19",
+      "contextLimit": 2000000,
+      "outputLimit": 30000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-4.20",
+      "name": "xAI: Grok 4.20",
+      "releaseDate": "2026-03-31",
+      "contextLimit": 2000000,
+      "outputLimit": 2000000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-4.20-multi-agent",
+      "name": "xAI: Grok 4.20 Multi-Agent",
+      "releaseDate": "2026-03-31",
+      "contextLimit": 2000000,
+      "outputLimit": 2000000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-4.3",
+      "name": "xAI: Grok 4.3",
+      "releaseDate": "2026-05-01",
+      "contextLimit": 1000000,
+      "outputLimit": 4096,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-code-fast-1",
+      "name": "xAI: Grok Code Fast 1",
+      "releaseDate": "2025-08-26",
+      "contextLimit": 256000,
+      "outputLimit": 10000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "x-ai\/grok-code-fast-1:optimized:free",
+      "name": "xAI: Grok Code Fast 1 Optimized (experimental, free)",
+      "releaseDate": "2025-08-27",
+      "contextLimit": 256000,
+      "outputLimit": 10000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "xiaomi\/mimo-v2-flash",
+      "name": "Xiaomi: MiMo-V2-Flash",
+      "family": "mimo",
+      "releaseDate": "2025-12-16",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "xiaomi\/mimo-v2-omni",
+      "name": "Xiaomi: MiMo-V2-Omni",
+      "family": "mimo",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "xiaomi\/mimo-v2-pro",
+      "name": "Xiaomi: MiMo-V2-Pro",
+      "family": "mimo",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 1048576,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "xiaomi\/mimo-v2.5",
+      "name": "Xiaomi: MiMo-V2.5",
+      "family": "mimo",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 1048576,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "xiaomi\/mimo-v2.5-pro",
+      "name": "Xiaomi: MiMo V2.5 Pro",
+      "family": "mimo",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 1048576,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4-32b",
+      "name": "Z.ai: GLM 4 32B ",
+      "releaseDate": "2025-07-25",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.5",
+      "name": "Z.ai: GLM 4.5",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 131072,
+      "outputLimit": 98304,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.5-air",
+      "name": "Z.ai: GLM 4.5 Air",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 131072,
+      "outputLimit": 98304,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.5v",
+      "name": "Z.ai: GLM 4.5V",
+      "releaseDate": "2025-08-11",
+      "contextLimit": 65536,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.6",
+      "name": "Z.ai: GLM 4.6",
+      "releaseDate": "2025-09-30",
+      "contextLimit": 204800,
+      "outputLimit": 204800,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.6v",
+      "name": "Z.ai: GLM 4.6V",
+      "releaseDate": "2025-09-30",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.7",
+      "name": "Z.ai: GLM 4.7",
+      "releaseDate": "2025-12-22",
+      "contextLimit": 202752,
+      "outputLimit": 65535,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-4.7-flash",
+      "name": "Z.ai: GLM 4.7 Flash",
+      "releaseDate": "2026-01-19",
+      "contextLimit": 202752,
+      "outputLimit": 40551,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-5",
+      "name": "Z.ai: GLM 5",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-5-turbo",
+      "name": "Z.ai: GLM 5 Turbo",
+      "releaseDate": "2026-03-15",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-5.1",
+      "name": "Z.ai: GLM 5.1",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "z-ai\/glm-5v-turbo",
+      "name": "Z.ai: GLM 5V Turbo",
+      "releaseDate": "2026-04-01",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

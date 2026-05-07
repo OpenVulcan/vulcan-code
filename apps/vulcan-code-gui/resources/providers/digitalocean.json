@@ -1,0 +1,1245 @@
+{
+  "id": "digitalocean",
+  "name": "DigitalOcean",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "DIGITALOCEAN_ACCESS_TOKEN"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/inference.do-ai.run\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "alibaba-qwen3-32b",
+      "name": "Qwen3-32B",
+      "family": "qwen",
+      "releaseDate": "2025-04-30",
+      "contextLimit": 131000,
+      "outputLimit": 40960,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "all-mini-lm-l6-v2",
+      "name": "All-MiniLM-L6-v2",
+      "family": "text-embedding",
+      "releaseDate": "2021-08-30",
+      "contextLimit": 256,
+      "outputLimit": 384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-4.1-opus",
+      "name": "Claude Opus 4.1",
+      "family": "claude-opus",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-4.5-sonnet",
+      "name": "Claude Sonnet 4.5",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-4.6-sonnet",
+      "name": "Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-haiku-4.5",
+      "name": "Claude Haiku 4.5",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-opus-4",
+      "name": "Claude Opus 4",
+      "family": "claude-opus",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-opus-4.5",
+      "name": "Claude Opus 4.5",
+      "family": "claude-opus",
+      "releaseDate": "2025-11-24",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-opus-4.6",
+      "name": "Claude Opus 4.6",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-opus-4.7",
+      "name": "Claude Opus 4.7",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic-claude-sonnet-4",
+      "name": "Claude Sonnet 4",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "arcee-trinity-large-thinking",
+      "name": "Trinity Large Thinking",
+      "status": "beta",
+      "family": "trinity",
+      "releaseDate": "2026-04-02",
+      "contextLimit": 256000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bge-m3",
+      "name": "BGE M3",
+      "family": "bge",
+      "releaseDate": "2024-01-30",
+      "contextLimit": 8192,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "bge-reranker-v2-m3",
+      "name": "BGE Reranker v2 M3",
+      "family": "bge",
+      "releaseDate": "2024-03-12",
+      "contextLimit": 8192,
+      "outputLimit": 1,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-3.2",
+      "name": "DeepSeek V3.2",
+      "family": "deepseek",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 128000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-r1-distill-llama-70b",
+      "name": "DeepSeek R1 Distill Llama 70B",
+      "family": "deepseek-thinking",
+      "releaseDate": "2025-01-30",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1048576,
+      "outputLimit": 393216,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "e5-large-v2",
+      "name": "E5 Large v2",
+      "family": "text-embedding",
+      "releaseDate": "2023-05-19",
+      "contextLimit": 512,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "fal-ai\/elevenlabs\/tts\/multilingual-v2",
+      "name": "ElevenLabs Multilingual TTS v2",
+      "family": "elevenlabs",
+      "releaseDate": "2023-08-22",
+      "contextLimit": 0,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "audio"
+      ]
+    },
+    {
+      "id": "fal-ai\/fast-sdxl",
+      "name": "Fast SDXL",
+      "family": "stable-diffusion",
+      "releaseDate": "2023-07-26",
+      "contextLimit": 0,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "image"
+      ]
+    },
+    {
+      "id": "fal-ai\/flux\/schnell",
+      "name": "FLUX.1 [schnell]",
+      "family": "flux",
+      "releaseDate": "2024-08-01",
+      "contextLimit": 0,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "image"
+      ]
+    },
+    {
+      "id": "fal-ai\/stable-audio-25\/text-to-audio",
+      "name": "Stable Audio 2.5 (Text-to-Audio)",
+      "releaseDate": "2025-10-08",
+      "contextLimit": 0,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "audio"
+      ]
+    },
+    {
+      "id": "gemma-4-31B-it",
+      "name": "Gemma 4 31B",
+      "family": "gemma",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 256000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "glm-5",
+      "name": "GLM 5",
+      "family": "glm",
+      "releaseDate": "2026-02-11",
+      "contextLimit": 202752,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gte-large-en-v1.5",
+      "name": "GTE Large (v1.5)",
+      "family": "text-embedding",
+      "releaseDate": "2024-03-27",
+      "contextLimit": 8192,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "Kimi K2.5",
+      "family": "kimi",
+      "releaseDate": "2026-01",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-4-maverick",
+      "name": "Llama 4 Maverick 17B 128E Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 1000000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-guard-4-12b",
+      "name": "Llama Guard 4 12B",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama3.3-70b-instruct",
+      "name": "Llama 3.3 Instruct 70B",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 128000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax-m2.5",
+      "name": "MiniMax M2.5",
+      "status": "beta",
+      "family": "minimax-m2.5",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 204800,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral-3-14B",
+      "name": "Ministral 3 14B Instruct",
+      "family": "ministral",
+      "releaseDate": "2025-12-15",
+      "contextLimit": 262144,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "multi-qa-mpnet-base-dot-v1",
+      "name": "Multi-QA-mpnet-base-dot-v1",
+      "family": "text-embedding",
+      "releaseDate": "2021-08-30",
+      "contextLimit": 512,
+      "outputLimit": 768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nemotron-3-nano-omni",
+      "name": "Nemotron Nano 3 Omni",
+      "family": "nemotron",
+      "releaseDate": "2026-04-28",
+      "contextLimit": 65536,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nemotron-nano-12b-v2-vl",
+      "name": "Nemotron Nano 12B v2 VL",
+      "family": "nemotron",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia-nemotron-3-super-120b",
+      "name": "Nemotron-3-Super-120B",
+      "status": "beta",
+      "family": "nemotron",
+      "releaseDate": "2026-03-11",
+      "contextLimit": 256000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-4.1",
+      "name": "GPT-4.1",
+      "family": "gpt",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-4o",
+      "name": "GPT-4o",
+      "family": "gpt",
+      "releaseDate": "2024-05-13",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-4o-mini",
+      "name": "GPT-4o mini",
+      "family": "gpt-mini",
+      "releaseDate": "2024-07-18",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5",
+      "name": "GPT-5",
+      "family": "gpt",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5-mini",
+      "name": "GPT-5 mini",
+      "family": "gpt-mini",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5-nano",
+      "name": "GPT-5 nano",
+      "family": "gpt-nano",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.1-codex-max",
+      "name": "GPT-5.1 Codex Max",
+      "family": "gpt-codex",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.2",
+      "name": "GPT-5.2",
+      "family": "gpt",
+      "releaseDate": "2025-12-11",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.2-pro",
+      "name": "GPT-5.2 pro",
+      "family": "gpt-pro",
+      "releaseDate": "2025-12-11",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.3-codex",
+      "name": "GPT-5.3 Codex",
+      "family": "gpt-codex",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.4",
+      "name": "GPT-5.4",
+      "family": "gpt",
+      "releaseDate": "2026-03-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.4-mini",
+      "name": "GPT-5.4 mini",
+      "family": "gpt-mini",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.4-nano",
+      "name": "GPT-5.4 nano",
+      "family": "gpt-nano",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.4-pro",
+      "name": "GPT-5.4 pro",
+      "family": "gpt-pro",
+      "releaseDate": "2026-03-05",
+      "contextLimit": 400000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-5.5",
+      "name": "GPT-5.5",
+      "family": "gpt",
+      "releaseDate": "2026-04-23",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-image-1",
+      "name": "GPT Image 1",
+      "family": "gpt-image",
+      "releaseDate": "2025-04-24",
+      "contextLimit": 0,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "image"
+      ]
+    },
+    {
+      "id": "openai-gpt-image-1.5",
+      "name": "GPT Image 1.5",
+      "family": "gpt-image",
+      "releaseDate": "2025-11-25",
+      "contextLimit": 0,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "image"
+      ]
+    },
+    {
+      "id": "openai-gpt-oss-120b",
+      "name": "gpt-oss-120b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-gpt-oss-20b",
+      "name": "gpt-oss-20b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-o1",
+      "name": "o1",
+      "family": "o",
+      "releaseDate": "2024-12-05",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-o3",
+      "name": "o3",
+      "family": "o",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai-o3-mini",
+      "name": "o3-mini",
+      "family": "o-mini",
+      "releaseDate": "2024-12-20",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3-coder-flash",
+      "name": "Qwen3 Coder Flash",
+      "family": "qwen",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3-embedding-0.6b",
+      "name": "Qwen3 Embedding 0.6B",
+      "status": "beta",
+      "family": "text-embedding",
+      "releaseDate": "2025-06-03",
+      "contextLimit": 8000,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3-tts-voicedesign",
+      "name": "Qwen3 TTS VoiceDesign",
+      "family": "qwen",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 32768,
+      "outputLimit": 1,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "audio"
+      ]
+    },
+    {
+      "id": "qwen3.5-397b-a17b",
+      "name": "Qwen 3.5 397B A17B",
+      "family": "qwen3.5",
+      "releaseDate": "2026-02-15",
+      "contextLimit": 262144,
+      "outputLimit": 81920,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "stable-diffusion-3.5-large",
+      "name": "Stable Diffusion 3.5 Large",
+      "family": "stable-diffusion",
+      "releaseDate": "2024-10-22",
+      "contextLimit": 256,
+      "outputLimit": 1,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "image"
+      ]
+    },
+    {
+      "id": "wan2-2-t2v-a14b",
+      "name": "Wan2.2-T2V-A14B",
+      "releaseDate": "2025-07-28",
+      "contextLimit": 100,
+      "outputLimit": 1,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "video"
+      ]
+    }
+  ]
+}

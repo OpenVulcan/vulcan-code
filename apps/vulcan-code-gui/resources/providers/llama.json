@@ -1,0 +1,149 @@
+{
+  "id": "llama",
+  "name": "Llama",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "LLAMA_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.llama.com\/compat\/v1\/",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "cerebras-llama-4-maverick-17b-128e-instruct",
+      "name": "Cerebras-Llama-4-Maverick-17B-128E-Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "cerebras-llama-4-scout-17b-16e-instruct",
+      "name": "Cerebras-Llama-4-Scout-17B-16E-Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "groq-llama-4-maverick-17b-128e-instruct",
+      "name": "Groq-Llama-4-Maverick-17B-128E-Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-3.3-70b-instruct",
+      "name": "Llama-3.3-70B-Instruct",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-3.3-8b-instruct",
+      "name": "Llama-3.3-8B-Instruct",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-4-maverick-17b-128e-instruct-fp8",
+      "name": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama-4-scout-17b-16e-instruct-fp8",
+      "name": "Llama-4-Scout-17B-16E-Instruct-FP8",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

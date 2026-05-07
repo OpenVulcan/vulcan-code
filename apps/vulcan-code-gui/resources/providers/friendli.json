@@ -1,0 +1,138 @@
+{
+  "id": "friendli",
+  "name": "Friendli",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "FRIENDLI_TOKEN"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.friendli.ai\/serverless\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "meta-llama\/Llama-3.1-8B-Instruct",
+      "name": "Llama 3.1 8B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-08-01",
+      "contextLimit": 131072,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta-llama\/Llama-3.3-70B-Instruct",
+      "name": "Llama 3.3 70B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-08-01",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "MiniMaxAI\/MiniMax-M2.5",
+      "name": "MiniMax-M2.5",
+      "family": "minimax",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 196608,
+      "outputLimit": 196608,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-235B-A22B-Instruct-2507",
+      "name": "Qwen3 235B A22B Instruct 2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-29",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-5",
+      "name": "GLM-5",
+      "family": "glm",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 202752,
+      "outputLimit": 202752,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org\/GLM-5.1",
+      "name": "GLM-5.1",
+      "family": "glm",
+      "releaseDate": "2026-04-07",
+      "contextLimit": 202752,
+      "outputLimit": 202752,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

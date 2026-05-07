@@ -379,6 +379,9 @@ struct ProviderFormState {
     /// Provider API key or access token value.
     /// 供应商 API Key 或访问 Token 值。
     api_key: String,
+    /// Optional provider base URL override value.
+    /// 可选的供应商基址覆盖值。
+    base_url: String,
     /// Azure-style resource name value when the provider requires it.
     /// 当供应商需要时使用的 Azure 风格资源名称值。
     resource_name: String,
@@ -393,6 +396,7 @@ impl ProviderFormState {
     fn from_options(options: &PersistedProviderOptions) -> Self {
         Self {
             api_key: options.get(ProviderFieldKey::ApiKey),
+            base_url: options.get(ProviderFieldKey::BaseUrl),
             resource_name: options.get(ProviderFieldKey::ResourceName),
             account_id: options.get(ProviderFieldKey::AccountId),
         }
@@ -403,6 +407,7 @@ impl ProviderFormState {
     fn get(&self, key: ProviderFieldKey) -> &str {
         match key {
             ProviderFieldKey::ApiKey => &self.api_key,
+            ProviderFieldKey::BaseUrl => &self.base_url,
             ProviderFieldKey::ResourceName => &self.resource_name,
             ProviderFieldKey::AccountId => &self.account_id,
         }
@@ -413,6 +418,7 @@ impl ProviderFormState {
     fn set(&mut self, key: ProviderFieldKey, value: String) {
         match key {
             ProviderFieldKey::ApiKey => self.api_key = value,
+            ProviderFieldKey::BaseUrl => self.base_url = value,
             ProviderFieldKey::ResourceName => self.resource_name = value,
             ProviderFieldKey::AccountId => self.account_id = value,
         }
@@ -423,6 +429,7 @@ impl ProviderFormState {
     fn to_options(&self) -> PersistedProviderOptions {
         let mut options = PersistedProviderOptions::default();
         options.set(ProviderFieldKey::ApiKey, self.api_key.clone());
+        options.set(ProviderFieldKey::BaseUrl, self.base_url.clone());
         options.set(ProviderFieldKey::ResourceName, self.resource_name.clone());
         options.set(ProviderFieldKey::AccountId, self.account_id.clone());
         options
@@ -794,7 +801,7 @@ impl VulcanWorkbench {
                     return Task::none();
                 };
 
-                if !definition.protocol.supports_model_fetch() {
+                if !definition.supports_remote_model_refresh() {
                     let message =
                         String::from("当前供应商不支持远端模型刷新，将继续使用内置静态模型目录。");
                     self.provider_notice = message.clone();
@@ -830,10 +837,6 @@ impl VulcanWorkbench {
                     .entry(provider_id.clone())
                     .or_insert_with(PersistedProviderEntry::default);
                 entry.name = Some(provider_name.clone());
-                entry.npm = provider_config::supported_provider_by_id(&provider_id)
-                    .map(|definition| definition.npm.clone());
-                entry.api = provider_config::supported_provider_by_id(&provider_id)
-                    .and_then(|definition| definition.default_api.clone());
                 entry.options = self.provider_form.to_options();
                 entry.models = provider_config::persist_remote_models(&models);
 
@@ -2091,24 +2094,17 @@ impl VulcanWorkbench {
             let provider_metadata: Element<'_, Message> =
                 if let Some(definition) = selected_definition {
                     column![
+                        text(format!("运行时：{}", definition.runtime.label())).size(12),
                         text(format!(
-                            "协议：{} | 模型来源：{}",
-                            definition.protocol.label(),
-                            definition.model_source_mode.label()
+                            "接口地址：{}",
+                            self.selected_provider_endpoint_summary()
                         ))
                         .size(12),
                         text(format!(
-                            "默认接口：{}",
-                            definition
-                                .default_api
-                                .as_deref()
-                                .unwrap_or("由协议与运行时内部解析")
+                            "模型目录：{}",
+                            self.selected_provider_model_source_summary()
                         ))
                         .size(12),
-                        definition
-                            .notes
-                            .first()
-                            .map_or_else(|| text("").size(1), |note| text(note).size(12),),
                     ]
                     .spacing(4)
                     .into()
@@ -2119,14 +2115,15 @@ impl VulcanWorkbench {
             let provider_field_list = selected_definition.map_or_else(
                 || column![text("当前没有可用的供应商定义。").size(13)].spacing(8),
                 |definition| {
-                    definition
-                        .fields
-                        .iter()
+                    let fields = definition.input_fields();
+
+                    fields
+                        .into_iter()
                         .fold(column![].spacing(10), |form, field| {
-                            let label = definition.field_label(*field);
-                            let placeholder = definition.field_placeholder(*field);
-                            let input = text_input(&placeholder, self.provider_form.get(*field))
-                                .on_input(move |value| Message::ProviderFieldChanged(*field, value))
+                            let label = definition.field_label(field);
+                            let placeholder = definition.field_placeholder(field);
+                            let input = text_input(&placeholder, self.provider_form.get(field))
+                                .on_input(move |value| Message::ProviderFieldChanged(field, value))
                                 .padding(10)
                                 .width(Fill);
                             let input = if field.is_secret() {
@@ -2196,13 +2193,13 @@ impl VulcanWorkbench {
                         selected_definition.map_or_else(
                             || button("尝试拉取模型").style(button::secondary),
                             |definition| {
-                                let action = if definition.protocol.supports_model_fetch() {
+                                let action = if definition.supports_remote_model_refresh() {
                                     Some(Message::RefreshProviderModels)
                                 } else {
                                     None
                                 };
                                 let mut button_widget =
-                                    button(if definition.protocol.supports_model_fetch() {
+                                    button(if definition.supports_remote_model_refresh() {
                                         "尝试拉取模型"
                                     } else {
                                         "仅使用静态模型目录"
@@ -2466,6 +2463,40 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Returns the resolved endpoint summary for the currently selected provider form state.
+    /// 返回当前选中供应商表单状态对应的解析后接口地址摘要。
+    fn selected_provider_endpoint_summary(&self) -> String {
+        self.selected_provider_definition()
+            .and_then(|definition| definition.resolved_base_url(&self.provider_form.to_options()))
+            .unwrap_or_else(|| String::from("由运行时自动解析"))
+    }
+
+    /// Returns the model-source summary computed from the current provider definition and cache state.
+    /// 返回根据当前供应商定义与缓存状态计算出的模型来源摘要。
+    fn selected_provider_model_source_summary(&self) -> String {
+        let models = self.current_provider_model_choices();
+
+        self.selected_provider_definition()
+            .map(|definition| {
+                if definition.supports_remote_model_refresh() {
+                    let has_cached_models = self
+                        .provider_configuration
+                        .provider
+                        .get(&self.selected_provider.id)
+                        .is_some_and(|entry| !entry.models.is_empty());
+
+                    if has_cached_models {
+                        format!("已缓存 {} 个模型", models.len())
+                    } else {
+                        format!("可远端拉取，当前内置 {} 个模型", models.len())
+                    }
+                } else {
+                    format!("使用内置目录，共 {} 个模型", models.len())
+                }
+            })
+            .unwrap_or_else(|| String::from("未找到供应商定义"))
+    }
+
     /// Returns the currently active model choice when it belongs to the selected provider.
     /// 当当前激活模型属于选中供应商时，返回对应的模型选项。
     fn active_model_choice_for_selected_provider(&self) -> Option<ModelChoice> {
@@ -2512,10 +2543,10 @@ impl VulcanWorkbench {
             .selected_provider_definition()
             .ok_or_else(|| String::from("当前供应商未找到可用定义。"))?;
 
-        for field in &definition.fields {
-            let value = self.provider_form.get(*field).trim();
+        for field in definition.input_fields() {
+            let value = self.provider_form.get(field).trim();
             if value.is_empty() {
-                return Err(format!("请先填写 `{}`。", definition.field_label(*field)));
+                return Err(format!("请先填写 `{}`。", definition.field_label(field)));
             }
         }
 
@@ -2525,12 +2556,10 @@ impl VulcanWorkbench {
             .entry(definition.id.clone())
             .or_insert_with(PersistedProviderEntry::default);
         entry.name = Some(definition.name.clone());
-        entry.npm = Some(definition.npm.clone());
-        entry.api = definition.default_api.clone();
         entry.options = self.provider_form.to_options();
 
         if entry.models.is_empty() {
-            entry.models = provider_config::persist_remote_models(&definition.static_models);
+            entry.models = provider_config::persist_remote_models(&definition.models);
         }
 
         provider_config::save_configuration_file(&self.provider_configuration)

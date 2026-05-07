@@ -1,0 +1,39 @@
+{
+  "id": "tencent-tokenhub",
+  "name": "Tencent TokenHub",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "TENCENT_TOKENHUB_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/tokenhub.tencentmaas.com\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "hy3-preview",
+      "name": "Hy3 preview",
+      "family": "Hy",
+      "releaseDate": "2026-04-20",
+      "contextLimit": 256000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

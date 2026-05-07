@@ -1,0 +1,168 @@
+{
+  "id": "stackit",
+  "name": "STACKIT",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "STACKIT_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.openai-compat.model-serving.eu01.onstackit.cloud\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "cortecs\/Llama-3.3-70B-Instruct-FP8-Dynamic",
+      "name": "Llama 3.3 70B",
+      "family": "llama",
+      "releaseDate": "2024-12-05",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google\/gemma-3-27b-it",
+      "name": "Gemma 3 27B",
+      "family": "gemma",
+      "releaseDate": "2025-05-17",
+      "contextLimit": 37000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "intfloat\/e5-mistral-7b-instruct",
+      "name": "E5 Mistral 7B",
+      "family": "mistral",
+      "releaseDate": "2023-12-11",
+      "contextLimit": 4096,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "neuralmagic\/Meta-Llama-3.1-8B-Instruct-FP8",
+      "name": "Llama 3.1 8B",
+      "family": "llama",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "neuralmagic\/Mistral-Nemo-Instruct-2407-FP8",
+      "name": "Mistral Nemo",
+      "family": "mistral",
+      "releaseDate": "2024-07-01",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai\/gpt-oss-120b",
+      "name": "GPT-OSS 120B",
+      "family": "gpt",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131000,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-235B-A22B-Instruct-FP8",
+      "name": "Qwen3-VL 235B",
+      "family": "qwen",
+      "releaseDate": "2024-11-01",
+      "contextLimit": 218000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen\/Qwen3-VL-Embedding-8B",
+      "name": "Qwen3-VL Embedding 8B",
+      "family": "qwen",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 32000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "id": "privatemode-ai",
+  "name": "Privatemode AI",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "PRIVATEMODE_API_KEY",
+    "PRIVATEMODE_ENDPOINT"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "http:\/\/localhost:8080\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "gemma-3-27b",
+      "name": "Gemma 3 27B",
+      "family": "gemma",
+      "releaseDate": "2025-03-12",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gpt-oss-120b",
+      "name": "gpt-oss-120b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-04",
+      "contextLimit": 128000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3-coder-30b-a3b",
+      "name": "Qwen3-Coder 30B-A3B",
+      "family": "qwen",
+      "releaseDate": "2025-04",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3-embedding-4b",
+      "name": "Qwen3-Embedding 4B",
+      "family": "qwen",
+      "releaseDate": "2025-06-06",
+      "contextLimit": 32000,
+      "outputLimit": 2560,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "whisper-large-v3",
+      "name": "Whisper large-v3",
+      "family": "whisper",
+      "releaseDate": "2023-09-01",
+      "contextLimit": 0,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

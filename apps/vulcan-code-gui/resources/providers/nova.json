@@ -1,0 +1,63 @@
+{
+  "id": "nova",
+  "name": "Nova",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "NOVA_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https:\/\/api.nova.amazon.com\/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "nova-2-lite-v1",
+      "name": "Nova 2 Lite",
+      "family": "nova-lite",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nova-2-pro-v1",
+      "name": "Nova 2 Pro",
+      "family": "nova-pro",
+      "releaseDate": "2025-12-03",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}
