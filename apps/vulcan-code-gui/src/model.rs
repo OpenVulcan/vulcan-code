@@ -113,9 +113,15 @@ pub struct SessionSummary {
     /// Stable session identifier for selection.
     /// 用于选择状态的稳定会话标识。
     pub id: usize,
+    /// Owning project identifier used to restore the session back into the correct project tree.
+    /// 用于将会话恢复回正确项目树的所属项目标识。
+    pub project_id: Option<String>,
     /// Session display title.
     /// 会话展示标题。
     pub title: String,
+    /// Session title origin used to avoid overwriting manual titles blindly.
+    /// 用于避免盲目覆盖人工标题的会话标题来源。
+    pub title_source: SessionTitleSource,
     /// Short current focus summary.
     /// 当前聚焦点的简要说明。
     pub focus: String,
@@ -138,6 +144,7 @@ impl SessionSummary {
     /// 使用明确元数据创建新的会话摘要。
     pub fn new(
         id: usize,
+        project_id: Option<String>,
         title: impl Into<String>,
         focus: impl Into<String>,
         status: SessionState,
@@ -147,7 +154,9 @@ impl SessionSummary {
     ) -> Self {
         Self {
             id,
+            project_id,
             title: title.into(),
+            title_source: SessionTitleSource::Generated,
             focus: focus.into(),
             status,
             changed_files,
@@ -156,47 +165,99 @@ impl SessionSummary {
         }
     }
 
+    /// Overrides the title source attached to the session summary.
+    /// 覆盖附着在会话摘要上的标题来源。
+    pub fn with_title_source(mut self, title_source: SessionTitleSource) -> Self {
+        self.title_source = title_source;
+        self
+    }
+
     /// Builds seed session data for the first prototype window.
     /// 为首版原型窗口构建种子会话数据。
     pub fn seeded() -> Vec<Self> {
         vec![
             Self::new(
                 1,
+                Some(String::from("vulcan-luaskills")),
                 "重命名中枢系统",
                 "收敛工作台命名与主入口语义",
                 SessionState::Running,
                 7,
                 4,
                 "1天前",
-            ),
+            )
+            .with_title_source(SessionTitleSource::Seeded),
             Self::new(
                 2,
+                Some(String::from("vulcan-luaskills")),
                 "评估 LuaSkills 会话声明机制",
                 "梳理技能、工具与角色接入策略",
                 SessionState::Completed,
                 3,
                 2,
                 "3天前",
-            ),
+            )
+            .with_title_source(SessionTitleSource::Seeded),
             Self::new(
                 3,
+                Some(String::from("vulcan-memory-mesh")),
                 "检查构建脚本异常相关问题",
                 "核对桌面窗口、打包与启动细节",
                 SessionState::Blocked,
                 2,
                 1,
                 "3周前",
-            ),
+            )
+            .with_title_source(SessionTitleSource::Seeded),
             Self::new(
                 4,
+                Some(String::from("vulcan-memory-mesh")),
                 "为 opencode.json 引用安装",
                 "梳理供应商配置读取与安装体验",
                 SessionState::Draft,
                 1,
                 2,
                 "26天前",
-            ),
+            )
+            .with_title_source(SessionTitleSource::Seeded),
         ]
+    }
+}
+
+/// Title origin metadata stored alongside one session summary.
+/// 与单个会话摘要一同存储的标题来源元数据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionTitleSource {
+    /// Seed title bundled with prototype data.
+    /// 随原型种子数据附带的初始标题。
+    Seeded,
+    /// Automatically generated title.
+    /// 自动生成的标题。
+    Generated,
+    /// Manually edited title.
+    /// 手工编辑后的标题。
+    Manual,
+}
+
+impl SessionTitleSource {
+    /// Returns the persisted text key used by the workspace store.
+    /// 返回工作台存储层使用的持久化文本键。
+    pub const fn as_persisted_key(self) -> &'static str {
+        match self {
+            Self::Seeded => "seeded",
+            Self::Generated => "generated",
+            Self::Manual => "manual",
+        }
+    }
+
+    /// Parses one persisted text key back into the session-title source enum.
+    /// 将一条持久化文本键解析回会话标题来源枚举。
+    pub fn from_persisted_key(value: &str) -> Self {
+        match value {
+            "seeded" => Self::Seeded,
+            "manual" => Self::Manual,
+            _ => Self::Generated,
+        }
     }
 }
 
@@ -380,19 +441,84 @@ impl SessionMessageKind {
     }
 }
 
+/// Durable record kinds used for visible transcript rows and hidden internal nodes.
+/// 用于可见转录行与隐藏内部节点的持久化记录类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionMessageRecordKind {
+    /// Plain transcript row shown directly to the user.
+    /// 直接展示给用户的普通转录行。
+    Transcript,
+    /// Hidden title-generation output kept for traceability.
+    /// 为了可追溯性保留的隐藏标题生成输出。
+    TitleOutput,
+    /// Hidden summary output produced after one execution round.
+    /// 在一次执行回合后产生的隐藏摘要输出。
+    SummaryOutput,
+    /// Hidden explore output produced when a session is seeded from one project.
+    /// 从某个项目播种会话时产生的隐藏探索输出。
+    ExploreOutput,
+    /// Hidden compaction summary used as the new context anchor.
+    /// 作为新上下文锚点使用的隐藏压缩摘要。
+    CompactionSummary,
+}
+
+impl SessionMessageRecordKind {
+    /// Returns the persisted text key used by the SQLite workspace store.
+    /// 返回 SQLite 工作台存储使用的持久化文本键。
+    pub const fn as_persisted_key(self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::TitleOutput => "title-output",
+            Self::SummaryOutput => "summary-output",
+            Self::ExploreOutput => "explore-output",
+            Self::CompactionSummary => "compaction-summary",
+        }
+    }
+
+    /// Returns whether the record should be included when rebuilding the next LLM context.
+    /// 返回在重建下一轮 LLM 上下文时是否应纳入该记录。
+    pub const fn contributes_to_context(self) -> bool {
+        !matches!(self, Self::TitleOutput)
+    }
+
+    /// Parses one persisted text key back into the durable record kind enum.
+    /// 将一条持久化文本键解析回持久化记录类型枚举。
+    pub fn from_persisted_key(value: &str) -> Self {
+        match value {
+            "title-output" => Self::TitleOutput,
+            "summary-output" => Self::SummaryOutput,
+            "explore-output" => Self::ExploreOutput,
+            "compaction-summary" => Self::CompactionSummary,
+            _ => Self::Transcript,
+        }
+    }
+}
+
 /// Structured message entry shown inside one workbench session transcript.
 /// 展示在某个工作台会话转录区中的结构化消息项。
 #[derive(Debug, Clone)]
 pub struct SessionMessageEntry {
+    /// Stable message identifier stored in SQLite and referenced by compaction checkpoints.
+    /// 存储在 SQLite 中并被压缩检查点引用的稳定消息标识。
+    pub id: String,
     /// High-level message kind.
     /// 消息的高层类型。
     pub kind: SessionMessageKind,
+    /// Durable record kind distinguishing visible transcript rows from hidden internal outputs.
+    /// 用于区分可见转录行与隐藏内部输出的持久化记录类型。
+    pub record_kind: SessionMessageRecordKind,
+    /// Whether the message should be rendered in the visible transcript stream.
+    /// 该消息是否应渲染到可见转录流中。
+    pub visible: bool,
     /// Optional headline displayed above the message body.
     /// 展示在消息正文上方的可选标题。
     pub title: String,
     /// Main message body content.
     /// 主要消息正文内容。
     pub body: String,
+    /// Unix-millis text captured when the entry is created or hydrated from storage.
+    /// 在创建或从存储恢复时捕获的 Unix 毫秒文本。
+    pub created_at: String,
 }
 
 impl SessionMessageEntry {
@@ -404,11 +530,103 @@ impl SessionMessageEntry {
         body: impl Into<String>,
     ) -> Self {
         Self {
+            id: String::new(),
             kind,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
             title: title.into(),
             body: body.into(),
+            created_at: String::new(),
         }
     }
+
+    /// Creates one hidden internal message entry with an explicit record kind.
+    /// 使用显式记录类型创建一条隐藏内部消息项。
+    pub fn hidden(
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: String::new(),
+            kind,
+            record_kind,
+            visible: false,
+            title: title.into(),
+            body: body.into(),
+            created_at: String::new(),
+        }
+    }
+
+    /// Attaches persisted runtime metadata to a freshly created session message entry.
+    /// 为一条新创建的会话消息项附着持久化运行时元数据。
+    pub fn with_runtime_metadata(
+        mut self,
+        id: impl Into<String>,
+        created_at: impl Into<String>,
+    ) -> Self {
+        self.id = id.into();
+        self.created_at = created_at.into();
+        self
+    }
+
+    /// Returns whether the entry should be shown to the user inside the transcript stream.
+    /// 返回该消息项是否应展示给用户的转录流中。
+    pub const fn is_visible_to_user(&self) -> bool {
+        self.visible
+    }
+
+    /// Returns whether the entry should participate in future model-context reconstruction.
+    /// 返回该消息项是否应参与未来的模型上下文重建。
+    pub const fn contributes_to_context(&self) -> bool {
+        self.record_kind.contributes_to_context()
+    }
+}
+
+/// Hidden compaction checkpoint bound to one session transcript.
+/// 绑定到单个会话转录流的隐藏压缩检查点。
+#[derive(Debug, Clone)]
+pub struct SessionCompactionEntry {
+    /// Stable compaction identifier.
+    /// 稳定的压缩标识。
+    pub id: String,
+    /// Last source message included by the compaction input window.
+    /// 被本次压缩输入窗口覆盖的最后一条源消息标识。
+    pub source_until_message_id: Option<String>,
+    /// First message identifier that should be used when rebuilding the next context window.
+    /// 重建下一轮上下文窗口时应作为起点的第一条消息标识。
+    pub context_start_message_id: Option<String>,
+    /// Hidden summary message emitted by the compaction step.
+    /// 压缩步骤输出的隐藏摘要消息标识。
+    pub summary_message_id: Option<String>,
+    /// Unix-millis text capturing when the checkpoint was created.
+    /// 捕获该检查点创建时间的 Unix 毫秒文本。
+    pub created_at: String,
+}
+
+/// Session-scoped runtime state required for context reconstruction and agent tracing.
+/// 上下文重建与代理追踪所需的按会话归属运行时状态。
+#[derive(Debug, Clone, Default)]
+pub struct SessionRuntimeStateEntry {
+    /// Last active agent identifier used by the session.
+    /// 最近一次被该会话使用的激活代理标识。
+    pub active_agent_id: Option<String>,
+    /// Last active provider identifier used by the session.
+    /// 最近一次被该会话使用的激活供应商标识。
+    pub active_provider_id: Option<String>,
+    /// Last active model identifier used by the session.
+    /// 最近一次被该会话使用的激活模型标识。
+    pub active_model_id: Option<String>,
+    /// Latest compaction identifier attached to the session.
+    /// 附着在该会话上的最近一次压缩标识。
+    pub last_compaction_id: Option<String>,
+    /// Current message identifier used as the next context reconstruction anchor.
+    /// 当前用作下一轮上下文重建锚点的消息标识。
+    pub context_start_message_id: Option<String>,
+    /// Unix-millis text capturing when the runtime state was last refreshed.
+    /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
+    pub updated_at: String,
 }
 
 /// Execution phases used by the main workbench transcript header.

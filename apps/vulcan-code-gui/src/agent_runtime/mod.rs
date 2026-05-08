@@ -9,6 +9,7 @@ pub mod runtime;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use executor::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport, execute_runtime_run,
+    ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
+    execute_runtime_run,
 };
 pub use runtime::RuntimeFoundation;

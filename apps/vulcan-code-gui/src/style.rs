@@ -190,6 +190,44 @@ pub fn main_display_bottom_separator_style(theme: &Theme) -> container::Style {
     }
 }
 
+/// Returns the translucent full-screen backdrop style used by the startup loading overlay.
+/// 返回启动加载遮罩使用的半透明全屏背景样式。
+pub fn startup_overlay_backdrop_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color {
+            r: 0.06,
+            g: 0.07,
+            b: 0.10,
+            a: 0.78,
+        })),
+        ..Default::default()
+    }
+}
+
+/// Returns the compact card style used by the startup loading overlay content.
+/// 返回启动加载遮罩内容卡片使用的紧凑样式。
+pub fn startup_overlay_card_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        border: Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.18),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.20,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 10.0),
+            blur_radius: 24.0,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the icon-button style used by one item inside the fixed left activity bar.
 /// 返回固定左侧活动条中某个图标按钮使用的样式。
 pub fn activity_bar_button_style(

@@ -18,6 +18,24 @@ use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use serde_json::{Value, json};
 
+/// Lightweight transcript row forwarded into the real runtime as model-facing context.
+/// 作为面向模型上下文转发到真实运行时的轻量转录行。
+#[derive(Debug, Clone)]
+pub struct ExecutionContextMessage {
+    /// Persisted message role label.
+    /// 持久化消息角色标签。
+    pub role: String,
+    /// Human-readable message title.
+    /// 人类可读消息标题。
+    pub title: String,
+    /// Primary message body content.
+    /// 主要消息正文内容。
+    pub body: String,
+    /// Durable record-kind label.
+    /// 持久化记录类型标签。
+    pub record_kind: String,
+}
+
 /// Minimal execution request captured from the current GUI state.
 /// 从当前 GUI 状态捕获的最小执行请求。
 #[derive(Debug, Clone)]
@@ -34,6 +52,9 @@ pub struct ExecutionPreparationRequest {
     /// Current composer prompt.
     /// 当前提示词输入区内容。
     pub prompt: String,
+    /// Model-facing context history reconstructed from the full transcript or the latest compaction checkpoint.
+    /// 从完整转录或最近一次压缩检查点重建出的面向模型上下文历史。
+    pub context_history: Vec<ExecutionContextMessage>,
     /// Current execution-mode label.
     /// 当前执行模式标签。
     pub execution_mode: String,
@@ -70,6 +91,9 @@ pub struct ExecutionPreparation {
     /// Workspace path captured for the run.
     /// 为本次运行捕获的工作区路径。
     pub workspace_path: String,
+    /// Number of history rows that will be forwarded into the real model call.
+    /// 将被转发到真实模型调用中的历史行数量。
+    pub context_history_count: usize,
     /// Execution-mode label captured for the run.
     /// 为本次运行捕获的执行模式标签。
     pub execution_mode: String,
@@ -133,6 +157,7 @@ impl ExecutionPreparation {
                     .unwrap_or_else(|| String::from("使用模型默认值"))
             ),
             format!("工作区：{}", self.workspace_path),
+            format!("上下文：{} 条历史消息", self.context_history_count),
         ];
 
         if !self.skill_names.is_empty() {
@@ -283,6 +308,7 @@ pub fn prepare_execution(
         model_blueprint,
         prompt_preview: truncate_preview(request.prompt.trim(), 180),
         workspace_path,
+        context_history_count: request.context_history.len(),
         execution_mode: request.execution_mode.clone(),
         temperature: request.temperature,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
@@ -337,13 +363,15 @@ pub async fn execute_runtime_run(
 
     let system_preamble =
         build_runtime_system_preamble(&preparation, active_agent.as_ref(), &discovery_rows);
+    let effective_prompt =
+        build_runtime_user_prompt(&request.context_history, request.prompt.trim());
 
     match execute_provider_prompt(
         &config,
         &preparation,
         active_agent.as_ref(),
         &system_preamble,
-        request.prompt.trim(),
+        &effective_prompt,
     )
     .await
     {
@@ -496,6 +524,30 @@ fn build_runtime_system_preamble(
     }
 
     sections.join("\n")
+}
+
+/// Builds the effective user prompt by prepending the reconstructed session context to the latest user input.
+/// 通过在最新用户输入前拼接重建后的会话上下文来构建生效用户提示词。
+fn build_runtime_user_prompt(context_history: &[ExecutionContextMessage], prompt: &str) -> String {
+    if context_history.is_empty() {
+        return prompt.to_string();
+    }
+
+    let context_block = context_history
+        .iter()
+        .map(|message| {
+            format!(
+                "[{}|{}|{}]\n{}",
+                message.role, message.record_kind, message.title, message.body
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    format!(
+        "以下是当前会话在最近一次上下文压缩锚点之后需要保留的历史上下文，请结合这些上下文继续完成本次请求。\n\n{}\n\n本轮最新用户请求如下：\n{}",
+        context_block, prompt
+    )
 }
 
 /// Executes one provider prompt against the currently selected runtime family.

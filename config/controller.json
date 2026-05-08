@@ -1,0 +1,12 @@
+{
+  "endpoint": "http://127.0.0.1:19811",
+  "autoSpawn": true,
+  "processMode": "managed",
+  "minimumUptimeSecs": 300,
+  "idleTimeoutSecs": 900,
+  "defaultLeaseTtlSecs": 120,
+  "connectTimeoutSecs": 5,
+  "startupTimeoutSecs": 15,
+  "startupRetryIntervalMs": 250,
+  "leaseRenewIntervalSecs": 30
+}

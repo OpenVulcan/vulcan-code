@@ -1,6 +1,7 @@
 //! Provider catalog, persistence, and remote model helper logic.
 //! 模型供应商目录、持久化与远端模型辅助逻辑。
 
+use crate::runtime_assets;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -785,6 +786,99 @@ impl PersistedMcpConfiguration {
     }
 }
 
+/// Supported controller process modes persisted in the shared configuration file.
+/// 持久化到共享配置文件中的受支持控制器进程模式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedControllerProcessMode {
+    /// Service mode keeps the controller alive until it is stopped externally.
+    /// 服务模式会让控制器保持存活，直到它被外部停止。
+    Service,
+    /// Managed mode lets the controller self-stop after idle windows.
+    /// 托管模式允许控制器在空闲窗口后自行停止。
+    #[default]
+    Managed,
+}
+
+/// Persisted controller bootstrap configuration stored in the shared Vulcan file.
+/// 存储在共享 Vulcan 文件中的持久化控制器引导配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedControllerConfiguration {
+    /// Optional controller endpoint URL or local bind string.
+    /// 可选的控制器端点 URL 或本地绑定字符串。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Whether the host may auto-spawn the controller when unavailable.
+    /// 当控制器不可用时宿主是否允许自动拉起它。
+    #[serde(default = "default_true")]
+    pub auto_spawn: bool,
+    /// Optional explicit controller executable path.
+    /// 可选的显式控制器可执行文件路径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable_path: Option<String>,
+    /// Process mode used when the host auto-spawns the controller.
+    /// 当宿主自动拉起控制器时使用的进程模式。
+    #[serde(default)]
+    pub process_mode: PersistedControllerProcessMode,
+    /// Minimum uptime required before managed self-shutdown is allowed.
+    /// 托管模式允许自停前必须满足的最小存活时长。
+    #[serde(default = "default_controller_minimum_uptime_secs")]
+    pub minimum_uptime_secs: u64,
+    /// Idle timeout used by managed self-shutdown.
+    /// 托管模式自停使用的空闲超时时长。
+    #[serde(default = "default_controller_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+    /// Default client lease TTL used during registration.
+    /// 注册客户端时使用的默认租约 TTL。
+    #[serde(default = "default_controller_default_lease_ttl_secs")]
+    pub default_lease_ttl_secs: u64,
+    /// Per-attempt connection timeout used by the SDK.
+    /// SDK 使用的单次连接超时时长。
+    #[serde(default = "default_controller_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    /// Total startup wait timeout used after auto-spawn.
+    /// 自动拉起后使用的总体启动等待超时时长。
+    #[serde(default = "default_controller_startup_timeout_secs")]
+    pub startup_timeout_secs: u64,
+    /// Polling interval used while waiting for the spawned controller to become ready.
+    /// 等待拉起控制器就绪时使用的轮询间隔。
+    #[serde(default = "default_controller_startup_retry_interval_ms")]
+    pub startup_retry_interval_ms: u64,
+    /// Background lease renewal interval used by the SDK.
+    /// SDK 使用的后台租约续约间隔。
+    #[serde(default = "default_controller_lease_renew_interval_secs")]
+    pub lease_renew_interval_secs: u64,
+}
+
+impl Default for PersistedControllerConfiguration {
+    /// Builds the default persisted controller configuration aligned with the official SDK defaults.
+    /// 构建与官方 SDK 默认值对齐的默认持久化控制器配置。
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            auto_spawn: true,
+            executable_path: None,
+            process_mode: PersistedControllerProcessMode::Managed,
+            minimum_uptime_secs: default_controller_minimum_uptime_secs(),
+            idle_timeout_secs: default_controller_idle_timeout_secs(),
+            default_lease_ttl_secs: default_controller_default_lease_ttl_secs(),
+            connect_timeout_secs: default_controller_connect_timeout_secs(),
+            startup_timeout_secs: default_controller_startup_timeout_secs(),
+            startup_retry_interval_ms: default_controller_startup_retry_interval_ms(),
+            lease_renew_interval_secs: default_controller_lease_renew_interval_secs(),
+        }
+    }
+}
+
+impl PersistedControllerConfiguration {
+    /// Returns whether the persisted controller configuration still equals the built-in defaults.
+    /// 返回持久化控制器配置是否仍然等于内置默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Root provider configuration file saved in the Vulcan home directory.
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -817,6 +911,13 @@ pub struct ProviderConfigurationFile {
     /// 持久化的 MCP 服务器配置块。
     #[serde(default, skip_serializing_if = "PersistedMcpConfiguration::is_empty")]
     pub mcp: PersistedMcpConfiguration,
+    /// Persisted controller bootstrap configuration.
+    /// 持久化的控制器引导配置。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedControllerConfiguration::is_default"
+    )]
+    pub controller: PersistedControllerConfiguration,
 }
 
 /// Loads the supported provider catalog derived from the split provider resources.
@@ -837,6 +938,21 @@ pub fn configuration_file_path() -> PathBuf {
     });
 
     home.join(".vulcan").join("vulcan-code.json")
+}
+
+/// Loads the shared controller bootstrap configuration from the runtime configuration directory.
+/// 从运行时配置目录加载共享控制器引导配置。
+pub fn load_controller_configuration_file() -> Result<PersistedControllerConfiguration, String> {
+    let path = runtime_assets::resolve_controller_config_file_path();
+
+    if !path.exists() {
+        return Ok(PersistedControllerConfiguration::default());
+    }
+
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("读取控制器配置文件失败：{}。", error))?;
+
+    serde_json::from_str(&text).map_err(|error| format!("解析控制器配置文件失败：{}。", error))
 }
 
 /// Loads the persisted provider configuration file from disk.
@@ -1067,9 +1183,7 @@ fn load_supported_providers() -> Vec<SupportedProviderDefinition> {
 /// Returns the directory path containing split provider catalog files.
 /// 返回包含分离供应商目录文件的目录路径。
 fn provider_catalog_directory_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join("providers")
+    runtime_assets::resolve_provider_catalog_directory()
 }
 
 /// Returns a sortable provider key that keeps common providers near the top of the picker.
@@ -1191,6 +1305,48 @@ fn looks_like_env_placeholder(value: &str) -> bool {
 /// 返回持久化运行时分区启用标记使用的默认布尔值。
 fn default_true() -> bool {
     true
+}
+
+/// Returns the default minimum uptime used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认最小存活时长。
+fn default_controller_minimum_uptime_secs() -> u64 {
+    300
+}
+
+/// Returns the default idle timeout used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认空闲超时时长。
+fn default_controller_idle_timeout_secs() -> u64 {
+    900
+}
+
+/// Returns the default lease TTL used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认租约 TTL。
+fn default_controller_default_lease_ttl_secs() -> u64 {
+    120
+}
+
+/// Returns the default connection timeout used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认连接超时时长。
+fn default_controller_connect_timeout_secs() -> u64 {
+    5
+}
+
+/// Returns the default startup timeout used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认启动超时时长。
+fn default_controller_startup_timeout_secs() -> u64 {
+    15
+}
+
+/// Returns the default startup retry interval used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认启动重试间隔。
+fn default_controller_startup_retry_interval_ms() -> u64 {
+    250
+}
+
+/// Returns the default lease renewal interval used by the shared controller configuration.
+/// 返回共享控制器配置使用的默认租约续约间隔。
+fn default_controller_lease_renew_interval_secs() -> u64 {
+    30
 }
 
 /// Extracts model choices from one response array node.

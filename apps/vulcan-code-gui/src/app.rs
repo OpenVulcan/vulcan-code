@@ -3,23 +3,27 @@
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::{
-    self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport, RuntimeFoundation,
-    RuntimeSkillKind, execute_runtime_run,
+    self, ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest,
+    ExecutionRunReport, RuntimeFoundation, RuntimeSkillKind, execute_runtime_run,
 };
 use crate::code_view;
+use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
+use crate::luaskills_runtime::{self, LuaSkillsBootstrapReport, LuaSkillsRuntimeHandle};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionMessageEntry, SessionMessageKind,
-    SessionRunPhase, SessionState, SessionSummary, TaskProjectSummary,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry,
+    SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::provider_config::{
-    self, ModelChoice, PersistedAgentKind, PersistedMcpServerEntry, PersistedMcpTransportKind,
-    PersistedProviderEntry, PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile,
-    ProviderFieldKey,
+    self, ModelChoice, PersistedAgentKind, PersistedControllerConfiguration,
+    PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedProviderEntry,
+    PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
 };
 use crate::style;
 use crate::theme;
 use crate::wheel_passthrough::WheelPassthrough;
+use crate::workspace_store::{self, WorkspaceSnapshot};
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
@@ -37,10 +41,11 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Path to the bundled SVG mark used in the header.
-/// 头部区域使用的内置 SVG 标识路径。
-const LOGO_ASSET_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/vulcan-mark.svg");
+/// Bundled SVG mark bytes used in the header.
+/// 头部区域使用的内置 SVG 标识字节。
+const LOGO_ASSET_BYTES: &[u8] = include_bytes!("../resources/vulcan-mark.svg");
 
 /// Markdown quick guide rendered in the runtime inspector.
 /// 渲染在运行检查面板中的 Markdown 快速指引。
@@ -365,6 +370,9 @@ pub struct VulcanWorkbench {
     /// Project nodes rendered by the main task-drawer tree.
     /// 由主任务抽屉树渲染的项目节点集合。
     task_projects: Vec<TaskProjectSummary>,
+    /// Archived project nodes retained outside the visible tree for later restoration.
+    /// 保留在可见树之外、供后续恢复使用的归档项目节点集合。
+    archived_task_projects: Vec<TaskProjectSummary>,
     /// Expanded project identifiers inside the main task-drawer tree.
     /// 主任务抽屉树内部已展开的项目标识集合。
     expanded_task_projects: BTreeSet<String>,
@@ -395,6 +403,24 @@ pub struct VulcanWorkbench {
     /// Session-scoped transcript messages rendered inside the main workbench output area.
     /// 渲染在主工作台输出区中的按会话归属消息转录集合。
     session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    /// Archived session summaries retained outside the visible workbench for later restoration.
+    /// 保留在可见工作台之外、供后续恢复使用的归档会话摘要集合。
+    archived_sessions: Vec<SessionSummary>,
+    /// Archived session-scoped transcript messages retained for later restoration.
+    /// 为后续恢复保留的按归档会话归属消息转录集合。
+    archived_session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    /// Session-scoped hidden compaction checkpoints retained for future context reconstruction.
+    /// 为未来上下文重建保留的按会话归属隐藏压缩检查点集合。
+    session_compactions: BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    /// Archived hidden compaction checkpoints retained for later restoration.
+    /// 为后续恢复保留的按归档会话归属隐藏压缩检查点集合。
+    archived_session_compactions: BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    /// Session-scoped runtime-state snapshots retained for title, summary, and compaction chaining.
+    /// 为标题、摘要与压缩串联保留的按会话归属运行时状态快照集合。
+    session_runtime_state: BTreeMap<usize, SessionRuntimeStateEntry>,
+    /// Archived session-scoped runtime-state snapshots retained for later restoration.
+    /// 为后续恢复保留的按归档会话归属运行时状态快照集合。
+    archived_session_runtime_state: BTreeMap<usize, SessionRuntimeStateEntry>,
     /// Session-scoped runtime events rendered beneath the transcript message stream.
     /// 渲染在消息流下方的按会话归属运行时事件集合。
     session_runtime_events: BTreeMap<usize, Vec<RuntimeEvent>>,
@@ -404,9 +430,21 @@ pub struct VulcanWorkbench {
     /// Identifier seed for newly created sessions.
     /// 新建会话使用的自增标识种子。
     next_session_id: usize,
+    /// Current startup lifecycle shown by the full-screen loading overlay.
+    /// 由全屏载入遮罩展示的当前启动生命周期状态。
+    startup_lifecycle: StartupLifecycle,
+    /// Optional controller runtime handle retained after the shared data plane boots.
+    /// 在共享数据平面完成引导后保留的可选控制器运行时句柄。
+    controller_runtime: Option<ControllerRuntimeHandle>,
+    /// Optional LuaSkills runtime handle retained after the secondary startup phase completes.
+    /// 在二级启动阶段完成后保留的可选 LuaSkills 运行时句柄。
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
+    /// Shared controller bootstrap configuration loaded from the runtime config directory.
+    /// 从运行时配置目录载入的共享控制器引导配置。
+    controller_configuration: PersistedControllerConfiguration,
     /// Compose runtime foundation derived from the shared configuration file.
     /// 根据共享配置文件构建出的 compose 运行时基础架构。
     runtime_foundation: RuntimeFoundation,
@@ -470,6 +508,21 @@ pub struct VulcanWorkbench {
     /// Status message displayed in the footer.
     /// 展示在底部状态栏中的状态消息。
     status_message: String,
+}
+
+/// Startup lifecycle displayed through the blocking full-screen loading overlay.
+/// 通过阻塞式全屏载入遮罩展示的启动生命周期状态。
+#[derive(Debug, Clone)]
+enum StartupLifecycle {
+    /// The application is still bootstrapping its controller-backed data plane.
+    /// 应用仍在引导其基于控制器的数据平面。
+    Bootstrapping { message: String },
+    /// The application data plane failed to initialize and needs user intervention.
+    /// 应用数据平面初始化失败，需要用户干预。
+    Failed { message: String },
+    /// The startup bootstrap completed and the normal workspace can accept interaction.
+    /// 启动引导已完成，正常工作区现在可以接受交互。
+    Ready,
 }
 
 /// Hover state describing the active visual line in one diff hunk.
@@ -929,6 +982,21 @@ impl MainDisplayPanel {
 /// 首版原型中由 iced 控件发出的消息集合。
 #[derive(Debug, Clone)]
 enum Message {
+    /// Starts the controller-backed startup bootstrap sequence.
+    /// 启动基于控制器的启动引导流程。
+    BeginStartupBootstrap,
+    /// Applies the completed controller bootstrap report.
+    /// 应用已完成的控制器引导报告。
+    StartupBootstrapFinished(Result<ControllerBootstrapReport, String>),
+    /// Applies the completed LuaSkills bootstrap report.
+    /// 应用已完成的 LuaSkills 引导报告。
+    LuaSkillsBootstrapFinished(Result<LuaSkillsBootstrapReport, String>),
+    /// Applies the completed workspace-state load result after the shared runtimes become ready.
+    /// 应用共享运行时就绪后已完成的工作台状态加载结果。
+    WorkspaceStateLoaded(Result<WorkspaceSnapshot, String>),
+    /// Applies the completed workspace-state persistence result after one user-visible mutation.
+    /// 应用某次用户可见变更后已完成的工作台状态持久化结果。
+    WorkspaceStatePersisted(Result<(), String>),
     /// Main workbench window opened successfully.
     /// 主工作台窗口已成功打开。
     MainWindowOpened(window::Id),
@@ -1244,6 +1312,17 @@ impl VulcanWorkbench {
                 }
             }
         }
+        let controller_configuration = match provider_config::load_controller_configuration_file() {
+            Ok(configuration) => {
+                provider_notice.push_str(" 已从运行时 config/controller.json 载入 vldb 基础配置。");
+                configuration
+            }
+            Err(error) => {
+                provider_notice
+                    .push_str(&format!(" 控制器基础配置载入失败，已回退到默认值：{error}"));
+                PersistedControllerConfiguration::default()
+            }
+        };
         let supported_provider_choices = provider_config::supported_provider_choices();
         let selected_provider = Self::resolve_initial_provider_choice(
             &provider_configuration,
@@ -1261,15 +1340,11 @@ impl VulcanWorkbench {
             .map(McpServerFormState::from_entry)
             .unwrap_or_default();
         let runtime_foundation = RuntimeFoundation::build(&provider_configuration);
-        let runtime_summary = runtime_foundation.summary();
-        let sessions = SessionSummary::seeded();
-        let session_run_phases = sessions
-            .iter()
-            .map(|session| (session.id, SessionRunPhase::Idle))
-            .collect();
 
         let placeholder_diff_panel = WorkspaceDiffPanel::placeholder();
         let (main_window_id, open_main_window) = window::open(main_window_settings());
+
+        let startup_controller_configuration = controller_configuration.clone();
 
         (
             Self {
@@ -1301,25 +1376,35 @@ impl VulcanWorkbench {
                 diff_scroll_offset: 0.0,
                 diff_viewport_height: 0.0,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
-                sessions,
-                task_projects: TaskProjectSummary::seeded(),
-                expanded_task_projects: TaskProjectSummary::seeded()
-                    .into_iter()
-                    .map(|project| project.id)
-                    .collect(),
+                sessions: Vec::new(),
+                task_projects: Vec::new(),
+                archived_task_projects: Vec::new(),
+                expanded_task_projects: BTreeSet::new(),
                 hovered_task_project: None,
                 hovered_task_session: None,
                 active_task_project_drop_target: None,
                 suppress_task_session_hover: false,
                 pending_task_project_interaction: None,
                 dragging_task_project: None,
-                selected_session: 1,
+                selected_session: 0,
                 activities: ActivityEntry::seeded(),
                 session_messages: BTreeMap::new(),
+                archived_sessions: Vec::new(),
+                archived_session_messages: BTreeMap::new(),
+                session_compactions: BTreeMap::new(),
+                archived_session_compactions: BTreeMap::new(),
+                session_runtime_state: BTreeMap::new(),
+                archived_session_runtime_state: BTreeMap::new(),
                 session_runtime_events: BTreeMap::new(),
-                session_run_phases,
-                next_session_id: 5,
+                session_run_phases: BTreeMap::new(),
+                next_session_id: 1,
+                startup_lifecycle: StartupLifecycle::Bootstrapping {
+                    message: String::from("正在初始化 vldb 数据平面，请稍候。"),
+                },
+                controller_runtime: None,
+                luaskills_runtime: None,
                 provider_configuration,
+                controller_configuration,
                 runtime_foundation,
                 active_main_panel: MainDisplayPanel::Main,
                 selected_provider,
@@ -1344,14 +1429,15 @@ impl VulcanWorkbench {
                 run_cargo_check: true,
                 persist_memory: true,
                 auto_approve: false,
-                status_message: format!(
-                    "运行时骨架已准备：{} 个代理 / {} 个技能 / {} 个原生工具。",
-                    runtime_summary.built_agent_count,
-                    runtime_summary.skill_count,
-                    runtime_summary.native_tool_count
-                ),
+                status_message: String::from("正在初始化 vldb 数据平面。"),
             },
-            open_main_window.map(Message::MainWindowOpened),
+            Task::batch([
+                open_main_window.map(Message::MainWindowOpened),
+                Task::perform(
+                    data_plane::bootstrap_application_data_plane(startup_controller_configuration),
+                    Message::StartupBootstrapFinished,
+                ),
+            ]),
         )
     }
 
@@ -1359,6 +1445,157 @@ impl VulcanWorkbench {
     /// 处理控件消息并更新应用状态。
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::BeginStartupBootstrap => {
+                self.startup_lifecycle = StartupLifecycle::Bootstrapping {
+                    message: String::from("正在初始化 vldb 数据平面，请稍候。"),
+                };
+                self.status_message = String::from("正在初始化 vldb 数据平面。");
+                self.controller_runtime = None;
+                self.luaskills_runtime = None;
+                self.task_projects.clear();
+                self.archived_task_projects.clear();
+                self.sessions.clear();
+                self.session_messages.clear();
+                self.archived_sessions.clear();
+                self.archived_session_messages.clear();
+                self.session_compactions.clear();
+                self.archived_session_compactions.clear();
+                self.session_runtime_state.clear();
+                self.archived_session_runtime_state.clear();
+                self.session_runtime_events.clear();
+                self.session_run_phases.clear();
+                self.expanded_task_projects.clear();
+                self.selected_session = 0;
+                self.next_session_id = 1;
+
+                Task::perform(
+                    data_plane::bootstrap_application_data_plane(
+                        self.controller_configuration.clone(),
+                    ),
+                    Message::StartupBootstrapFinished,
+                )
+            }
+            Message::StartupBootstrapFinished(result) => {
+                match result {
+                    Ok(report) => {
+                        self.status_message = report.summary_text();
+                        self.activities.push(ActivityEntry {
+                            level: ActivityLevel::Success,
+                            title: String::from("vldb 数据平面就绪"),
+                            detail: format!(
+                                "控制器端点 {} 已连接，主 SQLite 空间已初始化到 {}。",
+                                report.handle.endpoint,
+                                report.handle.sqlite_path.display()
+                            ),
+                        });
+                        self.controller_runtime = Some(report.handle);
+                        self.startup_lifecycle = StartupLifecycle::Bootstrapping {
+                            message: String::from("正在初始化 LuaSkills 运行时，请稍候。"),
+                        };
+                        self.status_message = String::from("正在初始化 LuaSkills 运行时。");
+
+                        return Task::perform(
+                            luaskills_runtime::bootstrap_luaskills_runtime(
+                                self.controller_configuration.clone(),
+                            ),
+                            Message::LuaSkillsBootstrapFinished,
+                        );
+                    }
+                    Err(error) => {
+                        self.status_message = format!("vldb 数据平面初始化失败：{error}");
+                        self.activities.push(ActivityEntry {
+                            level: ActivityLevel::Warning,
+                            title: String::from("vldb 数据平面初始化失败"),
+                            detail: error.clone(),
+                        });
+                        self.controller_runtime = None;
+                        self.startup_lifecycle = StartupLifecycle::Failed { message: error };
+                    }
+                }
+
+                Task::none()
+            }
+            Message::LuaSkillsBootstrapFinished(result) => {
+                match result {
+                    Ok(report) => {
+                        self.status_message = report.summary_text();
+                        self.activities.push(ActivityEntry {
+                            level: ActivityLevel::Success,
+                            title: String::from("LuaSkills 运行时就绪"),
+                            detail: format!(
+                                "运行时根目录 {} 已准备完成，已挂载 {} 个技能根并发现 {} 个入口。",
+                                report.handle.runtime_root.display(),
+                                report.handle.skill_roots.len(),
+                                report.handle.entry_count
+                            ),
+                        });
+                        self.luaskills_runtime = Some(report.handle);
+                        self.startup_lifecycle = StartupLifecycle::Bootstrapping {
+                            message: String::from("正在加载工作台项目、会话与历史消息，请稍候。"),
+                        };
+                        self.status_message = String::from("正在加载工作台数据。");
+
+                        if let Some(controller_runtime) = self.controller_runtime.clone() {
+                            return Task::perform(
+                                workspace_store::load_or_seed_workspace(controller_runtime),
+                                Message::WorkspaceStateLoaded,
+                            );
+                        }
+
+                        self.startup_lifecycle = StartupLifecycle::Failed {
+                            message: String::from("控制器运行时缺失，无法加载工作台数据。"),
+                        };
+                    }
+                    Err(error) => {
+                        self.status_message = format!("LuaSkills 运行时初始化失败：{error}");
+                        self.activities.push(ActivityEntry {
+                            level: ActivityLevel::Warning,
+                            title: String::from("LuaSkills 运行时初始化失败"),
+                            detail: error.clone(),
+                        });
+                        self.luaskills_runtime = None;
+                        self.startup_lifecycle = StartupLifecycle::Failed { message: error };
+                    }
+                }
+
+                Task::none()
+            }
+            Message::WorkspaceStateLoaded(result) => {
+                match result {
+                    Ok(snapshot) => {
+                        self.apply_workspace_snapshot(snapshot);
+                        self.startup_lifecycle = StartupLifecycle::Ready;
+                        self.status_message = String::from("工作台数据已加载完成。");
+                        self.push_activity(
+                            ActivityLevel::Success,
+                            "工作台数据已加载",
+                            format!(
+                                "已恢复 {} 个项目、{} 个会话与 {} 个会话消息集合。",
+                                self.task_projects.len(),
+                                self.sessions.len(),
+                                self.session_messages.len()
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        self.startup_lifecycle = StartupLifecycle::Failed {
+                            message: error.clone(),
+                        };
+                        self.status_message = format!("工作台数据加载失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "工作台数据加载失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::WorkspaceStatePersisted(result) => {
+                if let Err(error) = result {
+                    self.status_message = format!("工作台状态保存失败：{error}");
+                    self.push_activity(ActivityLevel::Warning, "工作台状态保存失败", error);
+                }
+
+                Task::none()
+            }
             Message::MainWindowOpened(window_id) => {
                 self.main_window_id = Some(window_id);
                 window::is_maximized(window_id).map(move |maximized| {
@@ -1580,6 +1817,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WindowLeftButtonReleased(window_id) => {
+                let mut did_commit_drop = false;
                 if self.main_window_id == Some(window_id) {
                     self.pending_main_task_panel_resize = None;
 
@@ -1598,6 +1836,7 @@ impl VulcanWorkbench {
 
                     if let Some((dragged_project_id, drop_target)) = committed_drop {
                         self.apply_task_project_drop_target(&dragged_project_id, &drop_target);
+                        did_commit_drop = true;
                     }
 
                     self.dragging_task_project = None;
@@ -1607,7 +1846,11 @@ impl VulcanWorkbench {
                         self.toggle_task_project_expanded(&project_id);
                     }
                 }
-                Task::none()
+                if did_commit_drop {
+                    self.persist_workspace_snapshot_task()
+                } else {
+                    Task::none()
+                }
             }
             Message::WindowMaximizedStateChanged(window_id, maximized) => {
                 if self.main_window_id == Some(window_id) {
@@ -1915,6 +2158,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::SessionSelected(session_id) => {
+                self.prune_unmaterialized_sessions(Some(session_id));
                 self.selected_session = session_id;
                 self.hovered_task_session = Some(session_id);
 
@@ -1935,6 +2179,7 @@ impl VulcanWorkbench {
 
                 if let Some(project_id) = project_id {
                     self.create_task_project_session(&project_id);
+                    return self.persist_workspace_snapshot_task();
                 } else {
                     self.status_message = String::from("当前没有可承载会话的项目节点。");
                 }
@@ -2058,12 +2303,13 @@ impl VulcanWorkbench {
             }
             Message::CreateTaskProjectSession(project_id) => {
                 self.create_task_project_session(&project_id);
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::AddTaskProjectFromFolder => {
                 match pick_task_project_folder(self.workspace_path.trim()) {
                     Ok(Some(selected_path)) => {
                         self.add_task_project_from_folder(&selected_path);
+                        return self.persist_workspace_snapshot_task();
                     }
                     Ok(None) => {
                         self.status_message = String::from("已取消从文件夹添加项目。");
@@ -2086,7 +2332,7 @@ impl VulcanWorkbench {
                         format!("已取消项目 `{title}` 的置顶状态。")
                     };
                 }
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::RenameTaskProject(project_id) => {
                 if let Some(project) = self.task_project_by_id_mut(&project_id) {
@@ -2100,7 +2346,7 @@ impl VulcanWorkbench {
                     self.status_message =
                         format!("已示例性重命名项目：`{original_title}` -> `{renamed_title}`。");
                 }
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::ArchiveTaskProject(project_id) => {
                 if let Some(index) = self
@@ -2109,14 +2355,32 @@ impl VulcanWorkbench {
                     .position(|project| project.id == project_id)
                 {
                     let project = self.task_projects.remove(index);
+                    self.drop_unmaterialized_sessions_for_project(&project.id);
                     let archived_session_ids = project.session_ids.clone();
-                    self.sessions
-                        .retain(|session| !archived_session_ids.contains(&session.id));
                     for session_id in &archived_session_ids {
-                        self.session_messages.remove(session_id);
+                        if let Some(session_index) = self
+                            .sessions
+                            .iter()
+                            .position(|session| session.id == *session_id)
+                        {
+                            let session = self.sessions.remove(session_index);
+                            self.archived_sessions.push(session);
+                        }
+                        if let Some(messages) = self.session_messages.remove(session_id) {
+                            self.archived_session_messages.insert(*session_id, messages);
+                        }
+                        if let Some(compactions) = self.session_compactions.remove(session_id) {
+                            self.archived_session_compactions
+                                .insert(*session_id, compactions);
+                        }
+                        if let Some(runtime_state) = self.session_runtime_state.remove(session_id) {
+                            self.archived_session_runtime_state
+                                .insert(*session_id, runtime_state);
+                        }
                         self.session_runtime_events.remove(session_id);
                         self.session_run_phases.remove(session_id);
                     }
+                    self.archived_task_projects.push(project.clone());
                     self.expanded_task_projects.remove(&project.id);
                     self.hovered_task_project = None;
                     self.hovered_task_session = None;
@@ -2126,7 +2390,7 @@ impl VulcanWorkbench {
                     self.ensure_valid_selected_session();
                     self.status_message = format!("已归档项目 `{}`。", project.title);
                 }
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::RenameTaskSession(session_id) => {
                 if let Some(session) = self
@@ -2144,7 +2408,7 @@ impl VulcanWorkbench {
                     self.status_message =
                         format!("已示例性重命名会话：`{original_title}` -> `{renamed_title}`。");
                 }
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::ArchiveTaskSession(session_id) => {
                 let archived_owner_snapshot = self.task_projects.iter().find_map(|project| {
@@ -2158,8 +2422,25 @@ impl VulcanWorkbench {
                     .session_by_id(session_id)
                     .map(|session| session.title.clone())
                     .unwrap_or_else(|| format!("会话 #{session_id}"));
-                self.sessions.retain(|session| session.id != session_id);
-                self.session_messages.remove(&session_id);
+                if let Some(index) = self
+                    .sessions
+                    .iter()
+                    .position(|session| session.id == session_id)
+                {
+                    let session = self.sessions.remove(index);
+                    self.archived_sessions.push(session);
+                }
+                if let Some(messages) = self.session_messages.remove(&session_id) {
+                    self.archived_session_messages.insert(session_id, messages);
+                }
+                if let Some(compactions) = self.session_compactions.remove(&session_id) {
+                    self.archived_session_compactions
+                        .insert(session_id, compactions);
+                }
+                if let Some(runtime_state) = self.session_runtime_state.remove(&session_id) {
+                    self.archived_session_runtime_state
+                        .insert(session_id, runtime_state);
+                }
                 self.session_runtime_events.remove(&session_id);
                 self.session_run_phases.remove(&session_id);
                 for project in &mut self.task_projects {
@@ -2180,7 +2461,7 @@ impl VulcanWorkbench {
                 self.suppress_task_session_hover = false;
                 self.ensure_valid_selected_session();
                 self.status_message = format!("已归档会话 `{archived_title}`。");
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::ScanWorkspace => {
                 // Load the current workspace diff synchronously for the first testing milestone.
@@ -2275,11 +2556,17 @@ impl VulcanWorkbench {
             }
             Message::StartRun => {
                 let request = if let Some(session) = self.selected_session() {
+                    let context_history = self
+                        .session_context_history(session.id)
+                        .into_iter()
+                        .map(session_message_into_execution_context)
+                        .collect::<Vec<_>>();
                     ExecutionPreparationRequest {
                         session_id: session.id,
                         session_title: session.title.clone(),
                         workspace_path: self.workspace_path.clone(),
                         prompt: self.composer.clone(),
+                        context_history,
                         execution_mode: self.execution_mode.to_string(),
                         temperature: self.temperature_enabled.then_some(self.temperature),
                     }
@@ -2314,6 +2601,9 @@ impl VulcanWorkbench {
                     "用户指令",
                     request.prompt.clone(),
                 );
+                let _ = self
+                    .maybe_generate_session_title_from_prompt(request.session_id, &request.prompt);
+                self.materialize_session_after_first_user_turn(request.session_id);
                 self.replace_session_runtime_events(request.session_id, Vec::new());
                 self.last_mcp_discovery_rows.clear();
                 self.last_mcp_discovery_errors.clear();
@@ -2327,10 +2617,13 @@ impl VulcanWorkbench {
                 let request_for_run = request.clone();
                 let config_for_run = self.provider_configuration.clone();
 
-                Task::perform(
-                    async move { execute_runtime_run(config_for_run, request_for_run).await },
-                    Message::RunExecutionFinished,
-                )
+                Task::batch([
+                    self.persist_workspace_snapshot_task(),
+                    Task::perform(
+                        async move { execute_runtime_run(config_for_run, request_for_run).await },
+                        Message::RunExecutionFinished,
+                    ),
+                ])
             }
             Message::RunExecutionFinished(report) => {
                 let session_id = report.session_id;
@@ -2353,6 +2646,7 @@ impl VulcanWorkbench {
                         "执行准备摘要",
                         assistant_body,
                     );
+                    self.update_session_runtime_identity_from_preparation(session_id, &preparation);
 
                     for warning in &preparation.warnings {
                         self.push_activity(ActivityLevel::Warning, "执行准备警告", warning.clone());
@@ -2422,7 +2716,10 @@ impl VulcanWorkbench {
                     self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
                 }
 
-                Task::none()
+                self.append_session_summary_output(session_id, &report);
+                self.maybe_compact_session_history(session_id);
+
+                self.persist_workspace_snapshot_task()
             }
             Message::StopRun => {
                 // Mark the current session as blocked to surface a safe stop point in the UI.
@@ -2447,7 +2744,7 @@ impl VulcanWorkbench {
                     "执行编排已暂停",
                     "当前处于人工确认窗口，可继续调整模型、策略或补丁内容。",
                 );
-                Task::none()
+                self.persist_workspace_snapshot_task()
             }
             Message::PaneFocused(pane) => {
                 self.focus = Some(pane);
@@ -2484,30 +2781,35 @@ impl VulcanWorkbench {
         // 仅使用自定义标题栏构建固定顶部 chrome，使主表面可以切换到左侧活动条模式。
         let top_chrome = container(self.view_window_title_bar(window_id, "Vulcan Code"))
             .style(style::window_chrome_style);
-
-        self.wrap_with_window_resize_handles(
-            window_id,
-            column![
-                top_chrome,
-                container(
-                    column![
-                        row![
-                            container(self.view_main_activity_bar())
-                                .width(MAIN_PANEL_ACTIVITY_BAR_WIDTH)
-                                .height(Fill)
-                                .style(style::activity_bar_style),
-                            self.view_main_display_region(),
-                        ]
-                        .height(Fill),
-                        self.view_status_bar(),
+        let main_surface: Element<'_, Message> = column![
+            top_chrome,
+            container(
+                column![
+                    row![
+                        container(self.view_main_activity_bar())
+                            .width(MAIN_PANEL_ACTIVITY_BAR_WIDTH)
+                            .height(Fill)
+                            .style(style::activity_bar_style),
+                        self.view_main_display_region(),
                     ]
-                    .spacing(0)
-                )
-                .height(Fill),
-            ]
-            .spacing(0)
-            .into(),
-        )
+                    .height(Fill),
+                    self.view_status_bar(),
+                ]
+                .spacing(0)
+            )
+            .height(Fill),
+        ]
+        .spacing(0)
+        .into();
+
+        let composed_surface: Element<'_, Message> =
+            if let Some(overlay) = self.view_startup_overlay() {
+                stack([main_surface, overlay]).into()
+            } else {
+                main_surface
+            };
+
+        self.wrap_with_window_resize_handles(window_id, composed_surface)
     }
 
     /// Builds the framed main display region with dedicated top, left, and bottom separators.
@@ -2541,6 +2843,56 @@ impl VulcanWorkbench {
         .width(Fill)
         .height(Fill)
         .into()
+    }
+
+    /// Builds the blocking startup overlay shown while the controller-backed data plane is initializing.
+    /// 构建在控制器数据平面初始化期间展示的阻塞式启动遮罩。
+    fn view_startup_overlay(&self) -> Option<Element<'_, Message>> {
+        match &self.startup_lifecycle {
+            StartupLifecycle::Ready => None,
+            StartupLifecycle::Bootstrapping { message } => Some(
+                container(
+                    container(
+                        column![
+                            text("正在载入 Vulcan Code").size(26),
+                            text("正在准备 vldb 数据平面、LuaSkills 与工作台状态。").size(14),
+                            text(message).size(13),
+                        ]
+                        .spacing(10),
+                    )
+                    .padding([22, 26])
+                    .width(420)
+                    .style(style::startup_overlay_card_style),
+                )
+                .width(Fill)
+                .height(Fill)
+                .center(Fill)
+                .style(style::startup_overlay_backdrop_style)
+                .into(),
+            ),
+            StartupLifecycle::Failed { message } => Some(
+                container(
+                    container(
+                        column![
+                            text("vldb 数据平面初始化失败").size(24),
+                            text(message).size(13),
+                            button("重新初始化")
+                                .style(button::primary)
+                                .on_press(Message::BeginStartupBootstrap),
+                        ]
+                        .spacing(14),
+                    )
+                    .padding([22, 26])
+                    .width(460)
+                    .style(style::startup_overlay_card_style),
+                )
+                .width(Fill)
+                .height(Fill)
+                .center(Fill)
+                .style(style::startup_overlay_backdrop_style)
+                .into(),
+            ),
+        }
     }
 
     /// Builds the currently selected top-level panel shown inside the main display region.
@@ -3552,10 +3904,7 @@ impl VulcanWorkbench {
     /// Builds the transcript stream area shown in the center of the main workbench canvas.
     /// 构建展示在主工作台中央画布中的会话转录流区域。
     fn view_main_canvas_transcript_stream(&self) -> Element<'_, Message> {
-        let messages = self
-            .selected_session_messages()
-            .cloned()
-            .unwrap_or_default();
+        let messages = self.selected_session_messages();
         let runtime_events = self
             .selected_session_runtime_events()
             .cloned()
@@ -3868,7 +4217,9 @@ impl VulcanWorkbench {
         let drag_region = mouse_area(
             container(
                 row![
-                    svg(LOGO_ASSET_PATH).width(20).height(20),
+                    svg(svg::Handle::from_memory(LOGO_ASSET_BYTES))
+                        .width(20)
+                        .height(20),
                     text(title).size(14),
                     space::horizontal(),
                 ]
@@ -5874,6 +6225,168 @@ impl VulcanWorkbench {
             .find(|session| session.id == self.selected_session)
     }
 
+    /// Returns whether one session already exists inside the visible or archived project tree bindings.
+    /// 返回某个会话是否已经存在于可见或归档项目树绑定关系中。
+    fn session_is_materialized(&self, session_id: usize) -> bool {
+        self.task_projects
+            .iter()
+            .chain(self.archived_task_projects.iter())
+            .any(|project| project.session_ids.contains(&session_id))
+    }
+
+    /// Removes transient draft sessions that have not produced any real conversation yet.
+    /// 移除尚未产出任何真实对话的临时草稿会话。
+    fn prune_unmaterialized_sessions(&mut self, retained_session_id: Option<usize>) {
+        let removable_ids = self
+            .sessions
+            .iter()
+            .filter(|session| Some(session.id) != retained_session_id)
+            .filter(|session| !self.session_is_materialized(session.id))
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+
+        if removable_ids.is_empty() {
+            return;
+        }
+
+        self.sessions
+            .retain(|session| !removable_ids.contains(&session.id));
+
+        for session_id in removable_ids {
+            self.session_messages.remove(&session_id);
+            self.session_compactions.remove(&session_id);
+            self.session_runtime_state.remove(&session_id);
+            self.session_runtime_events.remove(&session_id);
+            self.session_run_phases.remove(&session_id);
+            if self.hovered_task_session == Some(session_id) {
+                self.hovered_task_session = None;
+            }
+        }
+
+        self.ensure_valid_selected_session();
+    }
+
+    /// Removes transient draft sessions that still belong to one project but have never been materialized into the visible tree.
+    /// 移除仍归属于某个项目但从未正式进入可见树的临时草稿会话。
+    fn drop_unmaterialized_sessions_for_project(&mut self, project_id: &str) {
+        let removable_ids = self
+            .sessions
+            .iter()
+            .filter(|session| session.project_id.as_deref() == Some(project_id))
+            .filter(|session| !self.session_is_materialized(session.id))
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+
+        for session_id in removable_ids {
+            self.sessions.retain(|session| session.id != session_id);
+            self.session_messages.remove(&session_id);
+            self.session_compactions.remove(&session_id);
+            self.session_runtime_state.remove(&session_id);
+            self.session_runtime_events.remove(&session_id);
+            self.session_run_phases.remove(&session_id);
+        }
+
+        self.ensure_valid_selected_session();
+    }
+
+    /// Materializes one transient draft session into its owning project after the first real user turn arrives.
+    /// 在首条真实用户轮次到来后，将一个临时草稿会话正式归入其所属项目。
+    fn materialize_session_after_first_user_turn(&mut self, session_id: usize) {
+        if self.session_is_materialized(session_id) {
+            return;
+        }
+
+        let Some(project_id) = self
+            .session_by_id(session_id)
+            .and_then(|session| session.project_id.clone())
+        else {
+            return;
+        };
+
+        if let Some(project) = self.task_project_by_id_mut(&project_id) {
+            project.session_ids.insert(0, session_id);
+        } else {
+            return;
+        }
+
+        self.expanded_task_projects.insert(project_id.clone());
+        self.append_session_explore_output(session_id, Some(&project_id));
+    }
+
+    /// Builds one persistence-safe workspace snapshot that excludes transient draft sessions until they become real conversations.
+    /// 构建一份可安全持久化的工作台快照，在临时草稿会话成为真实对话前将其排除在外。
+    fn build_persistable_workspace_snapshot(&self) -> WorkspaceSnapshot {
+        let visible_session_ids = self
+            .task_projects
+            .iter()
+            .flat_map(|project| project.session_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let archived_session_ids = self
+            .archived_sessions
+            .iter()
+            .map(|session| session.id)
+            .collect::<BTreeSet<_>>();
+
+        let visible_sessions = self
+            .sessions
+            .iter()
+            .filter(|session| visible_session_ids.contains(&session.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let visible_session_ids = visible_sessions
+            .iter()
+            .map(|session| session.id)
+            .collect::<BTreeSet<_>>();
+        let selected_session = if visible_session_ids.contains(&self.selected_session)
+            || archived_session_ids.contains(&self.selected_session)
+        {
+            self.selected_session
+        } else {
+            visible_sessions
+                .first()
+                .map(|session| session.id)
+                .or_else(|| self.archived_sessions.first().map(|session| session.id))
+                .unwrap_or(0)
+        };
+
+        WorkspaceSnapshot {
+            task_projects: self.task_projects.clone(),
+            archived_task_projects: self.archived_task_projects.clone(),
+            sessions: visible_sessions,
+            archived_sessions: self.archived_sessions.clone(),
+            session_messages: self
+                .session_messages
+                .iter()
+                .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .map(|(session_id, messages)| (*session_id, messages.clone()))
+                .collect(),
+            archived_session_messages: self.archived_session_messages.clone(),
+            session_compactions: self
+                .session_compactions
+                .iter()
+                .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .map(|(session_id, entries)| (*session_id, entries.clone()))
+                .collect(),
+            archived_session_compactions: self.archived_session_compactions.clone(),
+            session_runtime_state: self
+                .session_runtime_state
+                .iter()
+                .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .map(|(session_id, state)| (*session_id, state.clone()))
+                .collect(),
+            archived_session_runtime_state: self.archived_session_runtime_state.clone(),
+            session_run_phases: self
+                .session_run_phases
+                .iter()
+                .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .map(|(session_id, phase)| (*session_id, *phase))
+                .collect(),
+            expanded_task_projects: self.expanded_task_projects.clone(),
+            selected_session,
+            next_session_id: self.next_session_id,
+        }
+    }
+
     /// Rebuilds all wrapped hunk caches under the current column estimate and refreshes visible buffers.
     /// 在当前列宽估算下重建全部 hunk 折行缓存，并刷新可见缓冲区。
     fn rebuild_diff_code_buffers_for_current_wrap(&mut self) {
@@ -6249,11 +6762,344 @@ impl VulcanWorkbench {
         kind: SessionMessageKind,
         title: impl Into<String>,
         body: impl Into<String>,
-    ) {
+    ) -> String {
+        self.append_session_message_entry(session_id, SessionMessageEntry::new(kind, title, body))
+    }
+
+    /// Appends one hidden internal message node to the target session while preserving stable insertion order.
+    /// 向目标会话追加一条隐藏内部消息节点，并保持稳定插入顺序。
+    fn push_hidden_session_message(
+        &mut self,
+        session_id: usize,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> String {
+        self.append_session_message_entry(
+            session_id,
+            SessionMessageEntry::hidden(kind, record_kind, title, body),
+        )
+    }
+
+    /// Materializes one session message entry with stable runtime metadata and appends it to the transcript map.
+    /// 使用稳定运行时元数据物化一条会话消息项并将其追加到转录映射中。
+    fn append_session_message_entry(
+        &mut self,
+        session_id: usize,
+        entry: SessionMessageEntry,
+    ) -> String {
+        let session_message_count = self
+            .session_messages
+            .get(&session_id)
+            .map(|messages| messages.len())
+            .unwrap_or(0);
+        let message_id = format!(
+            "session-{session_id}-message-{}-{session_message_count}",
+            current_unix_millis_text()
+        );
+        let created_at = current_unix_millis_text();
+        let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
         self.session_messages
             .entry(session_id)
             .or_default()
-            .push(SessionMessageEntry::new(kind, title, body));
+            .push(materialized_entry);
+        message_id
+    }
+
+    /// Returns the mutable runtime-state snapshot for the target session, creating one default row on demand.
+    /// 返回目标会话对应的可变运行时状态快照，并在缺失时按需创建默认行。
+    fn ensure_session_runtime_state_mut(
+        &mut self,
+        session_id: usize,
+    ) -> &mut SessionRuntimeStateEntry {
+        self.session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            })
+    }
+
+    /// Writes one hidden explore output for the target session so project-scoped context survives persistence.
+    /// 为目标会话写入一条隐藏探索输出，从而让项目级上下文在持久化后仍可恢复。
+    fn append_session_explore_output(&mut self, session_id: usize, project_id: Option<&str>) {
+        let explore_body = if let Some(project_id) = project_id {
+            if let Some(project) = self.task_project_by_id(project_id) {
+                format!(
+                    "当前会话绑定到项目 `{}`，根目录为 `{}`，后续 explore/triage 将优先围绕该目录展开。",
+                    project.title, project.path
+                )
+            } else {
+                format!(
+                    "当前会话绑定到项目标识 `{project_id}`，但项目详情暂未加载，后续 explore/triage 将在工作区内兜底。"
+                )
+            }
+        } else {
+            format!(
+                "当前会话未绑定到显式项目目录，后续 explore/triage 将围绕工作区 `{}` 展开。",
+                self.workspace_path
+            )
+        };
+        self.push_hidden_session_message(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ExploreOutput,
+            "Explore 输出",
+            explore_body,
+        );
+    }
+
+    /// Generates a new session title from the latest user prompt when the session title is still auto-managed.
+    /// 当会话标题仍处于自动管理状态时，根据最新用户提示词生成新的会话标题。
+    fn maybe_generate_session_title_from_prompt(
+        &mut self,
+        session_id: usize,
+        prompt: &str,
+    ) -> Option<String> {
+        let generated_title = derive_session_title_from_prompt(prompt)?;
+        let current_title_source = self
+            .session_by_id(session_id)
+            .map(|session| session.title_source)
+            .unwrap_or(SessionTitleSource::Generated);
+
+        if current_title_source == SessionTitleSource::Manual {
+            return None;
+        }
+
+        let current_title = self
+            .session_by_id(session_id)
+            .map(|session| session.title.clone())
+            .unwrap_or_default();
+
+        if generated_title == current_title {
+            return None;
+        }
+
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.title = generated_title.clone();
+            session.title_source = SessionTitleSource::Generated;
+            session.last_updated_label = String::from("刚刚");
+        }
+
+        self.push_hidden_session_message(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::TitleOutput,
+            "标题生成",
+            format!("系统已根据最新用户输入将当前会话标题更新为：{generated_title}"),
+        );
+
+        Some(generated_title)
+    }
+
+    /// Appends one hidden summary output after a real execution run completes.
+    /// 在一次真实执行完成后追加一条隐藏摘要输出。
+    fn append_session_summary_output(&mut self, session_id: usize, report: &ExecutionRunReport) {
+        let summary_body = if report.is_success() {
+            let output_preview = report
+                .assistant_output
+                .as_deref()
+                .map(|output| truncate_preview_lines(output, 3, 220))
+                .unwrap_or_else(|| String::from("模型本轮未返回可见文本输出。"));
+            format!(
+                "本轮执行成功完成。准备摘要：{}。输出摘要：{}",
+                report
+                    .preparation
+                    .as_ref()
+                    .map(|preparation| preparation.summary_rows().join("；"))
+                    .unwrap_or_else(|| String::from("无")),
+                output_preview
+            )
+        } else {
+            format!(
+                "本轮执行失败。错误摘要：{}",
+                report
+                    .error
+                    .as_deref()
+                    .map(|error| truncate_preview_lines(error, 2, 180))
+                    .unwrap_or_else(|| String::from("未知错误"))
+            )
+        };
+
+        self.push_hidden_session_message(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::SummaryOutput,
+            "Summary 输出",
+            summary_body,
+        );
+    }
+
+    /// Updates the runtime-state snapshot for the session from the latest execution preparation.
+    /// 根据最近一次执行准备结果更新该会话的运行时状态快照。
+    fn update_session_runtime_identity_from_preparation(
+        &mut self,
+        session_id: usize,
+        preparation: &ExecutionPreparation,
+    ) {
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.active_agent_id = Some(preparation.agent_id.clone());
+        runtime_state.active_provider_id = Some(preparation.model_blueprint.provider_id.clone());
+        runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+
+    /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
+    /// 当可见历史增长到当前阈值以上时创建一条隐藏压缩摘要。
+    fn maybe_compact_session_history(&mut self, session_id: usize) {
+        let Some(messages) = self.session_messages.get(&session_id).cloned() else {
+            return;
+        };
+        let runtime_state_snapshot = self
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let context_start_index = runtime_state_snapshot
+            .context_start_message_id
+            .as_deref()
+            .and_then(|context_start_message_id| {
+                messages
+                    .iter()
+                    .position(|message| message.id == context_start_message_id)
+            })
+            .unwrap_or(0);
+        let context_candidates = messages[context_start_index..]
+            .iter()
+            .filter(|message| message.contributes_to_context())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if context_candidates.len() < 10 {
+            return;
+        }
+
+        let retained_tail_count = 4usize;
+        if context_candidates.len() <= retained_tail_count {
+            return;
+        }
+
+        let compaction_source =
+            &context_candidates[..context_candidates.len() - retained_tail_count];
+        let source_until_message_id = compaction_source.last().map(|message| message.id.clone());
+        let summary_body = compaction_source
+            .iter()
+            .map(|message| {
+                let label = match message.record_kind {
+                    SessionMessageRecordKind::Transcript => message.kind.label(),
+                    SessionMessageRecordKind::SummaryOutput => "SUMMARY",
+                    SessionMessageRecordKind::ExploreOutput => "EXPLORE",
+                    SessionMessageRecordKind::CompactionSummary => "COMPACTION",
+                    SessionMessageRecordKind::TitleOutput => "TITLE",
+                };
+                format!(
+                    "{} · {}：{}",
+                    label,
+                    message.title,
+                    truncate_preview_lines(&message.body, 1, 88)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let summary_message_id = self.push_hidden_session_message(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::CompactionSummary,
+            "上下文压缩摘要",
+            format!(
+                "以下内容用于后续上下文重建，用户界面默认隐藏。\n\n{}",
+                summary_body
+            ),
+        );
+        let created_at = current_unix_millis_text();
+        let compaction_id = format!("session-{session_id}-compaction-{created_at}");
+        let context_start_message_id = Some(summary_message_id.clone());
+        self.session_compactions
+            .entry(session_id)
+            .or_default()
+            .push(SessionCompactionEntry {
+                id: compaction_id.clone(),
+                source_until_message_id,
+                context_start_message_id: context_start_message_id.clone(),
+                summary_message_id: Some(summary_message_id),
+                created_at: created_at.clone(),
+            });
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.last_compaction_id = Some(compaction_id);
+        runtime_state.context_start_message_id = context_start_message_id;
+        runtime_state.updated_at = created_at;
+    }
+
+    /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
+    /// 从起点或最近一次压缩锚点开始为单个会话构建当前面向模型的上下文历史。
+    fn session_context_history(&self, session_id: usize) -> Vec<SessionMessageEntry> {
+        let Some(messages) = self.session_messages.get(&session_id) else {
+            return Vec::new();
+        };
+        let start_index = self
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| runtime_state.context_start_message_id.as_deref())
+            .and_then(|context_start_message_id| {
+                messages
+                    .iter()
+                    .position(|message| message.id == context_start_message_id)
+            })
+            .unwrap_or(0);
+
+        messages[start_index..]
+            .iter()
+            .filter(|message| message.contributes_to_context())
+            .cloned()
+            .collect()
+    }
+
+    /// Applies one persisted workspace snapshot to the live GUI state in a single place.
+    /// 将一份持久化工作台快照集中应用到当前图形界面状态。
+    fn apply_workspace_snapshot(&mut self, snapshot: WorkspaceSnapshot) {
+        self.task_projects = snapshot.task_projects;
+        self.archived_task_projects = snapshot.archived_task_projects;
+        self.sessions = snapshot.sessions;
+        self.archived_sessions = snapshot.archived_sessions;
+        self.session_messages = snapshot.session_messages;
+        self.archived_session_messages = snapshot.archived_session_messages;
+        self.session_compactions = snapshot.session_compactions;
+        self.archived_session_compactions = snapshot.archived_session_compactions;
+        self.session_runtime_state = snapshot.session_runtime_state;
+        self.archived_session_runtime_state = snapshot.archived_session_runtime_state;
+        self.session_run_phases = snapshot.session_run_phases;
+        self.expanded_task_projects = snapshot.expanded_task_projects;
+        self.selected_session = snapshot.selected_session;
+        self.next_session_id = snapshot.next_session_id;
+        self.hovered_task_project = None;
+        self.hovered_task_session = None;
+        self.active_task_project_drop_target = None;
+        self.pending_task_project_interaction = None;
+        self.dragging_task_project = None;
+        self.suppress_task_session_hover = false;
+        self.session_runtime_events.clear();
+    }
+
+    /// Builds one asynchronous persistence task for the current visible workspace snapshot.
+    /// 为当前可见工作台快照构建一次异步持久化任务。
+    fn persist_workspace_snapshot_task(&self) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        let snapshot = self.build_persistable_workspace_snapshot();
+
+        Task::perform(
+            async move {
+                workspace_store::persist_workspace_snapshot(controller_runtime, &snapshot).await
+            },
+            Message::WorkspaceStatePersisted,
+        )
     }
 
     /// Replaces the runtime-event list for one session with a fresh snapshot.
@@ -6270,9 +7116,20 @@ impl VulcanWorkbench {
 
     /// Returns the currently selected session transcript messages.
     /// 返回当前选中会话的转录消息集合。
-    fn selected_session_messages(&self) -> Option<&Vec<SessionMessageEntry>> {
-        let session_id = self.selected_session().map(|session| session.id)?;
-        self.session_messages.get(&session_id)
+    fn selected_session_messages(&self) -> Vec<SessionMessageEntry> {
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            return Vec::new();
+        };
+        self.session_messages
+            .get(&session_id)
+            .map(|messages| {
+                messages
+                    .iter()
+                    .filter(|message| message.is_visible_to_user())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Returns the currently selected session runtime events.
@@ -6490,6 +7347,8 @@ impl VulcanWorkbench {
     /// Creates one new session under the target project and updates all related prototype state.
     /// 在目标项目下创建一个新会话，并同步更新相关原型状态。
     fn create_task_project_session(&mut self, project_id: &str) {
+        self.prune_unmaterialized_sessions(None);
+
         let session_id = self.next_session_id;
         self.next_session_id += 1;
 
@@ -6502,20 +7361,25 @@ impl VulcanWorkbench {
             0,
             SessionSummary::new(
                 session_id,
-                format!("探索会话 #{session_id}"),
-                "等待注入真实任务与上下文",
+                Some(project_id.to_string()),
+                "新对话",
+                "等待首条真实用户输入后再正式生成会话标题与上下文。",
                 SessionState::Draft,
-                1,
-                1,
+                0,
+                0,
                 "刚刚",
-            ),
+            )
+            .with_title_source(SessionTitleSource::Generated),
         );
 
-        if let Some(project) = self.task_project_by_id_mut(project_id) {
-            project.session_ids.insert(0, session_id);
-        }
-
         self.session_messages.entry(session_id).or_default();
+        self.session_compactions.entry(session_id).or_default();
+        self.session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            });
         self.session_runtime_events.entry(session_id).or_default();
         self.session_run_phases
             .insert(session_id, SessionRunPhase::Idle);
@@ -6525,11 +7389,11 @@ impl VulcanWorkbench {
         self.hovered_task_session = Some(session_id);
         self.suppress_task_session_hover = false;
         self.status_message =
-            format!("已在项目 `{project_title}` 下创建新的探索会话 #{session_id}。");
+            format!("已在项目 `{project_title}` 下创建新的空白对话草稿，等待首条真实输入。");
         self.push_activity(
             ActivityLevel::Info,
-            format!("创建会话 #{session_id}"),
-            format!("项目 `{project_title}` 新增了一个等待编排的会话节点。"),
+            format!("创建新对话草稿 #{session_id}"),
+            format!("项目 `{project_title}` 已创建一个未入列的新生会话，首条真实对话后才会正式加入列表。"),
         );
     }
 
@@ -6551,6 +7415,61 @@ impl VulcanWorkbench {
             self.status_message = format!(
                 "项目 `{}` 已存在，已定位到当前节点。",
                 existing_project.title
+            );
+            return;
+        }
+
+        if let Some(archived_index) = self.archived_task_projects.iter().position(|project| {
+            normalize_task_project_path(Path::new(&project.path))
+                .to_string_lossy()
+                .replace('\\', "/")
+                == normalized_path_text
+        }) {
+            let restored_project = self.archived_task_projects.remove(archived_index);
+            let restored_session_ids = restored_project.session_ids.clone();
+            for session_id in &restored_session_ids {
+                if let Some(index) = self
+                    .archived_sessions
+                    .iter()
+                    .position(|session| session.id == *session_id)
+                {
+                    let restored_session = self.archived_sessions.remove(index);
+                    self.sessions.push(restored_session);
+                }
+
+                if let Some(messages) = self.archived_session_messages.remove(session_id) {
+                    self.session_messages.insert(*session_id, messages);
+                }
+                if let Some(compactions) = self.archived_session_compactions.remove(session_id) {
+                    self.session_compactions.insert(*session_id, compactions);
+                }
+                if let Some(runtime_state) = self.archived_session_runtime_state.remove(session_id)
+                {
+                    self.session_runtime_state
+                        .insert(*session_id, runtime_state);
+                }
+                self.session_run_phases
+                    .insert(*session_id, SessionRunPhase::Idle);
+                self.session_runtime_events.remove(session_id);
+            }
+
+            let restored_title = restored_project.title.clone();
+            let restored_project_id = restored_project.id.clone();
+            self.task_projects.push(restored_project);
+            self.normalize_task_project_orders();
+            self.expanded_task_projects
+                .insert(restored_project_id.clone());
+            self.hovered_task_project = Some(restored_project_id);
+            if let Some(restored_session_id) = restored_session_ids.first().copied() {
+                self.selected_session = restored_session_id;
+                self.hovered_task_session = Some(restored_session_id);
+            }
+            self.ensure_valid_selected_session();
+            self.status_message = format!("已恢复归档项目 `{restored_title}`。");
+            self.push_activity(
+                ActivityLevel::Info,
+                format!("恢复项目 `{restored_title}`"),
+                format!("目录 `{normalized_path_text}` 已从归档列表恢复到项目树。"),
             );
             return;
         }
@@ -6716,6 +7635,75 @@ fn char_display_width_px(character: char) -> f32 {
 /// 为狭窄任务树尾部槽位压缩相对时间标签。
 fn compact_relative_label(value: &str) -> String {
     value.replace(' ', "").trim_end_matches('前').to_string()
+}
+
+/// Returns the current Unix timestamp in milliseconds as one text value.
+/// 以文本值形式返回当前 Unix 毫秒时间戳。
+fn current_unix_millis_text() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_millis()
+        .to_string()
+}
+
+/// Derives one compact session title from the latest user prompt while avoiding empty or noisy labels.
+/// 根据最新用户提示词推导一个紧凑会话标题，并规避空白或噪声标签。
+fn derive_session_title_from_prompt(prompt: &str) -> Option<String> {
+    let normalized = prompt
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(truncate_with_ellipsis(&normalized, 220.0))
+}
+
+/// Truncates one multi-line preview into a compact snippet used by hidden runtime summary nodes.
+/// 将一段多行预览截断为供隐藏运行时摘要节点使用的紧凑片段。
+fn truncate_preview_lines(value: &str, max_lines: usize, max_chars: usize) -> String {
+    let merged = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(max_lines)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let normalized = if merged.is_empty() {
+        value.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        merged
+    };
+
+    if normalized.chars().count() <= max_chars {
+        normalized
+    } else {
+        let truncated = normalized
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        format!("{truncated}…")
+    }
+}
+
+/// Converts one stored session message entry into the lightweight execution-context row sent to the runtime.
+/// 将一条已存储会话消息项转换为发送到运行时的轻量执行上下文行。
+fn session_message_into_execution_context(message: SessionMessageEntry) -> ExecutionContextMessage {
+    ExecutionContextMessage {
+        role: match message.kind {
+            SessionMessageKind::User => String::from("user"),
+            SessionMessageKind::Assistant => String::from("assistant"),
+            SessionMessageKind::Error => String::from("error"),
+        },
+        title: message.title,
+        body: message.body,
+        record_kind: message.record_kind.as_persisted_key().to_string(),
+    }
 }
 
 /// Returns the compact label rendered for one runtime-event kind inside the transcript stream.

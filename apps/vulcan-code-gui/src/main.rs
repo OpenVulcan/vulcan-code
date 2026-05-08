@@ -4,15 +4,19 @@
 mod agent_runtime;
 mod app;
 mod code_view;
+mod data_plane;
 mod diff;
+mod luaskills_runtime;
 mod mcp;
 mod model;
 mod provider_config;
+mod runtime_assets;
 mod skills;
 mod style;
 mod theme;
 mod tooling;
 mod wheel_passthrough;
+mod workspace_store;
 
 /// Starts the GUI application bootstrap sequence.
 /// 启动图形界面应用的引导流程。

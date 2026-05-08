@@ -1,0 +1,334 @@
+# build.ps1 packages vulcan-code-gui into one runnable output directory.
+# build.ps1 用于把 vulcan-code-gui 打包到可运行的 output 目录。
+# Usage:
+# 用法：
+#   .\build.ps1           # debug build
+#   .\build.ps1 release   # release build
+#   .\build.ps1 -Release  # release build
+
+param(
+    [switch]$Release
+)
+
+$ErrorActionPreference = "Stop"
+
+# Relaunch under PowerShell 7 when available so UTF-8 comments and modern syntax stay stable.
+# 若检测到 PowerShell 7，则自动在其下重启，确保 UTF-8 注释与现代语法保持稳定。
+if ($PSVersionTable.PSEdition -ne "Core") {
+    $CurrentScriptPath = $MyInvocation.MyCommand.Path
+    if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        $CurrentScriptPath = $PSCommandPath
+    }
+    $PowerShellCore = Get-Command "pwsh" -ErrorAction SilentlyContinue
+    if ($PowerShellCore -and -not [string]::IsNullOrWhiteSpace($CurrentScriptPath)) {
+        $ForwardedArguments = @()
+        if ($Release) {
+            $ForwardedArguments += "-Release"
+        }
+        elseif ($args.Count -gt 0) {
+            $ForwardedArguments += $args
+        }
+        & $PowerShellCore.Source -NoProfile -ExecutionPolicy Bypass -File $CurrentScriptPath @ForwardedArguments
+        exit $LASTEXITCODE
+    }
+}
+
+$ProjectDir = Split-Path $PSScriptRoot -Parent
+Set-Location $ProjectDir
+
+$BinName = "vulcan-code-gui"
+$BinaryFileName = $BinName
+if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    $BinaryFileName = "$BinName.exe"
+}
+$AppResourcesRoot = Join-Path $ProjectDir "apps\vulcan-code-gui\resources"
+
+if ($Release -or ($args.Count -gt 0 -and $args[0] -eq "release")) {
+    $OutDir = "output\bin"
+    $CargoProfile = "release"
+    $CargoArgs = @("--release")
+    Write-Host "==> Building release..."
+} else {
+    $OutDir = "output\debug"
+    $CargoProfile = "debug"
+    $CargoArgs = @()
+    Write-Host "==> Building debug..."
+}
+
+# Build
+& cargo build @CargoArgs
+
+# Determine binary path
+$BinExe = "target\$CargoProfile\$BinName.exe"
+if (-not (Test-Path $BinExe)) {
+    $BinExe = "target\$CargoProfile\$BinName"
+}
+if (-not (Test-Path $BinExe)) {
+    Write-Error "Build failed: binary not found at $BinExe"
+    exit 1
+}
+
+# Output directories
+$BaseOutDir = "output"
+$LibsOut = "$BaseOutDir\libs"
+$SkillsOut = "$BaseOutDir\skills"
+$PkgOut = "$BaseOutDir\lua_packages"
+$ConfigOut = "$BaseOutDir\config"
+$ResourcesOut = "$BaseOutDir\resources"
+$LicensesOut = "$BaseOutDir\licenses"
+$DependenciesOut = "$BaseOutDir\dependencies"
+$DatabasesOut = "$BaseOutDir\databases"
+$StateOut = "$BaseOutDir\state"
+$TempOut = "$BaseOutDir\temp"
+$LogsOut = "$BaseOutDir\logs"
+$LuaSkillsRuntimeRoot = Join-Path $ProjectDir "third_party\luaskills_runtime"
+
+function Reset-DirectoryContents {
+    <#
+    .SYNOPSIS
+    Ensure one directory exists and remove stale contents before a structured sync.
+    确保目录存在，并在结构化同步前清理旧内容。
+
+    .PARAMETER Path
+    Directory path to reset.
+    需要重置的目录路径。
+    #>
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+        return
+    }
+
+    Get-ChildItem -Force -LiteralPath $Path -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force
+    }
+}
+
+function Copy-DirectoryContents {
+    <#
+    .SYNOPSIS
+    Copy direct directory contents into a destination while preserving package layout.
+    将目录直属内容复制到目标目录，并保持包布局。
+
+    .PARAMETER Source
+    Source directory.
+    来源目录。
+
+    .PARAMETER Destination
+    Destination directory.
+    目标目录。
+    #>
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source)) {
+        return $false
+    }
+
+    Reset-DirectoryContents -Path $Destination
+    Get-ChildItem -Force -LiteralPath $Source | ForEach-Object {
+        Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $Destination
+    }
+    return $true
+}
+
+function Merge-DirectoryContents {
+    <#
+    .SYNOPSIS
+    Copy direct directory contents into a destination without clearing previously merged assets.
+    将目录直属内容复制到目标目录，并保留此前已合并的资产。
+
+    .PARAMETER Source
+    Source directory.
+    来源目录。
+
+    .PARAMETER Destination
+    Destination directory.
+    目标目录。
+    #>
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source)) {
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
+
+    Get-ChildItem -Force -LiteralPath $Source | ForEach-Object {
+        Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $Destination
+    }
+    return $true
+}
+
+function Enable-OutputModelConfigForLocalTesting {
+    <#
+    .SYNOPSIS
+    Enable model capabilities only in the built output runtime config for local smoke testing.
+    仅在构建后的输出运行配置中启用模型能力，方便本地冒烟测试。
+
+    .PARAMETER ConfigDirectory
+    Output config directory that may contain model_config.yaml.
+    可能包含 model_config.yaml 的输出配置目录。
+    #>
+    param([string]$ConfigDirectory)
+
+    $ModelConfigOut = Join-Path $ConfigDirectory "model_config.yaml"
+    if (-not (Test-Path -LiteralPath $ModelConfigOut)) {
+        return
+    }
+
+    $Content = Get-Content -LiteralPath $ModelConfigOut -Raw
+    $Content = $Content -replace '(?m)^  enabled:\s*false\s*$', '  enabled: true'
+    $Content = $Content -replace '(?m)^    enabled:\s*false\s*$', '    enabled: true'
+    Set-Content -LiteralPath $ModelConfigOut -Value $Content -Encoding UTF8
+    Write-Host "==> Output model_config.yaml enabled for local model smoke tests"
+}
+
+# Ensure output directories exist
+if (-not (Test-Path $BaseOutDir)) { New-Item -ItemType Directory -Path $BaseOutDir -Force | Out-Null }
+if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
+foreach ($dir in @($LibsOut, $SkillsOut, $PkgOut, $ConfigOut, $ResourcesOut, $LicensesOut, $DependenciesOut, $DatabasesOut, $StateOut, $TempOut, $LogsOut)) {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+}
+foreach ($dir in @(
+    "$DependenciesOut\\shared\\tools",
+    "$DependenciesOut\\shared\\lua",
+    "$DependenciesOut\\shared\\ffi",
+    "$DependenciesOut\\skill",
+    "$DatabasesOut\\sqlite",
+    "$DatabasesOut\\lancedb",
+    "$StateOut\\skills"
+)) {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+}
+
+# Copy binary
+Copy-Item -Force $BinExe (Join-Path $OutDir $BinaryFileName)
+Write-Host "==> Binary copied to $OutDir\"
+
+# Sync official LuaSkills runtime package exports to output/.
+# Build packaging treats third_party/luaskills_runtime as a caller-managed asset root and copies it as-is.
+# 构建打包会把 third_party/luaskills_runtime 视为调用方自管的资产根目录，并按现状直接同步。
+# Cross-platform validation is intentionally omitted because forks may replace lua_packages/runtime payloads with custom layouts.
+# 这里有意不做跨平台校验，因为 fork 方可能会用自定义布局替换 lua_packages/runtime 载荷。
+if (Test-Path -LiteralPath $LuaSkillsRuntimeRoot) {
+    $RuntimeSyncs = @()
+    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "lua_packages"); destination = $PkgOut; name = "lua_packages" }
+    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "libs"); destination = $LibsOut; name = "libs" }
+    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "resources"); destination = $ResourcesOut; name = "resources" }
+    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "licenses"); destination = $LicensesOut; name = "licenses" }
+
+    foreach ($Sync in $RuntimeSyncs) {
+        if ((Copy-DirectoryContents -Source $Sync.source -Destination $Sync.destination)) {
+            Write-Host "==> LuaSkills runtime $($Sync.name) synced to $($Sync.destination)\"
+        }
+        else {
+            Write-Host "==> LuaSkills runtime package has no $($Sync.name) directory"
+        }
+    }
+}
+else {
+    Write-Host "==> No third_party/luaskills_runtime found (run make deps first)"
+}
+
+# Sync application resources that must stay editable at runtime.
+# 同步运行时必须保持可编辑的应用资源。
+if (Test-Path (Join-Path $AppResourcesRoot "providers")) {
+    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "providers") -Destination (Join-Path $ResourcesOut "providers") | Out-Null
+    Write-Host "==> Provider catalog synced to $(Join-Path $ResourcesOut 'providers')\"
+}
+else {
+    Write-Host "==> No app provider catalog directory found"
+}
+
+if (Test-Path (Join-Path $AppResourcesRoot "vulcan-mark.svg")) {
+    Copy-Item -Force (Join-Path $AppResourcesRoot "vulcan-mark.svg") (Join-Path $ResourcesOut "vulcan-mark.svg")
+    Write-Host "==> App logo asset synced to $ResourcesOut\"
+}
+
+# Sync base config files to output/config/
+# 同步基础配置文件到 output/config/
+if (Test-Path "config") {
+    if (-not (Test-Path $ConfigOut)) { New-Item -ItemType Directory -Path $ConfigOut -Force | Out-Null }
+    Copy-Item -Force -Recurse "config\*" "$ConfigOut\"
+    Enable-OutputModelConfigForLocalTesting -ConfigDirectory $ConfigOut
+    Write-Host "==> Base configs synced to $ConfigOut\"
+}
+else {
+    Write-Host "==> No config directory found"
+}
+
+# Sync legacy runtime config files to output/config/ as an additive fallback.
+# 将旧版 runtime 配置文件追加同步到 output/config/ 作为兼容回退。
+if (Test-Path "runtime\configs") {
+    Merge-DirectoryContents -Source "runtime\configs" -Destination $ConfigOut | Out-Null
+    Enable-OutputModelConfigForLocalTesting -ConfigDirectory $ConfigOut
+    Write-Host "==> Legacy runtime configs merged into $ConfigOut\"
+}
+
+# Sync runtime shared resources to output/resources/
+if (Test-Path "runtime\resources") {
+    Merge-DirectoryContents -Source "runtime\resources" -Destination $ResourcesOut | Out-Null
+    Write-Host "==> Runtime shared resources synced to $ResourcesOut\"
+}
+else {
+    Write-Host "==> No runtime/resources directory found"
+}
+
+# Sync runtime state records to output/state/
+# 同步运行时状态记录到 output/state/
+if (Test-Path "runtime\state") {
+    Copy-Item -Force -Recurse "runtime\state\*" "$StateOut\"
+    Write-Host "==> Runtime state synced to $StateOut\"
+}
+else {
+    Write-Host "==> No runtime/state directory found"
+}
+
+# Sync runtime Lua skills to output/skills/
+if (Test-Path "runtime\skills") {
+    Copy-DirectoryContents -Source "runtime\skills" -Destination $SkillsOut | Out-Null
+    Write-Host "==> Runtime Lua skills synced to $SkillsOut\"
+}
+else {
+    Write-Host "==> No runtime/skills directory found"
+}
+
+# Prepare output/bin/tools/ as the host runtime tool directory.
+$HostToolsOut = Join-Path $BaseOutDir "bin\tools"
+if (-not (Test-Path $HostToolsOut)) { New-Item -ItemType Directory -Path $HostToolsOut -Force | Out-Null }
+Write-Host "==> Host tool output directory prepared at $HostToolsOut\"
+
+# Copy the host-installed vldb-controller executable to output/bin/ when the dependency bootstrap has prepared it.
+$ControllerOut = Join-Path $BaseOutDir "bin"
+if (-not (Test-Path $ControllerOut)) { New-Item -ItemType Directory -Path $ControllerOut -Force | Out-Null }
+$ControllerBinaryName = "vldb-controller"
+if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    $ControllerBinaryName = "vldb-controller.exe"
+}
+$ControllerBinarySource = Join-Path $ProjectDir "third_party\vldb_controller\bin\$ControllerBinaryName"
+if (Test-Path $ControllerBinarySource) {
+    if (-not (Get-Item -LiteralPath $ControllerBinarySource).PSIsContainer) {
+        try {
+            Copy-Item -Force $ControllerBinarySource "$ControllerOut\$ControllerBinaryName" -ErrorAction Stop
+            Write-Host "==> vldb-controller synced to $ControllerOut\"
+        } catch {
+            Write-Warning "vldb-controller is currently running or locked; keeping the existing output binary and continuing."
+        }
+    } else {
+        Write-Error "vldb-controller source path is not a file: $ControllerBinarySource"
+        exit 1
+    }
+} else {
+    Write-Host "==> No third_party/vldb_controller/bin/$ControllerBinaryName found"
+}
+
+Write-Host "==> Done. Binary: $(Join-Path $OutDir $BinaryFileName)"

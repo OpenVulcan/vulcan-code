@@ -13,6 +13,8 @@ iced = { version = "0.14.0", default-features = false, features = ["wgpu", "toki
 rig = { package = "rig-core", version = "0.36.0", default-features = false, features = ["reqwest", "rustls", "derive"] }
 rig-compose = "0.2.0"
 rig-mcp = "0.1.2"
+vldb-controller-client = "0.2.1"
+luaskills = { path = "../../projects/vulcan-luaskills" }
 async-trait = "0.1.89"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
