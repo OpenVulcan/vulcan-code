@@ -20,6 +20,10 @@ use crate::provider_config::{
     PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedProviderEntry,
     PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
 };
+use crate::skills::{
+    CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
+    SummarySkillInput, TitleAgentInput,
+};
 use crate::style;
 use crate::theme;
 use crate::wheel_passthrough::WheelPassthrough;
@@ -448,6 +452,9 @@ pub struct VulcanWorkbench {
     /// Compose runtime foundation derived from the shared configuration file.
     /// 根据共享配置文件构建出的 compose 运行时基础架构。
     runtime_foundation: RuntimeFoundation,
+    /// Dedicated title, explore, summary, and compaction execution chain for session-derived outputs.
+    /// 负责会话派生输出的专用标题、探索、摘要与压缩执行链。
+    session_skill_chain: SessionDerivedSkillChain,
     /// Currently selected top-level panel shown in the main display region.
     /// 当前显示在主显示区域中的顶层面板类型。
     active_main_panel: MainDisplayPanel,
@@ -1189,12 +1196,18 @@ enum Message {
     /// Archives one project node inside the main task-drawer tree.
     /// 归档主任务抽屉树中的某个项目节点。
     ArchiveTaskProject(String),
+    /// Restores one archived project node back into the visible main task-drawer tree.
+    /// 将一个已归档项目节点恢复回可见的主任务抽屉树。
+    RestoreTaskProject(String),
     /// Renames one session row inside the main task-drawer tree using a lightweight placeholder flow.
     /// 使用轻量占位流程重命名主任务抽屉树中的某个会话行。
     RenameTaskSession(usize),
     /// Archives one session row inside the main task-drawer tree.
     /// 归档主任务抽屉树中的某个会话行。
     ArchiveTaskSession(usize),
+    /// Restores one archived session row back into its visible owning project.
+    /// 将一个已归档会话行恢复回其可见的所属项目。
+    RestoreTaskSession(usize),
     /// Workspace scan action requested.
     /// 请求扫描工作区。
     ScanWorkspace,
@@ -1406,6 +1419,7 @@ impl VulcanWorkbench {
                 provider_configuration,
                 controller_configuration,
                 runtime_foundation,
+                session_skill_chain: SessionDerivedSkillChain::default(),
                 active_main_panel: MainDisplayPanel::Main,
                 selected_provider,
                 provider_form,
@@ -2392,6 +2406,10 @@ impl VulcanWorkbench {
                 }
                 self.persist_workspace_snapshot_task()
             }
+            Message::RestoreTaskProject(project_id) => {
+                let _ = self.restore_archived_task_project_by_id(&project_id);
+                self.persist_workspace_snapshot_task()
+            }
             Message::RenameTaskSession(session_id) => {
                 if let Some(session) = self
                     .sessions
@@ -2461,6 +2479,10 @@ impl VulcanWorkbench {
                 self.suppress_task_session_hover = false;
                 self.ensure_valid_selected_session();
                 self.status_message = format!("已归档会话 `{archived_title}`。");
+                self.persist_workspace_snapshot_task()
+            }
+            Message::RestoreTaskSession(session_id) => {
+                let _ = self.restore_archived_task_session(session_id);
                 self.persist_workspace_snapshot_task()
             }
             Message::ScanWorkspace => {
@@ -3206,6 +3228,7 @@ impl VulcanWorkbench {
         let mut tree = column![].spacing(1).width(Fill);
         let pinned_projects = self.task_projects.iter().filter(|project| project.pinned);
         let regular_projects = self.task_projects.iter().filter(|project| !project.pinned);
+        let archived_projects = self.archived_task_projects.iter();
 
         let has_pinned = self.task_projects.iter().any(|project| project.pinned);
 
@@ -3230,6 +3253,17 @@ impl VulcanWorkbench {
             );
 
         tree = tree.push(self.view_main_task_project_section_tail(false));
+
+        if !self.archived_task_projects.is_empty() {
+            tree = tree
+                .push(space::vertical().height(6))
+                .push(self.view_main_task_group_label("归档项目", false))
+                .push(
+                    archived_projects.fold(column![].spacing(1).width(Fill), |column, project| {
+                        column.push(self.view_archived_task_project_row(project))
+                    }),
+                );
+        }
 
         container(tree).width(Fill).into()
     }
@@ -3533,7 +3567,15 @@ impl VulcanWorkbench {
         &'a self,
         project: &'a TaskProjectSummary,
     ) -> Element<'a, Message> {
-        if project.session_ids.is_empty() {
+        let has_visible_sessions = !project.session_ids.is_empty();
+        let archived_sessions = self
+            .archived_sessions
+            .iter()
+            .filter(|session| session.project_id.as_deref() == Some(project.id.as_str()))
+            .collect::<Vec<_>>();
+        let has_archived_sessions = !archived_sessions.is_empty();
+
+        if !has_visible_sessions && !has_archived_sessions {
             return container(text("暂无对话").size(13).style(|theme: &Theme| {
                 iced::widget::text::Style {
                     color: Some(
@@ -3556,17 +3598,32 @@ impl VulcanWorkbench {
             .into();
         }
 
-        project
-            .session_ids
-            .iter()
-            .fold(column![].spacing(4).width(Fill), |column, session_id| {
+        let mut content = project.session_ids.iter().fold(
+            column![].spacing(4).width(Fill),
+            |column, session_id| {
                 if let Some(session) = self.session_by_id(*session_id) {
                     column.push(self.view_main_task_session_tree_row(session))
                 } else {
                     column
                 }
-            })
-            .into()
+            },
+        );
+
+        if has_archived_sessions {
+            if has_visible_sessions {
+                content = content.push(space::vertical().height(4));
+            }
+            content = content
+                .push(self.view_main_task_archived_session_group_label())
+                .push(archived_sessions.into_iter().fold(
+                    column![].spacing(4).width(Fill),
+                    |column, session| {
+                        column.push(self.view_archived_task_session_tree_row(session))
+                    },
+                ));
+        }
+
+        content.into()
     }
 
     /// Builds one tree row shown under a project node inside the main task drawer.
@@ -3721,6 +3778,237 @@ impl VulcanWorkbench {
                     Message::ArchiveTaskSession(session.id),
                 ),
             ]
+            .spacing(2)
+            .width(menu_width),
+        )
+        .padding([6, 6])
+        .width(menu_width)
+        .style(style::main_task_tree_menu_style)
+        .into()
+    }
+
+    /// Builds the compact archived-session subgroup label rendered inside one expanded project branch.
+    /// 构建展示在某个展开项目分支内部的紧凑归档会话分组标签。
+    fn view_main_task_archived_session_group_label(&self) -> Element<'_, Message> {
+        container(text("归档会话").size(12).style(|theme: &Theme| {
+            iced::widget::text::Style {
+                color: Some(
+                    theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.5),
+                ),
+            }
+        }))
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 2.0,
+            bottom: 0.0,
+            left: 35.0,
+        })
+        .width(Fill)
+        .into()
+    }
+
+    /// Builds one archived project row that can be restored back into the visible task tree.
+    /// 构建一条可恢复回可见任务树的归档项目行。
+    fn view_archived_task_project_row<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        let is_hovered = self.hovered_task_project.as_deref() == Some(project.id.as_str());
+        let folder_icon = codicon::folder()
+            .size(16)
+            .line_height(1.0)
+            .style(|theme: &Theme| iced::widget::text::Style {
+                color: Some(
+                    theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.7),
+                ),
+            });
+        let project_label = text(truncate_with_ellipsis(
+            &project.title,
+            self.main_task_project_title_limit_width() + 26.0,
+        ))
+        .size(15)
+        .width(Fill)
+        .wrapping(iced::advanced::text::Wrapping::None)
+        .style(|theme: &Theme| iced::widget::text::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.74),
+            ),
+        });
+
+        ContextMenu::new(
+            mouse_area(
+                container(
+                    row![
+                        folder_icon,
+                        project_label,
+                        text("已归档").size(12).style(|theme: &Theme| {
+                            iced::widget::text::Style {
+                                color: Some(
+                                    theme
+                                        .extended_palette()
+                                        .background
+                                        .base
+                                        .text
+                                        .scale_alpha(0.45),
+                                ),
+                            }
+                        }),
+                    ]
+                    .spacing(8)
+                    .align_y(Center),
+                )
+                .padding(iced::Padding {
+                    top: 3.0,
+                    right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                    bottom: 3.0,
+                    left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                })
+                .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
+                .width(Fill)
+                .style(move |theme| {
+                    style::main_task_tree_project_row_style(theme, is_hovered, false)
+                }),
+            )
+            .on_press(Message::RestoreTaskProject(project.id.clone()))
+            .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
+            .on_exit(Message::TaskProjectHovered(None)),
+            move || self.view_archived_task_project_menu(project),
+        )
+        .into()
+    }
+
+    /// Builds one archived session row that can be restored back into its visible project.
+    /// 构建一条可恢复回其可见项目中的归档会话行。
+    fn view_archived_task_session_tree_row<'a>(
+        &'a self,
+        session: &'a SessionSummary,
+    ) -> Element<'a, Message> {
+        let is_hovered =
+            self.dragging_task_project.is_none() && self.hovered_task_session == Some(session.id);
+        let session_label = text(truncate_with_ellipsis(
+            &session.title,
+            self.main_task_session_title_limit_width() + 40.0,
+        ))
+        .size(14)
+        .width(Fill)
+        .wrapping(iced::advanced::text::Wrapping::None)
+        .style(|theme: &Theme| iced::widget::text::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.72),
+            ),
+        });
+
+        let session_button = button(
+            container(
+                row![
+                    Self::view_main_task_session_status_icon(session.status),
+                    session_label,
+                    space::horizontal(),
+                    text("已归档").size(12).style(|theme: &Theme| {
+                        iced::widget::text::Style {
+                            color: Some(
+                                theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(0.45),
+                            ),
+                        }
+                    }),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding(iced::Padding {
+                top: 3.0,
+                right: 10.0,
+                bottom: 3.0,
+                left: 35.0,
+            })
+            .width(Fill),
+        )
+        .padding(0)
+        .width(Fill)
+        .style(move |theme, status| {
+            style::main_task_tree_session_button_style(theme, status, false, is_hovered)
+        })
+        .on_press(Message::RestoreTaskSession(session.id));
+
+        ContextMenu::new(
+            mouse_area(
+                container(session_button)
+                    .height(MAIN_TASK_SESSION_ROW_HEIGHT)
+                    .width(Fill),
+            )
+            .on_enter(Message::TaskSessionHovered(Some(session.id)))
+            .on_exit(Message::TaskSessionHovered(None)),
+            move || self.view_archived_task_session_menu(session),
+        )
+        .into()
+    }
+
+    /// Builds the overflow menu displayed for one archived project row.
+    /// 构建显示在某个归档项目行上的溢出菜单。
+    fn view_archived_task_project_menu<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        let menu_width = 200.0;
+
+        container(
+            column![
+                Self::view_main_task_tree_menu_button(
+                    "恢复",
+                    Message::RestoreTaskProject(project.id.clone()),
+                ),
+                Self::view_main_task_tree_menu_button(
+                    "从资源管理器中打开",
+                    Message::OpenTaskProjectDirectory(project.id.clone()),
+                ),
+            ]
+            .spacing(2)
+            .width(menu_width),
+        )
+        .padding([6, 6])
+        .width(menu_width)
+        .style(style::main_task_tree_menu_style)
+        .into()
+    }
+
+    /// Builds the overflow menu displayed for one archived session row.
+    /// 构建显示在某个归档会话行上的溢出菜单。
+    fn view_archived_task_session_menu<'a>(
+        &'a self,
+        session: &'a SessionSummary,
+    ) -> Element<'a, Message> {
+        let menu_width = 200.0;
+
+        container(
+            column![Self::view_main_task_tree_menu_button(
+                "恢复",
+                Message::RestoreTaskSession(session.id),
+            )]
             .spacing(2)
             .width(menu_width),
         )
@@ -6807,6 +7095,22 @@ impl VulcanWorkbench {
         message_id
     }
 
+    /// Appends one hidden derived session record produced by the dedicated session skill chain.
+    /// 追加一条由独立会话技能链产出的隐藏派生会话记录。
+    fn push_session_derived_record(
+        &mut self,
+        session_id: usize,
+        record: SessionDerivedRecord,
+    ) -> String {
+        self.push_hidden_session_message(
+            session_id,
+            record.kind,
+            record.record_kind,
+            record.title,
+            record.body,
+        )
+    }
+
     /// Returns the mutable runtime-state snapshot for the target session, creating one default row on demand.
     /// 返回目标会话对应的可变运行时状态快照，并在缺失时按需创建默认行。
     fn ensure_session_runtime_state_mut(
@@ -6824,30 +7128,17 @@ impl VulcanWorkbench {
     /// Writes one hidden explore output for the target session so project-scoped context survives persistence.
     /// 为目标会话写入一条隐藏探索输出，从而让项目级上下文在持久化后仍可恢复。
     fn append_session_explore_output(&mut self, session_id: usize, project_id: Option<&str>) {
-        let explore_body = if let Some(project_id) = project_id {
-            if let Some(project) = self.task_project_by_id(project_id) {
-                format!(
-                    "当前会话绑定到项目 `{}`，根目录为 `{}`，后续 explore/triage 将优先围绕该目录展开。",
-                    project.title, project.path
-                )
-            } else {
-                format!(
-                    "当前会话绑定到项目标识 `{project_id}`，但项目详情暂未加载，后续 explore/triage 将在工作区内兜底。"
-                )
-            }
-        } else {
-            format!(
-                "当前会话未绑定到显式项目目录，后续 explore/triage 将围绕工作区 `{}` 展开。",
-                self.workspace_path
-            )
+        let derived_record = {
+            let project = project_id
+                .and_then(|resolved_project_id| self.task_project_by_id(resolved_project_id));
+            self.session_skill_chain
+                .run_explore_skill(ExploreSkillInput {
+                    workspace_path: &self.workspace_path,
+                    project_id,
+                    project,
+                })
         };
-        self.push_hidden_session_message(
-            session_id,
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::ExploreOutput,
-            "Explore 输出",
-            explore_body,
-        );
+        self.push_session_derived_record(session_id, derived_record);
     }
 
     /// Generates a new session title from the latest user prompt when the session title is still auto-managed.
@@ -6857,82 +7148,37 @@ impl VulcanWorkbench {
         session_id: usize,
         prompt: &str,
     ) -> Option<String> {
-        let generated_title = derive_session_title_from_prompt(prompt)?;
-        let current_title_source = self
+        let (current_title, current_title_source) = self
             .session_by_id(session_id)
-            .map(|session| session.title_source)
-            .unwrap_or(SessionTitleSource::Generated);
-
-        if current_title_source == SessionTitleSource::Manual {
-            return None;
-        }
-
-        let current_title = self
-            .session_by_id(session_id)
-            .map(|session| session.title.clone())
-            .unwrap_or_default();
-
-        if generated_title == current_title {
-            return None;
-        }
+            .map(|session| (session.title.clone(), session.title_source))
+            .unwrap_or_else(|| (String::new(), SessionTitleSource::Generated));
+        let result = self.session_skill_chain.run_title_agent(TitleAgentInput {
+            current_title: &current_title,
+            title_source: current_title_source,
+            prompt,
+        })?;
 
         if let Some(session) = self
             .sessions
             .iter_mut()
             .find(|session| session.id == session_id)
         {
-            session.title = generated_title.clone();
+            session.title = result.generated_title.clone();
             session.title_source = SessionTitleSource::Generated;
             session.last_updated_label = String::from("刚刚");
         }
+        self.push_session_derived_record(session_id, result.hidden_record);
 
-        self.push_hidden_session_message(
-            session_id,
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::TitleOutput,
-            "标题生成",
-            format!("系统已根据最新用户输入将当前会话标题更新为：{generated_title}"),
-        );
-
-        Some(generated_title)
+        Some(result.generated_title)
     }
 
     /// Appends one hidden summary output after a real execution run completes.
     /// 在一次真实执行完成后追加一条隐藏摘要输出。
     fn append_session_summary_output(&mut self, session_id: usize, report: &ExecutionRunReport) {
-        let summary_body = if report.is_success() {
-            let output_preview = report
-                .assistant_output
-                .as_deref()
-                .map(|output| truncate_preview_lines(output, 3, 220))
-                .unwrap_or_else(|| String::from("模型本轮未返回可见文本输出。"));
-            format!(
-                "本轮执行成功完成。准备摘要：{}。输出摘要：{}",
-                report
-                    .preparation
-                    .as_ref()
-                    .map(|preparation| preparation.summary_rows().join("；"))
-                    .unwrap_or_else(|| String::from("无")),
-                output_preview
-            )
-        } else {
-            format!(
-                "本轮执行失败。错误摘要：{}",
-                report
-                    .error
-                    .as_deref()
-                    .map(|error| truncate_preview_lines(error, 2, 180))
-                    .unwrap_or_else(|| String::from("未知错误"))
-            )
-        };
-
-        self.push_hidden_session_message(
-            session_id,
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::SummaryOutput,
-            "Summary 输出",
-            summary_body,
-        );
+        let derived_record = self
+            .session_skill_chain
+            .run_summary_skill(SummarySkillInput { report });
+        self.push_session_derived_record(session_id, derived_record);
     }
 
     /// Updates the runtime-state snapshot for the session from the latest execution preparation.
@@ -6960,75 +7206,26 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
-        let context_start_index = runtime_state_snapshot
-            .context_start_message_id
-            .as_deref()
-            .and_then(|context_start_message_id| {
-                messages
-                    .iter()
-                    .position(|message| message.id == context_start_message_id)
-            })
-            .unwrap_or(0);
-        let context_candidates = messages[context_start_index..]
-            .iter()
-            .filter(|message| message.contributes_to_context())
-            .cloned()
-            .collect::<Vec<_>>();
-
-        if context_candidates.len() < 10 {
+        let Some(compaction_result) =
+            self.session_skill_chain
+                .run_compaction_skill(CompactionSkillInput {
+                    session_id,
+                    messages: &messages,
+                    runtime_state: &runtime_state_snapshot,
+                })
+        else {
             return;
-        }
-
-        let retained_tail_count = 4usize;
-        if context_candidates.len() <= retained_tail_count {
-            return;
-        }
-
-        let compaction_source =
-            &context_candidates[..context_candidates.len() - retained_tail_count];
-        let source_until_message_id = compaction_source.last().map(|message| message.id.clone());
-        let summary_body = compaction_source
-            .iter()
-            .map(|message| {
-                let label = match message.record_kind {
-                    SessionMessageRecordKind::Transcript => message.kind.label(),
-                    SessionMessageRecordKind::SummaryOutput => "SUMMARY",
-                    SessionMessageRecordKind::ExploreOutput => "EXPLORE",
-                    SessionMessageRecordKind::CompactionSummary => "COMPACTION",
-                    SessionMessageRecordKind::TitleOutput => "TITLE",
-                };
-                format!(
-                    "{} · {}：{}",
-                    label,
-                    message.title,
-                    truncate_preview_lines(&message.body, 1, 88)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let summary_message_id = self.push_hidden_session_message(
-            session_id,
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::CompactionSummary,
-            "上下文压缩摘要",
-            format!(
-                "以下内容用于后续上下文重建，用户界面默认隐藏。\n\n{}",
-                summary_body
-            ),
-        );
-        let created_at = current_unix_millis_text();
-        let compaction_id = format!("session-{session_id}-compaction-{created_at}");
-        let context_start_message_id = Some(summary_message_id.clone());
+        };
+        let summary_message_id =
+            self.push_session_derived_record(session_id, compaction_result.summary_record.clone());
+        let checkpoint = compaction_result.materialize_checkpoint(summary_message_id);
+        let created_at = checkpoint.created_at.clone();
+        let compaction_id = checkpoint.id.clone();
+        let context_start_message_id = checkpoint.context_start_message_id.clone();
         self.session_compactions
             .entry(session_id)
             .or_default()
-            .push(SessionCompactionEntry {
-                id: compaction_id.clone(),
-                source_until_message_id,
-                context_start_message_id: context_start_message_id.clone(),
-                summary_message_id: Some(summary_message_id),
-                created_at: created_at.clone(),
-            });
+            .push(checkpoint);
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
         runtime_state.last_compaction_id = Some(compaction_id);
         runtime_state.context_start_message_id = context_start_message_id;
@@ -7425,52 +7622,8 @@ impl VulcanWorkbench {
                 .replace('\\', "/")
                 == normalized_path_text
         }) {
-            let restored_project = self.archived_task_projects.remove(archived_index);
-            let restored_session_ids = restored_project.session_ids.clone();
-            for session_id in &restored_session_ids {
-                if let Some(index) = self
-                    .archived_sessions
-                    .iter()
-                    .position(|session| session.id == *session_id)
-                {
-                    let restored_session = self.archived_sessions.remove(index);
-                    self.sessions.push(restored_session);
-                }
-
-                if let Some(messages) = self.archived_session_messages.remove(session_id) {
-                    self.session_messages.insert(*session_id, messages);
-                }
-                if let Some(compactions) = self.archived_session_compactions.remove(session_id) {
-                    self.session_compactions.insert(*session_id, compactions);
-                }
-                if let Some(runtime_state) = self.archived_session_runtime_state.remove(session_id)
-                {
-                    self.session_runtime_state
-                        .insert(*session_id, runtime_state);
-                }
-                self.session_run_phases
-                    .insert(*session_id, SessionRunPhase::Idle);
-                self.session_runtime_events.remove(session_id);
-            }
-
-            let restored_title = restored_project.title.clone();
-            let restored_project_id = restored_project.id.clone();
-            self.task_projects.push(restored_project);
-            self.normalize_task_project_orders();
-            self.expanded_task_projects
-                .insert(restored_project_id.clone());
-            self.hovered_task_project = Some(restored_project_id);
-            if let Some(restored_session_id) = restored_session_ids.first().copied() {
-                self.selected_session = restored_session_id;
-                self.hovered_task_session = Some(restored_session_id);
-            }
-            self.ensure_valid_selected_session();
-            self.status_message = format!("已恢复归档项目 `{restored_title}`。");
-            self.push_activity(
-                ActivityLevel::Info,
-                format!("恢复项目 `{restored_title}`"),
-                format!("目录 `{normalized_path_text}` 已从归档列表恢复到项目树。"),
-            );
+            let restored_project_id = self.archived_task_projects[archived_index].id.clone();
+            let _ = self.restore_archived_task_project_by_id(&restored_project_id);
             return;
         }
 
@@ -7548,6 +7701,122 @@ impl VulcanWorkbench {
             }
             counter += 1;
         }
+    }
+
+    /// Restores one archived project node together with all persisted session artifacts back into the visible tree.
+    /// 将一个归档项目节点连同其全部持久化会话工件恢复回可见树。
+    fn restore_archived_task_project_by_id(&mut self, project_id: &str) -> bool {
+        let Some(archived_index) = self
+            .archived_task_projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return false;
+        };
+
+        let restored_project = self.archived_task_projects.remove(archived_index);
+        let restored_session_ids = restored_project.session_ids.clone();
+        let restored_title = restored_project.title.clone();
+        let restored_project_id = restored_project.id.clone();
+
+        for session_id in &restored_session_ids {
+            if let Some(index) = self
+                .archived_sessions
+                .iter()
+                .position(|session| session.id == *session_id)
+            {
+                let restored_session = self.archived_sessions.remove(index);
+                self.sessions.push(restored_session);
+            }
+
+            if let Some(messages) = self.archived_session_messages.remove(session_id) {
+                self.session_messages.insert(*session_id, messages);
+            }
+            if let Some(compactions) = self.archived_session_compactions.remove(session_id) {
+                self.session_compactions.insert(*session_id, compactions);
+            }
+            if let Some(runtime_state) = self.archived_session_runtime_state.remove(session_id) {
+                self.session_runtime_state
+                    .insert(*session_id, runtime_state);
+            }
+            self.session_run_phases
+                .insert(*session_id, SessionRunPhase::Idle);
+            self.session_runtime_events.remove(session_id);
+        }
+
+        self.task_projects.push(restored_project);
+        self.normalize_task_project_orders();
+        self.expanded_task_projects
+            .insert(restored_project_id.clone());
+        self.hovered_task_project = Some(restored_project_id);
+        if let Some(restored_session_id) = restored_session_ids.first().copied() {
+            self.selected_session = restored_session_id;
+            self.hovered_task_session = Some(restored_session_id);
+        }
+        self.ensure_valid_selected_session();
+        self.status_message = format!("已恢复归档项目 `{restored_title}`。");
+        self.push_activity(
+            ActivityLevel::Info,
+            format!("恢复项目 `{restored_title}`"),
+            format!("项目 `{restored_title}` 及其会话已恢复到可见工作台树。"),
+        );
+        true
+    }
+
+    /// Restores one archived session row back into its still-visible owning project.
+    /// 将一个归档会话行恢复回其仍然可见的所属项目。
+    fn restore_archived_task_session(&mut self, session_id: usize) -> bool {
+        let Some(archived_index) = self
+            .archived_sessions
+            .iter()
+            .position(|session| session.id == session_id)
+        else {
+            return false;
+        };
+
+        let restored_session = self.archived_sessions.remove(archived_index);
+        let restored_title = restored_session.title.clone();
+        let Some(project_id) = restored_session.project_id.clone() else {
+            self.archived_sessions
+                .insert(archived_index, restored_session);
+            return false;
+        };
+
+        {
+            let Some(project) = self.task_project_by_id_mut(&project_id) else {
+                self.archived_sessions
+                    .insert(archived_index, restored_session);
+                self.status_message =
+                    format!("无法恢复会话 `{restored_title}`，因为所属项目当前不可见。");
+                return false;
+            };
+
+            project.session_ids.insert(0, session_id);
+        }
+        self.sessions.insert(0, restored_session);
+        if let Some(messages) = self.archived_session_messages.remove(&session_id) {
+            self.session_messages.insert(session_id, messages);
+        }
+        if let Some(compactions) = self.archived_session_compactions.remove(&session_id) {
+            self.session_compactions.insert(session_id, compactions);
+        }
+        if let Some(runtime_state) = self.archived_session_runtime_state.remove(&session_id) {
+            self.session_runtime_state.insert(session_id, runtime_state);
+        }
+        self.session_run_phases
+            .insert(session_id, SessionRunPhase::Idle);
+        self.session_runtime_events.remove(&session_id);
+        self.expanded_task_projects.insert(project_id);
+        self.selected_session = session_id;
+        self.hovered_task_session = Some(session_id);
+        self.ensure_valid_selected_session();
+        self.status_message = format!("已恢复归档会话 `{restored_title}`。");
+        self.push_activity(
+            ActivityLevel::Info,
+            format!("恢复会话 `{restored_title}`"),
+            format!("归档会话 `{restored_title}` 已恢复到所属项目列表。"),
+        );
+        true
     }
 }
 
@@ -7645,50 +7914,6 @@ fn current_unix_millis_text() -> String {
         .unwrap_or(Duration::from_secs(0))
         .as_millis()
         .to_string()
-}
-
-/// Derives one compact session title from the latest user prompt while avoiding empty or noisy labels.
-/// 根据最新用户提示词推导一个紧凑会话标题，并规避空白或噪声标签。
-fn derive_session_title_from_prompt(prompt: &str) -> Option<String> {
-    let normalized = prompt
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    if normalized.is_empty() {
-        return None;
-    }
-
-    Some(truncate_with_ellipsis(&normalized, 220.0))
-}
-
-/// Truncates one multi-line preview into a compact snippet used by hidden runtime summary nodes.
-/// 将一段多行预览截断为供隐藏运行时摘要节点使用的紧凑片段。
-fn truncate_preview_lines(value: &str, max_lines: usize, max_chars: usize) -> String {
-    let merged = value
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(max_lines)
-        .collect::<Vec<_>>()
-        .join(" / ");
-    let normalized = if merged.is_empty() {
-        value.split_whitespace().collect::<Vec<_>>().join(" ")
-    } else {
-        merged
-    };
-
-    if normalized.chars().count() <= max_chars {
-        normalized
-    } else {
-        let truncated = normalized
-            .chars()
-            .take(max_chars.saturating_sub(1))
-            .collect::<String>();
-        format!("{truncated}…")
-    }
 }
 
 /// Converts one stored session message entry into the lightweight execution-context row sent to the runtime.

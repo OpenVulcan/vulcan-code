@@ -1,0 +1,46 @@
+[package]
+name = "rig-mcp"
+version = "0.1.2"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Azreal Contributors"]
+description = "Model Context Protocol bridge for rig-compose tool registries. Wraps the official `rmcp` SDK with rig-compose's transport-agnostic Tool surface."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ForeverAngry/rig-mcp"
+readme = "README.md"
+keywords = ["rig", "mcp", "rmcp", "agent", "ai"]
+categories = ["asynchronous"]
+
+[dependencies]
+rig-compose.workspace = true
+async-trait = "0.1"
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
+# Official Model Context Protocol SDK. We disable defaults and opt into
+# only the client + server + stdio transports we actually use; this
+# keeps the dependency surface tight (no HTTP/TLS pulled in).
+rmcp = { version = "1.6", default-features = false, features = [
+    "client",
+    "server",
+    "macros",
+    "transport-io",
+    "transport-child-process",
+] }
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
+
+[lints.clippy]
+dbg_macro = "forbid"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+expect_used = "deny"
+expect_fun_call = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+todo = "forbid"
+unimplemented = "forbid"
+unreachable = "deny"
+unwrap_used = "deny"
+

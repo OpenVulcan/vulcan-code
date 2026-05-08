@@ -3968,14 +3968,14 @@ dependencies = [
 [[package]]
 name = "rig-compose"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8b36cf7830c1fa4af645ff8691d4cffa9408586d4f0f8a5cf7d726a4e618b13"
 dependencies = [
  "async-trait",
  "dashmap",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -4032,8 +4032,6 @@ dependencies = [
 [[package]]
 name = "rig-mcp"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b48178ff698be0806cccb6538eecbcc9102710e10d4f9d34d5c518074396ac3"
 dependencies = [
  "async-trait",
  "rig-compose",

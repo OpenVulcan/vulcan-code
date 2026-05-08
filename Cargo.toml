@@ -1,5 +1,9 @@
 [workspace]
-members = ["apps/vulcan-code-gui"]
+members = [
+    "apps/vulcan-code-gui",
+    "apps/rig-compose",
+    "apps/rig-mcp",
+]
 resolver = "2"
 
 [workspace.package]
@@ -11,8 +15,8 @@ version = "0.1.0"
 [workspace.dependencies]
 iced = { version = "0.14.0", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced"] }
 rig = { package = "rig-core", version = "0.36.0", default-features = false, features = ["reqwest", "rustls", "derive"] }
-rig-compose = "0.2.0"
-rig-mcp = "0.1.2"
+rig-compose = { path = "apps/rig-compose" }
+rig-mcp = { path = "apps/rig-mcp" }
 vldb-controller-client = "0.2.1"
 luaskills = { path = "../../projects/vulcan-luaskills" }
 async-trait = "0.1.89"
