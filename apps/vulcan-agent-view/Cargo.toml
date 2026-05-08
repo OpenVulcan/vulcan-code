@@ -1,0 +1,14 @@
+[package]
+name = "vulcan-agent-view"
+description = "Structured agent transcript document model and extension-aware Markdown parser."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+pulldown-cmark = "0.13.3"

@@ -7,6 +7,11 @@ use crate::agent_runtime::{
     ExecutionRunReport, ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind,
     stream_runtime_run,
 };
+use crate::agent_view::{
+    agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_block_label,
+    agent_view_block_render_source, agent_view_block_title, agent_view_document_raw_source,
+    build_agent_view_document,
+};
 use crate::code_view;
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
@@ -32,12 +37,14 @@ use crate::workspace_store::{self, WorkspaceSnapshot};
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
-    button, checkbox, column, container, markdown, mouse_area, pick_list, progress_bar, radio, row,
-    rule, scrollable, slider, space, stack, svg, text, text_editor, text_input, toggler, tooltip,
+    button, checkbox, column, container, markdown, mouse_area, pick_list, progress_bar, radio,
+    rich_text, row, rule, scrollable, slider, space, stack, svg, text, text_editor, text_input,
+    toggler, tooltip,
 };
 use iced::window;
 use iced::{
-    Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, keyboard, task,
+    Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, clipboard,
+    keyboard, task,
 };
 use iced_aw::ContextMenu;
 use iced_fonts::{
@@ -48,7 +55,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Bundled SVG mark bytes used in the header.
 /// 头部区域使用的内置 SVG 标识字节。
@@ -173,6 +180,26 @@ const MAIN_TASK_SESSION_ROW_HEIGHT: f32 = 28.0;
 /// 项目行与树分区头共用的水平内边距。
 const MAIN_TASK_TREE_SECTION_LEFT_PADDING: f32 = 11.0;
 
+/// Shared bottom-gap threshold used to decide whether the transcript is still considered pinned to the latest output.
+/// 用于判断转录面板是否仍应视为贴住最新输出的共享底部间隙阈值。
+const TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD: f32 = 28.0;
+
+/// Shared bottom spacer kept at the tail of transcript surfaces so the newest content does not stick to the bottom edge.
+/// 保留在转录表面尾部的共享底部留白，用于避免最新内容紧贴底边。
+const TRANSCRIPT_BOTTOM_SPACER_HEIGHT: f32 = 72.0;
+
+/// Shared fixed body height used by the floating streaming-thinking overlay before any dock animation begins.
+/// 流式思考浮层在进入收纳动画前使用的共享正文固定高度。
+const THINKING_OVERLAY_BODY_HEIGHT: f32 = 220.0;
+
+/// Shared duration used by the floating thinking overlay dock animation.
+/// 流式思考浮层收纳动画使用的共享时长。
+const THINKING_OVERLAY_DOCK_ANIMATION_DURATION: Duration = Duration::from_millis(220);
+
+/// Shared tick interval used while the floating thinking overlay dock animation is active.
+/// 流式思考浮层收纳动画激活期间使用的共享刷新间隔。
+const THINKING_OVERLAY_DOCK_TICK_INTERVAL: Duration = Duration::from_millis(16);
+
 /// Shared square size used by compact task-tree hover action buttons.
 /// 任务树紧凑悬停动作按钮使用的共享方形尺寸。
 const MAIN_TASK_TREE_ACTION_BUTTON_SIZE: f32 = 18.0;
@@ -274,6 +301,12 @@ pub fn run() -> iced::Result {
     .theme(VulcanWorkbench::theme)
     .default_font(theme::ui_font())
     .font(theme::ui_font_bytes())
+    .font(theme::ui_italic_font_bytes())
+    .font(theme::ui_medium_font_bytes())
+    .font(theme::ui_medium_italic_font_bytes())
+    .font(theme::ui_bold_font_bytes())
+    .font(theme::ui_bold_italic_font_bytes())
+    .font(theme::ui_cjk_font_bytes())
     .font(theme::code_font_bytes())
     .font(theme::code_italic_font_bytes())
     .font(theme::cjk_code_font_bytes())
@@ -455,6 +488,15 @@ pub struct VulcanWorkbench {
     /// Active streaming thinking-message identifiers keyed by session id.
     /// 以会话标识为键保存的当前流式思考消息标识集合。
     streaming_thinking_message_ids: BTreeMap<usize, String>,
+    /// Session identifiers whose current streaming thinking message should still stay in the floating overlay.
+    /// 当前流式思考消息仍应停留在浮层中的会话标识集合。
+    floating_streaming_thinking_sessions: BTreeSet<usize>,
+    /// Session-scoped flag telling whether the floating streaming-thinking overlay should keep auto-following its latest tail.
+    /// 以会话为粒度保存的流式思考浮层是否应继续自动追随最新尾部标记。
+    session_streaming_thinking_follow_tail: BTreeMap<usize, bool>,
+    /// Short-lived dock animation snapshot kept while one completed streaming-thinking overlay shrinks into the transcript.
+    /// 某个已完成流式思考浮层收纳回正文时保留的短暂动画快照。
+    docking_thinking_overlay: Option<DockingThinkingOverlayState>,
     /// Active streaming output-message identifiers keyed by session id.
     /// 以会话标识为键保存的当前流式输出消息标识集合。
     streaming_output_message_ids: BTreeMap<usize, String>,
@@ -467,6 +509,33 @@ pub struct VulcanWorkbench {
     /// Selectable runtime-event Markdown buffers keyed by stable runtime-event identifier.
     /// 以稳定运行时事件标识为键保存的可选运行时 Markdown 缓冲区。
     runtime_event_markdown_buffers: BTreeMap<String, text_editor::Content>,
+    /// Unified structured transcript buffers keyed by visible session id.
+    /// 以可见会话标识为键保存的统一结构化转录缓冲区。
+    session_agent_view_buffers: BTreeMap<usize, text_editor::Content>,
+    /// Unified raw-source transcript buffers keyed by visible session id.
+    /// 以可见会话标识为键保存的统一原始源码转录缓冲区。
+    session_agent_view_raw_buffers: BTreeMap<usize, text_editor::Content>,
+    /// Unified structured transcript documents keyed by visible session id.
+    /// 以可见会话标识为键保存的统一结构化转录文档。
+    session_agent_view_documents: BTreeMap<usize, vulcan_agent_view::AgentViewDocument>,
+    /// Parsed Markdown payloads keyed by stable unified block identifier.
+    /// 以稳定统一块标识为键保存的已解析 Markdown 载荷。
+    session_agent_view_markdown: BTreeMap<String, markdown::Content>,
+    /// Unified block collapsed states keyed by session id and stable block identifier.
+    /// 以会话标识与稳定区块标识为键保存的统一块折叠状态。
+    session_agent_view_block_collapsed: BTreeMap<usize, BTreeMap<String, bool>>,
+    /// Session-scoped flag telling whether the transcript should keep auto-following the newest tail output.
+    /// 以会话为粒度保存的转录自动追随最新尾部输出标记。
+    session_agent_view_follow_tail: BTreeMap<usize, bool>,
+    /// Session identifiers whose transcript follow-tail flag is being temporarily protected from layout-driven scroll callbacks.
+    /// 当前转录自动追随标记正在被临时保护、以避免布局驱动滚动回调误判的会话标识集合。
+    session_agent_view_follow_tail_locked_sessions: BTreeSet<usize>,
+    /// Stable identifier of the unified transcript block currently hovered by the pointer.
+    /// 当前鼠标悬停的统一转录区块稳定标识。
+    hovered_agent_view_block_id: Option<String>,
+    /// Surface mode currently used by the unified transcript panel.
+    /// 当前统一转录面板使用的表面模式。
+    agent_transcript_surface_mode: AgentTranscriptSurfaceMode,
     /// Session-scoped execution phases reflected by the workbench status bar.
     /// 反映在工作台状态条中的按会话归属执行阶段集合。
     session_run_phases: BTreeMap<usize, SessionRunPhase>,
@@ -583,6 +652,21 @@ enum StartupLifecycle {
     Ready,
 }
 
+/// Unified transcript surface mode shown in the center workbench panel.
+/// 展示在中央工作台面板中的统一转录表面模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentTranscriptSurfaceMode {
+    /// Legacy segmented rendered-preview stream kept as the primary per-block visual inspection surface.
+    /// 作为首要逐块视觉检查表面的旧式分段渲染流。
+    DetailCards,
+    /// Selectable structured transcript projection backed by the unified agent-view document.
+    /// 由统一 agent-view 文档支撑的可选结构化转录投影。
+    Structured,
+    /// Selectable raw-source projection backed by the unified agent-view document.
+    /// 由统一 agent-view 文档支撑的可选原始源码投影。
+    RawSource,
+}
+
 /// Hover state describing the active visual line in one diff hunk.
 /// 描述某个 diff hunk 中当前激活可视行的悬停状态。
 #[derive(Debug, Clone)]
@@ -653,6 +737,24 @@ struct PendingTaskProjectInteraction {
     /// Cursor origin captured when the interaction started.
     /// 交互开始时捕获到的鼠标起始位置。
     origin: iced::Point,
+}
+
+/// Snapshot retained while one completed streaming-thinking overlay animates back into the transcript.
+/// 单个已完成流式思考浮层收纳回正文时保留的动画快照。
+#[derive(Debug, Clone)]
+struct DockingThinkingOverlayState {
+    /// Session identifier that owns the overlay currently animating out.
+    /// 当前正在执行退场动画的浮层所属会话标识。
+    session_id: usize,
+    /// Stable message identifier whose Markdown cache can still back the short dock animation.
+    /// 可在短暂收纳动画期间继续复用 Markdown 缓存的稳定消息标识。
+    message_id: String,
+    /// Final thinking body snapshot rendered during the short dock animation.
+    /// 在短暂收纳动画期间持续渲染的最终思考正文快照。
+    body: String,
+    /// Monotonic animation-start timestamp used to derive the current dock progress.
+    /// 用于推导当前收纳进度的单调动画起始时间戳。
+    started_at: Instant,
 }
 
 /// Drop-target previews used while the task-tree project cards are being reordered.
@@ -1214,30 +1316,65 @@ enum Message {
     /// Session selected from the navigator.
     /// 从导航区选择了某个会话。
     SessionSelected(usize),
-    /// Toggles one visible transcript message section between expanded and collapsed states.
-    /// 切换单个可见转录消息分区的展开与折叠状态。
-    ToggleSessionMessageCollapsed(usize, String),
-    /// Toggles one visible transcript message between Markdown rendering and raw selectable text.
-    /// 在 Markdown 渲染与可选原文之间切换单个可见转录消息。
-    ToggleSessionMessageRawMode(usize, String),
-    /// Applies one read-only text editor action to one selectable transcript-Markdown buffer.
-    /// 向某个可选转录 Markdown 缓冲区应用一次只读文本编辑器动作。
-    SessionMessageMarkdownAction(String, text_editor::Action),
-    /// Applies one read-only text editor action to one raw transcript-message buffer.
-    /// 向某个转录原文消息缓冲区应用一次只读文本编辑器动作。
-    SessionMessageRawAction(String, text_editor::Action),
-    /// Toggles one runtime-event section between expanded and collapsed states.
-    /// 切换单个运行时事件分区的展开与折叠状态。
-    ToggleRuntimeEventCollapsed(usize, String),
-    /// Toggles one runtime event between Markdown rendering and raw selectable text.
-    /// 在 Markdown 渲染与可选原文之间切换单个运行时事件。
-    ToggleRuntimeEventRawMode(usize, String),
-    /// Applies one read-only text editor action to one selectable runtime-event Markdown buffer.
-    /// 向某个可选运行时事件 Markdown 缓冲区应用一次只读文本编辑器动作。
-    RuntimeEventMarkdownAction(String, text_editor::Action),
-    /// Applies one read-only text editor action to one raw runtime-event buffer.
-    /// 向某个运行时事件原文缓冲区应用一次只读文本编辑器动作。
-    RuntimeEventRawAction(String, text_editor::Action),
+    /// Copies the unified visible transcript plain-text projection of the selected session into the clipboard.
+    /// 将当前选中会话统一可见转录的纯文本投影复制到剪贴板。
+    CopySelectedSessionDocumentPlainText,
+    /// Copies the unified visible transcript raw-source projection of the selected session into the clipboard.
+    /// 将当前选中会话统一可见转录的原始源码投影复制到剪贴板。
+    CopySelectedSessionDocumentRawSource,
+    /// Switches the unified transcript panel into the structured selectable-document mode.
+    /// 将统一转录面板切换到结构化可选文档模式。
+    ShowSelectedSessionDocumentStructured,
+    /// Switches the unified transcript panel into the raw-source selectable-document mode.
+    /// 将统一转录面板切换到原始源码可选文档模式。
+    ShowSelectedSessionDocumentRawSource,
+    /// Switches the transcript panel into the segmented rendered-preview mode.
+    /// 将转录面板切换到分段渲染预览模式。
+    ShowSelectedSessionDocumentDetailCards,
+    /// Toggles one unified rendered block between collapsed and expanded states.
+    /// 切换某个统一渲染区块的折叠与展开状态。
+    ToggleSelectedSessionAgentViewBlockCollapsed(String),
+    /// Tracks the hovered unified rendered block shown in the selected-session transcript panel.
+    /// 跟踪当前选中会话转录面板中被悬停的统一渲染区块。
+    SelectedSessionAgentViewBlockHovered(Option<String>),
+    /// Copies the raw-source payload of one unified rendered block into the clipboard.
+    /// 将某个统一渲染区块的原始源码载荷复制到剪贴板。
+    CopySelectedSessionAgentViewBlockRaw(String),
+    /// Handles one Markdown link activation emitted from the unified rendered transcript surface.
+    /// 处理从统一渲染转录表面发出的 Markdown 链接激活动作。
+    AgentViewMarkdownLinkActivated(String),
+    /// Applies one read-only action to the unified structured transcript buffer of the selected session.
+    /// 向当前选中会话的统一结构化转录缓冲区应用一次只读动作。
+    SelectedSessionDocumentStructuredAction(text_editor::Action),
+    /// Applies one read-only action to the unified raw-source transcript buffer of the selected session.
+    /// 向当前选中会话的统一原始源码转录缓冲区应用一次只读动作。
+    SelectedSessionDocumentRawSourceAction(text_editor::Action),
+    /// Records the current scroll viewport of the selected-session transcript panel.
+    /// 记录当前选中会话转录面板的滚动视口状态。
+    SelectedSessionTranscriptScrolled {
+        /// Session identifier owning the visible transcript panel.
+        /// 拥有当前可见转录面板的会话标识。
+        session_id: usize,
+        /// Latest viewport reported by the visible transcript scrollable.
+        /// 当前可见转录滚动容器回传的最新视口。
+        viewport: scrollable::Viewport,
+    },
+    /// Records the current scroll viewport of the floating streaming-thinking overlay.
+    /// 记录流式思考浮层的当前滚动视口状态。
+    SelectedSessionThinkingOverlayScrolled {
+        /// Session identifier owning the visible floating thinking overlay.
+        /// 拥有当前可见流式思考浮层的会话标识。
+        session_id: usize,
+        /// Latest viewport reported by the floating thinking scrollable.
+        /// 当前流式思考滚动容器回传的最新视口。
+        viewport: scrollable::Viewport,
+    },
+    /// Re-applies one protected transcript tail-follow operation after a layout-driven rebuild settles.
+    /// 在一次布局驱动的重建稳定后重新补偿执行转录尾部追随。
+    SelectedSessionTranscriptTailResync(usize),
+    /// Drives one short dock animation tick for the completed floating thinking overlay.
+    /// 驱动已完成流式思考浮层的一次短暂收纳动画 Tick。
+    ThinkingOverlayDockAnimationTick,
     /// Applies one read-only text editor action to one inspector activity-log buffer.
     /// 向某个检查面板活动日志缓冲区应用一次只读文本编辑器动作。
     ActivityLogRawAction(usize, text_editor::Action),
@@ -1512,10 +1649,22 @@ impl VulcanWorkbench {
                 session_message_markdown: BTreeMap::new(),
                 session_message_markdown_buffers: BTreeMap::new(),
                 streaming_thinking_message_ids: BTreeMap::new(),
+                floating_streaming_thinking_sessions: BTreeSet::new(),
+                session_streaming_thinking_follow_tail: BTreeMap::new(),
+                docking_thinking_overlay: None,
                 streaming_output_message_ids: BTreeMap::new(),
                 runtime_event_raw_buffers: BTreeMap::new(),
                 runtime_event_markdown: BTreeMap::new(),
                 runtime_event_markdown_buffers: BTreeMap::new(),
+                session_agent_view_buffers: BTreeMap::new(),
+                session_agent_view_raw_buffers: BTreeMap::new(),
+                session_agent_view_documents: BTreeMap::new(),
+                session_agent_view_markdown: BTreeMap::new(),
+                session_agent_view_block_collapsed: BTreeMap::new(),
+                session_agent_view_follow_tail: BTreeMap::new(),
+                session_agent_view_follow_tail_locked_sessions: BTreeSet::new(),
+                hovered_agent_view_block_id: None,
+                agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
                 session_run_phases: BTreeMap::new(),
                 next_run_id: 1,
                 active_run_id: None,
@@ -1595,10 +1744,22 @@ impl VulcanWorkbench {
                 self.session_message_markdown.clear();
                 self.session_message_markdown_buffers.clear();
                 self.streaming_thinking_message_ids.clear();
+                self.floating_streaming_thinking_sessions.clear();
+                self.session_streaming_thinking_follow_tail.clear();
+                self.docking_thinking_overlay = None;
                 self.streaming_output_message_ids.clear();
                 self.runtime_event_raw_buffers.clear();
                 self.runtime_event_markdown.clear();
                 self.runtime_event_markdown_buffers.clear();
+                self.session_agent_view_buffers.clear();
+                self.session_agent_view_raw_buffers.clear();
+                self.session_agent_view_documents.clear();
+                self.session_agent_view_markdown.clear();
+                self.session_agent_view_block_collapsed.clear();
+                self.session_agent_view_follow_tail.clear();
+                self.session_agent_view_follow_tail_locked_sessions.clear();
+                self.hovered_agent_view_block_id = None;
+                self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.session_run_phases.clear();
                 self.expanded_task_projects.clear();
                 self.selected_session = 0;
@@ -2303,6 +2464,7 @@ impl VulcanWorkbench {
                 self.prune_unmaterialized_sessions(Some(session_id));
                 self.selected_session = session_id;
                 self.hovered_task_session = Some(session_id);
+                self.hovered_agent_view_block_id = None;
 
                 // Capture the selected session title to keep footer feedback specific.
                 // 记录被选中的会话标题，保证底部反馈足够具体。
@@ -2312,57 +2474,146 @@ impl VulcanWorkbench {
                     .unwrap_or_else(|| String::from("未知会话"));
 
                 self.status_message = format!("当前会话已切换为：{selected_title}。");
+                Task::batch([
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                ])
+            }
+            Message::CopySelectedSessionDocumentPlainText => {
+                let Some(document) = self.selected_session_agent_view_document() else {
+                    self.status_message = String::from("当前没有可复制的统一会话文档。");
+                    return Task::none();
+                };
+
+                self.status_message = String::from("已复制当前会话正文文档。");
+                clipboard::write(document.plain_text())
+            }
+            Message::CopySelectedSessionDocumentRawSource => {
+                let Some(document) = self.selected_session_agent_view_document() else {
+                    self.status_message = String::from("当前没有可复制的统一会话文档原文。");
+                    return Task::none();
+                };
+
+                self.status_message = String::from("已复制当前会话原始输出源码。");
+                clipboard::write(agent_view_document_raw_source(&document))
+            }
+            Message::ShowSelectedSessionDocumentStructured => {
+                self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::Structured;
+                self.hovered_agent_view_block_id = None;
+                self.selected_session()
+                    .map(|session| {
+                        Task::batch([
+                            self.maybe_follow_selected_session_transcript_tail(session.id),
+                            self.maybe_follow_selected_session_thinking_overlay_tail(session.id),
+                        ])
+                    })
+                    .unwrap_or_else(Task::none)
+            }
+            Message::ShowSelectedSessionDocumentRawSource => {
+                self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::RawSource;
+                self.hovered_agent_view_block_id = None;
+                self.selected_session()
+                    .map(|session| {
+                        Task::batch([
+                            self.maybe_follow_selected_session_transcript_tail(session.id),
+                            self.maybe_follow_selected_session_thinking_overlay_tail(session.id),
+                        ])
+                    })
+                    .unwrap_or_else(Task::none)
+            }
+            Message::ShowSelectedSessionDocumentDetailCards => {
+                self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
+                self.hovered_agent_view_block_id = None;
+                self.selected_session()
+                    .map(|session| {
+                        Task::batch([
+                            self.maybe_follow_selected_session_transcript_tail(session.id),
+                            self.maybe_follow_selected_session_thinking_overlay_tail(session.id),
+                        ])
+                    })
+                    .unwrap_or_else(Task::none)
+            }
+            Message::ToggleSelectedSessionAgentViewBlockCollapsed(block_id) => {
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                self.toggle_session_agent_view_block_collapsed(session_id, &block_id);
                 Task::none()
             }
-            Message::ToggleSessionMessageCollapsed(session_id, message_id) => {
-                self.toggle_session_message_collapsed_state(session_id, &message_id);
-                self.persist_workspace_snapshot_task()
-            }
-            Message::ToggleSessionMessageRawMode(session_id, message_id) => {
-                self.toggle_session_message_raw_mode(session_id, &message_id);
+            Message::SelectedSessionAgentViewBlockHovered(block_id) => {
+                self.hovered_agent_view_block_id = block_id;
                 Task::none()
             }
-            Message::SessionMessageMarkdownAction(message_id, action) => {
-                if !action.is_edit() {
-                    if let Some(content) =
-                        self.session_message_markdown_buffers.get_mut(&message_id)
-                    {
-                        content.perform(action);
-                    }
+            Message::CopySelectedSessionAgentViewBlockRaw(raw_source) => {
+                self.status_message = String::from("已复制当前区块原始源码。");
+                clipboard::write(raw_source)
+            }
+            Message::AgentViewMarkdownLinkActivated(url) => {
+                self.status_message = format!("已复制块内链接：{url}");
+                clipboard::write(url)
+            }
+            Message::SelectedSessionDocumentStructuredAction(action) => {
+                if action.is_edit() {
+                    return Task::none();
                 }
-                Task::none()
-            }
-            Message::SessionMessageRawAction(message_id, action) => {
-                if !action.is_edit() {
-                    if let Some(content) = self.session_message_raw_buffers.get_mut(&message_id) {
-                        content.perform(action);
-                    }
+
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+
+                if let Some(content) = self.session_agent_view_buffers.get_mut(&session_id) {
+                    content.perform(action);
                 }
+
                 Task::none()
             }
-            Message::ToggleRuntimeEventCollapsed(session_id, event_id) => {
-                self.toggle_runtime_event_collapsed_state(session_id, &event_id);
-                Task::none()
-            }
-            Message::ToggleRuntimeEventRawMode(session_id, event_id) => {
-                self.toggle_runtime_event_raw_mode(session_id, &event_id);
-                Task::none()
-            }
-            Message::RuntimeEventMarkdownAction(event_id, action) => {
-                if !action.is_edit() {
-                    if let Some(content) = self.runtime_event_markdown_buffers.get_mut(&event_id) {
-                        content.perform(action);
-                    }
+            Message::SelectedSessionDocumentRawSourceAction(action) => {
+                if action.is_edit() {
+                    return Task::none();
                 }
+
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+
+                if let Some(content) = self.session_agent_view_raw_buffers.get_mut(&session_id) {
+                    content.perform(action);
+                }
+
                 Task::none()
             }
-            Message::RuntimeEventRawAction(event_id, action) => {
-                if !action.is_edit() {
-                    if let Some(content) = self.runtime_event_raw_buffers.get_mut(&event_id) {
-                        content.perform(action);
-                    }
+            Message::SelectedSessionTranscriptScrolled {
+                session_id,
+                viewport,
+            } => {
+                if self
+                    .session_agent_view_follow_tail_locked_sessions
+                    .contains(&session_id)
+                {
+                    return Task::none();
                 }
+                self.update_session_agent_view_follow_tail(session_id, viewport);
                 Task::none()
+            }
+            Message::SelectedSessionThinkingOverlayScrolled {
+                session_id,
+                viewport,
+            } => {
+                self.update_session_streaming_thinking_follow_tail(session_id, viewport);
+                Task::none()
+            }
+            Message::SelectedSessionTranscriptTailResync(session_id) => {
+                self.session_agent_view_follow_tail_locked_sessions
+                    .remove(&session_id);
+                self.session_agent_view_follow_tail.insert(session_id, true);
+                self.maybe_follow_selected_session_transcript_tail(session_id)
+            }
+            Message::ThinkingOverlayDockAnimationTick => {
+                if let Some(session_id) = self.prune_docking_thinking_overlay() {
+                    self.defer_selected_session_transcript_tail_resync(session_id)
+                } else {
+                    Task::none()
+                }
             }
             Message::ActivityLogRawAction(index, action) => {
                 if !action.is_edit() {
@@ -2843,7 +3094,11 @@ impl VulcanWorkbench {
                 self.active_run_session_id = Some(request.session_id);
                 self.active_run_handle = Some(run_handle);
 
-                Task::batch([self.persist_workspace_snapshot_task(), run_task])
+                Task::batch([
+                    self.persist_workspace_snapshot_task(),
+                    self.maybe_follow_selected_session_transcript_tail(request.session_id),
+                    run_task,
+                ])
             }
             Message::RunExecutionStreamEvent { run_id, event } => {
                 if self.active_run_id != Some(run_id) {
@@ -2866,15 +3121,27 @@ impl VulcanWorkbench {
                     }
                     ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
                         self.append_streaming_thinking_delta(session_id, &delta);
-                        Task::none()
+                        Task::batch([
+                            self.maybe_follow_selected_session_transcript_tail(session_id),
+                            self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                        ])
+                    }
+                    ExecutionStreamEvent::ThinkingCompleted { session_id } => {
+                        let should_follow_tail =
+                            self.session_agent_view_should_follow_tail(session_id);
+                        if should_follow_tail {
+                            self.lock_session_agent_view_follow_tail(session_id);
+                        }
+                        self.dock_streaming_thinking_message(session_id);
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::OutputDelta { session_id, delta } => {
                         self.append_streaming_output_delta(session_id, &delta);
-                        Task::none()
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
                         self.push_session_runtime_event(session_id, event);
-                        Task::none()
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::Finished(report) => {
                         self.clear_active_run_tracking();
@@ -2920,7 +3187,10 @@ impl VulcanWorkbench {
                     "AI 调用已停止",
                     "当前真实执行已被用户中止，可直接修改提示词后重新发起新的调用。",
                 );
-                self.persist_workspace_snapshot_task()
+                Task::batch([
+                    self.persist_workspace_snapshot_task(),
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                ])
             }
             Message::PaneFocused(pane) => {
                 self.focus = Some(pane);
@@ -4296,6 +4566,103 @@ impl VulcanWorkbench {
         .into()
     }
 
+    /// Builds the compact transcript toolbar that exposes whole-document copy actions for the selected session.
+    /// 构建暴露整份文档复制动作的紧凑转录工具栏。
+    fn view_transcript_toolbar(&self) -> Element<'_, Message> {
+        let has_selected_session = self.selected_session().is_some();
+        let is_detail_mode =
+            self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::DetailCards;
+        let is_structured_mode =
+            self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::Structured;
+        let is_raw_mode =
+            self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::RawSource;
+        let detail_mode_button = {
+            let button = button(text("渲染").size(12))
+                .padding([6, 10])
+                .style(if is_detail_mode {
+                    button::primary
+                } else {
+                    button::secondary
+                });
+
+            if has_selected_session && !is_detail_mode {
+                button.on_press(Message::ShowSelectedSessionDocumentDetailCards)
+            } else {
+                button
+            }
+        };
+        let structured_mode_button = {
+            let button =
+                button(text("正文").size(12))
+                    .padding([6, 10])
+                    .style(if is_structured_mode {
+                        button::primary
+                    } else {
+                        button::secondary
+                    });
+
+            if has_selected_session && !is_structured_mode {
+                button.on_press(Message::ShowSelectedSessionDocumentStructured)
+            } else {
+                button
+            }
+        };
+        let raw_mode_button = {
+            let button = button(text("原文").size(12))
+                .padding([6, 10])
+                .style(if is_raw_mode {
+                    button::primary
+                } else {
+                    button::secondary
+                });
+
+            if has_selected_session && !is_raw_mode {
+                button.on_press(Message::ShowSelectedSessionDocumentRawSource)
+            } else {
+                button
+            }
+        };
+        let plain_copy_button = {
+            let button = button(text("复制正文").size(12))
+                .padding([6, 10])
+                .style(button::secondary);
+
+            if has_selected_session {
+                button.on_press(Message::CopySelectedSessionDocumentPlainText)
+            } else {
+                button
+            }
+        };
+        let raw_copy_button = {
+            let button = button(text("复制原文").size(12))
+                .padding([6, 10])
+                .style(button::secondary);
+
+            if has_selected_session {
+                button.on_press(Message::CopySelectedSessionDocumentRawSource)
+            } else {
+                button
+            }
+        };
+
+        container(
+            row![
+                text("统一输出文档").size(12),
+                space::horizontal(),
+                detail_mode_button,
+                structured_mode_button,
+                raw_mode_button,
+                plain_copy_button,
+                raw_copy_button,
+            ]
+            .spacing(8)
+            .align_y(Center),
+        )
+        .padding([8, 12])
+        .style(container::bordered_box)
+        .into()
+    }
+
     /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     fn view_main_canvas(&self) -> Element<'_, Message> {
@@ -4382,6 +4749,7 @@ impl VulcanWorkbench {
                 )
                 .padding([12, 14])
                 .style(container::bordered_box),
+                self.view_transcript_toolbar(),
                 transcript_stream,
                 composer_panel,
             ]
@@ -4394,20 +4762,31 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Builds the transcript stream area shown in the center of the main workbench canvas.
-    /// 构建展示在主工作台中央画布中的会话转录流区域。
+    /// Builds the unified transcript document surface shown in the center of the main workbench canvas.
+    /// 构建展示在主工作台中央画布中的统一转录文档表面。
     fn view_main_canvas_transcript_stream(&self) -> Element<'_, Message> {
-        let selected_session_id = self
-            .selected_session()
-            .map(|session| session.id)
-            .unwrap_or(0);
-        let messages = self.selected_session_messages();
-        let runtime_events = self
-            .selected_session_runtime_events()
-            .cloned()
-            .unwrap_or_default();
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            return container(
+                column![
+                    text("尚未选择会话").size(18),
+                    text("先在左侧会话列表中选中一个会话，统一输出文档会显示在这里。").size(13),
+                ]
+                .spacing(8)
+                .align_x(iced::Alignment::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .style(container::bordered_box)
+            .into();
+        };
 
-        if messages.is_empty() && runtime_events.is_empty() {
+        let has_any_document_content = self
+            .selected_session_agent_view_document()
+            .map(|document| !document.blocks.is_empty())
+            .unwrap_or(false);
+
+        if !has_any_document_content {
             return container(
                 column![
                     text("尚未开始执行").size(18),
@@ -4424,199 +4803,509 @@ impl VulcanWorkbench {
             .into();
         }
 
-        let message_column =
-            messages
-                .into_iter()
-                .fold(column![].spacing(10).width(Fill), |column, message| {
-                    column.push(self.view_main_canvas_message_entry(selected_session_id, message))
-                });
-        let content_column = if runtime_events.is_empty() {
-            message_column
+        let base_surface: Element<'_, Message> =
+            if self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::DetailCards {
+                self.view_main_canvas_segmented_transcript_stream(session_id)
+            } else {
+                self.view_selected_session_agent_document_surface(session_id)
+            };
+
+        if let Some(overlay) = self.view_selected_session_streaming_thinking_overlay(session_id) {
+            stack([base_surface, overlay]).into()
         } else {
-            let event_rows = runtime_events.into_iter().enumerate().fold(
-                column![text("运行时事件").size(13)].spacing(8),
-                |column, (index, event)| {
-                    column.push(self.view_main_canvas_runtime_event_entry(
-                        selected_session_id,
-                        index,
-                        event,
-                    ))
-                },
-            );
-
-            message_column.push(container(event_rows).padding([6, 0]))
-        };
-
-        container(scrollable(content_column).height(Fill).spacing(10))
-            .padding(14)
-            .height(Fill)
-            .style(container::bordered_box)
-            .into()
+            base_surface
+        }
     }
 
-    /// Builds one transcript message bubble shown inside the main workbench stream.
-    /// 构建展示在主工作台消息流中的单条转录消息气泡。
-    fn view_main_canvas_message_entry(
+    /// Builds the unified rendered transcript stream used for per-block inspection during the transition period.
+    /// 构建过渡期用于逐块检查的统一渲染转录流。
+    fn view_main_canvas_segmented_transcript_stream(
         &self,
         session_id: usize,
-        message: SessionMessageEntry,
     ) -> Element<'_, Message> {
-        let kind = message.kind;
-        let title = message.title;
-        let body = message.body;
-        let message_id = message.id;
-        let is_collapsed = self.session_message_is_collapsed(session_id, &message_id);
-        let is_raw_mode = self.session_message_is_raw_mode(session_id, &message_id);
-        let body_view: Element<'_, Message> = if is_collapsed {
-            space().height(0).into()
-        } else if is_raw_mode {
-            let raw_message_id = message_id.clone();
-            self.view_workbench_raw_body(
-                self.session_message_raw_buffers.get(&message_id),
-                body.clone(),
-                move |action| Message::SessionMessageRawAction(raw_message_id.clone(), action),
-            )
-        } else {
-            let markdown_message_id = message_id.clone();
-            self.view_workbench_markdown_body(
-                self.session_message_markdown_buffers.get(&message_id),
-                body.clone(),
-                move |action| {
-                    Message::SessionMessageMarkdownAction(markdown_message_id.clone(), action)
-                },
-            )
+        let Some(document) = self.session_agent_view_documents.get(&session_id) else {
+            return container(text("当前没有可渲染的统一输出块。").size(14))
+                .padding(14)
+                .height(Fill)
+                .style(container::bordered_box)
+                .into();
         };
-        let header = row![
-            button(
-                row![text(kind.label()).size(11), text(title).size(13),]
-                    .spacing(8)
-                    .align_y(Center)
-            )
-            .padding(0)
-            .width(Fill)
-            .style(button::text)
-            .on_press(Message::ToggleSessionMessageCollapsed(
-                session_id,
-                message_id.clone(),
-            )),
-            button(text(if is_raw_mode { "MD" } else { "原文" }).size(11))
-                .padding([2, 6])
-                .style(button::text)
-                .on_press(Message::ToggleSessionMessageRawMode(
+        let content_column = document.blocks.iter().enumerate().fold(
+            column![].spacing(10).width(Fill),
+            |column, (block_index, block)| {
+                column.push(self.view_main_canvas_agent_view_block(session_id, block_index, block))
+            },
+        );
+        let content_column = content_column
+            .push(space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT))
+            .width(Fill);
+
+        container(
+            scrollable(content_column)
+                .id(transcript_scrollable_id(session_id))
+                .height(Fill)
+                .spacing(10)
+                .on_scroll(move |viewport| Message::SelectedSessionTranscriptScrolled {
                     session_id,
-                    message_id.clone(),
-                )),
+                    viewport,
+                }),
+        )
+        .padding(14)
+        .height(Fill)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds one unified rendered block card from the current agent-view document.
+    /// 根据当前 agent-view 文档构建一个统一渲染区块卡片。
+    fn view_main_canvas_agent_view_block<'a>(
+        &'a self,
+        session_id: usize,
+        block_index: usize,
+        block: &'a vulcan_agent_view::AgentViewBlock,
+    ) -> Element<'a, Message> {
+        let block_id = agent_view_block_id(session_id, block_index, block);
+        let block_is_hovered =
+            self.hovered_agent_view_block_id.as_deref() == Some(block_id.as_str());
+        let raw_source = block.raw_source().to_string();
+
+        // Render normal assistant Markdown directly into the transcript flow so prose reads like one continuous document.
+        // 直接把常规助手 Markdown 渲染进转录文档流中，使正文阅读体验保持连续。
+        if matches!(block, vulcan_agent_view::AgentViewBlock::Markdown(_)) {
+            let markdown_body = container(
+                self.view_agent_view_rendered_markdown_body(&block_id, block.plain_text()),
+            )
+            .width(Fill)
+            .into();
+
+            return mouse_area(self.view_agent_view_block_with_hover_overlay(
+                markdown_body,
+                &raw_source,
+                block_is_hovered,
+            ))
+            .on_enter(Message::SelectedSessionAgentViewBlockHovered(Some(
+                block_id.clone(),
+            )))
+            .on_exit(Message::SelectedSessionAgentViewBlockHovered(None))
+            .into();
+        }
+
+        let label = agent_view_block_label(block);
+        let title = truncate_with_ellipsis(&agent_view_block_title(block), 520.0);
+        let has_body = !agent_view_block_render_source(block).trim().is_empty();
+        let is_collapsed =
+            has_body && self.session_agent_view_block_is_collapsed(session_id, &block_id);
+        let collapse_button: Element<'a, Message> = if has_body {
             button(text(if is_collapsed { "▸" } else { "▾" }).size(12))
                 .padding([2, 4])
                 .style(button::text)
-                .on_press(Message::ToggleSessionMessageCollapsed(
-                    session_id,
-                    message_id.clone(),
-                )),
+                .on_press(Message::ToggleSelectedSessionAgentViewBlockCollapsed(
+                    block_id.clone(),
+                ))
+                .into()
+        } else {
+            container(space().width(8)).into()
+        };
+        let header = row![
+            container(text(label).size(11))
+                .padding([3, 8])
+                .style(container::rounded_box),
+            text(title).size(14),
+            space::horizontal(),
+            collapse_button,
         ]
         .spacing(8)
         .align_y(Center);
         let mut content = column![header].spacing(8);
-        if !is_collapsed {
-            content = content.push(
-                column![rule::horizontal(1), container(body_view).padding([8, 0])].spacing(8),
-            );
-        }
-        let bubble = container(content)
-            .padding([10, 12])
-            .style(move |theme| style::workbench_message_bubble_style(theme, kind));
 
-        match kind {
-            SessionMessageKind::User => row![space::horizontal(), bubble.width(FillPortion(7))]
-                .width(Fill)
-                .into(),
-            SessionMessageKind::Assistant | SessionMessageKind::Error => {
-                row![bubble.width(FillPortion(8)), space::horizontal()]
+        if has_body {
+            let body: Element<'a, Message> = if is_collapsed {
+                container(self.view_agent_view_collapsed_block_preview(block))
+                    .padding([8, 0])
+                    .into()
+            } else {
+                container(self.view_agent_view_rendered_block_body(&block_id, block))
+                    .padding([8, 0])
+                    .into()
+            };
+
+            content = content.push(column![rule::horizontal(1), body].spacing(8));
+        }
+
+        let block_container = match block {
+            vulcan_agent_view::AgentViewBlock::Directive(directive) => match directive.kind {
+                vulcan_agent_view::AgentViewDirectiveKind::UserPrompt => {
+                    container(content).padding([10, 12]).style(move |theme| {
+                        style::workbench_message_bubble_style(theme, SessionMessageKind::User)
+                    })
+                }
+                vulcan_agent_view::AgentViewDirectiveKind::Thinking => container(content)
+                    .padding([10, 12])
+                    .width(Fill)
+                    .style(style::agent_view_thinking_block_style),
+                vulcan_agent_view::AgentViewDirectiveKind::ToolCall => container(content)
+                    .padding([10, 12])
+                    .width(Fill)
+                    .style(style::agent_view_tool_call_block_style),
+                vulcan_agent_view::AgentViewDirectiveKind::ToolResult => container(content)
+                    .padding([10, 12])
+                    .width(Fill)
+                    .style(style::agent_view_tool_result_block_style),
+                vulcan_agent_view::AgentViewDirectiveKind::Notice => {
+                    let is_error = directive
+                        .attributes
+                        .get("severity")
+                        .map(|severity| severity.as_str())
+                        .is_some_and(|severity| severity == "error");
+
+                    container(content)
+                        .padding([10, 12])
+                        .width(Fill)
+                        .style(move |theme| style::agent_view_notice_block_style(theme, is_error))
+                }
+                vulcan_agent_view::AgentViewDirectiveKind::Diff => container(content)
+                    .padding([10, 12])
+                    .width(Fill)
+                    .style(style::agent_view_diff_block_style),
+                vulcan_agent_view::AgentViewDirectiveKind::Custom(_) => container(content)
+                    .padding([10, 12])
+                    .width(Fill)
+                    .style(style::agent_view_diff_block_style),
+            },
+            vulcan_agent_view::AgentViewBlock::Markdown(_) => unreachable!(),
+        };
+
+        let block_flow: Element<'a, Message> = match block {
+            vulcan_agent_view::AgentViewBlock::Directive(directive)
+                if directive.kind == vulcan_agent_view::AgentViewDirectiveKind::UserPrompt =>
+            {
+                row![space::horizontal(), block_container.width(FillPortion(7))]
                     .width(Fill)
                     .into()
+            }
+            _ => row![block_container.width(Fill), space::horizontal()]
+                .width(Fill)
+                .into(),
+        };
+
+        let block_flow = self.view_agent_view_block_with_hover_overlay(
+            block_flow,
+            &raw_source,
+            block_is_hovered,
+        );
+
+        mouse_area(block_flow)
+            .on_enter(Message::SelectedSessionAgentViewBlockHovered(Some(
+                block_id.clone(),
+            )))
+            .on_exit(Message::SelectedSessionAgentViewBlockHovered(None))
+            .into()
+    }
+
+    /// Wraps one transcript block with a bottom-left floating hover toolbar when the pointer is currently inside the block.
+    /// 当鼠标当前位于区块内部时，为转录区块包裹一个左下角浮动的悬停工具条。
+    fn view_agent_view_block_with_hover_overlay<'a>(
+        &'a self,
+        base: Element<'a, Message>,
+        raw_source: &str,
+        is_hovered: bool,
+    ) -> Element<'a, Message> {
+        if !is_hovered {
+            return base;
+        }
+
+        stack([
+            base,
+            column![
+                space::vertical().height(Fill),
+                row![
+                    container(
+                        button(text("复制输出原文").size(11))
+                            .padding([2, 6])
+                            .style(button::text)
+                            .on_press(Message::CopySelectedSessionAgentViewBlockRaw(
+                                raw_source.to_string(),
+                            )),
+                    )
+                    .padding([3, 4])
+                    .style(style::agent_view_hover_toolbar_style),
+                    space::horizontal(),
+                ]
+                .width(Fill)
+                .align_y(iced::Alignment::End),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .padding([0, 0])
+            .into(),
+        ])
+        .into()
+    }
+
+    /// Builds the compact collapsed preview used by one unified transcript block.
+    /// 构建统一转录区块折叠状态下使用的紧凑摘要预览。
+    fn view_agent_view_collapsed_block_preview<'a>(
+        &'a self,
+        block: &'a vulcan_agent_view::AgentViewBlock,
+    ) -> Element<'a, Message> {
+        match block {
+            vulcan_agent_view::AgentViewBlock::Directive(directive)
+                if directive.kind == vulcan_agent_view::AgentViewDirectiveKind::Thinking =>
+            {
+                let summary = truncate_with_ellipsis(
+                    &agent_view_first_non_empty_line(&directive.body)
+                        .unwrap_or("思考过程已完成")
+                        .to_string(),
+                    560.0,
+                );
+                let metrics = format!(
+                    "{} 行 · {} 字",
+                    agent_view_visible_line_count(&directive.body),
+                    agent_view_visible_character_count(&directive.body)
+                );
+
+                column![
+                    text("已完成思考").size(11),
+                    rich_text(build_agent_view_plain_text_spans(
+                        &summary,
+                        theme::ui_font(),
+                        AgentViewPlainTextRenderKind::Flow,
+                        None,
+                    ))
+                    .width(Fill)
+                    .size(13),
+                    text(metrics).size(11),
+                ]
+                .spacing(4)
+                .into()
+            }
+            vulcan_agent_view::AgentViewBlock::Directive(directive)
+                if directive.kind == vulcan_agent_view::AgentViewDirectiveKind::Diff =>
+            {
+                let summary = agent_view_diff_body_summary(&directive.body);
+                let file_label = agent_view_diff_primary_file_label(&directive.body)
+                    .unwrap_or_else(|| String::from("差异内容"));
+
+                column![
+                    text(summary).size(11),
+                    rich_text(build_agent_view_plain_text_spans(
+                        &truncate_with_ellipsis(&file_label, 560.0),
+                        theme::code_font(),
+                        AgentViewPlainTextRenderKind::Code,
+                        None,
+                    ))
+                    .width(Fill)
+                    .size(13),
+                ]
+                .spacing(4)
+                .into()
+            }
+            vulcan_agent_view::AgentViewBlock::Directive(directive)
+                if matches!(
+                    directive.kind,
+                    vulcan_agent_view::AgentViewDirectiveKind::ToolCall
+                        | vulcan_agent_view::AgentViewDirectiveKind::ToolResult
+                ) =>
+            {
+                let summary_source = truncate_with_ellipsis(
+                    &agent_view_first_non_empty_line(&directive.body)
+                        .unwrap_or_default()
+                        .to_string(),
+                    560.0,
+                );
+                let metrics = format!("{} 行", agent_view_visible_line_count(&directive.body));
+
+                column![
+                    rich_text(build_agent_view_plain_text_spans(
+                        &summary_source,
+                        theme::code_font(),
+                        AgentViewPlainTextRenderKind::Code,
+                        None,
+                    ))
+                    .width(Fill)
+                    .size(13),
+                    text(metrics).size(11),
+                ]
+                .spacing(4)
+                .into()
+            }
+            _ => {
+                let summary_source =
+                    truncate_with_ellipsis(&block.plain_text().replace('\n', " "), 560.0);
+                let metrics = format!("{} 行", agent_view_visible_line_count(&block.plain_text()));
+
+                column![
+                    rich_text(build_agent_view_plain_text_spans(
+                        &summary_source,
+                        theme::ui_font(),
+                        AgentViewPlainTextRenderKind::Flow,
+                        None,
+                    ))
+                    .width(Fill)
+                    .size(13),
+                    text(metrics).size(11),
+                ]
+                .spacing(4)
+                .into()
             }
         }
     }
 
-    /// Builds one runtime-event block shown beneath the transcript message list.
-    /// 构建展示在转录消息列表下方的单条运行时事件块。
-    fn view_main_canvas_runtime_event_entry(
-        &self,
-        session_id: usize,
-        event_index: usize,
-        event: RuntimeEvent,
-    ) -> Element<'_, Message> {
-        let kind = event.kind;
-        let event_id = session_runtime_event_id(session_id, event_index, &event);
-        let title = event.title;
-        let detail = event.detail;
-        let is_collapsed = self.runtime_event_is_collapsed(session_id, &event_id);
-        let is_raw_mode = self.runtime_event_is_raw_mode(session_id, &event_id);
-        let header = row![
-            button(
-                row![
-                    text(format!("事件 · {}", runtime_event_kind_label(kind))).size(11),
-                    text(title).size(13),
-                ]
-                .spacing(8)
-                .align_y(Center)
-            )
-            .padding(0)
-            .width(Fill)
-            .style(button::text)
-            .on_press(Message::ToggleRuntimeEventCollapsed(
-                session_id,
-                event_id.clone(),
-            )),
-            button(text(if is_raw_mode { "MD" } else { "原文" }).size(11))
-                .padding([2, 6])
-                .style(button::text)
-                .on_press(Message::ToggleRuntimeEventRawMode(
-                    session_id,
-                    event_id.clone(),
-                )),
-            button(text(if is_collapsed { "▸" } else { "▾" }).size(12))
-                .padding([2, 4])
-                .style(button::text)
-                .on_press(Message::ToggleRuntimeEventCollapsed(
-                    session_id,
-                    event_id.clone(),
-                )),
-        ]
-        .spacing(8)
-        .align_y(Center);
-        let mut content = column![header].spacing(8);
-        if !is_collapsed {
-            let detail_view = if is_raw_mode {
-                let raw_event_id = event_id.clone();
-                self.view_workbench_raw_body(
-                    self.runtime_event_raw_buffers.get(&event_id),
-                    detail.clone(),
-                    move |action| Message::RuntimeEventRawAction(raw_event_id.clone(), action),
-                )
-            } else {
-                let markdown_event_id = event_id.clone();
-                self.view_workbench_markdown_body(
-                    self.runtime_event_markdown_buffers.get(&event_id),
-                    detail.clone(),
-                    move |action| {
-                        Message::RuntimeEventMarkdownAction(markdown_event_id.clone(), action)
-                    },
-                )
-            };
-            content = content.push(
-                column![rule::horizontal(1), container(detail_view).padding([8, 0])].spacing(8),
-            );
+    /// Builds the rendered body for one unified transcript block while respecting directive-specific presentation rules.
+    /// 根据统一转录区块的语义类型构建对应的正文渲染结果。
+    fn view_agent_view_rendered_block_body<'a>(
+        &'a self,
+        block_id: &str,
+        block: &'a vulcan_agent_view::AgentViewBlock,
+    ) -> Element<'a, Message> {
+        match block {
+            vulcan_agent_view::AgentViewBlock::Markdown(_) => {
+                self.view_agent_view_rendered_markdown_body(block_id, block.plain_text())
+            }
+            vulcan_agent_view::AgentViewBlock::Directive(directive) => {
+                self.view_agent_view_directive_body(block_id, directive)
+            }
         }
-        container(content)
-            .padding([10, 12])
-            .width(Fill)
-            .style(move |theme| style::workbench_runtime_event_style(theme, kind))
-            .into()
     }
 
-    /// Builds one selectable Markdown body region for the workbench transcript using the cached projected buffer.
-    /// 使用已缓存的投影缓冲区为工作台转录区构建一块可选 Markdown 正文区域。
+    /// Builds the rendered body for one directive block using dedicated views for tool and diff content.
+    /// 使用工具与差异专属视图构建单个指令区块的正文。
+    fn view_agent_view_directive_body<'a>(
+        &'a self,
+        block_id: &str,
+        directive: &'a vulcan_agent_view::AgentViewDirectiveBlock,
+    ) -> Element<'a, Message> {
+        match directive.kind {
+            vulcan_agent_view::AgentViewDirectiveKind::ToolCall => {
+                self.view_agent_view_code_panel(&directive.body, AgentViewCodePanelTone::ToolCall)
+            }
+            vulcan_agent_view::AgentViewDirectiveKind::ToolResult => {
+                self.view_agent_view_code_panel(&directive.body, AgentViewCodePanelTone::ToolResult)
+            }
+            vulcan_agent_view::AgentViewDirectiveKind::Diff => {
+                self.view_agent_view_diff_panel(&directive.body)
+            }
+            vulcan_agent_view::AgentViewDirectiveKind::UserPrompt
+            | vulcan_agent_view::AgentViewDirectiveKind::Thinking
+            | vulcan_agent_view::AgentViewDirectiveKind::Notice
+            | vulcan_agent_view::AgentViewDirectiveKind::Custom(_) => {
+                self.view_agent_view_rendered_markdown_body(block_id, directive.plain_text())
+            }
+        }
+    }
+
+    /// Builds the monospace body used by tool-oriented directive blocks in the unified transcript.
+    /// 构建统一转录中工具类指令区块使用的等宽正文。
+    fn view_agent_view_code_panel<'a>(
+        &'a self,
+        body: &'a str,
+        tone: AgentViewCodePanelTone,
+    ) -> Element<'a, Message> {
+        let palette = self.app_theme.extended_palette();
+        let line_color = match tone {
+            AgentViewCodePanelTone::ToolCall => iced::color!(0x0550AE),
+            AgentViewCodePanelTone::ToolResult => palette.background.base.text.scale_alpha(0.92),
+        };
+        let source_lines = if body.is_empty() {
+            vec![""]
+        } else {
+            body.split('\n').collect::<Vec<_>>()
+        };
+        let rendered_lines = source_lines.into_iter().map(|line| {
+            rich_text(build_agent_view_plain_text_spans(
+                line,
+                theme::code_font(),
+                AgentViewPlainTextRenderKind::Code,
+                Some(line_color),
+            ))
+            .width(Fill)
+            .size(13)
+            .into()
+        });
+
+        container(
+            scrollable(container(column(rendered_lines).spacing(4)).padding([8, 10])).direction(
+                scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::default().width(7).scroller_width(7),
+                ),
+            ),
+        )
+        .width(Fill)
+        .style(style::agent_view_code_panel_style)
+        .into()
+    }
+
+    /// Builds the dedicated diff body used by unified diff directive blocks in the transcript.
+    /// 构建统一转录中差异指令区块使用的专属 diff 正文。
+    fn view_agent_view_diff_panel<'a>(&'a self, body: &'a str) -> Element<'a, Message> {
+        let palette = self.app_theme.extended_palette();
+        let source_lines = if body.is_empty() {
+            vec![""]
+        } else {
+            body.split('\n').collect::<Vec<_>>()
+        };
+        let rendered_lines = source_lines.into_iter().map(|line| {
+            let line_kind = agent_view_diff_line_kind(line);
+            let line_color = match line_kind {
+                crate::diff::DiffLineKind::Context => palette.background.base.text.scale_alpha(0.9),
+                _ => style::diff_line_number_color(line_kind),
+            };
+
+            row![
+                container(space().width(3).height(18))
+                    .style(move |theme| style::diff_line_bar_style(theme, line_kind)),
+                container(
+                    rich_text(build_agent_view_plain_text_spans(
+                        line,
+                        theme::code_font(),
+                        AgentViewPlainTextRenderKind::Code,
+                        Some(line_color),
+                    ))
+                    .width(Fill)
+                    .size(13)
+                )
+                .padding([2, 8])
+                .width(Fill)
+                .style(move |theme| style::agent_view_diff_line_style(theme, line_kind)),
+            ]
+            .width(Fill)
+            .align_y(Center)
+            .into()
+        });
+
+        container(
+            scrollable(container(column(rendered_lines).spacing(1)).padding(6)).direction(
+                scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::default().width(7).scroller_width(7),
+                ),
+            ),
+        )
+        .width(Fill)
+        .style(style::agent_view_code_panel_style)
+        .into()
+    }
+
+    /// Builds one rendered Markdown body from the cached unified block Markdown payload.
+    /// 使用已缓存的统一块 Markdown 载荷构建一块渲染后的 Markdown 正文。
+    fn view_agent_view_rendered_markdown_body<'a>(
+        &'a self,
+        block_id: &str,
+        fallback: String,
+    ) -> Element<'a, Message> {
+        if let Some(content) = self.session_agent_view_markdown.get(block_id) {
+            markdown::view_with(
+                content.items(),
+                theme::markdown_settings(&self.app_theme),
+                &AgentViewMarkdownViewer,
+            )
+            .into()
+        } else {
+            text(fallback).size(14).into()
+        }
+    }
+
+    /// Builds one reusable selectable Markdown body from the provided read-only buffer or fallback text.
+    /// 根据提供的只读缓冲区或回退文本构建一块可复用的可选 Markdown 正文。
     fn view_workbench_markdown_body<'a>(
         &'a self,
         buffer: Option<&'a text_editor::Content>,
@@ -4637,8 +5326,8 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Builds one selectable raw-text body region for the workbench transcript using the cached read-only buffer.
-    /// 使用已缓存的只读缓冲区为工作台转录区构建一块可选原文正文区域。
+    /// Builds one reusable selectable raw-text body from the provided read-only buffer or fallback text.
+    /// 根据提供的只读缓冲区或回退文本构建一块可复用的可选原文正文。
     fn view_workbench_raw_body<'a>(
         &'a self,
         buffer: Option<&'a text_editor::Content>,
@@ -4656,6 +5345,221 @@ impl VulcanWorkbench {
         } else {
             text(fallback).size(14).into()
         }
+    }
+
+    /// Builds the selectable unified transcript panel for the selected session.
+    /// 构建当前选中会话使用的可选统一转录面板。
+    fn view_selected_session_agent_document_surface(
+        &self,
+        session_id: usize,
+    ) -> Element<'_, Message> {
+        let (buffer, on_action, fallback_text) = match self.agent_transcript_surface_mode {
+            AgentTranscriptSurfaceMode::DetailCards => (
+                self.session_agent_view_buffers.get(&session_id),
+                Message::SelectedSessionDocumentStructuredAction
+                    as fn(text_editor::Action) -> Message,
+                self.selected_session_agent_view_document()
+                    .map(|document| document.selectable_text())
+                    .unwrap_or_default(),
+            ),
+            AgentTranscriptSurfaceMode::Structured => (
+                self.session_agent_view_buffers.get(&session_id),
+                Message::SelectedSessionDocumentStructuredAction
+                    as fn(text_editor::Action) -> Message,
+                self.selected_session_agent_view_document()
+                    .map(|document| document.selectable_text())
+                    .unwrap_or_default(),
+            ),
+            AgentTranscriptSurfaceMode::RawSource => (
+                self.session_agent_view_raw_buffers.get(&session_id),
+                Message::SelectedSessionDocumentRawSourceAction
+                    as fn(text_editor::Action) -> Message,
+                self.selected_session_agent_view_document()
+                    .map(|document| agent_view_document_raw_source(&document))
+                    .unwrap_or_default(),
+            ),
+        };
+
+        let body: Element<'_, Message> = if let Some(buffer) = buffer {
+            text_editor(buffer)
+                .height(Shrink)
+                .wrapping(iced::widget::text::Wrapping::Word)
+                .padding(0)
+                .size(14)
+                .style(style::workbench_transcript_raw_view_style)
+                .on_action(on_action)
+                .into()
+        } else {
+            text(fallback_text).size(14).into()
+        };
+        let body_flow = column![
+            body,
+            space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT),
+        ]
+        .width(Fill);
+
+        container(
+            scrollable(container(body_flow).width(Fill))
+                .id(transcript_scrollable_id(session_id))
+                .height(Fill)
+                .on_scroll(move |viewport| Message::SelectedSessionTranscriptScrolled {
+                    session_id,
+                    viewport,
+                }),
+        )
+        .padding([14, 16])
+        .height(Fill)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds the floating in-progress thinking overlay that stays above the transcript until the run finishes.
+    /// 构建在运行结束前悬浮于转录上方的进行中思考浮层。
+    fn view_selected_session_streaming_thinking_overlay(
+        &self,
+        session_id: usize,
+    ) -> Option<Element<'_, Message>> {
+        let (thinking_body, thinking_message_id, dock_progress, state_label, state_hint) =
+            if let Some(thinking_message) = self.streaming_thinking_message(session_id) {
+                (
+                    thinking_message.body.as_str(),
+                    thinking_message.id.as_str(),
+                    0.0_f32,
+                    "思考中",
+                    "完成后会自动收纳进正文",
+                )
+            } else if let Some(docking_overlay) = self
+                .docking_thinking_overlay
+                .as_ref()
+                .filter(|overlay| overlay.session_id == session_id)
+            {
+                (
+                    docking_overlay.body.as_str(),
+                    docking_overlay.message_id.as_str(),
+                    docking_thinking_overlay_progress(docking_overlay),
+                    "思考已完成",
+                    "正在收纳进正文",
+                )
+            } else {
+                return None;
+            };
+        let overlay_visible_ratio = (1.0 - dock_progress).clamp(0.0, 1.0);
+        let overlay_width = 420.0 - (1.0 - overlay_visible_ratio) * 72.0;
+        let overlay_body_height =
+            THINKING_OVERLAY_BODY_HEIGHT * (0.18 + overlay_visible_ratio * 0.82);
+        let overlay_bottom_padding = 18.0 + dock_progress * 18.0;
+        let header_alpha = 1.0 - dock_progress * 0.24;
+        let metrics = format!(
+            "{} 行 · {} 字",
+            agent_view_visible_line_count(thinking_body),
+            agent_view_visible_character_count(thinking_body)
+        );
+        let body: Element<'_, Message> =
+            if let Some(content) = self.session_message_markdown.get(thinking_message_id) {
+                markdown::view_with(
+                    content.items(),
+                    theme::markdown_settings(&self.app_theme),
+                    &AgentViewMarkdownViewer,
+                )
+                .into()
+            } else {
+                text(thinking_body).size(14).into()
+            };
+        let overlay_panel = container(
+            column![
+                row![
+                    container(text(state_label).size(11).style(move |theme: &Theme| {
+                        iced::widget::text::Style {
+                            color: Some(
+                                theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(header_alpha),
+                            ),
+                        }
+                    }),)
+                    .padding([3, 8])
+                    .style(container::rounded_box),
+                    text(state_hint).size(12).style(move |theme: &Theme| {
+                        iced::widget::text::Style {
+                            color: Some(
+                                theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(header_alpha),
+                            ),
+                        }
+                    }),
+                    space::horizontal(),
+                    text(metrics)
+                        .size(11)
+                        .style(move |theme: &Theme| iced::widget::text::Style {
+                            color: Some(
+                                theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(header_alpha * 0.84),
+                            ),
+                        }),
+                    button(text("复制原文").size(11))
+                        .padding([2, 6])
+                        .style(button::text)
+                        .on_press(Message::CopySelectedSessionAgentViewBlockRaw(
+                            thinking_body.to_string(),
+                        )),
+                ]
+                .spacing(8)
+                .align_y(Center),
+                container(
+                    scrollable(container(body).width(Fill))
+                        .id(thinking_overlay_scrollable_id(session_id))
+                        .height(overlay_body_height)
+                        .on_scroll(move |viewport| {
+                            Message::SelectedSessionThinkingOverlayScrolled {
+                                session_id,
+                                viewport,
+                            }
+                        }),
+                )
+                .padding([2, 0])
+                .width(Fill),
+            ]
+            .spacing(10),
+        )
+        .padding(iced::Padding {
+            top: 12.0,
+            right: 14.0,
+            bottom: 8.0 + overlay_visible_ratio * 4.0,
+            left: 14.0,
+        })
+        .width(overlay_width)
+        .style(move |theme| {
+            style::agent_view_thinking_overlay_transition_style(theme, dock_progress)
+        });
+
+        Some(
+            column![
+                space::vertical().height(Fill),
+                row![space::horizontal(), overlay_panel]
+                    .width(Fill)
+                    .align_y(iced::Alignment::End),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .padding(iced::Padding {
+                top: 18.0,
+                right: 18.0,
+                bottom: overlay_bottom_padding,
+                left: 18.0,
+            })
+            .into(),
+        )
     }
 
     /// Builds the reusable workspace surface shown by the example panel.
@@ -5158,12 +6062,20 @@ impl VulcanWorkbench {
     /// Subscribes to native window close events so multi-window state stays consistent.
     /// 订阅原生窗口关闭事件，以保持多窗口状态一致。
     fn subscription(&self) -> Subscription<Message> {
+        let overlay_animation_subscription = if self.docking_thinking_overlay.is_some() {
+            iced::time::every(THINKING_OVERLAY_DOCK_TICK_INTERVAL)
+                .map(|_| Message::ThinkingOverlayDockAnimationTick)
+        } else {
+            Subscription::none()
+        };
+
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
                 .map(|(window_id, size)| Message::WindowResized(window_id, size)),
             iced::event::listen_with(Self::map_main_panel_shortcut_event),
             iced::event::listen_with(Self::map_window_pointer_event),
+            overlay_animation_subscription,
         ])
     }
 
@@ -7522,6 +8434,7 @@ impl VulcanWorkbench {
             .entry(session_id)
             .or_default()
             .push(materialized_entry);
+        self.refresh_session_agent_view_buffers(session_id);
         message_id
     }
 
@@ -7564,11 +8477,14 @@ impl VulcanWorkbench {
             .insert(message_id.to_string(), markdown_content);
         self.session_message_markdown_buffers
             .insert(message_id.to_string(), markdown_buffer);
+        self.refresh_session_agent_view_buffers(session_id);
     }
 
     /// Ensures the session owns one visible thinking message and appends the incoming delta to it.
     /// 确保会话拥有一条可见思考消息，并将当前增量追加进去。
     fn append_streaming_thinking_delta(&mut self, session_id: usize, delta: &str) {
+        self.clear_docking_thinking_overlay(session_id);
+
         let message_id =
             if let Some(message_id) = self.streaming_thinking_message_ids.get(&session_id) {
                 message_id.clone()
@@ -7583,10 +8499,42 @@ impl VulcanWorkbench {
                 );
                 self.streaming_thinking_message_ids
                     .insert(session_id, message_id.clone());
+                self.floating_streaming_thinking_sessions.insert(session_id);
                 message_id
             };
 
         self.append_stream_delta_to_session_message(session_id, &message_id, delta);
+    }
+
+    /// Docks the current streaming thinking message back into the main transcript while keeping subsequent deltas on the same message.
+    /// 将当前流式思考消息收回主转录正文中，同时保留后续增量继续写入同一条消息。
+    fn dock_streaming_thinking_message(&mut self, session_id: usize) {
+        if self
+            .floating_streaming_thinking_sessions
+            .remove(&session_id)
+        {
+            if let Some((message_id, body)) = self
+                .streaming_thinking_message_ids
+                .get(&session_id)
+                .and_then(|message_id| {
+                    self.session_messages
+                        .get(&session_id)?
+                        .iter()
+                        .find(|message| message.id == *message_id)
+                        .map(|message| (message.id.clone(), message.body.clone()))
+                })
+            {
+                self.docking_thinking_overlay = Some(DockingThinkingOverlayState {
+                    session_id,
+                    message_id,
+                    body,
+                    started_at: Instant::now(),
+                });
+            }
+            self.session_streaming_thinking_follow_tail
+                .remove(&session_id);
+            self.refresh_session_agent_view_buffers(session_id);
+        }
     }
 
     /// Ensures the session owns one visible final-output message and appends the incoming delta to it.
@@ -7817,8 +8765,12 @@ impl VulcanWorkbench {
         self.append_session_summary_output(session_id, &report);
         self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
+        self.refresh_session_agent_view_buffers(session_id);
 
-        self.persist_workspace_snapshot_task()
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+        ])
     }
 
     /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
@@ -7910,12 +8862,16 @@ impl VulcanWorkbench {
         self.markdown_session_message_ids.clear();
         self.markdown_runtime_event_ids.clear();
         self.streaming_thinking_message_ids.clear();
+        self.floating_streaming_thinking_sessions.clear();
+        self.session_streaming_thinking_follow_tail.clear();
+        self.docking_thinking_overlay = None;
         self.streaming_output_message_ids.clear();
         self.rebuild_session_message_raw_buffers();
         self.rebuild_session_message_markdown();
         self.runtime_event_raw_buffers.clear();
         self.runtime_event_markdown.clear();
         self.runtime_event_markdown_buffers.clear();
+        self.rebuild_all_session_agent_view_buffers();
     }
 
     /// Rebuilds all read-only transcript source buffers from the current visible and archived session messages.
@@ -7960,6 +8916,141 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Rebuilds all unified transcript buffers from the current visible session and runtime-event state.
+    /// 根据当前可见会话与运行时事件状态重建全部统一转录缓冲区。
+    fn rebuild_all_session_agent_view_buffers(&mut self) {
+        self.session_agent_view_buffers.clear();
+        self.session_agent_view_raw_buffers.clear();
+        self.session_agent_view_documents.clear();
+        self.session_agent_view_markdown.clear();
+        self.session_agent_view_block_collapsed.clear();
+        self.session_agent_view_follow_tail.clear();
+        self.session_agent_view_follow_tail_locked_sessions.clear();
+        self.session_streaming_thinking_follow_tail.clear();
+        self.docking_thinking_overlay = None;
+        self.hovered_agent_view_block_id = None;
+
+        let mut known_session_ids = self
+            .sessions
+            .iter()
+            .map(|session| session.id)
+            .collect::<BTreeSet<_>>();
+        known_session_ids.extend(self.session_messages.keys().copied());
+        known_session_ids.extend(self.session_runtime_events.keys().copied());
+
+        for session_id in known_session_ids {
+            self.refresh_session_agent_view_buffers(session_id);
+        }
+    }
+
+    /// Refreshes the unified structured and raw transcript buffers for one session.
+    /// 刷新某个会话对应的统一结构化与原始转录缓冲区。
+    fn refresh_session_agent_view_buffers(&mut self, session_id: usize) {
+        let messages = self.visible_session_messages_for_agent_view(session_id);
+        let runtime_events = self
+            .session_runtime_events
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let document = build_agent_view_document(&messages, &runtime_events);
+        self.remove_session_agent_view_markdown_cache(session_id);
+
+        if document.blocks.is_empty() {
+            self.session_agent_view_buffers.remove(&session_id);
+            self.session_agent_view_raw_buffers.remove(&session_id);
+            self.session_agent_view_documents.remove(&session_id);
+            self.session_agent_view_block_collapsed.remove(&session_id);
+            self.session_agent_view_follow_tail.remove(&session_id);
+            self.clear_session_agent_view_hover_state(session_id);
+            return;
+        }
+
+        self.sync_session_agent_view_block_collapsed_state(session_id, &document);
+        for (block_index, block) in document.blocks.iter().enumerate() {
+            let block_id = agent_view_block_id(session_id, block_index, block);
+            let markdown_content = markdown::Content::parse(agent_view_block_render_source(block));
+            self.session_agent_view_markdown
+                .insert(block_id, markdown_content);
+        }
+
+        self.session_agent_view_buffers.insert(
+            session_id,
+            text_editor::Content::with_text(&document.selectable_text()),
+        );
+        self.session_agent_view_raw_buffers.insert(
+            session_id,
+            text_editor::Content::with_text(&agent_view_document_raw_source(&document)),
+        );
+        self.session_agent_view_documents
+            .insert(session_id, document);
+    }
+
+    /// Removes all cached unified-block Markdown payloads associated with one session.
+    /// 删除与某个会话关联的全部统一块 Markdown 缓存载荷。
+    fn remove_session_agent_view_markdown_cache(&mut self, session_id: usize) {
+        let prefix = format!("session-{session_id}-agent-view-block-");
+        self.session_agent_view_markdown
+            .retain(|block_id, _| !block_id.starts_with(&prefix));
+    }
+
+    /// Synchronizes the unified block collapsed-state map with the latest document shape while preserving user toggles.
+    /// 在保留用户切换结果的同时，将统一块折叠状态映射同步到最新文档结构。
+    fn sync_session_agent_view_block_collapsed_state(
+        &mut self,
+        session_id: usize,
+        document: &vulcan_agent_view::AgentViewDocument,
+    ) {
+        self.session_agent_view_follow_tail
+            .entry(session_id)
+            .or_insert(true);
+        let collapsed_entry = self
+            .session_agent_view_block_collapsed
+            .entry(session_id)
+            .or_default();
+        let mut active_ids = BTreeSet::new();
+
+        for (block_index, block) in document.blocks.iter().enumerate() {
+            let block_id = agent_view_block_id(session_id, block_index, block);
+            collapsed_entry
+                .entry(block_id.clone())
+                .or_insert(agent_view_block_collapsed_by_default(block));
+            active_ids.insert(block_id);
+        }
+
+        collapsed_entry.retain(|block_id, _| active_ids.contains(block_id));
+        self.sync_session_agent_view_hover_state(session_id, &active_ids);
+    }
+
+    /// Clears the hovered unified transcript block when it belongs to the provided session identifier.
+    /// 当悬停中的统一转录区块属于给定会话时清理对应悬停状态。
+    fn clear_session_agent_view_hover_state(&mut self, session_id: usize) {
+        let prefix = format!("session-{session_id}-agent-view-block-");
+        if self
+            .hovered_agent_view_block_id
+            .as_ref()
+            .is_some_and(|block_id| block_id.starts_with(&prefix))
+        {
+            self.hovered_agent_view_block_id = None;
+        }
+    }
+
+    /// Synchronizes the hovered unified transcript block with the latest visible block identifiers of one session.
+    /// 将统一转录区块悬停状态同步到某个会话最新可见的区块标识集合。
+    fn sync_session_agent_view_hover_state(
+        &mut self,
+        session_id: usize,
+        active_ids: &BTreeSet<String>,
+    ) {
+        let prefix = format!("session-{session_id}-agent-view-block-");
+        if self
+            .hovered_agent_view_block_id
+            .as_ref()
+            .is_some_and(|block_id| block_id.starts_with(&prefix) && !active_ids.contains(block_id))
+        {
+            self.hovered_agent_view_block_id = None;
+        }
+    }
+
     /// Removes all read-only runtime-event source buffers associated with one session.
     /// 删除与某个会话关联的全部只读运行时事件原文缓冲区。
     fn remove_runtime_event_raw_buffers(&mut self, session_id: usize) {
@@ -7976,6 +9067,13 @@ impl VulcanWorkbench {
     /// 在一次实时运行前后清理与某个会话关联的当前流式消息标识。
     fn clear_streaming_message_ids(&mut self, session_id: usize) {
         self.streaming_thinking_message_ids.remove(&session_id);
+        self.floating_streaming_thinking_sessions
+            .remove(&session_id);
+        self.session_streaming_thinking_follow_tail
+            .remove(&session_id);
+        self.session_agent_view_follow_tail_locked_sessions
+            .remove(&session_id);
+        self.clear_docking_thinking_overlay(session_id);
         self.streaming_output_message_ids.remove(&session_id);
     }
 
@@ -7994,6 +9092,20 @@ impl VulcanWorkbench {
         self.collapsed_runtime_event_ids.remove(&session_id);
         self.markdown_runtime_event_ids.remove(&session_id);
         self.remove_runtime_event_raw_buffers(session_id);
+        self.remove_session_agent_view_markdown_cache(session_id);
+        self.session_agent_view_buffers.remove(&session_id);
+        self.session_agent_view_raw_buffers.remove(&session_id);
+        self.session_agent_view_documents.remove(&session_id);
+        self.session_agent_view_block_collapsed.remove(&session_id);
+        self.session_agent_view_follow_tail.remove(&session_id);
+        self.session_agent_view_follow_tail_locked_sessions
+            .remove(&session_id);
+        self.session_streaming_thinking_follow_tail
+            .remove(&session_id);
+        self.floating_streaming_thinking_sessions
+            .remove(&session_id);
+        self.clear_docking_thinking_overlay(session_id);
+        self.clear_session_agent_view_hover_state(session_id);
     }
 
     /// Builds one asynchronous persistence task for the current visible workspace snapshot.
@@ -8034,6 +9146,7 @@ impl VulcanWorkbench {
                 .insert(event_id, markdown_buffer);
         }
         self.session_runtime_events.insert(session_id, events);
+        self.refresh_session_agent_view_buffers(session_id);
     }
 
     /// Appends one runtime event to the current session event stream and refreshes the corresponding raw/Markdown caches.
@@ -8059,112 +9172,28 @@ impl VulcanWorkbench {
             .entry(session_id)
             .or_default()
             .push(event);
+        self.refresh_session_agent_view_buffers(session_id);
     }
 
-    /// Returns whether one visible transcript message is currently collapsed in the persisted session UI state.
-    /// 返回某条可见转录消息当前是否在持久化会话界面状态中处于折叠状态。
-    fn session_message_is_collapsed(&self, session_id: usize, message_id: &str) -> bool {
-        self.session_runtime_state
+    /// Returns whether one unified rendered block is currently collapsed for the target session.
+    /// 返回目标会话中的某个统一渲染区块当前是否处于折叠状态。
+    fn session_agent_view_block_is_collapsed(&self, session_id: usize, block_id: &str) -> bool {
+        self.session_agent_view_block_collapsed
             .get(&session_id)
-            .map(|state| state.ui_state.collapsed_message_ids.contains(message_id))
+            .and_then(|entry| entry.get(block_id))
+            .copied()
             .unwrap_or(false)
     }
 
-    /// Toggles one visible transcript message collapsed state and refreshes the runtime-state timestamp.
-    /// 切换某条可见转录消息的折叠状态并刷新运行时状态时间戳。
-    fn toggle_session_message_collapsed_state(&mut self, session_id: usize, message_id: &str) {
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        if !runtime_state
-            .ui_state
-            .collapsed_message_ids
-            .insert(message_id.to_string())
-        {
-            runtime_state
-                .ui_state
-                .collapsed_message_ids
-                .remove(message_id);
-        }
-        runtime_state.updated_at = current_unix_millis_text();
-    }
-
-    /// Returns whether one visible transcript message is currently shown as raw selectable text by default unless Markdown mode is explicitly requested.
-    /// 返回某条可见转录消息当前是否以可选原文形式展示，除非用户显式请求 Markdown 模式。
-    fn session_message_is_raw_mode(&self, session_id: usize, message_id: &str) -> bool {
-        !self
-            .markdown_session_message_ids
-            .get(&session_id)
-            .map(|ids| ids.contains(message_id))
-            .unwrap_or(false)
-    }
-
-    /// Toggles one visible transcript message between raw selectable text and explicit Markdown rendering.
-    /// 在可选原文与显式 Markdown 渲染之间切换某条可见转录消息。
-    fn toggle_session_message_raw_mode(&mut self, session_id: usize, message_id: &str) {
-        let is_raw_mode = self.session_message_is_raw_mode(session_id, message_id);
+    /// Toggles one unified rendered block between collapsed and expanded states for the target session.
+    /// 为目标会话切换某个统一渲染区块的折叠与展开状态。
+    fn toggle_session_agent_view_block_collapsed(&mut self, session_id: usize, block_id: &str) {
         let entry = self
-            .markdown_session_message_ids
+            .session_agent_view_block_collapsed
             .entry(session_id)
             .or_default();
-        if is_raw_mode {
-            entry.insert(message_id.to_string());
-        } else {
-            entry.remove(message_id);
-        }
-        if entry.is_empty() {
-            self.markdown_session_message_ids.remove(&session_id);
-        }
-    }
-
-    /// Returns whether one runtime event section is currently collapsed for the active launch.
-    /// 返回某条运行时事件分区在当前启动周期内是否处于折叠状态。
-    fn runtime_event_is_collapsed(&self, session_id: usize, event_id: &str) -> bool {
-        self.collapsed_runtime_event_ids
-            .get(&session_id)
-            .map(|ids| ids.contains(event_id))
-            .unwrap_or(false)
-    }
-
-    /// Toggles one runtime event section collapsed state for the active launch.
-    /// 为当前启动周期切换某条运行时事件分区的折叠状态。
-    fn toggle_runtime_event_collapsed_state(&mut self, session_id: usize, event_id: &str) {
-        let entry = self
-            .collapsed_runtime_event_ids
-            .entry(session_id)
-            .or_default();
-        if !entry.insert(event_id.to_string()) {
-            entry.remove(event_id);
-        }
-        if entry.is_empty() {
-            self.collapsed_runtime_event_ids.remove(&session_id);
-        }
-    }
-
-    /// Returns whether one runtime event is currently shown as raw selectable text by default unless Markdown mode is explicitly requested.
-    /// 返回某条运行时事件当前是否以可选原文形式展示，除非用户显式请求 Markdown 模式。
-    fn runtime_event_is_raw_mode(&self, session_id: usize, event_id: &str) -> bool {
-        !self
-            .markdown_runtime_event_ids
-            .get(&session_id)
-            .map(|ids| ids.contains(event_id))
-            .unwrap_or(false)
-    }
-
-    /// Toggles one runtime event between raw selectable text and explicit Markdown rendering.
-    /// 在可选原文与显式 Markdown 渲染之间切换某条运行时事件。
-    fn toggle_runtime_event_raw_mode(&mut self, session_id: usize, event_id: &str) {
-        let is_raw_mode = self.runtime_event_is_raw_mode(session_id, event_id);
-        let entry = self
-            .markdown_runtime_event_ids
-            .entry(session_id)
-            .or_default();
-        if is_raw_mode {
-            entry.insert(event_id.to_string());
-        } else {
-            entry.remove(event_id);
-        }
-        if entry.is_empty() {
-            self.markdown_runtime_event_ids.remove(&session_id);
-        }
+        let current_value = entry.get(block_id).copied().unwrap_or(false);
+        entry.insert(block_id.to_string(), !current_value);
     }
 
     /// Updates the execution phase tracked for one session transcript.
@@ -8173,29 +9202,78 @@ impl VulcanWorkbench {
         self.session_run_phases.insert(session_id, phase);
     }
 
-    /// Returns the currently selected session transcript messages.
-    /// 返回当前选中会话的转录消息集合。
-    fn selected_session_messages(&self) -> Vec<SessionMessageEntry> {
-        let Some(session_id) = self.selected_session().map(|session| session.id) else {
-            return Vec::new();
+    /// Returns the visible session messages that should participate in the unified agent-view document for one session.
+    /// 返回某个会话中应参与统一 agent-view 文档构建的可见消息集合。
+    fn visible_session_messages_for_agent_view(
+        &self,
+        session_id: usize,
+    ) -> Vec<SessionMessageEntry> {
+        let active_streaming_thinking_id = if self.active_run_session_id == Some(session_id)
+            && self
+                .floating_streaming_thinking_sessions
+                .contains(&session_id)
+        {
+            self.streaming_thinking_message_ids
+                .get(&session_id)
+                .cloned()
+        } else {
+            None
         };
+
         self.session_messages
             .get(&session_id)
             .map(|messages| {
                 messages
                     .iter()
                     .filter(|message| message.is_visible_to_user())
+                    .filter(|message| {
+                        active_streaming_thinking_id
+                            .as_ref()
+                            .is_none_or(|thinking_id| message.id != *thinking_id)
+                    })
                     .cloned()
                     .collect()
             })
             .unwrap_or_default()
     }
 
-    /// Returns the currently selected session runtime events.
-    /// 返回当前选中会话的运行时事件集合。
-    fn selected_session_runtime_events(&self) -> Option<&Vec<RuntimeEvent>> {
+    /// Returns the currently streaming thinking message for one session when it is still actively floating above the transcript.
+    /// 返回某个会话当前仍以浮层方式展示的流式思考消息。
+    fn streaming_thinking_message(&self, session_id: usize) -> Option<&SessionMessageEntry> {
+        if self.active_run_session_id != Some(session_id) {
+            return None;
+        }
+        if !self
+            .floating_streaming_thinking_sessions
+            .contains(&session_id)
+        {
+            return None;
+        }
+
+        let message_id = self.streaming_thinking_message_ids.get(&session_id)?;
+        self.session_messages
+            .get(&session_id)?
+            .iter()
+            .find(|message| message.id == *message_id && !message.body.trim().is_empty())
+    }
+
+    /// Builds the unified agent-view document for the currently selected session when enough transcript state is available.
+    /// 当当前选中会话拥有足够转录状态时构建统一 agent-view 文档。
+    fn selected_session_agent_view_document(&self) -> Option<vulcan_agent_view::AgentViewDocument> {
         let session_id = self.selected_session().map(|session| session.id)?;
-        self.session_runtime_events.get(&session_id)
+        self.session_agent_view_documents
+            .get(&session_id)
+            .cloned()
+            .or_else(|| {
+                let messages = self.visible_session_messages_for_agent_view(session_id);
+                let runtime_events = self
+                    .session_runtime_events
+                    .get(&session_id)
+                    .cloned()
+                    .unwrap_or_default();
+
+                Some(build_agent_view_document(&messages, &runtime_events))
+            })
     }
 
     /// Returns the execution phase bound to the currently selected session transcript.
@@ -8204,6 +9282,132 @@ impl VulcanWorkbench {
         self.selected_session()
             .and_then(|session| self.session_run_phases.get(&session.id).copied())
             .unwrap_or(SessionRunPhase::Idle)
+    }
+
+    /// Returns whether one session transcript should keep auto-following the latest tail output.
+    /// 返回某个会话转录是否应继续自动追随最新尾部输出。
+    fn session_agent_view_should_follow_tail(&self, session_id: usize) -> bool {
+        self.session_agent_view_follow_tail
+            .get(&session_id)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    /// Updates the session-scoped auto-follow flag from one reported transcript viewport.
+    /// 根据一次回传的转录视口更新会话级自动追随标记。
+    fn update_session_agent_view_follow_tail(
+        &mut self,
+        session_id: usize,
+        viewport: scrollable::Viewport,
+    ) {
+        self.session_agent_view_follow_tail
+            .insert(session_id, transcript_viewport_is_near_bottom(viewport));
+    }
+
+    /// Builds one task that snaps the selected-session transcript to its tail when the user has not manually scrolled away.
+    /// 当用户尚未手动滚离底部时，构建将当前选中会话转录吸附到尾部的任务。
+    fn maybe_follow_selected_session_transcript_tail(&self, session_id: usize) -> Task<Message> {
+        if self.selected_session().map(|session| session.id) != Some(session_id) {
+            return Task::none();
+        }
+
+        if !self.session_agent_view_should_follow_tail(session_id) {
+            return Task::none();
+        }
+
+        operation::snap_to_end(transcript_scrollable_id(session_id))
+    }
+
+    /// Temporarily protects one session transcript from layout-driven follow-tail misclassification during a controlled rebuild.
+    /// 在一次受控重建期间临时保护某个会话转录，避免布局驱动的追随状态被误判。
+    fn lock_session_agent_view_follow_tail(&mut self, session_id: usize) {
+        self.session_agent_view_follow_tail.insert(session_id, true);
+        self.session_agent_view_follow_tail_locked_sessions
+            .insert(session_id);
+    }
+
+    /// Defers one transcript tail re-sync until after the current rebuild-driven layout pass has settled.
+    /// 将一次转录尾部重同步延后到当前由重建触发的布局稳定之后再执行。
+    fn defer_selected_session_transcript_tail_resync(&self, session_id: usize) -> Task<Message> {
+        Task::perform(
+            async move { session_id },
+            Message::SelectedSessionTranscriptTailResync,
+        )
+    }
+
+    /// Returns whether one floating streaming-thinking overlay should keep auto-following the latest tail.
+    /// 返回某个流式思考浮层是否应继续自动追随最新尾部。
+    fn session_streaming_thinking_should_follow_tail(&self, session_id: usize) -> bool {
+        self.session_streaming_thinking_follow_tail
+            .get(&session_id)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    /// Updates the session-scoped floating-thinking auto-follow flag from one reported overlay viewport.
+    /// 根据一次回传的浮层视口更新会话级流式思考自动追随标记。
+    fn update_session_streaming_thinking_follow_tail(
+        &mut self,
+        session_id: usize,
+        viewport: scrollable::Viewport,
+    ) {
+        self.session_streaming_thinking_follow_tail
+            .insert(session_id, transcript_viewport_is_near_bottom(viewport));
+    }
+
+    /// Builds one task that snaps the selected-session floating-thinking overlay to its tail when the user has not manually scrolled away.
+    /// 当用户尚未手动滚离底部时，构建将当前选中会话流式思考浮层吸附到尾部的任务。
+    fn maybe_follow_selected_session_thinking_overlay_tail(
+        &self,
+        session_id: usize,
+    ) -> Task<Message> {
+        if self.selected_session().map(|session| session.id) != Some(session_id) {
+            return Task::none();
+        }
+
+        if self.streaming_thinking_message(session_id).is_none() {
+            return Task::none();
+        }
+
+        if !self.session_streaming_thinking_should_follow_tail(session_id) {
+            return Task::none();
+        }
+
+        operation::snap_to_end(thinking_overlay_scrollable_id(session_id))
+    }
+
+    /// Clears the short dock animation snapshot when it belongs to the target session.
+    /// 当短暂收纳动画快照属于目标会话时清除它。
+    fn clear_docking_thinking_overlay(&mut self, session_id: usize) {
+        if self
+            .docking_thinking_overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.session_id == session_id)
+        {
+            self.docking_thinking_overlay = None;
+        }
+    }
+
+    /// Prunes the short dock animation snapshot once its configured duration has elapsed.
+    /// 当短暂收纳动画超过配置时长后裁剪掉对应快照。
+    fn prune_docking_thinking_overlay(&mut self) -> Option<usize> {
+        let should_prune = self
+            .docking_thinking_overlay
+            .as_ref()
+            .is_some_and(|overlay| {
+                overlay.started_at.elapsed() >= THINKING_OVERLAY_DOCK_ANIMATION_DURATION
+            });
+
+        if should_prune {
+            let session_id = self
+                .docking_thinking_overlay
+                .as_ref()
+                .map(|overlay| overlay.session_id);
+            self.docking_thinking_overlay = None;
+            session_id
+        } else {
+            None
+        }
     }
 
     /// Returns the session summary matching one identifier, if it still exists.
@@ -8604,6 +9808,7 @@ impl VulcanWorkbench {
             self.session_run_phases
                 .insert(*session_id, SessionRunPhase::Idle);
             self.session_runtime_events.remove(session_id);
+            self.refresh_session_agent_view_buffers(*session_id);
         }
 
         self.task_projects.push(restored_project);
@@ -8668,6 +9873,7 @@ impl VulcanWorkbench {
         self.session_run_phases
             .insert(session_id, SessionRunPhase::Idle);
         self.session_runtime_events.remove(&session_id);
+        self.refresh_session_agent_view_buffers(session_id);
         self.expanded_task_projects.insert(project_id);
         self.selected_session = session_id;
         self.hovered_task_session = Some(session_id);
@@ -8768,6 +9974,432 @@ fn compact_relative_label(value: &str) -> String {
     value.replace(' ', "").trim_end_matches('前').to_string()
 }
 
+/// Builds the stable scrollable identifier used by one session transcript surface across all transcript presentation modes.
+/// 为单个会话转录表面在全部展示模式下构建稳定滚动容器标识。
+fn transcript_scrollable_id(session_id: usize) -> iced::widget::Id {
+    iced::widget::Id::from(format!("session-{session_id}-agent-transcript-scrollable"))
+}
+
+/// Builds the stable scrollable identifier used by one floating streaming-thinking overlay.
+/// 为单个流式思考浮层构建稳定滚动容器标识。
+fn thinking_overlay_scrollable_id(session_id: usize) -> iced::widget::Id {
+    iced::widget::Id::from(format!("session-{session_id}-thinking-overlay-scrollable"))
+}
+
+/// Returns whether one transcript viewport should still be treated as pinned to the newest tail content.
+/// 返回某个转录视口是否仍应被视为贴住最新尾部内容。
+fn transcript_viewport_is_near_bottom(viewport: scrollable::Viewport) -> bool {
+    let absolute_offset = viewport.absolute_offset();
+    let viewport_bounds = viewport.bounds();
+    let content_bounds = viewport.content_bounds();
+    let bottom_gap =
+        (content_bounds.height - (absolute_offset.y + viewport_bounds.height)).max(0.0);
+
+    bottom_gap <= TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD
+}
+
+/// Returns the normalized dock progress of one completed streaming-thinking overlay animation snapshot.
+/// 返回单个已完成流式思考浮层动画快照的归一化收纳进度。
+fn docking_thinking_overlay_progress(overlay: &DockingThinkingOverlayState) -> f32 {
+    let elapsed = overlay.started_at.elapsed();
+    let duration = THINKING_OVERLAY_DOCK_ANIMATION_DURATION.as_secs_f32();
+
+    if duration <= f32::EPSILON {
+        1.0
+    } else {
+        (elapsed.as_secs_f32() / duration).clamp(0.0, 1.0)
+    }
+}
+
+/// Unified Markdown viewer used by the agent transcript surface so prose can keep the custom font routing rules.
+/// 统一转录面板使用的 Markdown 查看器，使正文能够遵循自定义字体路由规则。
+struct AgentViewMarkdownViewer;
+
+impl<'a, ThemeType, RendererType> markdown::Viewer<'a, Message, ThemeType, RendererType>
+    for AgentViewMarkdownViewer
+where
+    ThemeType: markdown::Catalog + 'a,
+    RendererType: iced::advanced::text::Renderer<Font = iced::Font> + 'a,
+{
+    /// Publishes the clicked Markdown link back into the GUI message pipeline.
+    /// 将点击的 Markdown 链接重新发布回 GUI 消息管线。
+    fn on_link_click(url: markdown::Uri) -> Message {
+        Message::AgentViewMarkdownLinkActivated(url)
+    }
+
+    /// Renders one Markdown heading with the transcript font-routing rules applied.
+    /// 使用转录字体路由规则渲染一个 Markdown 标题。
+    fn heading(
+        &self,
+        settings: markdown::Settings,
+        level: &'a markdown::HeadingLevel,
+        text: &'a markdown::Text,
+        _index: usize,
+    ) -> Element<'a, Message, ThemeType, RendererType> {
+        let heading_size = match level {
+            markdown::HeadingLevel::H1 => settings.h1_size,
+            markdown::HeadingLevel::H2 => settings.h2_size,
+            markdown::HeadingLevel::H3 => settings.h3_size,
+            markdown::HeadingLevel::H4 => settings.h4_size,
+            markdown::HeadingLevel::H5 => settings.h5_size,
+            markdown::HeadingLevel::H6 => settings.h6_size,
+        };
+
+        // Preserve the default intrinsic-width heading layout so table cells can size to content
+        // without being forced into a fill-width paragraph box that causes pathological wrapping.
+        // 保持默认的内禀宽度标题布局，让表格单元格能够按内容尺寸排版，
+        // 避免被强制塞进填满宽度的段落盒后出现异常换行。
+        container(
+            rich_text(build_agent_view_markdown_spans(
+                text,
+                settings.style,
+                AgentViewMarkdownRenderKind::Flow,
+            ))
+            .size(heading_size)
+            .on_link_click(Message::AgentViewMarkdownLinkActivated),
+        )
+        .into()
+    }
+
+    /// Renders one Markdown paragraph with the transcript font-routing rules applied.
+    /// 使用转录字体路由规则渲染一个 Markdown 段落。
+    fn paragraph(
+        &self,
+        settings: markdown::Settings,
+        text: &markdown::Text,
+    ) -> Element<'a, Message, ThemeType, RendererType> {
+        rich_text(build_agent_view_markdown_spans(
+            text,
+            settings.style,
+            AgentViewMarkdownRenderKind::Flow,
+        ))
+        .size(settings.text_size)
+        .on_link_click(Message::AgentViewMarkdownLinkActivated)
+        .into()
+    }
+
+    /// Renders one Markdown code block while routing Latin and CJK runs onto their dedicated monospace families.
+    /// 渲染一个 Markdown 代码块，同时把拉丁与 CJK 片段路由到各自的等宽字体族。
+    fn code_block(
+        &self,
+        settings: markdown::Settings,
+        _language: Option<&'a str>,
+        _code: &'a str,
+        lines: &'a [markdown::Text],
+    ) -> Element<'a, Message, ThemeType, RendererType> {
+        container(
+            scrollable(
+                container(column(lines.iter().map(|line| {
+                    rich_text(build_agent_view_markdown_spans(
+                        line,
+                        settings.style,
+                        AgentViewMarkdownRenderKind::CodeBlock,
+                    ))
+                    .width(Fill)
+                    .size(settings.code_size)
+                    .font(theme::code_font())
+                    .on_link_click(Message::AgentViewMarkdownLinkActivated)
+                    .into()
+                })))
+                .padding(settings.code_size),
+            )
+            .direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::default()
+                    .width(settings.code_size / 2)
+                    .scroller_width(settings.code_size / 2),
+            )),
+        )
+        .width(Fill)
+        .padding(settings.code_size / 4)
+        .class(ThemeType::code_block())
+        .into()
+    }
+}
+
+/// Markdown rendering mode used when routing transcript spans to the correct Latin and CJK font families.
+/// 将转录区间路由到正确的拉丁与 CJK 字体族时使用的 Markdown 渲染模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentViewMarkdownRenderKind {
+    /// Standard prose flow that may still contain inline code spans.
+    /// 可能仍包含行内代码片段的标准正文流。
+    Flow,
+    /// Full code-block flow where every span should stay on the monospace routing branch.
+    /// 每个片段都应保持在等宽字体分支上的完整代码块流。
+    CodeBlock,
+}
+
+/// Plain-text rendering mode used by structured transcript blocks outside the Markdown parser.
+/// 结构化转录区块在 Markdown 解析器之外使用的纯文本渲染模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentViewPlainTextRenderKind {
+    /// Standard prose flow routed onto the UI typography families.
+    /// 路由到界面排版字体族的标准正文流。
+    Flow,
+    /// Monospace flow routed onto the code typography families.
+    /// 路由到代码排版字体族的等宽文本流。
+    Code,
+}
+
+/// Tone used by raw tool-oriented transcript panels.
+/// 工具类原始转录面板使用的语气类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentViewCodePanelTone {
+    /// Tool invocation panel that should feel command-like.
+    /// 应体现命令感的工具调用面板。
+    ToolCall,
+    /// Tool completion panel that should feel like terminal output.
+    /// 应体现终端输出感的工具结果面板。
+    ToolResult,
+}
+
+/// Script bucket used by transcript span routing so Latin and East Asian glyphs can pick different bundled families.
+/// 转录区间路由使用的脚本分组，使拉丁与东亚字形能够选择不同的内置字体族。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentViewMarkdownScript {
+    /// Latin-like glyphs and neutral punctuation handled by the primary UI family.
+    /// 由主界面字体族承载的拉丁类字形与中性标点。
+    Latin,
+    /// East Asian glyphs that should stay on the bundled CJK fallback family.
+    /// 应保持在内置 CJK 兜底字体族上的东亚字形。
+    Cjk,
+}
+
+/// Builds routed rich-text spans from one parsed Markdown text payload while preserving links, highlights, and emphasis metadata.
+/// 从一段已解析 Markdown 文本载荷构建带路由的富文本片段，同时保留链接、高亮与强调元数据。
+fn build_agent_view_markdown_spans(
+    text: &markdown::Text,
+    style: markdown::Style,
+    render_kind: AgentViewMarkdownRenderKind,
+) -> Vec<iced::widget::text::Span<'static, markdown::Uri>> {
+    let base_spans = text.spans(style);
+    let mut output = Vec::new();
+
+    for source_span in base_spans.iter() {
+        let span_uses_code_branch = matches!(render_kind, AgentViewMarkdownRenderKind::CodeBlock)
+            || source_span.highlight.is_some()
+            || source_span.font == Some(style.inline_code_font);
+        let requested_font = source_span.font.unwrap_or(if span_uses_code_branch {
+            style.code_block_font
+        } else {
+            style.font
+        });
+
+        for (script, fragment) in split_agent_view_markdown_fragment(source_span.text.as_ref()) {
+            let routed_font = match (span_uses_code_branch, script) {
+                (true, AgentViewMarkdownScript::Latin) => {
+                    theme::normalize_code_latin_font(requested_font)
+                }
+                (true, AgentViewMarkdownScript::Cjk) => {
+                    theme::normalize_code_cjk_font(requested_font)
+                }
+                (false, AgentViewMarkdownScript::Latin) => {
+                    theme::normalize_ui_latin_font(requested_font)
+                }
+                (false, AgentViewMarkdownScript::Cjk) => {
+                    theme::normalize_ui_cjk_font(requested_font)
+                }
+            };
+
+            let mut routed_span = source_span.clone();
+            routed_span.text = fragment.into();
+            routed_span.font = Some(routed_font);
+            output.push(routed_span);
+        }
+    }
+
+    output
+}
+
+/// Builds routed rich-text spans from one plain-text payload while preserving the Latin and CJK font fallback strategy.
+/// 从一段纯文本载荷构建带路由的富文本片段，同时保留拉丁与 CJK 的字体兜底策略。
+fn build_agent_view_plain_text_spans(
+    text: &str,
+    requested_font: iced::Font,
+    render_kind: AgentViewPlainTextRenderKind,
+    color: Option<iced::Color>,
+) -> Vec<iced::widget::text::Span<'static, ()>> {
+    let fragments = if text.is_empty() {
+        vec![(AgentViewMarkdownScript::Latin, String::from(" "))]
+    } else {
+        split_agent_view_markdown_fragment(text)
+    };
+    let mut output = Vec::new();
+
+    for (script, fragment) in fragments {
+        let routed_font = match (render_kind, script) {
+            (AgentViewPlainTextRenderKind::Code, AgentViewMarkdownScript::Latin) => {
+                theme::normalize_code_latin_font(requested_font)
+            }
+            (AgentViewPlainTextRenderKind::Code, AgentViewMarkdownScript::Cjk) => {
+                theme::normalize_code_cjk_font(requested_font)
+            }
+            (AgentViewPlainTextRenderKind::Flow, AgentViewMarkdownScript::Latin) => {
+                theme::normalize_ui_latin_font(requested_font)
+            }
+            (AgentViewPlainTextRenderKind::Flow, AgentViewMarkdownScript::Cjk) => {
+                theme::normalize_ui_cjk_font(requested_font)
+            }
+        };
+
+        let mut routed_span = iced::widget::span(fragment).font(routed_font);
+        if let Some(color) = color {
+            routed_span = routed_span.color(color);
+        }
+        output.push(routed_span);
+    }
+
+    output
+}
+
+/// Classifies one raw diff line into the semantic line styles reused by the transcript diff viewer.
+/// 将一条原始 diff 行分类到转录 diff 查看器复用的语义行样式中。
+fn agent_view_diff_line_kind(line: &str) -> crate::diff::DiffLineKind {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        crate::diff::DiffLineKind::Added
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        crate::diff::DiffLineKind::Removed
+    } else if line.starts_with("@@")
+        || line.starts_with("diff --git ")
+        || line.starts_with("index ")
+        || line.starts_with("--- ")
+        || line.starts_with("+++ ")
+        || line.starts_with("new file mode ")
+        || line.starts_with("deleted file mode ")
+        || line.starts_with("\\ No newline at end of file")
+    {
+        crate::diff::DiffLineKind::Note
+    } else {
+        crate::diff::DiffLineKind::Context
+    }
+}
+
+/// Returns the first non-empty line trimmed from one plain-text block body.
+/// 返回某个纯文本区块正文中首条非空行的裁剪结果。
+fn agent_view_first_non_empty_line(body: &str) -> Option<&str> {
+    body.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+/// Counts the visible non-empty lines inside one plain-text block body.
+/// 统计某个纯文本区块正文中的可见非空行数量。
+fn agent_view_visible_line_count(body: &str) -> usize {
+    body.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .count()
+        .max(1)
+}
+
+/// Counts the visible non-whitespace characters inside one plain-text block body.
+/// 统计某个纯文本区块正文中的可见非空白字符数量。
+fn agent_view_visible_character_count(body: &str) -> usize {
+    body.chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+}
+
+/// Builds the collapsed summary text shown for one diff directive body.
+/// 构建某个差异指令正文在折叠状态下展示的摘要文本。
+fn agent_view_diff_body_summary(body: &str) -> String {
+    let panel = WorkspaceDiffPanel::from_unified_diff(String::new(), body);
+
+    if panel.files.is_empty() {
+        return String::from("差异内容");
+    }
+
+    format!(
+        "{} 个文件 · +{} / -{}",
+        panel.files.len(),
+        panel.additions,
+        panel.deletions
+    )
+}
+
+/// Returns the primary file label shown for one diff directive body when it is collapsed.
+/// 返回某个差异指令正文在折叠状态下展示的主文件标签。
+fn agent_view_diff_primary_file_label(body: &str) -> Option<String> {
+    let panel = WorkspaceDiffPanel::from_unified_diff(String::new(), body);
+
+    if panel.files.is_empty() {
+        None
+    } else if panel.files.len() == 1 {
+        panel.files.first().map(|file| file.header_title())
+    } else {
+        panel
+            .files
+            .first()
+            .map(|file| format!("{} 等 {} 个文件", file.header_title(), panel.files.len()))
+    }
+}
+
+/// Splits one text fragment into script-stable runs so Latin and CJK glyphs can be assigned to different bundled families.
+/// 将单段文本拆分成脚本稳定的片段，以便把拉丁与 CJK 字形分配给不同的内置字体族。
+fn split_agent_view_markdown_fragment(fragment: &str) -> Vec<(AgentViewMarkdownScript, String)> {
+    let mut runs = Vec::new();
+    let mut active_script = None;
+    let mut active_fragment = String::new();
+
+    for character in fragment.chars() {
+        let character_script = if is_agent_view_markdown_neutral_character(character) {
+            active_script.unwrap_or(AgentViewMarkdownScript::Latin)
+        } else {
+            classify_agent_view_markdown_script(character)
+        };
+
+        if active_script.is_some() && active_script != Some(character_script) {
+            runs.push((
+                active_script.unwrap_or(AgentViewMarkdownScript::Latin),
+                std::mem::take(&mut active_fragment),
+            ));
+        }
+
+        active_script = Some(character_script);
+        active_fragment.push(character);
+    }
+
+    if !active_fragment.is_empty() {
+        runs.push((
+            active_script.unwrap_or(AgentViewMarkdownScript::Latin),
+            active_fragment,
+        ));
+    }
+
+    runs
+}
+
+/// Returns whether one character should simply follow the surrounding script bucket instead of opening a brand new run.
+/// 返回某个字符是否应直接跟随周围脚本分组，而不是开启新的片段。
+fn is_agent_view_markdown_neutral_character(character: char) -> bool {
+    character.is_whitespace()
+        || character.is_ascii_punctuation()
+        || matches!(
+            character,
+            '·' | '•' | '‧' | '…' | '—' | '–' | '―' | '“' | '”' | '‘' | '’'
+        )
+}
+
+/// Classifies one character into the transcript Latin-or-CJK routing buckets.
+/// 将某个字符归类到转录渲染使用的拉丁或 CJK 路由分组中。
+fn classify_agent_view_markdown_script(character: char) -> AgentViewMarkdownScript {
+    if matches!(
+        character as u32,
+        0x2E80..=0x2FDF
+            | 0x3040..=0x30FF
+            | 0x3100..=0x312F
+            | 0x31A0..=0x31BF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFFEF
+            | 0x20000..=0x3FFFD
+    ) {
+        AgentViewMarkdownScript::Cjk
+    } else {
+        AgentViewMarkdownScript::Latin
+    }
+}
+
 /// Parses one Markdown source string and builds the paired selectable buffer used by read-only transcript views.
 /// 解析一段 Markdown 源文本，并构建只读转录视图使用的配套可选缓冲区。
 fn parse_selectable_markdown_body(
@@ -8796,7 +10428,7 @@ fn build_selectable_markdown_text(
     }
 
     let rendered =
-        markdown_items_to_selectable_text(content.items(), markdown::Style::from(theme), 0);
+        markdown_items_to_selectable_text(content.items(), theme::markdown_style(theme), 0);
     let trimmed = rendered.trim_end().to_string();
 
     if trimmed.trim().is_empty() {

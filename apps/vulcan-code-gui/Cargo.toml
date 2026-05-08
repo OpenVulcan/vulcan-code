@@ -22,6 +22,7 @@ rfd = "0.15.4"
 rig.workspace = true
 rig-compose.workspace = true
 rig-mcp.workspace = true
+vulcan-agent-view.workspace = true
 vldb-controller-client.workspace = true
 luaskills.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }

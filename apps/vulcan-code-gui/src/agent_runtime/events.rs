@@ -70,6 +70,9 @@ pub enum ExecutionStreamEvent {
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。
     ThinkingDelta { session_id: usize, delta: String },
+    /// Visible assistant thinking phase completed and should dock back into the main transcript immediately.
+    /// 可见助手思考阶段已完成，并应立即收回主转录正文中。
+    ThinkingCompleted { session_id: usize },
     /// Visible assistant final-output delta that should stay inside future context.
     /// 应保留在未来上下文之内的可见正式输出增量。
     OutputDelta { session_id: usize, delta: String },

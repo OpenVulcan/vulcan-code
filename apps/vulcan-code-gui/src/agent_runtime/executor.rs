@@ -367,6 +367,7 @@ pub fn stream_runtime_run(
         let mut warnings = preparation.warnings.clone();
         let mut thinking_output = String::new();
         let mut assistant_output = String::new();
+        let mut thinking_completed_emitted = false;
 
         let context_event = RuntimeEvent::new(
             RuntimeEventKind::ToolStarted,
@@ -419,6 +420,12 @@ pub fn stream_runtime_run(
                     };
                 }
                 Ok(ProviderStreamDelta::Output(delta)) => {
+                    if !thinking_completed_emitted && !thinking_output.trim().is_empty() {
+                        thinking_completed_emitted = true;
+                        yield ExecutionStreamEvent::ThinkingCompleted {
+                            session_id: request.session_id,
+                        };
+                    }
                     assistant_output.push_str(&delta);
                     yield ExecutionStreamEvent::OutputDelta {
                         session_id: request.session_id,
@@ -440,6 +447,11 @@ pub fn stream_runtime_run(
         }
 
         if let Some(error) = terminal_error {
+            if !thinking_completed_emitted && !thinking_output.trim().is_empty() {
+                yield ExecutionStreamEvent::ThinkingCompleted {
+                    session_id: request.session_id,
+                };
+            }
             let failed_event = RuntimeEvent::new(
                 RuntimeEventKind::Failed,
                 "真实执行失败",
@@ -460,6 +472,12 @@ pub fn stream_runtime_run(
             );
             yield ExecutionStreamEvent::Finished(report);
             return;
+        }
+
+        if !thinking_completed_emitted && !thinking_output.trim().is_empty() {
+            yield ExecutionStreamEvent::ThinkingCompleted {
+                session_id: request.session_id,
+            };
         }
 
         let normalized_output = normalize_assistant_output(assistant_output);

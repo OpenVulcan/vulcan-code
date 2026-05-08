@@ -3529,7 +3529,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c3a14896dfa883796f1cb410461aef38810ea05f2b2c33c5aded3649095fdad"
 dependencies = [
  "bitflags 2.11.1",
+ "getopts",
  "memchr",
+ "pulldown-cmark-escape",
  "unicase",
 ]
 
@@ -5439,6 +5441,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-agent-view"
+version = "0.1.0"
+dependencies = [
+ "pulldown-cmark 0.13.3",
+ "serde",
+]
+
+[[package]]
 name = "vulcan-code-gui"
 version = "0.1.0"
 dependencies = [
@@ -5458,6 +5468,7 @@ dependencies = [
  "serde",
  "serde_json",
  "vldb-controller-client",
+ "vulcan-agent-view",
 ]
 
 [[package]]
