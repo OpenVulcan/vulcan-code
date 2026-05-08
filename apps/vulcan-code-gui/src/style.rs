@@ -1,7 +1,9 @@
 //! Shared visual styles for the GUI workbench.
 //! GUI 工作台共享的视觉样式定义。
 
+use crate::agent_runtime::events::RuntimeEventKind;
 use crate::diff::DiffLineKind;
+use crate::model::{SessionMessageKind, SessionRunPhase};
 use iced::widget::{button, container, text_editor};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
@@ -626,5 +628,113 @@ pub fn window_close_button_style(theme: &Theme, status: button::Status) -> butto
             text_color: palette.background.base.text.scale_alpha(0.36),
             ..base
         },
+    }
+}
+
+/// Returns the container style used by one session message bubble in the workbench transcript.
+/// 返回工作台转录区单条会话消息气泡使用的容器样式。
+pub fn workbench_message_bubble_style(theme: &Theme, kind: SessionMessageKind) -> container::Style {
+    let palette = theme.extended_palette();
+
+    match kind {
+        SessionMessageKind::User => container::Style {
+            background: Some(palette.primary.weak.color.scale_alpha(0.92).into()),
+            border: Border {
+                radius: 2.0.into(),
+                width: 1.0,
+                color: palette.primary.strong.color.scale_alpha(0.18),
+            },
+            ..Default::default()
+        },
+        SessionMessageKind::Assistant => container::Style {
+            background: Some(palette.background.weak.color.scale_alpha(0.9).into()),
+            border: Border {
+                radius: 2.0.into(),
+                width: 1.0,
+                color: palette.background.strong.color.scale_alpha(0.16),
+            },
+            ..Default::default()
+        },
+        SessionMessageKind::Error => container::Style {
+            background: Some(iced::color!(0xFFF1F0).into()),
+            border: Border {
+                radius: 2.0.into(),
+                width: 1.0,
+                color: iced::color!(0xD73A49).scale_alpha(0.22),
+            },
+            ..Default::default()
+        },
+    }
+}
+
+/// Returns the status-chip style used by the workbench transcript header.
+/// 返回工作台转录区头部状态标签使用的样式。
+pub fn workbench_run_phase_chip_style(theme: &Theme, phase: SessionRunPhase) -> container::Style {
+    let palette = theme.extended_palette();
+    let (background, border) = match phase {
+        SessionRunPhase::Idle => (
+            palette.background.weak.color.scale_alpha(0.85),
+            palette.background.strong.color.scale_alpha(0.16),
+        ),
+        SessionRunPhase::Preparing => (
+            palette.primary.weak.color.scale_alpha(0.92),
+            palette.primary.strong.color.scale_alpha(0.2),
+        ),
+        SessionRunPhase::Ready => (
+            iced::color!(0xF0FFF4),
+            iced::color!(0x2DA44E).scale_alpha(0.18),
+        ),
+        SessionRunPhase::Failed => (
+            iced::color!(0xFFF1F0),
+            iced::color!(0xD73A49).scale_alpha(0.24),
+        ),
+        SessionRunPhase::Paused => (
+            iced::color!(0xFFF8E6),
+            iced::color!(0x9A6700).scale_alpha(0.2),
+        ),
+    };
+
+    container::Style {
+        background: Some(background.into()),
+        border: Border {
+            radius: 2.0.into(),
+            width: 1.0,
+            color: border,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the card style used by one runtime event block in the workbench transcript.
+/// 返回工作台转录区单个运行时事件块使用的卡片样式。
+pub fn workbench_runtime_event_style(theme: &Theme, kind: RuntimeEventKind) -> container::Style {
+    let palette = theme.extended_palette();
+    let (background, border) = match kind {
+        RuntimeEventKind::TokenDelta => (
+            palette.background.weak.color.scale_alpha(0.88),
+            palette.background.strong.color.scale_alpha(0.14),
+        ),
+        RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished => (
+            iced::color!(0xE3F2FF),
+            iced::color!(0x0969DA).scale_alpha(0.18),
+        ),
+        RuntimeEventKind::DelegateStarted | RuntimeEventKind::DelegateFinished => (
+            iced::color!(0xF6F2FF),
+            iced::color!(0x8250DF).scale_alpha(0.18),
+        ),
+        RuntimeEventKind::Failed => (
+            iced::color!(0xFFF1F0),
+            iced::color!(0xD73A49).scale_alpha(0.24),
+        ),
+    };
+
+    container::Style {
+        background: Some(background.into()),
+        border: Border {
+            radius: 2.0.into(),
+            width: 1.0,
+            color: border,
+        },
+        ..Default::default()
     }
 }

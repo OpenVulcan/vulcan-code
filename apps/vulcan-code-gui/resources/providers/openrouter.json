@@ -2,6 +2,11 @@
   "id": "openrouter",
   "name": "OpenRouter",
   "runtime": "openrouter",
+  "extraHeaders": {
+    "HTTP-Referer": "https://code.openvulcan.com",
+    "X-OpenRouter-Title": "vulcancode",
+    "X-OpenRouter-Categories": "cli-agent,cloud-agent,programming-app"
+  },
   "credentialEnvKeys": [
     "OPENROUTER_API_KEY"
   ],

@@ -352,3 +352,96 @@ impl ActivityEntry {
         ]
     }
 }
+
+/// Message kinds rendered inside one workbench session transcript.
+/// 渲染在某个工作台会话转录区中的消息类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionMessageKind {
+    /// User-authored prompt or follow-up input.
+    /// 用户撰写的提示词或跟进输入。
+    User,
+    /// Assistant-authored execution or reasoning output.
+    /// Assistant 生成的执行结果或推理输出。
+    Assistant,
+    /// Error output emitted by the execution pipeline.
+    /// 执行链路输出的错误消息。
+    Error,
+}
+
+impl SessionMessageKind {
+    /// Returns the compact label displayed in one transcript bubble header.
+    /// 返回显示在转录气泡头部中的精简标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::User => "USER",
+            Self::Assistant => "AI",
+            Self::Error => "ERROR",
+        }
+    }
+}
+
+/// Structured message entry shown inside one workbench session transcript.
+/// 展示在某个工作台会话转录区中的结构化消息项。
+#[derive(Debug, Clone)]
+pub struct SessionMessageEntry {
+    /// High-level message kind.
+    /// 消息的高层类型。
+    pub kind: SessionMessageKind,
+    /// Optional headline displayed above the message body.
+    /// 展示在消息正文上方的可选标题。
+    pub title: String,
+    /// Main message body content.
+    /// 主要消息正文内容。
+    pub body: String,
+}
+
+impl SessionMessageEntry {
+    /// Creates a new session message entry from explicit parts.
+    /// 使用明确片段创建新的会话消息项。
+    pub fn new(
+        kind: SessionMessageKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            title: title.into(),
+            body: body.into(),
+        }
+    }
+}
+
+/// Execution phases used by the main workbench transcript header.
+/// 主工作台转录区头部使用的执行阶段类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRunPhase {
+    /// No active execution has started yet.
+    /// 尚未开始任何执行。
+    Idle,
+    /// Execution preparation or streaming is in progress.
+    /// 执行准备或流式输出进行中。
+    Preparing,
+    /// The latest execution finished and produced output.
+    /// 最近一次执行已完成并产生输出。
+    Ready,
+    /// The latest execution failed.
+    /// 最近一次执行失败。
+    Failed,
+    /// Execution was paused manually.
+    /// 执行被手动暂停。
+    Paused,
+}
+
+impl SessionRunPhase {
+    /// Returns a compact label for the transcript status bar.
+    /// 返回转录区状态条使用的精简标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "空闲",
+            Self::Preparing => "执行中",
+            Self::Ready => "已完成",
+            Self::Failed => "失败",
+            Self::Paused => "已暂停",
+        }
+    }
+}

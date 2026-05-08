@@ -1,15 +1,21 @@
 //! Main application state and view composition for the desktop scaffold.
 //! 桌面端骨架的主应用状态与界面组合逻辑。
 
+use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::{
+    self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport, RuntimeFoundation,
+    RuntimeSkillKind, execute_runtime_run,
+};
 use crate::code_view;
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionState, SessionSummary,
-    TaskProjectSummary,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionMessageEntry, SessionMessageKind,
+    SessionRunPhase, SessionState, SessionSummary, TaskProjectSummary,
 };
 use crate::provider_config::{
-    self, ModelChoice, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
-    ProviderConfigurationFile, ProviderFieldKey,
+    self, ModelChoice, PersistedAgentKind, PersistedMcpServerEntry, PersistedMcpTransportKind,
+    PersistedProviderEntry, PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile,
+    ProviderFieldKey,
 };
 use crate::style;
 use crate::theme;
@@ -268,7 +274,6 @@ pub fn run() -> iced::Result {
 
 /// Root state for the AI coding desktop workbench.
 /// AI 编程桌面工作台的根状态。
-#[derive(Debug)]
 pub struct VulcanWorkbench {
     /// Main workbench window identifier.
     /// 主工作台窗口标识。
@@ -387,12 +392,24 @@ pub struct VulcanWorkbench {
     /// Runtime activity log rendered in the inspector pane.
     /// 渲染在检查面板中的运行活动日志。
     activities: Vec<ActivityEntry>,
+    /// Session-scoped transcript messages rendered inside the main workbench output area.
+    /// 渲染在主工作台输出区中的按会话归属消息转录集合。
+    session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    /// Session-scoped runtime events rendered beneath the transcript message stream.
+    /// 渲染在消息流下方的按会话归属运行时事件集合。
+    session_runtime_events: BTreeMap<usize, Vec<RuntimeEvent>>,
+    /// Session-scoped execution phases reflected by the workbench status bar.
+    /// 反映在工作台状态条中的按会话归属执行阶段集合。
+    session_run_phases: BTreeMap<usize, SessionRunPhase>,
     /// Identifier seed for newly created sessions.
     /// 新建会话使用的自增标识种子。
     next_session_id: usize,
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
+    /// Compose runtime foundation derived from the shared configuration file.
+    /// 根据共享配置文件构建出的 compose 运行时基础架构。
+    runtime_foundation: RuntimeFoundation,
     /// Currently selected top-level panel shown in the main display region.
     /// 当前显示在主显示区域中的顶层面板类型。
     active_main_panel: MainDisplayPanel,
@@ -405,6 +422,24 @@ pub struct VulcanWorkbench {
     /// Optional provider-configuration feedback message shown near the configuration widgets.
     /// 展示在配置控件附近的供应商配置反馈消息。
     provider_notice: String,
+    /// Optional MCP-configuration feedback message shown near the MCP settings widgets.
+    /// 展示在 MCP 设置控件附近的 MCP 配置反馈消息。
+    mcp_notice: String,
+    /// Currently selected MCP server identifier inside the settings page.
+    /// 当前在设置页面中选中的 MCP 服务器标识。
+    selected_mcp_server_id: Option<String>,
+    /// Editable MCP server form state for the selected MCP server entry.
+    /// 当前选中 MCP 服务器条目对应的可编辑表单状态。
+    mcp_server_form: McpServerFormState,
+    /// Latest validated execution preparation snapshot built from the current runtime state.
+    /// 根据当前运行时状态构建出的最近一次执行准备快照。
+    last_execution_preparation: Option<ExecutionPreparation>,
+    /// Latest successful MCP discovery summary rows produced by one real execution attempt.
+    /// 某次真实执行产出的最近一次 MCP 成功发现摘要行集合。
+    last_mcp_discovery_rows: Vec<String>,
+    /// Latest failed MCP discovery summary rows produced by one real execution attempt.
+    /// 某次真实执行产出的最近一次 MCP 失败发现摘要行集合。
+    last_mcp_discovery_errors: Vec<String>,
     /// Selected execution mode.
     /// 当前选择的执行模式。
     execution_mode: ExecutionMode,
@@ -668,6 +703,109 @@ impl ProviderFormState {
     }
 }
 
+/// Pick-list choice representing one configurable runtime agent.
+/// 表示单个可配置运行时代理的下拉选择项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentChoice {
+    /// Stable agent identifier.
+    /// 稳定代理标识。
+    id: String,
+    /// Human-readable display label.
+    /// 人类可读显示标签。
+    label: String,
+}
+
+impl std::fmt::Display for AgentChoice {
+    /// Renders the user-facing label of one agent picker item.
+    /// 渲染单个代理选择项的面向用户标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+/// Pick-list choice representing one configurable MCP server entry.
+/// 表示单个可配置 MCP 服务器条目的下拉选择项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpServerChoice {
+    /// Stable MCP server identifier.
+    /// 稳定 MCP 服务器标识。
+    id: String,
+    /// Human-readable display label.
+    /// 人类可读显示标签。
+    label: String,
+}
+
+impl std::fmt::Display for McpServerChoice {
+    /// Renders the user-facing label of one MCP server picker item.
+    /// 渲染单个 MCP 服务器选择项的面向用户标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+/// Editable MCP server form state mirrored into the shared configuration file.
+/// 映射回共享配置文件的可编辑 MCP 服务器表单状态。
+#[derive(Debug, Clone, Default)]
+struct McpServerFormState {
+    /// Human-readable MCP server name.
+    /// 人类可读的 MCP 服务器名称。
+    name: String,
+    /// Whether the MCP server is enabled.
+    /// 当前 MCP 服务器是否启用。
+    enabled: bool,
+    /// Command used to start the MCP server process.
+    /// 用于启动 MCP 服务器进程的命令。
+    command: String,
+    /// Delimited argument text shown in the settings form.
+    /// 展示在设置表单中的分隔参数文本。
+    args_text: String,
+    /// Optional working directory override.
+    /// 可选的工作目录覆盖值。
+    cwd: String,
+    /// Semicolon-delimited environment declarations.
+    /// 使用分号分隔的环境变量声明文本。
+    env_text: String,
+}
+
+impl McpServerFormState {
+    /// Builds an editable form state from one persisted MCP server entry.
+    /// 根据单个持久化 MCP 服务器条目构建可编辑表单状态。
+    fn from_entry(entry: &PersistedMcpServerEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            enabled: entry.enabled,
+            command: entry.command.clone(),
+            args_text: join_mcp_server_args(&entry.args),
+            cwd: entry.cwd.clone().unwrap_or_default(),
+            env_text: join_mcp_server_env(&entry.env),
+        }
+    }
+
+    /// Converts the editable form state into one persisted MCP server entry.
+    /// 将可编辑表单状态转换为单个持久化 MCP 服务器条目。
+    fn to_entry(&self) -> Result<PersistedMcpServerEntry, String> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(String::from("请先填写 MCP 服务器名称。"));
+        }
+
+        let command = self.command.trim();
+        if command.is_empty() {
+            return Err(String::from("请先填写 MCP 服务器启动命令。"));
+        }
+
+        Ok(PersistedMcpServerEntry {
+            name: name.to_string(),
+            enabled: self.enabled,
+            transport: PersistedMcpTransportKind::Stdio,
+            command: command.to_string(),
+            args: parse_mcp_server_args(&self.args_text),
+            cwd: trim_to_option(&self.cwd),
+            env: parse_mcp_server_env(&self.env_text)?,
+        })
+    }
+}
+
 /// Top-level panels that can be displayed inside the main workbench region.
 /// 可以显示在主工作台区域中的顶层面板类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -884,6 +1022,39 @@ enum Message {
     /// Selects one already-configured provider entry for editing.
     /// 选中一个已配置的供应商条目进行编辑。
     ConfiguredProviderSelected(String),
+    /// Selects the active runtime agent used by compose-based execution.
+    /// 选中 compose 执行链路使用的激活运行时代理。
+    ActiveAgentSelected(AgentChoice),
+    /// Selects one configured MCP server entry for editing.
+    /// 选中一个已配置 MCP 服务器条目进行编辑。
+    McpServerSelected(McpServerChoice),
+    /// Updates the editable MCP server name field.
+    /// 更新可编辑 MCP 服务器名称字段。
+    McpServerNameChanged(String),
+    /// Updates the editable MCP server command field.
+    /// 更新可编辑 MCP 服务器命令字段。
+    McpServerCommandChanged(String),
+    /// Updates the editable MCP server argument text field.
+    /// 更新可编辑 MCP 服务器参数文本字段。
+    McpServerArgsChanged(String),
+    /// Updates the editable MCP server working-directory field.
+    /// 更新可编辑 MCP 服务器工作目录字段。
+    McpServerCwdChanged(String),
+    /// Updates the editable MCP server environment text field.
+    /// 更新可编辑 MCP 服务器环境变量文本字段。
+    McpServerEnvChanged(String),
+    /// Toggles the editable MCP server enabled flag.
+    /// 切换可编辑 MCP 服务器启用标记。
+    McpServerEnabledToggled(bool),
+    /// Creates a new editable MCP server draft.
+    /// 创建一份新的可编辑 MCP 服务器草稿。
+    CreateMcpServer,
+    /// Persists the currently edited MCP server entry.
+    /// 持久化当前编辑中的 MCP 服务器条目。
+    SaveMcpServerConfiguration,
+    /// Removes the currently selected MCP server entry.
+    /// 删除当前选中的 MCP 服务器条目。
+    RemoveMcpServerConfiguration,
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
@@ -974,6 +1145,9 @@ enum Message {
     /// Primary execution action requested.
     /// 请求执行主任务动作。
     StartRun,
+    /// Applies the completed real execution report returned by the async runtime task.
+    /// 应用异步运行时任务返回的真实执行完成报告。
+    RunExecutionFinished(ExecutionRunReport),
     /// Stop action requested.
     /// 请求停止当前动作。
     StopRun,
@@ -1041,7 +1215,7 @@ impl VulcanWorkbench {
 
         // Load the persisted provider configuration before building the inspector so startup state matches disk.
         // 在构建检查面板前载入持久化供应商配置，确保启动状态与磁盘内容保持一致。
-        let (provider_configuration, provider_notice) =
+        let (mut provider_configuration, mut provider_notice) =
             match provider_config::load_configuration_file() {
                 Ok(config) => (
                     config,
@@ -1052,6 +1226,18 @@ impl VulcanWorkbench {
                     format!("供应商配置载入失败，已回退到空配置：{error}"),
                 ),
             };
+        if agent_runtime::ensure_runtime_defaults(&mut provider_configuration) {
+            match provider_config::save_configuration_file(&provider_configuration) {
+                Ok(()) => {
+                    provider_notice.push_str(" 已自动补齐 rig/compose/mcp 基础架构默认配置。");
+                }
+                Err(error) => {
+                    provider_notice.push_str(&format!(
+                        " 运行时默认配置已写入内存，但保存到磁盘失败：{error}"
+                    ));
+                }
+            }
+        }
         let supported_provider_choices = provider_config::supported_provider_choices();
         let selected_provider = Self::resolve_initial_provider_choice(
             &provider_configuration,
@@ -1062,6 +1248,19 @@ impl VulcanWorkbench {
             .get(&selected_provider.id)
             .map(|entry| ProviderFormState::from_options(&entry.options))
             .unwrap_or_default();
+        let selected_mcp_server_id = Self::resolve_initial_mcp_server_id(&provider_configuration);
+        let mcp_server_form = selected_mcp_server_id
+            .as_deref()
+            .and_then(|server_id| provider_configuration.mcp.servers.get(server_id))
+            .map(McpServerFormState::from_entry)
+            .unwrap_or_default();
+        let runtime_foundation = RuntimeFoundation::build(&provider_configuration);
+        let runtime_summary = runtime_foundation.summary();
+        let sessions = SessionSummary::seeded();
+        let session_run_phases = sessions
+            .iter()
+            .map(|session| (session.id, SessionRunPhase::Idle))
+            .collect();
 
         let placeholder_diff_panel = WorkspaceDiffPanel::placeholder();
         let (main_window_id, open_main_window) = window::open(main_window_settings());
@@ -1096,7 +1295,7 @@ impl VulcanWorkbench {
                 diff_scroll_offset: 0.0,
                 diff_viewport_height: 0.0,
                 quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
-                sessions: SessionSummary::seeded(),
+                sessions,
                 task_projects: TaskProjectSummary::seeded(),
                 expanded_task_projects: TaskProjectSummary::seeded()
                     .into_iter()
@@ -1110,12 +1309,26 @@ impl VulcanWorkbench {
                 dragging_task_project: None,
                 selected_session: 1,
                 activities: ActivityEntry::seeded(),
+                session_messages: BTreeMap::new(),
+                session_runtime_events: BTreeMap::new(),
+                session_run_phases,
                 next_session_id: 5,
                 provider_configuration,
+                runtime_foundation,
                 active_main_panel: MainDisplayPanel::Main,
                 selected_provider,
                 provider_form,
                 provider_notice,
+                mcp_notice: if selected_mcp_server_id.is_some() {
+                    String::from("已载入 MCP 服务器配置。")
+                } else {
+                    String::from("尚未配置 MCP 服务器，可在此新增一个 stdio 服务器。")
+                },
+                selected_mcp_server_id,
+                mcp_server_form,
+                last_execution_preparation: None,
+                last_mcp_discovery_rows: Vec::new(),
+                last_mcp_discovery_errors: Vec::new(),
                 execution_mode: ExecutionMode::Plan,
                 app_theme: theme::default_theme(),
                 temperature: 0.25,
@@ -1124,7 +1337,12 @@ impl VulcanWorkbench {
                 run_cargo_check: true,
                 persist_memory: true,
                 auto_approve: false,
-                status_message: String::from("工作台已准备，可继续接入真实 AI 编排与命令执行。"),
+                status_message: format!(
+                    "运行时骨架已准备：{} 个代理 / {} 个技能 / {} 个原生工具。",
+                    runtime_summary.built_agent_count,
+                    runtime_summary.skill_count,
+                    runtime_summary.native_tool_count
+                ),
             },
             open_main_window.map(Message::MainWindowOpened),
         )
@@ -1426,6 +1644,7 @@ impl VulcanWorkbench {
                     self.status_message = error;
                     return Task::none();
                 }
+                self.refresh_runtime_foundation();
 
                 let provider_name = provider_config::provider_summary(&self.selected_provider.id);
                 self.provider_notice = format!("已保存 `{provider_name}` 供应商配置。");
@@ -1454,6 +1673,7 @@ impl VulcanWorkbench {
                     self.status_message = error;
                     return Task::none();
                 }
+                self.refresh_runtime_foundation();
 
                 self.reload_selected_provider_form();
                 self.provider_notice = format!("已移除 `{provider_name}` 供应商配置。");
@@ -1543,6 +1763,7 @@ impl VulcanWorkbench {
                     self.status_message = error;
                     return Task::none();
                 }
+                self.refresh_runtime_foundation();
 
                 self.provider_notice = format!("已将 `{}` 设为当前激活模型。", model);
                 self.status_message = format!("当前激活模型已切换为 `{}`。", model);
@@ -1559,6 +1780,91 @@ impl VulcanWorkbench {
                         "已定位到已配置供应商：{}。",
                         provider_config::provider_summary(&provider_id)
                     );
+                }
+                Task::none()
+            }
+            Message::ActiveAgentSelected(choice) => {
+                self.provider_configuration.active_agent = Some(choice.id.clone());
+
+                if let Err(error) =
+                    provider_config::save_configuration_file(&self.provider_configuration)
+                {
+                    self.mcp_notice = error.clone();
+                    self.status_message = error;
+                    return Task::none();
+                }
+
+                self.refresh_runtime_foundation();
+                self.status_message = format!("当前激活代理已切换为 `{}`。", choice.label);
+                Task::none()
+            }
+            Message::McpServerSelected(choice) => {
+                self.selected_mcp_server_id = Some(choice.id.clone());
+                self.reload_selected_mcp_server_form();
+                self.mcp_notice = format!("已切换到 MCP 服务器 `{}`。", choice.label);
+                Task::none()
+            }
+            Message::McpServerNameChanged(value) => {
+                self.mcp_server_form.name = value;
+                Task::none()
+            }
+            Message::McpServerCommandChanged(value) => {
+                self.mcp_server_form.command = value;
+                Task::none()
+            }
+            Message::McpServerArgsChanged(value) => {
+                self.mcp_server_form.args_text = value;
+                Task::none()
+            }
+            Message::McpServerCwdChanged(value) => {
+                self.mcp_server_form.cwd = value;
+                Task::none()
+            }
+            Message::McpServerEnvChanged(value) => {
+                self.mcp_server_form.env_text = value;
+                Task::none()
+            }
+            Message::McpServerEnabledToggled(enabled) => {
+                self.mcp_server_form.enabled = enabled;
+                Task::none()
+            }
+            Message::CreateMcpServer => {
+                self.selected_mcp_server_id = None;
+                self.mcp_server_form = McpServerFormState {
+                    enabled: true,
+                    ..McpServerFormState::default()
+                };
+                self.mcp_notice = String::from("已创建新的 MCP 服务器草稿，请填写名称与命令。");
+                Task::none()
+            }
+            Message::SaveMcpServerConfiguration => {
+                match self.save_selected_mcp_server_configuration() {
+                    Ok(server_id) => {
+                        self.selected_mcp_server_id = Some(server_id);
+                        self.refresh_runtime_foundation();
+                        self.reload_selected_mcp_server_form();
+                        self.mcp_notice = String::from("MCP 服务器配置已保存。");
+                        self.status_message = String::from("MCP 服务器配置已写入本地文件。");
+                    }
+                    Err(error) => {
+                        self.mcp_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::RemoveMcpServerConfiguration => {
+                match self.remove_selected_mcp_server_configuration() {
+                    Ok(removed_name) => {
+                        self.refresh_runtime_foundation();
+                        self.reload_selected_mcp_server_form();
+                        self.mcp_notice = format!("已移除 MCP 服务器 `{removed_name}`。");
+                        self.status_message = format!("MCP 服务器 `{removed_name}` 配置已删除。");
+                    }
+                    Err(error) => {
+                        self.mcp_notice = error.clone();
+                        self.status_message = error;
+                    }
                 }
                 Task::none()
             }
@@ -1790,6 +2096,11 @@ impl VulcanWorkbench {
                     let archived_session_ids = project.session_ids.clone();
                     self.sessions
                         .retain(|session| !archived_session_ids.contains(&session.id));
+                    for session_id in &archived_session_ids {
+                        self.session_messages.remove(session_id);
+                        self.session_runtime_events.remove(session_id);
+                        self.session_run_phases.remove(session_id);
+                    }
                     self.expanded_task_projects.remove(&project.id);
                     self.hovered_task_project = None;
                     self.hovered_task_session = None;
@@ -1832,6 +2143,9 @@ impl VulcanWorkbench {
                     .map(|session| session.title.clone())
                     .unwrap_or_else(|| format!("会话 #{session_id}"));
                 self.sessions.retain(|session| session.id != session_id);
+                self.session_messages.remove(&session_id);
+                self.session_runtime_events.remove(&session_id);
+                self.session_run_phases.remove(&session_id);
                 for project in &mut self.task_projects {
                     project.session_ids.retain(|id| *id != session_id);
                 }
@@ -1944,29 +2258,154 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::StartRun => {
-                // Promote the current session into the running state to simulate orchestration start.
-                // 将当前会话推进到运行状态，以模拟编排启动流程。
-                if let Some(session) = self.selected_session_mut() {
-                    session.status = SessionState::Running;
-                    session.queued_steps = session.queued_steps.saturating_add(1);
+                let request = if let Some(session) = self.selected_session() {
+                    ExecutionPreparationRequest {
+                        session_id: session.id,
+                        session_title: session.title.clone(),
+                        workspace_path: self.workspace_path.clone(),
+                        prompt: self.composer.clone(),
+                        execution_mode: self.execution_mode.to_string(),
+                        temperature: self.temperature,
+                    }
+                } else {
+                    self.status_message = String::from("当前没有可执行的会话。");
+                    return Task::none();
+                };
+
+                if request.prompt.trim().is_empty() {
+                    self.status_message = String::from("当前提示词为空，无法启动执行。");
+                    self.push_session_message(
+                        request.session_id,
+                        SessionMessageKind::Error,
+                        "执行启动失败",
+                        "请输入任务指令后再启动执行。",
+                    );
+                    self.replace_session_runtime_events(
+                        request.session_id,
+                        vec![RuntimeEvent::new(
+                            RuntimeEventKind::Failed,
+                            "执行启动失败",
+                            "当前提示词为空，系统已拒绝本次运行请求。",
+                        )],
+                    );
+                    self.set_session_run_phase(request.session_id, SessionRunPhase::Failed);
+                    return Task::none();
                 }
 
-                self.context_usage = (self.context_usage + 6.0).min(100.0);
-                let active_model = self.active_model_summary();
-                let active_provider = self.active_provider_summary();
-                self.status_message = format!(
-                    "已按 {mode} 模式启动执行准备，当前模型为 {model}。",
-                    mode = self.execution_mode,
-                    model = active_model
+                self.push_session_message(
+                    request.session_id,
+                    SessionMessageKind::User,
+                    "用户指令",
+                    request.prompt.clone(),
                 );
-                self.push_activity(
-                    ActivityLevel::Success,
-                    "执行编排已启动",
-                    format!(
-                        "提供方：{}，模型：{}，温度：{:.2}。",
-                        active_provider, active_model, self.temperature
-                    ),
-                );
+                self.replace_session_runtime_events(request.session_id, Vec::new());
+                self.last_mcp_discovery_rows.clear();
+                self.last_mcp_discovery_errors.clear();
+                self.set_session_run_phase(request.session_id, SessionRunPhase::Preparing);
+                if let Some(session) = self.selected_session_mut() {
+                    session.status = SessionState::Running;
+                    session.last_updated_label = String::from("刚刚");
+                }
+                self.status_message = String::from("正在发起真实执行，请稍候。");
+
+                let request_for_run = request.clone();
+                let config_for_run = self.provider_configuration.clone();
+
+                Task::perform(
+                    async move { execute_runtime_run(config_for_run, request_for_run).await },
+                    Message::RunExecutionFinished,
+                )
+            }
+            Message::RunExecutionFinished(report) => {
+                let session_id = report.session_id;
+                self.last_mcp_discovery_rows = report.mcp_discovery_rows.clone();
+                self.last_mcp_discovery_errors = report.mcp_discovery_errors.clone();
+
+                if let Some(preparation) = report.preparation.clone() {
+                    let detail = preparation.summary_rows().join(" | ");
+                    let assistant_body = format!(
+                        "已基于当前代理与模型完成执行准备，并进入真实执行链路。\n\n{}",
+                        preparation.summary_rows().join("\n")
+                    );
+
+                    self.context_usage = (self.context_usage + 8.0).min(100.0);
+                    self.last_execution_preparation = Some(preparation.clone());
+                    self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
+                    self.push_session_message(
+                        session_id,
+                        SessionMessageKind::Assistant,
+                        "执行准备摘要",
+                        assistant_body,
+                    );
+
+                    for warning in &preparation.warnings {
+                        self.push_activity(ActivityLevel::Warning, "执行准备警告", warning.clone());
+                    }
+                }
+
+                self.replace_session_runtime_events(session_id, report.runtime_events.clone());
+
+                for warning in &report.warnings {
+                    self.push_activity(ActivityLevel::Warning, "执行运行警告", warning.clone());
+                }
+
+                if report.is_success() {
+                    let assistant_output = report
+                        .assistant_output
+                        .clone()
+                        .unwrap_or_else(|| String::from("模型已完成执行，但未返回可见文本输出。"));
+
+                    if let Some(session) = self
+                        .sessions
+                        .iter_mut()
+                        .find(|session| session.id == session_id)
+                    {
+                        session.status = SessionState::Completed;
+                        session.focus =
+                            String::from("最近一次真实执行已完成，可继续追问或调整参数。");
+                        session.queued_steps = session.queued_steps.saturating_add(1);
+                        session.last_updated_label = String::from("刚刚");
+                    }
+
+                    self.push_session_message(
+                        session_id,
+                        SessionMessageKind::Assistant,
+                        "AI 输出",
+                        assistant_output,
+                    );
+                    self.set_session_run_phase(session_id, SessionRunPhase::Ready);
+                    self.status_message = String::from("真实执行已完成，结果已写入工作台输出区。");
+                    self.push_activity(
+                        ActivityLevel::Success,
+                        "真实执行已完成",
+                        format!("会话 #{session_id} 已完成真实模型执行并产出输出。"),
+                    );
+                } else {
+                    let error = report
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。"));
+
+                    if let Some(session) = self
+                        .sessions
+                        .iter_mut()
+                        .find(|session| session.id == session_id)
+                    {
+                        session.status = SessionState::Blocked;
+                        session.last_updated_label = String::from("刚刚");
+                    }
+
+                    self.push_session_message(
+                        session_id,
+                        SessionMessageKind::Error,
+                        "执行失败",
+                        error.clone(),
+                    );
+                    self.set_session_run_phase(session_id, SessionRunPhase::Failed);
+                    self.status_message = error.clone();
+                    self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
+                }
+
                 Task::none()
             }
             Message::StopRun => {
@@ -1974,9 +2413,19 @@ impl VulcanWorkbench {
                 // 将当前会话标记为阻塞状态，以在界面中显式体现安全停止点。
                 if let Some(session) = self.selected_session_mut() {
                     session.status = SessionState::Blocked;
+                    session.last_updated_label = String::from("刚刚");
                 }
 
                 self.status_message = String::from("当前编排已暂停，等待下一步指令。");
+                if let Some(session_id) = self.selected_session().map(|session| session.id) {
+                    self.set_session_run_phase(session_id, SessionRunPhase::Paused);
+                    self.push_session_message(
+                        session_id,
+                        SessionMessageKind::Assistant,
+                        "执行已暂停",
+                        "当前编排已暂停，保留现有上下文与会话输出，可在调整参数后再次发起执行。",
+                    );
+                }
                 self.push_activity(
                     ActivityLevel::Warning,
                     "执行编排已暂停",
@@ -2994,34 +3443,199 @@ impl VulcanWorkbench {
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     fn view_main_canvas(&self) -> Element<'_, Message> {
         let active_session = self.selected_session();
+        let runtime_summary = self.runtime_foundation.summary();
+        let run_phase = self.selected_session_run_phase();
+        let session_title = active_session
+            .map(|session| session.title.as_str())
+            .unwrap_or("未选择会话");
+        let transcript_stream = self.view_main_canvas_transcript_stream();
+        let composer_panel = container(
+            column![
+                row![
+                    text("任务输入").size(16),
+                    space::horizontal(),
+                    text(format!("执行模式：{}", self.execution_mode)).size(13),
+                    text(format!("温度：{:.2}", self.temperature)).size(13),
+                ]
+                .spacing(12)
+                .align_y(Center),
+                text_input("输入当前会话要执行的任务指令", &self.composer)
+                    .on_input(Message::ComposerChanged)
+                    .padding(12),
+                row![
+                    text("执行后将把用户输入、AI 输出与运行时事件写入当前会话。").size(12),
+                    space::horizontal(),
+                    button("准备执行")
+                        .padding([10, 14])
+                        .style(button::primary)
+                        .on_press(Message::StartRun),
+                    button("暂停执行")
+                        .padding([10, 14])
+                        .style(button::secondary)
+                        .on_press(Message::StopRun),
+                ]
+                .spacing(10)
+                .align_y(Center),
+            ]
+            .spacing(10),
+        )
+        .padding(14)
+        .style(container::bordered_box);
 
         container(
             column![
-                text("工作台").size(28),
-                text("这里将承载后续 AI Coding 的主入口、任务流与协作状态视图。").size(14),
-                container(
+                row![
                     column![
-                        text(format!(
-                            "当前会话：{}",
-                            active_session
-                                .map(|session| session.title.as_str())
-                                .unwrap_or("未选择会话")
-                        ))
-                        .size(15),
-                        text(format!("当前模型：{}", self.active_model_summary())).size(14),
-                        text(format!("执行模式：{}", self.execution_mode)).size(14),
+                        text("AI 执行工作台").size(26),
+                        text("当前区域用于承载会话输出、执行事件和最小运行闭环。").size(13),
                     ]
-                    .spacing(8),
+                    .spacing(4),
+                    space::horizontal(),
+                    container(text(run_phase.label()).size(12))
+                        .padding([4, 10])
+                        .style(move |theme| style::workbench_run_phase_chip_style(
+                            theme, run_phase
+                        )),
+                ]
+                .align_y(Center),
+                container(
+                    row![
+                        text(format!("当前会话：{session_title}")).size(14),
+                        text(format!("当前模型：{}", self.active_model_summary())).size(13),
+                        text(format!("激活代理：{}", runtime_summary.active_agent_name)).size(13),
+                        text(format!(
+                            "会话状态：{}",
+                            active_session
+                                .map(|session| session.status.label())
+                                .unwrap_or("未选择")
+                        ))
+                        .size(13),
+                    ]
+                    .spacing(16)
+                    .align_y(Center),
                 )
-                .padding(18)
+                .padding([12, 14])
                 .style(container::bordered_box),
-                space::vertical().height(Fill),
+                transcript_stream,
+                composer_panel,
             ]
-            .spacing(16),
+            .spacing(14)
+            .height(Fill),
         )
-        .padding([18, 18])
+        .padding([16, 16])
         .width(Fill)
         .height(Fill)
+        .into()
+    }
+
+    /// Builds the transcript stream area shown in the center of the main workbench canvas.
+    /// 构建展示在主工作台中央画布中的会话转录流区域。
+    fn view_main_canvas_transcript_stream(&self) -> Element<'_, Message> {
+        let messages = self
+            .selected_session_messages()
+            .cloned()
+            .unwrap_or_default();
+        let runtime_events = self
+            .selected_session_runtime_events()
+            .cloned()
+            .unwrap_or_default();
+
+        if messages.is_empty() && runtime_events.is_empty() {
+            return container(
+                column![
+                    text("尚未开始执行").size(18),
+                    text("点击下方“准备执行”后，用户输入、AI 输出和运行时事件都会在这里持续沉淀。")
+                        .size(13),
+                ]
+                .spacing(8)
+                .align_x(iced::Alignment::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .style(container::bordered_box)
+            .into();
+        }
+
+        let message_column = messages
+            .into_iter()
+            .fold(column![].spacing(10).width(Fill), |column, message| {
+                column.push(self.view_main_canvas_message_entry(message))
+            });
+        let content_column = if runtime_events.is_empty() {
+            message_column
+        } else {
+            let event_rows = runtime_events.into_iter().fold(
+                column![text("运行时事件").size(13)].spacing(8),
+                |column, event| column.push(self.view_main_canvas_runtime_event_entry(event)),
+            );
+
+            message_column.push(container(event_rows).padding([6, 0]))
+        };
+
+        container(scrollable(content_column).height(Fill).spacing(10))
+            .padding(14)
+            .height(Fill)
+            .style(container::bordered_box)
+            .into()
+    }
+
+    /// Builds one transcript message bubble shown inside the main workbench stream.
+    /// 构建展示在主工作台消息流中的单条转录消息气泡。
+    fn view_main_canvas_message_entry(&self, message: SessionMessageEntry) -> Element<'_, Message> {
+        let kind = message.kind;
+        let title = message.title;
+        let body = message.body;
+        let bubble = container(
+            column![
+                row![
+                    text(kind.label()).size(11),
+                    space::horizontal(),
+                    text(title).size(13),
+                ]
+                .spacing(8)
+                .align_y(Center),
+                text(body).size(14),
+            ]
+            .spacing(8),
+        )
+        .padding([10, 12])
+        .style(move |theme| style::workbench_message_bubble_style(theme, kind));
+
+        match kind {
+            SessionMessageKind::User => row![space::horizontal(), bubble.width(FillPortion(7))]
+                .width(Fill)
+                .into(),
+            SessionMessageKind::Assistant | SessionMessageKind::Error => {
+                row![bubble.width(FillPortion(8)), space::horizontal()]
+                    .width(Fill)
+                    .into()
+            }
+        }
+    }
+
+    /// Builds one runtime-event block shown beneath the transcript message list.
+    /// 构建展示在转录消息列表下方的单条运行时事件块。
+    fn view_main_canvas_runtime_event_entry(&self, event: RuntimeEvent) -> Element<'_, Message> {
+        let kind = event.kind;
+        let title = event.title;
+        let detail = event.detail;
+        container(
+            column![
+                row![
+                    text(format!("事件 · {}", runtime_event_kind_label(kind))).size(11),
+                    space::horizontal(),
+                    text(title).size(13),
+                ]
+                .spacing(8)
+                .align_y(Center),
+                text(detail).size(13),
+            ]
+            .spacing(8),
+        )
+        .padding([10, 12])
+        .width(Fill)
+        .style(move |theme| style::workbench_runtime_event_style(theme, kind))
         .into()
     }
 
@@ -3119,11 +3733,72 @@ impl VulcanWorkbench {
     /// Builds one shared placeholder panel for not-yet-implemented top-level feature areas.
     /// 为尚未实现的顶层功能区域构建共享占位面板。
     fn view_placeholder_main_panel(&self, panel: MainDisplayPanel) -> Element<'_, Message> {
+        let summary = self.runtime_foundation.summary();
+        let panel_rows = match panel {
+            MainDisplayPanel::PromptSkills => self
+                .runtime_foundation
+                .skill_rows(RuntimeSkillKind::Regular),
+            MainDisplayPanel::LuaSkills => self
+                .runtime_foundation
+                .skill_rows(RuntimeSkillKind::LuaSkills),
+            MainDisplayPanel::Automation => {
+                let mut rows = self
+                    .runtime_foundation
+                    .skill_rows(RuntimeSkillKind::Automation);
+                rows.extend(self.runtime_foundation.tool_policy_rows());
+                rows
+            }
+            MainDisplayPanel::Agents => self.runtime_foundation.agent_rows(),
+            MainDisplayPanel::Plugins => {
+                let mut rows = self.runtime_foundation.native_tool_rows();
+                rows.extend(self.runtime_foundation.mcp_rows());
+                rows
+            }
+            MainDisplayPanel::VulcanMemoryMesh => {
+                self.runtime_foundation.skill_rows(RuntimeSkillKind::Memory)
+            }
+            _ => Vec::new(),
+        };
+        let content_rows = if panel_rows.is_empty() {
+            column![text("空面板").size(14)].spacing(8)
+        } else {
+            panel_rows
+                .into_iter()
+                .fold(column![].spacing(8), |column, row_text| {
+                    column.push(text(format!("• {row_text}")).size(13))
+                })
+        };
+        let warning_rows = if summary.warnings.is_empty() {
+            column![].spacing(0)
+        } else {
+            summary.warnings.iter().fold(
+                column![text("运行时告警").size(14)].spacing(6),
+                |column, warning| column.push(text(format!("• {warning}")).size(12)),
+            )
+        };
         container(
             column![
                 text(panel.section_title()).size(24),
                 text(panel.description()).size(13),
-                text("空面板").size(14),
+                text(format!(
+                    "激活代理：{} ({}) · 激活模型：{}",
+                    summary.active_agent_name, summary.active_agent_id, summary.active_model
+                ))
+                .size(13),
+                text(format!(
+                    "代理 {} / 已配置 {} / 协调 {} / 技能 {} / 原生工具 {} / 委派 {} / MCP {}/{}",
+                    summary.built_agent_count,
+                    summary.configured_agent_count,
+                    summary.coordinator_count,
+                    summary.skill_count,
+                    summary.native_tool_count,
+                    summary.delegate_tool_count,
+                    summary.enabled_mcp_server_count,
+                    summary.configured_mcp_server_count
+                ))
+                .size(12),
+                content_rows,
+                warning_rows,
             ]
             .spacing(10)
             .align_x(iced::Alignment::Start),
@@ -4524,10 +5199,196 @@ impl VulcanWorkbench {
         .padding(16)
         .style(container::bordered_box);
 
-        scrollable(column![provider_controls, selectors, policies, guide, activity_log].spacing(14))
-            .height(Fill)
-            .spacing(8)
+        let runtime_execution = self.view_runtime_execution_card();
+        let mcp_configuration = self.view_mcp_configuration_card();
+
+        scrollable(
+            column![
+                provider_controls,
+                selectors,
+                runtime_execution,
+                mcp_configuration,
+                policies,
+                guide,
+                activity_log
+            ]
+            .spacing(14),
+        )
+        .height(Fill)
+        .spacing(8)
+        .into()
+    }
+
+    /// Renders the execution runtime card that exposes active-agent selection and the latest preparation snapshot.
+    /// 渲染执行运行时卡片，以暴露激活代理选择与最近一次执行准备快照。
+    fn view_runtime_execution_card(&self) -> Element<'_, Message> {
+        let summary = self.runtime_foundation.summary();
+        let active_agent_choices = self.configured_agent_choices();
+        let selected_active_agent = self.active_agent_choice();
+        let preparation_rows = self
+            .last_execution_preparation
+            .as_ref()
+            .map(|preparation| preparation.summary_rows())
+            .unwrap_or_else(|| {
+                vec![String::from(
+                    "尚未触发执行准备，可点击示例面板中的“准备执行”按钮生成第一份运行计划。",
+                )]
+            });
+
+        let preparation_list = preparation_rows
+            .into_iter()
+            .fold(column![].spacing(6), |column, row_text| {
+                column.push(text(format!("• {row_text}")).size(12))
+            });
+
+        let active_agent_picker: Element<'_, Message> = if active_agent_choices.is_empty() {
+            container(text("当前尚未声明任何代理定义。").size(13))
+                .padding(10)
+                .style(container::bordered_box)
+                .into()
+        } else {
+            pick_list(
+                active_agent_choices,
+                selected_active_agent,
+                Message::ActiveAgentSelected,
+            )
+            .width(Fill)
+            .placeholder("选择激活代理")
             .into()
+        };
+
+        container(
+            column![
+                text("执行运行时").size(18),
+                active_agent_picker,
+                text(format!(
+                    "当前激活代理：{} ({})",
+                    summary.active_agent_name, summary.active_agent_id
+                ))
+                .size(12),
+                text(format!(
+                    "已构建代理 {} / 技能 {} / 原生工具 {} / 委派 {}",
+                    summary.built_agent_count,
+                    summary.skill_count,
+                    summary.native_tool_count,
+                    summary.delegate_tool_count
+                ))
+                .size(12),
+                preparation_list,
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Renders the MCP configuration card that exposes server summaries and one editable stdio server form.
+    /// 渲染 MCP 配置卡片，以暴露服务器摘要与单个可编辑的 stdio 服务器表单。
+    fn view_mcp_configuration_card(&self) -> Element<'_, Message> {
+        let server_choices = self.configured_mcp_server_choices();
+        let selected_server = self.selected_mcp_server_choice();
+        let server_summary_rows = self.runtime_foundation.mcp_rows();
+        let server_summary_list: Element<'_, Message> = if server_summary_rows.is_empty() {
+            text("尚未配置 MCP 服务器。").size(12).into()
+        } else {
+            server_summary_rows
+                .into_iter()
+                .fold(column![].spacing(6), |column, row_text| {
+                    column.push(text(format!("• {row_text}")).size(12))
+                })
+                .into()
+        };
+        let server_picker: Element<'_, Message> = if server_choices.is_empty() {
+            container(text("当前没有可编辑的 MCP 服务器，可先点击“新增服务器”。").size(12))
+                .padding(10)
+                .style(container::bordered_box)
+                .into()
+        } else {
+            pick_list(server_choices, selected_server, Message::McpServerSelected)
+                .width(Fill)
+                .placeholder("选择 MCP 服务器")
+                .into()
+        };
+        let mut remove_button = button("删除服务器").style(button::secondary);
+        if self.selected_mcp_server_id.is_some() {
+            remove_button = remove_button.on_press(Message::RemoveMcpServerConfiguration);
+        }
+        let latest_discovery_list: Element<'_, Message> = if self.last_mcp_discovery_rows.is_empty()
+            && self.last_mcp_discovery_errors.is_empty()
+        {
+            text("尚未执行真实 MCP 工具发现。").size(12).into()
+        } else {
+            let mut latest_rows = column![].spacing(6);
+
+            for row_text in &self.last_mcp_discovery_rows {
+                latest_rows = latest_rows.push(text(format!("• {row_text}")).size(12));
+            }
+
+            for error_text in &self.last_mcp_discovery_errors {
+                latest_rows = latest_rows.push(text(format!("• 失败：{error_text}")).size(12));
+            }
+
+            latest_rows.into()
+        };
+
+        container(
+            column![
+                row![
+                    text("MCP 服务器").size(18),
+                    space::horizontal(),
+                    text("当前仅开放 stdio").size(12),
+                ]
+                .align_y(Center),
+                server_picker,
+                checkbox(self.mcp_server_form.enabled)
+                    .label("启用该服务器")
+                    .on_toggle(Message::McpServerEnabledToggled),
+                text_input("服务器名称", &self.mcp_server_form.name)
+                    .on_input(Message::McpServerNameChanged)
+                    .padding(10)
+                    .width(Fill),
+                text_input("启动命令，例如 uvx", &self.mcp_server_form.command)
+                    .on_input(Message::McpServerCommandChanged)
+                    .padding(10)
+                    .width(Fill),
+                text_input(
+                    "参数（使用 | 分隔），例如 mcp-server-filesystem | D:/openvulcan/vulcan-code",
+                    &self.mcp_server_form.args_text,
+                )
+                .on_input(Message::McpServerArgsChanged)
+                .padding(10)
+                .width(Fill),
+                text_input("工作目录（可选）", &self.mcp_server_form.cwd)
+                    .on_input(Message::McpServerCwdChanged)
+                    .padding(10)
+                    .width(Fill),
+                text_input(
+                    "环境变量（可选，KEY=VALUE; KEY2=VALUE）",
+                    &self.mcp_server_form.env_text,
+                )
+                .on_input(Message::McpServerEnvChanged)
+                .padding(10)
+                .width(Fill),
+                row![
+                    button("新增服务器")
+                        .style(button::secondary)
+                        .on_press(Message::CreateMcpServer),
+                    button("保存服务器")
+                        .style(button::primary)
+                        .on_press(Message::SaveMcpServerConfiguration),
+                    remove_button,
+                ]
+                .spacing(10),
+                text(&self.mcp_notice).size(12),
+                column![text("服务器摘要").size(14), server_summary_list].spacing(8),
+                column![text("最近一次发现").size(14), latest_discovery_list].spacing(8),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
     }
 
     /// Renders a single session card in the navigation pane.
@@ -4644,6 +5505,81 @@ impl VulcanWorkbench {
                 id: String::from("openai"),
                 name: String::from("OpenAI"),
             })
+    }
+
+    /// Resolves the initial MCP server identifier using the persisted configuration order.
+    /// 使用持久化配置顺序解析初始 MCP 服务器标识。
+    fn resolve_initial_mcp_server_id(config: &ProviderConfigurationFile) -> Option<String> {
+        config.mcp.servers.keys().next().cloned()
+    }
+
+    /// Builds the configured agent choices rendered in the runtime settings card.
+    /// 构建渲染在运行时设置卡片中的已配置代理选择项。
+    fn configured_agent_choices(&self) -> Vec<AgentChoice> {
+        self.provider_configuration
+            .agents
+            .iter()
+            .map(|(id, entry)| AgentChoice {
+                id: id.clone(),
+                label: format!(
+                    "{} · {}",
+                    entry.name,
+                    persisted_agent_kind_label(entry.kind)
+                ),
+            })
+            .collect()
+    }
+
+    /// Returns the currently active agent choice rendered in the runtime settings card.
+    /// 返回渲染在运行时设置卡片中的当前激活代理选择项。
+    fn active_agent_choice(&self) -> Option<AgentChoice> {
+        let active_agent_id = self.provider_configuration.active_agent.as_deref()?;
+
+        self.configured_agent_choices()
+            .into_iter()
+            .find(|choice| choice.id == active_agent_id)
+    }
+
+    /// Builds the configured MCP server choices rendered in the MCP settings card.
+    /// 构建渲染在 MCP 设置卡片中的已配置 MCP 服务器选择项。
+    fn configured_mcp_server_choices(&self) -> Vec<McpServerChoice> {
+        self.provider_configuration
+            .mcp
+            .servers
+            .iter()
+            .map(|(id, entry)| McpServerChoice {
+                id: id.clone(),
+                label: format!(
+                    "{} · {}",
+                    entry.name,
+                    if entry.enabled { "启用" } else { "禁用" }
+                ),
+            })
+            .collect()
+    }
+
+    /// Returns the currently selected MCP server choice rendered in the MCP settings card.
+    /// 返回渲染在 MCP 设置卡片中的当前选中 MCP 服务器选择项。
+    fn selected_mcp_server_choice(&self) -> Option<McpServerChoice> {
+        let selected_server_id = self.selected_mcp_server_id.as_deref()?;
+
+        self.configured_mcp_server_choices()
+            .into_iter()
+            .find(|choice| choice.id == selected_server_id)
+    }
+
+    /// Reloads the editable MCP server form from the currently selected persisted entry.
+    /// 根据当前选中的持久化条目重新载入可编辑 MCP 服务器表单。
+    fn reload_selected_mcp_server_form(&mut self) {
+        self.mcp_server_form = self
+            .selected_mcp_server_id
+            .as_deref()
+            .and_then(|server_id| self.provider_configuration.mcp.servers.get(server_id))
+            .map(McpServerFormState::from_entry)
+            .unwrap_or_else(|| McpServerFormState {
+                enabled: true,
+                ..McpServerFormState::default()
+            });
     }
 
     /// Reloads the editable provider form from the persisted configuration entry of the selected provider.
@@ -4789,6 +5725,68 @@ impl VulcanWorkbench {
         provider_config::save_configuration_file(&self.provider_configuration)
     }
 
+    /// Persists the currently edited MCP server form back into the shared Vulcan configuration file.
+    /// 将当前编辑中的 MCP 服务器表单持久化回共享 Vulcan 配置文件。
+    fn save_selected_mcp_server_configuration(&mut self) -> Result<String, String> {
+        let entry = self.mcp_server_form.to_entry()?;
+        let current_server_id = self.selected_mcp_server_id.clone();
+        let next_server_id = current_server_id
+            .clone()
+            .unwrap_or_else(|| self.generate_mcp_server_id(&entry.name));
+
+        self.provider_configuration
+            .mcp
+            .servers
+            .insert(next_server_id.clone(), entry);
+        provider_config::save_configuration_file(&self.provider_configuration)?;
+
+        Ok(next_server_id)
+    }
+
+    /// Removes the currently selected MCP server entry from the shared Vulcan configuration file.
+    /// 从共享 Vulcan 配置文件中移除当前选中的 MCP 服务器条目。
+    fn remove_selected_mcp_server_configuration(&mut self) -> Result<String, String> {
+        let Some(server_id) = self.selected_mcp_server_id.clone() else {
+            return Err(String::from("当前没有可移除的 MCP 服务器。"));
+        };
+        let Some(removed_entry) = self.provider_configuration.mcp.servers.remove(&server_id) else {
+            return Err(String::from("当前选中的 MCP 服务器不存在。"));
+        };
+
+        provider_config::save_configuration_file(&self.provider_configuration)?;
+        self.selected_mcp_server_id =
+            Self::resolve_initial_mcp_server_id(&self.provider_configuration);
+
+        Ok(removed_entry.name)
+    }
+
+    /// Builds a stable MCP server identifier from the current form name while preserving uniqueness.
+    /// 根据当前表单名称构建稳定且唯一的 MCP 服务器标识。
+    fn generate_mcp_server_id(&self, name: &str) -> String {
+        let mut base = slugify_identifier(name);
+        if base.is_empty() {
+            base = String::from("mcp-server");
+        }
+
+        if !self.provider_configuration.mcp.servers.contains_key(&base) {
+            return base;
+        }
+
+        let mut suffix = 2usize;
+        loop {
+            let candidate = format!("{base}-{suffix}");
+            if !self
+                .provider_configuration
+                .mcp
+                .servers
+                .contains_key(&candidate)
+            {
+                return candidate;
+            }
+            suffix = suffix.saturating_add(1);
+        }
+    }
+
     /// Returns the active provider summary used by the workbench header and activity log.
     /// 返回工作台头部与活动日志使用的当前供应商摘要。
     fn active_provider_summary(&self) -> String {
@@ -4811,6 +5809,15 @@ impl VulcanWorkbench {
                 provider_config::model_summary(provider_id, model_id, &self.provider_configuration)
             })
             .unwrap_or_else(|| String::from("未配置模型"))
+    }
+
+    /// Rebuilds the compose runtime foundation from the current shared configuration state.
+    /// 根据当前共享配置状态重建 compose 运行时基础架构。
+    fn refresh_runtime_foundation(&mut self) {
+        self.runtime_foundation = RuntimeFoundation::build(&self.provider_configuration);
+        self.last_execution_preparation = None;
+        self.last_mcp_discovery_rows.clear();
+        self.last_mcp_discovery_errors.clear();
     }
 
     /// Returns the currently selected session, if any.
@@ -5196,6 +6203,55 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Appends one transcript message to the target session while preserving stable insertion order.
+    /// 向目标会话追加一条转录消息，并保持稳定插入顺序。
+    fn push_session_message(
+        &mut self,
+        session_id: usize,
+        kind: SessionMessageKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) {
+        self.session_messages
+            .entry(session_id)
+            .or_default()
+            .push(SessionMessageEntry::new(kind, title, body));
+    }
+
+    /// Replaces the runtime-event list for one session with a fresh snapshot.
+    /// 使用新的快照替换某个会话的运行时事件列表。
+    fn replace_session_runtime_events(&mut self, session_id: usize, events: Vec<RuntimeEvent>) {
+        self.session_runtime_events.insert(session_id, events);
+    }
+
+    /// Updates the execution phase tracked for one session transcript.
+    /// 更新某个会话转录区跟踪的执行阶段。
+    fn set_session_run_phase(&mut self, session_id: usize, phase: SessionRunPhase) {
+        self.session_run_phases.insert(session_id, phase);
+    }
+
+    /// Returns the currently selected session transcript messages.
+    /// 返回当前选中会话的转录消息集合。
+    fn selected_session_messages(&self) -> Option<&Vec<SessionMessageEntry>> {
+        let session_id = self.selected_session().map(|session| session.id)?;
+        self.session_messages.get(&session_id)
+    }
+
+    /// Returns the currently selected session runtime events.
+    /// 返回当前选中会话的运行时事件集合。
+    fn selected_session_runtime_events(&self) -> Option<&Vec<RuntimeEvent>> {
+        let session_id = self.selected_session().map(|session| session.id)?;
+        self.session_runtime_events.get(&session_id)
+    }
+
+    /// Returns the execution phase bound to the currently selected session transcript.
+    /// 返回绑定到当前选中会话转录区的执行阶段。
+    fn selected_session_run_phase(&self) -> SessionRunPhase {
+        self.selected_session()
+            .and_then(|session| self.session_run_phases.get(&session.id).copied())
+            .unwrap_or(SessionRunPhase::Idle)
+    }
+
     /// Returns the session summary matching one identifier, if it still exists.
     /// 返回与某个标识匹配的会话摘要（如果仍然存在）。
     fn session_by_id(&self, session_id: usize) -> Option<&SessionSummary> {
@@ -5421,6 +6477,10 @@ impl VulcanWorkbench {
             project.session_ids.insert(0, session_id);
         }
 
+        self.session_messages.entry(session_id).or_default();
+        self.session_runtime_events.entry(session_id).or_default();
+        self.session_run_phases
+            .insert(session_id, SessionRunPhase::Idle);
         self.expanded_task_projects.insert(project_id.to_string());
         self.selected_session = session_id;
         self.hovered_task_project = Some(project_id.to_string());
@@ -5620,20 +6680,115 @@ fn compact_relative_label(value: &str) -> String {
     value.replace(' ', "").trim_end_matches('前').to_string()
 }
 
+/// Returns the compact label rendered for one runtime-event kind inside the transcript stream.
+/// 返回转录流中某个运行时事件类型渲染使用的精简标签。
+fn runtime_event_kind_label(kind: RuntimeEventKind) -> &'static str {
+    match kind {
+        RuntimeEventKind::TokenDelta => "输出",
+        RuntimeEventKind::ToolStarted => "工具开始",
+        RuntimeEventKind::ToolFinished => "工具完成",
+        RuntimeEventKind::DelegateStarted => "委派开始",
+        RuntimeEventKind::DelegateFinished => "委派完成",
+        RuntimeEventKind::Failed => "失败",
+    }
+}
+
 /// Opens one native folder-picker dialog and returns the selected path when the user confirms.
 /// 打开一个原生文件夹选择对话框，并在用户确认时返回所选路径。
 fn pick_task_project_folder(initial_directory: &str) -> Result<Option<std::path::PathBuf>, String> {
-    let mut dialog = rfd::FileDialog::new().set_title("选择要添加到项目树的目录");
-    let trimmed_directory = initial_directory.trim();
-
-    if !trimmed_directory.is_empty() {
-        let initial_path = Path::new(trimmed_directory);
-        if initial_path.exists() && initial_path.is_dir() {
-            dialog = dialog.set_directory(initial_path);
-        }
+    #[cfg(target_os = "windows")]
+    {
+        return pick_task_project_folder_windows(initial_directory);
     }
 
-    Ok(dialog.pick_folder())
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut dialog = rfd::FileDialog::new().set_title("选择要添加到项目树的目录");
+        let trimmed_directory = initial_directory.trim();
+
+        if !trimmed_directory.is_empty() {
+            let initial_path = Path::new(trimmed_directory);
+            if initial_path.exists() && initial_path.is_dir() {
+                dialog = dialog.set_directory(initial_path);
+            }
+        }
+
+        Ok(dialog.pick_folder())
+    }
+}
+
+/// Escapes one string so it can be embedded safely inside a PowerShell single-quoted literal.
+/// 对单个字符串执行转义，保证它可以安全嵌入 PowerShell 单引号字面量。
+#[cfg(target_os = "windows")]
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+/// Opens one Windows-native folder picker without going through the PNG-backed cross-platform dialog.
+/// 打开一个 Windows 原生文件夹选择器，绕开依赖 PNG 资源链路的跨平台对话框。
+#[cfg(target_os = "windows")]
+fn pick_task_project_folder_windows(
+    initial_directory: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let trimmed_directory = initial_directory.trim();
+    let initial_path_literal = if !trimmed_directory.is_empty() {
+        let normalized = Path::new(trimmed_directory);
+        if normalized.exists() && normalized.is_dir() {
+            escape_powershell_single_quoted(&normalized.to_string_lossy())
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let script = format!(
+        concat!(
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;",
+            "Add-Type -AssemblyName System.Windows.Forms;",
+            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog;",
+            "$dialog.Description = '选择要添加到项目树的目录';",
+            "$dialog.ShowNewFolderButton = $true;",
+            "$initialPath = '{initial_path_literal}';",
+            "if ($initialPath.Length -gt 0 -and (Test-Path -LiteralPath $initialPath)) {{",
+            "  $dialog.SelectedPath = $initialPath;",
+            "}}",
+            "$result = $dialog.ShowDialog();",
+            "if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {{",
+            "  Write-Output $dialog.SelectedPath;",
+            "}}"
+        ),
+        initial_path_literal = initial_path_literal,
+    );
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .output()
+        .map_err(|error| format!("无法打开系统文件夹选择对话框：{error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if stderr.is_empty() {
+            format!("系统文件夹选择对话框退出码异常：{}", output.status)
+        } else {
+            format!("系统文件夹选择对话框执行失败：{stderr}")
+        };
+        return Err(message);
+    }
+
+    let selected_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if selected_path.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(std::path::PathBuf::from(selected_path)))
 }
 
 /// Normalizes one project path to a canonical form when the platform can resolve it.
@@ -5645,10 +6800,16 @@ fn normalize_task_project_path(path: &Path) -> std::path::PathBuf {
 /// Builds one compact ASCII slug from the project title so generated identifiers stay readable.
 /// 从项目标题构建紧凑的 ASCII slug，保证生成标识保持可读。
 fn slugify_task_project_title(title: &str) -> String {
+    slugify_identifier(title)
+}
+
+/// Builds one compact ASCII slug from an arbitrary identifier source so generated ids stay readable.
+/// 从任意标识来源构建紧凑 ASCII slug，保证生成的 id 保持可读。
+fn slugify_identifier(value: &str) -> String {
     let mut slug = String::new();
     let mut last_was_separator = false;
 
-    for character in title.chars() {
+    for character in value.chars() {
         if character.is_ascii_alphanumeric() {
             slug.push(character.to_ascii_lowercase());
             last_was_separator = false;
@@ -5659,6 +6820,79 @@ fn slugify_task_project_title(title: &str) -> String {
     }
 
     slug.trim_matches('-').to_string()
+}
+
+/// Converts one optional string field into a trimmed `Option<String>`.
+/// 将一个可选字符串字段转换为裁剪后的 `Option<String>`。
+fn trim_to_option(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Joins MCP server arguments into one compact editable text field.
+/// 将 MCP 服务器参数拼接为一段紧凑的可编辑文本字段。
+fn join_mcp_server_args(args: &[String]) -> String {
+    args.join(" | ")
+}
+
+/// Parses one compact MCP server argument text field into its vector representation.
+/// 将一段紧凑 MCP 服务器参数文本解析成向量表示。
+fn parse_mcp_server_args(value: &str) -> Vec<String> {
+    value
+        .split('|')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Joins MCP server environment variables into one compact editable text field.
+/// 将 MCP 服务器环境变量拼接为一段紧凑的可编辑文本字段。
+fn join_mcp_server_env(env: &BTreeMap<String, String>) -> String {
+    env.iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Parses one compact MCP server environment text field into its map representation.
+/// 将一段紧凑 MCP 服务器环境变量文本解析成映射表示。
+fn parse_mcp_server_env(value: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut map = BTreeMap::new();
+
+    for pair in value
+        .split(';')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            return Err(format!(
+                "环境变量 `{pair}` 格式无效，请使用 `KEY=VALUE` 并以分号分隔。"
+            ));
+        };
+        let key = raw_key.trim();
+        if key.is_empty() {
+            return Err(String::from("环境变量名称不能为空。"));
+        }
+        map.insert(key.to_string(), raw_value.trim().to_string());
+    }
+
+    Ok(map)
+}
+
+/// Returns a compact human-readable label for one persisted agent kind.
+/// 返回单个持久化代理类型的紧凑人类可读标签。
+fn persisted_agent_kind_label(kind: PersistedAgentKind) -> &'static str {
+    match kind {
+        PersistedAgentKind::Worker => "工作代理",
+        PersistedAgentKind::Specialist => "专家代理",
+        PersistedAgentKind::Coordinator => "协调代理",
+    }
 }
 
 /// Opens one filesystem path with the host operating system file manager.

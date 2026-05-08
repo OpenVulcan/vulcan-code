@@ -336,10 +336,18 @@ pub struct SupportedProviderDefinition {
     /// Provider runtime family aligned with the project integration model.
     /// 与项目接入模型对齐的供应商运行时族。
     pub runtime: ProviderRuntimeKind,
+    /// Explicit user-agent string used when the provider needs one fixed execution profile.
+    /// 当供应商需要固定执行标识时使用的显式 User-Agent 字符串。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
     /// Environment keys that may provide credentials for the provider.
     /// 可能为该供应商提供凭据的环境变量键集合。
     #[serde(default)]
     pub credential_env_keys: Vec<String>,
+    /// Additional HTTP headers appended to real execution requests for the provider.
+    /// 附加到该供应商真实执行请求中的额外 HTTP 头集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_headers: BTreeMap<String, String>,
     /// Ordered field list exposed by the provider form.
     /// 供应商表单暴露的有序字段列表。
     #[serde(default)]
@@ -547,6 +555,236 @@ pub struct PersistedProviderEntry {
     pub models: BTreeMap<String, PersistedModelEntry>,
 }
 
+/// Persisted skill family used by the runtime foundation.
+/// 运行时基础架构使用的持久化技能类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedSkillKind {
+    /// General built-in skill chain.
+    /// 常规内建技能链。
+    Regular,
+    /// LuaSkills-backed capability entry.
+    /// 基于 LuaSkills 的能力条目。
+    LuaSkills,
+    /// Automation-oriented skill entry.
+    /// 面向自动化的技能条目。
+    Automation,
+    /// Memory-oriented skill entry.
+    /// 面向记忆体系的技能条目。
+    Memory,
+}
+
+/// One persisted skill entry declared inside the shared Vulcan configuration file.
+/// 共享 Vulcan 配置文件中声明的单个持久化技能条目。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedSkillEntry {
+    /// Human-readable skill name.
+    /// 人类可读的技能名称。
+    pub name: String,
+    /// Skill family used to route the definition into the right registry bucket.
+    /// 用于将定义路由到正确注册表桶中的技能类型。
+    pub kind: PersistedSkillKind,
+    /// Optional skill description shown in configuration surfaces.
+    /// 展示在配置界面中的可选技能描述。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether the skill is currently enabled.
+    /// 当前技能是否启用。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Signals that make the skill applicable.
+    /// 使技能生效的信号集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_signals: Vec<String>,
+    /// Optional signal emitted by the skill after execution.
+    /// 技能执行后可选地发出的信号。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emitted_signal: Option<String>,
+    /// Confidence delta contributed by the skill.
+    /// 技能贡献的置信度增量。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_delta: Option<f32>,
+}
+
+/// Persisted agent family used by the compose runtime foundation.
+/// compose 运行时基础架构使用的持久化代理类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedAgentKind {
+    /// General worker agent driven by a skill chain.
+    /// 由技能链驱动的常规执行代理。
+    Worker,
+    /// Specialist agent focused on one capability domain.
+    /// 聚焦单一能力域的专家代理。
+    Specialist,
+    /// Coordinator agent that deterministically routes to specialists.
+    /// 将任务确定性路由给专家代理的协调代理。
+    Coordinator,
+}
+
+/// One deterministic routing rule used by a coordinator agent.
+/// 协调代理使用的单条确定性路由规则。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedAgentRoute {
+    /// Signal name that activates the route.
+    /// 激活该路由的信号名称。
+    pub signal: String,
+    /// Delegate agent identifier that should receive the routed investigation.
+    /// 应接收该路由调查的委派代理标识。
+    pub delegate: String,
+}
+
+/// One persisted tool-policy entry that scopes native and MCP tools.
+/// 用于限定原生工具与 MCP 工具的单个持久化工具策略条目。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedToolPolicyEntry {
+    /// Human-readable policy name.
+    /// 人类可读的策略名称。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether every native tool should be exposed to the bound agent.
+    /// 是否向绑定代理暴露全部原生工具。
+    #[serde(default)]
+    pub allow_all_native: bool,
+    /// Explicitly allowed native tool identifiers.
+    /// 显式允许的原生工具标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_tools: Vec<String>,
+    /// Explicitly allowed MCP server identifiers.
+    /// 显式允许的 MCP 服务器标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<String>,
+    /// Explicitly allowed MCP tool identifiers.
+    /// 显式允许的 MCP 工具标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_tools: Vec<String>,
+}
+
+/// One persisted agent entry stored in the shared Vulcan configuration file.
+/// 存储在共享 Vulcan 配置文件中的单个持久化代理条目。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedAgentEntry {
+    /// Human-readable agent name.
+    /// 人类可读的代理名称。
+    pub name: String,
+    /// High-level agent family.
+    /// 高层代理类型。
+    pub kind: PersistedAgentKind,
+    /// Optional agent description shown in management surfaces.
+    /// 展示在管理界面中的可选代理描述。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional system prompt or working charter.
+    /// 可选的系统提示词或工作章程。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Skill identifiers bound to the agent.
+    /// 绑定到该代理的技能标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// Native tool identifiers directly attached to the agent.
+    /// 直接附着到该代理上的原生工具标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_tools: Vec<String>,
+    /// MCP tool identifiers directly attached to the agent.
+    /// 直接附着到该代理上的 MCP 工具标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_tools: Vec<String>,
+    /// Delegate agent identifiers that may be exposed as sub-agent tools later.
+    /// 后续可作为子代理工具暴露的委派代理标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegates: Vec<String>,
+    /// Optional shared tool-policy identifier referenced by the agent.
+    /// 代理引用的可选共享工具策略标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_policy: Option<String>,
+    /// Optional deterministic routing table used by coordinator agents.
+    /// 协调代理使用的可选确定性路由表。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<PersistedAgentRoute>,
+    /// Optional fallback delegate used by coordinator agents.
+    /// 协调代理使用的可选回退委派目标。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_delegate: Option<String>,
+    /// Optional model override in `provider/model` form.
+    /// 以 `provider/model` 形式声明的可选模型覆盖。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Optional temperature override for the agent.
+    /// 该代理的可选温度参数覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Optional maximum step count or turn ceiling.
+    /// 可选的最大步数或轮次数上限。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u16>,
+}
+
+/// Supported MCP transport families persisted inside the shared configuration file.
+/// 持久化到共享配置文件中的受支持 MCP 传输类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedMcpTransportKind {
+    /// Standard input/output child-process transport.
+    /// 标准输入输出子进程传输。
+    Stdio,
+}
+
+/// One persisted MCP server entry stored in the shared configuration file.
+/// 存储在共享配置文件中的单个持久化 MCP 服务器条目。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedMcpServerEntry {
+    /// Human-readable server name.
+    /// 人类可读的服务器名称。
+    pub name: String,
+    /// Whether the server is enabled for runtime registration.
+    /// 该服务器是否对运行时注册启用。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Transport family used to start the server.
+    /// 用于启动该服务器的传输类型。
+    pub transport: PersistedMcpTransportKind,
+    /// Command used to launch the server process.
+    /// 用于启动服务器进程的命令。
+    pub command: String,
+    /// Argument vector passed to the server process.
+    /// 传递给服务器进程的参数列表。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Optional working directory used for the server process.
+    /// 服务器进程使用的可选工作目录。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Optional environment variables injected into the server process.
+    /// 注入到服务器进程中的可选环境变量集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+/// MCP configuration block persisted inside the shared Vulcan configuration file.
+/// 持久化在共享 Vulcan 配置文件中的 MCP 配置块。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedMcpConfiguration {
+    /// MCP server definitions keyed by stable identifier.
+    /// 以稳定标识为键的 MCP 服务器定义集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub servers: BTreeMap<String, PersistedMcpServerEntry>,
+}
+
+impl PersistedMcpConfiguration {
+    /// Returns whether the MCP configuration block is effectively empty.
+    /// 返回 MCP 配置块是否实际上为空。
+    pub fn is_empty(&self) -> bool {
+        self.servers.is_empty()
+    }
+}
+
 /// Root provider configuration file saved in the Vulcan home directory.
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -559,6 +797,26 @@ pub struct ProviderConfigurationFile {
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider: BTreeMap<String, PersistedProviderEntry>,
+    /// Active agent identifier selected for compose-based execution.
+    /// 为 compose 执行链路选中的激活代理标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_agent: Option<String>,
+    /// Persisted multi-agent definitions keyed by stable agent id.
+    /// 以稳定代理标识为键保存的多代理定义集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, PersistedAgentEntry>,
+    /// Persisted skill definitions keyed by stable skill id.
+    /// 以稳定技能标识为键保存的技能定义集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skills: BTreeMap<String, PersistedSkillEntry>,
+    /// Persisted tool policy definitions keyed by stable policy id.
+    /// 以稳定策略标识为键保存的工具策略定义集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_policies: BTreeMap<String, PersistedToolPolicyEntry>,
+    /// Persisted MCP server configuration block.
+    /// 持久化的 MCP 服务器配置块。
+    #[serde(default, skip_serializing_if = "PersistedMcpConfiguration::is_empty")]
+    pub mcp: PersistedMcpConfiguration,
 }
 
 /// Loads the supported provider catalog derived from the split provider resources.
@@ -927,6 +1185,12 @@ fn parse_env_placeholder(value: &str) -> Option<&str> {
 /// 返回某个值是否看起来像环境变量占位符外壳。
 fn looks_like_env_placeholder(value: &str) -> bool {
     value.starts_with("{env:") && value.ends_with('}')
+}
+
+/// Returns the default boolean value used by enabled flags in persisted runtime sections.
+/// 返回持久化运行时分区启用标记使用的默认布尔值。
+fn default_true() -> bool {
+    true
 }
 
 /// Extracts model choices from one response array node.
