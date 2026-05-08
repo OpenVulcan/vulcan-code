@@ -446,8 +446,11 @@ pub struct VulcanWorkbench {
     /// Active visual theme.
     /// 当前使用的视觉主题。
     app_theme: Theme,
-    /// Sampling temperature used as a planning heuristic.
-    /// 作为规划启发参数使用的采样温度。
+    /// Whether the runtime controls should send an explicit temperature argument.
+    /// 运行参数控制区是否应显式发送温度参数。
+    temperature_enabled: bool,
+    /// Sampling temperature used as a planning heuristic when the override is enabled.
+    /// 在显式开启覆盖时作为规划启发参数使用的采样温度。
     temperature: f32,
     /// Estimated context usage percentage.
     /// 估算的上下文占用百分比。
@@ -1064,6 +1067,9 @@ enum Message {
     /// Temperature slider changed.
     /// 温度滑块发生变化。
     TemperatureChanged(f32),
+    /// Temperature override toggle changed.
+    /// 温度覆盖开关被切换。
+    TemperatureEnabledToggled(bool),
     /// Plan-first workflow checkbox toggled.
     /// 先计划后执行复选框被切换。
     GeneratePlanToggled(bool),
@@ -1331,6 +1337,7 @@ impl VulcanWorkbench {
                 last_mcp_discovery_errors: Vec::new(),
                 execution_mode: ExecutionMode::Plan,
                 app_theme: theme::default_theme(),
+                temperature_enabled: false,
                 temperature: 0.25,
                 context_usage: 42.0,
                 generate_plan: true,
@@ -1882,6 +1889,15 @@ impl VulcanWorkbench {
                 self.temperature = value;
                 Task::none()
             }
+            Message::TemperatureEnabledToggled(enabled) => {
+                self.temperature_enabled = enabled;
+                self.status_message = if enabled {
+                    format!("已开启显式温度参数，当前值为 {:.2}。", self.temperature)
+                } else {
+                    String::from("已关闭显式温度参数，后续执行将使用模型默认值。")
+                };
+                Task::none()
+            }
             Message::GeneratePlanToggled(enabled) => {
                 self.generate_plan = enabled;
                 Task::none()
@@ -2265,7 +2281,7 @@ impl VulcanWorkbench {
                         workspace_path: self.workspace_path.clone(),
                         prompt: self.composer.clone(),
                         execution_mode: self.execution_mode.to_string(),
-                        temperature: self.temperature,
+                        temperature: self.temperature_enabled.then_some(self.temperature),
                     }
                 } else {
                     self.status_message = String::from("当前没有可执行的会话。");
@@ -3455,7 +3471,12 @@ impl VulcanWorkbench {
                     text("任务输入").size(16),
                     space::horizontal(),
                     text(format!("执行模式：{}", self.execution_mode)).size(13),
-                    text(format!("温度：{:.2}", self.temperature)).size(13),
+                    text(if self.temperature_enabled {
+                        format!("温度：{:.2}", self.temperature)
+                    } else {
+                        String::from("温度：模型默认")
+                    })
+                    .size(13),
                 ]
                 .spacing(12)
                 .align_y(Center),
@@ -5135,6 +5156,16 @@ impl VulcanWorkbench {
             .placeholder("选择当前激活模型")
             .into()
         };
+        let temperature_control: Element<'_, Message> = if self.temperature_enabled {
+            slider(0.0..=1.0, self.temperature, Message::TemperatureChanged)
+                .step(0.05)
+                .into()
+        } else {
+            text("已关闭显式温度覆盖，当前将完全使用供应商或模型默认设置。")
+                .size(12)
+                .into()
+        };
+
         let selectors = container(
             column![
                 text("运行参数").size(18),
@@ -5146,8 +5177,15 @@ impl VulcanWorkbench {
                 )
                 .width(Fill)
                 .placeholder("选择主题"),
-                text(format!("温度：{:.2}", self.temperature)),
-                slider(0.0..=1.0, self.temperature, Message::TemperatureChanged).step(0.05),
+                checkbox(self.temperature_enabled)
+                    .label("显式传递温度参数")
+                    .on_toggle(Message::TemperatureEnabledToggled),
+                text(if self.temperature_enabled {
+                    format!("温度：{:.2}", self.temperature)
+                } else {
+                    String::from("温度：使用模型默认值（不传此参数）")
+                }),
+                temperature_control,
             ]
             .spacing(12),
         )

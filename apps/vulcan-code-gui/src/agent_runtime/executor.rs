@@ -37,9 +37,9 @@ pub struct ExecutionPreparationRequest {
     /// Current execution-mode label.
     /// 当前执行模式标签。
     pub execution_mode: String,
-    /// Current sampling temperature.
-    /// 当前采样温度参数。
-    pub temperature: f32,
+    /// Optional sampling temperature override from the run-time controls.
+    /// 来自运行参数控制区的可选采样温度覆盖值。
+    pub temperature: Option<f32>,
 }
 
 /// Prepared execution plan rendered by the GUI before real LLM execution begins.
@@ -73,9 +73,9 @@ pub struct ExecutionPreparation {
     /// Execution-mode label captured for the run.
     /// 为本次运行捕获的执行模式标签。
     pub execution_mode: String,
-    /// Sampling temperature captured for the run.
-    /// 为本次运行捕获的采样温度。
-    pub temperature: f32,
+    /// Optional sampling temperature captured for the run.
+    /// 为本次运行捕获的可选采样温度。
+    pub temperature: Option<f32>,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,
@@ -126,8 +126,11 @@ impl ExecutionPreparation {
                 }
             ),
             format!(
-                "模式：{} · 温度 {:.2}",
-                self.execution_mode, self.temperature
+                "模式：{} · 温度 {}",
+                self.execution_mode,
+                self.temperature
+                    .map(|value| format!("{value:.2}"))
+                    .unwrap_or_else(|| String::from("使用模型默认值"))
             ),
             format!("工作区：{}", self.workspace_path),
         ];
@@ -513,8 +516,8 @@ async fn execute_provider_prompt(
     })?;
     let temperature = active_agent
         .and_then(|agent| agent.temperature)
-        .unwrap_or(preparation.temperature)
-        .clamp(0.0, 2.0) as f64;
+        .or(preparation.temperature)
+        .map(|value| value.clamp(0.0, 2.0) as f64);
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
     let request_headers = build_provider_request_headers(&preparation.model_blueprint)?;
@@ -618,7 +621,7 @@ async fn execute_openai_compatible_prompt(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    temperature: f64,
+    temperature: Option<f64>,
     headers: &HeaderMap,
 ) -> Result<String, String> {
     let mut builder = openai::CompletionsClient::builder()
@@ -633,11 +636,15 @@ async fn execute_openai_compatible_prompt(
         .build()
         .map_err(|error| format!("创建 OpenAI 兼容客户端失败：{}。", error))?;
     let model = client.completion_model(model_id);
-    let agent = AgentBuilder::new(model)
+    let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Worker")
-        .preamble(system_preamble)
-        .temperature(temperature)
-        .build();
+        .preamble(system_preamble);
+
+    if let Some(temperature) = temperature {
+        agent_builder = agent_builder.temperature(temperature);
+    }
+
+    let agent = agent_builder.build();
 
     agent
         .prompt(prompt.to_string())
@@ -655,7 +662,7 @@ async fn execute_alibaba_coding_plan_prompt(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    temperature: f64,
+    temperature: Option<f64>,
     user_agent_preview: &str,
 ) -> Result<String, String> {
     let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -775,7 +782,7 @@ fn build_alibaba_coding_plan_request_body(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    temperature: f64,
+    temperature: Option<f64>,
 ) -> Value {
     let mut body = json!({
         "model": model_id,
@@ -789,8 +796,11 @@ fn build_alibaba_coding_plan_request_body(
                 "content": prompt
             }
         ],
-        "temperature": temperature
     });
+
+    if let Some(temperature) = temperature {
+        body["temperature"] = json!(temperature);
+    }
 
     if provider_id == "alibaba-coding-plan-cn"
         && model_supports_dashscope_thinking(model_id)
@@ -866,7 +876,7 @@ async fn execute_openai_responses_prompt(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    temperature: f64,
+    temperature: Option<f64>,
     headers: &HeaderMap,
 ) -> Result<String, String> {
     let mut builder = openai::Client::builder()
@@ -881,11 +891,15 @@ async fn execute_openai_responses_prompt(
         .build()
         .map_err(|error| format!("创建 OpenAI Responses 客户端失败：{}。", error))?;
     let model = client.completion_model(model_id);
-    let agent = AgentBuilder::new(model)
+    let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Responses Worker")
-        .preamble(system_preamble)
-        .temperature(temperature)
-        .build();
+        .preamble(system_preamble);
+
+    if let Some(temperature) = temperature {
+        agent_builder = agent_builder.temperature(temperature);
+    }
+
+    let agent = agent_builder.build();
 
     agent
         .prompt(prompt.to_string())
@@ -901,7 +915,7 @@ async fn execute_anthropic_prompt(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    temperature: f64,
+    temperature: Option<f64>,
     headers: &HeaderMap,
 ) -> Result<String, String> {
     let mut builder = anthropic::Client::builder()
@@ -916,11 +930,15 @@ async fn execute_anthropic_prompt(
         .build()
         .map_err(|error| format!("创建 Anthropic 兼容客户端失败：{}。", error))?;
     let model = client.completion_model(model_id);
-    let agent = AgentBuilder::new(model)
+    let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Anthropic Worker")
-        .preamble(system_preamble)
-        .temperature(temperature)
-        .build();
+        .preamble(system_preamble);
+
+    if let Some(temperature) = temperature {
+        agent_builder = agent_builder.temperature(temperature);
+    }
+
+    let agent = agent_builder.build();
 
     agent
         .prompt(prompt.to_string())
@@ -935,7 +953,7 @@ async fn execute_openrouter_prompt(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    temperature: f64,
+    temperature: Option<f64>,
     headers: &HeaderMap,
 ) -> Result<String, String> {
     let client = openrouter::Client::builder()
@@ -944,11 +962,15 @@ async fn execute_openrouter_prompt(
         .build()
         .map_err(|error| format!("创建 OpenRouter 客户端失败：{}。", error))?;
     let model = client.completion_model(model_id);
-    let agent = AgentBuilder::new(model)
+    let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code OpenRouter Worker")
-        .preamble(system_preamble)
-        .temperature(temperature)
-        .build();
+        .preamble(system_preamble);
+
+    if let Some(temperature) = temperature {
+        agent_builder = agent_builder.temperature(temperature);
+    }
+
+    let agent = agent_builder.build();
 
     agent
         .prompt(prompt.to_string())
