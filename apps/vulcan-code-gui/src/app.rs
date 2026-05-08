@@ -26,6 +26,7 @@ use crate::provider_config::{
     PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedProviderEntry,
     PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
 };
+use crate::selectable_transcript::view_selectable_rendered_transcript;
 use crate::skills::{
     CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
     SummarySkillInput, TitleAgentInput,
@@ -515,6 +516,10 @@ pub struct VulcanWorkbench {
     /// Unified raw-source transcript buffers keyed by visible session id.
     /// 以可见会话标识为键保存的统一原始源码转录缓冲区。
     session_agent_view_raw_buffers: BTreeMap<usize, text_editor::Content>,
+    /// Unified selectable transcript projections keyed by visible session id.
+    /// 以可见会话标识为键保存的统一可选转录投影对象。
+    session_agent_view_selectable_documents:
+        BTreeMap<usize, vulcan_agent_view::AgentViewSelectableDocument>,
     /// Unified structured transcript documents keyed by visible session id.
     /// 以可见会话标识为键保存的统一结构化转录文档。
     session_agent_view_documents: BTreeMap<usize, vulcan_agent_view::AgentViewDocument>,
@@ -746,9 +751,6 @@ struct DockingThinkingOverlayState {
     /// Session identifier that owns the overlay currently animating out.
     /// 当前正在执行退场动画的浮层所属会话标识。
     session_id: usize,
-    /// Stable message identifier whose Markdown cache can still back the short dock animation.
-    /// 可在短暂收纳动画期间继续复用 Markdown 缓存的稳定消息标识。
-    message_id: String,
     /// Final thinking body snapshot rendered during the short dock animation.
     /// 在短暂收纳动画期间持续渲染的最终思考正文快照。
     body: String,
@@ -1658,6 +1660,7 @@ impl VulcanWorkbench {
                 runtime_event_markdown_buffers: BTreeMap::new(),
                 session_agent_view_buffers: BTreeMap::new(),
                 session_agent_view_raw_buffers: BTreeMap::new(),
+                session_agent_view_selectable_documents: BTreeMap::new(),
                 session_agent_view_documents: BTreeMap::new(),
                 session_agent_view_markdown: BTreeMap::new(),
                 session_agent_view_block_collapsed: BTreeMap::new(),
@@ -1753,6 +1756,7 @@ impl VulcanWorkbench {
                 self.runtime_event_markdown_buffers.clear();
                 self.session_agent_view_buffers.clear();
                 self.session_agent_view_raw_buffers.clear();
+                self.session_agent_view_selectable_documents.clear();
                 self.session_agent_view_documents.clear();
                 self.session_agent_view_markdown.clear();
                 self.session_agent_view_block_collapsed.clear();
@@ -4830,15 +4834,11 @@ impl VulcanWorkbench {
                 .style(container::bordered_box)
                 .into();
         };
-        let content_column = document.blocks.iter().enumerate().fold(
-            column![].spacing(10).width(Fill),
-            |column, (block_index, block)| {
-                column.push(self.view_main_canvas_agent_view_block(session_id, block_index, block))
-            },
-        );
-        let content_column = content_column
-            .push(space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT))
-            .width(Fill);
+        let content_column = column![
+            view_selectable_rendered_transcript::<Message>(document, &self.app_theme),
+            space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT),
+        ]
+        .width(Fill);
 
         container(
             scrollable(content_column)
@@ -5358,16 +5358,16 @@ impl VulcanWorkbench {
                 self.session_agent_view_buffers.get(&session_id),
                 Message::SelectedSessionDocumentStructuredAction
                     as fn(text_editor::Action) -> Message,
-                self.selected_session_agent_view_document()
-                    .map(|document| document.selectable_text())
+                self.selected_session_agent_view_selectable_document()
+                    .map(|document| document.buffer().to_string())
                     .unwrap_or_default(),
             ),
             AgentTranscriptSurfaceMode::Structured => (
                 self.session_agent_view_buffers.get(&session_id),
                 Message::SelectedSessionDocumentStructuredAction
                     as fn(text_editor::Action) -> Message,
-                self.selected_session_agent_view_document()
-                    .map(|document| document.selectable_text())
+                self.selected_session_agent_view_selectable_document()
+                    .map(|document| document.buffer().to_string())
                     .unwrap_or_default(),
             ),
             AgentTranscriptSurfaceMode::RawSource => (
@@ -5419,14 +5419,14 @@ impl VulcanWorkbench {
         &self,
         session_id: usize,
     ) -> Option<Element<'_, Message>> {
-        let (thinking_body, thinking_message_id, dock_progress, state_label, state_hint) =
+        let (thinking_body, dock_progress, state_label, state_hint, overlay_is_live_streaming) =
             if let Some(thinking_message) = self.streaming_thinking_message(session_id) {
                 (
                     thinking_message.body.as_str(),
-                    thinking_message.id.as_str(),
                     0.0_f32,
                     "思考中",
                     "完成后会自动收纳进正文",
+                    true,
                 )
             } else if let Some(docking_overlay) = self
                 .docking_thinking_overlay
@@ -5435,18 +5435,21 @@ impl VulcanWorkbench {
             {
                 (
                     docking_overlay.body.as_str(),
-                    docking_overlay.message_id.as_str(),
                     docking_thinking_overlay_progress(docking_overlay),
                     "思考已完成",
                     "正在收纳进正文",
+                    false,
                 )
             } else {
                 return None;
             };
         let overlay_visible_ratio = (1.0 - dock_progress).clamp(0.0, 1.0);
         let overlay_width = 420.0 - (1.0 - overlay_visible_ratio) * 72.0;
-        let overlay_body_height =
-            THINKING_OVERLAY_BODY_HEIGHT * (0.18 + overlay_visible_ratio * 0.82);
+        let overlay_body_height = if overlay_is_live_streaming {
+            THINKING_OVERLAY_BODY_HEIGHT * (0.18 + overlay_visible_ratio * 0.82)
+        } else {
+            0.0
+        };
         let overlay_bottom_padding = 18.0 + dock_progress * 18.0;
         let header_alpha = 1.0 - dock_progress * 0.24;
         let metrics = format!(
@@ -5454,17 +5457,60 @@ impl VulcanWorkbench {
             agent_view_visible_line_count(thinking_body),
             agent_view_visible_character_count(thinking_body)
         );
-        let body: Element<'_, Message> =
-            if let Some(content) = self.session_message_markdown.get(thinking_message_id) {
-                markdown::view_with(
-                    content.items(),
-                    theme::markdown_settings(&self.app_theme),
-                    &AgentViewMarkdownViewer,
-                )
+        let body_document = overlay_is_live_streaming.then(|| {
+            let mut document = vulcan_agent_view::AgentViewDocument::new();
+            document.push_markdown(thinking_body.to_string());
+            document
+        });
+        let dock_summary = thinking_body
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("思考内容已写入主会话");
+        let overlay_action: Element<'_, Message> = if overlay_is_live_streaming {
+            button(text("复制原文").size(11))
+                .padding([2, 6])
+                .style(button::text)
+                .on_press(Message::CopySelectedSessionAgentViewBlockRaw(
+                    thinking_body.to_string(),
+                ))
                 .into()
-            } else {
-                text(thinking_body).size(14).into()
-            };
+        } else {
+            space::horizontal().width(Shrink).into()
+        };
+        let overlay_body: Element<'_, Message> = if let Some(body_document) = body_document.as_ref()
+        {
+            container(
+                scrollable(
+                    container(view_selectable_rendered_transcript::<Message>(
+                        body_document,
+                        &self.app_theme,
+                    ))
+                    .width(Fill),
+                )
+                .id(thinking_overlay_scrollable_id(session_id))
+                .height(overlay_body_height)
+                .on_scroll(move |viewport| {
+                    Message::SelectedSessionThinkingOverlayScrolled {
+                        session_id,
+                        viewport,
+                    }
+                }),
+            )
+            .padding([2, 0])
+            .width(Fill)
+            .into()
+        } else {
+            container(
+                text(dock_summary)
+                    .size(12)
+                    .line_height(1.3)
+                    .wrapping(iced::widget::text::Wrapping::Word),
+            )
+            .padding([2, 0])
+            .width(Fill)
+            .into()
+        };
         let overlay_panel = container(
             column![
                 row![
@@ -5507,35 +5553,22 @@ impl VulcanWorkbench {
                                     .scale_alpha(header_alpha * 0.84),
                             ),
                         }),
-                    button(text("复制原文").size(11))
-                        .padding([2, 6])
-                        .style(button::text)
-                        .on_press(Message::CopySelectedSessionAgentViewBlockRaw(
-                            thinking_body.to_string(),
-                        )),
+                    overlay_action,
                 ]
                 .spacing(8)
                 .align_y(Center),
-                container(
-                    scrollable(container(body).width(Fill))
-                        .id(thinking_overlay_scrollable_id(session_id))
-                        .height(overlay_body_height)
-                        .on_scroll(move |viewport| {
-                            Message::SelectedSessionThinkingOverlayScrolled {
-                                session_id,
-                                viewport,
-                            }
-                        }),
-                )
-                .padding([2, 0])
-                .width(Fill),
+                overlay_body,
             ]
-            .spacing(10),
+            .spacing(if overlay_is_live_streaming { 10 } else { 6 }),
         )
         .padding(iced::Padding {
             top: 12.0,
             right: 14.0,
-            bottom: 8.0 + overlay_visible_ratio * 4.0,
+            bottom: if overlay_is_live_streaming {
+                8.0 + overlay_visible_ratio * 4.0
+            } else {
+                10.0
+            },
             left: 14.0,
         })
         .width(overlay_width)
@@ -8513,7 +8546,7 @@ impl VulcanWorkbench {
             .floating_streaming_thinking_sessions
             .remove(&session_id)
         {
-            if let Some((message_id, body)) = self
+            if let Some((_message_id, body)) = self
                 .streaming_thinking_message_ids
                 .get(&session_id)
                 .and_then(|message_id| {
@@ -8526,7 +8559,6 @@ impl VulcanWorkbench {
             {
                 self.docking_thinking_overlay = Some(DockingThinkingOverlayState {
                     session_id,
-                    message_id,
                     body,
                     started_at: Instant::now(),
                 });
@@ -8921,6 +8953,7 @@ impl VulcanWorkbench {
     fn rebuild_all_session_agent_view_buffers(&mut self) {
         self.session_agent_view_buffers.clear();
         self.session_agent_view_raw_buffers.clear();
+        self.session_agent_view_selectable_documents.clear();
         self.session_agent_view_documents.clear();
         self.session_agent_view_markdown.clear();
         self.session_agent_view_block_collapsed.clear();
@@ -8958,6 +8991,8 @@ impl VulcanWorkbench {
         if document.blocks.is_empty() {
             self.session_agent_view_buffers.remove(&session_id);
             self.session_agent_view_raw_buffers.remove(&session_id);
+            self.session_agent_view_selectable_documents
+                .remove(&session_id);
             self.session_agent_view_documents.remove(&session_id);
             self.session_agent_view_block_collapsed.remove(&session_id);
             self.session_agent_view_follow_tail.remove(&session_id);
@@ -8972,15 +9007,21 @@ impl VulcanWorkbench {
             self.session_agent_view_markdown
                 .insert(block_id, markdown_content);
         }
+        let selectable_document =
+            vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
+        let selectable_text = selectable_document.buffer().to_string();
+        let raw_source_text = agent_view_document_raw_source(&document);
 
         self.session_agent_view_buffers.insert(
             session_id,
-            text_editor::Content::with_text(&document.selectable_text()),
+            text_editor::Content::with_text(&selectable_text),
         );
         self.session_agent_view_raw_buffers.insert(
             session_id,
-            text_editor::Content::with_text(&agent_view_document_raw_source(&document)),
+            text_editor::Content::with_text(&raw_source_text),
         );
+        self.session_agent_view_selectable_documents
+            .insert(session_id, selectable_document);
         self.session_agent_view_documents
             .insert(session_id, document);
     }
@@ -9274,6 +9315,16 @@ impl VulcanWorkbench {
 
                 Some(build_agent_view_document(&messages, &runtime_events))
             })
+    }
+
+    /// Returns the selectable transcript projection for the currently selected session when it is already cached.
+    /// 当当前选中会话的可选转录投影已经缓存时返回该投影。
+    fn selected_session_agent_view_selectable_document(
+        &self,
+    ) -> Option<&vulcan_agent_view::AgentViewSelectableDocument> {
+        let session_id = self.selected_session().map(|session| session.id)?;
+        self.session_agent_view_selectable_documents
+            .get(&session_id)
     }
 
     /// Returns the execution phase bound to the currently selected session transcript.

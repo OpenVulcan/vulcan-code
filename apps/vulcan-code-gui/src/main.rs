@@ -12,6 +12,7 @@ mod mcp;
 mod model;
 mod provider_config;
 mod runtime_assets;
+mod selectable_transcript;
 mod skills;
 mod style;
 mod theme;
