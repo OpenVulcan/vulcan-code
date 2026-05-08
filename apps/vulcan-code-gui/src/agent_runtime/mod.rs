@@ -8,8 +8,9 @@ pub mod provider;
 pub mod runtime;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
+pub use events::ExecutionStreamEvent;
 pub use executor::{
     ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
-    execute_runtime_run,
+    stream_runtime_run,
 };
 pub use runtime::RuntimeFoundation;

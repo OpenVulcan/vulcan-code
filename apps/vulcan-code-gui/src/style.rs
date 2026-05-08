@@ -726,7 +726,7 @@ pub fn workbench_run_phase_chip_style(theme: &Theme, phase: SessionRunPhase) -> 
             iced::color!(0xFFF1F0),
             iced::color!(0xD73A49).scale_alpha(0.24),
         ),
-        SessionRunPhase::Paused => (
+        SessionRunPhase::Stopped => (
             iced::color!(0xFFF8E6),
             iced::color!(0x9A6700).scale_alpha(0.2),
         ),
@@ -774,5 +774,26 @@ pub fn workbench_runtime_event_style(theme: &Theme, kind: RuntimeEventKind) -> c
             color: border,
         },
         ..Default::default()
+    }
+}
+
+/// Returns the borderless read-only text-editor style used by selectable transcript source views.
+/// 返回可选取转录原文视图使用的无边框只读文本编辑器样式。
+pub fn workbench_transcript_raw_view_style(
+    theme: &Theme,
+    _status: text_editor::Status,
+) -> text_editor::Style {
+    let palette = theme.extended_palette();
+
+    text_editor::Style {
+        background: Background::Color(Color::TRANSPARENT),
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        placeholder: palette.secondary.base.color,
+        value: palette.background.base.text,
+        selection: palette.primary.weak.color.scale_alpha(0.9),
     }
 }

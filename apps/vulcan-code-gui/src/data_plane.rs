@@ -22,7 +22,7 @@ pub const APP_SQLITE_BINDING_TAG: &str = "app-state";
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 1;
+pub const APP_SCHEMA_VERSION: i64 = 2;
 
 /// Long-lived controller handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面持有的长生命周期控制器句柄。
@@ -165,6 +165,8 @@ pub async fn bootstrap_application_data_plane(
         .await
         .map_err(|error| format!("初始化应用数据结构失败：{error}"))?;
 
+    ensure_application_schema_migrations(&client, &sqlite_binding_id).await?;
+
     Ok(ControllerBootstrapReport {
         handle: ControllerRuntimeHandle {
             client,
@@ -246,6 +248,37 @@ async fn resolve_controller_binding_scope_id(client: &ControllerClient) -> Resul
 /// 基于稳定宿主绑定标签与会话作用域后缀构建一条控制器绑定标识。
 fn build_controller_binding_id(binding_tag: &str, binding_scope_id: &str) -> String {
     format!("{binding_tag}@{binding_scope_id}")
+}
+
+/// Applies additive schema migrations required by newer application builds.
+/// 应用较新应用版本所需的追加式结构迁移。
+async fn ensure_application_schema_migrations(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+) -> Result<(), String> {
+    let migration_result = client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            "ALTER TABLE session_runtime_state ADD COLUMN ui_state_json TEXT;",
+            vec![Vec::new()],
+        )
+        .await;
+
+    match migration_result {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let detail = error.to_string();
+            if detail.contains("duplicate column name")
+                || detail.contains("already exists")
+                || detail.contains("duplicate column")
+            {
+                Ok(())
+            } else {
+                Err(format!("执行应用结构迁移失败：{detail}"))
+            }
+        }
+    }
 }
 
 /// Returns one best-effort Unix epoch timestamp in milliseconds for controller client naming.
@@ -349,6 +382,7 @@ CREATE TABLE IF NOT EXISTS session_runtime_state (
     active_model_id TEXT,
     last_compaction_id TEXT,
     context_start_message_id TEXT,
+    ui_state_json TEXT,
     updated_at TEXT NOT NULL
 );
 

@@ -1,6 +1,8 @@
 //! Domain models for the AI coding desktop scaffold.
 //! AI 编程桌面骨架的领域模型定义。
 
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fmt;
 
 /// Execution modes for AI coding tasks.
@@ -448,6 +450,12 @@ pub enum SessionMessageRecordKind {
     /// Plain transcript row shown directly to the user.
     /// 直接展示给用户的普通转录行。
     Transcript,
+    /// Visible assistant thinking output kept outside future model context.
+    /// 展示给用户但不纳入后续模型上下文的思考输出。
+    ThinkingOutput,
+    /// Visible assistant final output kept inside future model context.
+    /// 展示给用户且纳入后续模型上下文的正式输出。
+    AssistantOutput,
     /// Hidden title-generation output kept for traceability.
     /// 为了可追溯性保留的隐藏标题生成输出。
     TitleOutput,
@@ -468,6 +476,8 @@ impl SessionMessageRecordKind {
     pub const fn as_persisted_key(self) -> &'static str {
         match self {
             Self::Transcript => "transcript",
+            Self::ThinkingOutput => "thinking-output",
+            Self::AssistantOutput => "assistant-output",
             Self::TitleOutput => "title-output",
             Self::SummaryOutput => "summary-output",
             Self::ExploreOutput => "explore-output",
@@ -478,13 +488,15 @@ impl SessionMessageRecordKind {
     /// Returns whether the record should be included when rebuilding the next LLM context.
     /// 返回在重建下一轮 LLM 上下文时是否应纳入该记录。
     pub const fn contributes_to_context(self) -> bool {
-        !matches!(self, Self::TitleOutput)
+        !matches!(self, Self::TitleOutput | Self::ThinkingOutput)
     }
 
     /// Parses one persisted text key back into the durable record kind enum.
     /// 将一条持久化文本键解析回持久化记录类型枚举。
     pub fn from_persisted_key(value: &str) -> Self {
         match value {
+            "thinking-output" => Self::ThinkingOutput,
+            "assistant-output" => Self::AssistantOutput,
             "title-output" => Self::TitleOutput,
             "summary-output" => Self::SummaryOutput,
             "explore-output" => Self::ExploreOutput,
@@ -607,6 +619,15 @@ pub struct SessionCompactionEntry {
 
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionTranscriptUiState {
+    /// Collapsed visible message identifiers persisted across restarts.
+    /// 跨重启持久化保存的可见消息折叠标识集合。
+    pub collapsed_message_ids: BTreeSet<String>,
+}
+
+/// Session-scoped runtime state required for context reconstruction and agent tracing.
+/// 上下文重建与代理追踪所需的按会话归属运行时状态。
 #[derive(Debug, Clone, Default)]
 pub struct SessionRuntimeStateEntry {
     /// Last active agent identifier used by the session.
@@ -624,6 +645,9 @@ pub struct SessionRuntimeStateEntry {
     /// Current message identifier used as the next context reconstruction anchor.
     /// 当前用作下一轮上下文重建锚点的消息标识。
     pub context_start_message_id: Option<String>,
+    /// Persisted transcript UI state restored with the session runtime metadata.
+    /// 随会话运行时元数据一起恢复的持久化转录界面状态。
+    pub ui_state: SessionTranscriptUiState,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
@@ -645,9 +669,9 @@ pub enum SessionRunPhase {
     /// The latest execution failed.
     /// 最近一次执行失败。
     Failed,
-    /// Execution was paused manually.
-    /// 执行被手动暂停。
-    Paused,
+    /// Execution was stopped manually.
+    /// 执行被手动停止。
+    Stopped,
 }
 
 impl SessionRunPhase {
@@ -659,7 +683,7 @@ impl SessionRunPhase {
             Self::Preparing => "执行中",
             Self::Ready => "已完成",
             Self::Failed => "失败",
-            Self::Paused => "已暂停",
+            Self::Stopped => "已停止",
         }
     }
 }

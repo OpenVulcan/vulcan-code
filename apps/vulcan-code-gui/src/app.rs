@@ -4,7 +4,8 @@
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::{
     self, ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest,
-    ExecutionRunReport, RuntimeFoundation, RuntimeSkillKind, execute_runtime_run,
+    ExecutionRunReport, ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind,
+    stream_runtime_run,
 };
 use crate::code_view;
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
@@ -35,7 +36,9 @@ use iced::widget::{
     rule, scrollable, slider, space, stack, svg, text, text_editor, text_input, toggler, tooltip,
 };
 use iced::window;
-use iced::{Center, Element, Fill, FillPortion, Pixels, Subscription, Task, Theme, keyboard};
+use iced::{
+    Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, keyboard, task,
+};
 use iced_aw::ContextMenu;
 use iced_fonts::{
     CODICON_FONT_BYTES, FONTAWESOME_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, fontawesome, lucide,
@@ -365,9 +368,9 @@ pub struct VulcanWorkbench {
     /// Current viewport height captured from the diff review flow.
     /// 从 diff 审查流捕获的当前视口高度。
     diff_viewport_height: f32,
-    /// Markdown content rendered in the inspector guide.
-    /// 渲染在检查面板指引中的 Markdown 内容。
-    quick_guide: markdown::Content,
+    /// Selectable Markdown buffer rendered in the inspector guide.
+    /// 渲染在检查面板指引中的可选 Markdown 缓冲区。
+    quick_guide_markdown_buffer: text_editor::Content,
     /// Session summaries rendered in the navigator pane.
     /// 渲染在导航面板中的会话摘要列表。
     sessions: Vec<SessionSummary>,
@@ -404,6 +407,9 @@ pub struct VulcanWorkbench {
     /// Runtime activity log rendered in the inspector pane.
     /// 渲染在检查面板中的运行活动日志。
     activities: Vec<ActivityEntry>,
+    /// Read-only activity-detail buffers used by the selectable inspector log cards.
+    /// 检查面板可选运行日志卡片使用的只读活动详情缓冲区。
+    activity_raw_buffers: Vec<text_editor::Content>,
     /// Session-scoped transcript messages rendered inside the main workbench output area.
     /// 渲染在主工作台输出区中的按会话归属消息转录集合。
     session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
@@ -428,9 +434,54 @@ pub struct VulcanWorkbench {
     /// Session-scoped runtime events rendered beneath the transcript message stream.
     /// 渲染在消息流下方的按会话归属运行时事件集合。
     session_runtime_events: BTreeMap<usize, Vec<RuntimeEvent>>,
+    /// Session-scoped collapsed runtime-event identifiers kept only in memory for the current launch.
+    /// 仅在当前启动周期内保留的按会话归属已折叠运行时事件标识集合。
+    collapsed_runtime_event_ids: BTreeMap<usize, BTreeSet<String>>,
+    /// Session-scoped Markdown-view message identifiers used when the user explicitly switches from selectable source text back to Markdown.
+    /// 当用户从可选原文显式切回 Markdown 时使用的按会话归属 Markdown 消息标识集合。
+    markdown_session_message_ids: BTreeMap<usize, BTreeSet<String>>,
+    /// Session-scoped Markdown-view runtime-event identifiers used when the user explicitly switches from selectable source text back to Markdown.
+    /// 当用户从可选原文显式切回 Markdown 时使用的按会话归属 Markdown 运行时事件标识集合。
+    markdown_runtime_event_ids: BTreeMap<usize, BTreeSet<String>>,
+    /// Read-only transcript source buffers keyed by stable message identifier.
+    /// 以稳定消息标识为键保存的只读转录原文缓冲区。
+    session_message_raw_buffers: BTreeMap<String, text_editor::Content>,
+    /// Parsed transcript Markdown payloads keyed by stable message identifier.
+    /// 以稳定消息标识为键保存的已解析转录 Markdown 载荷。
+    session_message_markdown: BTreeMap<String, markdown::Content>,
+    /// Selectable transcript Markdown buffers keyed by stable message identifier.
+    /// 以稳定消息标识为键保存的可选转录 Markdown 缓冲区。
+    session_message_markdown_buffers: BTreeMap<String, text_editor::Content>,
+    /// Active streaming thinking-message identifiers keyed by session id.
+    /// 以会话标识为键保存的当前流式思考消息标识集合。
+    streaming_thinking_message_ids: BTreeMap<usize, String>,
+    /// Active streaming output-message identifiers keyed by session id.
+    /// 以会话标识为键保存的当前流式输出消息标识集合。
+    streaming_output_message_ids: BTreeMap<usize, String>,
+    /// Read-only runtime-event source buffers keyed by stable runtime-event identifier.
+    /// 以稳定运行时事件标识为键保存的只读运行时原文缓冲区。
+    runtime_event_raw_buffers: BTreeMap<String, text_editor::Content>,
+    /// Parsed runtime-event Markdown payloads keyed by stable runtime-event identifier.
+    /// 以稳定运行时事件标识为键保存的已解析运行时 Markdown 载荷。
+    runtime_event_markdown: BTreeMap<String, markdown::Content>,
+    /// Selectable runtime-event Markdown buffers keyed by stable runtime-event identifier.
+    /// 以稳定运行时事件标识为键保存的可选运行时 Markdown 缓冲区。
+    runtime_event_markdown_buffers: BTreeMap<String, text_editor::Content>,
     /// Session-scoped execution phases reflected by the workbench status bar.
     /// 反映在工作台状态条中的按会话归属执行阶段集合。
     session_run_phases: BTreeMap<usize, SessionRunPhase>,
+    /// Monotonic identifier seed used to distinguish restarted or stopped execution streams.
+    /// 用于区分重启后或已停止执行流的单调递增标识种子。
+    next_run_id: u64,
+    /// Active execution stream identifier tracked while one real AI call is still in flight.
+    /// 当真实 AI 调用仍在进行中时跟踪的活动执行流标识。
+    active_run_id: Option<u64>,
+    /// Session identifier that currently owns the active real AI call.
+    /// 当前拥有活动真实 AI 调用的会话标识。
+    active_run_session_id: Option<usize>,
+    /// Abort handle used to stop the active real AI call at the iced task layer.
+    /// 用于在 iced 任务层停止当前真实 AI 调用的中止句柄。
+    active_run_handle: Option<task::Handle>,
     /// Identifier seed for newly created sessions.
     /// 新建会话使用的自增标识种子。
     next_session_id: usize,
@@ -1136,6 +1187,9 @@ enum Message {
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
+    /// Applies one read-only text editor action to the inspector guide Markdown buffer.
+    /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
+    QuickGuideMarkdownAction(text_editor::Action),
     /// Execution mode selected from the radio group.
     /// 从单选组中选择了执行模式。
     ExecutionModeSelected(ExecutionMode),
@@ -1160,6 +1214,33 @@ enum Message {
     /// Session selected from the navigator.
     /// 从导航区选择了某个会话。
     SessionSelected(usize),
+    /// Toggles one visible transcript message section between expanded and collapsed states.
+    /// 切换单个可见转录消息分区的展开与折叠状态。
+    ToggleSessionMessageCollapsed(usize, String),
+    /// Toggles one visible transcript message between Markdown rendering and raw selectable text.
+    /// 在 Markdown 渲染与可选原文之间切换单个可见转录消息。
+    ToggleSessionMessageRawMode(usize, String),
+    /// Applies one read-only text editor action to one selectable transcript-Markdown buffer.
+    /// 向某个可选转录 Markdown 缓冲区应用一次只读文本编辑器动作。
+    SessionMessageMarkdownAction(String, text_editor::Action),
+    /// Applies one read-only text editor action to one raw transcript-message buffer.
+    /// 向某个转录原文消息缓冲区应用一次只读文本编辑器动作。
+    SessionMessageRawAction(String, text_editor::Action),
+    /// Toggles one runtime-event section between expanded and collapsed states.
+    /// 切换单个运行时事件分区的展开与折叠状态。
+    ToggleRuntimeEventCollapsed(usize, String),
+    /// Toggles one runtime event between Markdown rendering and raw selectable text.
+    /// 在 Markdown 渲染与可选原文之间切换单个运行时事件。
+    ToggleRuntimeEventRawMode(usize, String),
+    /// Applies one read-only text editor action to one selectable runtime-event Markdown buffer.
+    /// 向某个可选运行时事件 Markdown 缓冲区应用一次只读文本编辑器动作。
+    RuntimeEventMarkdownAction(String, text_editor::Action),
+    /// Applies one read-only text editor action to one raw runtime-event buffer.
+    /// 向某个运行时事件原文缓冲区应用一次只读文本编辑器动作。
+    RuntimeEventRawAction(String, text_editor::Action),
+    /// Applies one read-only text editor action to one inspector activity-log buffer.
+    /// 向某个检查面板活动日志缓冲区应用一次只读文本编辑器动作。
+    ActivityLogRawAction(usize, text_editor::Action),
     /// Create-session action requested.
     /// 请求创建新会话。
     CreateSession,
@@ -1232,9 +1313,16 @@ enum Message {
     /// Primary execution action requested.
     /// 请求执行主任务动作。
     StartRun,
-    /// Applies the completed real execution report returned by the async runtime task.
-    /// 应用异步运行时任务返回的真实执行完成报告。
-    RunExecutionFinished(ExecutionRunReport),
+    /// Applies one incremental execution-stream event returned by the async runtime stream.
+    /// 应用异步运行时流返回的一条增量执行事件。
+    RunExecutionStreamEvent {
+        /// Monotonic execution-stream identifier used to discard stale events after stop or restart.
+        /// 用于在停止或重启后丢弃过期事件的单调执行流标识。
+        run_id: u64,
+        /// Concrete incremental event emitted by the async runtime stream.
+        /// 由异步运行时流发出的具体增量事件。
+        event: ExecutionStreamEvent,
+    },
     /// Stop action requested.
     /// 请求停止当前动作。
     StopRun,
@@ -1244,9 +1332,6 @@ enum Message {
     /// Pane grid split was resized.
     /// 分栏网格的分割线被调整。
     PaneResized(pane_grid::ResizeEvent),
-    /// Markdown guide emitted a link interaction.
-    /// Markdown 指引发出了链接交互事件。
-    GuideLinkClicked(markdown::Uri),
 }
 
 /// Icon kinds used by the hover action buttons inside the task-drawer tree.
@@ -1354,8 +1439,18 @@ impl VulcanWorkbench {
             .unwrap_or_default();
         let runtime_foundation = RuntimeFoundation::build(&provider_configuration);
 
+        let activities = ActivityEntry::seeded();
+        let activity_raw_buffers = activities
+            .iter()
+            .map(|entry| text_editor::Content::with_text(&entry.detail))
+            .collect::<Vec<_>>();
         let placeholder_diff_panel = WorkspaceDiffPanel::placeholder();
         let (main_window_id, open_main_window) = window::open(main_window_settings());
+        let app_theme = theme::default_theme();
+        let quick_guide = markdown::Content::parse(QUICK_GUIDE_MARKDOWN);
+        let quick_guide_markdown_buffer = text_editor::Content::with_text(
+            &build_selectable_markdown_text(QUICK_GUIDE_MARKDOWN, &quick_guide, &app_theme),
+        );
 
         let startup_controller_configuration = controller_configuration.clone();
 
@@ -1388,7 +1483,7 @@ impl VulcanWorkbench {
                 hovered_diff_line: None,
                 diff_scroll_offset: 0.0,
                 diff_viewport_height: 0.0,
-                quick_guide: markdown::Content::parse(QUICK_GUIDE_MARKDOWN),
+                quick_guide_markdown_buffer,
                 sessions: Vec::new(),
                 task_projects: Vec::new(),
                 archived_task_projects: Vec::new(),
@@ -1400,7 +1495,8 @@ impl VulcanWorkbench {
                 pending_task_project_interaction: None,
                 dragging_task_project: None,
                 selected_session: 0,
-                activities: ActivityEntry::seeded(),
+                activities,
+                activity_raw_buffers,
                 session_messages: BTreeMap::new(),
                 archived_sessions: Vec::new(),
                 archived_session_messages: BTreeMap::new(),
@@ -1409,7 +1505,22 @@ impl VulcanWorkbench {
                 session_runtime_state: BTreeMap::new(),
                 archived_session_runtime_state: BTreeMap::new(),
                 session_runtime_events: BTreeMap::new(),
+                collapsed_runtime_event_ids: BTreeMap::new(),
+                markdown_session_message_ids: BTreeMap::new(),
+                markdown_runtime_event_ids: BTreeMap::new(),
+                session_message_raw_buffers: BTreeMap::new(),
+                session_message_markdown: BTreeMap::new(),
+                session_message_markdown_buffers: BTreeMap::new(),
+                streaming_thinking_message_ids: BTreeMap::new(),
+                streaming_output_message_ids: BTreeMap::new(),
+                runtime_event_raw_buffers: BTreeMap::new(),
+                runtime_event_markdown: BTreeMap::new(),
+                runtime_event_markdown_buffers: BTreeMap::new(),
                 session_run_phases: BTreeMap::new(),
+                next_run_id: 1,
+                active_run_id: None,
+                active_run_session_id: None,
+                active_run_handle: None,
                 next_session_id: 1,
                 startup_lifecycle: StartupLifecycle::Bootstrapping {
                     message: String::from("正在初始化 vldb 数据平面，请稍候。"),
@@ -1435,7 +1546,7 @@ impl VulcanWorkbench {
                 last_mcp_discovery_rows: Vec::new(),
                 last_mcp_discovery_errors: Vec::new(),
                 execution_mode: ExecutionMode::Plan,
-                app_theme: theme::default_theme(),
+                app_theme,
                 temperature_enabled: false,
                 temperature: 0.25,
                 context_usage: 42.0,
@@ -1477,6 +1588,17 @@ impl VulcanWorkbench {
                 self.session_runtime_state.clear();
                 self.archived_session_runtime_state.clear();
                 self.session_runtime_events.clear();
+                self.collapsed_runtime_event_ids.clear();
+                self.markdown_session_message_ids.clear();
+                self.markdown_runtime_event_ids.clear();
+                self.session_message_raw_buffers.clear();
+                self.session_message_markdown.clear();
+                self.session_message_markdown_buffers.clear();
+                self.streaming_thinking_message_ids.clear();
+                self.streaming_output_message_ids.clear();
+                self.runtime_event_raw_buffers.clear();
+                self.runtime_event_markdown.clear();
+                self.runtime_event_markdown_buffers.clear();
                 self.session_run_phases.clear();
                 self.expanded_task_projects.clear();
                 self.selected_session = 0;
@@ -2137,6 +2259,12 @@ impl VulcanWorkbench {
                 self.status_message = format!("应用主题已切换为 {}。", theme);
                 Task::none()
             }
+            Message::QuickGuideMarkdownAction(action) => {
+                if !action.is_edit() {
+                    self.quick_guide_markdown_buffer.perform(action);
+                }
+                Task::none()
+            }
             Message::ExecutionModeSelected(mode) => {
                 self.execution_mode = mode;
                 self.status_message = format!("执行模式已切换为 {mode}。");
@@ -2184,6 +2312,64 @@ impl VulcanWorkbench {
                     .unwrap_or_else(|| String::from("未知会话"));
 
                 self.status_message = format!("当前会话已切换为：{selected_title}。");
+                Task::none()
+            }
+            Message::ToggleSessionMessageCollapsed(session_id, message_id) => {
+                self.toggle_session_message_collapsed_state(session_id, &message_id);
+                self.persist_workspace_snapshot_task()
+            }
+            Message::ToggleSessionMessageRawMode(session_id, message_id) => {
+                self.toggle_session_message_raw_mode(session_id, &message_id);
+                Task::none()
+            }
+            Message::SessionMessageMarkdownAction(message_id, action) => {
+                if !action.is_edit() {
+                    if let Some(content) =
+                        self.session_message_markdown_buffers.get_mut(&message_id)
+                    {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::SessionMessageRawAction(message_id, action) => {
+                if !action.is_edit() {
+                    if let Some(content) = self.session_message_raw_buffers.get_mut(&message_id) {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::ToggleRuntimeEventCollapsed(session_id, event_id) => {
+                self.toggle_runtime_event_collapsed_state(session_id, &event_id);
+                Task::none()
+            }
+            Message::ToggleRuntimeEventRawMode(session_id, event_id) => {
+                self.toggle_runtime_event_raw_mode(session_id, &event_id);
+                Task::none()
+            }
+            Message::RuntimeEventMarkdownAction(event_id, action) => {
+                if !action.is_edit() {
+                    if let Some(content) = self.runtime_event_markdown_buffers.get_mut(&event_id) {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::RuntimeEventRawAction(event_id, action) => {
+                if !action.is_edit() {
+                    if let Some(content) = self.runtime_event_raw_buffers.get_mut(&event_id) {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::ActivityLogRawAction(index, action) => {
+                if !action.is_edit() {
+                    if let Some(content) = self.activity_raw_buffers.get_mut(index) {
+                        content.perform(action);
+                    }
+                }
                 Task::none()
             }
             Message::CreateSession => {
@@ -2577,6 +2763,13 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::StartRun => {
+                if self.has_active_run() {
+                    self.status_message = String::from(
+                        "当前已有 AI 调用正在执行，可点击停止按钮中止后再发起新的请求。",
+                    );
+                    return Task::none();
+                }
+
                 let request = if let Some(session) = self.selected_session() {
                     let context_history = self
                         .session_context_history(session.id)
@@ -2627,6 +2820,7 @@ impl VulcanWorkbench {
                     .maybe_generate_session_title_from_prompt(request.session_id, &request.prompt);
                 self.materialize_session_after_first_user_turn(request.session_id);
                 self.replace_session_runtime_events(request.session_id, Vec::new());
+                self.clear_streaming_message_ids(request.session_id);
                 self.last_mcp_discovery_rows.clear();
                 self.last_mcp_discovery_errors.clear();
                 self.set_session_run_phase(request.session_id, SessionRunPhase::Preparing);
@@ -2636,135 +2830,95 @@ impl VulcanWorkbench {
                 }
                 self.status_message = String::from("正在发起真实执行，请稍候。");
 
+                let run_id = self.next_run_id;
+                self.next_run_id = self.next_run_id.saturating_add(1);
                 let request_for_run = request.clone();
                 let config_for_run = self.provider_configuration.clone();
+                let (run_task, run_handle) = Task::run(
+                    stream_runtime_run(config_for_run, request_for_run),
+                    move |event| Message::RunExecutionStreamEvent { run_id, event },
+                )
+                .abortable();
+                self.active_run_id = Some(run_id);
+                self.active_run_session_id = Some(request.session_id);
+                self.active_run_handle = Some(run_handle);
 
-                Task::batch([
-                    self.persist_workspace_snapshot_task(),
-                    Task::perform(
-                        async move { execute_runtime_run(config_for_run, request_for_run).await },
-                        Message::RunExecutionFinished,
-                    ),
-                ])
+                Task::batch([self.persist_workspace_snapshot_task(), run_task])
             }
-            Message::RunExecutionFinished(report) => {
-                let session_id = report.session_id;
-                self.last_mcp_discovery_rows = report.mcp_discovery_rows.clone();
-                self.last_mcp_discovery_errors = report.mcp_discovery_errors.clone();
-
-                if let Some(preparation) = report.preparation.clone() {
-                    let detail = preparation.summary_rows().join(" | ");
-                    let assistant_body = format!(
-                        "已基于当前代理与模型完成执行准备，并进入真实执行链路。\n\n{}",
-                        preparation.summary_rows().join("\n")
-                    );
-
-                    self.context_usage = (self.context_usage + 8.0).min(100.0);
-                    self.last_execution_preparation = Some(preparation.clone());
-                    self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
-                    self.push_session_message(
-                        session_id,
-                        SessionMessageKind::Assistant,
-                        "执行准备摘要",
-                        assistant_body,
-                    );
-                    self.update_session_runtime_identity_from_preparation(session_id, &preparation);
-
-                    for warning in &preparation.warnings {
-                        self.push_activity(ActivityLevel::Warning, "执行准备警告", warning.clone());
-                    }
+            Message::RunExecutionStreamEvent { run_id, event } => {
+                if self.active_run_id != Some(run_id) {
+                    return Task::none();
                 }
 
-                self.replace_session_runtime_events(session_id, report.runtime_events.clone());
-
-                for warning in &report.warnings {
-                    self.push_activity(ActivityLevel::Warning, "执行运行警告", warning.clone());
-                }
-
-                if report.is_success() {
-                    let assistant_output = report
-                        .assistant_output
-                        .clone()
-                        .unwrap_or_else(|| String::from("模型已完成执行，但未返回可见文本输出。"));
-
-                    if let Some(session) = self
-                        .sessions
-                        .iter_mut()
-                        .find(|session| session.id == session_id)
-                    {
-                        session.status = SessionState::Completed;
-                        session.focus =
-                            String::from("最近一次真实执行已完成，可继续追问或调整参数。");
-                        session.queued_steps = session.queued_steps.saturating_add(1);
-                        session.last_updated_label = String::from("刚刚");
+                match event {
+                    ExecutionStreamEvent::Prepared(preparation) => {
+                        let detail = preparation.summary_rows().join(" | ");
+                        self.last_execution_preparation = Some(preparation.clone());
+                        self.context_usage = (self.context_usage + 8.0).min(100.0);
+                        self.update_session_runtime_identity_from_preparation(
+                            preparation.session_id,
+                            &preparation,
+                        );
+                        self.status_message =
+                            String::from("真实执行已开始，正在分离思考与输出并持续写入工作台。");
+                        self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
+                        Task::none()
                     }
-
-                    self.push_session_message(
-                        session_id,
-                        SessionMessageKind::Assistant,
-                        "AI 输出",
-                        assistant_output,
-                    );
-                    self.set_session_run_phase(session_id, SessionRunPhase::Ready);
-                    self.status_message = String::from("真实执行已完成，结果已写入工作台输出区。");
-                    self.push_activity(
-                        ActivityLevel::Success,
-                        "真实执行已完成",
-                        format!("会话 #{session_id} 已完成真实模型执行并产出输出。"),
-                    );
-                } else {
-                    let error = report
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。"));
-
-                    if let Some(session) = self
-                        .sessions
-                        .iter_mut()
-                        .find(|session| session.id == session_id)
-                    {
-                        session.status = SessionState::Blocked;
-                        session.last_updated_label = String::from("刚刚");
+                    ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                        self.append_streaming_thinking_delta(session_id, &delta);
+                        Task::none()
                     }
-
-                    self.push_session_message(
-                        session_id,
-                        SessionMessageKind::Error,
-                        "执行失败",
-                        error.clone(),
-                    );
-                    self.set_session_run_phase(session_id, SessionRunPhase::Failed);
-                    self.status_message = error.clone();
-                    self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
+                    ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                        self.append_streaming_output_delta(session_id, &delta);
+                        Task::none()
+                    }
+                    ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                        self.push_session_runtime_event(session_id, event);
+                        Task::none()
+                    }
+                    ExecutionStreamEvent::Finished(report) => {
+                        self.clear_active_run_tracking();
+                        self.apply_execution_run_report(report)
+                    }
                 }
-
-                self.append_session_summary_output(session_id, &report);
-                self.maybe_compact_session_history(session_id);
-
-                self.persist_workspace_snapshot_task()
             }
             Message::StopRun => {
-                // Mark the current session as blocked to surface a safe stop point in the UI.
-                // 将当前会话标记为阻塞状态，以在界面中显式体现安全停止点。
-                if let Some(session) = self.selected_session_mut() {
+                let Some(session_id) = self.active_run_session_id else {
+                    self.status_message = String::from("当前没有正在执行的 AI 调用。");
+                    return Task::none();
+                };
+
+                let run_handle = self.active_run_handle.take();
+                self.clear_active_run_tracking();
+
+                if let Some(handle) = run_handle {
+                    handle.abort();
+                }
+
+                // Mark the stopped session as blocked so the interruption is visible in the UI.
+                // 将被停止的会话标记为阻塞状态，以便在界面中显式展示中断结果。
+                if let Some(session) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
                     session.status = SessionState::Blocked;
                     session.last_updated_label = String::from("刚刚");
                 }
 
-                self.status_message = String::from("当前编排已暂停，等待下一步指令。");
-                if let Some(session_id) = self.selected_session().map(|session| session.id) {
-                    self.set_session_run_phase(session_id, SessionRunPhase::Paused);
-                    self.push_session_message(
-                        session_id,
-                        SessionMessageKind::Assistant,
-                        "执行已暂停",
-                        "当前编排已暂停，保留现有上下文与会话输出，可在调整参数后再次发起执行。",
-                    );
-                }
+                self.clear_streaming_message_ids(session_id);
+                self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
+                self.status_message = String::from("已停止当前 AI 调用。");
+                self.push_session_message(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    "执行已停止",
+                    "已按用户请求停止当前 AI 调用，系统保留截至停止时的上下文、思考与输出片段。",
+                );
                 self.push_activity(
                     ActivityLevel::Warning,
-                    "执行编排已暂停",
-                    "当前处于人工确认窗口，可继续调整模型、策略或补丁内容。",
+                    "AI 调用已停止",
+                    "当前真实执行已被用户中止，可直接修改提示词后重新发起新的调用。",
                 );
                 self.persist_workspace_snapshot_task()
             }
@@ -2775,10 +2929,6 @@ impl VulcanWorkbench {
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
                 self.rebuild_diff_code_buffers_for_current_wrap();
-                Task::none()
-            }
-            Message::GuideLinkClicked(uri) => {
-                self.status_message = format!("指引面板捕获到链接交互：{uri}");
                 Task::none()
             }
         }
@@ -4095,6 +4245,57 @@ impl VulcanWorkbench {
             .into()
     }
 
+    /// Returns whether one real AI call is currently in flight.
+    /// 返回当前是否存在一个正在进行中的真实 AI 调用。
+    fn has_active_run(&self) -> bool {
+        self.active_run_id.is_some()
+    }
+
+    /// Clears the tracked active-run state after one AI call stops or finishes.
+    /// 在一次 AI 调用停止或结束后清理已跟踪的活动运行状态。
+    fn clear_active_run_tracking(&mut self) {
+        self.active_run_id = None;
+        self.active_run_session_id = None;
+        self.active_run_handle = None;
+    }
+
+    /// Builds the compact send-or-stop button shown at the right side of prompt inputs.
+    /// 构建显示在提示词输入框右侧的紧凑发送或停止按钮。
+    fn view_run_trigger_button(&self) -> Element<'_, Message> {
+        let is_running = self.has_active_run();
+        let tooltip_text = if is_running {
+            "停止当前 AI 调用"
+        } else {
+            "发送当前任务指令"
+        };
+        let button_style: fn(&Theme, button::Status) -> button::Style = if is_running {
+            button::danger
+        } else {
+            button::primary
+        };
+        let trigger_message = if is_running {
+            Message::StopRun
+        } else {
+            Message::StartRun
+        };
+        let icon: Element<'_, Message> = if is_running {
+            codicon::debug_stop().size(16).line_height(1.0).into()
+        } else {
+            lucide::send().size(16).line_height(1.0).into()
+        };
+
+        tooltip(
+            button(icon)
+                .padding([10, 12])
+                .style(button_style)
+                .on_press(trigger_message),
+            tooltip_text,
+            tooltip::Position::Bottom,
+        )
+        .style(container::rounded_box)
+        .into()
+    }
+
     /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     fn view_main_canvas(&self) -> Element<'_, Message> {
@@ -4120,20 +4321,24 @@ impl VulcanWorkbench {
                 ]
                 .spacing(12)
                 .align_y(Center),
-                text_input("输入当前会话要执行的任务指令", &self.composer)
-                    .on_input(Message::ComposerChanged)
-                    .padding(12),
+                row![
+                    text_input("输入当前会话要执行的任务指令", &self.composer)
+                        .on_input(Message::ComposerChanged)
+                        .padding(12)
+                        .width(Fill),
+                    self.view_run_trigger_button(),
+                ]
+                .spacing(10)
+                .align_y(Center),
                 row![
                     text("执行后将把用户输入、AI 输出与运行时事件写入当前会话。").size(12),
                     space::horizontal(),
-                    button("准备执行")
-                        .padding([10, 14])
-                        .style(button::primary)
-                        .on_press(Message::StartRun),
-                    button("暂停执行")
-                        .padding([10, 14])
-                        .style(button::secondary)
-                        .on_press(Message::StopRun),
+                    text(if self.has_active_run() {
+                        "运行中，可点击右侧停止按钮中止当前 AI 调用。"
+                    } else {
+                        "点击输入框右侧纸飞机按钮即可发起 AI 调用。"
+                    })
+                    .size(12),
                 ]
                 .spacing(10)
                 .align_y(Center),
@@ -4192,6 +4397,10 @@ impl VulcanWorkbench {
     /// Builds the transcript stream area shown in the center of the main workbench canvas.
     /// 构建展示在主工作台中央画布中的会话转录流区域。
     fn view_main_canvas_transcript_stream(&self) -> Element<'_, Message> {
+        let selected_session_id = self
+            .selected_session()
+            .map(|session| session.id)
+            .unwrap_or(0);
         let messages = self.selected_session_messages();
         let runtime_events = self
             .selected_session_runtime_events()
@@ -4202,7 +4411,7 @@ impl VulcanWorkbench {
             return container(
                 column![
                     text("尚未开始执行").size(18),
-                    text("点击下方“准备执行”后，用户输入、AI 输出和运行时事件都会在这里持续沉淀。")
+                    text("点击上方输入框右侧发送按钮后，用户输入、AI 输出和运行时事件都会在这里持续沉淀。")
                         .size(13),
                 ]
                 .spacing(8)
@@ -4215,17 +4424,24 @@ impl VulcanWorkbench {
             .into();
         }
 
-        let message_column = messages
-            .into_iter()
-            .fold(column![].spacing(10).width(Fill), |column, message| {
-                column.push(self.view_main_canvas_message_entry(message))
-            });
+        let message_column =
+            messages
+                .into_iter()
+                .fold(column![].spacing(10).width(Fill), |column, message| {
+                    column.push(self.view_main_canvas_message_entry(selected_session_id, message))
+                });
         let content_column = if runtime_events.is_empty() {
             message_column
         } else {
-            let event_rows = runtime_events.into_iter().fold(
+            let event_rows = runtime_events.into_iter().enumerate().fold(
                 column![text("运行时事件").size(13)].spacing(8),
-                |column, event| column.push(self.view_main_canvas_runtime_event_entry(event)),
+                |column, (index, event)| {
+                    column.push(self.view_main_canvas_runtime_event_entry(
+                        selected_session_id,
+                        index,
+                        event,
+                    ))
+                },
             );
 
             message_column.push(container(event_rows).padding([6, 0]))
@@ -4240,25 +4456,75 @@ impl VulcanWorkbench {
 
     /// Builds one transcript message bubble shown inside the main workbench stream.
     /// 构建展示在主工作台消息流中的单条转录消息气泡。
-    fn view_main_canvas_message_entry(&self, message: SessionMessageEntry) -> Element<'_, Message> {
+    fn view_main_canvas_message_entry(
+        &self,
+        session_id: usize,
+        message: SessionMessageEntry,
+    ) -> Element<'_, Message> {
         let kind = message.kind;
         let title = message.title;
         let body = message.body;
-        let bubble = container(
-            column![
-                row![
-                    text(kind.label()).size(11),
-                    space::horizontal(),
-                    text(title).size(13),
-                ]
-                .spacing(8)
-                .align_y(Center),
-                text(body).size(14),
-            ]
-            .spacing(8),
-        )
-        .padding([10, 12])
-        .style(move |theme| style::workbench_message_bubble_style(theme, kind));
+        let message_id = message.id;
+        let is_collapsed = self.session_message_is_collapsed(session_id, &message_id);
+        let is_raw_mode = self.session_message_is_raw_mode(session_id, &message_id);
+        let body_view: Element<'_, Message> = if is_collapsed {
+            space().height(0).into()
+        } else if is_raw_mode {
+            let raw_message_id = message_id.clone();
+            self.view_workbench_raw_body(
+                self.session_message_raw_buffers.get(&message_id),
+                body.clone(),
+                move |action| Message::SessionMessageRawAction(raw_message_id.clone(), action),
+            )
+        } else {
+            let markdown_message_id = message_id.clone();
+            self.view_workbench_markdown_body(
+                self.session_message_markdown_buffers.get(&message_id),
+                body.clone(),
+                move |action| {
+                    Message::SessionMessageMarkdownAction(markdown_message_id.clone(), action)
+                },
+            )
+        };
+        let header = row![
+            button(
+                row![text(kind.label()).size(11), text(title).size(13),]
+                    .spacing(8)
+                    .align_y(Center)
+            )
+            .padding(0)
+            .width(Fill)
+            .style(button::text)
+            .on_press(Message::ToggleSessionMessageCollapsed(
+                session_id,
+                message_id.clone(),
+            )),
+            button(text(if is_raw_mode { "MD" } else { "原文" }).size(11))
+                .padding([2, 6])
+                .style(button::text)
+                .on_press(Message::ToggleSessionMessageRawMode(
+                    session_id,
+                    message_id.clone(),
+                )),
+            button(text(if is_collapsed { "▸" } else { "▾" }).size(12))
+                .padding([2, 4])
+                .style(button::text)
+                .on_press(Message::ToggleSessionMessageCollapsed(
+                    session_id,
+                    message_id.clone(),
+                )),
+        ]
+        .spacing(8)
+        .align_y(Center);
+        let mut content = column![header].spacing(8);
+        if !is_collapsed {
+            content = content.push(
+                column![rule::horizontal(1), container(body_view).padding([8, 0])].spacing(8),
+            );
+        }
+        let bubble = container(content)
+            .padding([10, 12])
+            .style(move |theme| style::workbench_message_bubble_style(theme, kind));
 
         match kind {
             SessionMessageKind::User => row![space::horizontal(), bubble.width(FillPortion(7))]
@@ -4274,27 +4540,122 @@ impl VulcanWorkbench {
 
     /// Builds one runtime-event block shown beneath the transcript message list.
     /// 构建展示在转录消息列表下方的单条运行时事件块。
-    fn view_main_canvas_runtime_event_entry(&self, event: RuntimeEvent) -> Element<'_, Message> {
+    fn view_main_canvas_runtime_event_entry(
+        &self,
+        session_id: usize,
+        event_index: usize,
+        event: RuntimeEvent,
+    ) -> Element<'_, Message> {
         let kind = event.kind;
+        let event_id = session_runtime_event_id(session_id, event_index, &event);
         let title = event.title;
         let detail = event.detail;
-        container(
-            column![
+        let is_collapsed = self.runtime_event_is_collapsed(session_id, &event_id);
+        let is_raw_mode = self.runtime_event_is_raw_mode(session_id, &event_id);
+        let header = row![
+            button(
                 row![
                     text(format!("事件 · {}", runtime_event_kind_label(kind))).size(11),
-                    space::horizontal(),
                     text(title).size(13),
                 ]
                 .spacing(8)
-                .align_y(Center),
-                text(detail).size(13),
-            ]
-            .spacing(8),
-        )
-        .padding([10, 12])
-        .width(Fill)
-        .style(move |theme| style::workbench_runtime_event_style(theme, kind))
-        .into()
+                .align_y(Center)
+            )
+            .padding(0)
+            .width(Fill)
+            .style(button::text)
+            .on_press(Message::ToggleRuntimeEventCollapsed(
+                session_id,
+                event_id.clone(),
+            )),
+            button(text(if is_raw_mode { "MD" } else { "原文" }).size(11))
+                .padding([2, 6])
+                .style(button::text)
+                .on_press(Message::ToggleRuntimeEventRawMode(
+                    session_id,
+                    event_id.clone(),
+                )),
+            button(text(if is_collapsed { "▸" } else { "▾" }).size(12))
+                .padding([2, 4])
+                .style(button::text)
+                .on_press(Message::ToggleRuntimeEventCollapsed(
+                    session_id,
+                    event_id.clone(),
+                )),
+        ]
+        .spacing(8)
+        .align_y(Center);
+        let mut content = column![header].spacing(8);
+        if !is_collapsed {
+            let detail_view = if is_raw_mode {
+                let raw_event_id = event_id.clone();
+                self.view_workbench_raw_body(
+                    self.runtime_event_raw_buffers.get(&event_id),
+                    detail.clone(),
+                    move |action| Message::RuntimeEventRawAction(raw_event_id.clone(), action),
+                )
+            } else {
+                let markdown_event_id = event_id.clone();
+                self.view_workbench_markdown_body(
+                    self.runtime_event_markdown_buffers.get(&event_id),
+                    detail.clone(),
+                    move |action| {
+                        Message::RuntimeEventMarkdownAction(markdown_event_id.clone(), action)
+                    },
+                )
+            };
+            content = content.push(
+                column![rule::horizontal(1), container(detail_view).padding([8, 0])].spacing(8),
+            );
+        }
+        container(content)
+            .padding([10, 12])
+            .width(Fill)
+            .style(move |theme| style::workbench_runtime_event_style(theme, kind))
+            .into()
+    }
+
+    /// Builds one selectable Markdown body region for the workbench transcript using the cached projected buffer.
+    /// 使用已缓存的投影缓冲区为工作台转录区构建一块可选 Markdown 正文区域。
+    fn view_workbench_markdown_body<'a>(
+        &'a self,
+        buffer: Option<&'a text_editor::Content>,
+        fallback: String,
+        on_action: impl Fn(text_editor::Action) -> Message + 'a,
+    ) -> Element<'a, Message> {
+        if let Some(buffer) = buffer {
+            text_editor(buffer)
+                .height(Shrink)
+                .wrapping(iced::widget::text::Wrapping::Word)
+                .padding(0)
+                .size(14)
+                .style(style::workbench_transcript_raw_view_style)
+                .on_action(on_action)
+                .into()
+        } else {
+            text(fallback).size(14).into()
+        }
+    }
+
+    /// Builds one selectable raw-text body region for the workbench transcript using the cached read-only buffer.
+    /// 使用已缓存的只读缓冲区为工作台转录区构建一块可选原文正文区域。
+    fn view_workbench_raw_body<'a>(
+        &'a self,
+        buffer: Option<&'a text_editor::Content>,
+        fallback: String,
+        on_action: impl Fn(text_editor::Action) -> Message + 'a,
+    ) -> Element<'a, Message> {
+        if let Some(buffer) = buffer {
+            text_editor(buffer)
+                .height(Shrink)
+                .wrapping(iced::widget::text::Wrapping::Word)
+                .padding(0)
+                .style(style::workbench_transcript_raw_view_style)
+                .on_action(on_action)
+                .into()
+        } else {
+            text(fallback).size(14).into()
+        }
     }
 
     /// Builds the reusable workspace surface shown by the example panel.
@@ -4357,24 +4718,6 @@ impl VulcanWorkbench {
                 "创建一个新的探索会话用于承载额外任务。",
                 Message::CreateSession,
             ),
-            tooltip(
-                button("准备执行")
-                    .padding([10, 14])
-                    .style(button::primary)
-                    .on_press(Message::StartRun),
-                "根据当前模型与执行模式启动编排准备。",
-                tooltip::Position::Bottom,
-            )
-            .style(container::rounded_box),
-            tooltip(
-                button("暂停执行")
-                    .padding([10, 14])
-                    .style(button::danger)
-                    .on_press(Message::StopRun),
-                "暂停当前编排并保留调整窗口。",
-                tooltip::Position::Bottom,
-            )
-            .style(container::rounded_box),
         ]
         .spacing(10)
         .align_y(Center);
@@ -4923,9 +5266,15 @@ impl VulcanWorkbench {
         let composer = container(
             column![
                 text("任务指令").size(18),
-                text_input("例如：实现 GUI 基础设施并接入 iced 组件", &self.composer)
-                    .on_input(Message::ComposerChanged)
-                    .padding(12),
+                row![
+                    text_input("例如：实现 GUI 基础设施并接入 iced 组件", &self.composer)
+                        .on_input(Message::ComposerChanged)
+                        .padding(12)
+                        .width(Fill),
+                    self.view_run_trigger_button(),
+                ]
+                .spacing(10)
+                .align_y(Center),
                 row![
                     text(format!(
                         "当前会话：{}",
@@ -5859,8 +6208,11 @@ impl VulcanWorkbench {
         let guide = container(
             column![
                 text("集成指引").size(18),
-                markdown::view(self.quick_guide.items(), self.app_theme.clone())
-                    .map(Message::GuideLinkClicked),
+                self.view_workbench_markdown_body(
+                    Some(&self.quick_guide_markdown_buffer),
+                    QUICK_GUIDE_MARKDOWN.to_string(),
+                    Message::QuickGuideMarkdownAction,
+                ),
             ]
             .spacing(12),
         )
@@ -5869,10 +6221,16 @@ impl VulcanWorkbench {
 
         // Build the activity log card to visualize system feedback and execution breadcrumbs.
         // 构建活动日志卡片，以可视化系统反馈与执行轨迹。
-        let activity_log = container(self.activities.iter().fold(
-            column![text("运行日志").size(18)].spacing(12),
-            |list, entry| list.push(self.view_activity_card(entry)),
-        ))
+        let activity_log = container(
+            self.activities.iter().enumerate().fold(
+                column![
+                    text("运行日志").size(18),
+                    text("日志正文支持直接框选与复制。").size(12),
+                ]
+                .spacing(8),
+                |list, (index, entry)| list.push(self.view_activity_card(index, entry)),
+            ),
+        )
         .padding(16)
         .style(container::bordered_box);
 
@@ -5908,7 +6266,7 @@ impl VulcanWorkbench {
             .map(|preparation| preparation.summary_rows())
             .unwrap_or_else(|| {
                 vec![String::from(
-                    "尚未触发执行准备，可点击示例面板中的“准备执行”按钮生成第一份运行计划。",
+                    "尚未触发执行，可点击工作台输入框右侧的发送按钮发起第一次 AI 调用。",
                 )]
             });
 
@@ -6109,9 +6467,19 @@ impl VulcanWorkbench {
 
     /// Renders a single activity card inside the inspector log.
     /// 渲染检查面板日志中的单个活动卡片。
-    fn view_activity_card<'a>(&self, entry: &'a ActivityEntry) -> Element<'a, Message> {
+    fn view_activity_card<'a>(
+        &'a self,
+        index: usize,
+        entry: &'a ActivityEntry,
+    ) -> Element<'a, Message> {
         // Build a readable card so feedback can be scanned quickly during long-running tasks.
         // 构建易读卡片，便于在长任务期间快速扫描反馈。
+        let detail_view = self.view_workbench_raw_body(
+            self.activity_raw_buffers.get(index),
+            entry.detail.clone(),
+            move |action| Message::ActivityLogRawAction(index, action),
+        );
+
         container(
             column![
                 row![
@@ -6120,7 +6488,7 @@ impl VulcanWorkbench {
                     text(&entry.title).size(15),
                 ]
                 .align_y(Center),
-                text(&entry.detail).size(13),
+                detail_view,
             ]
             .spacing(8),
         )
@@ -6541,6 +6909,7 @@ impl VulcanWorkbench {
             .retain(|session| !removable_ids.contains(&session.id));
 
         for session_id in removable_ids {
+            self.clear_session_transcript_view_state(session_id);
             self.session_messages.remove(&session_id);
             self.session_compactions.remove(&session_id);
             self.session_runtime_state.remove(&session_id);
@@ -6566,6 +6935,7 @@ impl VulcanWorkbench {
             .collect::<Vec<_>>();
 
         for session_id in removable_ids {
+            self.clear_session_transcript_view_state(session_id);
             self.sessions.retain(|session| session.id != session_id);
             self.session_messages.remove(&session_id);
             self.session_compactions.remove(&session_id);
@@ -7040,6 +7410,18 @@ impl VulcanWorkbench {
         if self.activities.len() > 8 {
             self.activities.truncate(8);
         }
+
+        self.rebuild_activity_raw_buffers();
+    }
+
+    /// Rebuilds all selectable activity-detail buffers from the current inspector log entries.
+    /// 根据当前检查面板日志项重建全部可选活动详情缓冲区。
+    fn rebuild_activity_raw_buffers(&mut self) {
+        self.activity_raw_buffers = self
+            .activities
+            .iter()
+            .map(|entry| text_editor::Content::with_text(&entry.detail))
+            .collect();
     }
 
     /// Appends one transcript message to the target session while preserving stable insertion order.
@@ -7070,6 +7452,44 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Appends one visible transcript message with an explicit durable record kind and optional default-collapsed state.
+    /// 追加一条带显式持久化记录类型且可选默认折叠状态的可见转录消息。
+    fn push_visible_session_record_message(
+        &mut self,
+        session_id: usize,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        collapsed_by_default: bool,
+    ) -> String {
+        let title = title.into();
+        let body = body.into();
+        let message_id = self.append_session_message_entry(
+            session_id,
+            SessionMessageEntry {
+                id: String::new(),
+                kind,
+                record_kind,
+                visible: true,
+                title,
+                body,
+                created_at: String::new(),
+            },
+        );
+
+        if collapsed_by_default {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state
+                .ui_state
+                .collapsed_message_ids
+                .insert(message_id.clone());
+            runtime_state.updated_at = current_unix_millis_text();
+        }
+
+        message_id
+    }
+
     /// Materializes one session message entry with stable runtime metadata and appends it to the transcript map.
     /// 使用稳定运行时元数据物化一条会话消息项并将其追加到转录映射中。
     fn append_session_message_entry(
@@ -7088,11 +7508,108 @@ impl VulcanWorkbench {
         );
         let created_at = current_unix_millis_text();
         let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
+        self.session_message_raw_buffers.insert(
+            message_id.clone(),
+            text_editor::Content::with_text(&materialized_entry.body),
+        );
+        let (markdown_content, markdown_buffer) =
+            parse_selectable_markdown_body(&materialized_entry.body, &self.app_theme);
+        self.session_message_markdown
+            .insert(message_id.clone(), markdown_content);
+        self.session_message_markdown_buffers
+            .insert(message_id.clone(), markdown_buffer);
         self.session_messages
             .entry(session_id)
             .or_default()
             .push(materialized_entry);
         message_id
+    }
+
+    /// Returns the mutable transcript message entry for one session/message pair when it still exists in the visible transcript.
+    /// 返回某个会话/消息对在可见转录中仍存在时对应的可变消息项。
+    fn session_message_entry_mut(
+        &mut self,
+        session_id: usize,
+        message_id: &str,
+    ) -> Option<&mut SessionMessageEntry> {
+        self.session_messages
+            .get_mut(&session_id)?
+            .iter_mut()
+            .find(|message| message.id == message_id)
+    }
+
+    /// Appends one streamed body delta into an existing visible transcript message and refreshes its raw/Markdown caches.
+    /// 将一段流式正文增量追加到现有可见转录消息，并刷新其原文与 Markdown 缓存。
+    fn append_stream_delta_to_session_message(
+        &mut self,
+        session_id: usize,
+        message_id: &str,
+        delta: &str,
+    ) {
+        let body = {
+            let Some(message) = self.session_message_entry_mut(session_id, message_id) else {
+                return;
+            };
+            message.body.push_str(delta);
+            message.body.clone()
+        };
+
+        self.session_message_raw_buffers.insert(
+            message_id.to_string(),
+            text_editor::Content::with_text(&body),
+        );
+        let (markdown_content, markdown_buffer) =
+            parse_selectable_markdown_body(&body, &self.app_theme);
+        self.session_message_markdown
+            .insert(message_id.to_string(), markdown_content);
+        self.session_message_markdown_buffers
+            .insert(message_id.to_string(), markdown_buffer);
+    }
+
+    /// Ensures the session owns one visible thinking message and appends the incoming delta to it.
+    /// 确保会话拥有一条可见思考消息，并将当前增量追加进去。
+    fn append_streaming_thinking_delta(&mut self, session_id: usize, delta: &str) {
+        let message_id =
+            if let Some(message_id) = self.streaming_thinking_message_ids.get(&session_id) {
+                message_id.clone()
+            } else {
+                let message_id = self.push_visible_session_record_message(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::ThinkingOutput,
+                    "思考",
+                    String::new(),
+                    true,
+                );
+                self.streaming_thinking_message_ids
+                    .insert(session_id, message_id.clone());
+                message_id
+            };
+
+        self.append_stream_delta_to_session_message(session_id, &message_id, delta);
+    }
+
+    /// Ensures the session owns one visible final-output message and appends the incoming delta to it.
+    /// 确保会话拥有一条可见正式输出消息，并将当前增量追加进去。
+    fn append_streaming_output_delta(&mut self, session_id: usize, delta: &str) {
+        let message_id =
+            if let Some(message_id) = self.streaming_output_message_ids.get(&session_id) {
+                message_id.clone()
+            } else {
+                let message_id = self.push_visible_session_record_message(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::AssistantOutput,
+                    "输出",
+                    String::new(),
+                    false,
+                );
+                self.streaming_output_message_ids
+                    .insert(session_id, message_id.clone());
+                message_id
+            };
+
+        self.append_stream_delta_to_session_message(session_id, &message_id, delta);
     }
 
     /// Appends one hidden derived session record produced by the dedicated session skill chain.
@@ -7195,6 +7712,115 @@ impl VulcanWorkbench {
         runtime_state.updated_at = current_unix_millis_text();
     }
 
+    /// Finalizes one streamed execution report, updates visible session state, and appends hidden derived nodes.
+    /// 完成一份流式执行报告，更新可见会话状态并追加隐藏派生节点。
+    fn apply_execution_run_report(&mut self, report: ExecutionRunReport) -> Task<Message> {
+        let session_id = report.session_id;
+        self.last_mcp_discovery_rows = report.mcp_discovery_rows.clone();
+        self.last_mcp_discovery_errors = report.mcp_discovery_errors.clone();
+
+        if let Some(preparation) = report.preparation.clone() {
+            self.context_usage = (self.context_usage + 8.0).min(100.0);
+            self.last_execution_preparation = Some(preparation.clone());
+            self.update_session_runtime_identity_from_preparation(session_id, &preparation);
+
+            for warning in &preparation.warnings {
+                self.push_activity(ActivityLevel::Warning, "执行准备警告", warning.clone());
+            }
+        }
+
+        for warning in &report.warnings {
+            self.push_activity(ActivityLevel::Warning, "执行运行警告", warning.clone());
+        }
+
+        if report.is_success() {
+            let thinking_output = report
+                .thinking_output
+                .clone()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let assistant_output = report
+                .assistant_output
+                .clone()
+                .unwrap_or_else(|| String::from("模型已完成执行，但未返回可见文本输出。"));
+
+            if thinking_output.is_some()
+                && !self
+                    .streaming_thinking_message_ids
+                    .contains_key(&session_id)
+            {
+                self.push_visible_session_record_message(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::ThinkingOutput,
+                    "思考",
+                    thinking_output.unwrap_or_default(),
+                    true,
+                );
+            }
+
+            if !self.streaming_output_message_ids.contains_key(&session_id) {
+                self.push_visible_session_record_message(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::AssistantOutput,
+                    "输出",
+                    assistant_output,
+                    false,
+                );
+            }
+
+            if let Some(session) = self
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            {
+                session.status = SessionState::Completed;
+                session.focus = String::from("最近一次真实执行已完成，可继续追问或调整参数。");
+                session.queued_steps = session.queued_steps.saturating_add(1);
+                session.last_updated_label = String::from("刚刚");
+            }
+
+            self.set_session_run_phase(session_id, SessionRunPhase::Ready);
+            self.status_message = String::from("真实执行已完成，流式结果已写入工作台输出区。");
+            self.push_activity(
+                ActivityLevel::Success,
+                "真实执行已完成",
+                format!("会话 #{session_id} 已完成真实模型执行并产出分离后的思考与输出。"),
+            );
+        } else {
+            let error = report
+                .error
+                .clone()
+                .unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。"));
+
+            if let Some(session) = self
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            {
+                session.status = SessionState::Blocked;
+                session.last_updated_label = String::from("刚刚");
+            }
+
+            self.push_session_message(
+                session_id,
+                SessionMessageKind::Error,
+                "执行失败",
+                error.clone(),
+            );
+            self.set_session_run_phase(session_id, SessionRunPhase::Failed);
+            self.status_message = error.clone();
+            self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
+        }
+
+        self.append_session_summary_output(session_id, &report);
+        self.maybe_compact_session_history(session_id);
+        self.clear_streaming_message_ids(session_id);
+
+        self.persist_workspace_snapshot_task()
+    }
+
     /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
     /// 当可见历史增长到当前阈值以上时创建一条隐藏压缩摘要。
     fn maybe_compact_session_history(&mut self, session_id: usize) {
@@ -7280,6 +7906,94 @@ impl VulcanWorkbench {
         self.dragging_task_project = None;
         self.suppress_task_session_hover = false;
         self.session_runtime_events.clear();
+        self.collapsed_runtime_event_ids.clear();
+        self.markdown_session_message_ids.clear();
+        self.markdown_runtime_event_ids.clear();
+        self.streaming_thinking_message_ids.clear();
+        self.streaming_output_message_ids.clear();
+        self.rebuild_session_message_raw_buffers();
+        self.rebuild_session_message_markdown();
+        self.runtime_event_raw_buffers.clear();
+        self.runtime_event_markdown.clear();
+        self.runtime_event_markdown_buffers.clear();
+    }
+
+    /// Rebuilds all read-only transcript source buffers from the current visible and archived session messages.
+    /// 根据当前可见与归档会话消息重建全部只读转录原文缓冲区。
+    fn rebuild_session_message_raw_buffers(&mut self) {
+        self.session_message_raw_buffers.clear();
+
+        for messages in self
+            .session_messages
+            .values()
+            .chain(self.archived_session_messages.values())
+        {
+            for message in messages {
+                self.session_message_raw_buffers.insert(
+                    message.id.clone(),
+                    text_editor::Content::with_text(&message.body),
+                );
+            }
+        }
+    }
+
+    /// Rebuilds all parsed transcript Markdown payloads from the current visible and archived session messages.
+    /// 根据当前可见与归档会话消息重建全部已解析转录 Markdown 载荷。
+    fn rebuild_session_message_markdown(&mut self) {
+        self.session_message_markdown.clear();
+        self.session_message_markdown_buffers.clear();
+        let app_theme = self.app_theme.clone();
+
+        for messages in self
+            .session_messages
+            .values()
+            .chain(self.archived_session_messages.values())
+        {
+            for message in messages {
+                let (markdown_content, markdown_buffer) =
+                    parse_selectable_markdown_body(&message.body, &app_theme);
+                self.session_message_markdown
+                    .insert(message.id.clone(), markdown_content);
+                self.session_message_markdown_buffers
+                    .insert(message.id.clone(), markdown_buffer);
+            }
+        }
+    }
+
+    /// Removes all read-only runtime-event source buffers associated with one session.
+    /// 删除与某个会话关联的全部只读运行时事件原文缓冲区。
+    fn remove_runtime_event_raw_buffers(&mut self, session_id: usize) {
+        let prefix = format!("session-{session_id}-runtime-event-");
+        self.runtime_event_raw_buffers
+            .retain(|event_id, _| !event_id.starts_with(&prefix));
+        self.runtime_event_markdown
+            .retain(|event_id, _| !event_id.starts_with(&prefix));
+        self.runtime_event_markdown_buffers
+            .retain(|event_id, _| !event_id.starts_with(&prefix));
+    }
+
+    /// Clears active streaming message identifiers associated with one session before or after a live run.
+    /// 在一次实时运行前后清理与某个会话关联的当前流式消息标识。
+    fn clear_streaming_message_ids(&mut self, session_id: usize) {
+        self.streaming_thinking_message_ids.remove(&session_id);
+        self.streaming_output_message_ids.remove(&session_id);
+    }
+
+    /// Clears transient transcript view caches associated with one session identifier.
+    /// 清理与某个会话标识关联的临时转录视图缓存。
+    fn clear_session_transcript_view_state(&mut self, session_id: usize) {
+        if let Some(messages) = self.session_messages.get(&session_id) {
+            for message in messages {
+                self.session_message_raw_buffers.remove(&message.id);
+                self.session_message_markdown.remove(&message.id);
+                self.session_message_markdown_buffers.remove(&message.id);
+            }
+        }
+        self.markdown_session_message_ids.remove(&session_id);
+        self.clear_streaming_message_ids(session_id);
+        self.collapsed_runtime_event_ids.remove(&session_id);
+        self.markdown_runtime_event_ids.remove(&session_id);
+        self.remove_runtime_event_raw_buffers(session_id);
     }
 
     /// Builds one asynchronous persistence task for the current visible workspace snapshot.
@@ -7302,7 +8016,155 @@ impl VulcanWorkbench {
     /// Replaces the runtime-event list for one session with a fresh snapshot.
     /// 使用新的快照替换某个会话的运行时事件列表。
     fn replace_session_runtime_events(&mut self, session_id: usize, events: Vec<RuntimeEvent>) {
+        self.collapsed_runtime_event_ids.remove(&session_id);
+        self.markdown_runtime_event_ids.remove(&session_id);
+        self.remove_runtime_event_raw_buffers(session_id);
+        let app_theme = self.app_theme.clone();
+        for (index, event) in events.iter().enumerate() {
+            let event_id = session_runtime_event_id(session_id, index, event);
+            self.runtime_event_raw_buffers.insert(
+                event_id.clone(),
+                text_editor::Content::with_text(&event.detail),
+            );
+            let (markdown_content, markdown_buffer) =
+                parse_selectable_markdown_body(&event.detail, &app_theme);
+            self.runtime_event_markdown
+                .insert(event_id.clone(), markdown_content);
+            self.runtime_event_markdown_buffers
+                .insert(event_id, markdown_buffer);
+        }
         self.session_runtime_events.insert(session_id, events);
+    }
+
+    /// Appends one runtime event to the current session event stream and refreshes the corresponding raw/Markdown caches.
+    /// 向当前会话事件流追加一条运行时事件，并刷新对应的原文与 Markdown 缓存。
+    fn push_session_runtime_event(&mut self, session_id: usize, event: RuntimeEvent) {
+        let event_index = self
+            .session_runtime_events
+            .get(&session_id)
+            .map(|events| events.len())
+            .unwrap_or(0);
+        let event_id = session_runtime_event_id(session_id, event_index, &event);
+        self.runtime_event_raw_buffers.insert(
+            event_id.clone(),
+            text_editor::Content::with_text(&event.detail),
+        );
+        let (markdown_content, markdown_buffer) =
+            parse_selectable_markdown_body(&event.detail, &self.app_theme);
+        self.runtime_event_markdown
+            .insert(event_id.clone(), markdown_content);
+        self.runtime_event_markdown_buffers
+            .insert(event_id, markdown_buffer);
+        self.session_runtime_events
+            .entry(session_id)
+            .or_default()
+            .push(event);
+    }
+
+    /// Returns whether one visible transcript message is currently collapsed in the persisted session UI state.
+    /// 返回某条可见转录消息当前是否在持久化会话界面状态中处于折叠状态。
+    fn session_message_is_collapsed(&self, session_id: usize, message_id: &str) -> bool {
+        self.session_runtime_state
+            .get(&session_id)
+            .map(|state| state.ui_state.collapsed_message_ids.contains(message_id))
+            .unwrap_or(false)
+    }
+
+    /// Toggles one visible transcript message collapsed state and refreshes the runtime-state timestamp.
+    /// 切换某条可见转录消息的折叠状态并刷新运行时状态时间戳。
+    fn toggle_session_message_collapsed_state(&mut self, session_id: usize, message_id: &str) {
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        if !runtime_state
+            .ui_state
+            .collapsed_message_ids
+            .insert(message_id.to_string())
+        {
+            runtime_state
+                .ui_state
+                .collapsed_message_ids
+                .remove(message_id);
+        }
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+
+    /// Returns whether one visible transcript message is currently shown as raw selectable text by default unless Markdown mode is explicitly requested.
+    /// 返回某条可见转录消息当前是否以可选原文形式展示，除非用户显式请求 Markdown 模式。
+    fn session_message_is_raw_mode(&self, session_id: usize, message_id: &str) -> bool {
+        !self
+            .markdown_session_message_ids
+            .get(&session_id)
+            .map(|ids| ids.contains(message_id))
+            .unwrap_or(false)
+    }
+
+    /// Toggles one visible transcript message between raw selectable text and explicit Markdown rendering.
+    /// 在可选原文与显式 Markdown 渲染之间切换某条可见转录消息。
+    fn toggle_session_message_raw_mode(&mut self, session_id: usize, message_id: &str) {
+        let is_raw_mode = self.session_message_is_raw_mode(session_id, message_id);
+        let entry = self
+            .markdown_session_message_ids
+            .entry(session_id)
+            .or_default();
+        if is_raw_mode {
+            entry.insert(message_id.to_string());
+        } else {
+            entry.remove(message_id);
+        }
+        if entry.is_empty() {
+            self.markdown_session_message_ids.remove(&session_id);
+        }
+    }
+
+    /// Returns whether one runtime event section is currently collapsed for the active launch.
+    /// 返回某条运行时事件分区在当前启动周期内是否处于折叠状态。
+    fn runtime_event_is_collapsed(&self, session_id: usize, event_id: &str) -> bool {
+        self.collapsed_runtime_event_ids
+            .get(&session_id)
+            .map(|ids| ids.contains(event_id))
+            .unwrap_or(false)
+    }
+
+    /// Toggles one runtime event section collapsed state for the active launch.
+    /// 为当前启动周期切换某条运行时事件分区的折叠状态。
+    fn toggle_runtime_event_collapsed_state(&mut self, session_id: usize, event_id: &str) {
+        let entry = self
+            .collapsed_runtime_event_ids
+            .entry(session_id)
+            .or_default();
+        if !entry.insert(event_id.to_string()) {
+            entry.remove(event_id);
+        }
+        if entry.is_empty() {
+            self.collapsed_runtime_event_ids.remove(&session_id);
+        }
+    }
+
+    /// Returns whether one runtime event is currently shown as raw selectable text by default unless Markdown mode is explicitly requested.
+    /// 返回某条运行时事件当前是否以可选原文形式展示，除非用户显式请求 Markdown 模式。
+    fn runtime_event_is_raw_mode(&self, session_id: usize, event_id: &str) -> bool {
+        !self
+            .markdown_runtime_event_ids
+            .get(&session_id)
+            .map(|ids| ids.contains(event_id))
+            .unwrap_or(false)
+    }
+
+    /// Toggles one runtime event between raw selectable text and explicit Markdown rendering.
+    /// 在可选原文与显式 Markdown 渲染之间切换某条运行时事件。
+    fn toggle_runtime_event_raw_mode(&mut self, session_id: usize, event_id: &str) {
+        let is_raw_mode = self.runtime_event_is_raw_mode(session_id, event_id);
+        let entry = self
+            .markdown_runtime_event_ids
+            .entry(session_id)
+            .or_default();
+        if is_raw_mode {
+            entry.insert(event_id.to_string());
+        } else {
+            entry.remove(event_id);
+        }
+        if entry.is_empty() {
+            self.markdown_runtime_event_ids.remove(&session_id);
+        }
     }
 
     /// Updates the execution phase tracked for one session transcript.
@@ -7906,6 +8768,266 @@ fn compact_relative_label(value: &str) -> String {
     value.replace(' ', "").trim_end_matches('前').to_string()
 }
 
+/// Parses one Markdown source string and builds the paired selectable buffer used by read-only transcript views.
+/// 解析一段 Markdown 源文本，并构建只读转录视图使用的配套可选缓冲区。
+fn parse_selectable_markdown_body(
+    markdown_source: &str,
+    theme: &Theme,
+) -> (markdown::Content, text_editor::Content) {
+    let markdown_content = markdown::Content::parse(markdown_source);
+    let markdown_buffer = text_editor::Content::with_text(&build_selectable_markdown_text(
+        markdown_source,
+        &markdown_content,
+        theme,
+    ));
+
+    (markdown_content, markdown_buffer)
+}
+
+/// Builds one selectable plain-text projection from parsed Markdown while preserving the major reading structure.
+/// 从已解析 Markdown 构建一份可选纯文本投影，同时保留主要阅读结构。
+fn build_selectable_markdown_text(
+    markdown_source: &str,
+    content: &markdown::Content,
+    theme: &Theme,
+) -> String {
+    if markdown_items_contain_table(content.items()) {
+        return markdown_source.to_string();
+    }
+
+    let rendered =
+        markdown_items_to_selectable_text(content.items(), markdown::Style::from(theme), 0);
+    let trimmed = rendered.trim_end().to_string();
+
+    if trimmed.trim().is_empty() {
+        markdown_source.to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// Returns whether the parsed Markdown tree contains any table node that cannot yet be faithfully projected with the public iced API.
+/// 返回已解析 Markdown 树是否包含当前无法借助公开 iced API 完整投影的表格节点。
+fn markdown_items_contain_table(items: &[markdown::Item]) -> bool {
+    items.iter().any(|item| match item {
+        markdown::Item::Table { .. } => true,
+        markdown::Item::List { bullets, .. } => bullets.iter().any(|bullet| match bullet {
+            markdown::Bullet::Point { items } | markdown::Bullet::Task { items, .. } => {
+                markdown_items_contain_table(items)
+            }
+        }),
+        markdown::Item::Quote(items) => markdown_items_contain_table(items),
+        markdown::Item::Heading(_, _)
+        | markdown::Item::Paragraph(_)
+        | markdown::Item::CodeBlock { .. }
+        | markdown::Item::Image { .. }
+        | markdown::Item::Rule => false,
+    })
+}
+
+/// Converts a parsed Markdown item slice into one selectable plain-text block sequence.
+/// 将一组已解析 Markdown 节点转换为一段可选纯文本区块序列。
+fn markdown_items_to_selectable_text(
+    items: &[markdown::Item],
+    style: markdown::Style,
+    list_depth: usize,
+) -> String {
+    items
+        .iter()
+        .map(|item| markdown_item_to_selectable_text(item, style, list_depth))
+        .filter(|block| !block.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Converts one parsed Markdown item into its selectable plain-text projection.
+/// 将单个已解析 Markdown 节点转换为其可选纯文本投影。
+fn markdown_item_to_selectable_text(
+    item: &markdown::Item,
+    style: markdown::Style,
+    list_depth: usize,
+) -> String {
+    match item {
+        markdown::Item::Heading(level, text) => format!(
+            "{} {}",
+            markdown_heading_prefix(level),
+            markdown_text_to_selectable_text(text, style)
+        ),
+        markdown::Item::Paragraph(text) => markdown_text_to_selectable_text(text, style),
+        markdown::Item::CodeBlock { language, code, .. } => {
+            let fence = language
+                .as_deref()
+                .map(|language| format!("```{language}"))
+                .unwrap_or_else(|| String::from("```"));
+            let code_body = code.trim_end_matches('\n');
+
+            if code_body.is_empty() {
+                format!("{fence}\n```")
+            } else {
+                format!("{fence}\n{code_body}\n```")
+            }
+        }
+        markdown::Item::List {
+            start: None,
+            bullets,
+        } => bullets
+            .iter()
+            .map(|bullet| {
+                let indent = "  ".repeat(list_depth);
+                let (prefix, body) = match bullet {
+                    markdown::Bullet::Point { items } => (
+                        format!("{indent}- "),
+                        markdown_items_to_selectable_text(items, style, list_depth + 1),
+                    ),
+                    markdown::Bullet::Task { items, done } => (
+                        format!("{indent}- [{}] ", if *done { "x" } else { " " }),
+                        markdown_items_to_selectable_text(items, style, list_depth + 1),
+                    ),
+                };
+
+                prefix_multiline_markdown_block(&body, &prefix, &" ".repeat(prefix.chars().count()))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        markdown::Item::List {
+            start: Some(start),
+            bullets,
+        } => bullets
+            .iter()
+            .enumerate()
+            .map(|(index, bullet)| {
+                let indent = "  ".repeat(list_depth);
+                let prefix = format!("{indent}{}. ", *start + index as u64);
+                let body = match bullet {
+                    markdown::Bullet::Point { items } | markdown::Bullet::Task { items, .. } => {
+                        markdown_items_to_selectable_text(items, style, list_depth + 1)
+                    }
+                };
+
+                prefix_multiline_markdown_block(&body, &prefix, &" ".repeat(prefix.chars().count()))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        markdown::Item::Image { url, title, alt } => {
+            let alt_text = markdown_text_to_selectable_text(alt, style);
+
+            if title.is_empty() {
+                format!("![{alt_text}]({url})")
+            } else {
+                format!("![{alt_text}]({url} \"{title}\")")
+            }
+        }
+        markdown::Item::Quote(items) => markdown_items_to_selectable_text(items, style, list_depth)
+            .lines()
+            .map(|line| {
+                if line.is_empty() {
+                    String::from(">")
+                } else {
+                    format!("> {line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        markdown::Item::Rule => String::from("---"),
+        markdown::Item::Table { .. } => String::new(),
+    }
+}
+
+/// Converts one parsed Markdown inline-text payload into a readable plain-text fragment sequence.
+/// 将一段已解析 Markdown 行内文本载荷转换为可读的纯文本片段序列。
+fn markdown_text_to_selectable_text(text: &markdown::Text, style: markdown::Style) -> String {
+    let mut output = String::new();
+    let mut active_link: Option<String> = None;
+    let mut link_buffer = String::new();
+
+    for span in text.spans(style).iter() {
+        let span_link = span.link.clone();
+
+        if span_link != active_link {
+            flush_markdown_link_buffer(&mut output, &mut active_link, &mut link_buffer);
+            active_link = span_link;
+        }
+
+        let mut fragment = span.text.as_ref().to_string();
+        let is_inline_code = span.highlight.is_some() || span.font == Some(style.inline_code_font);
+
+        if is_inline_code && !fragment.is_empty() {
+            fragment = format!("`{fragment}`");
+        }
+
+        if active_link.is_some() {
+            link_buffer.push_str(&fragment);
+        } else {
+            output.push_str(&fragment);
+        }
+    }
+
+    flush_markdown_link_buffer(&mut output, &mut active_link, &mut link_buffer);
+    output
+}
+
+/// Flushes one buffered Markdown link span group into the selectable plain-text output.
+/// 将一组缓存中的 Markdown 链接片段刷新到可选纯文本输出中。
+fn flush_markdown_link_buffer(
+    output: &mut String,
+    active_link: &mut Option<String>,
+    link_buffer: &mut String,
+) {
+    let Some(link_url) = active_link.take() else {
+        return;
+    };
+
+    if link_buffer.trim().is_empty() {
+        output.push_str(&link_url);
+    } else if link_buffer.trim() == link_url {
+        output.push_str(link_buffer);
+    } else {
+        output.push_str(link_buffer);
+        output.push_str(" (");
+        output.push_str(&link_url);
+        output.push(')');
+    }
+
+    link_buffer.clear();
+}
+
+/// Prefixes one multiline Markdown-derived block while keeping continuation lines aligned with the first content line.
+/// 为多行 Markdown 派生区块补上前缀，并让后续续行与首行内容保持对齐。
+fn prefix_multiline_markdown_block(
+    body: &str,
+    first_prefix: &str,
+    continuation_prefix: &str,
+) -> String {
+    let mut lines = body.lines();
+    let Some(first_line) = lines.next() else {
+        return first_prefix.trim_end().to_string();
+    };
+
+    let mut output = String::from(first_prefix);
+    output.push_str(first_line);
+
+    for line in lines {
+        output.push('\n');
+        output.push_str(continuation_prefix);
+        output.push_str(line);
+    }
+
+    output
+}
+
+/// Returns the Markdown heading marker that corresponds to one parsed heading level.
+/// 返回与某个已解析标题层级对应的 Markdown 标题标记。
+fn markdown_heading_prefix(level: &markdown::HeadingLevel) -> &'static str {
+    match level {
+        markdown::HeadingLevel::H1 => "#",
+        markdown::HeadingLevel::H2 => "##",
+        markdown::HeadingLevel::H3 => "###",
+        markdown::HeadingLevel::H4 => "####",
+        markdown::HeadingLevel::H5 => "#####",
+        markdown::HeadingLevel::H6 => "######",
+    }
+}
+
 /// Returns the current Unix timestamp in milliseconds as one text value.
 /// 以文本值形式返回当前 Unix 毫秒时间戳。
 fn current_unix_millis_text() -> String {
@@ -7931,6 +9053,16 @@ fn session_message_into_execution_context(message: SessionMessageEntry) -> Execu
     }
 }
 
+/// Builds one stable runtime-event identifier within the current session event stream.
+/// 在当前会话事件流内部构建一条稳定运行时事件标识。
+fn session_runtime_event_id(session_id: usize, event_index: usize, event: &RuntimeEvent) -> String {
+    format!(
+        "session-{session_id}-runtime-event-{event_index}-{}-{}",
+        runtime_event_kind_label(event.kind),
+        slugify_runtime_event_title(&event.title)
+    )
+}
+
 /// Returns the compact label rendered for one runtime-event kind inside the transcript stream.
 /// 返回转录流中某个运行时事件类型渲染使用的精简标签。
 fn runtime_event_kind_label(kind: RuntimeEventKind) -> &'static str {
@@ -7942,6 +9074,25 @@ fn runtime_event_kind_label(kind: RuntimeEventKind) -> &'static str {
         RuntimeEventKind::DelegateFinished => "委派完成",
         RuntimeEventKind::Failed => "失败",
     }
+}
+
+/// Builds one compact slug from a runtime-event title for stable in-session identifiers.
+/// 根据运行时事件标题构建一条紧凑 slug，用于会话内稳定标识。
+fn slugify_runtime_event_title(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            slug.push('-');
+            last_was_separator = true;
+        }
+    }
+
+    slug.trim_matches('-').chars().take(24).collect()
 }
 
 /// Opens one native folder-picker dialog and returns the selected path when the user confirms.

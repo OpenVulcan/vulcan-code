@@ -2,21 +2,25 @@
 //! compose 运行时基础架构使用的执行准备模型与真实 Provider 执行辅助逻辑。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::mcp::McpServerRegistry;
 use crate::provider_config::{
     PersistedProviderOptions, ProviderConfigurationFile, ProviderRuntimeKind,
 };
+use async_stream::stream;
+use futures_util::{Stream, StreamExt};
 use reqwest::header::{
     AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
-use rig::agent::AgentBuilder;
-use rig::completion::Prompt;
+use rig::agent::{AgentBuilder, MultiTurnStreamItem};
+use rig::message::ReasoningContent;
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use serde_json::{Value, json};
+use std::pin::Pin;
 
 /// Lightweight transcript row forwarded into the real runtime as model-facing context.
 /// 作为面向模型上下文转发到真实运行时的轻量转录行。
@@ -194,9 +198,9 @@ pub struct ExecutionRunReport {
     /// Assistant output returned by the real provider call.
     /// 真实 Provider 调用返回的助手输出。
     pub assistant_output: Option<String>,
-    /// Runtime events collected during MCP discovery and provider execution.
-    /// 在 MCP 发现与 Provider 执行期间收集到的运行时事件集合。
-    pub runtime_events: Vec<RuntimeEvent>,
+    /// Assistant thinking output returned by the real provider call.
+    /// 真实 Provider 调用返回的助手思考输出。
+    pub thinking_output: Option<String>,
     /// Successful MCP discovery summary rows collected during the run.
     /// 运行期间收集到的 MCP 成功发现摘要行集合。
     pub mcp_discovery_rows: Vec<String>,
@@ -217,8 +221,8 @@ impl ExecutionRunReport {
     fn success(
         session_id: usize,
         preparation: ExecutionPreparation,
+        thinking_output: Option<String>,
         assistant_output: String,
-        runtime_events: Vec<RuntimeEvent>,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -227,7 +231,7 @@ impl ExecutionRunReport {
             session_id,
             preparation: Some(preparation),
             assistant_output: Some(assistant_output),
-            runtime_events,
+            thinking_output,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -240,7 +244,6 @@ impl ExecutionRunReport {
     fn failure(
         session_id: usize,
         preparation: Option<ExecutionPreparation>,
-        runtime_events: Vec<RuntimeEvent>,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -250,7 +253,7 @@ impl ExecutionRunReport {
             session_id,
             preparation,
             assistant_output: None,
-            runtime_events,
+            thinking_output: None,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -319,97 +322,171 @@ pub fn prepare_execution(
     })
 }
 
-/// Executes one real provider run and collects MCP discovery events for the current runtime state.
-/// 基于当前运行时状态执行一次真实 Provider 调用，并收集 MCP 发现事件。
-pub async fn execute_runtime_run(
+/// Lightweight provider-stream delta emitted while one real run is still in progress.
+/// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
+enum ProviderStreamDelta {
+    /// Assistant thinking delta returned by the provider stream.
+    /// Provider 流返回的助手思考增量。
+    Thinking(String),
+    /// Assistant final-output delta returned by the provider stream.
+    /// Provider 流返回的助手正式输出增量。
+    Output(String),
+    /// Runtime event emitted from one streamed provider-side tool interaction.
+    /// 来自某次 Provider 侧流式工具交互的运行时事件。
+    RuntimeEvent(RuntimeEvent),
+}
+
+/// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
+/// 以增量方式流式执行一次真实 Provider 调用，并依次产出准备、思考、输出与最终报告事件。
+pub fn stream_runtime_run(
     config: ProviderConfigurationFile,
     request: ExecutionPreparationRequest,
-) -> ExecutionRunReport {
-    let foundation = RuntimeFoundation::build(&config);
-    let preparation = match prepare_execution(&foundation, &config, &request) {
-        Ok(preparation) => preparation,
-        Err(error) => {
-            return ExecutionRunReport::failure(
-                request.session_id,
-                None,
-                vec![RuntimeEvent::new(
-                    RuntimeEventKind::Failed,
-                    "执行准备失败",
-                    error.clone(),
-                )],
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                error,
-            );
+) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
+    stream! {
+        let foundation = RuntimeFoundation::build(&config);
+        let preparation = match prepare_execution(&foundation, &config, &request) {
+            Ok(preparation) => preparation,
+            Err(error) => {
+                let report = ExecutionRunReport::failure(
+                    request.session_id,
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    error,
+                );
+                yield ExecutionStreamEvent::Finished(report);
+                return;
+            }
+        };
+
+        yield ExecutionStreamEvent::Prepared(preparation.clone());
+
+        let active_agent = foundation.active_agent_definition().cloned();
+        let mut runtime_events = Vec::new();
+        let mut warnings = preparation.warnings.clone();
+        let mut thinking_output = String::new();
+        let mut assistant_output = String::new();
+
+        let context_event = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "执行上下文",
+            format!(
+                "已进入真实执行阶段，目标模型为 `{}`，工作区为 `{}`。",
+                preparation.model_blueprint.model_name, preparation.workspace_path
+            ),
+        );
+        runtime_events.push(context_event.clone());
+                    yield ExecutionStreamEvent::RuntimeEvent {
+                        session_id: request.session_id,
+                        event: context_event,
+                    };
+
+        let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
+            discover_enabled_mcp_tools(&config).await;
+        warnings.extend(discovery_warnings);
+
+        for event in discovery_events {
+            runtime_events.push(event.clone());
+            yield ExecutionStreamEvent::RuntimeEvent {
+                session_id: request.session_id,
+                event,
+            };
         }
-    };
 
-    let active_agent = foundation.active_agent_definition().cloned();
-    let mut runtime_events = Vec::new();
-    let mut warnings = preparation.warnings.clone();
+        let system_preamble =
+            build_runtime_system_preamble(&preparation, active_agent.as_ref(), &discovery_rows);
+        let effective_prompt =
+            build_runtime_user_prompt(&request.context_history, request.prompt.trim());
 
-    runtime_events.push(RuntimeEvent::new(
-        RuntimeEventKind::ToolStarted,
-        "执行上下文",
-        format!(
-            "已进入真实执行阶段，目标模型为 `{}`，工作区为 `{}`。",
-            preparation.model_blueprint.model_name, preparation.workspace_path
-        ),
-    ));
+        let mut provider_stream = execute_provider_prompt_stream(
+            &config,
+            &preparation,
+            active_agent.as_ref(),
+            &system_preamble,
+            &effective_prompt,
+        );
 
-    let (discovery_rows, discovery_errors) =
-        discover_enabled_mcp_tools(&config, &mut runtime_events, &mut warnings).await;
+        let mut terminal_error = None;
 
-    let system_preamble =
-        build_runtime_system_preamble(&preparation, active_agent.as_ref(), &discovery_rows);
-    let effective_prompt =
-        build_runtime_user_prompt(&request.context_history, request.prompt.trim());
-
-    match execute_provider_prompt(
-        &config,
-        &preparation,
-        active_agent.as_ref(),
-        &system_preamble,
-        &effective_prompt,
-    )
-    .await
-    {
-        Ok(output) => {
-            runtime_events.push(RuntimeEvent::new(
-                RuntimeEventKind::TokenDelta,
-                "模型输出完成",
-                format!(
-                    "真实 Provider 已返回 {} 个字符的输出内容。",
-                    output.chars().count()
-                ),
-            ));
-            ExecutionRunReport::success(
-                request.session_id,
-                preparation,
-                normalize_assistant_output(output),
-                runtime_events,
-                discovery_rows,
-                discovery_errors,
-                warnings,
-            )
+        while let Some(item) = provider_stream.next().await {
+            match item {
+                Ok(ProviderStreamDelta::Thinking(delta)) => {
+                    thinking_output.push_str(&delta);
+                    yield ExecutionStreamEvent::ThinkingDelta {
+                        session_id: request.session_id,
+                        delta,
+                    };
+                }
+                Ok(ProviderStreamDelta::Output(delta)) => {
+                    assistant_output.push_str(&delta);
+                    yield ExecutionStreamEvent::OutputDelta {
+                        session_id: request.session_id,
+                        delta,
+                    };
+                }
+                Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
+                    runtime_events.push(event.clone());
+                    yield ExecutionStreamEvent::RuntimeEvent {
+                        session_id: request.session_id,
+                        event,
+                    };
+                }
+                Err(error) => {
+                    terminal_error = Some(error);
+                    break;
+                }
+            }
         }
-        Err(error) => {
-            runtime_events.push(RuntimeEvent::new(
+
+        if let Some(error) = terminal_error {
+            let failed_event = RuntimeEvent::new(
                 RuntimeEventKind::Failed,
                 "真实执行失败",
                 error.clone(),
-            ));
-            ExecutionRunReport::failure(
+            );
+            runtime_events.push(failed_event.clone());
+            yield ExecutionStreamEvent::RuntimeEvent {
+                session_id: request.session_id,
+                event: failed_event,
+            };
+            let report = ExecutionRunReport::failure(
                 request.session_id,
                 Some(preparation),
-                runtime_events,
                 discovery_rows,
                 discovery_errors,
                 warnings,
                 error,
-            )
+            );
+            yield ExecutionStreamEvent::Finished(report);
+            return;
         }
+
+        let normalized_output = normalize_assistant_output(assistant_output);
+        let output_completed_event = RuntimeEvent::new(
+            RuntimeEventKind::TokenDelta,
+            "模型输出完成",
+            format!(
+                "真实 Provider 已返回 {} 个字符的正式输出内容。",
+                normalized_output.chars().count()
+            ),
+        );
+        runtime_events.push(output_completed_event.clone());
+        yield ExecutionStreamEvent::RuntimeEvent {
+            session_id: request.session_id,
+            event: output_completed_event,
+        };
+
+        let report = ExecutionRunReport::success(
+            request.session_id,
+            preparation,
+            normalize_optional_stream_output(thinking_output),
+            normalized_output,
+            discovery_rows,
+            discovery_errors,
+            warnings,
+        );
+        yield ExecutionStreamEvent::Finished(report);
     }
 }
 
@@ -417,13 +494,13 @@ pub async fn execute_runtime_run(
 /// 发现已启用 MCP 工具并将结果转换为面向界面的运行时事件。
 async fn discover_enabled_mcp_tools(
     config: &ProviderConfigurationFile,
-    runtime_events: &mut Vec<RuntimeEvent>,
-    warnings: &mut Vec<String>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<RuntimeEvent>, Vec<String>, Vec<String>, Vec<String>) {
     let registry = McpServerRegistry::from_provider_configuration(config);
     let enabled_servers = registry.enabled_servers();
+    let mut runtime_events = Vec::new();
     let mut rows = Vec::new();
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
 
     if enabled_servers.is_empty() {
         runtime_events.push(RuntimeEvent::new(
@@ -431,7 +508,7 @@ async fn discover_enabled_mcp_tools(
             "MCP 工具发现",
             "当前没有启用的 MCP 服务器，本次执行将跳过远端工具发现。",
         ));
-        return (rows, errors);
+        return (runtime_events, rows, errors, warnings);
     }
 
     for server in enabled_servers {
@@ -472,7 +549,7 @@ async fn discover_enabled_mcp_tools(
         }
     }
 
-    (rows, errors)
+    (runtime_events, rows, errors, warnings)
 }
 
 /// Builds the effective runtime system prompt sent to the real provider agent.
@@ -550,29 +627,43 @@ fn build_runtime_user_prompt(context_history: &[ExecutionContextMessage], prompt
     )
 }
 
-/// Executes one provider prompt against the currently selected runtime family.
-/// 针对当前选中的运行时族执行一次 Provider 提示词调用。
-async fn execute_provider_prompt(
+/// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.
+/// 供运行时逐步转发思考与输出增量的装箱 Provider 流类型。
+type ProviderDeltaStream = Pin<Box<dyn Stream<Item = Result<ProviderStreamDelta, String>> + Send>>;
+
+/// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
+/// 针对当前选中的运行时族执行一次 Provider 提示词调用，并返回增量流。
+fn execute_provider_prompt_stream(
     config: &ProviderConfigurationFile,
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
-) -> Result<String, String> {
-    let options = resolve_provider_options(config, &preparation.model_blueprint.provider_id)?;
-    let api_key = options.resolved_api_key()?.ok_or_else(|| {
-        format!(
-            "供应商 `{}` 当前缺少可用 API Key，无法启动真实执行。",
-            preparation.model_blueprint.provider_name
-        )
-    })?;
+) -> ProviderDeltaStream {
+    let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
+        Ok(options) => options,
+        Err(error) => return one_shot_provider_error_stream(error),
+    };
+    let api_key = match options.resolved_api_key() {
+        Ok(Some(api_key)) => api_key,
+        Ok(None) => {
+            return one_shot_provider_error_stream(format!(
+                "供应商 `{}` 当前缺少可用 API Key，无法启动真实执行。",
+                preparation.model_blueprint.provider_name
+            ));
+        }
+        Err(error) => return one_shot_provider_error_stream(error),
+    };
     let temperature = active_agent
         .and_then(|agent| agent.temperature)
         .or(preparation.temperature)
         .map(|value| value.clamp(0.0, 2.0) as f64);
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
-    let request_headers = build_provider_request_headers(&preparation.model_blueprint)?;
+    let request_headers = match build_provider_request_headers(&preparation.model_blueprint) {
+        Ok(headers) => headers,
+        Err(error) => return one_shot_provider_error_stream(error),
+    };
     let user_agent_preview = request_headers
         .get(USER_AGENT)
         .and_then(|value| value.to_str().ok())
@@ -580,7 +671,7 @@ async fn execute_provider_prompt(
         .to_string();
 
     if is_alibaba_coding_plan_provider(&preparation.model_blueprint.provider_id) {
-        return execute_alibaba_coding_plan_prompt(
+        return execute_alibaba_coding_plan_stream(
             &preparation.model_blueprint.provider_id,
             &request_headers,
             &api_key,
@@ -590,69 +681,61 @@ async fn execute_provider_prompt(
             prompt,
             temperature,
             &user_agent_preview,
-        )
-        .await;
+        );
     }
 
     match preparation.model_blueprint.runtime_kind {
-        ProviderRuntimeKind::OpenAi => {
-            execute_openai_responses_prompt(
-                &api_key,
-                base_url,
-                model_id,
-                system_preamble,
-                prompt,
-                temperature,
-                &request_headers,
-            )
-            .await
-        }
+        ProviderRuntimeKind::OpenAi => execute_openai_responses_stream(
+            &api_key,
+            base_url,
+            model_id,
+            system_preamble,
+            prompt,
+            temperature,
+            &request_headers,
+        ),
         ProviderRuntimeKind::OpenAiCompatible
         | ProviderRuntimeKind::XAi
         | ProviderRuntimeKind::Mistral
         | ProviderRuntimeKind::Groq
         | ProviderRuntimeKind::TogetherAi
-        | ProviderRuntimeKind::Perplexity => {
-            execute_openai_compatible_prompt(
-                &api_key,
-                base_url,
-                model_id,
-                system_preamble,
-                prompt,
-                temperature,
-                &request_headers,
-            )
-            .await
-        }
-        ProviderRuntimeKind::OpenRouter => {
-            execute_openrouter_prompt(
-                &api_key,
-                model_id,
-                system_preamble,
-                prompt,
-                temperature,
-                &request_headers,
-            )
-            .await
-        }
-        ProviderRuntimeKind::Anthropic => {
-            execute_anthropic_prompt(
-                &api_key,
-                base_url,
-                model_id,
-                system_preamble,
-                prompt,
-                temperature,
-                &request_headers,
-            )
-            .await
-        }
+        | ProviderRuntimeKind::Perplexity => execute_openai_compatible_stream(
+            &api_key,
+            base_url,
+            model_id,
+            system_preamble,
+            prompt,
+            temperature,
+            &request_headers,
+        ),
+        ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
+            &api_key,
+            model_id,
+            system_preamble,
+            prompt,
+            temperature,
+            &request_headers,
+        ),
+        ProviderRuntimeKind::Anthropic => execute_anthropic_stream(
+            &api_key,
+            base_url,
+            model_id,
+            system_preamble,
+            prompt,
+            temperature,
+            &request_headers,
+        ),
         ProviderRuntimeKind::AzureOpenAi
         | ProviderRuntimeKind::GoogleGemini
-        | ProviderRuntimeKind::Cohere => Err(format!(
-            "当前阶段尚未接通 `{}` 的真实执行链路，请优先选择 OpenAI 兼容接口、百炼 Coding Plan 或 OpenRouter。",
-            preparation.model_blueprint.runtime_label
-        )),
+        | ProviderRuntimeKind::Cohere => {
+            let runtime_label = preparation.model_blueprint.runtime_label.clone();
+            Box::pin(stream! {
+                yield Err(format!(
+                    "当前阶段尚未接通 `{}` 的真实流式执行链路，请优先选择 OpenAI 兼容接口、百炼 Coding Plan、OpenRouter 或 Anthropic。",
+                    runtime_label
+                ));
+            })
+        }
     }
 }
 
@@ -665,9 +748,9 @@ fn is_alibaba_coding_plan_provider(provider_id: &str) -> bool {
     )
 }
 
-/// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client.
-/// 使用兼容 Chat Completions 的 rig 客户端执行一次 OpenAI 兼容提示词调用。
-async fn execute_openai_compatible_prompt(
+/// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client and streams deltas.
+/// 使用兼容 Chat Completions 的 rig 客户端执行一次 OpenAI 兼容提示词调用并流式返回增量。
+fn execute_openai_compatible_stream(
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
@@ -675,7 +758,7 @@ async fn execute_openai_compatible_prompt(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
-) -> Result<String, String> {
+) -> ProviderDeltaStream {
     let mut builder = openai::CompletionsClient::builder()
         .api_key(api_key)
         .http_headers(headers.clone());
@@ -684,9 +767,15 @@ async fn execute_openai_compatible_prompt(
         builder = builder.base_url(base_url);
     }
 
-    let client = builder
-        .build()
-        .map_err(|error| format!("创建 OpenAI 兼容客户端失败：{}。", error))?;
+    let client = match builder.build() {
+        Ok(client) => client,
+        Err(error) => {
+            return one_shot_provider_error_stream(format!(
+                "创建 OpenAI 兼容客户端失败：{}。",
+                error
+            ));
+        }
+    };
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Worker")
@@ -697,16 +786,31 @@ async fn execute_openai_compatible_prompt(
     }
 
     let agent = agent_builder.build();
+    let prompt = prompt.to_string();
 
-    agent
-        .prompt(prompt.to_string())
-        .await
-        .map_err(|error| format!("OpenAI 兼容执行失败：{}。", error))
+    Box::pin(stream! {
+        let mut stream = agent.stream_prompt(prompt).await;
+
+        while let Some(item) = stream.next().await {
+            let item = item.map_err(|error| format!("OpenAI 兼容流式执行失败：{}。", error));
+            match item {
+                Ok(item) => {
+                    for delta in provider_deltas_from_multi_turn_item(item) {
+                        yield Ok(delta);
+                    }
+                }
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    })
 }
 
-/// Executes one Alibaba Coding Plan prompt through the exact OpenAI chat-completions wire format.
-/// 通过精确的 OpenAI chat-completions 线协议执行一次阿里百炼 Coding Plan 提示词调用。
-async fn execute_alibaba_coding_plan_prompt(
+/// Executes one Alibaba Coding Plan prompt through the exact OpenAI chat-completions wire format and parses SSE deltas.
+/// 通过精确的 OpenAI chat-completions 线协议执行一次阿里百炼 Coding Plan 提示词调用并解析 SSE 增量。
+fn execute_alibaba_coding_plan_stream(
     provider_id: &str,
     headers: &HeaderMap,
     api_key: &str,
@@ -716,9 +820,9 @@ async fn execute_alibaba_coding_plan_prompt(
     prompt: &str,
     temperature: Option<f64>,
     user_agent_preview: &str,
-) -> Result<String, String> {
+) -> ProviderDeltaStream {
     let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Err(String::from(
+        return one_shot_provider_error_stream(String::from(
             "阿里百炼 Coding Plan 当前缺少可用的接口基址，无法启动真实执行。",
         ));
     };
@@ -730,57 +834,98 @@ async fn execute_alibaba_coding_plan_prompt(
         system_preamble,
         prompt,
         temperature,
+        true,
     );
     let request_preview = serde_json::to_string_pretty(&request_body)
         .unwrap_or_else(|_| String::from("{\"error\":\"request-preview-unavailable\"}"));
     let request_header_preview = format!("User-Agent: {user_agent_preview}");
+    let headers = headers.clone();
+    let api_key = api_key.to_string();
+    let endpoint_clone = endpoint.clone();
 
-    let client = reqwest::Client::new();
-    let mut request_builder = client
-        .post(&endpoint)
-        .header(AUTHORIZATION, format!("Bearer {api_key}"))
-        .header(CONTENT_TYPE, "application/json");
+    Box::pin(stream! {
+        let client = reqwest::Client::new();
+        let mut request_builder = client
+            .post(&endpoint_clone)
+            .header(AUTHORIZATION, format!("Bearer {api_key}"))
+            .header(CONTENT_TYPE, "application/json");
 
-    for (header_name, header_value) in headers {
-        request_builder = request_builder.header(header_name, header_value);
-    }
+        for (header_name, header_value) in &headers {
+            request_builder = request_builder.header(header_name, header_value);
+        }
 
-    let response = request_builder
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|error| {
-            format!(
-                "阿里百炼 Coding Plan 请求发送失败：{}。接口：{}。请求头：{}。请求体：{}",
-                error, endpoint, request_header_preview, request_preview
-            )
-        })?;
+        let response = match request_builder.json(&request_body).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                yield Err(format!(
+                    "阿里百炼 Coding Plan 请求发送失败：{}。接口：{}。请求头：{}。请求体：{}",
+                    error, endpoint, request_header_preview, request_preview
+                ));
+                return;
+            }
+        };
 
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .unwrap_or_else(|_| String::from("<<response-body-unavailable>>"));
+        let status = response.status();
+        if !status.is_success() {
+            let response_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<<response-body-unavailable>>"));
+            yield Err(format!(
+                "阿里百炼 Coding Plan 执行失败：HTTP {}。接口：{}。请求头：{}。请求体：{}。响应：{}",
+                status, endpoint, request_header_preview, request_preview, response_text
+            ));
+            return;
+        }
 
-    if !status.is_success() {
-        return Err(format!(
-            "阿里百炼 Coding Plan 执行失败：HTTP {}。接口：{}。请求头：{}。请求体：{}。响应：{}",
-            status, endpoint, request_header_preview, request_preview, response_text
-        ));
-    }
+        let mut pending = String::new();
+        let mut response = response;
 
-    let response_json = serde_json::from_str::<Value>(&response_text).map_err(|error| {
-        format!(
-            "阿里百炼 Coding Plan 返回了无法解析的 JSON：{}。接口：{}。原始响应：{}",
-            error, endpoint, response_text
-        )
-    })?;
+        loop {
+            let next_chunk = response.chunk().await;
+            let Some(chunk) = (match next_chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    yield Err(format!(
+                        "阿里百炼 Coding Plan 流式响应读取失败：{}。接口：{}。",
+                        error, endpoint
+                    ));
+                    return;
+                }
+            }) else {
+                break;
+            };
 
-    extract_alibaba_coding_plan_output(&response_json).ok_or_else(|| {
-        format!(
-            "阿里百炼 Coding Plan 返回成功，但未提取到可见输出。接口：{}。响应：{}",
-            endpoint, response_text
-        )
+            pending.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(line_break_index) = pending.find('\n') {
+                let mut line = pending.drain(..=line_break_index).collect::<String>();
+                line = line.trim().to_string();
+                if line.is_empty() || !line.starts_with("data:") {
+                    continue;
+                }
+
+                let payload = line["data:".len()..].trim();
+                if payload == "[DONE]" {
+                    break;
+                }
+
+                match serde_json::from_str::<Value>(payload) {
+                    Ok(json_payload) => {
+                        for delta in provider_deltas_from_alibaba_chunk(&json_payload) {
+                            yield Ok(delta);
+                        }
+                    }
+                    Err(error) => {
+                        yield Err(format!(
+                            "阿里百炼 Coding Plan 返回了无法解析的流式 JSON：{}。接口：{}。原始片段：{}",
+                            error, endpoint, payload
+                        ));
+                        return;
+                    }
+                }
+            }
+        }
     })
 }
 
@@ -835,6 +980,7 @@ fn build_alibaba_coding_plan_request_body(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
+    stream: bool,
 ) -> Value {
     let mut body = json!({
         "model": model_id,
@@ -848,6 +994,7 @@ fn build_alibaba_coding_plan_request_body(
                 "content": prompt
             }
         ],
+        "stream": stream,
     });
 
     if let Some(temperature) = temperature {
@@ -877,29 +1024,6 @@ fn model_supports_dashscope_thinking(model_id: &str) -> bool {
         || normalized.contains("minimax")
 }
 
-/// Extracts visible assistant output from one Alibaba Coding Plan chat-completions response.
-/// 从一份阿里百炼 Coding Plan chat-completions 响应中提取可见助手输出。
-fn extract_alibaba_coding_plan_output(response_json: &Value) -> Option<String> {
-    let first_choice = response_json.get("choices")?.as_array()?.first()?;
-    let message = first_choice.get("message")?;
-    let reasoning = message
-        .get("reasoning_content")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let content = extract_openai_message_content(message.get("content")?)
-        .trim()
-        .to_string();
-
-    match (reasoning, content.is_empty()) {
-        (Some(reasoning), false) => Some(format!("{reasoning}\n\n{content}")),
-        (Some(reasoning), true) => Some(reasoning),
-        (None, false) => Some(content),
-        (None, true) => None,
-    }
-}
-
 /// Extracts OpenAI-compatible message content from either a string or structured content array.
 /// 从字符串或结构化内容数组中提取 OpenAI 兼容消息内容。
 fn extract_openai_message_content(content: &Value) -> String {
@@ -920,9 +1044,149 @@ fn extract_openai_message_content(content: &Value) -> String {
     }
 }
 
-/// Executes one OpenAI Responses prompt using rig's default OpenAI responses client.
-/// 使用 rig 默认的 OpenAI Responses 客户端执行一次 OpenAI Responses 提示词调用。
-async fn execute_openai_responses_prompt(
+/// Builds a one-shot provider stream that yields one terminal error and then closes immediately.
+/// 构建一条一次性 Provider 流，使其仅产出一条最终错误后立即关闭。
+fn one_shot_provider_error_stream(error: impl Into<String>) -> ProviderDeltaStream {
+    let error = error.into();
+
+    Box::pin(stream! {
+        yield Err(error);
+    })
+}
+
+/// Converts one multi-turn streaming item into zero or more GUI-facing provider deltas.
+/// 将一条多轮流式项转换为零条或多条面向图形界面的 Provider 增量。
+fn provider_deltas_from_multi_turn_item<R>(
+    item: MultiTurnStreamItem<R>,
+) -> Vec<ProviderStreamDelta> {
+    match item {
+        MultiTurnStreamItem::StreamAssistantItem(content) => {
+            provider_deltas_from_assistant_content(content)
+        }
+        MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+            tool_result,
+            ..
+        }) => {
+            vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
+                RuntimeEventKind::ToolFinished,
+                format!("工具返回 · {}", tool_result.id),
+                format!(
+                    "工具 `{}` 已返回 {} 项结果。",
+                    tool_result.id,
+                    tool_result.content.iter().count()
+                ),
+            ))]
+        }
+        MultiTurnStreamItem::FinalResponse(_) => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+/// Converts one assistant streaming content chunk into zero or more GUI-facing provider deltas.
+/// 将一条助手流式内容块转换为零条或多条面向图形界面的 Provider 增量。
+fn provider_deltas_from_assistant_content<R>(
+    content: StreamedAssistantContent<R>,
+) -> Vec<ProviderStreamDelta> {
+    match content {
+        StreamedAssistantContent::Text(text) => {
+            if text.text.is_empty() {
+                Vec::new()
+            } else {
+                vec![ProviderStreamDelta::Output(text.text)]
+            }
+        }
+        StreamedAssistantContent::Reasoning(reasoning) => {
+            let flattened = flatten_reasoning_content(&reasoning.content);
+            if flattened.is_empty() {
+                Vec::new()
+            } else {
+                vec![ProviderStreamDelta::Thinking(flattened)]
+            }
+        }
+        StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+            if reasoning.is_empty() {
+                Vec::new()
+            } else {
+                vec![ProviderStreamDelta::Thinking(reasoning)]
+            }
+        }
+        StreamedAssistantContent::ToolCall { tool_call, .. } => {
+            vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
+                RuntimeEventKind::ToolStarted,
+                format!("工具调用 · {}", tool_call.function.name),
+                format!(
+                    "模型请求调用工具 `{}`，参数：{}。",
+                    tool_call.function.name,
+                    truncate_preview(&tool_call.function.arguments.to_string(), 160)
+                ),
+            ))]
+        }
+        StreamedAssistantContent::ToolCallDelta { id, content, .. } => {
+            vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
+                RuntimeEventKind::ToolStarted,
+                format!("工具增量 · {id}"),
+                format!("模型正在补充工具 `{id}` 的参数片段：{:?}。", content),
+            ))]
+        }
+        StreamedAssistantContent::Final(_) => Vec::new(),
+    }
+}
+
+/// Flattens structured reasoning content into one readable text block for the transcript thinking section.
+/// 将结构化推理内容压平成一段适合转录思考区展示的可读文本。
+fn flatten_reasoning_content(content: &[ReasoningContent]) -> String {
+    content
+        .iter()
+        .filter_map(|part| match part {
+            ReasoningContent::Text { text, .. } => Some(text.trim().to_string()),
+            ReasoningContent::Summary(summary) => Some(summary.trim().to_string()),
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => None,
+            _ => None,
+        })
+        .filter(|part: &String| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Extracts zero or more thinking/output deltas from one Alibaba Coding Plan streaming chunk.
+/// 从一条阿里百炼 Coding Plan 流式数据块中提取零条或多条思考或输出增量。
+fn provider_deltas_from_alibaba_chunk(chunk: &Value) -> Vec<ProviderStreamDelta> {
+    let Some(first_choice) = chunk
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+    else {
+        return Vec::new();
+    };
+    let Some(delta) = first_choice.get("delta") else {
+        return Vec::new();
+    };
+
+    let mut deltas = Vec::new();
+
+    for key in ["reasoning_content", "reasoning"] {
+        if let Some(reasoning) = delta.get(key).and_then(Value::as_str) {
+            if !reasoning.is_empty() {
+                deltas.push(ProviderStreamDelta::Thinking(reasoning.to_string()));
+            }
+        }
+    }
+
+    if let Some(content_delta) = delta.get("content") {
+        let flattened = extract_openai_message_content(content_delta)
+            .trim()
+            .to_string();
+        if !flattened.is_empty() {
+            deltas.push(ProviderStreamDelta::Output(flattened));
+        }
+    }
+
+    deltas
+}
+
+/// Executes one OpenAI Responses prompt using rig's default OpenAI responses client and streams deltas.
+/// 使用 rig 默认的 OpenAI Responses 客户端执行一次 OpenAI Responses 提示词调用并流式返回增量。
+fn execute_openai_responses_stream(
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
@@ -930,7 +1194,7 @@ async fn execute_openai_responses_prompt(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
-) -> Result<String, String> {
+) -> ProviderDeltaStream {
     let mut builder = openai::Client::builder()
         .api_key(api_key)
         .http_headers(headers.clone());
@@ -939,9 +1203,15 @@ async fn execute_openai_responses_prompt(
         builder = builder.base_url(base_url);
     }
 
-    let client = builder
-        .build()
-        .map_err(|error| format!("创建 OpenAI Responses 客户端失败：{}。", error))?;
+    let client = match builder.build() {
+        Ok(client) => client,
+        Err(error) => {
+            return one_shot_provider_error_stream(format!(
+                "创建 OpenAI Responses 客户端失败：{}。",
+                error
+            ));
+        }
+    };
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Responses Worker")
@@ -952,16 +1222,31 @@ async fn execute_openai_responses_prompt(
     }
 
     let agent = agent_builder.build();
+    let prompt = prompt.to_string();
 
-    agent
-        .prompt(prompt.to_string())
-        .await
-        .map_err(|error| format!("OpenAI Responses 执行失败：{}。", error))
+    Box::pin(stream! {
+        let mut stream = agent.stream_prompt(prompt).await;
+
+        while let Some(item) = stream.next().await {
+            let item = item.map_err(|error| format!("OpenAI Responses 流式执行失败：{}。", error));
+            match item {
+                Ok(item) => {
+                    for delta in provider_deltas_from_multi_turn_item(item) {
+                        yield Ok(delta);
+                    }
+                }
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    })
 }
 
-/// Executes one Anthropic-compatible prompt using rig's native Anthropic client.
-/// 使用 rig 原生 Anthropic 客户端执行一次 Anthropic 兼容提示词调用。
-async fn execute_anthropic_prompt(
+/// Executes one Anthropic-compatible prompt using rig's native Anthropic client and streams deltas.
+/// 使用 rig 原生 Anthropic 客户端执行一次 Anthropic 兼容提示词调用并流式返回增量。
+fn execute_anthropic_stream(
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
@@ -969,7 +1254,7 @@ async fn execute_anthropic_prompt(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
-) -> Result<String, String> {
+) -> ProviderDeltaStream {
     let mut builder = anthropic::Client::builder()
         .api_key(api_key)
         .http_headers(headers.clone());
@@ -978,9 +1263,15 @@ async fn execute_anthropic_prompt(
         builder = builder.base_url(base_url);
     }
 
-    let client = builder
-        .build()
-        .map_err(|error| format!("创建 Anthropic 兼容客户端失败：{}。", error))?;
+    let client = match builder.build() {
+        Ok(client) => client,
+        Err(error) => {
+            return one_shot_provider_error_stream(format!(
+                "创建 Anthropic 兼容客户端失败：{}。",
+                error
+            ));
+        }
+    };
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Anthropic Worker")
@@ -991,28 +1282,51 @@ async fn execute_anthropic_prompt(
     }
 
     let agent = agent_builder.build();
+    let prompt = prompt.to_string();
 
-    agent
-        .prompt(prompt.to_string())
-        .await
-        .map_err(|error| format!("Anthropic 兼容执行失败：{}。", error))
+    Box::pin(stream! {
+        let mut stream = agent.stream_prompt(prompt).await;
+
+        while let Some(item) = stream.next().await {
+            let item = item.map_err(|error| format!("Anthropic 兼容流式执行失败：{}。", error));
+            match item {
+                Ok(item) => {
+                    for delta in provider_deltas_from_multi_turn_item(item) {
+                        yield Ok(delta);
+                    }
+                }
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    })
 }
 
-/// Executes one OpenRouter prompt using the native OpenRouter rig client.
-/// 使用原生 OpenRouter rig 客户端执行一次 OpenRouter 提示词调用。
-async fn execute_openrouter_prompt(
+/// Executes one OpenRouter prompt using the native OpenRouter rig client and streams deltas.
+/// 使用原生 OpenRouter rig 客户端执行一次 OpenRouter 提示词调用并流式返回增量。
+fn execute_openrouter_stream(
     api_key: &str,
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
-) -> Result<String, String> {
-    let client = openrouter::Client::builder()
+) -> ProviderDeltaStream {
+    let client = match openrouter::Client::builder()
         .api_key(api_key)
         .http_headers(headers.clone())
         .build()
-        .map_err(|error| format!("创建 OpenRouter 客户端失败：{}。", error))?;
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return one_shot_provider_error_stream(format!(
+                "创建 OpenRouter 客户端失败：{}。",
+                error
+            ));
+        }
+    };
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code OpenRouter Worker")
@@ -1023,11 +1337,26 @@ async fn execute_openrouter_prompt(
     }
 
     let agent = agent_builder.build();
+    let prompt = prompt.to_string();
 
-    agent
-        .prompt(prompt.to_string())
-        .await
-        .map_err(|error| format!("OpenRouter 执行失败：{}。", error))
+    Box::pin(stream! {
+        let mut stream = agent.stream_prompt(prompt).await;
+
+        while let Some(item) = stream.next().await {
+            let item = item.map_err(|error| format!("OpenRouter 流式执行失败：{}。", error));
+            match item {
+                Ok(item) => {
+                    for delta in provider_deltas_from_multi_turn_item(item) {
+                        yield Ok(delta);
+                    }
+                }
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// Resolves the persisted provider options for one provider identifier.
@@ -1052,6 +1381,18 @@ fn normalize_assistant_output(output: String) -> String {
         String::from("模型未返回可见文本输出。")
     } else {
         trimmed.to_string()
+    }
+}
+
+/// Normalizes one optional streamed text buffer so blank values become `None`.
+/// 规范化一段可选流式文本缓冲，使纯空白值转换为 `None`。
+fn normalize_optional_stream_output(output: String) -> Option<String> {
+    let trimmed = output.trim();
+
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 

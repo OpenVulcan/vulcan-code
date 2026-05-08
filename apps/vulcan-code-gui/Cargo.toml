@@ -14,7 +14,9 @@ async-trait.workspace = true
 iced.workspace = true
 iced_aw = { version = "0.14.1", default-features = false, features = ["context_menu"] }
 iced_fonts = { version = "0.3.0", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
+async-stream = "0.3.6"
 dirs = "6.0.0"
+futures-util = "0.3.31"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15.4"
 rig.workspace = true

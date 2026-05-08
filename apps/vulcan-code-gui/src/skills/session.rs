@@ -321,6 +321,8 @@ impl CompactionSkill {
             .map(|message| {
                 let label = match message.record_kind {
                     SessionMessageRecordKind::Transcript => message.kind.label(),
+                    SessionMessageRecordKind::ThinkingOutput => "THINKING",
+                    SessionMessageRecordKind::AssistantOutput => "OUTPUT",
                     SessionMessageRecordKind::SummaryOutput => "SUMMARY",
                     SessionMessageRecordKind::ExploreOutput => "EXPLORE",
                     SessionMessageRecordKind::CompactionSummary => "COMPACTION",
