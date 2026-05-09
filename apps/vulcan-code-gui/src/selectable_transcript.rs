@@ -1857,6 +1857,7 @@ fn render_markdown_source_with_table_fallback(
                 builder,
                 &mut buffered_plain_lines,
                 paragraph_style,
+                settings,
                 app_theme,
             );
 
@@ -1903,6 +1904,7 @@ fn render_markdown_source_with_table_fallback(
         builder,
         &mut buffered_plain_lines,
         paragraph_style,
+        settings,
         app_theme,
     );
 }
@@ -1913,16 +1915,29 @@ fn flush_plain_markdown_fallback_buffer(
     builder: &mut RenderedTranscriptBuilder,
     buffered_plain_lines: &mut Vec<&str>,
     paragraph_style: PlainParagraphStyle,
+    settings: markdown::Settings,
     app_theme: &Theme,
 ) {
-    let plain_text = buffered_plain_lines.join("\n");
+    let markdown_source = buffered_plain_lines.join("\n");
     buffered_plain_lines.clear();
 
-    if plain_text.trim().is_empty() {
+    if markdown_source.trim().is_empty() {
         return;
     }
 
-    builder.push_plain_paragraph(plain_text, paragraph_style, app_theme);
+    let normalized_source =
+        normalize_markdown_source_for_transcript_display(&markdown_source);
+    let markdown_content = markdown::Content::parse(&normalized_source);
+    render_markdown_items(
+        builder,
+        markdown_content.items(),
+        RenderContext {
+            indent_left: paragraph_style.indent_left,
+            quote_depth: paragraph_style.quote_depth,
+        },
+        settings,
+        app_theme,
+    );
 }
 
 /// Repairs Markdown source before rendering so compacted table rows recover real line boundaries.
@@ -3055,16 +3070,19 @@ fn byte_offset_to_char_offset(text: &str, byte_offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use crate::theme;
     use super::{
-        RenderedParagraphNode, byte_offset_to_char_offset,
+        PlainParagraphStyle, RenderedParagraphNode, RenderedTranscriptBuilder,
+        RenderedTranscriptNode, byte_offset_to_char_offset,
         clamp_hit_test_point_to_paragraph_text_bounds, expand_compact_markdown_table_line,
         multiline_cursor_to_byte_offset, normalize_markdown_source_for_transcript_display,
         parse_markdown_table_source, prepare_markdown_source_for_rendering,
+        render_markdown_source_with_table_fallback,
     };
     use iced::advanced::text;
     use iced::widget::markdown;
     use iced::widget::text::Span;
-    use iced::{Padding, Pixels, Point, Size};
+    use iced::{Color, Padding, Pixels, Point, Size, Theme};
     use std::ops::Range;
 
     /// Verifies ASCII byte offsets remain identical after conversion because one byte still means one visible character.
@@ -3175,6 +3193,49 @@ mod tests {
         let line = "以下是基于当前协调代理配置与调度上下文的示例表格。如需指定具体字段、数据源或业务场景，请补充说明，我将按需生成或调整。|代理名称 |核心职责 |当前状态 |调度触发条件 | 备注||:---|:---|:---|:---|:---|";
         let expanded = expand_compact_markdown_table_line(line);
         assert!(expanded.is_some());
+    }
+
+    /// Verifies Markdown content after one rendered table still preserves quote and inline-format semantics.
+    /// 验证渲染表格后的 Markdown 内容仍会保留引用与行内格式语义。
+    #[test]
+    fn markdown_after_table_keeps_quote_and_inline_formatting() {
+        let source = "| 列1 | 列2 |\n|---|---|\n| 数据A | 数据B |\n> 💡 **提示**：当前处于 `Plan First`阶段";
+        let app_theme = Theme::Dark;
+        let markdown_settings = theme::markdown_settings(&app_theme);
+        let mut builder = RenderedTranscriptBuilder::new(
+            Color::from_rgb8(0, 122, 255),
+            Color::from_rgb8(24, 24, 24),
+        );
+
+        render_markdown_source_with_table_fallback(
+            &mut builder,
+            source,
+            PlainParagraphStyle::flow(Pixels(16.0)),
+            markdown_settings,
+            &app_theme,
+        );
+
+        assert!(matches!(
+            builder.nodes.first(),
+            Some(RenderedTranscriptNode::Table(_))
+        ));
+
+        let quote_paragraph = builder
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                RenderedTranscriptNode::Paragraph(paragraph) if paragraph.quote_depth > 0 => {
+                    Some(paragraph)
+                }
+                _ => None,
+            })
+            .expect("quote paragraph should remain rendered as markdown");
+
+        assert!(quote_paragraph.display_text.contains("提示"));
+        assert!(quote_paragraph.display_text.contains("Plan First"));
+        assert!(!quote_paragraph.display_text.contains("**"));
+        assert!(!quote_paragraph.display_text.contains('`'));
+        assert!(!quote_paragraph.display_text.contains('>'));
     }
 
     /// Verifies padded block hit-testing is clamped back into the real text area instead of drifting inside decorative box padding.

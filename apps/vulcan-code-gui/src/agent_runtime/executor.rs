@@ -1191,9 +1191,7 @@ fn provider_deltas_from_alibaba_chunk(chunk: &Value) -> Vec<ProviderStreamDelta>
     }
 
     if let Some(content_delta) = delta.get("content") {
-        let flattened = extract_openai_message_content(content_delta)
-            .trim()
-            .to_string();
+        let flattened = extract_openai_message_content(content_delta);
         if !flattened.is_empty() {
             deltas.push(ProviderStreamDelta::Output(flattened));
         }
@@ -1426,5 +1424,55 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
             .take(max_chars.saturating_sub(1))
             .collect::<String>();
         format!("{truncated}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderStreamDelta, provider_deltas_from_alibaba_chunk};
+    use serde_json::json;
+
+    /// Verifies Alibaba content deltas preserve leading and trailing newlines so streamed Markdown code fences do not glue lines together.
+    /// 验证阿里百炼内容增量会保留首尾换行，从而避免流式 Markdown 代码围栏与下一行黏连。
+    #[test]
+    fn alibaba_output_deltas_preserve_newline_boundaries() {
+        let chunk = json!({
+            "choices": [
+                {
+                    "delta": {
+                        "content": "\n```lua\n"
+                    }
+                }
+            ]
+        });
+
+        let deltas = provider_deltas_from_alibaba_chunk(&chunk);
+
+        assert!(matches!(
+            deltas.as_slice(),
+            [ProviderStreamDelta::Output(delta)] if delta == "\n```lua\n"
+        ));
+    }
+
+    /// Verifies Alibaba content deltas preserve whitespace-only fragments when they carry meaningful indentation inside streamed code blocks.
+    /// 验证阿里百炼内容增量在承载代码块缩进时会保留仅含空白的片段。
+    #[test]
+    fn alibaba_output_deltas_preserve_whitespace_only_fragments() {
+        let chunk = json!({
+            "choices": [
+                {
+                    "delta": {
+                        "content": "    "
+                    }
+                }
+            ]
+        });
+
+        let deltas = provider_deltas_from_alibaba_chunk(&chunk);
+
+        assert!(matches!(
+            deltas.as_slice(),
+            [ProviderStreamDelta::Output(delta)] if delta == "    "
+        ));
     }
 }
