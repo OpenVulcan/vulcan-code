@@ -22,6 +22,9 @@ pub struct LuaSkillsRuntimeHandle {
     /// Stable runtime root reserved for bundled LuaSkills resources and state.
     /// 为内建 LuaSkills 资源与状态保留的稳定运行时根目录。
     pub runtime_root: PathBuf,
+    /// Stable system Lua library directory reserved for host-owned persistent runtimes.
+    /// 为宿主自有持久运行时保留的稳定 system Lua 库目录。
+    pub system_lua_lib_dir: PathBuf,
     /// Ordered skill roots currently mounted into the engine.
     /// 当前挂载到引擎中的有序技能根目录集合。
     pub skill_roots: Vec<RuntimeSkillRoot>,
@@ -37,6 +40,7 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
         formatter
             .debug_struct("LuaSkillsRuntimeHandle")
             .field("runtime_root", &self.runtime_root)
+            .field("system_lua_lib_dir", &self.system_lua_lib_dir)
             .field("skill_roots", &self.skill_roots)
             .field("entry_count", &self.entry_count)
             .finish()
@@ -73,6 +77,7 @@ pub async fn bootstrap_luaskills_runtime(
     let runtime_root = application_luaskills_runtime_root();
     runtime_assets::sync_bundled_luaskills_runtime(&runtime_root)?;
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
+    let system_lua_lib_dir = runtime_root.join("system_lua_lib");
     let host_options = build_host_options(&runtime_root, controller);
     let pool_config = LuaVmPoolConfig {
         min_size: 1,
@@ -92,6 +97,7 @@ pub async fn bootstrap_luaskills_runtime(
         handle: LuaSkillsRuntimeHandle {
             engine: Arc::new(Mutex::new(engine)),
             runtime_root,
+            system_lua_lib_dir,
             skill_roots,
             entry_count,
         },
@@ -115,6 +121,7 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     let download_root = temp_dir.join("downloads");
     let root_skills_dir = runtime_root.join("skills").join("root");
     let user_skills_dir = runtime_root.join("skills").join("user");
+    let system_lua_lib_dir = runtime_root.join("system_lua_lib");
 
     for directory in [
         runtime_root,
@@ -126,6 +133,7 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
         download_root.as_path(),
         root_skills_dir.as_path(),
         user_skills_dir.as_path(),
+        system_lua_lib_dir.as_path(),
     ] {
         fs::create_dir_all(directory).map_err(|error| {
             format!(
@@ -160,6 +168,7 @@ fn build_host_options(
     host_options.host_provided_lua_root = Some(runtime_root.join("lua_packages"));
     host_options.host_provided_ffi_root = Some(runtime_root.join("libs"));
     host_options.host_provided_tool_root = Some(runtime_root.join("bin").join("tools"));
+    host_options.system_lua_lib_dir = Some(runtime_root.join("system_lua_lib"));
     host_options.download_cache_root = Some(runtime_root.join("temp").join("downloads"));
     host_options.dependency_dir_name = String::from("dependencies");
     host_options.state_dir_name = String::from("state");
