@@ -2,7 +2,7 @@
 //! GUI 工作台共享的视觉样式定义。
 
 use crate::diff::DiffLineKind;
-use crate::model::{SessionMessageKind, SessionRunPhase};
+use crate::model::SessionRunPhase;
 use iced::widget::{button, container, text_editor};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
@@ -237,7 +237,7 @@ pub fn activity_bar_button_style(
     let palette = theme.extended_palette();
     let active_style = button::Style {
         background: Some(Background::Color(palette.primary.weak.color)),
-        text_color: palette.primary.strong.text,
+        text_color: activity_bar_icon_color(theme, true),
         border: Border {
             radius: 2.0.into(),
             width: 1.0,
@@ -248,7 +248,7 @@ pub fn activity_bar_button_style(
     };
     let inactive_style = button::Style {
         background: Some(Background::Color(Color::TRANSPARENT)),
-        text_color: palette.background.base.text.scale_alpha(0.82),
+        text_color: activity_bar_icon_color(theme, false),
         border: Border {
             radius: 2.0.into(),
             width: 1.0,
@@ -302,6 +302,18 @@ pub fn activity_bar_button_style(
             text_color: palette.background.base.text.scale_alpha(0.34),
             ..inactive_style
         },
+    }
+}
+
+/// Returns the foreground color used by one activity-bar icon across active and inactive states.
+/// 返回活动条图标在激活态与非激活态之间共用的前景色。
+pub fn activity_bar_icon_color(theme: &Theme, is_active: bool) -> Color {
+    let palette = theme.extended_palette();
+
+    if is_active {
+        palette.primary.strong.text
+    } else {
+        palette.background.base.text.scale_alpha(0.94)
     }
 }
 
@@ -668,42 +680,6 @@ pub fn window_close_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
-/// Returns the container style used by one session message bubble in the workbench transcript.
-/// 返回工作台转录区单条会话消息气泡使用的容器样式。
-pub fn workbench_message_bubble_style(theme: &Theme, kind: SessionMessageKind) -> container::Style {
-    let palette = theme.extended_palette();
-
-    match kind {
-        SessionMessageKind::User => container::Style {
-            background: Some(palette.primary.weak.color.scale_alpha(0.92).into()),
-            border: Border {
-                radius: 2.0.into(),
-                width: 1.0,
-                color: palette.primary.strong.color.scale_alpha(0.18),
-            },
-            ..Default::default()
-        },
-        SessionMessageKind::Assistant => container::Style {
-            background: Some(palette.background.weak.color.scale_alpha(0.9).into()),
-            border: Border {
-                radius: 2.0.into(),
-                width: 1.0,
-                color: palette.background.strong.color.scale_alpha(0.16),
-            },
-            ..Default::default()
-        },
-        SessionMessageKind::Error => container::Style {
-            background: Some(iced::color!(0xFFF1F0).into()),
-            border: Border {
-                radius: 2.0.into(),
-                width: 1.0,
-                color: iced::color!(0xD73A49).scale_alpha(0.22),
-            },
-            ..Default::default()
-        },
-    }
-}
-
 /// Returns the status-chip style used by the workbench transcript header.
 /// 返回工作台转录区头部状态标签使用的样式。
 pub fn workbench_run_phase_chip_style(theme: &Theme, phase: SessionRunPhase) -> container::Style {
@@ -742,201 +718,78 @@ pub fn workbench_run_phase_chip_style(theme: &Theme, phase: SessionRunPhase) -> 
     }
 }
 
-/// Returns the container style used by one unified thinking block in the agent transcript.
-/// 返回代理转录区统一思考区块使用的容器样式。
-pub fn agent_view_thinking_block_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.secondary.weak.color.scale_alpha(0.32).into()),
-        border: Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: palette.secondary.strong.color.scale_alpha(0.16),
-        },
-        ..Default::default()
-    }
-}
-
-/// Returns the floating-overlay style used by the in-progress thinking surface.
-/// 返回进行中思考浮层使用的悬浮样式。
-pub fn agent_view_thinking_overlay_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.scale_alpha(0.96).into()),
-        border: Border {
-            radius: 10.0.into(),
-            width: 1.0,
-            color: palette.secondary.strong.color.scale_alpha(0.18),
-        },
-        shadow: Shadow {
-            color: Color::BLACK.scale_alpha(0.14),
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 24.0,
-        },
-        ..Default::default()
-    }
-}
-
-/// Returns the floating-overlay style used by the in-progress thinking surface while it may be docking back into the transcript.
-/// 返回进行中思考浮层在可能收纳回正文时使用的悬浮样式。
-pub fn agent_view_thinking_overlay_transition_style(
+/// Returns the segmented mode-button style used by the transcript surface switcher.
+/// 返回转录表面切换器使用的分段模式按钮样式。
+pub fn workbench_transcript_mode_button_style(
     theme: &Theme,
-    dock_progress: f32,
-) -> container::Style {
+    status: button::Status,
+    is_active: bool,
+) -> button::Style {
     let palette = theme.extended_palette();
-    let visible_ratio = (1.0 - dock_progress).clamp(0.0, 1.0);
-    let mut style = agent_view_thinking_overlay_style(theme);
-
-    style.background = Some(
-        palette
-            .background
-            .base
-            .color
-            .scale_alpha(0.64 + visible_ratio * 0.32)
-            .into(),
-    );
-    style.border = Border {
-        radius: (8.0 + visible_ratio * 2.0).into(),
-        width: 1.0,
-        color: palette
-            .secondary
-            .strong
-            .color
-            .scale_alpha(0.08 + visible_ratio * 0.10),
-    };
-    style.shadow = Shadow {
-        color: Color::BLACK.scale_alpha(0.04 + visible_ratio * 0.10),
-        offset: Vector::new(0.0, 4.0 + visible_ratio * 4.0),
-        blur_radius: 10.0 + visible_ratio * 14.0,
-    };
-    style
-}
-
-/// Returns the floating style used by the block-level hover action toolbar in the agent transcript.
-/// 返回代理转录区块级悬浮动作工具条使用的浮动样式。
-pub fn agent_view_hover_toolbar_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.scale_alpha(0.96).into()),
-        border: Border {
-            radius: 999.0.into(),
-            width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.14),
-        },
-        shadow: Shadow {
-            color: Color::BLACK.scale_alpha(0.1),
-            offset: Vector::new(0.0, 4.0),
-            blur_radius: 14.0,
-        },
-        ..Default::default()
-    }
-}
-
-/// Returns the container style used by one unified tool-call block in the agent transcript.
-/// 返回代理转录区统一工具调用区块使用的容器样式。
-pub fn agent_view_tool_call_block_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(iced::color!(0xEEF6FF).into()),
+    let base = button::Style {
+        background: Some(Background::Color(if is_active {
+            palette.background.weak.color.scale_alpha(0.92)
+        } else {
+            Color::TRANSPARENT
+        })),
+        text_color: palette.background.base.text.scale_alpha(0.88),
         border: Border {
             radius: 6.0.into(),
             width: 1.0,
-            color: iced::color!(0x0969DA).scale_alpha(0.2),
+            color: if is_active {
+                palette.primary.strong.color.scale_alpha(0.34)
+            } else {
+                palette.background.strong.color.scale_alpha(0.22)
+            },
         },
-        ..Default::default()
-    }
-}
-
-/// Returns the container style used by one unified tool-result block in the agent transcript.
-/// 返回代理转录区统一工具结果区块使用的容器样式。
-pub fn agent_view_tool_result_block_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.weak.color.scale_alpha(0.78).into()),
-        border: Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.14),
-        },
-        ..Default::default()
-    }
-}
-
-/// Returns the container style used by one unified notice block in the agent transcript.
-/// 返回代理转录区统一提示区块使用的容器样式。
-pub fn agent_view_notice_block_style(theme: &Theme, is_error: bool) -> container::Style {
-    let palette = theme.extended_palette();
-    let (background, border) = if is_error {
-        (
-            iced::color!(0xFFF1F0),
-            iced::color!(0xD73A49).scale_alpha(0.24),
-        )
-    } else {
-        (
-            palette.primary.weak.color.scale_alpha(0.2),
-            palette.primary.strong.color.scale_alpha(0.18),
-        )
+        shadow: Shadow::default(),
+        snap: true,
     };
 
-    container::Style {
-        background: Some(background.into()),
-        border: Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: border,
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(if is_active {
+                palette.background.weak.color
+            } else {
+                palette.background.weak.color.scale_alpha(0.58)
+            })),
+            text_color: palette.background.base.text,
+            border: Border {
+                color: if is_active {
+                    palette.primary.strong.color.scale_alpha(0.42)
+                } else {
+                    palette.background.strong.color.scale_alpha(0.30)
+                },
+                ..base.border
+            },
+            ..base
         },
-        ..Default::default()
-    }
-}
-
-/// Returns the container style used by one unified diff block in the agent transcript.
-/// 返回代理转录区统一差异区块使用的容器样式。
-pub fn agent_view_diff_block_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        border: Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.16),
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(if is_active {
+                palette.background.strong.color.scale_alpha(0.92)
+            } else {
+                palette.background.weak.color.scale_alpha(0.72)
+            })),
+            text_color: palette.background.base.text,
+            border: Border {
+                color: if is_active {
+                    palette.primary.strong.color.scale_alpha(0.48)
+                } else {
+                    palette.background.strong.color.scale_alpha(0.34)
+                },
+                ..base.border
+            },
+            ..base
         },
-        ..Default::default()
-    }
-}
-
-/// Returns the shared inner code-panel style used by tool and diff transcript blocks.
-/// 返回工具与差异转录区块共用的内层代码面板样式。
-pub fn agent_view_code_panel_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(palette.background.base.color.scale_alpha(0.96).into()),
-        border: Border {
-            radius: 4.0.into(),
-            width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.14),
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.36),
+            border: Border {
+                color: palette.background.strong.color.scale_alpha(0.14),
+                ..base.border
+            },
+            ..base
         },
-        ..Default::default()
-    }
-}
-
-/// Returns the line-container style used by one diff line inside the unified transcript block.
-/// 返回统一转录差异区块内部单条 diff 行使用的容器样式。
-pub fn agent_view_diff_line_style(_theme: &Theme, kind: DiffLineKind) -> container::Style {
-    let background = match kind {
-        DiffLineKind::Added => iced::color!(0xF0FFF4),
-        DiffLineKind::Removed => iced::color!(0xFFF1F0),
-        DiffLineKind::Note => iced::color!(0xEEF6FF),
-        DiffLineKind::Context => iced::color!(0xFAFBFC),
-    };
-
-    container::Style {
-        background: Some(background.into()),
-        ..Default::default()
     }
 }
 

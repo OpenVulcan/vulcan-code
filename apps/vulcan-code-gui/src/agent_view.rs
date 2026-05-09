@@ -63,52 +63,6 @@ pub fn agent_view_block_id(
     )
 }
 
-/// Returns the short Chinese label used by the GUI block header for one unified block.
-/// 返回图形界面为统一区块头部使用的中文短标签。
-pub fn agent_view_block_label(block: &AgentViewBlock) -> &'static str {
-    match block {
-        AgentViewBlock::Markdown(_) => "Markdown",
-        AgentViewBlock::Directive(directive) => match directive.kind {
-            AgentViewDirectiveKind::UserPrompt => "用户指令",
-            AgentViewDirectiveKind::Thinking => "思考",
-            AgentViewDirectiveKind::ToolCall => "工具调用",
-            AgentViewDirectiveKind::ToolResult => "工具结果",
-            AgentViewDirectiveKind::Diff => "文件差异",
-            AgentViewDirectiveKind::Notice => "提示",
-            AgentViewDirectiveKind::Custom(_) => "扩展块",
-        },
-    }
-}
-
-/// Returns the readable GUI header title for one unified block.
-/// 返回统一区块在图形界面头部展示时使用的可读标题。
-pub fn agent_view_block_title(block: &AgentViewBlock) -> String {
-    match block {
-        AgentViewBlock::Markdown(markdown) => markdown
-            .plain_text()
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .map(|line| line.trim().to_string())
-            .unwrap_or_else(|| String::from("Markdown 输出")),
-        AgentViewBlock::Directive(directive) => directive
-            .attributes
-            .get("title")
-            .map(|title| title.trim())
-            .filter(|title| !title.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| agent_view_block_label(block).to_string()),
-    }
-}
-
-/// Returns the Markdown-compatible body source that should feed the GUI renderer for one unified block.
-/// 返回某个统一区块供图形界面渲染器消费的 Markdown 兼容正文源码。
-pub fn agent_view_block_render_source(block: &AgentViewBlock) -> &str {
-    match block {
-        AgentViewBlock::Markdown(markdown) => &markdown.raw_source,
-        AgentViewBlock::Directive(directive) => &directive.body,
-    }
-}
-
 /// Returns whether the GUI should treat the block as collapsed before the user explicitly expands it.
 /// 返回图形界面是否应在用户显式展开前将该区块视为折叠状态。
 pub fn agent_view_block_collapsed_by_default(block: &AgentViewBlock) -> bool {
@@ -152,6 +106,9 @@ fn append_parsed_markdown_document(document: &mut AgentViewDocument, source: &st
 fn build_user_prompt_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
+    if !message.created_at.trim().is_empty() {
+        attributes.insert(String::from("created-at"), message.created_at.clone());
+    }
     if !message.title.trim().is_empty() {
         attributes.insert(String::from("title"), message.title.clone());
     }
@@ -176,6 +133,9 @@ fn build_thinking_block(message: &SessionMessageEntry) -> AgentViewDirectiveBloc
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
     attributes.insert(String::from("collapsed"), String::from("true"));
+    if !message.created_at.trim().is_empty() {
+        attributes.insert(String::from("created-at"), message.created_at.clone());
+    }
     if !message.title.trim().is_empty() {
         attributes.insert(String::from("title"), message.title.clone());
     }

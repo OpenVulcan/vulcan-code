@@ -365,7 +365,8 @@ pub fn stream_runtime_run(
         let active_agent = foundation.active_agent_definition().cloned();
         let mut runtime_events = Vec::new();
         let mut warnings = preparation.warnings.clone();
-        let mut thinking_output = String::new();
+        let mut thinking_raw_output = String::new();
+        let mut thinking_visible_output = String::new();
         let mut assistant_output = String::new();
         let mut thinking_completed_emitted = false;
 
@@ -413,14 +414,24 @@ pub fn stream_runtime_run(
         while let Some(item) = provider_stream.next().await {
             match item {
                 Ok(ProviderStreamDelta::Thinking(delta)) => {
-                    thinking_output.push_str(&delta);
-                    yield ExecutionStreamEvent::ThinkingDelta {
-                        session_id: request.session_id,
-                        delta,
-                    };
+                    thinking_raw_output.push_str(&delta);
+                    let normalized_visible_output =
+                        normalize_streamed_thinking_output(&thinking_raw_output);
+                    let visible_delta = normalized_visible_output
+                        .strip_prefix(&thinking_visible_output)
+                        .unwrap_or(normalized_visible_output.as_str())
+                        .to_string();
+                    thinking_visible_output = normalized_visible_output;
+
+                    if !visible_delta.is_empty() {
+                        yield ExecutionStreamEvent::ThinkingDelta {
+                            session_id: request.session_id,
+                            delta: visible_delta,
+                        };
+                    }
                 }
                 Ok(ProviderStreamDelta::Output(delta)) => {
-                    if !thinking_completed_emitted && !thinking_output.trim().is_empty() {
+                    if !thinking_completed_emitted && !thinking_visible_output.trim().is_empty() {
                         thinking_completed_emitted = true;
                         yield ExecutionStreamEvent::ThinkingCompleted {
                             session_id: request.session_id,
@@ -447,7 +458,7 @@ pub fn stream_runtime_run(
         }
 
         if let Some(error) = terminal_error {
-            if !thinking_completed_emitted && !thinking_output.trim().is_empty() {
+            if !thinking_completed_emitted && !thinking_visible_output.trim().is_empty() {
                 yield ExecutionStreamEvent::ThinkingCompleted {
                     session_id: request.session_id,
                 };
@@ -474,7 +485,7 @@ pub fn stream_runtime_run(
             return;
         }
 
-        if !thinking_completed_emitted && !thinking_output.trim().is_empty() {
+        if !thinking_completed_emitted && !thinking_visible_output.trim().is_empty() {
             yield ExecutionStreamEvent::ThinkingCompleted {
                 session_id: request.session_id,
             };
@@ -498,7 +509,7 @@ pub fn stream_runtime_run(
         let report = ExecutionRunReport::success(
             request.session_id,
             preparation,
-            normalize_optional_stream_output(thinking_output),
+            normalize_optional_stream_output(thinking_visible_output),
             normalized_output,
             discovery_rows,
             discovery_errors,
@@ -1412,6 +1423,96 @@ fn normalize_optional_stream_output(output: String) -> Option<String> {
     }
 }
 
+/// Classifies whether the current raw thinking buffer is still pending one synthetic preamble match, has fully matched it, or should be preserved verbatim.
+/// 判断当前原始思考缓冲是仍在等待合成前导语完整匹配、已经完整命中该前导语，还是应按原样保留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyntheticThinkingPreambleState {
+    /// The current buffer only matches a prefix of the synthetic preamble and should not emit visible content yet.
+    /// 当前缓冲仅匹配到合成前导语的前缀，因此暂时不应产出可见内容。
+    Pending,
+    /// The synthetic preamble has been fully matched and visible content should start from the provided byte offset.
+    /// 合成前导语已经被完整匹配，可见内容应从给定字节偏移开始。
+    Matched { visible_start_byte: usize },
+    /// The current buffer is not the synthetic preamble and should be preserved exactly as received.
+    /// 当前缓冲并非合成前导语，应按接收结果原样保留。
+    Rejected,
+}
+
+/// Normalizes one streamed thinking buffer so provider-added synthetic preamble text never enters transcript storage or copies.
+/// 规范化一段流式思考缓冲，使 Provider 额外插入的合成前导语不会进入转录存储或复制内容。
+fn normalize_streamed_thinking_output(raw_output: &str) -> String {
+    match classify_synthetic_thinking_preamble(raw_output) {
+        SyntheticThinkingPreambleState::Pending => String::new(),
+        SyntheticThinkingPreambleState::Matched { visible_start_byte } => {
+            raw_output[visible_start_byte..].to_string()
+        }
+        SyntheticThinkingPreambleState::Rejected => raw_output.to_string(),
+    }
+}
+
+/// Detects whether the current raw thinking buffer starts with the synthetic "Here's a thinking process:" preamble emitted by some providers.
+/// 检测当前原始思考缓冲是否以部分 Provider 额外插入的 “Here's a thinking process:” 合成前导语开头。
+fn classify_synthetic_thinking_preamble(raw_output: &str) -> SyntheticThinkingPreambleState {
+    let expected = "here's a thinking process:";
+    let mut characters = raw_output.char_indices().peekable();
+
+    while let Some((_, character)) = characters.peek().copied() {
+        if matches!(character, ' ' | '\t' | '\r' | '\n' | '·' | '•') {
+            characters.next();
+        } else {
+            break;
+        }
+    }
+
+    for expected_character in expected.chars() {
+        let Some((_, actual_character)) = characters.next() else {
+            return SyntheticThinkingPreambleState::Pending;
+        };
+
+        if normalize_synthetic_thinking_preamble_character(actual_character)
+            != Some(expected_character)
+        {
+            return SyntheticThinkingPreambleState::Rejected;
+        }
+    }
+
+    let mut visible_start_byte = characters
+        .peek()
+        .map(|(byte_index, _)| *byte_index)
+        .unwrap_or(raw_output.len());
+
+    while let Some((byte_index, character)) = characters.peek().copied() {
+        if matches!(character, ' ' | '\t' | '·' | '•') {
+            characters.next();
+            visible_start_byte = byte_index + character.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    while let Some((byte_index, character)) = characters.peek().copied() {
+        if matches!(character, '\r' | '\n' | ' ' | '\t') {
+            characters.next();
+            visible_start_byte = byte_index + character.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    SyntheticThinkingPreambleState::Matched { visible_start_byte }
+}
+
+/// Normalizes one candidate preamble character into the lowercase comparable form expected by the synthetic-thinking matcher.
+/// 将一个候选前导语字符规范化为合成思考匹配器期望的小写可比较形式。
+fn normalize_synthetic_thinking_preamble_character(character: char) -> Option<char> {
+    match character {
+        '’' => Some('\''),
+        '\'' | ':' | ' ' => Some(character),
+        _ if character.is_ascii() => Some(character.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
 /// Truncates one preview string while preserving a readable Unicode-safe suffix.
 /// 在保留可读 Unicode 后缀的前提下截断一段预览文本。
 fn truncate_preview(value: &str, max_chars: usize) -> String {
@@ -1429,7 +1530,10 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderStreamDelta, provider_deltas_from_alibaba_chunk};
+    use super::{
+        ProviderStreamDelta, SyntheticThinkingPreambleState, classify_synthetic_thinking_preamble,
+        normalize_streamed_thinking_output, provider_deltas_from_alibaba_chunk,
+    };
     use serde_json::json;
 
     /// Verifies Alibaba content deltas preserve leading and trailing newlines so streamed Markdown code fences do not glue lines together.
@@ -1474,5 +1578,32 @@ mod tests {
             deltas.as_slice(),
             [ProviderStreamDelta::Output(delta)] if delta == "    "
         ));
+    }
+
+    /// Verifies synthetic reasoning preamble text is removed before streamed thinking content enters transcript storage.
+    /// 验证合成推理前导语会在流式思考内容进入转录存储之前被移除。
+    #[test]
+    fn streamed_thinking_preamble_is_removed_before_storage() {
+        let chunk_one = "Here's a think";
+        let chunk_two = "ing process:\n\n1. 分析问题";
+
+        assert_eq!(normalize_streamed_thinking_output(chunk_one), "");
+        assert_eq!(
+            normalize_streamed_thinking_output(&format!("{chunk_one}{chunk_two}")),
+            "1. 分析问题"
+        );
+    }
+
+    /// Verifies normal reasoning text is preserved verbatim instead of being mistaken for the synthetic preamble.
+    /// 验证正常推理文本会被原样保留，而不会被误判成合成前导语。
+    #[test]
+    fn normal_reasoning_text_is_not_mistaken_for_synthetic_preamble() {
+        let raw_output = "Hello reasoning\n- 实际思考内容";
+
+        assert!(matches!(
+            classify_synthetic_thinking_preamble(raw_output),
+            SyntheticThinkingPreambleState::Rejected
+        ));
+        assert_eq!(normalize_streamed_thinking_output(raw_output), raw_output);
     }
 }
