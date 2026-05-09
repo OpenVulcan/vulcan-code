@@ -5498,6 +5498,7 @@ dependencies = [
  "rig-mcp",
  "serde",
  "serde_json",
+ "serde_yaml",
  "time",
  "unicode-segmentation",
  "vldb-controller-client",

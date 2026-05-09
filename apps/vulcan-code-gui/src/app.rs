@@ -14,7 +14,11 @@ use crate::agent_view::{
 use crate::code_view;
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
-use crate::luaskills_runtime::{self, LuaSkillsBootstrapReport, LuaSkillsRuntimeHandle};
+use crate::luaskills_runtime::{
+    self, LuaSkillsBootstrapReport, LuaSkillsCatalog, LuaSkillsCatalogSkill,
+    LuaSkillsInstallSourceChoice, LuaSkillsManagementAction, LuaSkillsManagementReport,
+    LuaSkillsRuntimeHandle,
+};
 use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
@@ -589,6 +593,24 @@ pub struct VulcanWorkbench {
     /// Optional LuaSkills runtime handle retained after the secondary startup phase completes.
     /// 在二级启动阶段完成后保留的可选 LuaSkills 运行时句柄。
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    /// Latest LuaSkills skill catalog loaded from the embedded host runtime.
+    /// 从嵌入式宿主运行时载入的最新 LuaSkills 技能清单。
+    luaskills_catalog: Option<LuaSkillsCatalog>,
+    /// Local panel-scoped LuaSkills feedback message shown near the management widgets.
+    /// 展示在 LuaSkills 管理控件附近的面板局部反馈消息。
+    luaskills_notice: String,
+    /// Install source choice currently selected in the LuaSkills management panel.
+    /// 当前在 LuaSkills 管理面板中选中的安装来源类型。
+    luaskills_install_source_choice: LuaSkillsInstallSourceChoice,
+    /// Optional explicit skill id typed into the LuaSkills install form.
+    /// 在 LuaSkills 安装表单中输入的可选显式技能标识符。
+    luaskills_install_skill_id: String,
+    /// Raw source locator typed into the LuaSkills install form.
+    /// 在 LuaSkills 安装表单中输入的原始来源定位值。
+    luaskills_install_source: String,
+    /// Whether one LuaSkills catalog or lifecycle operation is still running in the background.
+    /// 当前是否仍有某个 LuaSkills 清单或生命周期操作在后台执行。
+    luaskills_operation_in_flight: bool,
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
@@ -1355,6 +1377,39 @@ enum Message {
     /// Removes the currently selected MCP server entry.
     /// 删除当前选中的 MCP 服务器条目。
     RemoveMcpServerConfiguration,
+    /// Applies one freshly loaded LuaSkills catalog snapshot from the embedded host runtime.
+    /// 应用一份来自嵌入式宿主运行时的最新 LuaSkills 技能目录快照。
+    LuaSkillsCatalogLoaded(Result<LuaSkillsCatalog, String>),
+    /// Requests reloading the visible LuaSkills catalog from the embedded host runtime.
+    /// 请求从嵌入式宿主运行时重新载入可见 LuaSkills 技能目录。
+    RefreshLuaSkillsCatalog,
+    /// Updates the install source choice selected in the LuaSkills panel.
+    /// 更新 LuaSkills 面板中当前选中的安装来源类型。
+    LuaSkillsInstallSourceChoiceSelected(LuaSkillsInstallSourceChoice),
+    /// Updates the optional explicit skill id field shown in the LuaSkills install form.
+    /// 更新 LuaSkills 安装表单中显示的可选显式技能标识符字段。
+    LuaSkillsInstallSkillIdChanged(String),
+    /// Updates the raw source locator field shown in the LuaSkills install form.
+    /// 更新 LuaSkills 安装表单中显示的原始来源定位字段。
+    LuaSkillsInstallSourceChanged(String),
+    /// Requests installing one LuaSkills package into the USER root through the embedded host runtime.
+    /// 请求通过嵌入式宿主运行时向 USER 根安装一个 LuaSkills 包。
+    InstallLuaSkill,
+    /// Requests updating one managed LuaSkills package through the embedded host runtime.
+    /// 请求通过嵌入式宿主运行时更新一个受管 LuaSkills 包。
+    UpdateLuaSkill(String),
+    /// Requests enabling one disabled LuaSkills package through the embedded host runtime.
+    /// 请求通过嵌入式宿主运行时启用一个已停用的 LuaSkills 包。
+    EnableLuaSkill(String),
+    /// Requests disabling one enabled LuaSkills package through the embedded host runtime.
+    /// 请求通过嵌入式宿主运行时停用一个已启用的 LuaSkills 包。
+    DisableLuaSkill(String),
+    /// Requests uninstalling one ordinary LuaSkills package through the embedded host runtime.
+    /// 请求通过嵌入式宿主运行时卸载一个普通 LuaSkills 包。
+    UninstallLuaSkill(String),
+    /// Applies the finished result of one host-side LuaSkills management action.
+    /// 应用单次宿主侧 LuaSkills 管理动作的完成结果。
+    LuaSkillsManagementFinished(Result<LuaSkillsManagementReport, String>),
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
@@ -1765,6 +1820,12 @@ impl VulcanWorkbench {
                 },
                 controller_runtime: None,
                 luaskills_runtime: None,
+                luaskills_catalog: None,
+                luaskills_notice: String::from("LuaSkills 面板尚未加载技能目录。"),
+                luaskills_install_source_choice: LuaSkillsInstallSourceChoice::Github,
+                luaskills_install_skill_id: String::new(),
+                luaskills_install_source: String::new(),
+                luaskills_operation_in_flight: false,
                 provider_configuration,
                 controller_configuration,
                 runtime_foundation,
@@ -1815,6 +1876,12 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在初始化 vldb 数据平面。");
                 self.controller_runtime = None;
                 self.luaskills_runtime = None;
+                self.luaskills_catalog = None;
+                self.luaskills_notice = String::from("LuaSkills 面板尚未加载技能目录。");
+                self.luaskills_install_source_choice = LuaSkillsInstallSourceChoice::Github;
+                self.luaskills_install_skill_id.clear();
+                self.luaskills_install_source.clear();
+                self.luaskills_operation_in_flight = false;
                 self.task_projects.clear();
                 self.archived_task_projects.clear();
                 self.sessions.clear();
@@ -1918,17 +1985,29 @@ impl VulcanWorkbench {
                                 report.handle.entry_count
                             ),
                         });
+                        let luaskills_handle = report.handle.clone();
                         self.luaskills_runtime = Some(report.handle);
+                        self.luaskills_operation_in_flight = true;
+                        self.luaskills_notice =
+                            String::from("LuaSkills 运行时已就绪，正在载入技能目录。");
                         self.startup_lifecycle = StartupLifecycle::Bootstrapping {
                             message: String::from("正在加载工作台项目、会话与历史消息，请稍候。"),
                         };
                         self.status_message = String::from("正在加载工作台数据。");
 
                         if let Some(controller_runtime) = self.controller_runtime.clone() {
-                            return Task::perform(
-                                workspace_store::load_or_seed_workspace(controller_runtime),
-                                Message::WorkspaceStateLoaded,
-                            );
+                            return Task::batch([
+                                Task::perform(
+                                    workspace_store::load_or_seed_workspace(controller_runtime),
+                                    Message::WorkspaceStateLoaded,
+                                ),
+                                Task::perform(
+                                    async move {
+                                        luaskills_runtime::load_luaskills_catalog(&luaskills_handle)
+                                    },
+                                    Message::LuaSkillsCatalogLoaded,
+                                ),
+                            ]);
                         }
 
                         self.startup_lifecycle = StartupLifecycle::Failed {
@@ -1943,6 +2022,8 @@ impl VulcanWorkbench {
                             detail: error.clone(),
                         });
                         self.luaskills_runtime = None;
+                        self.luaskills_catalog = None;
+                        self.luaskills_operation_in_flight = false;
                         self.startup_lifecycle = StartupLifecycle::Failed { message: error };
                     }
                 }
@@ -1981,6 +2062,227 @@ impl VulcanWorkbench {
                 if let Err(error) = result {
                     self.status_message = format!("工作台状态保存失败：{error}");
                     self.push_activity(ActivityLevel::Warning, "工作台状态保存失败", error);
+                }
+
+                Task::none()
+            }
+            Message::LuaSkillsCatalogLoaded(result) => {
+                self.luaskills_operation_in_flight = false;
+
+                match result {
+                    Ok(catalog) => {
+                        let visible_skill_count = catalog.skills.len();
+                        let enabled_skill_count =
+                            catalog.skills.iter().filter(|skill| skill.enabled).count();
+                        self.luaskills_notice = format!(
+                            "LuaSkills 目录已载入：可见技能 {} 个，启用 {} 个，运行时入口 {} 个。",
+                            visible_skill_count, enabled_skill_count, catalog.entry_count
+                        );
+                        self.status_message = self.luaskills_notice.clone();
+                        self.luaskills_catalog = Some(catalog);
+                    }
+                    Err(error) => {
+                        self.luaskills_catalog = None;
+                        self.luaskills_notice = format!("LuaSkills 技能目录载入失败：{error}");
+                        self.status_message = self.luaskills_notice.clone();
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "LuaSkills 技能目录载入失败",
+                            error,
+                        );
+                    }
+                }
+
+                Task::none()
+            }
+            Message::RefreshLuaSkillsCatalog => {
+                let Some(handle) = self.luaskills_runtime.clone() else {
+                    self.luaskills_notice =
+                        String::from("LuaSkills 运行时尚未就绪，暂时无法刷新。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                };
+
+                if self.luaskills_operation_in_flight {
+                    return Task::none();
+                }
+
+                self.luaskills_operation_in_flight = true;
+                self.luaskills_notice = String::from("正在刷新 LuaSkills 技能目录。");
+                Task::perform(
+                    async move {
+                        luaskills_runtime::perform_luaskills_management_action(
+                            &handle,
+                            LuaSkillsManagementAction::Refresh,
+                        )
+                    },
+                    Message::LuaSkillsManagementFinished,
+                )
+            }
+            Message::LuaSkillsInstallSourceChoiceSelected(choice) => {
+                self.luaskills_install_source_choice = choice;
+                Task::none()
+            }
+            Message::LuaSkillsInstallSkillIdChanged(value) => {
+                self.luaskills_install_skill_id = value;
+                Task::none()
+            }
+            Message::LuaSkillsInstallSourceChanged(value) => {
+                self.luaskills_install_source = value;
+                Task::none()
+            }
+            Message::InstallLuaSkill => {
+                let Some(handle) = self.luaskills_runtime.clone() else {
+                    self.luaskills_notice =
+                        String::from("LuaSkills 运行时尚未就绪，暂时无法安装技能。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                };
+
+                if self.luaskills_operation_in_flight {
+                    return Task::none();
+                }
+
+                if self.luaskills_install_source.trim().is_empty() {
+                    self.luaskills_notice =
+                        String::from("请先填写安装来源，例如 GitHub 仓库或包地址。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                }
+
+                let action = LuaSkillsManagementAction::Install {
+                    skill_id: if self.luaskills_install_skill_id.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.luaskills_install_skill_id.clone())
+                    },
+                    source: self.luaskills_install_source.clone(),
+                    source_type: self.luaskills_install_source_choice,
+                };
+                self.luaskills_operation_in_flight = true;
+                self.luaskills_notice = String::from("正在安装 LuaSkills 技能。");
+                Task::perform(
+                    async move {
+                        luaskills_runtime::perform_luaskills_management_action(&handle, action)
+                    },
+                    Message::LuaSkillsManagementFinished,
+                )
+            }
+            Message::UpdateLuaSkill(skill_id) => {
+                let Some(handle) = self.luaskills_runtime.clone() else {
+                    self.luaskills_notice =
+                        String::from("LuaSkills 运行时尚未就绪，暂时无法更新技能。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                };
+
+                if self.luaskills_operation_in_flight {
+                    return Task::none();
+                }
+
+                self.luaskills_operation_in_flight = true;
+                self.luaskills_notice = format!("正在更新技能 `{skill_id}`。");
+                Task::perform(
+                    async move {
+                        luaskills_runtime::perform_luaskills_management_action(
+                            &handle,
+                            LuaSkillsManagementAction::Update { skill_id },
+                        )
+                    },
+                    Message::LuaSkillsManagementFinished,
+                )
+            }
+            Message::EnableLuaSkill(skill_id) => {
+                let Some(handle) = self.luaskills_runtime.clone() else {
+                    self.luaskills_notice =
+                        String::from("LuaSkills 运行时尚未就绪，暂时无法启用技能。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                };
+
+                if self.luaskills_operation_in_flight {
+                    return Task::none();
+                }
+
+                self.luaskills_operation_in_flight = true;
+                self.luaskills_notice = format!("正在启用技能 `{skill_id}`。");
+                Task::perform(
+                    async move {
+                        luaskills_runtime::perform_luaskills_management_action(
+                            &handle,
+                            LuaSkillsManagementAction::Enable { skill_id },
+                        )
+                    },
+                    Message::LuaSkillsManagementFinished,
+                )
+            }
+            Message::DisableLuaSkill(skill_id) => {
+                let Some(handle) = self.luaskills_runtime.clone() else {
+                    self.luaskills_notice =
+                        String::from("LuaSkills 运行时尚未就绪，暂时无法停用技能。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                };
+
+                if self.luaskills_operation_in_flight {
+                    return Task::none();
+                }
+
+                self.luaskills_operation_in_flight = true;
+                self.luaskills_notice = format!("正在停用技能 `{skill_id}`。");
+                Task::perform(
+                    async move {
+                        luaskills_runtime::perform_luaskills_management_action(
+                            &handle,
+                            LuaSkillsManagementAction::Disable { skill_id },
+                        )
+                    },
+                    Message::LuaSkillsManagementFinished,
+                )
+            }
+            Message::UninstallLuaSkill(skill_id) => {
+                let Some(handle) = self.luaskills_runtime.clone() else {
+                    self.luaskills_notice =
+                        String::from("LuaSkills 运行时尚未就绪，暂时无法卸载技能。");
+                    self.status_message = self.luaskills_notice.clone();
+                    return Task::none();
+                };
+
+                if self.luaskills_operation_in_flight {
+                    return Task::none();
+                }
+
+                self.luaskills_operation_in_flight = true;
+                self.luaskills_notice = format!("正在卸载技能 `{skill_id}`。");
+                Task::perform(
+                    async move {
+                        luaskills_runtime::perform_luaskills_management_action(
+                            &handle,
+                            LuaSkillsManagementAction::Uninstall { skill_id },
+                        )
+                    },
+                    Message::LuaSkillsManagementFinished,
+                )
+            }
+            Message::LuaSkillsManagementFinished(result) => {
+                self.luaskills_operation_in_flight = false;
+
+                match result {
+                    Ok(report) => {
+                        self.luaskills_notice = report.message.clone();
+                        self.status_message = report.message.clone();
+                        self.luaskills_catalog = Some(report.catalog);
+                        self.push_activity(
+                            ActivityLevel::Success,
+                            "LuaSkills 管理操作已完成",
+                            report.message,
+                        );
+                    }
+                    Err(error) => {
+                        self.luaskills_notice = format!("LuaSkills 管理操作失败：{error}");
+                        self.status_message = self.luaskills_notice.clone();
+                        self.push_activity(ActivityLevel::Warning, "LuaSkills 管理操作失败", error);
+                    }
                 }
 
                 Task::none()
@@ -2114,9 +2416,9 @@ impl VulcanWorkbench {
                     MainDisplayPanel::PromptSkills => {
                         String::from("已切换到技能（常规）面板，当前显示占位内容。")
                     }
-                    MainDisplayPanel::LuaSkills => {
-                        String::from("已切换到技能（LuaSkills）面板，当前显示占位内容。")
-                    }
+                    MainDisplayPanel::LuaSkills => String::from(
+                        "已切换到技能（LuaSkills）面板，当前聚焦技能目录与生命周期管理。",
+                    ),
                     MainDisplayPanel::Automation => {
                         String::from("已切换到自动化面板，当前显示占位内容。")
                     }
@@ -2136,6 +2438,21 @@ impl VulcanWorkbench {
                         String::from("已切换到设置面板，当前聚焦供应商配置与运行参数。")
                     }
                 };
+
+                if panel == MainDisplayPanel::LuaSkills
+                    && self.luaskills_catalog.is_none()
+                    && !self.luaskills_operation_in_flight
+                {
+                    if let Some(handle) = self.luaskills_runtime.clone() {
+                        self.luaskills_operation_in_flight = true;
+                        self.luaskills_notice = String::from("正在载入 LuaSkills 技能目录。");
+                        return Task::perform(
+                            async move { luaskills_runtime::load_luaskills_catalog(&handle) },
+                            Message::LuaSkillsCatalogLoaded,
+                        );
+                    }
+                }
+
                 Task::none()
             }
             Message::WindowClosed(window_id) => {
@@ -3440,9 +3757,7 @@ impl VulcanWorkbench {
             MainDisplayPanel::PromptSkills => {
                 self.view_placeholder_main_panel(MainDisplayPanel::PromptSkills)
             }
-            MainDisplayPanel::LuaSkills => {
-                self.view_placeholder_main_panel(MainDisplayPanel::LuaSkills)
-            }
+            MainDisplayPanel::LuaSkills => self.view_luaskills_panel(),
             MainDisplayPanel::Automation => {
                 self.view_placeholder_main_panel(MainDisplayPanel::Automation)
             }
@@ -5279,6 +5594,247 @@ impl VulcanWorkbench {
         .padding([18, 20])
         .width(Fill)
         .height(Fill)
+        .into()
+    }
+
+    /// Builds the LuaSkills management panel backed by the embedded host runtime and its live skill catalog.
+    /// 构建由嵌入式宿主运行时及其实时技能目录驱动的 LuaSkills 管理面板。
+    fn view_luaskills_panel(&self) -> Element<'_, Message> {
+        let panel_header = container(
+            column![
+                text(MainDisplayPanel::LuaSkills.section_title()).size(22),
+                text(MainDisplayPanel::LuaSkills.description()).size(13),
+            ]
+            .spacing(4),
+        )
+        .padding([4, 2]);
+
+        let summary_lines = if let Some(catalog) = &self.luaskills_catalog {
+            let enabled_skill_count = catalog.skills.iter().filter(|skill| skill.enabled).count();
+            let managed_skill_count = catalog.skills.iter().filter(|skill| skill.managed).count();
+            column![
+                text(format!("运行时根：{}", catalog.runtime_root.display())).size(12),
+                text(format!(
+                    "system_lua_lib：{}",
+                    catalog.system_lua_lib_dir.display()
+                ))
+                .size(12),
+                text(format!(
+                    "可见技能 {} · 已启用 {} · 受管安装 {} · 运行时入口 {}",
+                    catalog.skills.len(),
+                    enabled_skill_count,
+                    managed_skill_count,
+                    catalog.entry_count
+                ))
+                .size(12),
+            ]
+            .spacing(4)
+        } else {
+            column![
+                text("尚未载入 LuaSkills 技能目录。").size(12),
+                text("当嵌入式 LuaSkills 运行时就绪后，这里会显示当前可见技能。").size(12),
+            ]
+            .spacing(4)
+        };
+
+        let mut refresh_button = button("刷新").padding([8, 14]).style(button::secondary);
+        if !self.luaskills_operation_in_flight {
+            refresh_button = refresh_button.on_press(Message::RefreshLuaSkillsCatalog);
+        }
+
+        let source_placeholder = match self.luaskills_install_source_choice {
+            LuaSkillsInstallSourceChoice::Github => "例如：LuaSkills/vulcan-codekit",
+            LuaSkillsInstallSourceChoice::Url => "例如：https://example.com/skill-source.yaml",
+        };
+
+        let mut install_button = button("直接安装").padding([8, 14]);
+        if !self.luaskills_operation_in_flight {
+            install_button = install_button.on_press(Message::InstallLuaSkill);
+        }
+
+        let install_controls = container(
+            column![
+                row![
+                    text("技能目录").size(18),
+                    space::horizontal().width(Fill),
+                    refresh_button,
+                ]
+                .align_y(Center),
+                summary_lines,
+                text(&self.luaskills_notice).size(12),
+                row([
+                    LuaSkillsInstallSourceChoice::Github,
+                    LuaSkillsInstallSourceChoice::Url,
+                ]
+                .into_iter()
+                .map(|choice| {
+                    radio(
+                        choice.label(),
+                        choice,
+                        Some(self.luaskills_install_source_choice),
+                        Message::LuaSkillsInstallSourceChoiceSelected,
+                    )
+                    .into()
+                }))
+                .spacing(18)
+                .align_y(Center),
+                text_input(
+                    "可选：显式技能标识符，例如 vulcan-codekit",
+                    &self.luaskills_install_skill_id,
+                )
+                .on_input(Message::LuaSkillsInstallSkillIdChanged)
+                .padding(10),
+                text_input(source_placeholder, &self.luaskills_install_source)
+                    .on_input(Message::LuaSkillsInstallSourceChanged)
+                    .padding(10),
+                row![
+                    install_button,
+                    text("说明：GitHub 与包地址都走 LuaSkills 0.4.0 的受管安装链。").size(12),
+                ]
+                .spacing(10)
+                .align_y(Center),
+            ]
+            .spacing(10),
+        )
+        .padding(16)
+        .style(container::bordered_box);
+
+        let skills_column = match &self.luaskills_catalog {
+            Some(catalog) if catalog.skills.is_empty() => {
+                column![text("当前没有可见 LuaSkills 技能。").size(13)].spacing(8)
+            }
+            Some(catalog) => catalog
+                .skills
+                .iter()
+                .fold(column![].spacing(12), |column, skill| {
+                    column.push(self.view_luaskills_skill_card(skill))
+                }),
+            None => column![
+                text("LuaSkills 技能目录尚未可用。").size(13),
+                text("请先等待启动引导完成，或点击上方“刷新”重新拉取目录。").size(12),
+            ]
+            .spacing(8),
+        };
+
+        let skill_list = container(
+            column![
+                text("可见技能列表").size(18),
+                scrollable(skills_column).height(Fill),
+            ]
+            .spacing(10)
+            .height(Fill),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .height(Fill);
+
+        column![panel_header, install_controls, skill_list]
+            .spacing(12)
+            .height(Fill)
+            .into()
+    }
+
+    /// Builds one LuaSkills skill card row used by the desktop management panel.
+    /// 构建桌面管理面板使用的单个 LuaSkills 技能卡片行。
+    fn view_luaskills_skill_card(&self, skill: &LuaSkillsCatalogSkill) -> Element<'_, Message> {
+        let source_text = if let Some(source_locator) = &skill.source_locator {
+            let source_type = match skill.source_type {
+                Some(luaskills::SkillInstallSourceType::Github) => "GitHub",
+                Some(luaskills::SkillInstallSourceType::Url) => "包地址",
+                None => "未知来源",
+            };
+            format!("{source_type} · {source_locator}")
+        } else if skill.system_owned {
+            String::from("ROOT 宿主内建技能")
+        } else {
+            String::from("未记录来源")
+        };
+
+        let status_text = if skill.enabled {
+            "已启用"
+        } else {
+            "已停用"
+        };
+        let manage_text = if skill.managed { "受管" } else { "非受管" };
+
+        let mut action_row = row![].spacing(8).align_y(Center);
+        if skill.system_owned {
+            action_row = action_row.push(text("宿主内建，只读展示").size(12));
+        } else {
+            if skill.enabled {
+                let mut disable_button = button("停用").padding([6, 10]).style(button::secondary);
+                if !self.luaskills_operation_in_flight {
+                    disable_button =
+                        disable_button.on_press(Message::DisableLuaSkill(skill.skill_id.clone()));
+                }
+                action_row = action_row.push(disable_button);
+            } else {
+                let mut enable_button = button("启用").padding([6, 10]);
+                if !self.luaskills_operation_in_flight {
+                    enable_button =
+                        enable_button.on_press(Message::EnableLuaSkill(skill.skill_id.clone()));
+                }
+                action_row = action_row.push(enable_button);
+            }
+
+            if skill.managed {
+                let mut update_button = button("更新").padding([6, 10]).style(button::secondary);
+                if !self.luaskills_operation_in_flight {
+                    update_button =
+                        update_button.on_press(Message::UpdateLuaSkill(skill.skill_id.clone()));
+                }
+                action_row = action_row.push(update_button);
+            }
+
+            let mut uninstall_button = button("卸载").padding([6, 10]).style(button::secondary);
+            if !self.luaskills_operation_in_flight {
+                uninstall_button =
+                    uninstall_button.on_press(Message::UninstallLuaSkill(skill.skill_id.clone()));
+            }
+            action_row = action_row.push(uninstall_button);
+        }
+
+        let detail_rows = if let Some(disabled_reason) = &skill.disabled_reason {
+            column![
+                text(format!(
+                    "{} · {} · 根 {} · 运行时入口 {}",
+                    status_text, manage_text, skill.root_name, skill.entry_count
+                ))
+                .size(12),
+                text(format!("来源：{source_text}")).size(12),
+                text(format!("停用原因：{disabled_reason}")).size(12),
+                text(format!("路径：{}", skill.skill_dir.display())).size(12),
+            ]
+            .spacing(4)
+        } else {
+            column![
+                text(format!(
+                    "{} · {} · 根 {} · 运行时入口 {}",
+                    status_text, manage_text, skill.root_name, skill.entry_count
+                ))
+                .size(12),
+                text(format!("来源：{source_text}")).size(12),
+                text(format!("路径：{}", skill.skill_dir.display())).size(12),
+            ]
+            .spacing(4)
+        };
+
+        container(
+            column![
+                row![
+                    text(format!("{}  v{}", skill.display_name, skill.version)).size(16),
+                    space::horizontal().width(Fill),
+                    text(format!("ID: {}", skill.skill_id)).size(12),
+                ]
+                .align_y(Center),
+                detail_rows,
+                action_row,
+            ]
+            .spacing(10),
+        )
+        .padding(14)
+        .style(container::rounded_box)
+        .width(Fill)
         .into()
     }
 
