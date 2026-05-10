@@ -7,12 +7,17 @@ use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions,
     LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeSkillRoot, SkillInstallRequest,
-    SkillInstallSourceType, SkillManager, SkillManagerConfig, SkillMeta, SkillUninstallOptions,
+    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    SkillUninstallOptions,
 };
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+/// Relative configuration file path that declares the host-managed ROOT skill bootstrap set.
+/// 声明宿主管理 ROOT 技能引导集合的相对配置文件路径。
+const ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH: &str = "config/luaskills_root_skills.yaml";
 
 /// Long-lived LuaSkills runtime handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面保留的长生命周期 LuaSkills 运行时句柄。
@@ -226,13 +231,72 @@ pub struct LuaSkillsManagementReport {
     pub catalog: LuaSkillsCatalog,
 }
 
+/// Declarative bootstrap configuration for host-managed ROOT skills.
+/// 宿主管理 ROOT 技能使用的声明式引导配置。
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RootSkillBootstrapConfig {
+    /// Ordered ROOT skill declarations that must exist inside the system-owned ROOT layer.
+    /// 必须存在于系统自有 ROOT 层中的有序技能声明集合。
+    root_skills: Vec<RootSkillBootstrapEntry>,
+}
+
+/// One host-managed ROOT skill declaration loaded from the bootstrap config file.
+/// 从引导配置文件加载的单条宿主管理 ROOT 技能声明。
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RootSkillBootstrapEntry {
+    /// Stable skill identifier expected after installation completes.
+    /// 安装完成后预期存在的稳定技能标识符。
+    skill_id: String,
+    /// Source locator consumed by the LuaSkills managed-install pipeline.
+    /// 供 LuaSkills 受管安装链消费的来源定位值。
+    source: String,
+    /// Managed-install source type used to interpret the source locator.
+    /// 用于解释来源定位值的受管安装来源类型。
+    source_type: RootSkillBootstrapSourceType,
+}
+
+/// Supported source-type values for host-managed ROOT bootstrap skills.
+/// 宿主管理 ROOT 引导技能支持的来源类型取值。
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RootSkillBootstrapSourceType {
+    /// Install from one GitHub repository source.
+    /// 从某个 GitHub 仓库来源安装。
+    Github,
+    /// Install from one direct package/source URL.
+    /// 从某个直接包地址或 source URL 安装。
+    Url,
+}
+
+impl RootSkillBootstrapSourceType {
+    /// Converts the declarative bootstrap source type into the upstream LuaSkills source enum.
+    /// 将声明式引导来源类型转换为上游 LuaSkills 来源枚举。
+    fn into_runtime_source_type(self) -> SkillInstallSourceType {
+        match self {
+            Self::Github => SkillInstallSourceType::Github,
+            Self::Url => SkillInstallSourceType::Url,
+        }
+    }
+}
+
 /// Bootstraps one minimal LuaSkills runtime after the controller data plane is ready.
 /// 在控制器数据平面就绪后引导一个最小化的 LuaSkills 运行时。
 pub async fn bootstrap_luaskills_runtime(
     controller: PersistedControllerConfiguration,
 ) -> Result<LuaSkillsBootstrapReport, String> {
-    let runtime_root = application_luaskills_runtime_root();
-    runtime_assets::sync_bundled_luaskills_runtime(&runtime_root)?;
+    run_luaskills_blocking_task("luaskills-bootstrap", move || {
+        bootstrap_luaskills_runtime_blocking(controller)
+    })
+}
+
+/// Bootstraps one minimal LuaSkills runtime inside one blocking host thread.
+/// 在单个阻塞宿主线程内部引导一个最小化的 LuaSkills 运行时。
+fn bootstrap_luaskills_runtime_blocking(
+    controller: PersistedControllerConfiguration,
+) -> Result<LuaSkillsBootstrapReport, String> {
+    let runtime_root = application_luaskills_runtime_root().ok_or_else(|| {
+        String::from("未找到 LuaSkills 活动运行根，请先执行 make build 并从 output 目录启动应用。")
+    })?;
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
     let host_options = build_host_options(&runtime_root, controller);
@@ -243,6 +307,8 @@ pub async fn bootstrap_luaskills_runtime(
     };
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("创建 LuaSkills 引擎失败：{error}"))?;
+
+    ensure_configured_root_skills_installed(&runtime_root, &skill_roots, &mut engine)?;
 
     engine
         .load_from_roots(&skill_roots)
@@ -261,22 +327,186 @@ pub async fn bootstrap_luaskills_runtime(
     })
 }
 
+/// Execute one LuaSkills host operation on a dedicated blocking thread and return its result.
+/// 在专用阻塞线程上执行单次 LuaSkills 宿主操作，并返回其结果。
+fn run_luaskills_blocking_task<T, F>(thread_name: &str, operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(operation)
+        .map_err(|error| format!("启动 LuaSkills 阻塞线程失败：{error}"))?
+        .join()
+        .map_err(|panic_payload| {
+            let panic_message = if let Some(message) = panic_payload.downcast_ref::<String>() {
+                message.clone()
+            } else if let Some(message) = panic_payload.downcast_ref::<&'static str>() {
+                (*message).to_string()
+            } else {
+                String::from("未知 panic")
+            };
+            format!("LuaSkills 阻塞线程执行失败：{panic_message}")
+        })?
+}
+
+/// Ensures the configured host-managed ROOT skills are installed before the runtime catalog is loaded.
+/// 在加载运行时技能目录之前，确保配置声明的宿主管理 ROOT 技能已经完成安装。
+fn ensure_configured_root_skills_installed(
+    runtime_root: &Path,
+    skill_roots: &[RuntimeSkillRoot],
+    engine: &mut LuaEngine,
+) -> Result<(), String> {
+    let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
+    let configured_skills = load_root_skill_bootstrap_entries(runtime_root)?;
+    if configured_skills.is_empty() {
+        return Ok(());
+    }
+
+    let installed_root_skill_ids =
+        collect_effective_skill_instances_from_roots(std::slice::from_ref(&root_target))
+            .map_err(|error| format!("解析 ROOT 层技能目录失败：{error}"))?
+            .into_iter()
+            .map(|instance| instance.skill_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+    let mut installed_any_skill = false;
+    for configured_skill in configured_skills {
+        if installed_root_skill_ids.contains(configured_skill.skill_id.as_str()) {
+            continue;
+        }
+
+        let install_request = SkillInstallRequest {
+            skill_id: Some(configured_skill.skill_id.clone()),
+            source: Some(configured_skill.source.clone()),
+            source_type: configured_skill.source_type.into_runtime_source_type(),
+        };
+        engine
+            .system_install_skill_in_root(
+                skill_roots,
+                &root_target,
+                SkillManagementAuthority::System,
+                &install_request,
+            )
+            .map_err(|error| {
+                format!(
+                    "安装 ROOT 默认技能 `{}` 失败：{error}",
+                    configured_skill.skill_id
+                )
+            })?;
+        installed_any_skill = true;
+    }
+
+    if installed_any_skill {
+        engine
+            .reload_from_roots(skill_roots)
+            .map_err(|error| format!("刷新 LuaSkills 技能根失败：{error}"))?;
+    }
+
+    Ok(())
+}
+
+/// Loads the declarative host-managed ROOT skill bootstrap list from the active runtime config directory.
+/// 从活动运行时配置目录加载声明式宿主管理 ROOT 技能引导列表。
+fn load_root_skill_bootstrap_entries(
+    runtime_root: &Path,
+) -> Result<Vec<RootSkillBootstrapEntry>, String> {
+    let mut candidate_paths = vec![runtime_root.join(ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH)];
+    let source_config_path =
+        crate::runtime_assets::source_config_directory().join("luaskills_root_skills.yaml");
+    if candidate_paths[0] != source_config_path {
+        candidate_paths.push(source_config_path);
+    }
+
+    let Some(config_path) = candidate_paths.into_iter().find(|path| path.exists()) else {
+        return Ok(Vec::new());
+    };
+    if !config_path.is_file() {
+        return Err(format!(
+            "ROOT 技能引导配置不是有效文件：{}",
+            config_path.display()
+        ));
+    }
+
+    let config_text = fs::read_to_string(&config_path).map_err(|error| {
+        format!(
+            "读取 ROOT 技能引导配置失败（{}）：{error}",
+            config_path.display()
+        )
+    })?;
+    let config: RootSkillBootstrapConfig = serde_yaml::from_str(&config_text).map_err(|error| {
+        format!(
+            "解析 ROOT 技能引导配置失败（{}）：{error}",
+            config_path.display()
+        )
+    })?;
+
+    let mut entries = Vec::with_capacity(config.root_skills.len());
+    for entry in config.root_skills {
+        let skill_id = entry.skill_id.trim().to_string();
+        let source = entry.source.trim().to_string();
+        if skill_id.is_empty() {
+            return Err(format!(
+                "ROOT 技能引导配置存在空 skill_id（{}）。",
+                config_path.display()
+            ));
+        }
+        if source.is_empty() {
+            return Err(format!(
+                "ROOT 技能引导配置 `{}` 的 source 不能为空。",
+                skill_id
+            ));
+        }
+        entries.push(RootSkillBootstrapEntry {
+            skill_id,
+            source,
+            source_type: entry.source_type,
+        });
+    }
+
+    Ok(entries)
+}
+
 /// Returns the stable runtime root used by the embedded LuaSkills host integration.
 /// 返回嵌入式 LuaSkills 宿主集成使用的稳定运行时根目录。
-pub fn application_luaskills_runtime_root() -> PathBuf {
-    crate::data_plane::application_data_root().join("luaskills-runtime")
+pub fn application_luaskills_runtime_root() -> Option<PathBuf> {
+    runtime_assets::resolve_luaskills_runtime_root()
 }
 
 /// Rebuild the visible LuaSkills catalog from the current runtime roots without mutating lifecycle state.
 /// 在不修改生命周期状态的前提下，根据当前运行时根重建可见 LuaSkills 清单。
-pub fn load_luaskills_catalog(handle: &LuaSkillsRuntimeHandle) -> Result<LuaSkillsCatalog, String> {
+pub async fn load_luaskills_catalog(
+    handle: LuaSkillsRuntimeHandle,
+) -> Result<LuaSkillsCatalog, String> {
+    run_luaskills_blocking_task("luaskills-catalog", move || {
+        load_luaskills_catalog_blocking(&handle)
+    })
+}
+
+/// Rebuild the visible LuaSkills catalog inside one blocking host thread.
+/// 在单个阻塞宿主线程内部重建可见 LuaSkills 技能目录清单。
+fn load_luaskills_catalog_blocking(
+    handle: &LuaSkillsRuntimeHandle,
+) -> Result<LuaSkillsCatalog, String> {
     let engine = lock_runtime_engine(handle)?;
     build_luaskills_catalog(handle, &engine)
 }
 
 /// Execute one host-side LuaSkills management action and rebuild the visible catalog afterwards.
 /// 执行单次宿主侧 LuaSkills 管理动作，并在完成后重建可见清单。
-pub fn perform_luaskills_management_action(
+pub async fn perform_luaskills_management_action(
+    handle: LuaSkillsRuntimeHandle,
+    action: LuaSkillsManagementAction,
+) -> Result<LuaSkillsManagementReport, String> {
+    run_luaskills_blocking_task("luaskills-management", move || {
+        perform_luaskills_management_action_blocking(&handle, action)
+    })
+}
+
+/// Execute one host-side LuaSkills management action inside one blocking host thread.
+/// 在单个阻塞宿主线程内部执行单次宿主侧 LuaSkills 管理动作。
+fn perform_luaskills_management_action_blocking(
     handle: &LuaSkillsRuntimeHandle,
     action: LuaSkillsManagementAction,
 ) -> Result<LuaSkillsManagementReport, String> {
@@ -305,37 +535,69 @@ pub fn perform_luaskills_management_action(
             result.message
         }
         LuaSkillsManagementAction::Update { skill_id } => {
-            let target_root = ordinary_target_root_for_skill(handle, &skill_id)?;
+            let target_root = target_root_for_skill(handle, &skill_id)?;
             let request = SkillInstallRequest {
                 skill_id: Some(skill_id.clone()),
                 source: None,
                 source_type: SkillInstallSourceType::Github,
             };
-            let result = engine
-                .update_skill_in_root(&handle.skill_roots, &target_root, &request)
-                .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?;
+            let result = if target_root.name.eq_ignore_ascii_case("ROOT") {
+                engine
+                    .system_update_skill_in_root(
+                        &handle.skill_roots,
+                        &target_root,
+                        SkillManagementAuthority::System,
+                        &request,
+                    )
+                    .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
+            } else {
+                engine
+                    .update_skill_in_root(&handle.skill_roots, &target_root, &request)
+                    .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
+            };
             result.message
         }
         LuaSkillsManagementAction::Enable { skill_id } => {
-            ordinary_operation_guard(handle, &skill_id)?;
-            engine
-                .enable_skill(&handle.skill_roots, &skill_id)
-                .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+            let target_root = target_root_for_skill(handle, &skill_id)?;
+            if target_root.name.eq_ignore_ascii_case("ROOT") {
+                engine
+                    .system_enable_skill(
+                        &handle.skill_roots,
+                        SkillManagementAuthority::System,
+                        &skill_id,
+                    )
+                    .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+            } else {
+                engine
+                    .enable_skill(&handle.skill_roots, &skill_id)
+                    .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+            }
             format!("已启用技能 `{skill_id}`。")
         }
         LuaSkillsManagementAction::Disable { skill_id } => {
-            ordinary_operation_guard(handle, &skill_id)?;
-            engine
-                .disable_skill_in_roots(
-                    &handle.skill_roots,
-                    &skill_id,
-                    Some("disabled from vulcan-code-gui"),
-                )
-                .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
+            let target_root = target_root_for_skill(handle, &skill_id)?;
+            if target_root.name.eq_ignore_ascii_case("ROOT") {
+                engine
+                    .system_disable_skill_in_roots(
+                        &handle.skill_roots,
+                        SkillManagementAuthority::System,
+                        &skill_id,
+                        Some("disabled from vulcan-code-gui"),
+                    )
+                    .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
+            } else {
+                engine
+                    .disable_skill_in_roots(
+                        &handle.skill_roots,
+                        &skill_id,
+                        Some("disabled from vulcan-code-gui"),
+                    )
+                    .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
+            }
             format!("已停用技能 `{skill_id}`。")
         }
         LuaSkillsManagementAction::Uninstall { skill_id } => {
-            let target_root = ordinary_target_root_for_skill(handle, &skill_id)?;
+            let target_root = ordinary_uninstall_target_root_for_skill(handle, &skill_id)?;
             let result = engine
                 .uninstall_skill_in_root(
                     &handle.skill_roots,
@@ -360,9 +622,10 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     let lua_packages_dir = runtime_root.join("lua_packages");
     let libs_root = runtime_root.join("libs");
     let tool_root = runtime_root.join("bin").join("tools");
+    let state_dir = runtime_root.join("state");
     let download_root = temp_dir.join("downloads");
-    let root_skills_dir = runtime_root.join("skills").join("root");
-    let user_skills_dir = runtime_root.join("skills").join("user");
+    let root_skills_dir = runtime_root.join("skills");
+    let user_skills_dir = default_user_skill_root();
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
 
     for directory in [
@@ -372,6 +635,7 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
         lua_packages_dir.as_path(),
         libs_root.as_path(),
         tool_root.as_path(),
+        state_dir.as_path(),
         download_root.as_path(),
         root_skills_dir.as_path(),
         user_skills_dir.as_path(),
@@ -412,10 +676,12 @@ fn build_host_options(
     host_options.host_provided_tool_root = Some(runtime_root.join("bin").join("tools"));
     host_options.system_lua_lib_dir = Some(runtime_root.join("system_lua_lib"));
     host_options.download_cache_root = Some(runtime_root.join("temp").join("downloads"));
+    host_options.allow_network_download = true;
     host_options.dependency_dir_name = String::from("dependencies");
     host_options.state_dir_name = String::from("state");
     host_options.database_dir_name = String::from("databases");
-    host_options.skill_config_file_path = Some(runtime_root.join("skill-config.json"));
+    host_options.skill_config_file_path =
+        Some(runtime_root.join("config").join("skill_config.json"));
     host_options.sqlite_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.lancedb_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.space_controller.endpoint = controller
@@ -444,6 +710,14 @@ fn build_host_options(
     host_options.space_controller.startup_retry_interval_ms = controller.startup_retry_interval_ms;
     host_options.space_controller.lease_renew_interval_secs = controller.lease_renew_interval_secs;
     host_options
+}
+
+/// Returns the mutable USER skill root stored under the current user's VulcanCode data directory.
+/// 返回存放在当前用户 VulcanCode 数据目录下的可变 USER 技能根目录。
+fn default_user_skill_root() -> PathBuf {
+    crate::data_plane::application_data_root()
+        .join("luaskills-user")
+        .join("skills")
 }
 
 /// Acquire one immutable runtime-engine guard from the shared host handle.
@@ -539,47 +813,15 @@ fn build_luaskills_catalog(
     })
 }
 
-/// Resolve the ordinary USER root used by the desktop panel for managed install actions.
+/// Resolves the ordinary USER root used by the desktop panel for managed install actions.
 /// 解析桌面面板用于受管安装动作的普通 USER 根。
 fn ordinary_user_root(handle: &LuaSkillsRuntimeHandle) -> Result<RuntimeSkillRoot, String> {
-    handle
-        .skill_roots
-        .iter()
-        .find(|root| root.name.eq_ignore_ascii_case("USER"))
-        .cloned()
-        .ok_or_else(|| String::from("当前运行时缺少 USER 技能根，无法执行普通安装。"))
+    resolve_named_skill_root(&handle.skill_roots, "USER")
 }
 
-/// Guard one ordinary skill-management operation against ROOT-owned effective skills.
-/// 在执行普通技能管理操作前拦截由 ROOT 拥有的生效技能。
-fn ordinary_operation_guard(handle: &LuaSkillsRuntimeHandle, skill_id: &str) -> Result<(), String> {
-    let resolved = resolve_skill_root_for_id(handle, skill_id)?;
-    if resolved.name.eq_ignore_ascii_case("ROOT") {
-        return Err(format!(
-            "技能 `{skill_id}` 当前位于 ROOT 层，由宿主内建控制，不能通过普通管理面直接操作。"
-        ));
-    }
-    Ok(())
-}
-
-/// Resolve the effective ordinary target root that owns one skill identifier.
-/// 解析拥有目标技能标识符的当前生效普通根目录。
-fn ordinary_target_root_for_skill(
-    handle: &LuaSkillsRuntimeHandle,
-    skill_id: &str,
-) -> Result<RuntimeSkillRoot, String> {
-    let resolved = resolve_skill_root_for_id(handle, skill_id)?;
-    if resolved.name.eq_ignore_ascii_case("ROOT") {
-        return Err(format!(
-            "技能 `{skill_id}` 当前位于 ROOT 层，由宿主内建控制，不能通过普通管理面直接操作。"
-        ));
-    }
-    Ok(resolved)
-}
-
-/// Resolve the owning runtime root of one effective skill identifier from the current root chain.
-/// 从当前根目录链中解析单个生效技能标识符所属的运行时根。
-fn resolve_skill_root_for_id(
+/// Resolves the effective target root that currently owns one visible skill identifier.
+/// 解析当前拥有单个可见技能标识符的生效目标根目录。
+fn target_root_for_skill(
     handle: &LuaSkillsRuntimeHandle,
     skill_id: &str,
 ) -> Result<RuntimeSkillRoot, String> {
@@ -588,12 +830,22 @@ fn resolve_skill_root_for_id(
         .into_iter()
         .find(|instance| instance.skill_id == skill_id)
         .ok_or_else(|| format!("未找到技能 `{skill_id}` 对应的生效目录。"))?;
-    handle
-        .skill_roots
-        .iter()
-        .find(|root| root.name == resolved.root_name)
-        .cloned()
-        .ok_or_else(|| format!("未找到技能 `{skill_id}` 对应的运行时根配置。"))
+    resolve_named_skill_root(&handle.skill_roots, &resolved.root_name)
+}
+
+/// Resolves the uninstall target root and blocks attempts to remove host-owned ROOT skills.
+/// 解析卸载目标根目录，并拦截对宿主自有 ROOT 技能的移除操作。
+fn ordinary_uninstall_target_root_for_skill(
+    handle: &LuaSkillsRuntimeHandle,
+    skill_id: &str,
+) -> Result<RuntimeSkillRoot, String> {
+    let resolved = target_root_for_skill(handle, skill_id)?;
+    if resolved.name.eq_ignore_ascii_case("ROOT") {
+        return Err(format!(
+            "技能 `{skill_id}` 当前位于 ROOT 层，由宿主内建控制，不允许卸载。"
+        ));
+    }
+    Ok(resolved)
 }
 
 /// Build one skill-manager instance that mirrors the runtime root layout used by the embedded host.
@@ -608,9 +860,15 @@ fn build_skill_manager_for_root(
         .find(|root| root.name == root_name)
         .cloned()
         .ok_or_else(|| format!("未找到技能根 `{root_name}`。"))?;
+    let lifecycle_root = skill_root
+        .skills_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| skill_root.skills_dir.clone())
+        .join("state");
     Ok(SkillManager::new(SkillManagerConfig {
         skill_root,
-        lifecycle_root: handle.runtime_root.join("state"),
+        lifecycle_root,
         download_cache_root: handle.runtime_root.join("temp").join("downloads"),
         allow_network_download: true,
         github_base_url: None,
@@ -636,4 +894,17 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
     value
         .map(|field| field.trim().to_string())
         .filter(|field| !field.is_empty())
+}
+
+/// Resolves one named runtime skill root from the current root chain.
+/// 从当前技能根链中解析指定名称的单个运行时技能根。
+fn resolve_named_skill_root(
+    skill_roots: &[RuntimeSkillRoot],
+    root_name: &str,
+) -> Result<RuntimeSkillRoot, String> {
+    skill_roots
+        .iter()
+        .find(|root| root.name.eq_ignore_ascii_case(root_name))
+        .cloned()
+        .ok_or_else(|| format!("当前运行时缺少 {root_name} 技能根。"))
 }

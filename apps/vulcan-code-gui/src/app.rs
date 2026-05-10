@@ -1990,10 +1990,9 @@ impl VulcanWorkbench {
                         self.luaskills_operation_in_flight = true;
                         self.luaskills_notice =
                             String::from("LuaSkills 运行时已就绪，正在载入技能目录。");
-                        self.startup_lifecycle = StartupLifecycle::Bootstrapping {
-                            message: String::from("正在加载工作台项目、会话与历史消息，请稍候。"),
-                        };
-                        self.status_message = String::from("正在加载工作台数据。");
+                        self.startup_lifecycle = StartupLifecycle::Ready;
+                        self.status_message =
+                            String::from("LuaSkills 运行时已就绪，正在后台加载工作台数据。");
 
                         if let Some(controller_runtime) = self.controller_runtime.clone() {
                             return Task::batch([
@@ -2002,9 +2001,7 @@ impl VulcanWorkbench {
                                     Message::WorkspaceStateLoaded,
                                 ),
                                 Task::perform(
-                                    async move {
-                                        luaskills_runtime::load_luaskills_catalog(&luaskills_handle)
-                                    },
+                                    luaskills_runtime::load_luaskills_catalog(luaskills_handle),
                                     Message::LuaSkillsCatalogLoaded,
                                 ),
                             ]);
@@ -2048,9 +2045,6 @@ impl VulcanWorkbench {
                         );
                     }
                     Err(error) => {
-                        self.startup_lifecycle = StartupLifecycle::Failed {
-                            message: error.clone(),
-                        };
                         self.status_message = format!("工作台数据加载失败：{error}");
                         self.push_activity(ActivityLevel::Warning, "工作台数据加载失败", error);
                     }
@@ -2110,12 +2104,10 @@ impl VulcanWorkbench {
                 self.luaskills_operation_in_flight = true;
                 self.luaskills_notice = String::from("正在刷新 LuaSkills 技能目录。");
                 Task::perform(
-                    async move {
-                        luaskills_runtime::perform_luaskills_management_action(
-                            &handle,
-                            LuaSkillsManagementAction::Refresh,
-                        )
-                    },
+                    luaskills_runtime::perform_luaskills_management_action(
+                        handle,
+                        LuaSkillsManagementAction::Refresh,
+                    ),
                     Message::LuaSkillsManagementFinished,
                 )
             }
@@ -2162,9 +2154,7 @@ impl VulcanWorkbench {
                 self.luaskills_operation_in_flight = true;
                 self.luaskills_notice = String::from("正在安装 LuaSkills 技能。");
                 Task::perform(
-                    async move {
-                        luaskills_runtime::perform_luaskills_management_action(&handle, action)
-                    },
+                    luaskills_runtime::perform_luaskills_management_action(handle, action),
                     Message::LuaSkillsManagementFinished,
                 )
             }
@@ -2183,12 +2173,10 @@ impl VulcanWorkbench {
                 self.luaskills_operation_in_flight = true;
                 self.luaskills_notice = format!("正在更新技能 `{skill_id}`。");
                 Task::perform(
-                    async move {
-                        luaskills_runtime::perform_luaskills_management_action(
-                            &handle,
-                            LuaSkillsManagementAction::Update { skill_id },
-                        )
-                    },
+                    luaskills_runtime::perform_luaskills_management_action(
+                        handle,
+                        LuaSkillsManagementAction::Update { skill_id },
+                    ),
                     Message::LuaSkillsManagementFinished,
                 )
             }
@@ -2207,12 +2195,10 @@ impl VulcanWorkbench {
                 self.luaskills_operation_in_flight = true;
                 self.luaskills_notice = format!("正在启用技能 `{skill_id}`。");
                 Task::perform(
-                    async move {
-                        luaskills_runtime::perform_luaskills_management_action(
-                            &handle,
-                            LuaSkillsManagementAction::Enable { skill_id },
-                        )
-                    },
+                    luaskills_runtime::perform_luaskills_management_action(
+                        handle,
+                        LuaSkillsManagementAction::Enable { skill_id },
+                    ),
                     Message::LuaSkillsManagementFinished,
                 )
             }
@@ -2231,12 +2217,10 @@ impl VulcanWorkbench {
                 self.luaskills_operation_in_flight = true;
                 self.luaskills_notice = format!("正在停用技能 `{skill_id}`。");
                 Task::perform(
-                    async move {
-                        luaskills_runtime::perform_luaskills_management_action(
-                            &handle,
-                            LuaSkillsManagementAction::Disable { skill_id },
-                        )
-                    },
+                    luaskills_runtime::perform_luaskills_management_action(
+                        handle,
+                        LuaSkillsManagementAction::Disable { skill_id },
+                    ),
                     Message::LuaSkillsManagementFinished,
                 )
             }
@@ -2255,12 +2239,10 @@ impl VulcanWorkbench {
                 self.luaskills_operation_in_flight = true;
                 self.luaskills_notice = format!("正在卸载技能 `{skill_id}`。");
                 Task::perform(
-                    async move {
-                        luaskills_runtime::perform_luaskills_management_action(
-                            &handle,
-                            LuaSkillsManagementAction::Uninstall { skill_id },
-                        )
-                    },
+                    luaskills_runtime::perform_luaskills_management_action(
+                        handle,
+                        LuaSkillsManagementAction::Uninstall { skill_id },
+                    ),
                     Message::LuaSkillsManagementFinished,
                 )
             }
@@ -2447,7 +2429,7 @@ impl VulcanWorkbench {
                         self.luaskills_operation_in_flight = true;
                         self.luaskills_notice = String::from("正在载入 LuaSkills 技能目录。");
                         return Task::perform(
-                            async move { luaskills_runtime::load_luaskills_catalog(&handle) },
+                            luaskills_runtime::load_luaskills_catalog(handle),
                             Message::LuaSkillsCatalogLoaded,
                         );
                     }
@@ -5758,34 +5740,34 @@ impl VulcanWorkbench {
         let manage_text = if skill.managed { "受管" } else { "非受管" };
 
         let mut action_row = row![].spacing(8).align_y(Center);
-        if skill.system_owned {
-            action_row = action_row.push(text("宿主内建，只读展示").size(12));
+        if skill.enabled {
+            let mut disable_button = button("停用").padding([6, 10]).style(button::secondary);
+            if !self.luaskills_operation_in_flight {
+                disable_button =
+                    disable_button.on_press(Message::DisableLuaSkill(skill.skill_id.clone()));
+            }
+            action_row = action_row.push(disable_button);
         } else {
-            if skill.enabled {
-                let mut disable_button = button("停用").padding([6, 10]).style(button::secondary);
-                if !self.luaskills_operation_in_flight {
-                    disable_button =
-                        disable_button.on_press(Message::DisableLuaSkill(skill.skill_id.clone()));
-                }
-                action_row = action_row.push(disable_button);
-            } else {
-                let mut enable_button = button("启用").padding([6, 10]);
-                if !self.luaskills_operation_in_flight {
-                    enable_button =
-                        enable_button.on_press(Message::EnableLuaSkill(skill.skill_id.clone()));
-                }
-                action_row = action_row.push(enable_button);
+            let mut enable_button = button("启用").padding([6, 10]);
+            if !self.luaskills_operation_in_flight {
+                enable_button =
+                    enable_button.on_press(Message::EnableLuaSkill(skill.skill_id.clone()));
             }
+            action_row = action_row.push(enable_button);
+        }
 
-            if skill.managed {
-                let mut update_button = button("更新").padding([6, 10]).style(button::secondary);
-                if !self.luaskills_operation_in_flight {
-                    update_button =
-                        update_button.on_press(Message::UpdateLuaSkill(skill.skill_id.clone()));
-                }
-                action_row = action_row.push(update_button);
+        if skill.managed {
+            let mut update_button = button("更新").padding([6, 10]).style(button::secondary);
+            if !self.luaskills_operation_in_flight {
+                update_button =
+                    update_button.on_press(Message::UpdateLuaSkill(skill.skill_id.clone()));
             }
+            action_row = action_row.push(update_button);
+        }
 
+        if skill.system_owned {
+            action_row = action_row.push(text("ROOT 系统技能，不允许卸载").size(12));
+        } else {
             let mut uninstall_button = button("卸载").padding([6, 10]).style(button::secondary);
             if !self.luaskills_operation_in_flight {
                 uninstall_button =
