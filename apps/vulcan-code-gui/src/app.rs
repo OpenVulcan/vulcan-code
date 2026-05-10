@@ -2,6 +2,7 @@
 //! 桌面端骨架的主应用状态与界面组合逻辑。
 
 use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
+use crate::agent_runtime::config::WORKSPACE_COORDINATOR_AGENT_ID;
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::{
     self, ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest,
@@ -622,6 +623,15 @@ pub struct VulcanWorkbench {
     /// User-visible agent profile catalog loaded from the dedicated user directory and state file.
     /// 从独立用户目录与状态文件载入的面向用户 Agent 配置目录。
     agent_profile_catalog: AgentProfileCatalog,
+    /// Currently selected user-agent identifier in the dedicated Agent management panel.
+    /// 当前在独立 Agent 管理面板中选中的用户 Agent 标识。
+    selected_user_agent_profile_id: Option<String>,
+    /// Editable user-agent form state used by the dedicated Agent management panel.
+    /// 独立 Agent 管理面板使用的可编辑用户 Agent 表单状态。
+    agent_profile_form: AgentProfileFormState,
+    /// Local panel-scoped feedback message shown near the dedicated Agent management widgets.
+    /// 展示在独立 Agent 管理控件附近的局部反馈消息。
+    agent_profile_notice: String,
     /// Shared controller bootstrap configuration loaded from the runtime config directory.
     /// 从运行时配置目录载入的共享控制器引导配置。
     controller_configuration: PersistedControllerConfiguration,
@@ -1022,6 +1032,71 @@ impl std::fmt::Display for AgentChoice {
     }
 }
 
+/// Editable user-agent form state mirrored into the dedicated user-agent markdown directory.
+/// 映射回独立用户 Agent Markdown 目录的可编辑用户 Agent 表单状态。
+#[derive(Debug, Clone)]
+struct AgentProfileFormState {
+    /// Stable agent identifier stored on disk and used by the runtime.
+    /// 保存在磁盘上并供运行时使用的稳定 Agent 标识。
+    id: String,
+    /// Human-readable agent name displayed in pickers and management lists.
+    /// 展示在选择器与管理列表中的人类可读 Agent 名称。
+    name: String,
+    /// Optional concise description shown in the management list and runtime surfaces.
+    /// 展示在管理列表与运行时表面中的可选简短描述。
+    description: String,
+    /// Optional `provider/model` override written into the profile frontmatter.
+    /// 写入配置前置元数据中的可选 `provider/model` 覆盖值。
+    model: String,
+    /// Optional temperature override shown as editable text.
+    /// 以可编辑文本形式展示的可选温度覆盖值。
+    temperature_text: String,
+    /// Optional max-turn override shown as editable text.
+    /// 以可编辑文本形式展示的可选最大轮次数覆盖值。
+    max_turns_text: String,
+    /// Editable primary prompt buffer saved as the Markdown body.
+    /// 保存为 Markdown 正文的可编辑主提示词缓冲区。
+    prompt_buffer: text_editor::Content,
+}
+
+impl AgentProfileFormState {
+    /// Builds an editable user-agent form from one persisted user profile.
+    /// 根据单条持久化用户 Agent 配置构建可编辑表单。
+    fn from_profile(profile: &agent_profile::UserAgentProfile) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            description: profile.description.clone(),
+            model: profile.model.clone().unwrap_or_default(),
+            temperature_text: profile
+                .temperature
+                .map(|value| format!("{value:.2}"))
+                .unwrap_or_default(),
+            max_turns_text: profile
+                .max_turns
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            prompt_buffer: text_editor::Content::with_text(&profile.prompt),
+        }
+    }
+}
+
+impl Default for AgentProfileFormState {
+    /// Builds the default editable user-agent draft form.
+    /// 构建默认的可编辑用户 Agent 草稿表单。
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            description: String::new(),
+            model: String::new(),
+            temperature_text: String::new(),
+            max_turns_text: String::new(),
+            prompt_buffer: text_editor::Content::with_text(""),
+        }
+    }
+}
+
 /// Pick-list choice representing one configurable MCP server entry.
 /// 表示单个可配置 MCP 服务器条目的下拉选择项。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1187,8 +1262,8 @@ enum MainDisplayPanel {
     /// Automation panel placeholder used to host recurring and scheduled flows later.
     /// 用于后续承载定时与自动化流程的自动化面板占位。
     Automation,
-    /// Agent panel placeholder used to host multi-agent configuration later.
-    /// 用于后续承载多代理配置的代理面板占位。
+    /// Agent panel used to manage user-authored primary-agent profiles.
+    /// 用于管理用户自定义主代理配置的代理面板。
     Agents,
     /// Plugin panel placeholder used to host plugin management later.
     /// 用于后续承载插件管理的插件面板占位。
@@ -1229,7 +1304,7 @@ impl MainDisplayPanel {
             Self::PromptSkills => "承载常规提示词模板、技能节点与后续编排入口的占位面板。",
             Self::LuaSkills => "承载 LuaSkills 技能目录、配置与执行入口的占位面板。",
             Self::Automation => "承载自动化任务、定时策略与唤醒流程的占位面板。",
-            Self::Agents => "承载多代理定义、分工关系与运行策略的占位面板。",
+            Self::Agents => "集中管理用户自定义主代理，并与按模型路由的系统默认代理协同工作。",
             Self::Plugins => "承载插件能力、扩展安装与版本管理的占位面板。",
             Self::VulcanMemoryMesh => "承载记忆网格、关联记忆与长期上下文能力的占位面板。",
             Self::Example => "承载当前工作区主体与交互示例，便于持续重构布局。",
@@ -1424,6 +1499,39 @@ enum Message {
     /// Selects the active runtime agent used by compose-based execution.
     /// 选中 compose 执行链路使用的激活运行时代理。
     ActiveAgentSelected(AgentChoice),
+    /// Selects one user-authored agent profile for editing in the dedicated Agent panel.
+    /// 在独立 Agent 面板中选中一条用户自定义 Agent 配置进行编辑。
+    UserAgentProfileSelected(String),
+    /// Creates a new editable user-agent draft in the dedicated Agent panel.
+    /// 在独立 Agent 面板中创建一份新的用户 Agent 草稿。
+    CreateUserAgentProfileDraft,
+    /// Updates the editable user-agent identifier field.
+    /// 更新可编辑用户 Agent 标识字段。
+    UserAgentProfileIdChanged(String),
+    /// Updates the editable user-agent display name field.
+    /// 更新可编辑用户 Agent 显示名称字段。
+    UserAgentProfileNameChanged(String),
+    /// Updates the editable user-agent description field.
+    /// 更新可编辑用户 Agent 描述字段。
+    UserAgentProfileDescriptionChanged(String),
+    /// Updates the editable user-agent model override field.
+    /// 更新可编辑用户 Agent 模型覆盖字段。
+    UserAgentProfileModelChanged(String),
+    /// Updates the editable user-agent temperature override field.
+    /// 更新可编辑用户 Agent 温度覆盖字段。
+    UserAgentProfileTemperatureChanged(String),
+    /// Updates the editable user-agent max-turn override field.
+    /// 更新可编辑用户 Agent 最大轮次数覆盖字段。
+    UserAgentProfileMaxTurnsChanged(String),
+    /// Applies one editing action to the editable user-agent prompt buffer.
+    /// 向可编辑用户 Agent 提示词缓冲区应用一次编辑动作。
+    UserAgentProfilePromptAction(text_editor::Action),
+    /// Persists the currently edited user-agent profile to the dedicated user directory.
+    /// 将当前编辑中的用户 Agent 配置持久化到独立用户目录。
+    SaveUserAgentProfile,
+    /// Deletes the currently selected user-agent profile from the dedicated user directory.
+    /// 从独立用户目录中删除当前选中的用户 Agent 配置。
+    DeleteUserAgentProfile,
     /// Selects one configured MCP server entry for editing.
     /// 选中一个已配置 MCP 服务器条目进行编辑。
     McpServerSelected(McpServerChoice),
@@ -1841,6 +1949,13 @@ impl VulcanWorkbench {
             .and_then(|server_id| provider_configuration.mcp.servers.get(server_id))
             .map(McpServerFormState::from_entry)
             .unwrap_or_default();
+        let selected_user_agent_profile_id =
+            Self::resolve_initial_user_agent_profile_editor_id(&agent_profile_catalog);
+        let agent_profile_form = selected_user_agent_profile_id
+            .as_deref()
+            .and_then(|agent_id| agent_profile_catalog.agents.get(agent_id))
+            .map(AgentProfileFormState::from_profile)
+            .unwrap_or_default();
         let runtime_foundation =
             RuntimeFoundation::build(&provider_configuration, &agent_profile_catalog, None, None);
 
@@ -1956,6 +2071,11 @@ impl VulcanWorkbench {
                 luaskills_operation_in_flight: false,
                 provider_configuration,
                 agent_profile_catalog,
+                selected_user_agent_profile_id,
+                agent_profile_form,
+                agent_profile_notice: String::from(
+                    "系统默认代理会按模型自动路由；这里管理的是用户自定义主代理。",
+                ),
                 controller_configuration,
                 runtime_foundation,
                 session_skill_chain: SessionDerivedSkillChain::default(),
@@ -1973,12 +2093,12 @@ impl VulcanWorkbench {
                 last_execution_preparation: None,
                 last_mcp_discovery_rows: Vec::new(),
                 last_mcp_discovery_errors: Vec::new(),
-                execution_mode: ExecutionMode::Plan,
+                execution_mode: ExecutionMode::Build,
                 app_theme,
                 temperature_enabled: false,
                 temperature: 0.25,
                 context_usage: 42.0,
-                generate_plan: true,
+                generate_plan: false,
                 run_cargo_check: true,
                 persist_memory: true,
                 auto_approve: false,
@@ -2559,7 +2679,7 @@ impl VulcanWorkbench {
                         String::from("已切换到自动化面板，当前显示占位内容。")
                     }
                     MainDisplayPanel::Agents => {
-                        String::from("已切换到代理面板，当前显示占位内容。")
+                        String::from("已切换到代理面板，可在此管理用户自定义 Agent。")
                     }
                     MainDisplayPanel::Plugins => {
                         String::from("已切换到插件面板，当前显示占位内容。")
@@ -2898,6 +3018,86 @@ impl VulcanWorkbench {
 
                 self.refresh_runtime_foundation();
                 self.status_message = format!("当前激活代理已切换为 `{}`。", choice.label);
+                Task::none()
+            }
+            Message::UserAgentProfileSelected(agent_id) => {
+                self.selected_user_agent_profile_id = self
+                    .agent_profile_catalog
+                    .agents
+                    .contains_key(&agent_id)
+                    .then_some(agent_id);
+                self.reload_selected_user_agent_profile_form();
+                self.agent_profile_notice = self
+                    .selected_user_agent_profile_id
+                    .as_deref()
+                    .and_then(|selected_id| self.agent_profile_catalog.agents.get(selected_id))
+                    .map(|profile| format!("已切换到用户 Agent `{}`。", profile.name))
+                    .unwrap_or_else(|| String::from("未找到目标用户 Agent，已回退到新建草稿。"));
+                self.status_message = self.agent_profile_notice.clone();
+                Task::none()
+            }
+            Message::CreateUserAgentProfileDraft => {
+                self.selected_user_agent_profile_id = None;
+                self.reload_selected_user_agent_profile_form();
+                self.agent_profile_notice =
+                    String::from("已创建新的用户 Agent 草稿，请填写名称与主提示词。");
+                self.status_message = self.agent_profile_notice.clone();
+                Task::none()
+            }
+            Message::UserAgentProfileIdChanged(value) => {
+                self.agent_profile_form.id = value;
+                Task::none()
+            }
+            Message::UserAgentProfileNameChanged(value) => {
+                self.agent_profile_form.name = value;
+                Task::none()
+            }
+            Message::UserAgentProfileDescriptionChanged(value) => {
+                self.agent_profile_form.description = value;
+                Task::none()
+            }
+            Message::UserAgentProfileModelChanged(value) => {
+                self.agent_profile_form.model = value;
+                Task::none()
+            }
+            Message::UserAgentProfileTemperatureChanged(value) => {
+                self.agent_profile_form.temperature_text = value;
+                Task::none()
+            }
+            Message::UserAgentProfileMaxTurnsChanged(value) => {
+                self.agent_profile_form.max_turns_text = value;
+                Task::none()
+            }
+            Message::UserAgentProfilePromptAction(action) => {
+                self.agent_profile_form.prompt_buffer.perform(action);
+                Task::none()
+            }
+            Message::SaveUserAgentProfile => {
+                match self.save_selected_user_agent_profile() {
+                    Ok(saved_name) => {
+                        self.agent_profile_notice =
+                            format!("用户 Agent `{saved_name}` 已保存并刷新运行时。");
+                        self.status_message = self.agent_profile_notice.clone();
+                    }
+                    Err(error) => {
+                        self.agent_profile_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::DeleteUserAgentProfile => {
+                match self.remove_selected_user_agent_profile() {
+                    Ok(removed_name) => {
+                        self.agent_profile_notice =
+                            format!("用户 Agent `{removed_name}` 已删除并刷新运行时。");
+                        self.status_message = self.agent_profile_notice.clone();
+                    }
+                    Err(error) => {
+                        self.agent_profile_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
                 Task::none()
             }
             Message::McpServerSelected(choice) => {
@@ -3928,7 +4128,7 @@ impl VulcanWorkbench {
             MainDisplayPanel::Automation => {
                 self.view_placeholder_main_panel(MainDisplayPanel::Automation)
             }
-            MainDisplayPanel::Agents => self.view_placeholder_main_panel(MainDisplayPanel::Agents),
+            MainDisplayPanel::Agents => self.view_agents_panel(),
             MainDisplayPanel::Plugins => {
                 self.view_placeholder_main_panel(MainDisplayPanel::Plugins)
             }
@@ -5899,6 +6099,309 @@ impl VulcanWorkbench {
             .spacing(12)
             .height(Fill)
             .into()
+    }
+
+    /// Builds the dedicated user-agent management panel backed by the dedicated user profile directory.
+    /// 构建由独立用户 Agent 配置目录驱动的专用用户 Agent 管理面板。
+    fn view_agents_panel(&self) -> Element<'_, Message> {
+        let panel_header = container(
+            column![
+                text(MainDisplayPanel::Agents.section_title()).size(22),
+                text(MainDisplayPanel::Agents.description()).size(13),
+            ]
+            .spacing(4),
+        )
+        .padding([4, 2]);
+
+        let system_default_summary = self
+            .runtime_foundation
+            .active_agent_definition()
+            .filter(|agent| agent.id == WORKSPACE_COORDINATOR_AGENT_ID)
+            .map(|agent| {
+                format!(
+                    "当前系统默认代理：{}（按模型自动路由基础提示词）",
+                    agent.name
+                )
+            })
+            .unwrap_or_else(|| String::from("当前系统默认代理会按模型自动路由基础提示词。"));
+
+        let summary_card = container(
+            column![
+                text(&self.agent_profile_notice).size(12),
+                text(format!(
+                    "用户目录：{}",
+                    agent_profile::agent_profiles_directory().display()
+                ))
+                .size(12),
+                text(system_default_summary).size(12),
+            ]
+            .spacing(8),
+        )
+        .padding(16)
+        .style(container::bordered_box);
+
+        let profile_list_body = if self.agent_profile_catalog.agents.is_empty() {
+            column![
+                text("当前还没有用户自定义 Agent。").size(13),
+                text("点击“新建 Agent”创建一份覆盖系统默认提示词的主代理。").size(12),
+            ]
+            .spacing(8)
+        } else {
+            self.agent_profile_catalog
+                .agents
+                .values()
+                .fold(column![].spacing(8), |column, profile| {
+                    column.push(self.view_user_agent_profile_card(profile))
+                })
+        };
+
+        let profile_list = container(
+            column![
+                row![
+                    column![
+                        text("用户 Agent 列表").size(18),
+                        text("系统默认代理不在此列表中，它会按模型自动路由。").size(12),
+                    ]
+                    .spacing(4),
+                    space::horizontal(),
+                    button("新建 Agent")
+                        .padding([10, 14])
+                        .style(button::secondary)
+                        .on_press(Message::CreateUserAgentProfileDraft),
+                ]
+                .align_y(Center),
+                scrollable(profile_list_body).height(Fill),
+            ]
+            .spacing(12)
+            .height(Fill),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .width(FillPortion(2))
+        .height(Fill);
+
+        let selected_agent_is_current = self
+            .selected_user_agent_profile_id
+            .as_deref()
+            .zip(
+                self.agent_profile_catalog
+                    .state
+                    .selected_agent_id
+                    .as_deref(),
+            )
+            .is_some_and(|(selected_id, active_id)| selected_id == active_id);
+        let selected_agent_choice = self
+            .selected_user_agent_profile_id
+            .as_deref()
+            .and_then(|agent_id| self.agent_profile_catalog.agents.get(agent_id))
+            .map(|profile| AgentChoice {
+                id: profile.id.clone(),
+                label: profile.name.clone(),
+            });
+
+        let activation_button: Element<'_, Message> = if let Some(choice) = selected_agent_choice {
+            if selected_agent_is_current {
+                container(text("该 Agent 当前已激活。").size(12))
+                    .padding([10, 12])
+                    .style(container::rounded_box)
+                    .into()
+            } else {
+                button("设为当前代理")
+                    .padding([10, 14])
+                    .style(button::secondary)
+                    .on_press(Message::ActiveAgentSelected(choice))
+                    .into()
+            }
+        } else {
+            container(text("新建草稿保存后即可设为当前代理。").size(12))
+                .padding([10, 12])
+                .style(container::rounded_box)
+                .into()
+        };
+
+        let delete_button: Element<'_, Message> = if self.selected_user_agent_profile_id.is_some() {
+            button("删除")
+                .padding([10, 14])
+                .style(button::danger)
+                .on_press(Message::DeleteUserAgentProfile)
+                .into()
+        } else {
+            button("删除")
+                .padding([10, 14])
+                .style(button::danger)
+                .into()
+        };
+
+        let editor_panel = container(
+            scrollable(
+                column![
+                    row![
+                        column![
+                            text("编辑用户 Agent").size(18),
+                            text("用户 Agent 会覆盖系统默认主提示词，并可按需追加模型与参数覆盖。")
+                                .size(12),
+                        ]
+                        .spacing(4),
+                        space::horizontal(),
+                        activation_button,
+                        delete_button,
+                        button("保存")
+                            .padding([10, 14])
+                            .style(button::primary)
+                            .on_press(Message::SaveUserAgentProfile),
+                    ]
+                    .align_y(Center),
+                    column![
+                        text("稳定标识").size(13),
+                        text_input("留空时会根据名称自动生成", &self.agent_profile_form.id,)
+                            .on_input(Message::UserAgentProfileIdChanged)
+                            .padding([10, 12]),
+                    ]
+                    .spacing(6),
+                    column![
+                        text("显示名称").size(13),
+                        text_input("例如：审慎代码评审代理", &self.agent_profile_form.name)
+                            .on_input(Message::UserAgentProfileNameChanged)
+                            .padding([10, 12]),
+                    ]
+                    .spacing(6),
+                    column![
+                        text("简短描述").size(13),
+                        text_input(
+                            "说明这个 Agent 更适合处理什么任务",
+                            &self.agent_profile_form.description,
+                        )
+                        .on_input(Message::UserAgentProfileDescriptionChanged)
+                        .padding([10, 12]),
+                    ]
+                    .spacing(6),
+                    row![
+                        column![
+                            text("模型覆盖").size(13),
+                            text_input(
+                                "可选，例如 openai/gpt-5.5",
+                                &self.agent_profile_form.model,
+                            )
+                            .on_input(Message::UserAgentProfileModelChanged)
+                            .padding([10, 12]),
+                        ]
+                        .spacing(6)
+                        .width(FillPortion(3)),
+                        column![
+                            text("温度覆盖").size(13),
+                            text_input(
+                                "可选，例如 0.20",
+                                &self.agent_profile_form.temperature_text,
+                            )
+                            .on_input(Message::UserAgentProfileTemperatureChanged)
+                            .padding([10, 12]),
+                        ]
+                        .spacing(6)
+                        .width(FillPortion(1)),
+                        column![
+                            text("最大轮次").size(13),
+                            text_input("可选，例如 12", &self.agent_profile_form.max_turns_text,)
+                                .on_input(Message::UserAgentProfileMaxTurnsChanged)
+                                .padding([10, 12]),
+                        ]
+                        .spacing(6)
+                        .width(FillPortion(1)),
+                    ]
+                    .spacing(10),
+                    column![
+                        text("主提示词 Markdown").size(13),
+                        container(
+                            text_editor(&self.agent_profile_form.prompt_buffer)
+                                .height(320)
+                                .padding(12)
+                                .size(14)
+                                .wrapping(iced::widget::text::Wrapping::Word)
+                                .on_action(Message::UserAgentProfilePromptAction),
+                        )
+                        .style(container::bordered_box),
+                    ]
+                    .spacing(6),
+                ]
+                .spacing(12),
+            )
+            .height(Fill),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .width(FillPortion(3))
+        .height(Fill);
+
+        column![
+            panel_header,
+            summary_card,
+            row![profile_list, editor_panel].spacing(12).height(Fill),
+        ]
+        .spacing(12)
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds one selectable user-agent summary card shown in the left list of the Agent panel.
+    /// 构建显示在 Agent 面板左侧列表中的单个可选用户 Agent 摘要卡片。
+    fn view_user_agent_profile_card<'a>(
+        &self,
+        profile: &'a agent_profile::UserAgentProfile,
+    ) -> Element<'a, Message> {
+        let is_selected =
+            self.selected_user_agent_profile_id.as_deref() == Some(profile.id.as_str());
+        let is_active = self
+            .agent_profile_catalog
+            .state
+            .selected_agent_id
+            .as_deref()
+            == Some(profile.id.as_str());
+        let active_badge: Element<'_, Message> = if is_active {
+            container(text("当前激活").size(11))
+                .padding([4, 8])
+                .style(container::rounded_box)
+                .into()
+        } else {
+            space::horizontal().into()
+        };
+        let description_text = if profile.description.trim().is_empty() {
+            String::from("未填写描述")
+        } else {
+            profile.description.clone()
+        };
+        let meta_segments = [
+            Some(format!("ID：{}", profile.id)),
+            profile.model.as_ref().map(|model| format!("模型：{model}")),
+            profile
+                .temperature
+                .map(|temperature| format!("温度：{temperature:.2}")),
+            profile.max_turns.map(|turns| format!("最大轮次：{turns}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        button(
+            column![
+                row![
+                    text(&profile.name).size(15),
+                    space::horizontal(),
+                    active_badge,
+                ]
+                .align_y(Center),
+                text(description_text).size(12),
+                text(meta_segments.join(" · ")).size(11),
+            ]
+            .spacing(6),
+        )
+        .padding([12, 14])
+        .width(Fill)
+        .style(if is_selected {
+            button::primary
+        } else {
+            button::secondary
+        })
+        .on_press(Message::UserAgentProfileSelected(profile.id.clone()))
+        .into()
     }
 
     /// Builds one LuaSkills skill card row used by the desktop management panel.
@@ -8474,6 +8977,154 @@ impl VulcanWorkbench {
 
         self.diff_viewport_height
             .max(dedicated_window_height.max(main_panel_height))
+    }
+
+    /// Resolves the initial user-agent identifier selected by the dedicated Agent management panel.
+    /// 解析独立 Agent 管理面板在启动时应选中的初始用户 Agent 标识。
+    fn resolve_initial_user_agent_profile_editor_id(
+        catalog: &AgentProfileCatalog,
+    ) -> Option<String> {
+        catalog
+            .state
+            .selected_agent_id
+            .as_deref()
+            .filter(|agent_id| catalog.agents.contains_key(*agent_id))
+            .map(str::to_string)
+            .or_else(|| catalog.agents.keys().next().cloned())
+    }
+
+    /// Reloads the editable user-agent form from the currently selected user-agent identifier.
+    /// 根据当前选中的用户 Agent 标识重新载入可编辑用户 Agent 表单。
+    fn reload_selected_user_agent_profile_form(&mut self) {
+        self.agent_profile_form = self
+            .selected_user_agent_profile_id
+            .as_deref()
+            .and_then(|agent_id| self.agent_profile_catalog.agents.get(agent_id))
+            .map(AgentProfileFormState::from_profile)
+            .unwrap_or_default();
+    }
+
+    /// Reloads the user-agent catalog from disk and restores the editor selection when possible.
+    /// 从磁盘重新载入用户 Agent 目录，并在可能时恢复编辑器选中状态。
+    fn reload_agent_profile_catalog(
+        &mut self,
+        preferred_agent_id: Option<String>,
+    ) -> Result<(), String> {
+        self.agent_profile_catalog = agent_profile::load_agent_profile_catalog()?;
+        self.selected_user_agent_profile_id = preferred_agent_id
+            .filter(|agent_id| self.agent_profile_catalog.agents.contains_key(agent_id))
+            .or_else(|| {
+                Self::resolve_initial_user_agent_profile_editor_id(&self.agent_profile_catalog)
+            });
+        self.reload_selected_user_agent_profile_form();
+        Ok(())
+    }
+
+    /// Builds one persisted user-agent profile from the editable Agent management form.
+    /// 根据可编辑 Agent 管理表单构建一条可持久化的用户 Agent 配置。
+    fn build_user_agent_profile_from_form(
+        &self,
+    ) -> Result<agent_profile::UserAgentProfile, String> {
+        let name = self.agent_profile_form.name.trim();
+        if name.is_empty() {
+            return Err(String::from("请先填写用户 Agent 的显示名称。"));
+        }
+
+        let prompt = self.agent_profile_form.prompt_buffer.text();
+        if prompt.trim().is_empty() {
+            return Err(String::from("请先填写用户 Agent 的主提示词 Markdown。"));
+        }
+
+        let normalized_id = trim_to_option(&self.agent_profile_form.id)
+            .map(|value| agent_profile::canonicalize_agent_identifier(&value))
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let derived = agent_profile::canonicalize_agent_identifier(name);
+                (!derived.is_empty()).then_some(derived)
+            })
+            .ok_or_else(|| {
+                String::from("无法根据当前名称生成稳定标识，请显式填写一个英文或 slug 风格的标识。")
+            })?;
+
+        let temperature = match trim_to_option(&self.agent_profile_form.temperature_text) {
+            Some(value) => Some(
+                value
+                    .parse::<f32>()
+                    .map_err(|_| String::from("温度覆盖必须是合法的小数，例如 `0.20`。"))?,
+            ),
+            None => None,
+        };
+
+        let max_turns = match trim_to_option(&self.agent_profile_form.max_turns_text) {
+            Some(value) => Some(
+                value
+                    .parse::<u16>()
+                    .map_err(|_| String::from("最大轮次必须是合法的正整数。"))?,
+            ),
+            None => None,
+        };
+
+        Ok(agent_profile::UserAgentProfile {
+            id: normalized_id,
+            name: name.to_string(),
+            description: self.agent_profile_form.description.trim().to_string(),
+            prompt,
+            model: trim_to_option(&self.agent_profile_form.model),
+            temperature,
+            max_turns,
+        })
+    }
+
+    /// Saves the currently edited user-agent profile and refreshes the runtime-facing agent catalog.
+    /// 保存当前编辑中的用户 Agent 配置，并刷新面向运行时的 Agent 目录。
+    fn save_selected_user_agent_profile(&mut self) -> Result<String, String> {
+        let profile = self.build_user_agent_profile_from_form()?;
+        let previous_id = self.selected_user_agent_profile_id.clone();
+        agent_profile::save_user_agent_profile(&profile, previous_id.as_deref())?;
+
+        if previous_id.is_some()
+            && self.agent_profile_catalog.state.selected_agent_id == previous_id
+        {
+            self.agent_profile_catalog.state.selected_agent_id = Some(profile.id.clone());
+            agent_profile::save_agent_profile_state(&self.agent_profile_catalog.state)?;
+        }
+
+        self.reload_agent_profile_catalog(Some(profile.id.clone()))?;
+        self.refresh_runtime_foundation();
+
+        Ok(profile.name)
+    }
+
+    /// Deletes the currently selected user-agent profile and refreshes the runtime-facing agent catalog.
+    /// 删除当前选中的用户 Agent 配置，并刷新面向运行时的 Agent 目录。
+    fn remove_selected_user_agent_profile(&mut self) -> Result<String, String> {
+        let selected_agent_id = self.selected_user_agent_profile_id.clone().ok_or_else(|| {
+            String::from("当前没有选中的用户 Agent，可先从左侧列表选择一条配置。")
+        })?;
+        let removed_name = self
+            .agent_profile_catalog
+            .agents
+            .get(&selected_agent_id)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| selected_agent_id.clone());
+
+        agent_profile::delete_user_agent_profile(&selected_agent_id)?;
+
+        if self
+            .agent_profile_catalog
+            .state
+            .selected_agent_id
+            .as_deref()
+            == Some(selected_agent_id.as_str())
+        {
+            self.agent_profile_catalog.state.selected_agent_id = None;
+            agent_profile::save_agent_profile_state(&self.agent_profile_catalog.state)?;
+        }
+
+        self.reload_agent_profile_catalog(None)?;
+        self.refresh_runtime_foundation();
+
+        Ok(removed_name)
     }
 
     /// Returns the overscanned vertical window used by diff virtualization.

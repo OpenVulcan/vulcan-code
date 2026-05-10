@@ -1,5 +1,5 @@
-//! Compose runtime foundation assembled from provider, tool, skill, and MCP configuration.
-//! 从供应商、工具、技能与 MCP 配置组装出的 compose 运行时基础架构。
+//! Host runtime foundation assembled from provider, tool, skill, and MCP configuration.
+//! 从供应商、工具、技能与 MCP 配置组装出的宿主运行时基础架构。
 
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::{
@@ -9,15 +9,9 @@ use crate::agent_runtime::config::{
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor, McpServerRegistry};
 use crate::provider_config::ProviderConfigurationFile;
-use crate::skills::{BuiltinSkillCatalog, build_builtin_skill_catalog};
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
-use rig_compose::agent::Agent;
-use rig_compose::coordinator::{CoordinatorAgent, RoutingRule};
-use rig_compose::delegate::{DelegateRegistry, DelegateTool, InProcessAgentDelegate};
-use rig_compose::{GenericAgent, ToolRegistry};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 /// High-level runtime summary exposed to UI placeholder surfaces.
 /// 暴露给 UI 占位面板的高层运行时摘要。
@@ -61,8 +55,8 @@ pub struct RuntimeFoundationSummary {
     pub warnings: Vec<String>,
 }
 
-/// In-memory compose runtime foundation built from the shared Vulcan configuration file.
-/// 根据共享 Vulcan 配置文件构建的内存态 compose 运行时基础架构。
+/// In-memory host runtime foundation built from the shared Vulcan configuration file.
+/// 根据共享 Vulcan 配置文件构建的内存态宿主运行时基础架构。
 pub struct RuntimeFoundation {
     /// Runtime-facing aggregate configuration.
     /// 面向运行时的聚合配置。
@@ -73,35 +67,20 @@ pub struct RuntimeFoundation {
     /// LuaSkills-backed runtime tool descriptors exposed to rig-driven execution flows.
     /// 暴露给 rig 驱动执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    /// Registered built-in skill catalog.
-    /// 已注册的内建技能目录。
-    skills: BuiltinSkillCatalog,
     /// MCP server registry.
     /// MCP 服务器注册表。
     mcp_registry: McpServerRegistry,
     /// Live MCP runtime handle that tracks current transport state and available tools.
     /// 跟踪当前传输状态与可用工具的实时 MCP 运行时句柄。
     mcp_runtime: Option<McpRuntimeHandle>,
-    /// Built agents keyed by their stable agent id.
-    /// 以稳定代理标识为键保存的已构建代理集合。
-    agents: BTreeMap<String, Arc<dyn Agent>>,
-    /// Delegate registry holding in-process child-agent executors.
-    /// 保存进程内子代理执行器的委派注册表。
-    delegate_registry: DelegateRegistry,
-    /// Registry of delegate tools prepared for later model-driven delegation.
-    /// 为后续模型驱动委派准备的委派工具注册表。
-    delegate_tools: ToolRegistry,
-    /// Coordinator agent identifiers.
-    /// 协调代理标识集合。
-    coordinator_agent_ids: BTreeSet<String>,
     /// Build warnings collected while materialising the foundation.
     /// 在组装基础架构时收集到的构建警告。
     warnings: Vec<String>,
 }
 
 impl RuntimeFoundation {
-    /// Builds the compose runtime foundation from the shared provider configuration file.
-    /// 根据共享供应商配置文件构建 compose 运行时基础架构。
+    /// Builds the host runtime foundation from the shared provider configuration file.
+    /// 根据共享供应商配置文件构建宿主运行时基础架构。
     pub fn build(
         config: &ProviderConfigurationFile,
         agent_profile_catalog: &AgentProfileCatalog,
@@ -110,7 +89,6 @@ impl RuntimeFoundation {
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let native_tools = build_native_tool_catalog(&runtime_config);
-        let skills = build_builtin_skill_catalog(&runtime_config.skills);
         let mcp_registry = McpServerRegistry::from_provider_configuration(config);
         let mut warnings = Vec::new();
         let luaskills_tools = match luaskills_runtime.as_ref() {
@@ -123,72 +101,13 @@ impl RuntimeFoundation {
             },
             None => Vec::new(),
         };
-        let mut agents = BTreeMap::new();
-        let mut coordinator_agent_ids = BTreeSet::new();
-
-        for definition in runtime_config
-            .agents
-            .iter()
-            .filter(|definition| definition.kind != RuntimeAgentKind::Coordinator)
-        {
-            if let Some(agent) = build_worker_agent(
-                definition,
-                &runtime_config.tool_policies,
-                &native_tools,
-                &skills,
-                &mut warnings,
-            ) {
-                agents.insert(definition.id.clone(), agent);
-            }
-        }
-
-        let worker_agents = agents.clone();
-
-        for definition in runtime_config
-            .agents
-            .iter()
-            .filter(|definition| definition.kind == RuntimeAgentKind::Coordinator)
-        {
-            if let Some(agent) = build_coordinator_agent(definition, &worker_agents, &mut warnings)
-            {
-                coordinator_agent_ids.insert(definition.id.clone());
-                agents.insert(definition.id.clone(), agent);
-            }
-        }
-
-        let delegate_registry = DelegateRegistry::new();
-        for (agent_id, agent) in &agents {
-            delegate_registry
-                .register(agent_id.clone(), InProcessAgentDelegate::arc(agent.clone()));
-        }
-
-        let delegate_tools = ToolRegistry::new();
-        for (agent_id, definition) in runtime_config
-            .agents
-            .iter()
-            .map(|definition| (&definition.id, definition))
-        {
-            if let Some(executor) = delegate_registry.get(agent_id) {
-                let tool = DelegateTool::new(
-                    format!("delegate.{agent_id}"),
-                    format!("委派给代理 `{}`。", definition.name),
-                    executor,
-                );
-                delegate_tools.register(Arc::new(tool));
-            }
-        }
 
         Self {
             config: runtime_config,
             native_tools,
             luaskills_tools,
-            skills,
             mcp_registry,
             mcp_runtime,
-            agents,
-            delegate_registry,
-            delegate_tools,
-            coordinator_agent_ids,
             warnings,
         }
     }
@@ -202,12 +121,14 @@ impl RuntimeFoundation {
             .iter()
             .find(|definition| definition.id == self.config.active_agent_id)
             .map(|definition| definition.name.clone())
-            .or_else(|| {
-                self.agents
-                    .get(&self.config.active_agent_id)
-                    .map(|agent| agent.name().to_string())
-            })
             .unwrap_or_else(|| String::from("未解析到激活代理"));
+
+        let coordinator_count = self
+            .config
+            .agents
+            .iter()
+            .filter(|definition| definition.kind == RuntimeAgentKind::Coordinator)
+            .count();
 
         RuntimeFoundationSummary {
             active_agent_id: self.config.active_agent_id.clone(),
@@ -218,11 +139,16 @@ impl RuntimeFoundation {
                 .clone()
                 .unwrap_or_else(|| String::from("未配置模型")),
             configured_agent_count: self.config.agents.len(),
-            built_agent_count: self.agents.len(),
-            coordinator_count: self.coordinator_agent_ids.len(),
-            skill_count: self.skills.descriptors.len(),
+            built_agent_count: self.config.agents.len(),
+            coordinator_count,
+            skill_count: self.config.skills.len(),
             native_tool_count: self.native_tools.descriptors.len(),
-            delegate_tool_count: self.delegate_tools.len().max(self.delegate_registry.len()),
+            delegate_tool_count: self
+                .config
+                .agents
+                .iter()
+                .map(|definition| definition.delegates.len())
+                .sum(),
             configured_mcp_server_count: self.mcp_registry.configured_count(),
             enabled_mcp_server_count: self.mcp_registry.enabled_count(),
             warnings: self.warnings.clone(),
@@ -254,11 +180,11 @@ impl RuntimeFoundation {
     /// Returns lightweight skill rows filtered by skill family.
     /// 返回按技能类型过滤后的轻量技能行文本。
     pub fn skill_rows(&self, kind: RuntimeSkillKind) -> Vec<String> {
-        self.skills
-            .descriptors
+        self.config
+            .skills
             .iter()
-            .filter(|descriptor| descriptor.kind == kind)
-            .map(|descriptor| format!("{} · {}", descriptor.name, descriptor.id))
+            .filter(|definition| definition.kind == kind)
+            .map(|definition| format!("{} · {}", definition.name, definition.id))
             .collect()
     }
 
@@ -270,6 +196,12 @@ impl RuntimeFoundation {
             .iter()
             .map(|descriptor| format!("{} · {}", descriptor.name, descriptor.description))
             .collect()
+    }
+
+    /// Returns the shared native tool catalog used by the current runtime foundation.
+    /// 返回当前运行时基础架构使用的共享原生工具目录。
+    pub fn native_tool_catalog(&self) -> &NativeToolCatalog {
+        &self.native_tools
     }
 
     /// Returns lightweight MCP server rows for UI placeholder surfaces.
@@ -313,7 +245,10 @@ impl RuntimeFoundation {
     /// Returns whether one agent identifier has already been built into the runtime foundation.
     /// 返回某个代理标识当前是否已经被构建进运行时基础架构。
     pub fn has_built_agent(&self, agent_id: &str) -> bool {
-        self.agents.contains_key(agent_id)
+        self.config
+            .agents
+            .iter()
+            .any(|definition| definition.id == agent_id)
     }
 
     /// Returns human-readable skill names bound to one agent identifier.
@@ -383,11 +318,8 @@ impl RuntimeFoundation {
             return Vec::new();
         };
 
-        if definition.kind == RuntimeAgentKind::Coordinator {
-            Vec::new()
-        } else {
-            self.luaskills_tools.clone()
-        }
+        let _ = definition;
+        self.luaskills_tools.clone()
     }
 
     /// Resolves the MCP runtime tools currently visible to one agent.
@@ -404,9 +336,6 @@ impl RuntimeFoundation {
         else {
             return Vec::new();
         };
-        if definition.kind == RuntimeAgentKind::Coordinator {
-            return Vec::new();
-        }
 
         let policy = definition
             .tool_policy
@@ -470,89 +399,6 @@ impl RuntimeFoundation {
             .filter(|row| row.starts_with("在线") || row.starts_with("连接中"))
             .collect()
     }
-}
-
-/// Builds one worker or specialist agent from its runtime definition.
-/// 根据运行时定义构建单个工作代理或专家代理。
-fn build_worker_agent(
-    definition: &RuntimeAgentDefinition,
-    tool_policies: &BTreeMap<String, RuntimeToolPolicyDefinition>,
-    native_tools: &NativeToolCatalog,
-    skills: &BuiltinSkillCatalog,
-    warnings: &mut Vec<String>,
-) -> Option<Arc<dyn Agent>> {
-    let available_native_tool_ids = native_tools
-        .descriptors
-        .iter()
-        .map(|descriptor| descriptor.id.clone())
-        .collect::<BTreeSet<_>>();
-    let allowed_tools = resolve_agent_native_tools(
-        definition,
-        tool_policies,
-        &available_native_tool_ids,
-        warnings,
-    );
-
-    let builder = GenericAgent::builder(definition.name.clone())
-        .with_skills(definition.skill_ids.iter().cloned())
-        .with_tools(allowed_tools.iter().cloned());
-
-    match builder.build(&skills.registry, &native_tools.registry) {
-        Ok(agent) => Some(Arc::new(agent)),
-        Err(error) => {
-            warnings.push(format!(
-                "代理 `{}` 构建失败，已跳过：{}",
-                definition.name, error
-            ));
-            None
-        }
-    }
-}
-
-/// Builds one coordinator agent from its runtime definition and worker registry.
-/// 根据运行时定义与工作代理注册表构建单个协调代理。
-fn build_coordinator_agent(
-    definition: &RuntimeAgentDefinition,
-    worker_agents: &BTreeMap<String, Arc<dyn Agent>>,
-    warnings: &mut Vec<String>,
-) -> Option<Arc<dyn Agent>> {
-    let mut builder = CoordinatorAgent::builder(definition.name.clone());
-    let mut registered_specialists = BTreeSet::new();
-
-    for route in &definition.routes {
-        let Some(target_agent) = worker_agents.get(&route.delegate) else {
-            warnings.push(format!(
-                "协调代理 `{}` 引用了不存在的路由目标 `{}`。",
-                definition.name, route.delegate
-            ));
-            continue;
-        };
-
-        if registered_specialists.insert(route.delegate.clone()) {
-            builder = builder.with_specialist(target_agent.clone());
-        }
-
-        builder = builder.route(RoutingRule::new(
-            target_agent.name().to_string(),
-            [route.signal.clone()],
-        ));
-    }
-
-    if let Some(fallback) = &definition.fallback_delegate {
-        if let Some(target_agent) = worker_agents.get(fallback) {
-            if registered_specialists.insert(fallback.clone()) {
-                builder = builder.with_specialist(target_agent.clone());
-            }
-            builder = builder.fallback(target_agent.name().to_string());
-        } else {
-            warnings.push(format!(
-                "协调代理 `{}` 的回退目标 `{}` 不存在。",
-                definition.name, fallback
-            ));
-        }
-    }
-
-    Some(Arc::new(builder.build()))
 }
 
 /// Resolves the native tool whitelist for one agent definition.

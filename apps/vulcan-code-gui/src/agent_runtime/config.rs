@@ -136,6 +136,7 @@ impl From<PersistedSkillKind> for RuntimeSkillKind {
 /// Runtime-facing routing rule used by coordinator agents.
 /// 协调代理使用的运行时路由规则。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RuntimeAgentRoute {
     /// Signal name that activates the route.
     /// 激活该路由的信号名称。
@@ -173,6 +174,7 @@ pub struct RuntimeToolPolicyDefinition {
 /// Runtime-facing skill definition.
 /// 面向运行时的技能定义。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RuntimeSkillDefinition {
     /// Stable skill identifier.
     /// 稳定技能标识。
@@ -335,8 +337,9 @@ impl AgentRuntimeConfig {
                 .state
                 .selected_agent_id
                 .clone()
+                .filter(|agent_id| *agent_id != WORKSPACE_COORDINATOR_AGENT_ID)
                 .filter(|agent_id| agents.iter().any(|definition| definition.id == *agent_id))
-                .unwrap_or_else(|| WORKSPACE_COORDINATOR_AGENT_ID.to_string()),
+                .unwrap_or_else(|| DEFAULT_WORKER_AGENT_ID.to_string()),
             agents,
             skills,
             tool_policies,
@@ -480,13 +483,8 @@ fn default_memory_skill() -> PersistedSkillEntry {
 fn default_safe_tool_policy() -> PersistedToolPolicyEntry {
     PersistedToolPolicyEntry {
         name: Some(String::from("默认安全策略")),
-        allow_all_native: false,
-        native_tools: vec![
-            String::from("workspace.describe"),
-            String::from("registry.list_agents"),
-            String::from("registry.list_skills"),
-            String::from("mcp.list_servers"),
-        ],
+        allow_all_native: true,
+        native_tools: Vec::new(),
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
     }

@@ -1,5 +1,5 @@
-//! Runtime foundation for rig-core, rig-compose, and rig-mcp integration.
-//! 面向 rig-core、rig-compose 与 rig-mcp 集成的运行时基础模块。
+//! Runtime foundation for rig-core, MCP runtime integration, and host-owned tool orchestration.
+//! 面向 rig-core、MCP 运行时集成与宿主自有工具编排的运行时基础模块。
 
 pub mod config;
 pub mod events;

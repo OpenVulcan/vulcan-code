@@ -1,33 +1,25 @@
-//! Streamable HTTP MCP transport, backed by the official [`rmcp`] SDK.
-//!
-//! This module exposes remote MCP servers that speak streamable HTTP as
-//! transport-agnostic [`McpTransport`] handles. The rmcp client owns the
-//! protocol handshake, session lifecycle, and SSE-driven response stream;
-//! we only bridge schema discovery and tool invocation into `rig-compose`.
+//! Stdio MCP client transport backed by the official `rmcp` SDK.
+//! 基于官方 `rmcp` SDK 的 stdio MCP 客户端传输。
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use http::{HeaderName, HeaderValue};
-use serde_json::Value;
-use tokio::sync::broadcast;
-
 use rmcp::ClientHandler;
 use rmcp::model::{CallToolRequestParams, Tool as RmcpTool};
 use rmcp::service::{NotificationContext, Peer, RoleClient, RunningService, ServiceExt};
-use rmcp::transport::{
-    StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
-};
+use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
+use serde_json::Value;
+use tokio::process::Command;
+use tokio::sync::broadcast;
 
-use crate::transport::{McpTransport, McpTransportEvent};
-use rig_compose::registry::KernelError;
-use rig_compose::tool::ToolSchema;
+use crate::error::McpRuntimeError;
+use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
-/// Production streamable-HTTP MCP client.
-/// 生产级 streamable-HTTP MCP 客户端。
-pub struct HttpTransport {
-    /// Stable endpoint label surfaced to the registry layer.
-    /// 暴露给注册表层的稳定端点标签。
+/// Production stdio MCP client transport.
+/// 生产级 stdio MCP 客户端传输。
+pub struct StdioTransport {
+    /// Stable endpoint label surfaced to the host runtime.
+    /// 暴露给宿主运行时的稳定端点标签。
     endpoint: String,
     /// Cloneable rmcp client peer used for schema discovery and calls.
     /// 用于 schema 发现与调用的可克隆 rmcp 客户端 peer。
@@ -40,39 +32,28 @@ pub struct HttpTransport {
     event_sender: broadcast::Sender<McpTransportEvent>,
 }
 
-impl HttpTransport {
-    /// Connects to one streamable-HTTP MCP endpoint.
-    /// 连接到一个 streamable-HTTP MCP 端点。
-    pub async fn connect(
+impl StdioTransport {
+    /// Spawn one child program and connect over stdio.
+    /// 启动一个子进程程序并通过 stdio 建立连接。
+    pub async fn spawn(
         endpoint: impl Into<String>,
-        uri: impl Into<String>,
-        bearer_token: Option<String>,
-        custom_headers: HashMap<String, String>,
-    ) -> Result<Self, KernelError> {
+        program: impl AsRef<std::ffi::OsStr>,
+        args: &[&str],
+    ) -> Result<Self, McpRuntimeError> {
         let endpoint = endpoint.into();
-        let uri = uri.into();
-        let mut config = StreamableHttpClientTransportConfig::with_uri(uri.clone());
-        let parsed_headers = parse_http_headers(custom_headers)?;
-
-        if let Some(token) = bearer_token
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            config = config.auth_header(token.to_string());
-        }
-
-        if !parsed_headers.is_empty() {
-            config = config.custom_headers(parsed_headers);
-        }
-
-        let transport = StreamableHttpClientTransport::from_config(config);
+        let program = program.as_ref().to_owned();
+        let argv: Vec<String> = args.iter().map(|value| (*value).to_string()).collect();
+        let cmd = Command::new(&program).configure(|command| {
+            command.args(&argv);
+        });
+        let transport = TokioChildProcess::new(cmd)
+            .map_err(|error| McpRuntimeError::transport(format!("mcp.spawn: {error}")))?;
         let (event_sender, _) = broadcast::channel(32);
         let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
         let service = handler
             .serve(transport)
             .await
-            .map_err(|error| KernelError::ToolFailed(format!("mcp.connect(http): {error}")))?;
+            .map_err(|error| McpRuntimeError::transport(format!("mcp.connect: {error}")))?;
         let peer = service.peer().clone();
         spawn_transport_disconnect_watch(endpoint.clone(), peer.clone(), event_sender.clone());
 
@@ -86,7 +67,7 @@ impl HttpTransport {
 }
 
 #[async_trait]
-impl McpTransport for HttpTransport {
+impl McpTransport for StdioTransport {
     fn endpoint(&self) -> &str {
         &self.endpoint
     }
@@ -95,21 +76,21 @@ impl McpTransport for HttpTransport {
         self.event_sender.subscribe()
     }
 
-    async fn list_tools(&self) -> Result<Vec<ToolSchema>, KernelError> {
+    async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
         let tools = self
             .peer
             .list_all_tools()
             .await
-            .map_err(|error| KernelError::ToolFailed(format!("tools/list(http): {error}")))?;
+            .map_err(|error| McpRuntimeError::transport(format!("tools/list: {error}")))?;
         Ok(tools.into_iter().map(rmcp_tool_to_schema).collect())
     }
 
-    async fn call_tool(&self, name: &str, args: Value) -> Result<Value, KernelError> {
+    async fn call_tool(&self, name: &str, args: Value) -> Result<Value, McpRuntimeError> {
         let arguments = match args {
             Value::Object(map) => Some(map),
             Value::Null => None,
             other => {
-                return Err(KernelError::InvalidArgument(format!(
+                return Err(McpRuntimeError::invalid_argument(format!(
                     "tools/call requires an object or null arguments, got {other}"
                 )));
             }
@@ -125,7 +106,7 @@ impl McpTransport for HttpTransport {
             .peer
             .call_tool(params)
             .await
-            .map_err(|error| KernelError::ToolFailed(format!("tools/call(http): {error}")))?;
+            .map_err(|error| McpRuntimeError::transport(format!("tools/call: {error}")))?;
 
         if result.is_error.unwrap_or(false) {
             let message = result
@@ -133,7 +114,7 @@ impl McpTransport for HttpTransport {
                 .iter()
                 .find_map(|content| content.as_text().map(|text| text.text.clone()))
                 .unwrap_or_else(|| "tool returned error".to_string());
-            return Err(KernelError::ToolFailed(message));
+            return Err(McpRuntimeError::transport(message));
         }
 
         if let Some(value) = result.structured_content {
@@ -148,7 +129,6 @@ impl McpTransport for HttpTransport {
             if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
                 return Ok(parsed);
             }
-
             return Ok(Value::String(text));
         }
 
@@ -192,7 +172,7 @@ fn spawn_transport_disconnect_watch(
         loop {
             if peer.is_transport_closed() {
                 let _ = event_sender.send(McpTransportEvent::Disconnected {
-                    reason: format!("MCP HTTP 传输 `{endpoint}` 已关闭。"),
+                    reason: format!("MCP stdio 传输 `{endpoint}` 已关闭。"),
                 });
                 break;
             }
@@ -202,36 +182,10 @@ fn spawn_transport_disconnect_watch(
     });
 }
 
-/// Converts custom string headers into typed HTTP headers.
-/// 将自定义字符串请求头转换为类型化 HTTP 请求头。
-fn parse_http_headers(
-    custom_headers: HashMap<String, String>,
-) -> Result<HashMap<HeaderName, HeaderValue>, KernelError> {
-    let mut parsed = HashMap::with_capacity(custom_headers.len());
-
-    for (raw_name, raw_value) in custom_headers {
-        let header_name = HeaderName::from_bytes(raw_name.trim().as_bytes()).map_err(|error| {
-            KernelError::InvalidArgument(format!(
-                "invalid MCP HTTP header name `{}`: {}",
-                raw_name, error
-            ))
-        })?;
-        let header_value = HeaderValue::from_str(raw_value.trim()).map_err(|error| {
-            KernelError::InvalidArgument(format!(
-                "invalid MCP HTTP header value for `{}`: {}",
-                raw_name, error
-            ))
-        })?;
-        parsed.insert(header_name, header_value);
-    }
-
-    Ok(parsed)
-}
-
-/// Converts one rmcp tool schema into the local kernel schema.
-/// 将单个 rmcp 工具 schema 转换为本地内核 schema。
-fn rmcp_tool_to_schema(tool: RmcpTool) -> ToolSchema {
-    ToolSchema {
+/// Converts one rmcp tool schema into the host-owned MCP tool schema.
+/// 将单个 rmcp 工具 schema 转换为宿主自有 MCP 工具 schema。
+fn rmcp_tool_to_schema(tool: RmcpTool) -> McpToolSchema {
+    McpToolSchema {
         name: tool.name.to_string(),
         description: tool
             .description

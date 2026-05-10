@@ -171,6 +171,61 @@ pub fn save_agent_profile_state(state: &AgentProfileState) -> Result<(), String>
     fs::write(&path, content).map_err(|error| format!("写入 Agent 状态配置失败：{}。", error))
 }
 
+/// Canonicalizes one user-provided agent identifier into the stable slug format used on disk.
+/// 将用户提供的 Agent 标识规范化为磁盘使用的稳定 slug 格式。
+pub fn canonicalize_agent_identifier(raw: &str) -> String {
+    slugify_identifier(raw)
+}
+
+/// Saves one user-authored agent profile into the user directory, optionally replacing one previous identifier.
+/// 将单条用户自定义 Agent 配置保存到用户目录，并可选替换某个旧标识。
+pub fn save_user_agent_profile(
+    profile: &UserAgentProfile,
+    previous_id: Option<&str>,
+) -> Result<(), String> {
+    if profile.id.trim().is_empty() {
+        return Err(String::from("Agent 标识不能为空。"));
+    }
+
+    fs::create_dir_all(agent_profiles_directory())
+        .map_err(|error| format!("创建用户 Agent 目录失败：{}。", error))?;
+
+    if let Some(previous_id) = previous_id
+        .map(str::trim)
+        .filter(|previous_id| !previous_id.is_empty() && *previous_id != profile.id)
+    {
+        let previous_path = user_agent_profile_file_path(previous_id);
+        if previous_path.exists() {
+            fs::remove_file(&previous_path).map_err(|error| {
+                format!(
+                    "移除旧 Agent 文件 `{}` 失败：{}。",
+                    previous_path.display(),
+                    error
+                )
+            })?;
+        }
+    }
+
+    save_user_agent_profile_markdown(profile)
+}
+
+/// Deletes one user-authored agent profile markdown file from the user directory.
+/// 从用户目录中删除单条用户自定义 Agent Markdown 文件。
+pub fn delete_user_agent_profile(agent_id: &str) -> Result<(), String> {
+    let normalized_id = canonicalize_agent_identifier(agent_id);
+    if normalized_id.is_empty() {
+        return Err(String::from("Agent 标识不能为空。"));
+    }
+
+    let path = user_agent_profile_file_path(&normalized_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(&path)
+        .map_err(|error| format!("删除 Agent 文件 `{}` 失败：{}。", path.display(), error))
+}
+
 /// Migrates legacy provider-bound agent definitions into the user-agent directory when needed.
 /// 在需要时将旧版绑定在 Provider 配置中的 Agent 定义迁移到用户 Agent 目录。
 pub fn migrate_legacy_provider_agents(
@@ -364,14 +419,7 @@ fn user_agent_profile_from_legacy_entry(
 /// Saves one user-authored agent profile into the user markdown directory.
 /// 将单条用户自定义 Agent 配置保存到用户 Markdown 目录。
 fn save_user_agent_profile_markdown(profile: &UserAgentProfile) -> Result<(), String> {
-    let directory = agent_profiles_directory();
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("创建用户 Agent 目录失败：{}。", error))?;
-
-    let path = directory.join(format!("{}.md", profile.id));
-    if path.exists() {
-        return Ok(());
-    }
+    let path = user_agent_profile_file_path(&profile.id);
 
     let frontmatter = UserAgentFrontmatter {
         id: Some(profile.id.clone()),
@@ -391,6 +439,12 @@ fn save_user_agent_profile_markdown(profile: &UserAgentProfile) -> Result<(), St
 
     fs::write(&path, content)
         .map_err(|error| format!("写入用户 Agent 文件 `{}` 失败：{}。", path.display(), error))
+}
+
+/// Returns the markdown file path used by one user-authored agent identifier.
+/// 返回某个用户自定义 Agent 标识对应的 Markdown 文件路径。
+fn user_agent_profile_file_path(agent_id: &str) -> PathBuf {
+    agent_profiles_directory().join(format!("{agent_id}.md"))
 }
 
 /// Returns whether one legacy agent identifier belongs to the built-in runtime seed set.

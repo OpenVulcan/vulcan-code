@@ -3,9 +3,8 @@
 
 use crate::mcp::config::{McpServerConfig, McpTransportKind, runtime_mcp_server_configs};
 use crate::provider_config::ProviderConfigurationFile;
-use rig_compose::tool::Tool;
-use rig_mcp::{HttpTransport, McpTool, McpTransport, SseTransport, StdioTransport};
 use std::sync::Arc;
+use vulcan_mcp_runtime::{HttpTransport, McpTransport, SseTransport, StdioTransport};
 
 /// Runtime registry of configured MCP servers.
 /// 已配置 MCP 服务器的运行时注册表。
@@ -132,18 +131,5 @@ impl McpServerRegistry {
                 Ok(Arc::new(transport))
             }
         }
-    }
-
-    /// Discovers remote MCP tools for one enabled server.
-    /// 为某个已启用服务器发现远端 MCP 工具集合。
-    #[allow(dead_code)]
-    pub async fn discover_tools_for_server(
-        &self,
-        server_id: &str,
-    ) -> Result<Vec<Arc<dyn Tool>>, String> {
-        let transport = self.spawn_transport(server_id).await?;
-        McpTool::from_transport(transport)
-            .await
-            .map_err(|error| format!("发现 MCP 工具失败：{}。", error))
     }
 }

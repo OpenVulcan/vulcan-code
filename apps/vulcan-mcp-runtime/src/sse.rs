@@ -1,9 +1,5 @@
-//! Legacy SSE MCP transport for servers that still expose the older
-//! server-sent-events message bridge.
-//!
-//! This transport is intentionally separate from streamable HTTP. It opens one
-//! long-lived SSE stream, consumes the legacy `endpoint` control event, and
-//! sends JSON-RPC requests to the advertised message endpoint.
+//! Legacy SSE MCP client transport for older MCP servers.
+//! 面向旧式 MCP 服务器的 legacy SSE MCP 客户端传输。
 
 use std::{
     collections::HashMap,
@@ -20,13 +16,6 @@ use reqwest::{
     Client, Response, Url,
     header::{ACCEPT, HeaderMap, HeaderName, HeaderValue},
 };
-use sse_stream::{Sse, SseStream};
-use tokio::{
-    sync::{Mutex, broadcast, oneshot, watch},
-    time::timeout,
-};
-use tokio_util::sync::CancellationToken;
-
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities,
     ClientJsonRpcMessage, ClientNotification, ClientRequest, Implementation, InitializeRequest,
@@ -34,21 +23,26 @@ use rmcp::model::{
     ListToolsResult, NumberOrString, RequestId, ServerJsonRpcMessage, ServerNotification,
     ServerResult,
 };
+use sse_stream::{Sse, SseStream};
+use tokio::{
+    sync::{Mutex, broadcast, oneshot, watch},
+    time::timeout,
+};
+use tokio_util::sync::CancellationToken;
 
-use crate::transport::{McpTransport, McpTransportEvent};
-use rig_compose::registry::KernelError;
-use rig_compose::tool::ToolSchema;
+use crate::error::McpRuntimeError;
+use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Background response channel sender keyed by JSON-RPC request id.
 /// 按 JSON-RPC 请求标识索引的后台响应通道发送端。
 type PendingResponseMap =
-    Arc<Mutex<HashMap<String, oneshot::Sender<Result<ServerJsonRpcMessage, KernelError>>>>>;
+    Arc<Mutex<HashMap<String, oneshot::Sender<Result<ServerJsonRpcMessage, McpRuntimeError>>>>>;
 
 /// Legacy SSE MCP client transport.
 /// 旧式 SSE MCP 客户端传输。
 pub struct SseTransport {
-    /// Stable endpoint label surfaced to the registry layer.
-    /// 暴露给注册表层的稳定端点标签。
+    /// Stable endpoint label surfaced to the host runtime.
+    /// 暴露给宿主运行时的稳定端点标签。
     endpoint: String,
     /// Shared HTTP client used by the stream and message posts.
     /// 被事件流和消息 POST 复用的共享 HTTP 客户端。
@@ -77,20 +71,20 @@ pub struct SseTransport {
 }
 
 impl SseTransport {
-    /// Connects to one legacy SSE MCP endpoint and performs the initialize handshake.
+    /// Connect to one legacy SSE MCP endpoint and perform the initialize handshake.
     /// 连接到一个旧式 SSE MCP 端点并完成 initialize 握手。
     pub async fn connect(
         endpoint: impl Into<String>,
         sse_url: impl Into<String>,
         bearer_token: Option<String>,
         custom_headers: HashMap<String, String>,
-    ) -> Result<Self, KernelError> {
+    ) -> Result<Self, McpRuntimeError> {
         let sse_url = Url::parse(&sse_url.into()).map_err(|error| {
-            KernelError::InvalidArgument(format!("invalid legacy SSE MCP url: {error}"))
+            McpRuntimeError::invalid_argument(format!("invalid legacy SSE MCP url: {error}"))
         })?;
         let http_client = Client::builder()
             .build()
-            .map_err(|error| KernelError::ToolFailed(format!("build SSE client: {error}")))?;
+            .map_err(|error| McpRuntimeError::transport(format!("build SSE client: {error}")))?;
         let custom_headers = parse_http_headers(custom_headers)?;
         let pending_responses = Arc::new(Mutex::new(HashMap::new()));
         let (message_endpoint_tx, message_endpoint_rx) = watch::channel(None);
@@ -124,9 +118,9 @@ impl SseTransport {
         Ok(transport)
     }
 
-    /// Performs the MCP initialize handshake on the legacy message endpoint.
+    /// Perform the MCP initialize handshake on the legacy message endpoint.
     /// 在旧式消息端点上执行 MCP initialize 握手。
-    async fn initialize(&self) -> Result<(), KernelError> {
+    async fn initialize(&self) -> Result<(), McpRuntimeError> {
         let request_id = self.next_request_id();
         let initialize_request = InitializeRequest::new(InitializeRequestParams::new(
             ClientCapabilities::default(),
@@ -143,7 +137,7 @@ impl SseTransport {
             .await?;
 
         let ServerResult::InitializeResult(_) = extract_server_result(response)? else {
-            return Err(KernelError::ToolFailed(
+            return Err(McpRuntimeError::transport(
                 "legacy SSE initialize did not return initialize result".to_string(),
             ));
         };
@@ -157,9 +151,12 @@ impl SseTransport {
         self.send_notification(initialized_notification).await
     }
 
-    /// Sends one JSON-RPC notification without waiting for a response.
+    /// Send one JSON-RPC notification without waiting for a response.
     /// 发送一条无需等待响应的 JSON-RPC 通知。
-    async fn send_notification(&self, message: ClientJsonRpcMessage) -> Result<(), KernelError> {
+    async fn send_notification(
+        &self,
+        message: ClientJsonRpcMessage,
+    ) -> Result<(), McpRuntimeError> {
         let message_endpoint = self.resolve_message_endpoint().await?;
         let response = post_client_message(
             &self.http_client,
@@ -172,13 +169,13 @@ impl SseTransport {
         consume_post_response(response).await.map(|_| ())
     }
 
-    /// Sends one JSON-RPC request and waits for the matching response.
+    /// Send one JSON-RPC request and wait for the matching response.
     /// 发送一条 JSON-RPC 请求并等待对应响应。
     async fn send_request_and_wait(
         &self,
         request_id: RequestId,
         message: ClientJsonRpcMessage,
-    ) -> Result<ServerJsonRpcMessage, KernelError> {
+    ) -> Result<ServerJsonRpcMessage, McpRuntimeError> {
         let request_key = request_id_key(&request_id);
         let (sender, receiver) = oneshot::channel();
         self.pending_responses
@@ -205,13 +202,13 @@ impl SseTransport {
                 Ok(None) => timeout(Duration::from_secs(30), receiver)
                     .await
                     .map_err(|_| {
-                        KernelError::ToolFailed(format!(
+                        McpRuntimeError::transport(format!(
                             "legacy SSE request `{}` timed out while waiting for response",
                             request_key
                         ))
                     })?
                     .map_err(|_| {
-                        KernelError::ToolFailed(format!(
+                        McpRuntimeError::transport(format!(
                             "legacy SSE request `{}` lost its response channel",
                             request_key
                         ))
@@ -230,9 +227,9 @@ impl SseTransport {
         Ok(response)
     }
 
-    /// Resolves the current legacy message endpoint advertised by the SSE stream.
+    /// Resolve the current legacy message endpoint advertised by the SSE stream.
     /// 解析当前由 SSE 事件流公布的旧式消息端点。
-    async fn resolve_message_endpoint(&self) -> Result<Url, KernelError> {
+    async fn resolve_message_endpoint(&self) -> Result<Url, McpRuntimeError> {
         if let Some(url) = self.message_endpoint_rx.borrow().clone() {
             return Ok(url);
         }
@@ -241,25 +238,25 @@ impl SseTransport {
         timeout(Duration::from_secs(10), receiver.changed())
             .await
             .map_err(|_| {
-                KernelError::ToolFailed(
+                McpRuntimeError::transport(
                     "legacy SSE endpoint did not advertise a message endpoint within 10 seconds"
                         .to_string(),
                 )
             })?
             .map_err(|error| {
-                KernelError::ToolFailed(format!(
+                McpRuntimeError::transport(format!(
                     "legacy SSE message endpoint watch channel closed: {error}"
                 ))
             })?;
 
         receiver.borrow().clone().ok_or_else(|| {
-            KernelError::ToolFailed(
+            McpRuntimeError::transport(
                 "legacy SSE stream did not provide a valid message endpoint".to_string(),
             )
         })
     }
 
-    /// Allocates the next monotonically increasing JSON-RPC request id.
+    /// Allocate the next monotonically increasing JSON-RPC request id.
     /// 分配下一个单调递增的 JSON-RPC 请求标识。
     fn next_request_id(&self) -> RequestId {
         NumberOrString::Number(self.next_request_id.fetch_add(1, Ordering::Relaxed) as i64)
@@ -267,7 +264,7 @@ impl SseTransport {
 }
 
 impl Drop for SseTransport {
-    /// Cancels the background SSE listener when the transport is dropped.
+    /// Cancel the background SSE listener when the transport is dropped.
     /// 在传输对象析构时取消后台 SSE 监听器。
     fn drop(&mut self) {
         self.shutdown_token.cancel();
@@ -284,7 +281,7 @@ impl McpTransport for SseTransport {
         self.event_sender.subscribe()
     }
 
-    async fn list_tools(&self) -> Result<Vec<ToolSchema>, KernelError> {
+    async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
         let request_id = self.next_request_id();
         let request = ListToolsRequest {
             method: Default::default(),
@@ -300,7 +297,7 @@ impl McpTransport for SseTransport {
         let ServerResult::ListToolsResult(ListToolsResult { tools, .. }) =
             extract_server_result(response)?
         else {
-            return Err(KernelError::ToolFailed(
+            return Err(McpRuntimeError::transport(
                 "legacy SSE tools/list did not return a listTools result".to_string(),
             ));
         };
@@ -311,12 +308,12 @@ impl McpTransport for SseTransport {
         &self,
         name: &str,
         args: serde_json::Value,
-    ) -> Result<serde_json::Value, KernelError> {
+    ) -> Result<serde_json::Value, McpRuntimeError> {
         let arguments = match args {
             serde_json::Value::Object(map) => Some(map),
             serde_json::Value::Null => None,
             other => {
-                return Err(KernelError::InvalidArgument(format!(
+                return Err(McpRuntimeError::invalid_argument(format!(
                     "tools/call requires an object or null arguments, got {other}"
                 )));
             }
@@ -332,7 +329,7 @@ impl McpTransport for SseTransport {
             )
             .await?;
         let ServerResult::CallToolResult(result) = extract_server_result(response)? else {
-            return Err(KernelError::ToolFailed(
+            return Err(McpRuntimeError::transport(
                 "legacy SSE tools/call did not return a callTool result".to_string(),
             ));
         };
@@ -340,7 +337,7 @@ impl McpTransport for SseTransport {
     }
 }
 
-/// Spawns the background SSE listener loop.
+/// Spawn the background SSE listener loop.
 /// 启动后台 SSE 监听循环。
 fn spawn_sse_listener(
     http_client: Client,
@@ -415,14 +412,14 @@ fn spawn_sse_listener(
     });
 }
 
-/// Opens one legacy SSE stream with the required request headers.
+/// Open one legacy SSE stream with the required request headers.
 /// 使用所需请求头打开一条旧式 SSE 事件流。
 async fn open_sse_stream(
     http_client: &Client,
     sse_url: &Url,
     bearer_token: &Option<String>,
     custom_headers: &HeaderMap,
-) -> Result<Response, KernelError> {
+) -> Result<Response, McpRuntimeError> {
     let mut request = http_client
         .get(sse_url.clone())
         .header(ACCEPT, "text/event-stream");
@@ -442,14 +439,14 @@ async fn open_sse_stream(
     request
         .send()
         .await
-        .map_err(|error| KernelError::ToolFailed(format!("open legacy SSE stream: {error}")))?
+        .map_err(|error| McpRuntimeError::transport(format!("open legacy SSE stream: {error}")))?
         .error_for_status()
         .map_err(|error| {
-            KernelError::ToolFailed(format!("legacy SSE stream returned error: {error}"))
+            McpRuntimeError::transport(format!("legacy SSE stream returned error: {error}"))
         })
 }
 
-/// Handles one SSE event, including legacy `endpoint` control frames.
+/// Handle one SSE event, including legacy `endpoint` control frames.
 /// 处理单个 SSE 事件，包括旧式 `endpoint` 控制帧。
 async fn handle_sse_event(
     sse_url: &Url,
@@ -490,8 +487,8 @@ async fn handle_sse_event(
     deliver_server_message(message, pending_responses).await;
 }
 
-/// Parses the legacy message endpoint from one control-event payload.
-/// 从一条控制事件载荷中解析旧式消息端点。
+/// Parse the legacy message endpoint from one control-event payload.
+/// 从单条控制事件载荷中解析旧式消息端点。
 fn parse_legacy_message_endpoint(base_url: &Url, payload: Option<&str>) -> Option<Url> {
     let raw = payload?.trim();
     if raw.is_empty() {
@@ -509,7 +506,7 @@ fn parse_legacy_message_endpoint(base_url: &Url, payload: Option<&str>) -> Optio
         .or_else(|| base_url.join(normalized).ok())
 }
 
-/// Sends one client message through the legacy message endpoint.
+/// Send one client message through the legacy message endpoint.
 /// 通过旧式消息端点发送一条客户端消息。
 async fn post_client_message(
     http_client: &Client,
@@ -517,7 +514,7 @@ async fn post_client_message(
     bearer_token: &Option<String>,
     custom_headers: &HeaderMap,
     message: &ClientJsonRpcMessage,
-) -> Result<Response, KernelError> {
+) -> Result<Response, McpRuntimeError> {
     let mut request = http_client.post(message_endpoint.clone());
 
     if let Some(token) = bearer_token
@@ -532,21 +529,19 @@ async fn post_client_message(
         request = request.header(name, value);
     }
 
-    request
-        .json(message)
-        .send()
-        .await
-        .map_err(|error| KernelError::ToolFailed(format!("post legacy SSE MCP message: {error}")))
+    request.json(message).send().await.map_err(|error| {
+        McpRuntimeError::transport(format!("post legacy SSE MCP message: {error}"))
+    })
 }
 
-/// Consumes an HTTP POST response and extracts an immediate JSON-RPC result when present.
+/// Consume an HTTP POST response and extract an immediate JSON-RPC result when present.
 /// 消费 HTTP POST 响应，并在存在即时 JSON-RPC 结果时将其提取出来。
 async fn consume_post_response(
     response: Response,
-) -> Result<Option<ServerJsonRpcMessage>, KernelError> {
-    let response = response
-        .error_for_status()
-        .map_err(|error| KernelError::ToolFailed(format!("legacy SSE MCP post failed: {error}")))?;
+) -> Result<Option<ServerJsonRpcMessage>, McpRuntimeError> {
+    let response = response.error_for_status().map_err(|error| {
+        McpRuntimeError::transport(format!("legacy SSE MCP post failed: {error}"))
+    })?;
 
     let content_type = response
         .headers()
@@ -560,7 +555,7 @@ async fn consume_post_response(
             .json::<ServerJsonRpcMessage>()
             .await
             .map_err(|error| {
-                KernelError::ToolFailed(format!(
+                McpRuntimeError::transport(format!(
                     "decode legacy SSE MCP immediate JSON response: {error}"
                 ))
             })?;
@@ -570,8 +565,8 @@ async fn consume_post_response(
     Ok(None)
 }
 
-/// Delivers one parsed server JSON-RPC message to any waiting request future.
-/// 将一条已解析的服务端 JSON-RPC 消息投递给等待中的请求 future。
+/// Deliver one parsed server JSON-RPC message to any waiting request future.
+/// 将单条已解析的服务端 JSON-RPC 消息投递给等待中的请求 future。
 async fn deliver_server_message(
     message: ServerJsonRpcMessage,
     pending_responses: &PendingResponseMap,
@@ -587,30 +582,30 @@ async fn deliver_server_message(
     }
 }
 
-/// Extracts the typed server result or turns one JSON-RPC error into `KernelError`.
-/// 提取类型化服务端结果，或将 JSON-RPC 错误转换成 `KernelError`。
-fn extract_server_result(message: ServerJsonRpcMessage) -> Result<ServerResult, KernelError> {
+/// Extract the typed server result or turn one JSON-RPC error into runtime error.
+/// 提取类型化服务端结果，或将单条 JSON-RPC 错误转换成运行时错误。
+fn extract_server_result(message: ServerJsonRpcMessage) -> Result<ServerResult, McpRuntimeError> {
     match message {
         JsonRpcMessage::Response(response) => Ok(response.result),
         JsonRpcMessage::Error(error) => {
-            Err(KernelError::ToolFailed(error.error.message.to_string()))
+            Err(McpRuntimeError::transport(error.error.message.to_string()))
         }
-        other => Err(KernelError::ToolFailed(format!(
+        other => Err(McpRuntimeError::transport(format!(
             "unexpected legacy SSE MCP response message: {other:?}"
         ))),
     }
 }
 
-/// Converts one `CallToolResult` into the local kernel JSON value contract.
-/// 将单个 `CallToolResult` 转换为本地内核 JSON 值契约。
-fn call_tool_result_to_value(result: CallToolResult) -> Result<serde_json::Value, KernelError> {
+/// Convert one `CallToolResult` into the host-owned JSON value contract.
+/// 将单个 `CallToolResult` 转换为宿主自有 JSON 值契约。
+fn call_tool_result_to_value(result: CallToolResult) -> Result<serde_json::Value, McpRuntimeError> {
     if result.is_error.unwrap_or(false) {
         let message = result
             .content
             .iter()
             .find_map(|content| content.as_text().map(|text| text.text.clone()))
             .unwrap_or_else(|| "tool returned error".to_string());
-        return Err(KernelError::ToolFailed(message));
+        return Err(McpRuntimeError::transport(message));
     }
 
     if let Some(value) = result.structured_content {
@@ -631,10 +626,10 @@ fn call_tool_result_to_value(result: CallToolResult) -> Result<serde_json::Value
     Ok(serde_json::Value::Null)
 }
 
-/// Converts one rmcp tool schema into the local kernel schema.
-/// 将单个 rmcp 工具 schema 转换为本地内核 schema。
-fn rmcp_tool_to_schema(tool: rmcp::model::Tool) -> ToolSchema {
-    ToolSchema {
+/// Convert one rmcp tool schema into the host-owned MCP tool schema.
+/// 将单个 rmcp 工具 schema 转换为宿主自有 MCP 工具 schema。
+fn rmcp_tool_to_schema(tool: rmcp::model::Tool) -> McpToolSchema {
+    McpToolSchema {
         name: tool.name.to_string(),
         description: tool
             .description
@@ -648,7 +643,7 @@ fn rmcp_tool_to_schema(tool: rmcp::model::Tool) -> ToolSchema {
     }
 }
 
-/// Converts one request id into a stable map key.
+/// Convert one request id into a stable map key.
 /// 将单个请求标识转换为稳定映射键。
 fn request_id_key(request_id: &RequestId) -> String {
     match request_id {
@@ -657,20 +652,22 @@ fn request_id_key(request_id: &RequestId) -> String {
     }
 }
 
-/// Converts custom string headers into typed HTTP headers.
+/// Convert custom string headers into typed HTTP headers.
 /// 将自定义字符串请求头转换为类型化 HTTP 请求头。
-fn parse_http_headers(custom_headers: HashMap<String, String>) -> Result<HeaderMap, KernelError> {
+fn parse_http_headers(
+    custom_headers: HashMap<String, String>,
+) -> Result<HeaderMap, McpRuntimeError> {
     let mut parsed = HeaderMap::with_capacity(custom_headers.len());
 
     for (raw_name, raw_value) in custom_headers {
         let header_name = HeaderName::from_bytes(raw_name.trim().as_bytes()).map_err(|error| {
-            KernelError::InvalidArgument(format!(
+            McpRuntimeError::invalid_argument(format!(
                 "invalid MCP HTTP header name `{}`: {}",
                 raw_name, error
             ))
         })?;
         let header_value = HeaderValue::from_str(raw_value.trim()).map_err(|error| {
-            KernelError::InvalidArgument(format!(
+            McpRuntimeError::invalid_argument(format!(
                 "invalid MCP HTTP header value for `{}`: {}",
                 raw_name, error
             ))

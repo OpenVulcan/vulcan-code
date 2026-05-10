@@ -9,21 +9,18 @@ use std::fmt;
 /// AI 编码任务的执行模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
-    /// Generates a plan before modification.
-    /// 修改前先生成计划。
+    /// Executes implementation tasks directly with the full coding tool surface.
+    /// 使用完整编码工具面直接执行实现任务。
+    Build,
+    /// Generates one plan before implementation with a read-only and analysis-biased tool surface.
+    /// 在实现前生成方案，并使用只读与分析偏向工具面。
     Plan,
-    /// Applies patches directly to target files.
-    /// 直接向目标文件应用补丁。
-    Patch,
-    /// Reviews code and produces findings.
-    /// 以评审方式输出问题与结论。
-    Review,
 }
 
 impl ExecutionMode {
     /// All execution modes exposed in the radio group.
     /// 单选组件中暴露的全部执行模式。
-    pub const ALL: [Self; 3] = [Self::Plan, Self::Patch, Self::Review];
+    pub const ALL: [Self; 2] = [Self::Build, Self::Plan];
 }
 
 impl fmt::Display for ExecutionMode {
@@ -31,9 +28,8 @@ impl fmt::Display for ExecutionMode {
     /// 渲染面向用户的执行模式标签。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
-            Self::Plan => "Plan First",
-            Self::Patch => "Patch Directly",
-            Self::Review => "Review Mode",
+            Self::Build => "Build",
+            Self::Plan => "Plan",
         };
 
         formatter.write_str(label)

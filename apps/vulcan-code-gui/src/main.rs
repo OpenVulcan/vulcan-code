@@ -18,6 +18,7 @@ mod skills;
 mod style;
 mod theme;
 mod tooling;
+mod vulcan_tools_bridge;
 mod wheel_passthrough;
 mod workspace_store;
 

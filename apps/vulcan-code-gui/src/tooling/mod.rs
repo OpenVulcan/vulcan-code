@@ -3,4 +3,4 @@
 
 pub mod native;
 
-pub use native::{NativeToolCatalog, build_native_tool_catalog};
+pub use native::{NativeToolCatalog, NativeToolDescriptor, build_native_tool_catalog};

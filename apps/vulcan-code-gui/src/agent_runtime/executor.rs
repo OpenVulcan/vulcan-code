@@ -5,17 +5,17 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
-use crate::agent_runtime::rig_tools::{build_luaskills_rig_tools, build_mcp_rig_tools};
+use crate::agent_runtime::rig_tools::build_vulcan_rig_tools;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor};
+use crate::mcp::McpRuntimeHandle;
 use crate::provider_config::{
     PersistedProviderOptions, ProviderConfigurationFile, ProviderRuntimeKind,
 };
 use crate::runtime_assets;
+use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
-use luaskills::RuntimeEntryDescriptor;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::agent::{AgentBuilder, MultiTurnStreamItem};
 use rig::message::ReasoningContent;
@@ -26,6 +26,9 @@ use rig::tool::ToolDyn;
 use serde_json::Value;
 use std::pin::Pin;
 use std::{fs, path::Path};
+use vulcan_tools_manager::{
+    ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
+};
 
 /// Relative resource directory name that stores provider base system prompts.
 /// 存放 Provider 基础系统提示词的相对资源目录名称。
@@ -148,15 +151,9 @@ pub struct ExecutionPreparation {
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,
-    /// Resolved native tool identifiers attached to the active agent.
-    /// 附着在当前代理上的原生工具标识集合。
-    pub native_tools: Vec<String>,
-    /// Resolved LuaSkills runtime tool descriptors attached to the active agent.
-    /// 附着在当前代理上的 LuaSkills 运行时工具描述集合。
-    pub luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    /// Resolved MCP runtime tool descriptors attached to the active agent.
-    /// 附着在当前代理上的 MCP 运行时工具描述集合。
-    pub mcp_tools: Vec<McpRuntimeToolDescriptor>,
+    /// Unified AI-visible tool descriptors resolved for the active mode.
+    /// 为当前模式解析出的统一 AI 可见工具描述集合。
+    pub tool_descriptors: Vec<VulcanToolDescriptor>,
     /// Delegate agent identifiers exposed to the active agent.
     /// 暴露给当前代理的委派代理标识集合。
     pub delegate_agents: Vec<String>,
@@ -215,16 +212,38 @@ impl ExecutionPreparation {
             rows.push(format!("技能：{}", self.skill_names.join("、")));
         }
 
-        if !self.native_tools.is_empty() {
-            rows.push(format!("原生工具：{}", self.native_tools.join("、")));
+        if !self.tool_descriptors.is_empty() {
+            rows.push(format!(
+                "工具：{} 个已直接暴露",
+                self.tool_descriptors.len()
+            ));
         }
 
-        if !self.luaskills_tools.is_empty() {
-            rows.push(format!("LuaSkills 工具：{} 个", self.luaskills_tools.len()));
+        let native_tool_count = self
+            .tool_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::Native)
+            .count();
+        if native_tool_count > 0 {
+            rows.push(format!("原生工具：{} 个", native_tool_count));
         }
 
-        if !self.mcp_tools.is_empty() {
-            rows.push(format!("MCP 工具：{} 个", self.mcp_tools.len()));
+        let luaskills_tool_count = self
+            .tool_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
+            .count();
+        if luaskills_tool_count > 0 {
+            rows.push(format!("LuaSkills 工具：{} 个", luaskills_tool_count));
+        }
+
+        let mcp_tool_count = self
+            .tool_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::Mcp)
+            .count();
+        if mcp_tool_count > 0 {
+            rows.push(format!("MCP 工具：{} 个", mcp_tool_count));
         }
 
         if !self.delegate_agents.is_empty() {
@@ -327,6 +346,8 @@ impl ExecutionRunReport {
 /// 根据当前运行时基础架构与 GUI 请求构建一份通过校验的执行准备对象。
 pub fn prepare_execution(
     foundation: &RuntimeFoundation,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    mcp_runtime: Option<McpRuntimeHandle>,
     config: &ProviderConfigurationFile,
     request: &ExecutionPreparationRequest,
 ) -> Result<ExecutionPreparation, String> {
@@ -344,6 +365,15 @@ pub fn prepare_execution(
     let model_blueprint = resolve_active_provider_blueprint(config)?;
     let mut warnings = Vec::new();
     let workspace_path = request.workspace_path.trim().to_string();
+    let tools_manager = build_vulcan_tools_manager(
+        foundation.native_tool_catalog().clone(),
+        luaskills_runtime,
+        mcp_runtime,
+        foundation.resolved_native_tools_for_agent(&active_agent.id),
+        foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
+        foundation.resolved_mcp_tools_for_agent(&active_agent.id),
+    );
+    let resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
 
     if workspace_path.is_empty() {
         warnings.push(String::from(
@@ -370,9 +400,7 @@ pub fn prepare_execution(
         execution_mode: request.execution_mode.clone(),
         temperature: request.temperature,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
-        native_tools: foundation.resolved_native_tools_for_agent(&active_agent.id),
-        luaskills_tools: foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
-        mcp_tools: foundation.resolved_mcp_tools_for_agent(&active_agent.id),
+        tool_descriptors: resolved_tools.descriptors,
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
         warnings,
@@ -409,7 +437,13 @@ pub fn stream_runtime_run(
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
         );
-        let preparation = match prepare_execution(&foundation, &config, &request) {
+        let preparation = match prepare_execution(
+            &foundation,
+            luaskills_runtime.clone(),
+            mcp_runtime.clone(),
+            &config,
+            &request,
+        ) {
             Ok(preparation) => preparation,
             Err(error) => {
                 let report = ExecutionRunReport::failure(
@@ -428,6 +462,19 @@ pub fn stream_runtime_run(
         yield ExecutionStreamEvent::Prepared(preparation.clone());
 
         let active_agent = foundation.active_agent_definition().cloned();
+        let active_agent_tool_id = active_agent
+            .as_ref()
+            .map(|agent| agent.id.clone())
+            .unwrap_or_else(|| preparation.agent_id.clone());
+        let tools_manager = build_vulcan_tools_manager(
+            foundation.native_tool_catalog().clone(),
+            luaskills_runtime.clone(),
+            mcp_runtime.clone(),
+            foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
+            foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
+            foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
+        );
+        let resolved_tools = tools_manager.resolve_for_execution_mode(&preparation.execution_mode);
         let mut runtime_events = Vec::new();
         let mut warnings = preparation.warnings.clone();
         let mut thinking_raw_output = String::new();
@@ -472,8 +519,8 @@ pub fn stream_runtime_run(
             active_agent.as_ref(),
             &system_preamble,
             &effective_prompt,
-            luaskills_runtime.clone(),
-            mcp_runtime.clone(),
+            tools_manager,
+            resolved_tools.definitions,
         );
 
         let mut terminal_error = None;
@@ -676,29 +723,27 @@ fn build_runtime_system_preamble(
         sections.push(format!("绑定技能：{}", preparation.skill_names.join("、")));
     }
 
-    if !preparation.native_tools.is_empty() {
+    let native_tool_names =
+        tool_names_for_source(&preparation.tool_descriptors, VulcanToolSourceKind::Native);
+    if !native_tool_names.is_empty() {
         sections.push(format!(
-            "原生工具目录：{}。当前阶段仅对真实模型执行链进行接通，工具注册仍在后续阶段继续增强。",
-            preparation.native_tools.join("、")
+            "原生工具已真实注册到本次模型调用：{}。调用时以工具 schema 为准，不要在文本中猜测参数或返回格式。",
+            native_tool_names.join("、")
         ));
     }
 
     if let Some(luaskills_section) =
-        render_luaskills_tool_prompt_section(&preparation.luaskills_tools)
+        render_luaskills_tool_prompt_section(&preparation.tool_descriptors)
     {
         sections.push(luaskills_section);
     }
 
-    if !preparation.mcp_tools.is_empty() {
-        let tool_rows = preparation
-            .mcp_tools
-            .iter()
-            .map(|tool| format!("`{}`（服务器 `{}`）", tool.schema.name, tool.server_name))
-            .collect::<Vec<_>>()
-            .join("、");
+    let mcp_tool_names =
+        tool_names_for_source(&preparation.tool_descriptors, VulcanToolSourceKind::Mcp);
+    if !mcp_tool_names.is_empty() {
         sections.push(format!(
             "MCP 工具已真实注册到本次模型调用：{}。调用时以工具 schema 为准，不要在文本中猜测参数或返回格式。",
-            tool_rows
+            mcp_tool_names.join("、")
         ));
     }
 
@@ -709,10 +754,9 @@ fn build_runtime_system_preamble(
         ));
     }
 
-    if !discovery_rows.is_empty() {
-        sections.push(format!(
-            "当前已连接的 MCP 能力来源：{}。",
-            discovery_rows.join("；")
+    if !mcp_tool_names.is_empty() && !discovery_rows.is_empty() {
+        sections.push(String::from(
+            "当前已连接的 MCP 服务器所暴露工具也已直接注册；若服务器断开，其工具会自动撤销。",
         ));
     }
 
@@ -800,14 +844,18 @@ fn read_non_empty_system_prompt_file(path: &Path) -> Option<String> {
 
 /// Render the LuaSkills runtime tool table in the host prompt format expected by the active AI agent.
 /// 按当前 AI 代理预期的宿主提示词格式渲染 LuaSkills 运行时工具表。
-fn render_luaskills_tool_prompt_section(entries: &[RuntimeEntryDescriptor]) -> Option<String> {
-    if entries.is_empty() {
+fn render_luaskills_tool_prompt_section(descriptors: &[VulcanToolDescriptor]) -> Option<String> {
+    let luaskills_descriptors = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
+        .collect::<Vec<_>>();
+    if luaskills_descriptors.is_empty() {
         return None;
     }
 
-    let rows = entries
+    let rows = luaskills_descriptors
         .iter()
-        .map(|entry| format!("- `{}`：{}", entry.canonical_name, entry.description))
+        .map(|descriptor| format!("- `{}`：{}", descriptor.name, descriptor.description))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -815,6 +863,19 @@ fn render_luaskills_tool_prompt_section(entries: &[RuntimeEntryDescriptor]) -> O
         "LuaSkills 工具目录（以下工具已真实注册到本次模型调用，调用时以工具 schema 为准，参数与返回结构不要依赖文本猜测）：\n{}",
         rows
     ))
+}
+
+/// Collects all tool display names belonging to one unified tool source.
+/// 收集属于单个统一工具来源的全部工具展示名称。
+fn tool_names_for_source(
+    descriptors: &[VulcanToolDescriptor],
+    source: VulcanToolSourceKind,
+) -> Vec<String> {
+    descriptors
+        .iter()
+        .filter(|descriptor| descriptor.source == source)
+        .map(|descriptor| descriptor.name.clone())
+        .collect()
 }
 
 /// Builds the effective user prompt by prepending the reconstructed session context to the latest user input.
@@ -853,8 +914,8 @@ fn execute_provider_prompt_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
-    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
+    tools_manager: VulcanToolsManager,
+    resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
     let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
         Ok(options) => options,
@@ -887,17 +948,11 @@ fn execute_provider_prompt_stream(
         .filter(|object| !object.is_empty())
         .map(|object| Value::Object(object.clone()));
     let build_runtime_tools = || {
-        let mut rig_tools = build_luaskills_rig_tools(
-            luaskills_runtime.clone(),
+        build_vulcan_rig_tools(
+            tools_manager.clone(),
             preparation.session_id,
-            &preparation.luaskills_tools,
-        );
-        rig_tools.extend(build_mcp_rig_tools(
-            mcp_runtime.clone(),
-            preparation.session_id,
-            &preparation.mcp_tools,
-        ));
-        rig_tools
+            &resolved_tools,
+        )
     };
 
     match preparation.model_blueprint.runtime_kind {

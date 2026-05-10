@@ -4,12 +4,26 @@
 use crate::mcp::config::McpServerConfig;
 use crate::mcp::registry::McpServerRegistry;
 use crate::provider_config::ProviderConfigurationFile;
-use rig_compose::tool::ToolSchema;
-use rig_mcp::{McpTransport, McpTransportEvent};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
+use vulcan_mcp_runtime::{McpTransport, McpTransportEvent};
+
+/// Stable MCP tool schema exposed to the host runtime and execution planner.
+/// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
+#[derive(Debug, Clone)]
+pub struct McpRuntimeToolSchema {
+    /// Stable MCP tool name.
+    /// 稳定 MCP 工具名称。
+    pub name: String,
+    /// Human-readable MCP tool description.
+    /// 人类可读的 MCP 工具描述。
+    pub description: String,
+    /// JSON Schema describing the tool arguments.
+    /// 描述工具参数的 JSON Schema。
+    pub args_schema: serde_json::Value,
+}
 
 /// Stable MCP tool descriptor exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具描述。
@@ -18,12 +32,9 @@ pub struct McpRuntimeToolDescriptor {
     /// Stable server identifier that currently owns the tool.
     /// 当前拥有该工具的稳定服务器标识。
     pub server_id: String,
-    /// Human-readable server name shown in diagnostics.
-    /// 展示在诊断信息中的人类可读服务器名称。
-    pub server_name: String,
     /// Tool schema discovered from the remote MCP endpoint.
     /// 从远端 MCP 端点发现得到的工具 schema。
-    pub schema: ToolSchema,
+    pub schema: McpRuntimeToolSchema,
 }
 
 /// Runtime connectivity state of one configured MCP server.
@@ -339,8 +350,11 @@ async fn refresh_server_tools(
         .into_iter()
         .map(|schema| McpRuntimeToolDescriptor {
             server_id: server.id.clone(),
-            server_name: server.name.clone(),
-            schema,
+            schema: McpRuntimeToolSchema {
+                name: schema.name,
+                description: schema.description,
+                args_schema: schema.args_schema,
+            },
         })
         .collect::<Vec<_>>();
 

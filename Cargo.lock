@@ -823,20 +823,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1642,12 +1628,6 @@ dependencies = [
  "read-fonts 0.35.0",
  "smallvec",
 ]
-
-[[package]]
-name = "hashbrown"
-version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
@@ -4070,21 +4050,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rig-compose"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "dashmap",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "rig-core"
 version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4134,22 +4099,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rig-mcp"
-version = "0.1.2"
-dependencies = [
- "async-trait",
- "futures",
- "http",
- "reqwest 0.12.28",
- "rig-compose",
- "rmcp",
- "serde_json",
- "sse-stream",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4178,7 +4127,6 @@ dependencies = [
  "process-wrap",
  "reqwest 0.13.3",
  "rmcp-macros",
- "schemars",
  "serde",
  "serde_json",
  "sse-stream",
@@ -4395,7 +4343,6 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
- "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
@@ -5563,7 +5510,6 @@ version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
 dependencies = [
- "getrandom 0.4.2",
  "js-sys",
  "serde_core",
  "wasm-bindgen",
@@ -5623,9 +5569,7 @@ dependencies = [
  "luaskills",
  "reqwest 0.12.28",
  "rfd",
- "rig-compose",
  "rig-core",
- "rig-mcp",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -5634,6 +5578,30 @@ dependencies = [
  "unicode-segmentation",
  "vldb-controller-client",
  "vulcan-agent-view",
+ "vulcan-mcp-runtime",
+ "vulcan-tools-manager",
+]
+
+[[package]]
+name = "vulcan-mcp-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "http",
+ "reqwest 0.12.28",
+ "rmcp",
+ "serde_json",
+ "sse-stream",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "vulcan-tools-manager"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
