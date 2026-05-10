@@ -36,6 +36,22 @@ const USER_PROMPT_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
 /// 右对齐用户提示词气泡相对于转录视口宽度使用的最大宽度比例。
 const USER_PROMPT_BUBBLE_MAX_WIDTH_RATIO: f32 = 0.70;
 
+/// Fixed width used by the lightweight transcript context menu.
+/// 转录轻量右键菜单使用的固定宽度。
+const TRANSCRIPT_CONTEXT_MENU_WIDTH: f32 = 136.0;
+
+/// Fixed row height used by each transcript context-menu item.
+/// 每条转录右键菜单项使用的固定行高。
+const TRANSCRIPT_CONTEXT_MENU_ITEM_HEIGHT: f32 = 30.0;
+
+/// Outer padding applied around the transcript context-menu text labels.
+/// 应用于转录右键菜单文本标签周围的外边距。
+const TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X: f32 = 12.0;
+
+/// Corner radius used by the lightweight transcript context menu.
+/// 轻量转录右键菜单使用的圆角半径。
+const TRANSCRIPT_CONTEXT_MENU_RADIUS: f32 = 10.0;
+
 /// Link-action prefix used by the selectable transcript to identify copy-user-prompt chrome interactions.
 /// 可选择转录用于识别复制用户提示词交互的链接动作前缀。
 const USER_PROMPT_COPY_ACTION_PREFIX: &str = "vulcan-agent-view://copy-user-prompt/";
@@ -97,6 +113,27 @@ pub enum SelectableTranscriptInteraction {
     /// Opens one tool block in the dedicated centered modal surface.
     /// 在专用居中弹层中打开某个工具区块。
     OpenToolModal(String),
+}
+
+/// Enumerates the lightweight context-menu actions exposed by the selectable transcript.
+/// 枚举可选择转录公开的轻量右键菜单动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptContextMenuAction {
+    /// Copies the current non-empty transcript selection into the system clipboard.
+    /// 将当前非空转录选区复制到系统剪贴板。
+    CopySelection,
+    /// Expands the current selection to cover the whole rendered transcript.
+    /// 将当前选区扩展为覆盖整个渲染转录。
+    SelectAll,
+}
+
+/// Captures one open transcript context-menu request anchored to a widget-space pointer position.
+/// 记录一个锚定到组件空间指针位置的转录右键菜单打开请求。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TranscriptContextMenuState {
+    /// Pointer position used to anchor the top-left corner of the context menu after clamping.
+    /// 在钳制之后用于锚定右键菜单左上角的指针位置。
+    anchor_position: Point,
 }
 
 /// Builds one selectable rendered transcript element from the provided structured agent document.
@@ -185,6 +222,9 @@ struct SelectableTranscriptState {
     /// Body scroll offsets retained per collapsible semantic block.
     /// 按折叠语义区块保留的正文滚动偏移量。
     collapsible_body_scroll_offsets: BTreeMap<String, f32>,
+    /// Currently open lightweight context menu anchored inside the transcript surface.
+    /// 当前在转录表面内部打开的轻量右键菜单。
+    context_menu: Option<TranscriptContextMenuState>,
 }
 
 impl Default for SelectableTranscriptState {
@@ -203,6 +243,7 @@ impl Default for SelectableTranscriptState {
             last_click_link_target: None,
             last_click_instant: None,
             collapsible_body_scroll_offsets: BTreeMap::new(),
+            context_menu: None,
         }
     }
 }
@@ -1865,7 +1906,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         &self,
         tree: &tree::Tree,
         renderer: &mut Renderer,
-        _theme: &Theme,
+        app_theme: &Theme,
         defaults: &renderer::Style,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
@@ -2212,6 +2253,85 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             );
         }
 
+        if let Some(menu_state) = state.context_menu {
+            let menu_actions =
+                transcript_context_menu_actions(current_selection_for_state(state).is_some());
+            let menu_bounds =
+                transcript_context_menu_bounds(layout.bounds(), menu_state, menu_actions.len());
+            let palette = app_theme.extended_palette();
+            let hovered_action = cursor.position().and_then(|position| {
+                hit_test_transcript_context_menu_action(
+                    menu_bounds,
+                    menu_actions.as_slice(),
+                    position,
+                )
+            });
+
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: menu_bounds,
+                    border: Border {
+                        color: palette.background.strong.color.scale_alpha(0.28),
+                        width: 1.0,
+                        radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
+                    },
+                    shadow: iced::Shadow {
+                        color: Color::BLACK.scale_alpha(0.18),
+                        offset: iced::Vector::new(0.0, 8.0),
+                        blur_radius: 18.0,
+                    },
+                    ..renderer::Quad::default()
+                },
+                Background::Color(mix_color(
+                    palette.background.base.color,
+                    palette.background.weak.color,
+                    0.18,
+                )),
+            );
+
+            for (index, action) in menu_actions.iter().enumerate() {
+                let item_bounds = transcript_context_menu_item_bounds(menu_bounds, index);
+                if hovered_action == Some(*action) {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: item_bounds,
+                            border: Border {
+                                color: Color::TRANSPARENT,
+                                width: 0.0,
+                                radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
+                            },
+                            ..renderer::Quad::default()
+                        },
+                        Background::Color(palette.primary.weak.color.scale_alpha(0.24)),
+                    );
+                }
+
+                renderer.fill_text(
+                    text::Text {
+                        content: transcript_context_menu_action_label(*action).to_string(),
+                        bounds: Size::new(
+                            (item_bounds.width - TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X * 2.0)
+                                .max(1.0),
+                            item_bounds.height.max(1.0),
+                        ),
+                        size: Pixels(14.0),
+                        line_height: text::LineHeight::default(),
+                        font: theme::ui_font(),
+                        align_x: text::Alignment::Left,
+                        align_y: iced::alignment::Vertical::Center,
+                        shaping: text::Shaping::Advanced,
+                        wrapping: text::Wrapping::None,
+                    },
+                    Point::new(
+                        item_bounds.x + TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X,
+                        item_bounds.y,
+                    ),
+                    defaults.text_color,
+                    *viewport,
+                );
+            }
+        }
+
         let _ = cursor;
     }
 
@@ -2232,6 +2352,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
 
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                state.context_menu = None;
                 if let Some(position) = cursor.position_over(layout.bounds()) {
                     let delta_y = match delta {
                         mouse::ScrollDelta::Lines { y, .. } => -y * 36.0,
@@ -2250,6 +2371,35 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(menu_state) = state.context_menu {
+                    if let Some(position) = cursor.position() {
+                        let menu_actions = transcript_context_menu_actions(
+                            current_selection_for_state(state).is_some(),
+                        );
+                        let menu_bounds = transcript_context_menu_bounds(
+                            layout.bounds(),
+                            menu_state,
+                            menu_actions.len(),
+                        );
+                        if let Some(action) = hit_test_transcript_context_menu_action(
+                            menu_bounds,
+                            menu_actions.as_slice(),
+                            position,
+                        ) {
+                            execute_transcript_context_menu_action(
+                                action,
+                                state,
+                                &self.document,
+                                clipboard,
+                            );
+                            state.focused = true;
+                            state.context_menu = None;
+                            shell.capture_event();
+                            return;
+                        }
+                    }
+                    state.context_menu = None;
+                }
                 if let Some(position) = cursor.position_over(layout.bounds()) {
                     if let Some(hit_char) =
                         hit_test_rendered_document(&self.document, state, layout.bounds(), position)
@@ -2268,6 +2418,18 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 } else {
                     state.focused = false;
                     self.publish_drag_auto_scroll_request(state, None, shell);
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                if let Some(position) = cursor.position_over(layout.bounds()) {
+                    state.focused = true;
+                    state.context_menu = Some(TranscriptContextMenuState {
+                        anchor_position: position,
+                    });
+                    self.publish_drag_auto_scroll_request(state, None, shell);
+                    shell.capture_event();
+                } else {
+                    state.context_menu = None;
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
@@ -2396,6 +2558,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 text,
                 ..
             }) if state.focused && shortcut_matches_copy(key, *modifiers, text.as_deref()) => {
+                state.context_menu = None;
                 if let Some((selection_start, selection_end)) =
                     effective_selection(state, &self.document, layout.bounds(), cursor.position())
                 {
@@ -2414,9 +2577,13 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             }) if state.focused
                 && shortcut_matches_select_all(key, *modifiers, text.as_deref()) =>
             {
+                state.context_menu = None;
                 state.anchor_char = 0;
                 state.head_char = self.document.len_chars();
                 shell.capture_event();
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed { .. }) => {
+                state.context_menu = None;
             }
             _ => {}
         }
@@ -2436,6 +2603,16 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             return mouse::Interaction::None;
         };
         let state = tree.state.downcast_ref::<SelectableTranscriptState>();
+
+        if let Some(menu_state) = state.context_menu {
+            let menu_actions =
+                transcript_context_menu_actions(current_selection_for_state(state).is_some());
+            let menu_bounds =
+                transcript_context_menu_bounds(layout.bounds(), menu_state, menu_actions.len());
+            if menu_bounds.contains(position) {
+                return mouse::Interaction::Pointer;
+            }
+        }
 
         if hit_test_rendered_document(&self.document, state, layout.bounds(), position)
             .and_then(|hit_char| self.document.link_at_char_offset(hit_char))
@@ -5043,6 +5220,109 @@ fn effective_selection(
     };
 
     normalized_selection_for_offsets(state.anchor_char, head_char)
+}
+
+/// Returns the current static transcript selection when no live drag extrapolation is needed.
+/// 在不需要实时拖拽外推时返回当前静态转录选区。
+fn current_selection_for_state(state: &SelectableTranscriptState) -> Option<(usize, usize)> {
+    normalized_selection_for_offsets(state.anchor_char, state.head_char)
+}
+
+/// Returns the lightweight transcript context-menu actions visible under the current selection state.
+/// 根据当前选区状态返回轻量转录右键菜单可见的动作集合。
+fn transcript_context_menu_actions(has_selection: bool) -> Vec<TranscriptContextMenuAction> {
+    if has_selection {
+        vec![
+            TranscriptContextMenuAction::CopySelection,
+            TranscriptContextMenuAction::SelectAll,
+        ]
+    } else {
+        vec![TranscriptContextMenuAction::SelectAll]
+    }
+}
+
+/// Returns the localized label rendered for one transcript context-menu action.
+/// 返回为某个转录右键菜单动作渲染的本地化标签。
+fn transcript_context_menu_action_label(action: TranscriptContextMenuAction) -> &'static str {
+    match action {
+        TranscriptContextMenuAction::CopySelection => "复制",
+        TranscriptContextMenuAction::SelectAll => "全选",
+    }
+}
+
+/// Computes the clamped transcript context-menu bounds for the provided anchor point and item count.
+/// 根据给定锚点与菜单项数量计算经过钳制的转录右键菜单边界。
+fn transcript_context_menu_bounds(
+    widget_bounds: Rectangle,
+    menu_state: TranscriptContextMenuState,
+    item_count: usize,
+) -> Rectangle {
+    let width = TRANSCRIPT_CONTEXT_MENU_WIDTH.min(widget_bounds.width.max(1.0));
+    let height = (TRANSCRIPT_CONTEXT_MENU_ITEM_HEIGHT * item_count as f32).max(1.0);
+    let max_x = (widget_bounds.x + widget_bounds.width - width).max(widget_bounds.x);
+    let max_y = (widget_bounds.y + widget_bounds.height - height).max(widget_bounds.y);
+
+    Rectangle::new(
+        Point::new(
+            menu_state.anchor_position.x.clamp(widget_bounds.x, max_x),
+            menu_state.anchor_position.y.clamp(widget_bounds.y, max_y),
+        ),
+        Size::new(width, height),
+    )
+}
+
+/// Returns the row bounds occupied by the indexed transcript context-menu item.
+/// 返回给定索引的转录右键菜单项所占据的行边界。
+fn transcript_context_menu_item_bounds(menu_bounds: Rectangle, index: usize) -> Rectangle {
+    Rectangle::new(
+        Point::new(
+            menu_bounds.x,
+            menu_bounds.y + TRANSCRIPT_CONTEXT_MENU_ITEM_HEIGHT * index as f32,
+        ),
+        Size::new(menu_bounds.width, TRANSCRIPT_CONTEXT_MENU_ITEM_HEIGHT),
+    )
+}
+
+/// Hit-tests the transcript context menu and returns the clicked action, if any.
+/// 对转录右键菜单执行命中测试，并在命中时返回对应动作。
+fn hit_test_transcript_context_menu_action(
+    menu_bounds: Rectangle,
+    actions: &[TranscriptContextMenuAction],
+    position: Point,
+) -> Option<TranscriptContextMenuAction> {
+    if !menu_bounds.contains(position) {
+        return None;
+    }
+
+    actions.iter().enumerate().find_map(|(index, action)| {
+        transcript_context_menu_item_bounds(menu_bounds, index)
+            .contains(position)
+            .then_some(*action)
+    })
+}
+
+/// Executes one transcript context-menu action against the current selection state and clipboard.
+/// 针对当前选区状态与剪贴板执行一次转录右键菜单动作。
+fn execute_transcript_context_menu_action(
+    action: TranscriptContextMenuAction,
+    state: &mut SelectableTranscriptState,
+    document: &RenderedTranscriptDocument,
+    clipboard: &mut dyn Clipboard,
+) {
+    match action {
+        TranscriptContextMenuAction::CopySelection => {
+            if let Some((selection_start, selection_end)) = current_selection_for_state(state) {
+                clipboard.write(
+                    ClipboardKind::Standard,
+                    document.selected_text(selection_start, selection_end),
+                );
+            }
+        }
+        TranscriptContextMenuAction::SelectAll => {
+            state.anchor_char = 0;
+            state.head_char = document.len_chars();
+        }
+    }
 }
 
 /// Returns the nearest selection head character offset for one drag pointer position, even when it has crossed above or below the widget bounds.
