@@ -4,13 +4,16 @@
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
+use crate::agent_runtime::rig_tools::build_luaskills_rig_tools;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpServerRegistry;
 use crate::provider_config::{
     PersistedProviderOptions, ProviderConfigurationFile, ProviderRuntimeKind,
 };
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
+use luaskills::RuntimeEntryDescriptor;
 use reqwest::header::{
     AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
@@ -19,6 +22,7 @@ use rig::message::ReasoningContent;
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
+use rig::tool::ToolDyn;
 use serde_json::{Value, json};
 use std::pin::Pin;
 
@@ -110,6 +114,9 @@ pub struct ExecutionPreparation {
     /// Resolved native tool identifiers attached to the active agent.
     /// 附着在当前代理上的原生工具标识集合。
     pub native_tools: Vec<String>,
+    /// Resolved LuaSkills runtime tool descriptors attached to the active agent.
+    /// 附着在当前代理上的 LuaSkills 运行时工具描述集合。
+    pub luaskills_tools: Vec<RuntimeEntryDescriptor>,
     /// Delegate agent identifiers exposed to the active agent.
     /// 暴露给当前代理的委派代理标识集合。
     pub delegate_agents: Vec<String>,
@@ -170,6 +177,10 @@ impl ExecutionPreparation {
 
         if !self.native_tools.is_empty() {
             rows.push(format!("原生工具：{}", self.native_tools.join("、")));
+        }
+
+        if !self.luaskills_tools.is_empty() {
+            rows.push(format!("LuaSkills 工具：{} 个", self.luaskills_tools.len()));
         }
 
         if !self.delegate_agents.is_empty() {
@@ -316,6 +327,7 @@ pub fn prepare_execution(
         temperature: request.temperature,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         native_tools: foundation.resolved_native_tools_for_agent(&active_agent.id),
+        luaskills_tools: foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
         warnings,
@@ -340,10 +352,11 @@ enum ProviderStreamDelta {
 /// 以增量方式流式执行一次真实 Provider 调用，并依次产出准备、思考、输出与最终报告事件。
 pub fn stream_runtime_run(
     config: ProviderConfigurationFile,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let foundation = RuntimeFoundation::build(&config);
+        let foundation = RuntimeFoundation::build(&config, luaskills_runtime.clone());
         let preparation = match prepare_execution(&foundation, &config, &request) {
             Ok(preparation) => preparation,
             Err(error) => {
@@ -407,6 +420,7 @@ pub fn stream_runtime_run(
             active_agent.as_ref(),
             &system_preamble,
             &effective_prompt,
+            luaskills_runtime.clone(),
         );
 
         let mut terminal_error = None;
@@ -615,6 +629,12 @@ fn build_runtime_system_preamble(
         ));
     }
 
+    if let Some(luaskills_section) =
+        render_luaskills_tool_prompt_section(&preparation.luaskills_tools)
+    {
+        sections.push(luaskills_section);
+    }
+
     if !preparation.delegate_agents.is_empty() {
         sections.push(format!(
             "可委派代理：{}。当前阶段仅注入协作上下文，不会自动触发真实子代理调度。",
@@ -630,6 +650,53 @@ fn build_runtime_system_preamble(
     }
 
     sections.join("\n")
+}
+
+/// Render the LuaSkills runtime tool table in the host prompt format expected by the active AI agent.
+/// 按当前 AI 代理预期的宿主提示词格式渲染 LuaSkills 运行时工具表。
+fn render_luaskills_tool_prompt_section(entries: &[RuntimeEntryDescriptor]) -> Option<String> {
+    if entries.is_empty() {
+        return None;
+    }
+
+    let rows = entries
+        .iter()
+        .map(|entry| {
+            let parameter_rows = if entry.parameters.is_empty() {
+                String::from("  - 参数：无")
+            } else {
+                let parameters = entry
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        format!(
+                            "  - 参数 `{}`（{}，{}）：{}",
+                            parameter.name,
+                            parameter.param_type,
+                            if parameter.required { "必填" } else { "可选" },
+                            parameter.description
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("  - 参数列表：\n{}", parameters)
+            };
+
+            format!(
+                "- `{}`：{}\n  - 所属技能：`{}`\n{}\n  - 调用约束：必须传入 JSON 对象参数；返回值优先关注 `content` 字段，必要时再读取 `overflowMode`、`templateHint` 与 `hostResult`。",
+                entry.canonical_name,
+                entry.description,
+                entry.skill_id,
+                parameter_rows
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(format!(
+        "LuaSkills 工具表（当当前执行链支持 rig tool-calling 时，以下工具会以 canonical_name 真实注册；若当前供应商走非 rig 兼容专线，则本节仅作为可用工具目录提示）：\n{}",
+        rows
+    ))
 }
 
 /// Builds the effective user prompt by prepending the reconstructed session context to the latest user input.
@@ -668,6 +735,7 @@ fn execute_provider_prompt_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
 ) -> ProviderDeltaStream {
     let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
         Ok(options) => options,
@@ -698,6 +766,11 @@ fn execute_provider_prompt_stream(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("<<unset>>")
         .to_string();
+    let luaskills_rig_tools = build_luaskills_rig_tools(
+        luaskills_runtime,
+        preparation.session_id,
+        &preparation.luaskills_tools,
+    );
 
     if is_alibaba_coding_plan_provider(&preparation.model_blueprint.provider_id) {
         return execute_alibaba_coding_plan_stream(
@@ -722,6 +795,7 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
+            luaskills_rig_tools,
         ),
         ProviderRuntimeKind::OpenAiCompatible
         | ProviderRuntimeKind::XAi
@@ -736,6 +810,7 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
+            luaskills_rig_tools,
         ),
         ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
             &api_key,
@@ -744,6 +819,7 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
+            luaskills_rig_tools,
         ),
         ProviderRuntimeKind::Anthropic => execute_anthropic_stream(
             &api_key,
@@ -753,6 +829,7 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
+            luaskills_rig_tools,
         ),
         ProviderRuntimeKind::AzureOpenAi
         | ProviderRuntimeKind::GoogleGemini
@@ -787,6 +864,7 @@ fn execute_openai_compatible_stream(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
+    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::CompletionsClient::builder()
         .api_key(api_key)
@@ -814,7 +892,11 @@ fn execute_openai_compatible_stream(
         agent_builder = agent_builder.temperature(temperature);
     }
 
-    let agent = agent_builder.build();
+    let agent = if luaskills_rig_tools.is_empty() {
+        agent_builder.build()
+    } else {
+        agent_builder.tools(luaskills_rig_tools).build()
+    };
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
@@ -1221,6 +1303,7 @@ fn execute_openai_responses_stream(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
+    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::Client::builder()
         .api_key(api_key)
@@ -1248,7 +1331,11 @@ fn execute_openai_responses_stream(
         agent_builder = agent_builder.temperature(temperature);
     }
 
-    let agent = agent_builder.build();
+    let agent = if luaskills_rig_tools.is_empty() {
+        agent_builder.build()
+    } else {
+        agent_builder.tools(luaskills_rig_tools).build()
+    };
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
@@ -1281,6 +1368,7 @@ fn execute_anthropic_stream(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
+    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
 ) -> ProviderDeltaStream {
     let mut builder = anthropic::Client::builder()
         .api_key(api_key)
@@ -1308,7 +1396,11 @@ fn execute_anthropic_stream(
         agent_builder = agent_builder.temperature(temperature);
     }
 
-    let agent = agent_builder.build();
+    let agent = if luaskills_rig_tools.is_empty() {
+        agent_builder.build()
+    } else {
+        agent_builder.tools(luaskills_rig_tools).build()
+    };
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
@@ -1340,6 +1432,7 @@ fn execute_openrouter_stream(
     prompt: &str,
     temperature: Option<f64>,
     headers: &HeaderMap,
+    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
 ) -> ProviderDeltaStream {
     let client = match openrouter::Client::builder()
         .api_key(api_key)
@@ -1363,7 +1456,11 @@ fn execute_openrouter_stream(
         agent_builder = agent_builder.temperature(temperature);
     }
 
-    let agent = agent_builder.build();
+    let agent = if luaskills_rig_tools.is_empty() {
+        agent_builder.build()
+    } else {
+        agent_builder.tools(luaskills_rig_tools).build()
+    };
     let prompt = prompt.to_string();
 
     Box::pin(stream! {

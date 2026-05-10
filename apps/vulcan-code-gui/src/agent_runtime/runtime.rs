@@ -5,10 +5,12 @@ use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeSkillKind,
     RuntimeToolPolicyDefinition,
 };
+use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::McpServerRegistry;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::skills::{BuiltinSkillCatalog, build_builtin_skill_catalog};
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
+use luaskills::RuntimeEntryDescriptor;
 use rig_compose::agent::Agent;
 use rig_compose::coordinator::{CoordinatorAgent, RoutingRule};
 use rig_compose::delegate::{DelegateRegistry, DelegateTool, InProcessAgentDelegate};
@@ -67,6 +69,9 @@ pub struct RuntimeFoundation {
     /// Registered native tool catalog.
     /// 已注册的原生工具目录。
     native_tools: NativeToolCatalog,
+    /// LuaSkills-backed runtime tool descriptors exposed to rig-driven execution flows.
+    /// 暴露给 rig 驱动执行链的 LuaSkills 运行时工具描述集合。
+    luaskills_tools: Vec<RuntimeEntryDescriptor>,
     /// Registered built-in skill catalog.
     /// 已注册的内建技能目录。
     skills: BuiltinSkillCatalog,
@@ -93,12 +98,25 @@ pub struct RuntimeFoundation {
 impl RuntimeFoundation {
     /// Builds the compose runtime foundation from the shared provider configuration file.
     /// 根据共享供应商配置文件构建 compose 运行时基础架构。
-    pub fn build(config: &ProviderConfigurationFile) -> Self {
+    pub fn build(
+        config: &ProviderConfigurationFile,
+        luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_provider_configuration(config);
         let native_tools = build_native_tool_catalog(&runtime_config);
         let skills = build_builtin_skill_catalog(&runtime_config.skills);
         let mcp_registry = McpServerRegistry::from_provider_configuration(config);
         let mut warnings = Vec::new();
+        let luaskills_tools = match luaskills_runtime.as_ref() {
+            Some(handle) => match list_luaskills_tool_entries(handle) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    warnings.push(format!("加载 LuaSkills 工具表失败：{error}"));
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
         let mut agents = BTreeMap::new();
         let mut coordinator_agent_ids = BTreeSet::new();
 
@@ -157,6 +175,7 @@ impl RuntimeFoundation {
         Self {
             config: runtime_config,
             native_tools,
+            luaskills_tools,
             skills,
             mcp_registry,
             agents,
@@ -336,6 +355,28 @@ impl RuntimeFoundation {
             &available_native_tool_ids,
             &mut warnings,
         )
+    }
+
+    /// Resolves the LuaSkills runtime tools currently visible to one agent.
+    /// 解析当前对某个代理可见的 LuaSkills 运行时工具集合。
+    pub fn resolved_luaskills_tools_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Vec<RuntimeEntryDescriptor> {
+        let Some(definition) = self
+            .config
+            .agents
+            .iter()
+            .find(|definition| definition.id == agent_id)
+        else {
+            return Vec::new();
+        };
+
+        if definition.kind == RuntimeAgentKind::Coordinator {
+            Vec::new()
+        } else {
+            self.luaskills_tools.clone()
+        }
     }
 
     /// Returns enabled MCP server summary rows for execution diagnostics.

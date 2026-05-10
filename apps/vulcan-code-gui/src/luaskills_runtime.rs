@@ -3,13 +3,17 @@
 
 use crate::provider_config::{PersistedControllerConfiguration, PersistedControllerProcessMode};
 use crate::runtime_assets;
+use iced::futures::channel::oneshot;
+use luaskills::runtime_result::RuntimeHostResult;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
-    LuaEngine, LuaEngineOptions, LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions,
-    LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeSkillRoot, SkillInstallRequest,
-    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
-    SkillUninstallOptions,
+    LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeDatabaseProviderMode,
+    LuaRuntimeHostOptions, LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig,
+    RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeInvocationResult, RuntimeRequestContext,
+    RuntimeSkillRoot, SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
+    SkillManager, SkillManagerConfig, SkillMeta, SkillUninstallOptions,
 };
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -351,6 +355,44 @@ where
         })?
 }
 
+/// Execute one LuaSkills host operation on a dedicated blocking thread without stalling the async caller.
+/// 在专用阻塞线程上执行单次 LuaSkills 宿主操作，并避免阻塞异步调用方。
+async fn run_luaskills_blocking_task_async<T, F>(
+    thread_name: &str,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel();
+    let thread_name = thread_name.to_string();
+
+    std::thread::Builder::new()
+        .name(thread_name.clone())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+                .map_err(|panic_payload| {
+                    let panic_message =
+                        if let Some(message) = panic_payload.downcast_ref::<String>() {
+                            message.clone()
+                        } else if let Some(message) = panic_payload.downcast_ref::<&'static str>() {
+                            (*message).to_string()
+                        } else {
+                            String::from("未知 panic")
+                        };
+                    format!("LuaSkills 阻塞线程执行失败：{panic_message}")
+                })
+                .and_then(|value| value);
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("启动 LuaSkills 阻塞线程失败：{error}"))?;
+
+    receiver
+        .await
+        .map_err(|_| format!("LuaSkills 阻塞线程 `{thread_name}` 意外断开。"))?
+}
+
 /// Ensures the configured host-managed ROOT skills are installed before the runtime catalog is loaded.
 /// 在加载运行时技能目录之前，确保配置声明的宿主管理 ROOT 技能已经完成安装。
 fn ensure_configured_root_skills_installed(
@@ -612,6 +654,103 @@ fn perform_luaskills_management_action_blocking(
 
     let catalog = build_luaskills_catalog(handle, &engine)?;
     Ok(LuaSkillsManagementReport { message, catalog })
+}
+
+/// List every LuaSkills runtime entry currently visible to the host tool surface.
+/// 列出当前对宿主工具表面可见的全部 LuaSkills 运行时入口。
+pub fn list_luaskills_tool_entries(
+    handle: &LuaSkillsRuntimeHandle,
+) -> Result<Vec<RuntimeEntryDescriptor>, String> {
+    let engine = lock_runtime_engine(handle)?;
+    Ok(engine.list_entries_for_authority(SkillManagementAuthority::System))
+}
+
+/// Call one LuaSkills runtime entry on a dedicated blocking thread and return the structured result.
+/// 在专用阻塞线程上调用单个 LuaSkills 运行时入口，并返回结构化结果。
+pub async fn call_luaskills_tool_entry(
+    handle: LuaSkillsRuntimeHandle,
+    tool_name: String,
+    args: Value,
+    invocation_context: Option<LuaInvocationContext>,
+) -> Result<RuntimeInvocationResult, String> {
+    run_luaskills_blocking_task_async("luaskills-tool-call", move || {
+        let engine = lock_runtime_engine(&handle)?;
+        engine.call_skill(&tool_name, &args, invocation_context.as_ref())
+    })
+    .await
+}
+
+/// Build one JSON-Schema object definition from the LuaSkills runtime entry parameter descriptors.
+/// 根据 LuaSkills 运行时入口参数描述构建一份 JSON-Schema 对象定义。
+pub fn luaskills_entry_args_schema(entry: &RuntimeEntryDescriptor) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+
+    for parameter in &entry.parameters {
+        if parameter.required {
+            required.push(Value::String(parameter.name.clone()));
+        }
+        properties.insert(
+            parameter.name.clone(),
+            json!({
+                "type": schema_type_for_luaskills_parameter(&parameter.param_type),
+                "description": parameter.description,
+            }),
+        );
+    }
+
+    let mut schema = Map::new();
+    schema.insert(String::from("type"), Value::String(String::from("object")));
+    schema.insert(String::from("properties"), Value::Object(properties));
+    schema.insert(String::from("additionalProperties"), Value::Bool(false));
+    if !required.is_empty() {
+        schema.insert(String::from("required"), Value::Array(required));
+    }
+
+    Value::Object(schema)
+}
+
+/// Convert one LuaSkills runtime invocation result into one host-stable JSON object.
+/// 将单个 LuaSkills 运行时调用结果转换成宿主稳定的 JSON 对象。
+pub fn serialize_luaskills_invocation_result(result: &RuntimeInvocationResult) -> Value {
+    json!({
+        "content": result.content,
+        "overflowMode": result.overflow_mode.map(|mode| match mode {
+            luaskills::ToolOverflowMode::Truncate => "truncate",
+            luaskills::ToolOverflowMode::Page => "page",
+        }),
+        "templateHint": result.template_hint,
+        "contentBytes": result.content_bytes,
+        "contentLines": result.content_lines,
+        "hostResult": result.host_result.as_ref().map(serialize_luaskills_host_result),
+    })
+}
+
+/// Build one default LuaSkills invocation context used by rig-backed tool calls.
+/// 构建一份供 rig 驱动工具调用使用的默认 LuaSkills 调用上下文。
+pub fn build_luaskills_tool_invocation_context(
+    session_id: Option<usize>,
+    transport_name: &str,
+    tool_name: &str,
+) -> LuaInvocationContext {
+    let request_context = RuntimeRequestContext {
+        request_id: Some(format!("luaskills-tool:{tool_name}")),
+        client_name: Some(String::from("vulcan-code-gui")),
+        transport_name: Some(transport_name.to_string()),
+        session_id: session_id.map(|value| value.to_string()),
+        client_info: Some(RuntimeClientInfo {
+            kind: Some(String::from("desktop")),
+            name: Some(String::from("VulcanCode")),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        }),
+        client_capabilities: Value::Object(Map::new()),
+    };
+
+    LuaInvocationContext::new(
+        Some(request_context),
+        Value::Object(Map::new()),
+        Value::Object(Map::new()),
+    )
 }
 
 /// Ensures the minimum runtime directory layout exists and returns the mounted skill roots.
@@ -894,6 +1033,29 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
     value
         .map(|field| field.trim().to_string())
         .filter(|field| !field.is_empty())
+}
+
+/// Map one LuaSkills runtime parameter type string into a JSON-Schema primitive type label.
+/// 将单个 LuaSkills 运行时参数类型字符串映射为 JSON-Schema 基元类型标签。
+fn schema_type_for_luaskills_parameter(parameter_type: &str) -> &'static str {
+    match parameter_type.trim().to_ascii_lowercase().as_str() {
+        "int" | "integer" => "integer",
+        "number" | "float" | "double" => "number",
+        "bool" | "boolean" => "boolean",
+        "object" | "json" | "map" => "object",
+        "array" | "list" => "array",
+        "string" | "path" | "file" | "url" => "string",
+        _ => "string",
+    }
+}
+
+/// Convert one LuaSkills host-result object into one host-stable JSON object.
+/// 将单个 LuaSkills 宿主结果对象转换成宿主稳定的 JSON 对象。
+fn serialize_luaskills_host_result(result: &RuntimeHostResult) -> Value {
+    json!({
+        "kind": result.kind,
+        "payload": result.payload,
+    })
 }
 
 /// Resolves one named runtime skill root from the current root chain.

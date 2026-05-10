@@ -1715,7 +1715,7 @@ impl VulcanWorkbench {
             .and_then(|server_id| provider_configuration.mcp.servers.get(server_id))
             .map(McpServerFormState::from_entry)
             .unwrap_or_default();
-        let runtime_foundation = RuntimeFoundation::build(&provider_configuration);
+        let runtime_foundation = RuntimeFoundation::build(&provider_configuration, None);
 
         let activities = ActivityEntry::seeded();
         let activity_raw_buffers = activities
@@ -3485,7 +3485,11 @@ impl VulcanWorkbench {
                 let request_for_run = request.clone();
                 let config_for_run = self.provider_configuration.clone();
                 let (run_task, run_handle) = Task::run(
-                    stream_runtime_run(config_for_run, request_for_run),
+                    stream_runtime_run(
+                        config_for_run,
+                        self.luaskills_runtime.clone(),
+                        request_for_run,
+                    ),
                     move |event| Message::RunExecutionStreamEvent { run_id, event },
                 )
                 .abortable();
@@ -7913,7 +7917,8 @@ impl VulcanWorkbench {
     /// Rebuilds the compose runtime foundation from the current shared configuration state.
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     fn refresh_runtime_foundation(&mut self) {
-        self.runtime_foundation = RuntimeFoundation::build(&self.provider_configuration);
+        self.runtime_foundation =
+            RuntimeFoundation::build(&self.provider_configuration, self.luaskills_runtime.clone());
         self.last_execution_preparation = None;
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();

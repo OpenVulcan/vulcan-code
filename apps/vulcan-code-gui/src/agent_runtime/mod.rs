@@ -5,6 +5,7 @@ pub mod config;
 pub mod events;
 pub mod executor;
 pub mod provider;
+pub mod rig_tools;
 pub mod runtime;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
