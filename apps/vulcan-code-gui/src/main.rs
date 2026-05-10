@@ -1,6 +1,7 @@
 //! Application entry module for the Rust + iced desktop prototype.
 //! Rust + iced 桌面原型的应用入口模块。
 
+mod agent_profile;
 mod agent_runtime;
 mod agent_view;
 mod app;

@@ -325,7 +325,7 @@ pub struct ModelInterleavedField {
 
 /// One supported provider definition loaded from the split resource catalog.
 /// 从分离资源目录中载入的单个受支持供应商定义。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupportedProviderDefinition {
     /// Stable provider identifier used in config and runtime routing.
@@ -349,6 +349,10 @@ pub struct SupportedProviderDefinition {
     /// 附加到该供应商真实执行请求中的额外 HTTP 头集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra_headers: BTreeMap<String, String>,
+    /// Additional JSON body parameters merged into provider requests by compatible runtimes.
+    /// 由兼容运行时合并进供应商请求体中的附加 JSON Body 参数。
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra_body: serde_json::Map<String, serde_json::Value>,
     /// Ordered field list exposed by the provider form.
     /// 供应商表单暴露的有序字段列表。
     #[serde(default)]
@@ -733,6 +737,32 @@ pub enum PersistedMcpTransportKind {
     /// Standard input/output child-process transport.
     /// 标准输入输出子进程传输。
     Stdio,
+    /// Streamable HTTP client transport.
+    /// Streamable HTTP 客户端传输。
+    Http,
+    /// Legacy server-sent-events MCP transport.
+    /// 旧式基于 Server-Sent Events 的 MCP 传输。
+    Sse,
+}
+
+impl PersistedMcpTransportKind {
+    /// Returns the human-readable transport label used by UI surfaces.
+    /// 返回 UI 界面使用的人类可读传输标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::Http => "http",
+            Self::Sse => "sse",
+        }
+    }
+}
+
+impl fmt::Display for PersistedMcpTransportKind {
+    /// Renders the transport kind into one compact UI label.
+    /// 将传输类型渲染为紧凑 UI 标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
 }
 
 /// One persisted MCP server entry stored in the shared configuration file.
@@ -752,11 +782,24 @@ pub struct PersistedMcpServerEntry {
     pub transport: PersistedMcpTransportKind,
     /// Command used to launch the server process.
     /// 用于启动服务器进程的命令。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub command: String,
     /// Argument vector passed to the server process.
     /// 传递给服务器进程的参数列表。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Optional remote MCP endpoint URL used by HTTP transports.
+    /// HTTP 传输使用的可选远端 MCP 端点 URL。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Optional bearer token injected into HTTP MCP requests.
+    /// 注入到 HTTP MCP 请求中的可选 Bearer Token。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bearer_token: Option<String>,
+    /// Optional HTTP headers injected into remote MCP requests.
+    /// 注入到远端 MCP 请求中的可选 HTTP 请求头。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
     /// Optional working directory used for the server process.
     /// 服务器进程使用的可选工作目录。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -891,14 +934,14 @@ pub struct ProviderConfigurationFile {
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider: BTreeMap<String, PersistedProviderEntry>,
-    /// Active agent identifier selected for compose-based execution.
-    /// 为 compose 执行链路选中的激活代理标识。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_agent: Option<String>,
-    /// Persisted multi-agent definitions keyed by stable agent id.
-    /// 以稳定代理标识为键保存的多代理定义集合。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub agents: BTreeMap<String, PersistedAgentEntry>,
+    /// Legacy active-agent identifier retained only for one-time migration into the dedicated agent profile store.
+    /// 仅为一次性迁移到独立 Agent 配置存储而保留的旧版激活代理标识。
+    #[serde(rename = "active_agent", default, skip_serializing)]
+    pub legacy_active_agent: Option<String>,
+    /// Legacy persisted multi-agent definitions retained only for one-time migration into the dedicated agent profile store.
+    /// 仅为一次性迁移到独立 Agent 配置存储而保留的旧版多代理定义集合。
+    #[serde(rename = "agents", default, skip_serializing)]
+    pub legacy_agents: BTreeMap<String, PersistedAgentEntry>,
     /// Persisted skill definitions keyed by stable skill id.
     /// 以稳定技能标识为键保存的技能定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

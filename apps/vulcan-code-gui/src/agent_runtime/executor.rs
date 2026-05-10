@@ -1,30 +1,67 @@
 //! Execution-preparation models and real provider execution helpers for the compose runtime foundation.
 //! compose 运行时基础架构使用的执行准备模型与真实 Provider 执行辅助逻辑。
 
+use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
-use crate::agent_runtime::rig_tools::build_luaskills_rig_tools;
+use crate::agent_runtime::rig_tools::{build_luaskills_rig_tools, build_mcp_rig_tools};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpServerRegistry;
+use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor};
 use crate::provider_config::{
     PersistedProviderOptions, ProviderConfigurationFile, ProviderRuntimeKind,
 };
+use crate::runtime_assets;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
 use luaskills::RuntimeEntryDescriptor;
-use reqwest::header::{
-    AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
-};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::agent::{AgentBuilder, MultiTurnStreamItem};
 use rig::message::ReasoningContent;
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::pin::Pin;
+use std::{fs, path::Path};
+
+/// Relative resource directory name that stores provider base system prompts.
+/// 存放 Provider 基础系统提示词的相对资源目录名称。
+const SYSTEM_PROMPTS_DIR_NAME: &str = "system-prompts";
+
+/// Default provider prompt file name.
+/// 默认 Provider 提示词文件名。
+const DEFAULT_SYSTEM_PROMPT_FILE_NAME: &str = "default.txt";
+
+/// GPT-family provider prompt file name.
+/// GPT 家族 Provider 提示词文件名。
+const GPT_SYSTEM_PROMPT_FILE_NAME: &str = "gpt.txt";
+
+/// Codex-family provider prompt file name.
+/// Codex 家族 Provider 提示词文件名。
+const CODEX_SYSTEM_PROMPT_FILE_NAME: &str = "codex.txt";
+
+/// Beast-style provider prompt file name.
+/// Beast 风格 Provider 提示词文件名。
+const BEAST_SYSTEM_PROMPT_FILE_NAME: &str = "beast.txt";
+
+/// Anthropic provider prompt file name.
+/// Anthropic Provider 提示词文件名。
+const ANTHROPIC_SYSTEM_PROMPT_FILE_NAME: &str = "anthropic.txt";
+
+/// Gemini provider prompt file name.
+/// Gemini Provider 提示词文件名。
+const GEMINI_SYSTEM_PROMPT_FILE_NAME: &str = "gemini.txt";
+
+/// Kimi-family provider prompt file name.
+/// Kimi 家族 Provider 提示词文件名。
+const KIMI_SYSTEM_PROMPT_FILE_NAME: &str = "kimi.txt";
+
+/// Trinity-family provider prompt file name.
+/// Trinity 家族 Provider 提示词文件名。
+const TRINITY_SYSTEM_PROMPT_FILE_NAME: &str = "trinity.txt";
 
 /// Lightweight transcript row forwarded into the real runtime as model-facing context.
 /// 作为面向模型上下文转发到真实运行时的轻量转录行。
@@ -117,6 +154,9 @@ pub struct ExecutionPreparation {
     /// Resolved LuaSkills runtime tool descriptors attached to the active agent.
     /// 附着在当前代理上的 LuaSkills 运行时工具描述集合。
     pub luaskills_tools: Vec<RuntimeEntryDescriptor>,
+    /// Resolved MCP runtime tool descriptors attached to the active agent.
+    /// 附着在当前代理上的 MCP 运行时工具描述集合。
+    pub mcp_tools: Vec<McpRuntimeToolDescriptor>,
     /// Delegate agent identifiers exposed to the active agent.
     /// 暴露给当前代理的委派代理标识集合。
     pub delegate_agents: Vec<String>,
@@ -181,6 +221,10 @@ impl ExecutionPreparation {
 
         if !self.luaskills_tools.is_empty() {
             rows.push(format!("LuaSkills 工具：{} 个", self.luaskills_tools.len()));
+        }
+
+        if !self.mcp_tools.is_empty() {
+            rows.push(format!("MCP 工具：{} 个", self.mcp_tools.len()));
         }
 
         if !self.delegate_agents.is_empty() {
@@ -328,6 +372,7 @@ pub fn prepare_execution(
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         native_tools: foundation.resolved_native_tools_for_agent(&active_agent.id),
         luaskills_tools: foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
+        mcp_tools: foundation.resolved_mcp_tools_for_agent(&active_agent.id),
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
         warnings,
@@ -352,11 +397,18 @@ enum ProviderStreamDelta {
 /// 以增量方式流式执行一次真实 Provider 调用，并依次产出准备、思考、输出与最终报告事件。
 pub fn stream_runtime_run(
     config: ProviderConfigurationFile,
+    agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    mcp_runtime: Option<McpRuntimeHandle>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let foundation = RuntimeFoundation::build(&config, luaskills_runtime.clone());
+        let foundation = RuntimeFoundation::build(
+            &config,
+            &agent_profile_catalog,
+            luaskills_runtime.clone(),
+            mcp_runtime.clone(),
+        );
         let preparation = match prepare_execution(&foundation, &config, &request) {
             Ok(preparation) => preparation,
             Err(error) => {
@@ -398,7 +450,7 @@ pub fn stream_runtime_run(
                     };
 
         let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
-            discover_enabled_mcp_tools(&config).await;
+            collect_enabled_mcp_runtime_events(mcp_runtime.as_ref());
         warnings.extend(discovery_warnings);
 
         for event in discovery_events {
@@ -421,6 +473,7 @@ pub fn stream_runtime_run(
             &system_preamble,
             &effective_prompt,
             luaskills_runtime.clone(),
+            mcp_runtime.clone(),
         );
 
         let mut terminal_error = None;
@@ -533,60 +586,58 @@ pub fn stream_runtime_run(
     }
 }
 
-/// Discovers enabled MCP tools and converts the result into UI-facing runtime events.
-/// 发现已启用 MCP 工具并将结果转换为面向界面的运行时事件。
-async fn discover_enabled_mcp_tools(
-    config: &ProviderConfigurationFile,
+/// Collects enabled MCP runtime state and converts the latest snapshot into UI-facing runtime events.
+/// 收集已启用 MCP 运行时状态，并将最新快照转换为面向界面的运行时事件。
+fn collect_enabled_mcp_runtime_events(
+    mcp_runtime: Option<&McpRuntimeHandle>,
 ) -> (Vec<RuntimeEvent>, Vec<String>, Vec<String>, Vec<String>) {
-    let registry = McpServerRegistry::from_provider_configuration(config);
-    let enabled_servers = registry.enabled_servers();
     let mut runtime_events = Vec::new();
     let mut rows = Vec::new();
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-
-    if enabled_servers.is_empty() {
+    let Some(runtime) = mcp_runtime else {
         runtime_events.push(RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
-            "MCP 工具发现",
-            "当前没有启用的 MCP 服务器，本次执行将跳过远端工具发现。",
+            "MCP 运行时",
+            "当前没有可用的 MCP 运行时句柄，本次执行将跳过 MCP 工具注册。",
+        ));
+        return (runtime_events, rows, errors, warnings);
+    };
+    let snapshot = runtime.snapshot();
+
+    if snapshot.servers.is_empty() {
+        runtime_events.push(RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "MCP 运行时",
+            "当前没有已配置的 MCP 服务器，本次执行将跳过 MCP 工具注册。",
         ));
         return (runtime_events, rows, errors, warnings);
     }
 
-    for server in enabled_servers {
-        runtime_events.push(RuntimeEvent::new(
-            RuntimeEventKind::ToolStarted,
-            format!("MCP 工具发现 · {}", server.name),
-            format!("正在连接 `{}` 并发现可用工具。", server.command_summary()),
-        ));
-
-        match registry.discover_tools_for_server(&server.id).await {
-            Ok(tools) => {
-                let names = tools
-                    .into_iter()
-                    .map(|tool| tool.name())
-                    .collect::<Vec<_>>();
-                let summary = if names.is_empty() {
-                    format!("服务器 `{}` 未暴露可用工具。", server.name)
-                } else {
-                    format!("服务器 `{}` 暴露工具：{}。", server.name, names.join("、"))
-                };
-                rows.push(summary.clone());
-                runtime_events.push(RuntimeEvent::new(
-                    RuntimeEventKind::ToolFinished,
-                    format!("MCP 工具发现 · {}", server.name),
-                    summary,
-                ));
-            }
-            Err(error) => {
-                let summary = format!("MCP 服务器 `{}` 工具发现失败：{}。", server.name, error);
-                warnings.push(summary.clone());
-                errors.push(summary);
+    for server in snapshot.servers.values().filter(|server| server.enabled) {
+        let summary = format!(
+            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具。",
+            server.name,
+            server.status.label(),
+            server.tools.len()
+        );
+        rows.push(summary.clone());
+        match &server.last_error {
+            Some(error) => {
+                let combined = format!("{summary} 最近一次错误：{error}");
+                warnings.push(combined.clone());
+                errors.push(combined.clone());
                 runtime_events.push(RuntimeEvent::new(
                     RuntimeEventKind::Failed,
-                    format!("MCP 工具发现失败 · {}", server.name),
-                    error,
+                    format!("MCP 服务器离线 · {}", server.name),
+                    combined,
+                ));
+            }
+            None => {
+                runtime_events.push(RuntimeEvent::new(
+                    RuntimeEventKind::ToolFinished,
+                    format!("MCP 服务器在线 · {}", server.name),
+                    summary,
                 ));
             }
         }
@@ -605,18 +656,21 @@ fn build_runtime_system_preamble(
     let agent_prompt = active_agent
         .map(|agent| agent.system_prompt.trim())
         .filter(|prompt| !prompt.is_empty())
-        .unwrap_or("你是 Vulcan Code 的执行代理。");
+        .map(str::to_string);
     let agent_description = active_agent
         .map(|agent| agent.description.trim())
         .filter(|description| !description.is_empty())
         .unwrap_or("负责根据当前工作区与会话上下文完成桌面 AI 编码任务。");
 
-    let mut sections = vec![
-        agent_prompt.to_string(),
-        format!("代理说明：{agent_description}"),
-        format!("当前工作区：{}", preparation.workspace_path),
-        format!("当前执行模式：{}", preparation.execution_mode),
-    ];
+    let mut sections = Vec::new();
+    sections.push(
+        agent_prompt
+            .or_else(|| load_provider_base_system_prompt(&preparation.model_blueprint))
+            .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent.")),
+    );
+    sections.push(format!("代理说明：{agent_description}"));
+    sections.push(format!("当前工作区：{}", preparation.workspace_path));
+    sections.push(format!("当前执行模式：{}", preparation.execution_mode));
 
     if !preparation.skill_names.is_empty() {
         sections.push(format!("绑定技能：{}", preparation.skill_names.join("、")));
@@ -635,6 +689,19 @@ fn build_runtime_system_preamble(
         sections.push(luaskills_section);
     }
 
+    if !preparation.mcp_tools.is_empty() {
+        let tool_rows = preparation
+            .mcp_tools
+            .iter()
+            .map(|tool| format!("`{}`（服务器 `{}`）", tool.schema.name, tool.server_name))
+            .collect::<Vec<_>>()
+            .join("、");
+        sections.push(format!(
+            "MCP 工具已真实注册到本次模型调用：{}。调用时以工具 schema 为准，不要在文本中猜测参数或返回格式。",
+            tool_rows
+        ));
+    }
+
     if !preparation.delegate_agents.is_empty() {
         sections.push(format!(
             "可委派代理：{}。当前阶段仅注入协作上下文，不会自动触发真实子代理调度。",
@@ -644,12 +711,91 @@ fn build_runtime_system_preamble(
 
     if !discovery_rows.is_empty() {
         sections.push(format!(
-            "MCP 发现结果：{}。当前阶段已完成工具发现，但尚未把这些工具真实注册到本次模型调用中。",
+            "当前已连接的 MCP 能力来源：{}。",
             discovery_rows.join("；")
         ));
     }
 
     sections.join("\n")
+}
+
+/// Loads one provider-family base system prompt from the editable resource directory.
+/// 从可编辑资源目录中加载对应 Provider 家族的基础系统提示词。
+fn load_provider_base_system_prompt(blueprint: &ProviderRuntimeBlueprint) -> Option<String> {
+    let file_name = resolve_provider_base_prompt_file_name(blueprint);
+    let packaged_prompt_path = runtime_assets::resolve_app_resources_directory()
+        .join(SYSTEM_PROMPTS_DIR_NAME)
+        .join(file_name);
+    if let Some(prompt) = read_non_empty_system_prompt_file(&packaged_prompt_path) {
+        return Some(prompt);
+    }
+
+    let source_prompt_path = runtime_assets::source_resource_directory()
+        .join(SYSTEM_PROMPTS_DIR_NAME)
+        .join(file_name);
+    if source_prompt_path != packaged_prompt_path {
+        if let Some(prompt) = read_non_empty_system_prompt_file(&source_prompt_path) {
+            return Some(prompt);
+        }
+    }
+
+    if file_name != DEFAULT_SYSTEM_PROMPT_FILE_NAME {
+        let packaged_default_path = runtime_assets::resolve_app_resources_directory()
+            .join(SYSTEM_PROMPTS_DIR_NAME)
+            .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
+        if let Some(prompt) = read_non_empty_system_prompt_file(&packaged_default_path) {
+            return Some(prompt);
+        }
+
+        let source_default_path = runtime_assets::source_resource_directory()
+            .join(SYSTEM_PROMPTS_DIR_NAME)
+            .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
+        if source_default_path != packaged_default_path {
+            if let Some(prompt) = read_non_empty_system_prompt_file(&source_default_path) {
+                return Some(prompt);
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolves one provider/model combination into the matching base prompt file name.
+/// 将单个 Provider/模型组合解析为对应的基础提示词文件名。
+fn resolve_provider_base_prompt_file_name(blueprint: &ProviderRuntimeBlueprint) -> &'static str {
+    let model_id = blueprint.model_id.to_ascii_lowercase();
+
+    if model_id.contains("gpt-4") || model_id.contains("o1") || model_id.contains("o3") {
+        return BEAST_SYSTEM_PROMPT_FILE_NAME;
+    }
+    if model_id.contains("gpt") {
+        if model_id.contains("codex") {
+            return CODEX_SYSTEM_PROMPT_FILE_NAME;
+        }
+        return GPT_SYSTEM_PROMPT_FILE_NAME;
+    }
+    if model_id.contains("gemini-") {
+        return GEMINI_SYSTEM_PROMPT_FILE_NAME;
+    }
+    if model_id.contains("claude") {
+        return ANTHROPIC_SYSTEM_PROMPT_FILE_NAME;
+    }
+    if model_id.contains("trinity") {
+        return TRINITY_SYSTEM_PROMPT_FILE_NAME;
+    }
+    if model_id.contains("kimi") {
+        return KIMI_SYSTEM_PROMPT_FILE_NAME;
+    }
+    DEFAULT_SYSTEM_PROMPT_FILE_NAME
+}
+
+/// Reads one prompt text file and trims only the outer blank region.
+/// 读取单个提示词文本文件，并仅裁剪外围空白区域。
+fn read_non_empty_system_prompt_file(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
 }
 
 /// Render the LuaSkills runtime tool table in the host prompt format expected by the active AI agent.
@@ -661,40 +807,12 @@ fn render_luaskills_tool_prompt_section(entries: &[RuntimeEntryDescriptor]) -> O
 
     let rows = entries
         .iter()
-        .map(|entry| {
-            let parameter_rows = if entry.parameters.is_empty() {
-                String::from("  - 参数：无")
-            } else {
-                let parameters = entry
-                    .parameters
-                    .iter()
-                    .map(|parameter| {
-                        format!(
-                            "  - 参数 `{}`（{}，{}）：{}",
-                            parameter.name,
-                            parameter.param_type,
-                            if parameter.required { "必填" } else { "可选" },
-                            parameter.description
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                format!("  - 参数列表：\n{}", parameters)
-            };
-
-            format!(
-                "- `{}`：{}\n  - 所属技能：`{}`\n{}\n  - 调用约束：必须传入 JSON 对象参数；返回值优先关注 `content` 字段，必要时再读取 `overflowMode`、`templateHint` 与 `hostResult`。",
-                entry.canonical_name,
-                entry.description,
-                entry.skill_id,
-                parameter_rows
-            )
-        })
+        .map(|entry| format!("- `{}`：{}", entry.canonical_name, entry.description))
         .collect::<Vec<_>>()
         .join("\n");
 
     Some(format!(
-        "LuaSkills 工具表（当当前执行链支持 rig tool-calling 时，以下工具会以 canonical_name 真实注册；若当前供应商走非 rig 兼容专线，则本节仅作为可用工具目录提示）：\n{}",
+        "LuaSkills 工具目录（以下工具已真实注册到本次模型调用，调用时以工具 schema 为准，参数与返回结构不要依赖文本猜测）：\n{}",
         rows
     ))
 }
@@ -736,6 +854,7 @@ fn execute_provider_prompt_stream(
     system_preamble: &str,
     prompt: &str,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    mcp_runtime: Option<McpRuntimeHandle>,
 ) -> ProviderDeltaStream {
     let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
         Ok(options) => options,
@@ -761,30 +880,25 @@ fn execute_provider_prompt_stream(
         Ok(headers) => headers,
         Err(error) => return one_shot_provider_error_stream(error),
     };
-    let user_agent_preview = request_headers
-        .get(USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("<<unset>>")
-        .to_string();
-    let luaskills_rig_tools = build_luaskills_rig_tools(
-        luaskills_runtime,
-        preparation.session_id,
-        &preparation.luaskills_tools,
-    );
-
-    if is_alibaba_coding_plan_provider(&preparation.model_blueprint.provider_id) {
-        return execute_alibaba_coding_plan_stream(
-            &preparation.model_blueprint.provider_id,
-            &request_headers,
-            &api_key,
-            base_url,
-            model_id,
-            system_preamble,
-            prompt,
-            temperature,
-            &user_agent_preview,
+    let additional_params = preparation
+        .model_blueprint
+        .extra_body
+        .as_object()
+        .filter(|object| !object.is_empty())
+        .map(|object| Value::Object(object.clone()));
+    let build_runtime_tools = || {
+        let mut rig_tools = build_luaskills_rig_tools(
+            luaskills_runtime.clone(),
+            preparation.session_id,
+            &preparation.luaskills_tools,
         );
-    }
+        rig_tools.extend(build_mcp_rig_tools(
+            mcp_runtime.clone(),
+            preparation.session_id,
+            &preparation.mcp_tools,
+        ));
+        rig_tools
+    };
 
     match preparation.model_blueprint.runtime_kind {
         ProviderRuntimeKind::OpenAi => execute_openai_responses_stream(
@@ -795,7 +909,8 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
-            luaskills_rig_tools,
+            build_runtime_tools(),
+            additional_params,
         ),
         ProviderRuntimeKind::OpenAiCompatible
         | ProviderRuntimeKind::XAi
@@ -810,7 +925,8 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
-            luaskills_rig_tools,
+            build_runtime_tools(),
+            additional_params,
         ),
         ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
             &api_key,
@@ -819,7 +935,8 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
-            luaskills_rig_tools,
+            build_runtime_tools(),
+            additional_params,
         ),
         ProviderRuntimeKind::Anthropic => execute_anthropic_stream(
             &api_key,
@@ -829,7 +946,8 @@ fn execute_provider_prompt_stream(
             prompt,
             temperature,
             &request_headers,
-            luaskills_rig_tools,
+            build_runtime_tools(),
+            additional_params,
         ),
         ProviderRuntimeKind::AzureOpenAi
         | ProviderRuntimeKind::GoogleGemini
@@ -845,15 +963,6 @@ fn execute_provider_prompt_stream(
     }
 }
 
-/// Returns whether one provider identifier should use the dedicated Alibaba Coding Plan chat-completions path.
-/// 返回某个供应商标识是否应使用专用的阿里百炼 Coding Plan chat-completions 执行路径。
-fn is_alibaba_coding_plan_provider(provider_id: &str) -> bool {
-    matches!(
-        provider_id,
-        "alibaba-coding-plan" | "alibaba-coding-plan-cn"
-    )
-}
-
 /// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client and streams deltas.
 /// 使用兼容 Chat Completions 的 rig 客户端执行一次 OpenAI 兼容提示词调用并流式返回增量。
 fn execute_openai_compatible_stream(
@@ -865,6 +974,7 @@ fn execute_openai_compatible_stream(
     temperature: Option<f64>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::CompletionsClient::builder()
         .api_key(api_key)
@@ -891,6 +1001,9 @@ fn execute_openai_compatible_stream(
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
     }
+    if let Some(additional_params) = additional_params {
+        agent_builder = agent_builder.additional_params(additional_params);
+    }
 
     let agent = if luaskills_rig_tools.is_empty() {
         agent_builder.build()
@@ -913,127 +1026,6 @@ fn execute_openai_compatible_stream(
                 Err(error) => {
                     yield Err(error);
                     break;
-                }
-            }
-        }
-    })
-}
-
-/// Executes one Alibaba Coding Plan prompt through the exact OpenAI chat-completions wire format and parses SSE deltas.
-/// 通过精确的 OpenAI chat-completions 线协议执行一次阿里百炼 Coding Plan 提示词调用并解析 SSE 增量。
-fn execute_alibaba_coding_plan_stream(
-    provider_id: &str,
-    headers: &HeaderMap,
-    api_key: &str,
-    base_url: Option<&str>,
-    model_id: &str,
-    system_preamble: &str,
-    prompt: &str,
-    temperature: Option<f64>,
-    user_agent_preview: &str,
-) -> ProviderDeltaStream {
-    let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) else {
-        return one_shot_provider_error_stream(String::from(
-            "阿里百炼 Coding Plan 当前缺少可用的接口基址，无法启动真实执行。",
-        ));
-    };
-
-    let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let request_body = build_alibaba_coding_plan_request_body(
-        provider_id,
-        model_id,
-        system_preamble,
-        prompt,
-        temperature,
-        true,
-    );
-    let request_preview = serde_json::to_string_pretty(&request_body)
-        .unwrap_or_else(|_| String::from("{\"error\":\"request-preview-unavailable\"}"));
-    let request_header_preview = format!("User-Agent: {user_agent_preview}");
-    let headers = headers.clone();
-    let api_key = api_key.to_string();
-    let endpoint_clone = endpoint.clone();
-
-    Box::pin(stream! {
-        let client = reqwest::Client::new();
-        let mut request_builder = client
-            .post(&endpoint_clone)
-            .header(AUTHORIZATION, format!("Bearer {api_key}"))
-            .header(CONTENT_TYPE, "application/json");
-
-        for (header_name, header_value) in &headers {
-            request_builder = request_builder.header(header_name, header_value);
-        }
-
-        let response = match request_builder.json(&request_body).send().await {
-            Ok(response) => response,
-            Err(error) => {
-                yield Err(format!(
-                    "阿里百炼 Coding Plan 请求发送失败：{}。接口：{}。请求头：{}。请求体：{}",
-                    error, endpoint, request_header_preview, request_preview
-                ));
-                return;
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            let response_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| String::from("<<response-body-unavailable>>"));
-            yield Err(format!(
-                "阿里百炼 Coding Plan 执行失败：HTTP {}。接口：{}。请求头：{}。请求体：{}。响应：{}",
-                status, endpoint, request_header_preview, request_preview, response_text
-            ));
-            return;
-        }
-
-        let mut pending = String::new();
-        let mut response = response;
-
-        loop {
-            let next_chunk = response.chunk().await;
-            let Some(chunk) = (match next_chunk {
-                Ok(chunk) => chunk,
-                Err(error) => {
-                    yield Err(format!(
-                        "阿里百炼 Coding Plan 流式响应读取失败：{}。接口：{}。",
-                        error, endpoint
-                    ));
-                    return;
-                }
-            }) else {
-                break;
-            };
-
-            pending.push_str(&String::from_utf8_lossy(&chunk));
-
-            while let Some(line_break_index) = pending.find('\n') {
-                let mut line = pending.drain(..=line_break_index).collect::<String>();
-                line = line.trim().to_string();
-                if line.is_empty() || !line.starts_with("data:") {
-                    continue;
-                }
-
-                let payload = line["data:".len()..].trim();
-                if payload == "[DONE]" {
-                    break;
-                }
-
-                match serde_json::from_str::<Value>(payload) {
-                    Ok(json_payload) => {
-                        for delta in provider_deltas_from_alibaba_chunk(&json_payload) {
-                            yield Ok(delta);
-                        }
-                    }
-                    Err(error) => {
-                        yield Err(format!(
-                            "阿里百炼 Coding Plan 返回了无法解析的流式 JSON：{}。接口：{}。原始片段：{}",
-                            error, endpoint, payload
-                        ));
-                        return;
-                    }
                 }
             }
         }
@@ -1081,78 +1073,6 @@ fn build_provider_request_headers(
     }
 
     Ok(headers)
-}
-
-/// Builds the exact chat-completions payload used for Alibaba Coding Plan.
-/// 构建阿里百炼 Coding Plan 使用的精确 chat-completions 请求体。
-fn build_alibaba_coding_plan_request_body(
-    provider_id: &str,
-    model_id: &str,
-    system_preamble: &str,
-    prompt: &str,
-    temperature: Option<f64>,
-    stream: bool,
-) -> Value {
-    let mut body = json!({
-        "model": model_id,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_preamble
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "stream": stream,
-    });
-
-    if let Some(temperature) = temperature {
-        body["temperature"] = json!(temperature);
-    }
-
-    if provider_id == "alibaba-coding-plan-cn"
-        && model_supports_dashscope_thinking(model_id)
-        && !model_id.to_ascii_lowercase().contains("kimi-k2-thinking")
-    {
-        body["enable_thinking"] = Value::Bool(true);
-    }
-
-    body
-}
-
-/// Returns whether one Alibaba model should request DashScope reasoning output explicitly.
-/// 返回某个阿里模型是否应显式请求 DashScope 推理输出。
-fn model_supports_dashscope_thinking(model_id: &str) -> bool {
-    let normalized = model_id.to_ascii_lowercase();
-
-    normalized.contains("qwen")
-        || normalized.contains("kimi")
-        || normalized.contains("deepseek")
-        || normalized.contains("glm")
-        || normalized.contains("qwq")
-        || normalized.contains("minimax")
-}
-
-/// Extracts OpenAI-compatible message content from either a string or structured content array.
-/// 从字符串或结构化内容数组中提取 OpenAI 兼容消息内容。
-fn extract_openai_message_content(content: &Value) -> String {
-    match content {
-        Value::String(text) => text.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| match part {
-                Value::Object(map) => map
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
 }
 
 /// Builds a one-shot provider stream that yields one terminal error and then closes immediately.
@@ -1259,40 +1179,6 @@ fn flatten_reasoning_content(content: &[ReasoningContent]) -> String {
         .join("\n")
 }
 
-/// Extracts zero or more thinking/output deltas from one Alibaba Coding Plan streaming chunk.
-/// 从一条阿里百炼 Coding Plan 流式数据块中提取零条或多条思考或输出增量。
-fn provider_deltas_from_alibaba_chunk(chunk: &Value) -> Vec<ProviderStreamDelta> {
-    let Some(first_choice) = chunk
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-    else {
-        return Vec::new();
-    };
-    let Some(delta) = first_choice.get("delta") else {
-        return Vec::new();
-    };
-
-    let mut deltas = Vec::new();
-
-    for key in ["reasoning_content", "reasoning"] {
-        if let Some(reasoning) = delta.get(key).and_then(Value::as_str) {
-            if !reasoning.is_empty() {
-                deltas.push(ProviderStreamDelta::Thinking(reasoning.to_string()));
-            }
-        }
-    }
-
-    if let Some(content_delta) = delta.get("content") {
-        let flattened = extract_openai_message_content(content_delta);
-        if !flattened.is_empty() {
-            deltas.push(ProviderStreamDelta::Output(flattened));
-        }
-    }
-
-    deltas
-}
-
 /// Executes one OpenAI Responses prompt using rig's default OpenAI responses client and streams deltas.
 /// 使用 rig 默认的 OpenAI Responses 客户端执行一次 OpenAI Responses 提示词调用并流式返回增量。
 fn execute_openai_responses_stream(
@@ -1304,6 +1190,7 @@ fn execute_openai_responses_stream(
     temperature: Option<f64>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::Client::builder()
         .api_key(api_key)
@@ -1329,6 +1216,9 @@ fn execute_openai_responses_stream(
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
+    }
+    if let Some(additional_params) = additional_params {
+        agent_builder = agent_builder.additional_params(additional_params);
     }
 
     let agent = if luaskills_rig_tools.is_empty() {
@@ -1369,6 +1259,7 @@ fn execute_anthropic_stream(
     temperature: Option<f64>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = anthropic::Client::builder()
         .api_key(api_key)
@@ -1394,6 +1285,9 @@ fn execute_anthropic_stream(
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
+    }
+    if let Some(additional_params) = additional_params {
+        agent_builder = agent_builder.additional_params(additional_params);
     }
 
     let agent = if luaskills_rig_tools.is_empty() {
@@ -1433,6 +1327,7 @@ fn execute_openrouter_stream(
     temperature: Option<f64>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let client = match openrouter::Client::builder()
         .api_key(api_key)
@@ -1454,6 +1349,9 @@ fn execute_openrouter_stream(
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
+    }
+    if let Some(additional_params) = additional_params {
+        agent_builder = agent_builder.additional_params(additional_params);
     }
 
     let agent = if luaskills_rig_tools.is_empty() {
@@ -1628,54 +1526,9 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderStreamDelta, SyntheticThinkingPreambleState, classify_synthetic_thinking_preamble,
-        normalize_streamed_thinking_output, provider_deltas_from_alibaba_chunk,
+        SyntheticThinkingPreambleState, classify_synthetic_thinking_preamble,
+        normalize_streamed_thinking_output,
     };
-    use serde_json::json;
-
-    /// Verifies Alibaba content deltas preserve leading and trailing newlines so streamed Markdown code fences do not glue lines together.
-    /// 验证阿里百炼内容增量会保留首尾换行，从而避免流式 Markdown 代码围栏与下一行黏连。
-    #[test]
-    fn alibaba_output_deltas_preserve_newline_boundaries() {
-        let chunk = json!({
-            "choices": [
-                {
-                    "delta": {
-                        "content": "\n```lua\n"
-                    }
-                }
-            ]
-        });
-
-        let deltas = provider_deltas_from_alibaba_chunk(&chunk);
-
-        assert!(matches!(
-            deltas.as_slice(),
-            [ProviderStreamDelta::Output(delta)] if delta == "\n```lua\n"
-        ));
-    }
-
-    /// Verifies Alibaba content deltas preserve whitespace-only fragments when they carry meaningful indentation inside streamed code blocks.
-    /// 验证阿里百炼内容增量在承载代码块缩进时会保留仅含空白的片段。
-    #[test]
-    fn alibaba_output_deltas_preserve_whitespace_only_fragments() {
-        let chunk = json!({
-            "choices": [
-                {
-                    "delta": {
-                        "content": "    "
-                    }
-                }
-            ]
-        });
-
-        let deltas = provider_deltas_from_alibaba_chunk(&chunk);
-
-        assert!(matches!(
-            deltas.as_slice(),
-            [ProviderStreamDelta::Output(delta)] if delta == "    "
-        ));
-    }
 
     /// Verifies synthetic reasoning preamble text is removed before streamed thinking content enters transcript storage.
     /// 验证合成推理前导语会在流式思考内容进入转录存储之前被移除。

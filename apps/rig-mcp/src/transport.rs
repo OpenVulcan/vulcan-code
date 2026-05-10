@@ -14,9 +14,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio::sync::broadcast;
 
 use rig_compose::registry::{KernelError, ToolRegistry};
 use rig_compose::tool::{Tool, ToolSchema};
+
+/// MCP transport lifecycle event broadcast to host runtimes.
+/// 广播给宿主运行时的 MCP 传输生命周期事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpTransportEvent {
+    /// Remote server tool list changed and should be re-discovered.
+    /// 远端服务器工具列表已变化，需要重新发现。
+    ToolsChanged,
+    /// Remote server transport disconnected and its registered tools should be withdrawn.
+    /// 远端服务器传输已断开，其已注册工具应被撤回。
+    Disconnected {
+        /// Human-readable disconnect reason surfaced for diagnostics.
+        /// 供诊断使用的人类可读断开原因。
+        reason: String,
+    },
+}
 
 /// Bidirectional MCP transport. Real implementations layer JSON-RPC
 /// framing, capability negotiation, and reconnection on top of this; the
@@ -30,6 +47,10 @@ pub trait McpTransport: Send + Sync {
     /// Discover the tools exposed by the remote endpoint. Called at
     /// registration time; the returned schemas are authoritative.
     async fn list_tools(&self) -> Result<Vec<ToolSchema>, KernelError>;
+
+    /// Subscribe to transport lifecycle events emitted after the initial connection succeeds.
+    /// 订阅初始连接成功之后发出的传输生命周期事件。
+    fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent>;
 
     /// Invoke a named tool. Implementations MUST round-trip the result
     /// JSON without modification so callers can rely on schema fidelity.
@@ -99,13 +120,16 @@ impl Tool for McpTool {
 pub struct LoopbackTransport {
     endpoint: String,
     registry: ToolRegistry,
+    event_sender: broadcast::Sender<McpTransportEvent>,
 }
 
 impl LoopbackTransport {
     pub fn new(endpoint: impl Into<String>, registry: ToolRegistry) -> Self {
+        let (event_sender, _) = broadcast::channel(8);
         Self {
             endpoint: endpoint.into(),
             registry,
+            event_sender,
         }
     }
 }
@@ -121,6 +145,10 @@ impl McpTransport for LoopbackTransport {
         // trait surface small; for the loopback transport we walk the
         // inner DashMap via a public helper added below.
         Ok(self.registry.schemas())
+    }
+
+    fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent> {
+        self.event_sender.subscribe()
     }
 
     async fn call_tool(&self, name: &str, args: Value) -> Result<Value, KernelError> {

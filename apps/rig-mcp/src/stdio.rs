@@ -15,21 +15,24 @@
 //!   the current process's stdin/stdout. Intended for `--mcp-serve`
 //!   style CLI flags.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::process::Command;
+use tokio::sync::broadcast;
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Content, Implementation, ListToolsResult,
     PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo, Tool as RmcpTool,
 };
-use rmcp::service::{Peer, RequestContext, RoleClient, RoleServer, RunningService, ServiceExt};
+use rmcp::service::{
+    NotificationContext, Peer, RequestContext, RoleClient, RoleServer, RunningService, ServiceExt,
+};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess, stdio as rmcp_stdio};
-use rmcp::{ErrorData as McpError, ServerHandler};
+use rmcp::{ClientHandler, ErrorData as McpError, ServerHandler};
 
-use crate::transport::McpTransport;
+use crate::transport::{McpTransport, McpTransportEvent};
 use rig_compose::registry::{KernelError, ToolRegistry};
 use rig_compose::tool::ToolSchema;
 
@@ -164,7 +167,10 @@ pub struct StdioTransport {
     /// Keeps the rmcp service task alive for the lifetime of the
     /// transport. Held but never read — dropping the transport drops
     /// the service, which closes the child's stdio.
-    _service: Arc<RunningService<RoleClient, ()>>,
+    _service: Arc<RunningService<RoleClient, Arc<EventingClientHandler>>>,
+    /// Broadcast channel used to surface tool refresh and disconnect events.
+    /// 用于对外广播工具刷新与断连事件的广播通道。
+    event_sender: broadcast::Sender<McpTransportEvent>,
 }
 
 impl StdioTransport {
@@ -177,6 +183,7 @@ impl StdioTransport {
         program: impl AsRef<std::ffi::OsStr>,
         args: &[&str],
     ) -> Result<Self, KernelError> {
+        let endpoint = endpoint.into();
         let program = program.as_ref().to_owned();
         let argv: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
         let cmd = Command::new(&program).configure(|c| {
@@ -184,15 +191,19 @@ impl StdioTransport {
         });
         let transport = TokioChildProcess::new(cmd)
             .map_err(|e| KernelError::ToolFailed(format!("mcp.spawn: {e}")))?;
-        let service = ()
+        let (event_sender, _) = broadcast::channel(32);
+        let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
+        let service = handler
             .serve(transport)
             .await
             .map_err(|e| KernelError::ToolFailed(format!("mcp.connect: {e}")))?;
         let peer = service.peer().clone();
+        spawn_transport_disconnect_watch(endpoint.clone(), peer.clone(), event_sender.clone());
         Ok(Self {
-            endpoint: endpoint.into(),
+            endpoint,
             peer,
             _service: Arc::new(service),
+            event_sender,
         })
     }
 }
@@ -201,6 +212,10 @@ impl StdioTransport {
 impl McpTransport for StdioTransport {
     fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    fn event_receiver(&self) -> broadcast::Receiver<McpTransportEvent> {
+        self.event_sender.subscribe()
     }
 
     async fn list_tools(&self) -> Result<Vec<ToolSchema>, KernelError> {
@@ -261,6 +276,52 @@ impl McpTransport for StdioTransport {
         }
         Ok(Value::Null)
     }
+}
+
+/// Client-side rmcp notification adapter that forwards tool-list changes to the host runtime.
+/// 将工具列表变化转发给宿主运行时的客户端侧 rmcp 通知适配器。
+#[derive(Clone)]
+struct EventingClientHandler {
+    /// Broadcast channel used to emit MCP transport lifecycle events.
+    /// 用于发出 MCP 传输生命周期事件的广播通道。
+    event_sender: broadcast::Sender<McpTransportEvent>,
+}
+
+impl EventingClientHandler {
+    /// Create one eventing client handler from a shared broadcast sender.
+    /// 根据共享广播发送端创建一个具备事件能力的客户端处理器。
+    fn new(event_sender: broadcast::Sender<McpTransportEvent>) -> Self {
+        Self { event_sender }
+    }
+}
+
+impl ClientHandler for EventingClientHandler {
+    /// Forward `tools/list_changed` notifications into the host runtime event stream.
+    /// 将 `tools/list_changed` 通知转发到宿主运行时事件流。
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        let _ = self.event_sender.send(McpTransportEvent::ToolsChanged);
+    }
+}
+
+/// Poll the rmcp peer until the underlying transport closes and then emit a disconnect event.
+/// 轮询 rmcp peer 直到其底层传输关闭，然后发出断连事件。
+fn spawn_transport_disconnect_watch(
+    endpoint: String,
+    peer: Peer<RoleClient>,
+    event_sender: broadcast::Sender<McpTransportEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            if peer.is_transport_closed() {
+                let _ = event_sender.send(McpTransportEvent::Disconnected {
+                    reason: format!("MCP stdio 传输 `{endpoint}` 已关闭。"),
+                });
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    });
 }
 
 fn rmcp_tool_to_schema(t: RmcpTool) -> ToolSchema {

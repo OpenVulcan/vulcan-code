@@ -4,7 +4,7 @@
 use crate::mcp::config::{McpServerConfig, McpTransportKind, runtime_mcp_server_configs};
 use crate::provider_config::ProviderConfigurationFile;
 use rig_compose::tool::Tool;
-use rig_mcp::{McpTool, McpTransport, StdioTransport};
+use rig_mcp::{HttpTransport, McpTool, McpTransport, SseTransport, StdioTransport};
 use std::sync::Arc;
 
 /// Runtime registry of configured MCP servers.
@@ -71,13 +71,10 @@ impl McpServerRegistry {
             .collect()
     }
 
-    /// Spawns one stdio MCP transport from the stored server entry.
-    /// 根据存储的服务器条目启动一个 stdio MCP 传输实例。
+    /// Spawns one MCP transport from the stored server entry.
+    /// 根据存储的服务器条目启动一个 MCP 传输实例。
     #[allow(dead_code)]
-    pub async fn spawn_stdio_transport(
-        &self,
-        server_id: &str,
-    ) -> Result<Arc<dyn McpTransport>, String> {
+    pub async fn spawn_transport(&self, server_id: &str) -> Result<Arc<dyn McpTransport>, String> {
         let server = self
             .servers
             .iter()
@@ -100,6 +97,40 @@ impl McpServerRegistry {
                         })?;
                 Ok(Arc::new(transport))
             }
+            McpTransportKind::Http => {
+                let url = server
+                    .url
+                    .clone()
+                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 HTTP URL。", server.name))?;
+                let transport = HttpTransport::connect(
+                    server.command_summary(),
+                    url,
+                    server.bearer_token.clone(),
+                    server.headers.clone().into_iter().collect(),
+                )
+                .await
+                .map_err(|error| {
+                    format!("连接 MCP HTTP 服务器 `{}` 失败：{}。", server.name, error)
+                })?;
+                Ok(Arc::new(transport))
+            }
+            McpTransportKind::Sse => {
+                let url = server
+                    .url
+                    .clone()
+                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 SSE URL。", server.name))?;
+                let transport = SseTransport::connect(
+                    server.command_summary(),
+                    url,
+                    server.bearer_token.clone(),
+                    server.headers.clone().into_iter().collect(),
+                )
+                .await
+                .map_err(|error| {
+                    format!("连接 MCP SSE 服务器 `{}` 失败：{}。", server.name, error)
+                })?;
+                Ok(Arc::new(transport))
+            }
         }
     }
 
@@ -110,7 +141,7 @@ impl McpServerRegistry {
         &self,
         server_id: &str,
     ) -> Result<Vec<Arc<dyn Tool>>, String> {
-        let transport = self.spawn_stdio_transport(server_id).await?;
+        let transport = self.spawn_transport(server_id).await?;
         McpTool::from_transport(transport)
             .await
             .map_err(|error| format!("发现 MCP 工具失败：{}。", error))

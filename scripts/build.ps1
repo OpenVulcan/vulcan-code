@@ -249,6 +249,22 @@ else {
     Write-Host "==> No app provider catalog directory found"
 }
 
+if (Test-Path (Join-Path $AppResourcesRoot "agent-prompts")) {
+    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "agent-prompts") -Destination (Join-Path $ResourcesOut "agent-prompts") | Out-Null
+    Write-Host "==> Agent prompt catalog synced to $(Join-Path $ResourcesOut 'agent-prompts')\"
+}
+else {
+    Write-Host "==> No app agent prompt catalog directory found"
+}
+
+if (Test-Path (Join-Path $AppResourcesRoot "system-prompts")) {
+    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "system-prompts") -Destination (Join-Path $ResourcesOut "system-prompts") | Out-Null
+    Write-Host "==> Provider system prompt catalog synced to $(Join-Path $ResourcesOut 'system-prompts')\"
+}
+else {
+    Write-Host "==> No app provider system prompt catalog directory found"
+}
+
 if (Test-Path (Join-Path $AppResourcesRoot "vulcan-mark.svg")) {
     Copy-Item -Force (Join-Path $AppResourcesRoot "vulcan-mark.svg") (Join-Path $ResourcesOut "vulcan-mark.svg")
     Write-Host "==> App logo asset synced to $ResourcesOut\"

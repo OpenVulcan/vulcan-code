@@ -5,6 +5,7 @@ use crate::provider_config::{
     self, PersistedProviderOptions, ProviderConfigurationFile, ProviderFieldKey,
     ProviderRuntimeKind,
 };
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Resolved provider/model runtime blueprint used by execution preparation.
@@ -44,6 +45,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Additional HTTP headers configured by the provider definition.
     /// 供应商定义配置的附加 HTTP 头集合。
     pub extra_headers: BTreeMap<String, String>,
+    /// Additional JSON body parameters configured by the provider definition.
+    /// 供应商定义配置的附加 JSON Body 参数集合。
+    pub extra_body: Value,
 }
 
 impl ProviderRuntimeBlueprint {
@@ -121,6 +125,7 @@ pub fn resolve_active_provider_blueprint(
         credential_source,
         user_agent: definition.user_agent.clone(),
         extra_headers: definition.extra_headers.clone(),
+        extra_body: Value::Object(definition.extra_body.clone()),
     })
 }
 

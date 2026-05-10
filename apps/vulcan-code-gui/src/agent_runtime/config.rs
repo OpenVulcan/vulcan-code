@@ -1,11 +1,14 @@
 //! Runtime configuration mapping shared by the compose execution foundation.
 //! compose 执行基础架构共享的运行时配置映射层。
 
+use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile};
 use crate::provider_config::{
-    PersistedAgentEntry, PersistedAgentKind, PersistedAgentRoute, PersistedSkillEntry,
-    PersistedSkillKind, PersistedToolPolicyEntry, ProviderConfigurationFile,
+    PersistedSkillEntry, PersistedSkillKind, PersistedToolPolicyEntry, ProviderConfigurationFile,
 };
+use crate::runtime_assets;
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 
 /// Stable identifier of the default worker agent seeded into fresh configurations.
 /// 注入到新配置中的默认工作代理稳定标识。
@@ -31,6 +34,34 @@ pub const DEFAULT_SAFE_TOOL_POLICY_ID: &str = "default-safe";
 /// Lua 定向工具策略的稳定标识。
 pub const LUA_SAFE_TOOL_POLICY_ID: &str = "lua-safe";
 
+/// Relative resource directory name that stores default agent system prompts.
+/// 存放默认代理系统提示词的相对资源目录名称。
+const AGENT_PROMPTS_DIR_NAME: &str = "agent-prompts";
+
+/// Default worker prompt resource file name.
+/// 默认工作代理提示词资源文件名。
+const DEFAULT_WORKER_PROMPT_FILE_NAME: &str = "default-worker.txt";
+
+/// Default Lua specialist prompt resource file name.
+/// 默认 Lua 专家代理提示词资源文件名。
+const LUA_SPECIALIST_PROMPT_FILE_NAME: &str = "lua-specialist.txt";
+
+/// Default memory specialist prompt resource file name.
+/// 默认记忆专家代理提示词资源文件名。
+const MEMORY_SPECIALIST_PROMPT_FILE_NAME: &str = "memory-specialist.txt";
+
+/// Legacy inline worker prompt kept as one compatibility fallback.
+/// 保留为兼容回退的一条旧版内联工作代理提示词。
+const LEGACY_DEFAULT_WORKER_PROMPT: &str = "你是 Vulcan Code 的默认工作代理。";
+
+/// Legacy inline Lua prompt kept as one compatibility fallback.
+/// 保留为兼容回退的一条旧版内联 Lua 代理提示词。
+const LEGACY_LUA_SPECIALIST_PROMPT: &str = "你是 LuaSkills 方向的专家代理。";
+
+/// Legacy inline memory prompt kept as one compatibility fallback.
+/// 保留为兼容回退的一条旧版内联记忆代理提示词。
+const LEGACY_MEMORY_SPECIALIST_PROMPT: &str = "你是 VulcanMemoryMesh 方向的专家代理。";
+
 /// Runtime-facing agent family used by the compose foundation.
 /// compose 基础架构使用的运行时代理类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,18 +85,6 @@ impl RuntimeAgentKind {
             Self::Worker => "工作代理",
             Self::Specialist => "专家代理",
             Self::Coordinator => "协调代理",
-        }
-    }
-}
-
-impl From<PersistedAgentKind> for RuntimeAgentKind {
-    /// Converts one persisted agent kind into its runtime counterpart.
-    /// 将一个持久化代理类型转换为对应的运行时代理类型。
-    fn from(value: PersistedAgentKind) -> Self {
-        match value {
-            PersistedAgentKind::Worker => Self::Worker,
-            PersistedAgentKind::Specialist => Self::Specialist,
-            PersistedAgentKind::Coordinator => Self::Coordinator,
         }
     }
 }
@@ -263,32 +282,22 @@ pub struct AgentRuntimeConfig {
 impl AgentRuntimeConfig {
     /// Builds the runtime-facing aggregate configuration from the persisted root config.
     /// 根据持久化根配置构建面向运行时的聚合配置。
-    pub fn from_provider_configuration(config: &ProviderConfigurationFile) -> Self {
-        let agents = config
-            .agents
-            .iter()
-            .map(|(id, entry)| RuntimeAgentDefinition {
-                id: id.clone(),
-                name: entry.name.clone(),
-                kind: entry.kind.into(),
-                description: entry.description.clone().unwrap_or_default(),
-                system_prompt: entry.system_prompt.clone().unwrap_or_default(),
-                skill_ids: entry.skills.clone(),
-                native_tools: entry.native_tools.clone(),
-                mcp_tools: entry.mcp_tools.clone(),
-                delegates: entry.delegates.clone(),
-                tool_policy: entry.tool_policy.clone(),
-                routes: entry
-                    .routes
-                    .iter()
-                    .map(runtime_route_from_persisted)
-                    .collect(),
-                fallback_delegate: entry.fallback_delegate.clone(),
-                model: entry.model.clone(),
-                temperature: entry.temperature,
-                max_turns: entry.max_turns,
-            })
-            .collect::<Vec<_>>();
+    pub fn from_sources(
+        config: &ProviderConfigurationFile,
+        agent_profile_catalog: &AgentProfileCatalog,
+    ) -> Self {
+        let mut agents = vec![
+            default_worker_agent(),
+            default_lua_agent(),
+            default_memory_agent(),
+            default_coordinator_agent(),
+        ];
+        agents.extend(
+            agent_profile_catalog
+                .agents
+                .values()
+                .map(runtime_agent_from_user_profile),
+        );
 
         let skills = config
             .skills
@@ -322,9 +331,11 @@ impl AgentRuntimeConfig {
 
         Self {
             active_model: config.model.clone(),
-            active_agent_id: config
-                .active_agent
+            active_agent_id: agent_profile_catalog
+                .state
+                .selected_agent_id
                 .clone()
+                .filter(|agent_id| agents.iter().any(|definition| definition.id == *agent_id))
                 .unwrap_or_else(|| WORKSPACE_COORDINATOR_AGENT_ID.to_string()),
             agents,
             skills,
@@ -357,30 +368,7 @@ pub fn ensure_runtime_defaults(config: &mut ProviderConfigurationFile) -> bool {
     changed |=
         ensure_default_tool_policy(config, LUA_SAFE_TOOL_POLICY_ID, default_lua_tool_policy());
 
-    changed |= ensure_default_agent(config, DEFAULT_WORKER_AGENT_ID, default_worker_agent());
-    changed |= ensure_default_agent(config, LUA_SPECIALIST_AGENT_ID, default_lua_agent());
-    changed |= ensure_default_agent(config, MEMORY_SPECIALIST_AGENT_ID, default_memory_agent());
-    changed |= ensure_default_agent(
-        config,
-        WORKSPACE_COORDINATOR_AGENT_ID,
-        default_coordinator_agent(),
-    );
-
-    if config.active_agent.is_none() {
-        config.active_agent = Some(WORKSPACE_COORDINATOR_AGENT_ID.to_string());
-        changed = true;
-    }
-
     changed
-}
-
-/// Converts one persisted route into its runtime representation.
-/// 将单条持久化路由转换为对应的运行时表示。
-fn runtime_route_from_persisted(route: &PersistedAgentRoute) -> RuntimeAgentRoute {
-    RuntimeAgentRoute {
-        signal: route.signal.clone(),
-        delegate: route.delegate.clone(),
-    }
 }
 
 /// Converts one persisted tool policy into its runtime representation.
@@ -425,21 +413,6 @@ fn ensure_default_tool_policy(
         false
     } else {
         config.tool_policies.insert(id.to_string(), entry);
-        true
-    }
-}
-
-/// Inserts a default agent definition only when the given identifier is absent.
-/// 仅当给定标识不存在时插入默认代理定义。
-fn ensure_default_agent(
-    config: &mut ProviderConfigurationFile,
-    id: &str,
-    entry: PersistedAgentEntry,
-) -> bool {
-    if config.agents.contains_key(id) {
-        false
-    } else {
-        config.agents.insert(id.to_string(), entry);
         true
     }
 }
@@ -534,17 +507,19 @@ fn default_lua_tool_policy() -> PersistedToolPolicyEntry {
     }
 }
 
-/// Builds the default worker agent definition.
-/// 构建默认工作代理定义。
-fn default_worker_agent() -> PersistedAgentEntry {
-    PersistedAgentEntry {
+/// Builds the default worker agent runtime definition.
+/// 构建默认工作代理运行时定义。
+fn default_worker_agent() -> RuntimeAgentDefinition {
+    RuntimeAgentDefinition {
+        id: String::from(DEFAULT_WORKER_AGENT_ID),
         name: String::from("默认工作代理"),
-        kind: PersistedAgentKind::Worker,
-        description: Some(String::from(
-            "负责常规 AI Coding 执行、问题拆解与基础工具协作。",
-        )),
-        system_prompt: Some(String::from("你是 Vulcan Code 的默认工作代理。")),
-        skills: vec![String::from("regular.workspace-triage")],
+        kind: RuntimeAgentKind::Worker,
+        description: String::from("负责常规 AI Coding 执行、问题拆解与基础工具协作。"),
+        system_prompt: load_default_agent_prompt(
+            DEFAULT_WORKER_PROMPT_FILE_NAME,
+            LEGACY_DEFAULT_WORKER_PROMPT,
+        ),
+        skill_ids: vec![String::from("regular.workspace-triage")],
         native_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: vec![
@@ -560,15 +535,19 @@ fn default_worker_agent() -> PersistedAgentEntry {
     }
 }
 
-/// Builds the default Lua specialist agent definition.
-/// 构建默认 Lua 专家代理定义。
-fn default_lua_agent() -> PersistedAgentEntry {
-    PersistedAgentEntry {
+/// Builds the default Lua specialist agent runtime definition.
+/// 构建默认 Lua 专家代理运行时定义。
+fn default_lua_agent() -> RuntimeAgentDefinition {
+    RuntimeAgentDefinition {
+        id: String::from(LUA_SPECIALIST_AGENT_ID),
         name: String::from("LuaSkills 专家代理"),
-        kind: PersistedAgentKind::Specialist,
-        description: Some(String::from("负责 LuaSkills、Lua 工具链与宿主运行时桥接。")),
-        system_prompt: Some(String::from("你是 LuaSkills 方向的专家代理。")),
-        skills: vec![String::from("luaskills.bridge")],
+        kind: RuntimeAgentKind::Specialist,
+        description: String::from("负责 LuaSkills、Lua 工具链与宿主运行时桥接。"),
+        system_prompt: load_default_agent_prompt(
+            LUA_SPECIALIST_PROMPT_FILE_NAME,
+            LEGACY_LUA_SPECIALIST_PROMPT,
+        ),
+        skill_ids: vec![String::from("luaskills.bridge")],
         native_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
@@ -581,15 +560,19 @@ fn default_lua_agent() -> PersistedAgentEntry {
     }
 }
 
-/// Builds the default memory specialist agent definition.
-/// 构建默认记忆专家代理定义。
-fn default_memory_agent() -> PersistedAgentEntry {
-    PersistedAgentEntry {
+/// Builds the default memory specialist agent runtime definition.
+/// 构建默认记忆专家代理运行时定义。
+fn default_memory_agent() -> RuntimeAgentDefinition {
+    RuntimeAgentDefinition {
+        id: String::from(MEMORY_SPECIALIST_AGENT_ID),
         name: String::from("记忆专家代理"),
-        kind: PersistedAgentKind::Specialist,
-        description: Some(String::from("负责记忆网格、历史上下文与长期信息编织。")),
-        system_prompt: Some(String::from("你是 VulcanMemoryMesh 方向的专家代理。")),
-        skills: vec![String::from("memorymesh.recall")],
+        kind: RuntimeAgentKind::Specialist,
+        description: String::from("负责记忆网格、历史上下文与长期信息编织。"),
+        system_prompt: load_default_agent_prompt(
+            MEMORY_SPECIALIST_PROMPT_FILE_NAME,
+            LEGACY_MEMORY_SPECIALIST_PROMPT,
+        ),
+        skill_ids: vec![String::from("memorymesh.recall")],
         native_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
@@ -602,17 +585,16 @@ fn default_memory_agent() -> PersistedAgentEntry {
     }
 }
 
-/// Builds the default coordinator agent definition.
-/// 构建默认协调代理定义。
-fn default_coordinator_agent() -> PersistedAgentEntry {
-    PersistedAgentEntry {
-        name: String::from("工作区协调代理"),
-        kind: PersistedAgentKind::Coordinator,
-        description: Some(String::from(
-            "负责在常规代理、LuaSkills 代理与记忆代理之间进行确定性调度。",
-        )),
-        system_prompt: Some(String::from("你是负责子代理分工与调度的协调代理。")),
-        skills: Vec::new(),
+/// Builds the system-default coordinator runtime definition used when the user does not select one custom agent.
+/// 构建当用户未选择自定义 Agent 时使用的系统默认协调运行时定义。
+fn default_coordinator_agent() -> RuntimeAgentDefinition {
+    RuntimeAgentDefinition {
+        id: String::from(WORKSPACE_COORDINATOR_AGENT_ID),
+        name: String::from("系统默认（按模型）"),
+        kind: RuntimeAgentKind::Coordinator,
+        description: String::from("负责在常规代理、LuaSkills 代理与记忆代理之间进行确定性调度。"),
+        system_prompt: String::new(),
+        skill_ids: Vec::new(),
         native_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: vec![
@@ -622,11 +604,11 @@ fn default_coordinator_agent() -> PersistedAgentEntry {
         ],
         tool_policy: Some(String::from(DEFAULT_SAFE_TOOL_POLICY_ID)),
         routes: vec![
-            PersistedAgentRoute {
+            RuntimeAgentRoute {
                 signal: String::from("lua.request"),
                 delegate: String::from(LUA_SPECIALIST_AGENT_ID),
             },
-            PersistedAgentRoute {
+            RuntimeAgentRoute {
                 signal: String::from("memory.recall"),
                 delegate: String::from(MEMORY_SPECIALIST_AGENT_ID),
             },
@@ -636,4 +618,53 @@ fn default_coordinator_agent() -> PersistedAgentEntry {
         temperature: Some(0.15),
         max_turns: Some(12),
     }
+}
+
+/// Builds one runtime agent definition from a user-authored profile by overlaying it on the system-default coordinator semantics.
+/// 通过叠加系统默认协调代理语义，从用户自定义配置构建一条运行时代理定义。
+fn runtime_agent_from_user_profile(profile: &UserAgentProfile) -> RuntimeAgentDefinition {
+    let mut definition = default_coordinator_agent();
+    definition.id = profile.id.clone();
+    definition.name = profile.name.clone();
+    definition.description = if profile.description.trim().is_empty() {
+        String::from("基于用户自定义提示词的主代理。")
+    } else {
+        profile.description.clone()
+    };
+    definition.system_prompt = profile.prompt.clone();
+    definition.model = profile.model.clone();
+    definition.temperature = profile.temperature.or(definition.temperature);
+    definition.max_turns = profile.max_turns.or(definition.max_turns);
+    definition
+}
+
+/// Loads one bundled default agent prompt and falls back to one short inline prompt when missing.
+/// 加载一份内置默认代理提示词，并在缺失时回退到一条简短的内联提示词。
+fn load_default_agent_prompt(file_name: &str, fallback_prompt: &str) -> String {
+    let packaged_prompt_path = runtime_assets::resolve_app_resources_directory()
+        .join(AGENT_PROMPTS_DIR_NAME)
+        .join(file_name);
+    if let Some(prompt) = read_non_empty_prompt_file(&packaged_prompt_path) {
+        return prompt;
+    }
+
+    let source_prompt_path = runtime_assets::source_resource_directory()
+        .join(AGENT_PROMPTS_DIR_NAME)
+        .join(file_name);
+    if source_prompt_path != packaged_prompt_path {
+        if let Some(prompt) = read_non_empty_prompt_file(&source_prompt_path) {
+            return prompt;
+        }
+    }
+
+    fallback_prompt.to_string()
+}
+
+/// Reads one prompt text file and trims outer blank lines while preserving the inner content.
+/// 读取单个提示词文本文件，并裁剪外围空白行同时保留内部正文。
+fn read_non_empty_prompt_file(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
 }

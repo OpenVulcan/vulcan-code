@@ -13,6 +13,12 @@ pub enum McpTransportKind {
     /// Standard input/output child-process transport.
     /// 标准输入输出子进程传输。
     Stdio,
+    /// Streamable HTTP client transport.
+    /// Streamable HTTP 客户端传输。
+    Http,
+    /// Legacy server-sent-events MCP transport.
+    /// 旧式基于 Server-Sent Events 的 MCP 传输。
+    Sse,
 }
 
 impl McpTransportKind {
@@ -21,6 +27,8 @@ impl McpTransportKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Stdio => "stdio",
+            Self::Http => "http",
+            Self::Sse => "sse",
         }
     }
 }
@@ -31,6 +39,8 @@ impl From<PersistedMcpTransportKind> for McpTransportKind {
     fn from(value: PersistedMcpTransportKind) -> Self {
         match value {
             PersistedMcpTransportKind::Stdio => Self::Stdio,
+            PersistedMcpTransportKind::Http => Self::Http,
+            PersistedMcpTransportKind::Sse => Self::Sse,
         }
     }
 }
@@ -58,6 +68,15 @@ pub struct McpServerConfig {
     /// Process argument list.
     /// 进程参数列表。
     pub args: Vec<String>,
+    /// Remote endpoint URL used by HTTP transports.
+    /// HTTP 传输使用的远端端点 URL。
+    pub url: Option<String>,
+    /// Optional bearer token used by HTTP transports.
+    /// HTTP 传输使用的可选 Bearer Token。
+    pub bearer_token: Option<String>,
+    /// Additional HTTP headers used by HTTP transports.
+    /// HTTP 传输使用的附加 HTTP 请求头。
+    pub headers: BTreeMap<String, String>,
     /// Optional working directory.
     /// 可选工作目录。
     pub cwd: Option<String>,
@@ -70,10 +89,18 @@ impl McpServerConfig {
     /// Returns a compact command-line summary.
     /// 返回紧凑的命令行摘要。
     pub fn command_summary(&self) -> String {
-        if self.args.is_empty() {
-            self.command.clone()
-        } else {
-            format!("{} {}", self.command, self.args.join(" "))
+        match self.transport {
+            McpTransportKind::Stdio => {
+                if self.args.is_empty() {
+                    self.command.clone()
+                } else {
+                    format!("{} {}", self.command, self.args.join(" "))
+                }
+            }
+            McpTransportKind::Http | McpTransportKind::Sse => self
+                .url
+                .clone()
+                .unwrap_or_else(|| String::from("(missing url)")),
         }
     }
 }
@@ -99,6 +126,9 @@ fn runtime_mcp_server_from_persisted(id: &str, entry: &PersistedMcpServerEntry) 
         transport: entry.transport.into(),
         command: entry.command.clone(),
         args: entry.args.clone(),
+        url: entry.url.clone(),
+        bearer_token: entry.bearer_token.clone(),
+        headers: entry.headers.clone(),
         cwd: entry.cwd.clone(),
         env: entry.env.clone(),
     }

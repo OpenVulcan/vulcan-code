@@ -1,6 +1,7 @@
 //! Main application state and view composition for the desktop scaffold.
 //! 桌面端骨架的主应用状态与界面组合逻辑。
 
+use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::{
     self, ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest,
@@ -19,15 +20,16 @@ use crate::luaskills_runtime::{
     LuaSkillsInstallSourceChoice, LuaSkillsManagementAction, LuaSkillsManagementReport,
     LuaSkillsRuntimeHandle,
 };
+use crate::mcp::{McpRuntimeHandle, bootstrap_mcp_runtime};
 use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::provider_config::{
-    self, ModelChoice, PersistedAgentKind, PersistedControllerConfiguration,
-    PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedProviderEntry,
-    PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
+    self, ModelChoice, PersistedControllerConfiguration, PersistedMcpServerEntry,
+    PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
+    ProviderConfigurationFile, ProviderFieldKey,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
@@ -593,6 +595,9 @@ pub struct VulcanWorkbench {
     /// Optional LuaSkills runtime handle retained after the secondary startup phase completes.
     /// 在二级启动阶段完成后保留的可选 LuaSkills 运行时句柄。
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    /// Optional long-lived MCP runtime handle retained after the background MCP bootstrap completes.
+    /// 在后台 MCP 引导完成后保留的可选长期 MCP 运行时句柄。
+    mcp_runtime: Option<McpRuntimeHandle>,
     /// Latest LuaSkills skill catalog loaded from the embedded host runtime.
     /// 从嵌入式宿主运行时载入的最新 LuaSkills 技能清单。
     luaskills_catalog: Option<LuaSkillsCatalog>,
@@ -614,6 +619,9 @@ pub struct VulcanWorkbench {
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
+    /// User-visible agent profile catalog loaded from the dedicated user directory and state file.
+    /// 从独立用户目录与状态文件载入的面向用户 Agent 配置目录。
+    agent_profile_catalog: AgentProfileCatalog,
     /// Shared controller bootstrap configuration loaded from the runtime config directory.
     /// 从运行时配置目录载入的共享控制器引导配置。
     controller_configuration: PersistedControllerConfiguration,
@@ -1036,7 +1044,7 @@ impl std::fmt::Display for McpServerChoice {
 
 /// Editable MCP server form state mirrored into the shared configuration file.
 /// 映射回共享配置文件的可编辑 MCP 服务器表单状态。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct McpServerFormState {
     /// Human-readable MCP server name.
     /// 人类可读的 MCP 服务器名称。
@@ -1044,12 +1052,24 @@ struct McpServerFormState {
     /// Whether the MCP server is enabled.
     /// 当前 MCP 服务器是否启用。
     enabled: bool,
+    /// Selected transport family.
+    /// 当前选中的传输类型。
+    transport: PersistedMcpTransportKind,
     /// Command used to start the MCP server process.
     /// 用于启动 MCP 服务器进程的命令。
     command: String,
     /// Delimited argument text shown in the settings form.
     /// 展示在设置表单中的分隔参数文本。
     args_text: String,
+    /// Remote endpoint URL used by HTTP transports.
+    /// HTTP 传输使用的远端端点 URL。
+    url: String,
+    /// Optional bearer token used by HTTP transports.
+    /// HTTP 传输使用的可选 Bearer Token。
+    bearer_token: String,
+    /// Semicolon-delimited HTTP header declarations.
+    /// 使用分号分隔的 HTTP 请求头声明文本。
+    headers_text: String,
     /// Optional working directory override.
     /// 可选的工作目录覆盖值。
     cwd: String,
@@ -1065,8 +1085,12 @@ impl McpServerFormState {
         Self {
             name: entry.name.clone(),
             enabled: entry.enabled,
+            transport: entry.transport,
             command: entry.command.clone(),
             args_text: join_mcp_server_args(&entry.args),
+            url: entry.url.clone().unwrap_or_default(),
+            bearer_token: entry.bearer_token.clone().unwrap_or_default(),
+            headers_text: join_mcp_server_headers(&entry.headers),
             cwd: entry.cwd.clone().unwrap_or_default(),
             env_text: join_mcp_server_env(&entry.env),
         }
@@ -1080,20 +1104,70 @@ impl McpServerFormState {
             return Err(String::from("请先填写 MCP 服务器名称。"));
         }
 
-        let command = self.command.trim();
-        if command.is_empty() {
-            return Err(String::from("请先填写 MCP 服务器启动命令。"));
-        }
+        match self.transport {
+            PersistedMcpTransportKind::Stdio => {
+                let command = self.command.trim();
+                if command.is_empty() {
+                    return Err(String::from("请先填写 MCP 服务器启动命令。"));
+                }
 
-        Ok(PersistedMcpServerEntry {
-            name: name.to_string(),
-            enabled: self.enabled,
+                Ok(PersistedMcpServerEntry {
+                    name: name.to_string(),
+                    enabled: self.enabled,
+                    transport: PersistedMcpTransportKind::Stdio,
+                    command: command.to_string(),
+                    args: parse_mcp_server_args(&self.args_text),
+                    url: None,
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    cwd: trim_to_option(&self.cwd),
+                    env: parse_mcp_server_env(&self.env_text)?,
+                })
+            }
+            PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => {
+                let url = self.url.trim();
+                if url.is_empty() {
+                    return Err(String::from("请先填写 MCP 远端服务器 URL。"));
+                }
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(String::from(
+                        "MCP 远端服务器 URL 必须以 `http://` 或 `https://` 开头。",
+                    ));
+                }
+
+                Ok(PersistedMcpServerEntry {
+                    name: name.to_string(),
+                    enabled: self.enabled,
+                    transport: self.transport,
+                    command: String::new(),
+                    args: Vec::new(),
+                    url: Some(url.to_string()),
+                    bearer_token: trim_to_option(&self.bearer_token),
+                    headers: parse_mcp_server_headers(&self.headers_text)?,
+                    cwd: None,
+                    env: BTreeMap::new(),
+                })
+            }
+        }
+    }
+}
+
+impl Default for McpServerFormState {
+    /// Builds the default editable MCP server form.
+    /// 构建默认的可编辑 MCP 服务器表单。
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            enabled: false,
             transport: PersistedMcpTransportKind::Stdio,
-            command: command.to_string(),
-            args: parse_mcp_server_args(&self.args_text),
-            cwd: trim_to_option(&self.cwd),
-            env: parse_mcp_server_env(&self.env_text)?,
-        })
+            command: String::new(),
+            args_text: String::new(),
+            url: String::new(),
+            bearer_token: String::new(),
+            headers_text: String::new(),
+            cwd: String::new(),
+            env_text: String::new(),
+        }
     }
 }
 
@@ -1242,6 +1316,9 @@ enum Message {
     /// Applies the completed LuaSkills bootstrap report.
     /// 应用已完成的 LuaSkills 引导报告。
     LuaSkillsBootstrapFinished(Result<LuaSkillsBootstrapReport, String>),
+    /// Applies the completed MCP runtime bootstrap result.
+    /// 应用已完成的 MCP 运行时引导结果。
+    McpRuntimeBootstrapped(Result<McpRuntimeHandle, String>),
     /// Applies the completed workspace-state load result after the shared runtimes become ready.
     /// 应用共享运行时就绪后已完成的工作台状态加载结果。
     WorkspaceStateLoaded(Result<WorkspaceSnapshot, String>),
@@ -1353,12 +1430,24 @@ enum Message {
     /// Updates the editable MCP server name field.
     /// 更新可编辑 MCP 服务器名称字段。
     McpServerNameChanged(String),
+    /// Selects the editable MCP transport family.
+    /// 选择可编辑 MCP 传输类型。
+    McpServerTransportSelected(PersistedMcpTransportKind),
     /// Updates the editable MCP server command field.
     /// 更新可编辑 MCP 服务器命令字段。
     McpServerCommandChanged(String),
     /// Updates the editable MCP server argument text field.
     /// 更新可编辑 MCP 服务器参数文本字段。
     McpServerArgsChanged(String),
+    /// Updates the editable MCP server URL field.
+    /// 更新可编辑 MCP 服务器 URL 字段。
+    McpServerUrlChanged(String),
+    /// Updates the editable MCP server bearer token field.
+    /// 更新可编辑 MCP 服务器 Bearer Token 字段。
+    McpServerBearerTokenChanged(String),
+    /// Updates the editable MCP server HTTP headers field.
+    /// 更新可编辑 MCP 服务器 HTTP 请求头字段。
+    McpServerHeadersChanged(String),
     /// Updates the editable MCP server working-directory field.
     /// 更新可编辑 MCP 服务器工作目录字段。
     McpServerCwdChanged(String),
@@ -1676,14 +1765,51 @@ impl VulcanWorkbench {
                     format!("供应商配置载入失败，已回退到空配置：{error}"),
                 ),
             };
-        if agent_runtime::ensure_runtime_defaults(&mut provider_configuration) {
+        let runtime_defaults_changed =
+            agent_runtime::ensure_runtime_defaults(&mut provider_configuration);
+        let mut agent_profile_catalog = match agent_profile::load_agent_profile_catalog() {
+            Ok(catalog) => {
+                provider_notice.push_str(" 已从用户目录载入 Agent 配置。");
+                catalog
+            }
+            Err(error) => {
+                provider_notice.push_str(&format!(
+                    " 用户 Agent 配置载入失败，已回退到系统默认：{error}"
+                ));
+                AgentProfileCatalog::default()
+            }
+        };
+        let legacy_agent_migrated = match agent_profile::migrate_legacy_provider_agents(
+            &provider_configuration,
+            &mut agent_profile_catalog,
+        ) {
+            Ok(changed) => {
+                if changed {
+                    provider_notice
+                        .push_str(" 已将旧版合并在 Provider 配置中的 Agent 定义迁移到用户目录。");
+                }
+                changed
+            }
+            Err(error) => {
+                provider_notice.push_str(&format!(
+                    " 旧版 Agent 配置迁移失败，后续仅使用系统默认：{error}"
+                ));
+                false
+            }
+        };
+        if runtime_defaults_changed || legacy_agent_migrated {
             match provider_config::save_configuration_file(&provider_configuration) {
                 Ok(()) => {
-                    provider_notice.push_str(" 已自动补齐 rig/compose/mcp 基础架构默认配置。");
+                    if runtime_defaults_changed {
+                        provider_notice.push_str(" 已自动补齐 rig/compose/mcp 基础架构默认配置。");
+                    }
+                    if legacy_agent_migrated {
+                        provider_notice.push_str(" 旧版 Provider Agent 字段已从主配置文件中清退。");
+                    }
                 }
                 Err(error) => {
                     provider_notice.push_str(&format!(
-                        " 运行时默认配置已写入内存，但保存到磁盘失败：{error}"
+                        " 运行时配置调整已写入内存，但保存到磁盘失败：{error}"
                     ));
                 }
             }
@@ -1715,7 +1841,8 @@ impl VulcanWorkbench {
             .and_then(|server_id| provider_configuration.mcp.servers.get(server_id))
             .map(McpServerFormState::from_entry)
             .unwrap_or_default();
-        let runtime_foundation = RuntimeFoundation::build(&provider_configuration, None);
+        let runtime_foundation =
+            RuntimeFoundation::build(&provider_configuration, &agent_profile_catalog, None, None);
 
         let activities = ActivityEntry::seeded();
         let activity_raw_buffers = activities
@@ -1820,6 +1947,7 @@ impl VulcanWorkbench {
                 },
                 controller_runtime: None,
                 luaskills_runtime: None,
+                mcp_runtime: None,
                 luaskills_catalog: None,
                 luaskills_notice: String::from("LuaSkills 面板尚未加载技能目录。"),
                 luaskills_install_source_choice: LuaSkillsInstallSourceChoice::Github,
@@ -1827,6 +1955,7 @@ impl VulcanWorkbench {
                 luaskills_install_source: String::new(),
                 luaskills_operation_in_flight: false,
                 provider_configuration,
+                agent_profile_catalog,
                 controller_configuration,
                 runtime_foundation,
                 session_skill_chain: SessionDerivedSkillChain::default(),
@@ -1837,7 +1966,7 @@ impl VulcanWorkbench {
                 mcp_notice: if selected_mcp_server_id.is_some() {
                     String::from("已载入 MCP 服务器配置。")
                 } else {
-                    String::from("尚未配置 MCP 服务器，可在此新增一个 stdio 服务器。")
+                    String::from("尚未配置 MCP 服务器，可在此新增一个 stdio 或 http 服务器。")
                 },
                 selected_mcp_server_id,
                 mcp_server_form,
@@ -1876,6 +2005,9 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在初始化 vldb 数据平面。");
                 self.controller_runtime = None;
                 self.luaskills_runtime = None;
+                if let Some(handle) = self.mcp_runtime.take() {
+                    handle.shutdown();
+                }
                 self.luaskills_catalog = None;
                 self.luaskills_notice = String::from("LuaSkills 面板尚未加载技能目录。");
                 self.luaskills_install_source_choice = LuaSkillsInstallSourceChoice::Github;
@@ -2001,6 +2133,10 @@ impl VulcanWorkbench {
                                     Message::WorkspaceStateLoaded,
                                 ),
                                 Task::perform(
+                                    bootstrap_mcp_runtime(self.provider_configuration.clone()),
+                                    Message::McpRuntimeBootstrapped,
+                                ),
+                                Task::perform(
                                     luaskills_runtime::load_luaskills_catalog(luaskills_handle),
                                     Message::LuaSkillsCatalogLoaded,
                                 ),
@@ -2084,6 +2220,24 @@ impl VulcanWorkbench {
                             "LuaSkills 技能目录载入失败",
                             error,
                         );
+                    }
+                }
+
+                Task::none()
+            }
+            Message::McpRuntimeBootstrapped(result) => {
+                match result {
+                    Ok(handle) => {
+                        self.mcp_runtime = Some(handle);
+                        self.refresh_runtime_foundation();
+                        self.mcp_notice =
+                            String::from("MCP 运行时已就绪，后续执行将直接注册实时可用工具。");
+                    }
+                    Err(error) => {
+                        self.mcp_runtime = None;
+                        self.refresh_runtime_foundation();
+                        self.mcp_notice = format!("MCP 运行时初始化失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "MCP 运行时初始化失败", error);
                     }
                 }
 
@@ -2723,10 +2877,19 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ActiveAgentSelected(choice) => {
-                self.provider_configuration.active_agent = Some(choice.id.clone());
+                let selected_agent_id = if choice.id == SYSTEM_DEFAULT_AGENT_CHOICE_ID {
+                    None
+                } else if self.agent_profile_catalog.agents.contains_key(&choice.id) {
+                    Some(choice.id.clone())
+                } else {
+                    self.status_message =
+                        format!("未找到用户代理 `{}`，无法切换当前激活代理。", choice.label);
+                    return Task::none();
+                };
+                self.agent_profile_catalog.state.selected_agent_id = selected_agent_id;
 
                 if let Err(error) =
-                    provider_config::save_configuration_file(&self.provider_configuration)
+                    agent_profile::save_agent_profile_state(&self.agent_profile_catalog.state)
                 {
                     self.mcp_notice = error.clone();
                     self.status_message = error;
@@ -2747,12 +2910,28 @@ impl VulcanWorkbench {
                 self.mcp_server_form.name = value;
                 Task::none()
             }
+            Message::McpServerTransportSelected(transport) => {
+                self.mcp_server_form.transport = transport;
+                Task::none()
+            }
             Message::McpServerCommandChanged(value) => {
                 self.mcp_server_form.command = value;
                 Task::none()
             }
             Message::McpServerArgsChanged(value) => {
                 self.mcp_server_form.args_text = value;
+                Task::none()
+            }
+            Message::McpServerUrlChanged(value) => {
+                self.mcp_server_form.url = value;
+                Task::none()
+            }
+            Message::McpServerBearerTokenChanged(value) => {
+                self.mcp_server_form.bearer_token = value;
+                Task::none()
+            }
+            Message::McpServerHeadersChanged(value) => {
+                self.mcp_server_form.headers_text = value;
                 Task::none()
             }
             Message::McpServerCwdChanged(value) => {
@@ -2773,17 +2952,17 @@ impl VulcanWorkbench {
                     enabled: true,
                     ..McpServerFormState::default()
                 };
-                self.mcp_notice = String::from("已创建新的 MCP 服务器草稿，请填写名称与命令。");
+                self.mcp_notice = String::from("已创建新的 MCP 服务器草稿，请填写名称与连接信息。");
                 Task::none()
             }
             Message::SaveMcpServerConfiguration => {
                 match self.save_selected_mcp_server_configuration() {
                     Ok(server_id) => {
                         self.selected_mcp_server_id = Some(server_id);
-                        self.refresh_runtime_foundation();
                         self.reload_selected_mcp_server_form();
                         self.mcp_notice = String::from("MCP 服务器配置已保存。");
                         self.status_message = String::from("MCP 服务器配置已写入本地文件。");
+                        return self.restart_mcp_runtime_task();
                     }
                     Err(error) => {
                         self.mcp_notice = error.clone();
@@ -2795,10 +2974,10 @@ impl VulcanWorkbench {
             Message::RemoveMcpServerConfiguration => {
                 match self.remove_selected_mcp_server_configuration() {
                     Ok(removed_name) => {
-                        self.refresh_runtime_foundation();
                         self.reload_selected_mcp_server_form();
                         self.mcp_notice = format!("已移除 MCP 服务器 `{removed_name}`。");
                         self.status_message = format!("MCP 服务器 `{removed_name}` 配置已删除。");
+                        return self.restart_mcp_runtime_task();
                     }
                     Err(error) => {
                         self.mcp_notice = error.clone();
@@ -3487,7 +3666,9 @@ impl VulcanWorkbench {
                 let (run_task, run_handle) = Task::run(
                     stream_runtime_run(
                         config_for_run,
+                        self.agent_profile_catalog.clone(),
                         self.luaskills_runtime.clone(),
+                        self.mcp_runtime.clone(),
                         request_for_run,
                     ),
                     move |event| Message::RunExecutionStreamEvent { run_id, event },
@@ -7376,11 +7557,12 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Renders the MCP configuration card that exposes server summaries and one editable stdio server form.
-    /// 渲染 MCP 配置卡片，以暴露服务器摘要与单个可编辑的 stdio 服务器表单。
+    /// Renders the MCP configuration card that exposes server summaries and one editable transport-aware server form.
+    /// 渲染 MCP 配置卡片，以暴露服务器摘要与单个感知传输类型的可编辑服务器表单。
     fn view_mcp_configuration_card(&self) -> Element<'_, Message> {
         let server_choices = self.configured_mcp_server_choices();
         let selected_server = self.selected_mcp_server_choice();
+        let transport_choices = mcp_transport_choices();
         let server_summary_rows = self.runtime_foundation.mcp_rows();
         let server_summary_list: Element<'_, Message> = if server_summary_rows.is_empty() {
             text("尚未配置 MCP 服务器。").size(12).into()
@@ -7425,22 +7607,15 @@ impl VulcanWorkbench {
             latest_rows.into()
         };
 
-        container(
-            column![
-                row![
-                    text("MCP 服务器").size(18),
-                    space::horizontal(),
-                    text("当前仅开放 stdio").size(12),
-                ]
-                .align_y(Center),
-                server_picker,
-                checkbox(self.mcp_server_form.enabled)
-                    .label("启用该服务器")
-                    .on_toggle(Message::McpServerEnabledToggled),
-                text_input("服务器名称", &self.mcp_server_form.name)
-                    .on_input(Message::McpServerNameChanged)
-                    .padding(10)
-                    .width(Fill),
+        let transport_picker = pick_list(
+            transport_choices,
+            Some(self.mcp_server_form.transport),
+            Message::McpServerTransportSelected,
+        )
+        .width(Fill)
+        .placeholder("选择传输类型");
+        let transport_fields: Element<'_, Message> = match self.mcp_server_form.transport {
+            PersistedMcpTransportKind::Stdio => column![
                 text_input("启动命令，例如 uvx", &self.mcp_server_form.command)
                     .on_input(Message::McpServerCommandChanged)
                     .padding(10)
@@ -7463,6 +7638,83 @@ impl VulcanWorkbench {
                 .on_input(Message::McpServerEnvChanged)
                 .padding(10)
                 .width(Fill),
+            ]
+            .spacing(10)
+            .into(),
+            PersistedMcpTransportKind::Http => column![
+                text_input(
+                    "MCP URL，例如 https://example.com/mcp",
+                    &self.mcp_server_form.url
+                )
+                .on_input(Message::McpServerUrlChanged)
+                .padding(10)
+                .width(Fill),
+                text_input(
+                    "Bearer Token（可选，仅填写 Token 内容）",
+                    &self.mcp_server_form.bearer_token,
+                )
+                .on_input(Message::McpServerBearerTokenChanged)
+                .padding(10)
+                .width(Fill),
+                text_input(
+                    "HTTP 请求头（可选，KEY=VALUE; KEY2=VALUE）",
+                    &self.mcp_server_form.headers_text,
+                )
+                .on_input(Message::McpServerHeadersChanged)
+                .padding(10)
+                .width(Fill),
+            ]
+            .spacing(10)
+            .into(),
+            PersistedMcpTransportKind::Sse => column![
+                text_input(
+                    "SSE URL，例如 https://example.com/sse",
+                    &self.mcp_server_form.url
+                )
+                .on_input(Message::McpServerUrlChanged)
+                .padding(10)
+                .width(Fill),
+                text(
+                    "该模式面向旧式 MCP SSE 服务：客户端先连接 SSE 事件流，再根据 endpoint 事件公布的消息端点发起调用。",
+                )
+                .size(12),
+                text_input(
+                    "Bearer Token（可选，仅填写 Token 内容）",
+                    &self.mcp_server_form.bearer_token,
+                )
+                .on_input(Message::McpServerBearerTokenChanged)
+                .padding(10)
+                .width(Fill),
+                text_input(
+                    "HTTP 请求头（可选，KEY=VALUE; KEY2=VALUE）",
+                    &self.mcp_server_form.headers_text,
+                )
+                .on_input(Message::McpServerHeadersChanged)
+                .padding(10)
+                .width(Fill),
+            ]
+            .spacing(10)
+            .into(),
+        };
+
+        container(
+            column![
+                row![
+                    text("MCP 服务器").size(18),
+                    space::horizontal(),
+                    text("当前开放 stdio、http(streamable) 与 sse(legacy)").size(12),
+                ]
+                .align_y(Center),
+                server_picker,
+                checkbox(self.mcp_server_form.enabled)
+                    .label("启用该服务器")
+                    .on_toggle(Message::McpServerEnabledToggled),
+                text_input("服务器名称", &self.mcp_server_form.name)
+                    .on_input(Message::McpServerNameChanged)
+                    .padding(10)
+                    .width(Fill),
+                transport_picker,
+                transport_fields,
                 row![
                     button("新增服务器")
                         .style(button::secondary)
@@ -7619,24 +7871,31 @@ impl VulcanWorkbench {
     /// Builds the configured agent choices rendered in the runtime settings card.
     /// 构建渲染在运行时设置卡片中的已配置代理选择项。
     fn configured_agent_choices(&self) -> Vec<AgentChoice> {
-        self.provider_configuration
-            .agents
-            .iter()
-            .map(|(id, entry)| AgentChoice {
-                id: id.clone(),
-                label: format!(
-                    "{} · {}",
-                    entry.name,
-                    persisted_agent_kind_label(entry.kind)
-                ),
-            })
-            .collect()
+        std::iter::once(AgentChoice {
+            id: String::from(SYSTEM_DEFAULT_AGENT_CHOICE_ID),
+            label: String::from("系统默认（按模型）"),
+        })
+        .chain(
+            self.agent_profile_catalog
+                .agents
+                .values()
+                .map(|profile| AgentChoice {
+                    id: profile.id.clone(),
+                    label: profile.name.clone(),
+                }),
+        )
+        .collect()
     }
 
     /// Returns the currently active agent choice rendered in the runtime settings card.
     /// 返回渲染在运行时设置卡片中的当前激活代理选择项。
     fn active_agent_choice(&self) -> Option<AgentChoice> {
-        let active_agent_id = self.provider_configuration.active_agent.as_deref()?;
+        let active_agent_id = self
+            .agent_profile_catalog
+            .state
+            .selected_agent_id
+            .as_deref()
+            .unwrap_or(SYSTEM_DEFAULT_AGENT_CHOICE_ID);
 
         self.configured_agent_choices()
             .into_iter()
@@ -7917,11 +8176,28 @@ impl VulcanWorkbench {
     /// Rebuilds the compose runtime foundation from the current shared configuration state.
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     fn refresh_runtime_foundation(&mut self) {
-        self.runtime_foundation =
-            RuntimeFoundation::build(&self.provider_configuration, self.luaskills_runtime.clone());
+        self.runtime_foundation = RuntimeFoundation::build(
+            &self.provider_configuration,
+            &self.agent_profile_catalog,
+            self.luaskills_runtime.clone(),
+            self.mcp_runtime.clone(),
+        );
         self.last_execution_preparation = None;
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();
+    }
+
+    /// Restarts the long-lived MCP runtime after configuration changes and rebuilds the runtime foundation immediately.
+    /// 在配置变更后重启长期 MCP 运行时，并立即重建运行时基础架构。
+    fn restart_mcp_runtime_task(&mut self) -> Task<Message> {
+        if let Some(handle) = self.mcp_runtime.take() {
+            handle.shutdown();
+        }
+        self.refresh_runtime_foundation();
+        Task::perform(
+            bootstrap_mcp_runtime(self.provider_configuration.clone()),
+            Message::McpRuntimeBootstrapped,
+        )
     }
 
     /// Returns the currently selected session, if any.
@@ -10845,6 +11121,42 @@ fn join_mcp_server_env(env: &BTreeMap<String, String>) -> String {
 /// Parses one compact MCP server environment text field into its map representation.
 /// 将一段紧凑 MCP 服务器环境变量文本解析成映射表示。
 fn parse_mcp_server_env(value: &str) -> Result<BTreeMap<String, String>, String> {
+    parse_key_value_pairs(value, "环境变量", "请使用 `KEY=VALUE` 并以分号分隔。")
+}
+
+/// Returns the MCP transport choices exposed by the settings form.
+/// 返回设置表单暴露的 MCP 传输类型选项。
+fn mcp_transport_choices() -> Vec<PersistedMcpTransportKind> {
+    vec![
+        PersistedMcpTransportKind::Stdio,
+        PersistedMcpTransportKind::Http,
+        PersistedMcpTransportKind::Sse,
+    ]
+}
+
+/// Joins MCP server HTTP headers into one compact editable text field.
+/// 将 MCP 服务器 HTTP 请求头拼接为一段紧凑的可编辑文本字段。
+fn join_mcp_server_headers(headers: &BTreeMap<String, String>) -> String {
+    headers
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Parses one compact MCP server HTTP headers field into its map representation.
+/// 将一段紧凑 MCP 服务器 HTTP 请求头文本解析成映射表示。
+fn parse_mcp_server_headers(value: &str) -> Result<BTreeMap<String, String>, String> {
+    parse_key_value_pairs(value, "请求头", "请使用 `KEY=VALUE` 并以分号分隔。")
+}
+
+/// Parses one semicolon-delimited key-value text field into a map.
+/// 将一段使用分号分隔的键值对文本解析成映射。
+fn parse_key_value_pairs(
+    value: &str,
+    subject_label: &str,
+    format_hint: &str,
+) -> Result<BTreeMap<String, String>, String> {
     let mut map = BTreeMap::new();
 
     for pair in value
@@ -10853,13 +11165,11 @@ fn parse_mcp_server_env(value: &str) -> Result<BTreeMap<String, String>, String>
         .filter(|item| !item.is_empty())
     {
         let Some((raw_key, raw_value)) = pair.split_once('=') else {
-            return Err(format!(
-                "环境变量 `{pair}` 格式无效，请使用 `KEY=VALUE` 并以分号分隔。"
-            ));
+            return Err(format!("{subject_label} `{pair}` 格式无效，{format_hint}"));
         };
         let key = raw_key.trim();
         if key.is_empty() {
-            return Err(String::from("环境变量名称不能为空。"));
+            return Err(format!("{subject_label}名称不能为空。"));
         }
         map.insert(key.to_string(), raw_value.trim().to_string());
     }
@@ -10869,14 +11179,6 @@ fn parse_mcp_server_env(value: &str) -> Result<BTreeMap<String, String>, String>
 
 /// Returns a compact human-readable label for one persisted agent kind.
 /// 返回单个持久化代理类型的紧凑人类可读标签。
-fn persisted_agent_kind_label(kind: PersistedAgentKind) -> &'static str {
-    match kind {
-        PersistedAgentKind::Worker => "工作代理",
-        PersistedAgentKind::Specialist => "专家代理",
-        PersistedAgentKind::Coordinator => "协调代理",
-    }
-}
-
 /// Opens one filesystem path with the host operating system file manager.
 /// 使用宿主操作系统的文件管理器打开某个文件系统路径。
 fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {

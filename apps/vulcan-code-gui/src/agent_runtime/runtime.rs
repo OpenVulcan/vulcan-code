@@ -1,12 +1,13 @@
 //! Compose runtime foundation assembled from provider, tool, skill, and MCP configuration.
 //! 从供应商、工具、技能与 MCP 配置组装出的 compose 运行时基础架构。
 
+use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeSkillKind,
     RuntimeToolPolicyDefinition,
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
-use crate::mcp::McpServerRegistry;
+use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor, McpServerRegistry};
 use crate::provider_config::ProviderConfigurationFile;
 use crate::skills::{BuiltinSkillCatalog, build_builtin_skill_catalog};
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -78,6 +79,9 @@ pub struct RuntimeFoundation {
     /// MCP server registry.
     /// MCP 服务器注册表。
     mcp_registry: McpServerRegistry,
+    /// Live MCP runtime handle that tracks current transport state and available tools.
+    /// 跟踪当前传输状态与可用工具的实时 MCP 运行时句柄。
+    mcp_runtime: Option<McpRuntimeHandle>,
     /// Built agents keyed by their stable agent id.
     /// 以稳定代理标识为键保存的已构建代理集合。
     agents: BTreeMap<String, Arc<dyn Agent>>,
@@ -100,9 +104,11 @@ impl RuntimeFoundation {
     /// 根据共享供应商配置文件构建 compose 运行时基础架构。
     pub fn build(
         config: &ProviderConfigurationFile,
+        agent_profile_catalog: &AgentProfileCatalog,
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+        mcp_runtime: Option<McpRuntimeHandle>,
     ) -> Self {
-        let runtime_config = AgentRuntimeConfig::from_provider_configuration(config);
+        let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let native_tools = build_native_tool_catalog(&runtime_config);
         let skills = build_builtin_skill_catalog(&runtime_config.skills);
         let mcp_registry = McpServerRegistry::from_provider_configuration(config);
@@ -178,6 +184,7 @@ impl RuntimeFoundation {
             luaskills_tools,
             skills,
             mcp_registry,
+            mcp_runtime,
             agents,
             delegate_registry,
             delegate_tools,
@@ -268,7 +275,11 @@ impl RuntimeFoundation {
     /// Returns lightweight MCP server rows for UI placeholder surfaces.
     /// 返回供 UI 占位面板使用的轻量 MCP 服务器行文本。
     pub fn mcp_rows(&self) -> Vec<String> {
-        self.mcp_registry.summary_rows()
+        self.mcp_runtime
+            .as_ref()
+            .map(McpRuntimeHandle::snapshot)
+            .map(|snapshot| snapshot.summary_rows())
+            .unwrap_or_else(|| self.mcp_registry.summary_rows())
     }
 
     /// Returns lightweight tool-policy rows for UI placeholder surfaces.
@@ -379,13 +390,84 @@ impl RuntimeFoundation {
         }
     }
 
+    /// Resolves the MCP runtime tools currently visible to one agent.
+    /// 解析当前对某个代理可见的 MCP 运行时工具集合。
+    pub fn resolved_mcp_tools_for_agent(&self, agent_id: &str) -> Vec<McpRuntimeToolDescriptor> {
+        let Some(mcp_runtime) = self.mcp_runtime.as_ref() else {
+            return Vec::new();
+        };
+        let Some(definition) = self
+            .config
+            .agents
+            .iter()
+            .find(|definition| definition.id == agent_id)
+        else {
+            return Vec::new();
+        };
+        if definition.kind == RuntimeAgentKind::Coordinator {
+            return Vec::new();
+        }
+
+        let policy = definition
+            .tool_policy
+            .as_ref()
+            .and_then(|policy_id| self.config.tool_policies.get(policy_id));
+        let allowed_server_ids = if let Some(policy) = policy {
+            if policy.mcp_servers.is_empty() {
+                None
+            } else {
+                Some(policy.mcp_servers.iter().cloned().collect::<BTreeSet<_>>())
+            }
+        } else {
+            None
+        };
+        let allowed_tool_names = if !definition.mcp_tools.is_empty() {
+            Some(
+                definition
+                    .mcp_tools
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
+        } else if let Some(policy) = policy {
+            if policy.mcp_tools.is_empty() {
+                None
+            } else {
+                Some(policy.mcp_tools.iter().cloned().collect::<BTreeSet<_>>())
+            }
+        } else {
+            None
+        };
+
+        mcp_runtime
+            .available_tool_descriptors()
+            .into_iter()
+            .filter(|tool| {
+                allowed_server_ids
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.contains(&tool.server_id))
+            })
+            .filter(|tool| {
+                allowed_tool_names.as_ref().is_none_or(|allowed| {
+                    allowed.contains(&tool.schema.name)
+                        || allowed.contains(&format!("{}/{}", tool.server_id, tool.schema.name))
+                })
+            })
+            .collect()
+    }
+
     /// Returns enabled MCP server summary rows for execution diagnostics.
     /// 返回供执行诊断使用的已启用 MCP 服务器摘要行集合。
     pub fn enabled_mcp_server_rows(&self) -> Vec<String> {
-        self.mcp_registry
-            .summary_rows()
-            .into_iter()
-            .filter(|row| row.starts_with("启用"))
+        let rows = self
+            .mcp_runtime
+            .as_ref()
+            .map(McpRuntimeHandle::snapshot)
+            .map(|snapshot| snapshot.summary_rows())
+            .unwrap_or_else(|| self.mcp_registry.summary_rows());
+
+        rows.into_iter()
+            .filter(|row| row.starts_with("在线") || row.starts_with("连接中"))
             .collect()
     }
 }

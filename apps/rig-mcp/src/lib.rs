@@ -21,8 +21,12 @@
     )
 )]
 
+pub mod http;
+pub mod sse;
 pub mod stdio;
 pub mod transport;
 
+pub use http::HttpTransport;
+pub use sse::SseTransport;
 pub use stdio::{StdioTransport, serve_stdio};
-pub use transport::{LoopbackTransport, McpTool, McpTransport};
+pub use transport::{LoopbackTransport, McpTool, McpTransport, McpTransportEvent};

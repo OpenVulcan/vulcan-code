@@ -3,5 +3,7 @@
 
 pub mod config;
 pub mod registry;
+pub mod runtime;
 
 pub use registry::McpServerRegistry;
+pub use runtime::{McpRuntimeHandle, McpRuntimeToolDescriptor, bootstrap_mcp_runtime};
