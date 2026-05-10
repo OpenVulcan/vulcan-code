@@ -1,10 +1,14 @@
 //! LuaSkills runtime bootstrap helpers layered on top of the shared controller client.
 //! 构建在共享控制器客户端之上的 LuaSkills 运行时引导辅助模块。
 
+use crate::model::SessionId;
+use crate::project_temp_maintenance;
 use crate::provider_config::{PersistedControllerConfiguration, PersistedControllerProcessMode};
 use crate::runtime_assets;
+use crate::tool_result_format::{
+    EffectiveBudgetScope, HostRenderOptions, ToolResultBudgetSnapshot, render_tool_result_text,
+};
 use iced::futures::channel::oneshot;
-use luaskills::runtime_result::RuntimeHostResult;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeDatabaseProviderMode,
@@ -682,11 +686,17 @@ pub async fn call_luaskills_tool_entry(
 
 /// Build one JSON-Schema object definition from the LuaSkills runtime entry parameter descriptors.
 /// 根据 LuaSkills 运行时入口参数描述构建一份 JSON-Schema 对象定义。
-pub fn luaskills_entry_args_schema(entry: &RuntimeEntryDescriptor) -> Value {
+pub fn luaskills_entry_args_schema(
+    entry: &RuntimeEntryDescriptor,
+    hide_host_managed_sid: bool,
+) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
 
     for parameter in &entry.parameters {
+        if hide_host_managed_sid && parameter.name == LUASKILL_SID_PARAMETER_NAME {
+            continue;
+        }
         if parameter.required {
             required.push(Value::String(parameter.name.clone()));
         }
@@ -710,26 +720,44 @@ pub fn luaskills_entry_args_schema(entry: &RuntimeEntryDescriptor) -> Value {
     Value::Object(schema)
 }
 
-/// Convert one LuaSkills runtime invocation result into one host-stable JSON object.
-/// 将单个 LuaSkills 运行时调用结果转换成宿主稳定的 JSON 对象。
-pub fn serialize_luaskills_invocation_result(result: &RuntimeInvocationResult) -> Value {
-    json!({
-        "content": result.content,
-        "overflowMode": result.overflow_mode.map(|mode| match mode {
-            luaskills::ToolOverflowMode::Truncate => "truncate",
-            luaskills::ToolOverflowMode::Page => "page",
-        }),
-        "templateHint": result.template_hint,
-        "contentBytes": result.content_bytes,
-        "contentLines": result.content_lines,
-        "hostResult": result.host_result.as_ref().map(serialize_luaskills_host_result),
-    })
+/// Stable LuaSkills reserved managed-identity parameter name used by host projections.
+/// 宿主投影使用的稳定 LuaSkills 保留托管身份参数名称。
+pub const LUASKILL_SID_PARAMETER_NAME: &str = "LUASKILL_SID";
+
+/// Stable host-managed prefix reserved by LuaSkills for injected managed identities.
+/// LuaSkills 为注入托管身份保留的稳定宿主管理前缀。
+pub const LUASKILLS_HOST_MANAGED_SID_PREFIX: &str = "LUASKILLS-SID-";
+
+/// Render one LuaSkills invocation result into the final host-managed text returned to the model.
+/// 将单次 LuaSkills 调用结果渲染为返回给模型的最终宿主管理文本。
+pub fn render_luaskills_invocation_result_text(
+    handle: &LuaSkillsRuntimeHandle,
+    tool_name: &str,
+    skill_name: Option<&str>,
+    result: &RuntimeInvocationResult,
+    workspace_root: Option<&Path>,
+) -> String {
+    let client_budget = build_default_luaskills_budget_snapshot(tool_name);
+    let spill_root = workspace_root
+        .filter(|path| !path.as_os_str().is_empty())
+        .and_then(|path| project_temp_maintenance::ensure_project_temp_dir(path).ok());
+    let render_options = HostRenderOptions {
+        spill_root,
+        template_skill_roots: handle
+            .skill_roots
+            .iter()
+            .map(|root| root.skills_dir.clone())
+            .collect(),
+        template_resources_root: Some(handle.runtime_root.join("resources")),
+    };
+
+    render_tool_result_text(result, skill_name, &client_budget, &render_options)
 }
 
 /// Build one default LuaSkills invocation context used by rig-backed tool calls.
 /// 构建一份供 rig 驱动工具调用使用的默认 LuaSkills 调用上下文。
 pub fn build_luaskills_tool_invocation_context(
-    session_id: Option<usize>,
+    session_id: Option<SessionId>,
     transport_name: &str,
     tool_name: &str,
 ) -> LuaInvocationContext {
@@ -745,12 +773,48 @@ pub fn build_luaskills_tool_invocation_context(
         }),
         client_capabilities: Value::Object(Map::new()),
     };
+    let client_budget = build_default_luaskills_client_budget(tool_name);
 
     LuaInvocationContext::new(
         Some(request_context),
-        Value::Object(Map::new()),
+        client_budget,
         Value::Object(Map::new()),
     )
+}
+
+/// Builds one default client-budget snapshot for host-driven LuaSkills tool calls with unlimited lines and a 200KB byte ceiling.
+/// 为宿主驱动的 LuaSkills 工具调用构建一份默认客户端预算快照，采用无限行与 200KB 字节上限。
+fn build_default_luaskills_client_budget(tool_name: &str) -> Value {
+    let budget = build_default_luaskills_budget_snapshot(tool_name);
+    json!({
+        "client_name": "vulcan-code-gui",
+        "tool_name": tool_name,
+        "matched_client_pattern": "vulcan-code-gui",
+        "tool_result": {
+            "bytes": budget.tool_result.bytes,
+            "lines": budget.tool_result.lines
+        },
+        "file_read": {
+            "bytes": budget.file_read.bytes,
+            "lines": budget.file_read.lines
+        },
+        "tool_config": {}
+    })
+}
+
+/// Builds one strongly typed default budget snapshot reused by host-side result rendering and Lua invocation context injection.
+/// 构建一份强类型默认预算快照，供宿主侧结果渲染与 Lua 调用上下文注入复用。
+fn build_default_luaskills_budget_snapshot(_tool_name: &str) -> ToolResultBudgetSnapshot {
+    ToolResultBudgetSnapshot {
+        tool_result: EffectiveBudgetScope {
+            bytes: 200_000,
+            lines: -1,
+        },
+        file_read: EffectiveBudgetScope {
+            bytes: 200_000,
+            lines: -1,
+        },
+    }
 }
 
 /// Ensures the minimum runtime directory layout exists and returns the mounted skill roots.
@@ -1047,15 +1111,6 @@ fn schema_type_for_luaskills_parameter(parameter_type: &str) -> &'static str {
         "string" | "path" | "file" | "url" => "string",
         _ => "string",
     }
-}
-
-/// Convert one LuaSkills host-result object into one host-stable JSON object.
-/// 将单个 LuaSkills 宿主结果对象转换成宿主稳定的 JSON 对象。
-fn serialize_luaskills_host_result(result: &RuntimeHostResult) -> Value {
-    json!({
-        "kind": result.kind,
-        "payload": result.payload,
-    })
 }
 
 /// Resolves one named runtime skill root from the current root chain.

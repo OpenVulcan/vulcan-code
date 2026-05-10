@@ -4,6 +4,7 @@
 //! 供后续代理执行界面使用的运行时事件定义。
 
 use crate::agent_runtime::executor::{ExecutionPreparation, ExecutionRunReport};
+use crate::model::SessionId;
 
 /// High-level runtime event kinds emitted by the compose foundation.
 /// compose 基础架构发出的高层运行时事件类型。
@@ -69,17 +70,23 @@ pub enum ExecutionStreamEvent {
     Prepared(ExecutionPreparation),
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。
-    ThinkingDelta { session_id: usize, delta: String },
+    ThinkingDelta {
+        session_id: SessionId,
+        delta: String,
+    },
     /// Visible assistant thinking phase completed and should dock back into the main transcript immediately.
     /// 可见助手思考阶段已完成，并应立即收回主转录正文中。
-    ThinkingCompleted { session_id: usize },
+    ThinkingCompleted { session_id: SessionId },
     /// Visible assistant final-output delta that should stay inside future context.
     /// 应保留在未来上下文之内的可见正式输出增量。
-    OutputDelta { session_id: usize, delta: String },
+    OutputDelta {
+        session_id: SessionId,
+        delta: String,
+    },
     /// Runtime event emitted while the run is still in progress.
     /// 在运行仍进行中时发出的运行时事件。
     RuntimeEvent {
-        session_id: usize,
+        session_id: SessionId,
         event: RuntimeEvent,
     },
     /// Terminal execution report emitted exactly once at the end of the run.

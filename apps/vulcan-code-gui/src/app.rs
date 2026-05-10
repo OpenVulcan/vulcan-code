@@ -23,10 +23,11 @@ use crate::luaskills_runtime::{
 };
 use crate::mcp::{McpRuntimeHandle, bootstrap_mcp_runtime};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry, SessionId,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
+use crate::project_temp_maintenance;
 use crate::provider_config::{
     self, ModelChoice, PersistedControllerConfiguration, PersistedMcpServerEntry,
     PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
@@ -56,17 +57,19 @@ use iced::{
 };
 use iced_aw::ContextMenu;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 use vulcan_agent_view::{
     THINKING_MODAL_ANIMATION_DURATION, THINKING_MODAL_TICK_INTERVAL, ThinkingModalPhase,
-    build_modal_thinking_surface_document, build_overlay_thinking_surface_document,
-    build_thinking_title, format_thinking_duration_label, thinking_modal_progress,
-    thinking_overlay_scrollable_id, view_thinking_modal_surface, view_thinking_overlay_surface,
+    build_modal_thinking_surface_document, build_modal_tool_surface_document,
+    build_overlay_thinking_surface_document, build_thinking_title, format_thinking_duration_label,
+    thinking_modal_progress, thinking_overlay_scrollable_id, view_thinking_modal_surface,
+    view_thinking_overlay_surface,
 };
 
 /// Bundled SVG mark bytes used in the header.
@@ -394,6 +397,9 @@ pub struct VulcanWorkbench {
     /// Prompt composer value used before execution.
     /// 执行前用于组织任务的提示词输入值。
     composer: String,
+    /// Prompt composer editor buffer used by the main Build/Plan input surface.
+    /// 主 Build/Plan 输入表面使用的提示词编辑器缓冲区。
+    composer_buffer: text_editor::Content,
     /// Text editor content for patch and scaffold previews.
     /// 用于补丁与骨架预览的文本编辑器内容。
     editor_content: text_editor::Content,
@@ -444,7 +450,7 @@ pub struct VulcanWorkbench {
     hovered_task_project: Option<String>,
     /// Session identifier currently hovered inside the main task-drawer tree.
     /// 当前在主任务抽屉树中悬停的会话标识。
-    hovered_task_session: Option<usize>,
+    hovered_task_session: Option<SessionId>,
     /// Current drop target preview shown while one project card is being reordered.
     /// 当前在项目卡片重排期间展示的插入目标预览。
     active_task_project_drop_target: Option<TaskProjectDropTarget>,
@@ -459,7 +465,7 @@ pub struct VulcanWorkbench {
     dragging_task_project: Option<String>,
     /// Currently selected session identifier.
     /// 当前被选中的会话标识。
-    selected_session: usize,
+    selected_session: SessionId,
     /// Runtime activity log rendered in the inspector pane.
     /// 渲染在检查面板中的运行活动日志。
     activities: Vec<ActivityEntry>,
@@ -468,37 +474,40 @@ pub struct VulcanWorkbench {
     activity_raw_buffers: Vec<text_editor::Content>,
     /// Session-scoped transcript messages rendered inside the main workbench output area.
     /// 渲染在主工作台输出区中的按会话归属消息转录集合。
-    session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    session_messages: BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     /// Archived session summaries retained outside the visible workbench for later restoration.
     /// 保留在可见工作台之外、供后续恢复使用的归档会话摘要集合。
     archived_sessions: Vec<SessionSummary>,
     /// Archived session-scoped transcript messages retained for later restoration.
     /// 为后续恢复保留的按归档会话归属消息转录集合。
-    archived_session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    archived_session_messages: BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     /// Session-scoped hidden compaction checkpoints retained for future context reconstruction.
     /// 为未来上下文重建保留的按会话归属隐藏压缩检查点集合。
-    session_compactions: BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    session_compactions: BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
     /// Archived hidden compaction checkpoints retained for later restoration.
     /// 为后续恢复保留的按归档会话归属隐藏压缩检查点集合。
-    archived_session_compactions: BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    archived_session_compactions: BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
     /// Session-scoped runtime-state snapshots retained for title, summary, and compaction chaining.
     /// 为标题、摘要与压缩串联保留的按会话归属运行时状态快照集合。
-    session_runtime_state: BTreeMap<usize, SessionRuntimeStateEntry>,
+    session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
     /// Archived session-scoped runtime-state snapshots retained for later restoration.
     /// 为后续恢复保留的按归档会话归属运行时状态快照集合。
-    archived_session_runtime_state: BTreeMap<usize, SessionRuntimeStateEntry>,
+    archived_session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Pending destructive archived-item deletion confirmation currently shown inline to the user.
+    /// 当前以内联形式展示给用户的待确认破坏性归档项删除状态。
+    pending_archived_delete_confirmation: Option<ArchivedDeleteConfirmationState>,
     /// Session-scoped runtime events rendered beneath the transcript message stream.
     /// 渲染在消息流下方的按会话归属运行时事件集合。
-    session_runtime_events: BTreeMap<usize, Vec<RuntimeEvent>>,
+    session_runtime_events: BTreeMap<SessionId, Vec<RuntimeEvent>>,
     /// Session-scoped collapsed runtime-event identifiers kept only in memory for the current launch.
     /// 仅在当前启动周期内保留的按会话归属已折叠运行时事件标识集合。
-    collapsed_runtime_event_ids: BTreeMap<usize, BTreeSet<String>>,
+    collapsed_runtime_event_ids: BTreeMap<SessionId, BTreeSet<String>>,
     /// Session-scoped Markdown-view message identifiers used when the user explicitly switches from selectable source text back to Markdown.
     /// 当用户从可选原文显式切回 Markdown 时使用的按会话归属 Markdown 消息标识集合。
-    markdown_session_message_ids: BTreeMap<usize, BTreeSet<String>>,
+    markdown_session_message_ids: BTreeMap<SessionId, BTreeSet<String>>,
     /// Session-scoped Markdown-view runtime-event identifiers used when the user explicitly switches from selectable source text back to Markdown.
     /// 当用户从可选原文显式切回 Markdown 时使用的按会话归属 Markdown 运行时事件标识集合。
-    markdown_runtime_event_ids: BTreeMap<usize, BTreeSet<String>>,
+    markdown_runtime_event_ids: BTreeMap<SessionId, BTreeSet<String>>,
     /// Read-only transcript source buffers keyed by stable message identifier.
     /// 以稳定消息标识为键保存的只读转录原文缓冲区。
     session_message_raw_buffers: BTreeMap<String, text_editor::Content>,
@@ -510,22 +519,28 @@ pub struct VulcanWorkbench {
     session_message_markdown_buffers: BTreeMap<String, text_editor::Content>,
     /// Active streaming thinking-message identifiers keyed by session id.
     /// 以会话标识为键保存的当前流式思考消息标识集合。
-    streaming_thinking_message_ids: BTreeMap<usize, String>,
+    streaming_thinking_message_ids: BTreeMap<SessionId, String>,
     /// Session identifiers whose current streaming thinking message should still stay in the floating overlay.
     /// 当前流式思考消息仍应停留在浮层中的会话标识集合。
-    floating_streaming_thinking_sessions: BTreeSet<usize>,
+    floating_streaming_thinking_sessions: BTreeSet<SessionId>,
     /// Session-scoped flag telling whether the floating streaming-thinking overlay should keep auto-following its latest tail.
     /// 以会话为粒度保存的流式思考浮层是否应继续自动追随最新尾部标记。
-    session_streaming_thinking_follow_tail: BTreeMap<usize, bool>,
+    session_streaming_thinking_follow_tail: BTreeMap<SessionId, bool>,
     /// Centered modal state retained when the user explicitly opens one inline thinking block for closer inspection.
     /// 当用户显式打开某个内联思考区块进行聚焦查看时保留的居中弹层状态。
     active_thinking_modal: Option<ThinkingModalState>,
+    /// Centered modal state retained when the user explicitly opens one inline tool block for closer inspection.
+    /// 当用户显式打开某个内联工具区块进行聚焦查看时保留的居中弹层状态。
+    active_tool_modal: Option<ToolModalState>,
     /// Pending inline-thinking toggle waiting for the double-click window to elapse before it is committed.
     /// 等待双击判定窗口结束后再正式提交的待执行内联思考折叠切换状态。
     pending_thinking_inline_toggle: Option<PendingThinkingInlineToggleState>,
     /// Active streaming output-message identifiers keyed by session id.
     /// 以会话标识为键保存的当前流式输出消息标识集合。
-    streaming_output_message_ids: BTreeMap<usize, String>,
+    streaming_output_message_ids: BTreeMap<SessionId, String>,
+    /// Per-run tool-call message identifiers keyed by session id and tool-call id.
+    /// 以会话标识与工具调用标识为键保存的单次运行工具调用消息标识集合。
+    session_tool_call_message_ids: BTreeMap<SessionId, BTreeMap<String, String>>,
     /// Read-only runtime-event source buffers keyed by stable runtime-event identifier.
     /// 以稳定运行时事件标识为键保存的只读运行时原文缓冲区。
     runtime_event_raw_buffers: BTreeMap<String, text_editor::Content>,
@@ -537,32 +552,32 @@ pub struct VulcanWorkbench {
     runtime_event_markdown_buffers: BTreeMap<String, text_editor::Content>,
     /// Unified structured transcript buffers keyed by visible session id.
     /// 以可见会话标识为键保存的统一结构化转录缓冲区。
-    session_agent_view_buffers: BTreeMap<usize, text_editor::Content>,
+    session_agent_view_buffers: BTreeMap<SessionId, text_editor::Content>,
     /// Unified raw-source transcript buffers keyed by visible session id.
     /// 以可见会话标识为键保存的统一原始源码转录缓冲区。
-    session_agent_view_raw_buffers: BTreeMap<usize, text_editor::Content>,
+    session_agent_view_raw_buffers: BTreeMap<SessionId, text_editor::Content>,
     /// Unified selectable transcript projections keyed by visible session id.
     /// 以可见会话标识为键保存的统一可选转录投影对象。
     session_agent_view_selectable_documents:
-        BTreeMap<usize, vulcan_agent_view::AgentViewSelectableDocument>,
+        BTreeMap<SessionId, vulcan_agent_view::AgentViewSelectableDocument>,
     /// Unified structured transcript documents keyed by visible session id.
     /// 以可见会话标识为键保存的统一结构化转录文档。
-    session_agent_view_documents: BTreeMap<usize, vulcan_agent_view::AgentViewDocument>,
+    session_agent_view_documents: BTreeMap<SessionId, vulcan_agent_view::AgentViewDocument>,
     /// Unified block collapsed states keyed by session id and stable block identifier.
     /// 以会话标识与稳定区块标识为键保存的统一块折叠状态。
-    session_agent_view_block_collapsed: BTreeMap<usize, BTreeMap<String, bool>>,
+    session_agent_view_block_collapsed: BTreeMap<SessionId, BTreeMap<String, bool>>,
     /// Session-scoped flag telling whether the transcript should keep auto-following the newest tail output.
     /// 以会话为粒度保存的转录自动追随最新尾部输出标记。
-    session_agent_view_follow_tail: BTreeMap<usize, bool>,
+    session_agent_view_follow_tail: BTreeMap<SessionId, bool>,
     /// Latest transcript scrollable viewport keyed by session id.
     /// 以会话标识为键保存的最新转录滚动视口。
-    session_agent_view_viewports: BTreeMap<usize, scrollable::Viewport>,
+    session_agent_view_viewports: BTreeMap<SessionId, scrollable::Viewport>,
     /// Active drag auto-scroll state for the main rendered transcript surface.
     /// 主渲染转录表面的当前拖拽自动滚动状态。
     active_transcript_drag_auto_scroll: Option<ActiveTranscriptDragAutoScroll>,
     /// Latest floating thinking-overlay viewport keyed by session id.
     /// 以会话标识为键保存的最新浮动思考层视口。
-    session_streaming_thinking_viewports: BTreeMap<usize, scrollable::Viewport>,
+    session_streaming_thinking_viewports: BTreeMap<SessionId, scrollable::Viewport>,
     /// Active drag auto-scroll state for the floating thinking overlay body.
     /// 流式思考浮层正文的当前拖拽自动滚动状态。
     active_thinking_overlay_drag_auto_scroll: Option<ActiveTranscriptDragAutoScroll>,
@@ -571,7 +586,7 @@ pub struct VulcanWorkbench {
     agent_transcript_surface_mode: AgentTranscriptSurfaceMode,
     /// Session-scoped execution phases reflected by the workbench status bar.
     /// 反映在工作台状态条中的按会话归属执行阶段集合。
-    session_run_phases: BTreeMap<usize, SessionRunPhase>,
+    session_run_phases: BTreeMap<SessionId, SessionRunPhase>,
     /// Monotonic identifier seed used to distinguish restarted or stopped execution streams.
     /// 用于区分重启后或已停止执行流的单调递增标识种子。
     next_run_id: u64,
@@ -580,13 +595,10 @@ pub struct VulcanWorkbench {
     active_run_id: Option<u64>,
     /// Session identifier that currently owns the active real AI call.
     /// 当前拥有活动真实 AI 调用的会话标识。
-    active_run_session_id: Option<usize>,
+    active_run_session_id: Option<SessionId>,
     /// Abort handle used to stop the active real AI call at the iced task layer.
     /// 用于在 iced 任务层停止当前真实 AI 调用的中止句柄。
     active_run_handle: Option<task::Handle>,
-    /// Identifier seed for newly created sessions.
-    /// 新建会话使用的自增标识种子。
-    next_session_id: usize,
     /// Current startup lifecycle shown by the full-screen loading overlay.
     /// 由全屏载入遮罩展示的当前启动生命周期状态。
     startup_lifecycle: StartupLifecycle,
@@ -811,9 +823,27 @@ struct PendingTaskProjectInteraction {
 struct ThinkingModalState {
     /// Session identifier owning the currently opened thinking block.
     /// 当前已打开思考区块所属的会话标识。
-    session_id: usize,
+    session_id: SessionId,
     /// Stable rendered-transcript block identifier of the opened thinking block.
     /// 当前已打开思考区块的稳定渲染转录区块标识。
+    block_id: String,
+    /// Current lifecycle phase of the modal so opening and closing animations can share one state container.
+    /// 当前弹层的生命周期阶段，以便打开与关闭动画共享同一状态容器。
+    phase: ThinkingModalPhase,
+    /// Monotonic timestamp captured when the current phase began.
+    /// 当前阶段开始时捕获的单调时间戳。
+    started_at: Instant,
+}
+
+/// Centered modal state retained while one inline tool block is explicitly opened above the transcript.
+/// 当某个内联工具区块被显式打开到转录上方时保留的居中弹层状态。
+#[derive(Debug, Clone)]
+struct ToolModalState {
+    /// Session identifier owning the currently opened tool block.
+    /// 当前已打开工具区块所属的会话标识。
+    session_id: SessionId,
+    /// Stable rendered-transcript block identifier of the opened tool block.
+    /// 当前已打开工具区块的稳定渲染转录区块标识。
     block_id: String,
     /// Current lifecycle phase of the modal so opening and closing animations can share one state container.
     /// 当前弹层的生命周期阶段，以便打开与关闭动画共享同一状态容器。
@@ -829,7 +859,7 @@ struct ThinkingModalState {
 struct PendingThinkingInlineToggleState {
     /// Session identifier owning the inline thinking block that may still toggle.
     /// 拥有当前待切换内联思考区块的会话标识。
-    session_id: usize,
+    session_id: SessionId,
     /// Stable rendered-transcript block identifier targeted by the pending inline toggle.
     /// 当前待执行内联切换所针对的稳定渲染转录区块标识。
     block_id: String,
@@ -844,10 +874,46 @@ struct PendingThinkingInlineToggleState {
 struct ActiveTranscriptDragAutoScroll {
     /// Session identifier that owns the scrollable surface currently being auto-scrolled.
     /// 当前正在被自动滚动的滚动表面所属会话标识。
-    session_id: usize,
+    session_id: SessionId,
     /// Latest overshoot request reported by the selectable transcript widget.
     /// 可选择转录组件最近一次回传的越界滚动请求。
     request: SelectableTranscriptDragAutoScroll,
+}
+
+/// Stable archived-item deletion target retained while the user is going through the destructive second confirmation.
+/// 当用户正在经过破坏性二次确认流程时保留的稳定归档项删除目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ArchivedDeleteTarget {
+    /// Permanently deletes one archived project together with all child archived sessions.
+    /// 彻底删除一个归档项目及其全部子归档会话。
+    Project(String),
+    /// Permanently deletes one archived session row.
+    /// 彻底删除一条归档会话行。
+    Session(SessionId),
+}
+
+/// Pending destructive archived-item deletion confirmation shown inline inside the archived area.
+/// 显示在归档区域内部的待确认破坏性归档项删除状态。
+#[derive(Debug, Clone)]
+struct ArchivedDeleteConfirmationState {
+    /// Stable deletion target that will be removed permanently after the second confirmation.
+    /// 完成二次确认后将被永久移除的稳定删除目标。
+    target: ArchivedDeleteTarget,
+    /// Human-readable title echoed back to the user in the destructive confirmation copy.
+    /// 在破坏性确认文案中回显给用户的人类可读标题。
+    title: String,
+}
+
+/// Result payload returned after one archived-item hard-delete request finishes.
+/// 单次归档项硬删除请求完成后返回的结果载荷。
+#[derive(Debug, Clone)]
+struct ArchivedDeleteOutcome {
+    /// Stable deletion target that has already been removed from persistence.
+    /// 已经从持久化层移除的稳定删除目标。
+    target: ArchivedDeleteTarget,
+    /// Human-readable title used for status and confirmation messages.
+    /// 用于状态与确认文案的人类可读标题。
+    title: String,
 }
 
 /// Drop-target previews used while the task-tree project cards are being reordered.
@@ -1382,6 +1448,9 @@ fn main_display_panel_icon_svg_bytes(panel: MainDisplayPanel) -> &'static [u8] {
 /// 首版原型中由 iced 控件发出的消息集合。
 #[derive(Debug, Clone)]
 enum Message {
+    /// Ignores one callback branch without mutating any state.
+    /// 忽略某个回调分支且不修改任何状态。
+    Noop,
     /// Starts the controller-backed startup bootstrap sequence.
     /// 启动基于控制器的启动引导流程。
     BeginStartupBootstrap,
@@ -1397,6 +1466,9 @@ enum Message {
     /// Applies the completed workspace-state load result after the shared runtimes become ready.
     /// 应用共享运行时就绪后已完成的工作台状态加载结果。
     WorkspaceStateLoaded(Result<WorkspaceSnapshot, String>),
+    /// Applies the completed project-scoped temp cleanup result after startup or one project-load action.
+    /// 应用启动后或单次项目载入动作后已完成的项目级临时目录清理结果。
+    ProjectTempMaintenanceFinished(Result<(), String>),
     /// Applies the completed workspace-state persistence result after one user-visible mutation.
     /// 应用某次用户可见变更后已完成的工作台状态持久化结果。
     WorkspaceStatePersisted(Result<(), String>),
@@ -1466,6 +1538,9 @@ enum Message {
     /// Prompt composer changed from the text input.
     /// 提示词输入框内容发生变化。
     ComposerChanged(String),
+    /// Applies one text-editor action inside the main prompt composer.
+    /// 应用主提示词编辑器中的一条文本编辑动作。
+    ComposerEditorAction(text_editor::Action),
     /// Embedded editor emitted an editing action.
     /// 嵌入式编辑器发出了编辑动作。
     EditorActionPerformed(text_editor::Action),
@@ -1616,6 +1691,9 @@ enum Message {
     /// Execution mode selected from the radio group.
     /// 从单选组中选择了执行模式。
     ExecutionModeSelected(ExecutionMode),
+    /// Cycles the current execution mode from the main-input shortcut.
+    /// 通过主输入区快捷键循环切换当前执行模式。
+    CycleExecutionMode,
     /// Temperature slider changed.
     /// 温度滑块发生变化。
     TemperatureChanged(f32),
@@ -1636,7 +1714,7 @@ enum Message {
     AutoApproveToggled(bool),
     /// Session selected from the navigator.
     /// 从导航区选择了某个会话。
-    SessionSelected(usize),
+    SessionSelected(SessionId),
     /// Switches the unified transcript panel into the structured selectable-document mode.
     /// 将统一转录面板切换到结构化可选文档模式。
     ShowSelectedSessionDocumentStructured,
@@ -1652,12 +1730,18 @@ enum Message {
     /// Opens one inline thinking block in the centered modal surface.
     /// 在居中弹层表面中打开某个内联思考区块。
     OpenSelectedSessionThinkingModal(String),
+    /// Opens one inline tool block in the centered modal surface.
+    /// 在居中弹层表面中打开某个内联工具区块。
+    OpenSelectedSessionToolModal(String),
     /// Commits one previously scheduled inline-thinking toggle after the double-click grace window has elapsed.
     /// 在双击宽限窗口结束后，正式提交一次先前调度的内联思考切换。
     FlushPendingThinkingInlineToggle,
     /// Starts or completes closing the centered thinking modal.
     /// 启动或完成关闭居中思考弹层。
     CloseSelectedSessionThinkingModal,
+    /// Starts or completes closing the centered tool modal.
+    /// 启动或完成关闭居中工具弹层。
+    CloseSelectedSessionToolModal,
     /// Applies one read-only action to the unified structured transcript buffer of the selected session.
     /// 向当前选中会话的统一结构化转录缓冲区应用一次只读动作。
     SelectedSessionDocumentStructuredAction(text_editor::Action),
@@ -1669,7 +1753,7 @@ enum Message {
     SelectedSessionTranscriptScrolled {
         /// Session identifier owning the visible transcript panel.
         /// 拥有当前可见转录面板的会话标识。
-        session_id: usize,
+        session_id: SessionId,
         /// Latest viewport reported by the visible transcript scrollable.
         /// 当前可见转录滚动容器回传的最新视口。
         viewport: scrollable::Viewport,
@@ -1679,7 +1763,7 @@ enum Message {
     SelectedSessionTranscriptDragAutoScrollChanged {
         /// Session identifier owning the main rendered transcript surface.
         /// 拥有主渲染转录表面的会话标识。
-        session_id: usize,
+        session_id: SessionId,
         /// Latest drag auto-scroll request, or `None` when the pointer has returned inside the viewport.
         /// 最新拖拽自动滚动请求；当指针回到视口内时为 `None`。
         request: Option<SelectableTranscriptDragAutoScroll>,
@@ -1689,7 +1773,7 @@ enum Message {
     SelectedSessionThinkingOverlayDragAutoScrollChanged {
         /// Session identifier owning the floating thinking overlay.
         /// 拥有流式思考浮层的会话标识。
-        session_id: usize,
+        session_id: SessionId,
         /// Latest drag auto-scroll request, or `None` when the pointer has returned inside the viewport.
         /// 最新拖拽自动滚动请求；当指针回到视口内时为 `None`。
         request: Option<SelectableTranscriptDragAutoScroll>,
@@ -1702,7 +1786,7 @@ enum Message {
     SelectedSessionThinkingOverlayScrolled {
         /// Session identifier owning the visible floating thinking overlay.
         /// 拥有当前可见流式思考浮层的会话标识。
-        session_id: usize,
+        session_id: SessionId,
         /// Latest viewport reported by the floating thinking scrollable.
         /// 当前流式思考滚动容器回传的最新视口。
         viewport: scrollable::Viewport,
@@ -1730,7 +1814,7 @@ enum Message {
     TaskProjectSectionTailHovered(Option<bool>),
     /// Updates the hovered session row inside the main task-drawer tree.
     /// 更新主任务抽屉树中当前悬停的会话行。
-    TaskSessionHovered(Option<usize>),
+    TaskSessionHovered(Option<SessionId>),
     /// Starts one click-or-drag interaction from a project row inside the main task-drawer tree.
     /// 从主任务抽屉树中的某个项目行启动一次点击或拖拽交互。
     StartTaskProjectInteraction(String),
@@ -1757,13 +1841,28 @@ enum Message {
     RestoreTaskProject(String),
     /// Renames one session row inside the main task-drawer tree using a lightweight placeholder flow.
     /// 使用轻量占位流程重命名主任务抽屉树中的某个会话行。
-    RenameTaskSession(usize),
+    RenameTaskSession(SessionId),
     /// Archives one session row inside the main task-drawer tree.
     /// 归档主任务抽屉树中的某个会话行。
-    ArchiveTaskSession(usize),
+    ArchiveTaskSession(SessionId),
     /// Restores one archived session row back into its visible owning project.
     /// 将一个已归档会话行恢复回其可见的所属项目。
-    RestoreTaskSession(usize),
+    RestoreTaskSession(SessionId),
+    /// Requests the first-step destructive confirmation for one archived project.
+    /// 请求针对某个归档项目的第一步破坏性确认。
+    RequestPermanentDeleteArchivedTaskProject(String),
+    /// Requests the first-step destructive confirmation for one archived session.
+    /// 请求针对某个归档会话的第一步破坏性确认。
+    RequestPermanentDeleteArchivedTaskSession(SessionId),
+    /// Cancels the currently visible archived-item destructive confirmation flow.
+    /// 取消当前可见的归档项破坏性确认流程。
+    CancelPermanentDeleteArchivedItem,
+    /// Confirms and starts the permanent deletion of the currently selected archived item.
+    /// 确认并启动当前选中归档项的永久删除。
+    ConfirmPermanentDeleteArchivedItem,
+    /// Applies the final result returned by one archived-item permanent deletion task.
+    /// 应用单次归档项永久删除任务返回的最终结果。
+    PermanentDeleteArchivedItemFinished(Result<ArchivedDeleteOutcome, String>),
     /// Workspace scan action requested.
     /// 请求扫描工作区。
     ScanWorkspace,
@@ -1993,6 +2092,9 @@ impl VulcanWorkbench {
                 focus,
                 workspace_path: String::from("D:/openvulcan/vulcan-code"),
                 composer: String::from("为 Rust + iced AI Coding 客户端搭建可扩展的桌面基础设施。"),
+                composer_buffer: text_editor::Content::with_text(
+                    "为 Rust + iced AI Coding 客户端搭建可扩展的桌面基础设施。",
+                ),
                 editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
                 diff_summary: placeholder_diff_panel.summary_text(),
                 diff_panel: placeholder_diff_panel,
@@ -2014,7 +2116,7 @@ impl VulcanWorkbench {
                 suppress_task_session_hover: false,
                 pending_task_project_interaction: None,
                 dragging_task_project: None,
-                selected_session: 0,
+                selected_session: SessionId::nil(),
                 activities,
                 activity_raw_buffers,
                 session_messages: BTreeMap::new(),
@@ -2024,6 +2126,7 @@ impl VulcanWorkbench {
                 archived_session_compactions: BTreeMap::new(),
                 session_runtime_state: BTreeMap::new(),
                 archived_session_runtime_state: BTreeMap::new(),
+                pending_archived_delete_confirmation: None,
                 session_runtime_events: BTreeMap::new(),
                 collapsed_runtime_event_ids: BTreeMap::new(),
                 markdown_session_message_ids: BTreeMap::new(),
@@ -2035,8 +2138,10 @@ impl VulcanWorkbench {
                 floating_streaming_thinking_sessions: BTreeSet::new(),
                 session_streaming_thinking_follow_tail: BTreeMap::new(),
                 active_thinking_modal: None,
+                active_tool_modal: None,
                 pending_thinking_inline_toggle: None,
                 streaming_output_message_ids: BTreeMap::new(),
+                session_tool_call_message_ids: BTreeMap::new(),
                 runtime_event_raw_buffers: BTreeMap::new(),
                 runtime_event_markdown: BTreeMap::new(),
                 runtime_event_markdown_buffers: BTreeMap::new(),
@@ -2056,7 +2161,6 @@ impl VulcanWorkbench {
                 active_run_id: None,
                 active_run_session_id: None,
                 active_run_handle: None,
-                next_session_id: 1,
                 startup_lifecycle: StartupLifecycle::Bootstrapping {
                     message: String::from("正在初始化 vldb 数据平面，请稍候。"),
                 },
@@ -2118,6 +2222,7 @@ impl VulcanWorkbench {
     /// 处理控件消息并更新应用状态。
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Noop => Task::none(),
             Message::BeginStartupBootstrap => {
                 self.startup_lifecycle = StartupLifecycle::Bootstrapping {
                     message: String::from("正在初始化 vldb 数据平面，请稍候。"),
@@ -2144,6 +2249,7 @@ impl VulcanWorkbench {
                 self.archived_session_compactions.clear();
                 self.session_runtime_state.clear();
                 self.archived_session_runtime_state.clear();
+                self.pending_archived_delete_confirmation = None;
                 self.session_runtime_events.clear();
                 self.collapsed_runtime_event_ids.clear();
                 self.markdown_session_message_ids.clear();
@@ -2155,6 +2261,7 @@ impl VulcanWorkbench {
                 self.floating_streaming_thinking_sessions.clear();
                 self.session_streaming_thinking_follow_tail.clear();
                 self.active_thinking_modal = None;
+                self.active_tool_modal = None;
                 self.pending_thinking_inline_toggle = None;
                 self.streaming_output_message_ids.clear();
                 self.runtime_event_raw_buffers.clear();
@@ -2173,8 +2280,7 @@ impl VulcanWorkbench {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.session_run_phases.clear();
                 self.expanded_task_projects.clear();
-                self.selected_session = 0;
-                self.next_session_id = 1;
+                self.selected_session = SessionId::nil();
 
                 Task::perform(
                     data_plane::bootstrap_application_data_plane(
@@ -2299,11 +2405,24 @@ impl VulcanWorkbench {
                                 self.session_messages.len()
                             ),
                         );
+                        return self.schedule_project_temp_cleanup_for_all_projects();
                     }
                     Err(error) => {
                         self.status_message = format!("工作台数据加载失败：{error}");
                         self.push_activity(ActivityLevel::Warning, "工作台数据加载失败", error);
                     }
+                }
+
+                Task::none()
+            }
+            Message::ProjectTempMaintenanceFinished(result) => {
+                if let Err(error) = result {
+                    self.push_activity(
+                        ActivityLevel::Warning,
+                        "项目临时目录清理失败",
+                        error.clone(),
+                    );
+                    self.status_message = format!("项目临时目录清理失败：{error}");
                 }
 
                 Task::none()
@@ -2834,6 +2953,11 @@ impl VulcanWorkbench {
                 self.composer = value;
                 Task::none()
             }
+            Message::ComposerEditorAction(action) => {
+                self.composer_buffer.perform(action);
+                self.composer = self.composer_buffer.text();
+                Task::none()
+            }
             Message::EditorActionPerformed(action) => {
                 self.editor_content.perform(action);
                 Task::none()
@@ -3202,6 +3326,14 @@ impl VulcanWorkbench {
                 self.status_message = format!("执行模式已切换为 {mode}。");
                 Task::none()
             }
+            Message::CycleExecutionMode => {
+                self.execution_mode = match self.execution_mode {
+                    ExecutionMode::Build => ExecutionMode::Plan,
+                    ExecutionMode::Plan => ExecutionMode::Build,
+                };
+                self.status_message = format!("执行模式已切换为 {}。", self.execution_mode);
+                Task::none()
+            }
             Message::TemperatureChanged(value) => {
                 self.temperature = value;
                 Task::none()
@@ -3237,6 +3369,7 @@ impl VulcanWorkbench {
                 self.hovered_task_session = Some(session_id);
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
+                self.active_tool_modal = None;
                 self.pending_thinking_inline_toggle = None;
 
                 // Capture the selected session title to keep footer feedback specific.
@@ -3256,6 +3389,7 @@ impl VulcanWorkbench {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::Structured;
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
+                self.active_tool_modal = None;
                 self.pending_thinking_inline_toggle = None;
                 self.selected_session()
                     .map(|session| {
@@ -3270,6 +3404,7 @@ impl VulcanWorkbench {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::RawSource;
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
+                self.active_tool_modal = None;
                 self.pending_thinking_inline_toggle = None;
                 self.selected_session()
                     .map(|session| {
@@ -3284,6 +3419,7 @@ impl VulcanWorkbench {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
+                self.active_tool_modal = None;
                 self.pending_thinking_inline_toggle = None;
                 self.selected_session()
                     .map(|session| {
@@ -3313,12 +3449,25 @@ impl VulcanWorkbench {
                 self.open_thinking_modal(session_id, block_id);
                 Task::none()
             }
+            Message::OpenSelectedSessionToolModal(block_id) => {
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                self.cancel_pending_thinking_inline_toggle(Some(session_id), None);
+                self.open_tool_modal(session_id, block_id);
+                Task::none()
+            }
             Message::FlushPendingThinkingInlineToggle => {
                 self.flush_pending_thinking_inline_toggle();
                 Task::none()
             }
             Message::CloseSelectedSessionThinkingModal => {
                 self.begin_close_thinking_modal();
+                self.begin_close_tool_modal();
+                Task::none()
+            }
+            Message::CloseSelectedSessionToolModal => {
+                self.begin_close_tool_modal();
                 Task::none()
             }
             Message::SelectedSessionDocumentStructuredAction(action) => {
@@ -3391,6 +3540,7 @@ impl VulcanWorkbench {
             }
             Message::ThinkingModalAnimationTick => {
                 self.advance_thinking_modal_animation();
+                self.advance_tool_modal_animation();
                 Task::none()
             }
             Message::ActivityLogRawAction(index, action) => {
@@ -3538,7 +3688,12 @@ impl VulcanWorkbench {
                 match pick_task_project_folder(self.workspace_path.trim()) {
                     Ok(Some(selected_path)) => {
                         self.add_task_project_from_folder(&selected_path);
-                        return self.persist_workspace_snapshot_task();
+                        return Task::batch([
+                            self.persist_workspace_snapshot_task(),
+                            self.schedule_project_temp_cleanup_for_paths(vec![
+                                selected_path.clone(),
+                            ]),
+                        ]);
                     }
                     Ok(None) => {
                         self.status_message = String::from("已取消从文件夹添加项目。");
@@ -3622,8 +3777,16 @@ impl VulcanWorkbench {
                 self.persist_workspace_snapshot_task()
             }
             Message::RestoreTaskProject(project_id) => {
+                self.pending_archived_delete_confirmation = None;
                 let _ = self.restore_archived_task_project_by_id(&project_id);
-                self.persist_workspace_snapshot_task()
+                let mut tasks = vec![self.persist_workspace_snapshot_task()];
+                if let Some(project_path) = self
+                    .task_project_by_id(&project_id)
+                    .map(|project| PathBuf::from(project.path.clone()))
+                {
+                    tasks.push(self.schedule_project_temp_cleanup_for_paths(vec![project_path]));
+                }
+                Task::batch(tasks)
             }
             Message::RenameTaskSession(session_id) => {
                 if let Some(session) = self
@@ -3697,8 +3860,62 @@ impl VulcanWorkbench {
                 self.persist_workspace_snapshot_task()
             }
             Message::RestoreTaskSession(session_id) => {
+                self.pending_archived_delete_confirmation = None;
                 let _ = self.restore_archived_task_session(session_id);
                 self.persist_workspace_snapshot_task()
+            }
+            Message::RequestPermanentDeleteArchivedTaskProject(project_id) => {
+                self.pending_archived_delete_confirmation = self
+                    .archived_task_projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                    .map(|project| ArchivedDeleteConfirmationState {
+                        target: ArchivedDeleteTarget::Project(project.id.clone()),
+                        title: project.title.clone(),
+                    });
+                if self.pending_archived_delete_confirmation.is_some() {
+                    self.status_message = String::from("请再次确认是否彻底删除该归档项目。");
+                }
+                Task::none()
+            }
+            Message::RequestPermanentDeleteArchivedTaskSession(session_id) => {
+                self.pending_archived_delete_confirmation = self
+                    .archived_sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .map(|session| ArchivedDeleteConfirmationState {
+                        target: ArchivedDeleteTarget::Session(session.id),
+                        title: session.title.clone(),
+                    });
+                if self.pending_archived_delete_confirmation.is_some() {
+                    self.status_message = String::from("请再次确认是否彻底删除该归档会话。");
+                }
+                Task::none()
+            }
+            Message::CancelPermanentDeleteArchivedItem => {
+                self.pending_archived_delete_confirmation = None;
+                self.status_message = String::from("已取消归档项彻底删除。");
+                Task::none()
+            }
+            Message::ConfirmPermanentDeleteArchivedItem => {
+                let Some(confirmation) = self.pending_archived_delete_confirmation.clone() else {
+                    return Task::none();
+                };
+                self.pending_archived_delete_confirmation = None;
+                self.status_message = format!("正在彻底删除 `{}`。", confirmation.title);
+                self.permanently_delete_archived_item_task(confirmation)
+            }
+            Message::PermanentDeleteArchivedItemFinished(result) => {
+                match result {
+                    Ok(outcome) => {
+                        self.apply_archived_delete_outcome(&outcome);
+                        self.status_message = format!("已彻底删除 `{}`。", outcome.title);
+                    }
+                    Err(error) => {
+                        self.status_message = format!("彻底删除归档项失败：{error}");
+                    }
+                }
+                Task::none()
             }
             Message::ScanWorkspace => {
                 // Load the current workspace diff synchronously for the first testing milestone.
@@ -3799,6 +4016,9 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
 
+                let current_prompt = self.composer_buffer.text();
+                self.composer = current_prompt.clone();
+
                 let request = if let Some(session) = self.selected_session() {
                     let context_history = self
                         .session_context_history(session.id)
@@ -3809,7 +4029,7 @@ impl VulcanWorkbench {
                         session_id: session.id,
                         session_title: session.title.clone(),
                         workspace_path: self.workspace_path.clone(),
-                        prompt: self.composer.clone(),
+                        prompt: current_prompt,
                         context_history,
                         execution_mode: self.execution_mode.to_string(),
                         temperature: self.temperature_enabled.then_some(self.temperature),
@@ -3850,6 +4070,8 @@ impl VulcanWorkbench {
                 self.materialize_session_after_first_user_turn(request.session_id);
                 self.replace_session_runtime_events(request.session_id, Vec::new());
                 self.clear_streaming_message_ids(request.session_id);
+                self.session_tool_call_message_ids
+                    .remove(&request.session_id);
                 self.last_mcp_discovery_rows.clear();
                 self.last_mcp_discovery_errors.clear();
                 self.set_session_run_phase(request.session_id, SessionRunPhase::Preparing);
@@ -3858,6 +4080,8 @@ impl VulcanWorkbench {
                     session.last_updated_label = String::from("刚刚");
                 }
                 self.status_message = String::from("正在发起真实执行，请稍候。");
+                self.composer.clear();
+                self.composer_buffer = text_editor::Content::with_text("");
 
                 let run_id = self.next_run_id;
                 self.next_run_id = self.next_run_id.saturating_add(1);
@@ -3953,6 +4177,7 @@ impl VulcanWorkbench {
                 }
 
                 self.clear_streaming_message_ids(session_id);
+                self.session_tool_call_message_ids.remove(&session_id);
                 self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
                 self.status_message = String::from("已停止当前 AI 调用。");
                 self.push_session_message(
@@ -4421,7 +4646,6 @@ impl VulcanWorkbench {
         let mut tree = column![].spacing(1).width(Fill);
         let pinned_projects = self.task_projects.iter().filter(|project| project.pinned);
         let regular_projects = self.task_projects.iter().filter(|project| !project.pinned);
-        let archived_projects = self.archived_task_projects.iter();
 
         let has_pinned = self.task_projects.iter().any(|project| project.pinned);
 
@@ -4447,18 +4671,46 @@ impl VulcanWorkbench {
 
         tree = tree.push(self.view_main_task_project_section_tail(false));
 
-        if !self.archived_task_projects.is_empty() {
-            tree = tree
-                .push(space::vertical().height(6))
-                .push(self.view_main_task_group_label("归档项目", false))
-                .push(
-                    archived_projects.fold(column![].spacing(1).width(Fill), |column, project| {
-                        column.push(self.view_archived_task_project_row(project))
-                    }),
-                );
-        }
-
         container(tree).width(Fill).into()
+    }
+
+    /// Builds the inline destructive second-confirmation card shown before one archived item is permanently deleted.
+    /// 构建在某个归档项被永久删除前展示的内联破坏性二次确认卡片。
+    fn view_archived_delete_confirmation_card(
+        &self,
+        confirmation: &ArchivedDeleteConfirmationState,
+    ) -> Element<'_, Message> {
+        let subject_label = match &confirmation.target {
+            ArchivedDeleteTarget::Project(_) => "归档项目",
+            ArchivedDeleteTarget::Session(_) => "归档会话",
+        };
+
+        container(
+            column![
+                text(format!(
+                    "将彻底删除{} `{}`，此操作不可恢复。",
+                    subject_label, confirmation.title
+                ))
+                .size(13),
+                row![
+                    button("取消")
+                        .padding([8, 12])
+                        .style(button::secondary)
+                        .on_press(Message::CancelPermanentDeleteArchivedItem),
+                    button("确认删除")
+                        .padding([8, 12])
+                        .style(button::danger)
+                        .on_press(Message::ConfirmPermanentDeleteArchivedItem),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            ]
+            .spacing(10),
+        )
+        .padding(12)
+        .width(Fill)
+        .style(container::rounded_box)
+        .into()
     }
 
     /// Builds one compact section label used inside the project tree.
@@ -4761,14 +5013,8 @@ impl VulcanWorkbench {
         project: &'a TaskProjectSummary,
     ) -> Element<'a, Message> {
         let has_visible_sessions = !project.session_ids.is_empty();
-        let archived_sessions = self
-            .archived_sessions
-            .iter()
-            .filter(|session| session.project_id.as_deref() == Some(project.id.as_str()))
-            .collect::<Vec<_>>();
-        let has_archived_sessions = !archived_sessions.is_empty();
 
-        if !has_visible_sessions && !has_archived_sessions {
+        if !has_visible_sessions {
             return container(text("暂无对话").size(13).style(|theme: &Theme| {
                 iced::widget::text::Style {
                     color: Some(
@@ -4791,7 +5037,7 @@ impl VulcanWorkbench {
             .into();
         }
 
-        let mut content = project.session_ids.iter().fold(
+        let content = project.session_ids.iter().fold(
             column![].spacing(4).width(Fill),
             |column, session_id| {
                 if let Some(session) = self.session_by_id(*session_id) {
@@ -4801,20 +5047,6 @@ impl VulcanWorkbench {
                 }
             },
         );
-
-        if has_archived_sessions {
-            if has_visible_sessions {
-                content = content.push(space::vertical().height(4));
-            }
-            content = content
-                .push(self.view_main_task_archived_session_group_label())
-                .push(archived_sessions.into_iter().fold(
-                    column![].spacing(4).width(Fill),
-                    |column, session| {
-                        column.push(self.view_archived_task_session_tree_row(session))
-                    },
-                ));
-        }
 
         content.into()
     }
@@ -4977,31 +5209,6 @@ impl VulcanWorkbench {
         .padding([6, 6])
         .width(menu_width)
         .style(style::main_task_tree_menu_style)
-        .into()
-    }
-
-    /// Builds the compact archived-session subgroup label rendered inside one expanded project branch.
-    /// 构建展示在某个展开项目分支内部的紧凑归档会话分组标签。
-    fn view_main_task_archived_session_group_label(&self) -> Element<'_, Message> {
-        container(text("归档会话").size(12).style(|theme: &Theme| {
-            iced::widget::text::Style {
-                color: Some(
-                    theme
-                        .extended_palette()
-                        .background
-                        .base
-                        .text
-                        .scale_alpha(0.5),
-                ),
-            }
-        }))
-        .padding(iced::Padding {
-            top: 0.0,
-            right: 2.0,
-            bottom: 0.0,
-            left: 35.0,
-        })
-        .width(Fill)
         .into()
     }
 
@@ -5176,6 +5383,10 @@ impl VulcanWorkbench {
                     Message::RestoreTaskProject(project.id.clone()),
                 ),
                 Self::view_main_task_tree_menu_button(
+                    "彻底删除",
+                    Message::RequestPermanentDeleteArchivedTaskProject(project.id.clone()),
+                ),
+                Self::view_main_task_tree_menu_button(
                     "从资源管理器中打开",
                     Message::OpenTaskProjectDirectory(project.id.clone()),
                 ),
@@ -5198,10 +5409,16 @@ impl VulcanWorkbench {
         let menu_width = 200.0;
 
         container(
-            column![Self::view_main_task_tree_menu_button(
-                "恢复",
-                Message::RestoreTaskSession(session.id),
-            )]
+            column![
+                Self::view_main_task_tree_menu_button(
+                    "恢复",
+                    Message::RestoreTaskSession(session.id),
+                ),
+                Self::view_main_task_tree_menu_button(
+                    "彻底删除",
+                    Message::RequestPermanentDeleteArchivedTaskSession(session.id),
+                ),
+            ]
             .spacing(2)
             .width(menu_width),
         )
@@ -5339,6 +5556,67 @@ impl VulcanWorkbench {
         .into()
     }
 
+    /// Returns the current visible line count of the main prompt composer.
+    /// 返回主提示词编辑器当前可见的逻辑行数量。
+    fn composer_line_count(&self) -> usize {
+        self.composer.lines().count().max(1)
+    }
+
+    /// Builds the compact one-line composer editor that stays in the main toolbar row.
+    /// 构建保留在主工具栏行内的紧凑单行提示词编辑器。
+    fn view_compact_composer_editor(&self) -> Element<'_, Message> {
+        container(
+            text_editor(&self.composer_buffer)
+                .height(44)
+                .padding([10, 12])
+                .placeholder("输入当前会话要执行的任务指令")
+                .key_binding(|key_press| match key_press.key.as_ref() {
+                    keyboard::Key::Named(keyboard::key::Named::Enter)
+                        if !key_press.modifiers.shift() =>
+                    {
+                        Some(text_editor::Binding::Custom(Message::StartRun))
+                    }
+                    _ => text_editor::Binding::from_key_press(key_press),
+                })
+                .on_action(Message::ComposerEditorAction),
+        )
+        .width(Fill)
+        .into()
+    }
+
+    /// Builds the floating multiline composer overlay when the current prompt spans multiple lines.
+    /// 当当前提示词跨越多行时构建浮动多行编辑器遮罩。
+    fn view_composer_multiline_overlay(&self) -> Option<Element<'_, Message>> {
+        if self.composer_line_count() <= 1 {
+            return None;
+        }
+
+        let visible_lines = self.composer_line_count().min(15) as f32;
+        let editor_height = 20.0 + visible_lines * 24.0;
+
+        Some(
+            container(
+                text_editor(&self.composer_buffer)
+                    .height(editor_height)
+                    .padding([12, 14])
+                    .placeholder("输入当前会话要执行的任务指令")
+                    .key_binding(|key_press| match key_press.key.as_ref() {
+                        keyboard::Key::Named(keyboard::key::Named::Enter)
+                            if !key_press.modifiers.shift() =>
+                        {
+                            Some(text_editor::Binding::Custom(Message::StartRun))
+                        }
+                        _ => text_editor::Binding::from_key_press(key_press),
+                    })
+                    .on_action(Message::ComposerEditorAction),
+            )
+            .padding(0)
+            .style(container::bordered_box)
+            .width(Fill)
+            .into(),
+        )
+    }
+
     /// Builds the compact transcript surface-mode switcher shown at the trailing end of the session-status row.
     /// 构建显示在会话状态行末端的紧凑转录表面模式切换器。
     fn view_transcript_surface_mode_switcher(&self) -> Element<'_, Message> {
@@ -5413,6 +5691,7 @@ impl VulcanWorkbench {
             .unwrap_or("未选择会话");
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
+        let composer_overlay = self.view_composer_multiline_overlay();
         let composer_panel = container(
             column![
                 row![
@@ -5429,10 +5708,14 @@ impl VulcanWorkbench {
                 .spacing(12)
                 .align_y(Center),
                 row![
-                    text_input("输入当前会话要执行的任务指令", &self.composer)
-                        .on_input(Message::ComposerChanged)
-                        .padding(12)
-                        .width(Fill),
+                    pick_list(
+                        ExecutionMode::ALL,
+                        Some(self.execution_mode),
+                        Message::ExecutionModeSelected
+                    )
+                    .width(110)
+                    .placeholder("模式"),
+                    self.view_compact_composer_editor(),
                     self.view_run_trigger_button(),
                 ]
                 .spacing(10)
@@ -5454,6 +5737,33 @@ impl VulcanWorkbench {
         )
         .padding(14)
         .style(container::bordered_box);
+
+        let transcript_surface: Element<'_, Message> = if let Some(overlay) = composer_overlay {
+            stack([
+                transcript_stream,
+                container(
+                    column![
+                        space::vertical().height(Fill),
+                        row![
+                            space::horizontal().width(120),
+                            overlay,
+                            space::horizontal().width(52),
+                        ]
+                        .width(Fill)
+                        .align_y(iced::Alignment::End),
+                    ]
+                    .width(Fill)
+                    .height(Fill),
+                )
+                .width(Fill)
+                .height(Fill)
+                .padding([8, 14])
+                .into(),
+            ])
+            .into()
+        } else {
+            transcript_stream
+        };
 
         container(
             column![
@@ -5493,7 +5803,7 @@ impl VulcanWorkbench {
                 .width(Fill)
                 .padding([12, 14])
                 .style(container::bordered_box),
-                transcript_stream,
+                transcript_surface,
                 composer_panel,
             ]
             .spacing(14)
@@ -5563,6 +5873,10 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
 
+        if let Some(overlay) = self.view_selected_session_tool_modal(session_id) {
+            layered_surfaces.push(overlay);
+        }
+
         stack(layered_surfaces).into()
     }
 
@@ -5570,7 +5884,7 @@ impl VulcanWorkbench {
     /// 构建过渡期用于逐块检查的统一渲染转录流。
     fn view_main_canvas_segmented_transcript_stream(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Element<'_, Message> {
         let Some(document) = self.rendered_session_agent_view_document(session_id) else {
             return container(text("当前没有可渲染的统一输出块。").size(14))
@@ -5594,6 +5908,10 @@ impl VulcanWorkbench {
                     SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                         Message::OpenSelectedSessionThinkingModal(block_id)
                     }
+                    SelectableTranscriptInteraction::OpenToolModal(block_id) => {
+                        Message::OpenSelectedSessionToolModal(block_id)
+                    }
+                    SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
                 },
             ),
             space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT),
@@ -5663,7 +5981,7 @@ impl VulcanWorkbench {
     /// 构建当前选中会话使用的可选统一转录面板。
     fn view_selected_session_agent_document_surface(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Element<'_, Message> {
         let (buffer, on_action, fallback_text) = match self.agent_transcript_surface_mode {
             AgentTranscriptSurfaceMode::DetailCards => (
@@ -5729,7 +6047,7 @@ impl VulcanWorkbench {
     /// 构建当用户显式打开某个内联思考区块时显示的居中思考弹层。
     fn view_selected_session_thinking_modal(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Option<Element<'_, Message>> {
         let modal_state = self
             .active_thinking_modal
@@ -5757,6 +6075,10 @@ impl VulcanWorkbench {
                 SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                     Message::OpenSelectedSessionThinkingModal(block_id)
                 }
+                SelectableTranscriptInteraction::OpenToolModal(block_id) => {
+                    Message::OpenSelectedSessionToolModal(block_id)
+                }
+                SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
             },
             move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
                 session_id,
@@ -5766,11 +6088,55 @@ impl VulcanWorkbench {
         ))
     }
 
+    /// Builds the centered tool modal shown when the user explicitly opens one inline tool block.
+    /// 构建当用户显式打开某个内联工具区块时显示的居中工具弹层。
+    fn view_selected_session_tool_modal(
+        &self,
+        session_id: SessionId,
+    ) -> Option<Element<'_, Message>> {
+        let modal_state = self
+            .active_tool_modal
+            .as_ref()
+            .filter(|modal_state| modal_state.session_id == session_id)?;
+        let document = self.rendered_session_agent_view_document(modal_state.session_id)?;
+        let (title, document) = build_modal_tool_surface_document(document, &modal_state.block_id)?;
+        let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
+        Some(view_thinking_modal_surface(
+            title,
+            String::from("这里会显示完整的工具调用参数与返回结果。"),
+            &document,
+            &self.app_theme,
+            progress,
+            thinking_overlay_scrollable_id(session_id),
+            move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
+                session_id,
+                request,
+            },
+            |interaction| match interaction {
+                SelectableTranscriptInteraction::ToggleThinkingInline(block_id) => {
+                    Message::ToggleSelectedSessionThinkingInline(block_id)
+                }
+                SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
+                    Message::OpenSelectedSessionThinkingModal(block_id)
+                }
+                SelectableTranscriptInteraction::OpenToolModal(block_id) => {
+                    Message::OpenSelectedSessionToolModal(block_id)
+                }
+                SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+            },
+            move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
+                session_id,
+                viewport,
+            },
+            Message::CloseSelectedSessionToolModal,
+        ))
+    }
+
     /// Builds the floating streaming-thinking overlay shown while one active thinking message is still in progress.
     /// 构建当某条活动思考消息仍在流式进行时显示的浮动思考面板。
     fn view_selected_session_streaming_thinking_overlay(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Option<Element<'_, Message>> {
         if self
             .active_thinking_modal
@@ -5804,6 +6170,10 @@ impl VulcanWorkbench {
                 SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                     Message::OpenSelectedSessionThinkingModal(block_id)
                 }
+                SelectableTranscriptInteraction::OpenToolModal(block_id) => {
+                    Message::OpenSelectedSessionToolModal(block_id)
+                }
+                SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
             },
             move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
                 session_id,
@@ -6520,9 +6890,74 @@ impl VulcanWorkbench {
         )
         .padding([4, 2]);
 
-        column![panel_header, self.view_inspector()]
-            .spacing(12)
-            .height(Fill)
+        column![
+            panel_header,
+            self.view_inspector(),
+            self.view_archived_restore_card()
+        ]
+        .spacing(12)
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds the dedicated archived-item restore card shown inside settings instead of the main session tree.
+    /// 构建展示在设置页面中的独立归档恢复卡片，而不是继续显示在主会话树里。
+    fn view_archived_restore_card(&self) -> Element<'_, Message> {
+        let archived_project_session_ids = self
+            .archived_task_projects
+            .iter()
+            .flat_map(|project| project.session_ids.iter().copied())
+            .collect::<HashSet<_>>();
+        let standalone_archived_sessions = self
+            .archived_sessions
+            .iter()
+            .filter(|session| !archived_project_session_ids.contains(&session.id))
+            .collect::<Vec<_>>();
+
+        let mut content = column![
+            row![
+                text("归档恢复").size(18),
+                space::horizontal(),
+                text("归档内容只在这里展示，主会话树不再显示。").size(12),
+            ]
+            .align_y(Center)
+        ]
+        .spacing(12);
+
+        if self.archived_task_projects.is_empty() && standalone_archived_sessions.is_empty() {
+            content = content.push(text("当前没有归档项目或归档会话。").size(13));
+        } else {
+            if !self.archived_task_projects.is_empty() {
+                content = content.push(text("归档项目").size(14)).push(
+                    self.archived_task_projects
+                        .iter()
+                        .fold(column![].spacing(1).width(Fill), |column, project| {
+                            column.push(self.view_archived_task_project_row(project))
+                        }),
+                );
+            }
+
+            if !standalone_archived_sessions.is_empty() {
+                content = content.push(text("独立归档会话").size(14)).push(
+                    standalone_archived_sessions.into_iter().fold(
+                        column![].spacing(1).width(Fill),
+                        |column, session| {
+                            column.push(self.view_archived_task_session_tree_row(session))
+                        },
+                    ),
+                );
+            }
+        }
+
+        if let Some(confirmation) = self.pending_archived_delete_confirmation.as_ref() {
+            content = content
+                .push(space::vertical().height(6))
+                .push(self.view_archived_delete_confirmation_card(confirmation));
+        }
+
+        container(content)
+            .padding(16)
+            .style(container::bordered_box)
             .into()
     }
 
@@ -6876,6 +7311,10 @@ impl VulcanWorkbench {
             .active_thinking_modal
             .as_ref()
             .is_some_and(|modal_state| modal_state.phase != ThinkingModalPhase::Open)
+            || self
+                .active_tool_modal
+                .as_ref()
+                .is_some_and(|modal_state| modal_state.phase != ThinkingModalPhase::Open)
         {
             iced::time::every(THINKING_MODAL_TICK_INTERVAL)
                 .map(|_| Message::ThinkingModalAnimationTick)
@@ -6912,6 +7351,19 @@ impl VulcanWorkbench {
         _window_id: window::Id,
     ) -> Option<Message> {
         match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Tab),
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && modifiers.shift()
+                && !modifiers.control()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                Some(Message::CycleExecutionMode)
+            }
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::Escape),
                 repeat,
@@ -8721,7 +9173,7 @@ impl VulcanWorkbench {
 
     /// Returns whether one session already exists inside the visible or archived project tree bindings.
     /// 返回某个会话是否已经存在于可见或归档项目树绑定关系中。
-    fn session_is_materialized(&self, session_id: usize) -> bool {
+    fn session_is_materialized(&self, session_id: SessionId) -> bool {
         self.task_projects
             .iter()
             .chain(self.archived_task_projects.iter())
@@ -8730,7 +9182,7 @@ impl VulcanWorkbench {
 
     /// Removes transient draft sessions that have not produced any real conversation yet.
     /// 移除尚未产出任何真实对话的临时草稿会话。
-    fn prune_unmaterialized_sessions(&mut self, retained_session_id: Option<usize>) {
+    fn prune_unmaterialized_sessions(&mut self, retained_session_id: Option<SessionId>) {
         let removable_ids = self
             .sessions
             .iter()
@@ -8787,7 +9239,7 @@ impl VulcanWorkbench {
 
     /// Materializes one transient draft session into its owning project after the first real user turn arrives.
     /// 在首条真实用户轮次到来后，将一个临时草稿会话正式归入其所属项目。
-    fn materialize_session_after_first_user_turn(&mut self, session_id: usize) {
+    fn materialize_session_after_first_user_turn(&mut self, session_id: SessionId) {
         if self.session_is_materialized(session_id) {
             return;
         }
@@ -8842,7 +9294,7 @@ impl VulcanWorkbench {
                 .first()
                 .map(|session| session.id)
                 .or_else(|| self.archived_sessions.first().map(|session| session.id))
-                .unwrap_or(0)
+                .unwrap_or_default()
         };
 
         WorkspaceSnapshot {
@@ -8879,7 +9331,6 @@ impl VulcanWorkbench {
                 .collect(),
             expanded_task_projects: self.expanded_task_projects.clone(),
             selected_session,
-            next_session_id: self.next_session_id,
         }
     }
 
@@ -9414,7 +9865,7 @@ impl VulcanWorkbench {
     /// 向目标会话追加一条转录消息，并保持稳定插入顺序。
     fn push_session_message(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         kind: SessionMessageKind,
         title: impl Into<String>,
         body: impl Into<String>,
@@ -9426,7 +9877,7 @@ impl VulcanWorkbench {
     /// 向目标会话追加一条隐藏内部消息节点，并保持稳定插入顺序。
     fn push_hidden_session_message(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         kind: SessionMessageKind,
         record_kind: SessionMessageRecordKind,
         title: impl Into<String>,
@@ -9442,7 +9893,7 @@ impl VulcanWorkbench {
     /// 追加一条带显式持久化记录类型且可选默认折叠状态的可见转录消息。
     fn push_visible_session_record_message(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         kind: SessionMessageKind,
         record_kind: SessionMessageRecordKind,
         title: impl Into<String>,
@@ -9480,7 +9931,7 @@ impl VulcanWorkbench {
     /// 使用稳定运行时元数据物化一条会话消息项并将其追加到转录映射中。
     fn append_session_message_entry(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         entry: SessionMessageEntry,
     ) -> String {
         let session_message_count = self
@@ -9516,7 +9967,7 @@ impl VulcanWorkbench {
     /// 返回某个会话/消息对在可见转录中仍存在时对应的可变消息项。
     fn session_message_entry_mut(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         message_id: &str,
     ) -> Option<&mut SessionMessageEntry> {
         self.session_messages
@@ -9529,7 +9980,7 @@ impl VulcanWorkbench {
     /// 将一段流式正文增量追加到现有可见转录消息，并刷新其原文与 Markdown 缓存。
     fn append_stream_delta_to_session_message(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         message_id: &str,
         delta: &str,
     ) {
@@ -9554,9 +10005,43 @@ impl VulcanWorkbench {
         self.refresh_session_agent_view_buffers(session_id);
     }
 
+    /// Replaces the full visible payload of one existing session message and refreshes every cached projection.
+    /// 替换某条既有会话消息的完整可见载荷，并刷新全部缓存投影。
+    fn replace_session_message_payload(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        record_kind: SessionMessageRecordKind,
+    ) {
+        let title = title.into();
+        let body = body.into();
+
+        let Some(message) = self.session_message_entry_mut(session_id, message_id) else {
+            return;
+        };
+
+        message.title = title;
+        message.body = body.clone();
+        message.record_kind = record_kind;
+
+        self.session_message_raw_buffers.insert(
+            message_id.to_string(),
+            text_editor::Content::with_text(&body),
+        );
+        let (markdown_content, markdown_buffer) =
+            parse_selectable_markdown_body(&body, &self.app_theme);
+        self.session_message_markdown
+            .insert(message_id.to_string(), markdown_content);
+        self.session_message_markdown_buffers
+            .insert(message_id.to_string(), markdown_buffer);
+        self.refresh_session_agent_view_buffers(session_id);
+    }
+
     /// Ensures the session owns one visible thinking message and appends the incoming delta to it.
     /// 确保会话拥有一条可见思考消息，并将当前增量追加进去。
-    fn append_streaming_thinking_delta(&mut self, session_id: usize, delta: &str) {
+    fn append_streaming_thinking_delta(&mut self, session_id: SessionId, delta: &str) {
         let message_id =
             if let Some(message_id) = self.streaming_thinking_message_ids.get(&session_id) {
                 message_id.clone()
@@ -9583,7 +10068,7 @@ impl VulcanWorkbench {
 
     /// Docks the current streaming thinking message back into the main transcript while keeping subsequent deltas on the same message.
     /// 将当前流式思考消息收回主转录正文中，同时保留后续增量继续写入同一条消息。
-    fn dock_streaming_thinking_message(&mut self, session_id: usize) {
+    fn dock_streaming_thinking_message(&mut self, session_id: SessionId) {
         self.clear_thinking_overlay_drag_auto_scroll(session_id);
         self.floating_streaming_thinking_sessions
             .remove(&session_id);
@@ -9594,7 +10079,7 @@ impl VulcanWorkbench {
 
     /// Ensures the session owns one visible final-output message and appends the incoming delta to it.
     /// 确保会话拥有一条可见正式输出消息，并将当前增量追加进去。
-    fn append_streaming_output_delta(&mut self, session_id: usize, delta: &str) {
+    fn append_streaming_output_delta(&mut self, session_id: SessionId, delta: &str) {
         let message_id =
             if let Some(message_id) = self.streaming_output_message_ids.get(&session_id) {
                 message_id.clone()
@@ -9619,7 +10104,7 @@ impl VulcanWorkbench {
     /// 追加一条由独立会话技能链产出的隐藏派生会话记录。
     fn push_session_derived_record(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         record: SessionDerivedRecord,
     ) -> String {
         self.push_hidden_session_message(
@@ -9635,7 +10120,7 @@ impl VulcanWorkbench {
     /// 返回目标会话对应的可变运行时状态快照，并在缺失时按需创建默认行。
     fn ensure_session_runtime_state_mut(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> &mut SessionRuntimeStateEntry {
         self.session_runtime_state
             .entry(session_id)
@@ -9647,7 +10132,7 @@ impl VulcanWorkbench {
 
     /// Writes one hidden explore output for the target session so project-scoped context survives persistence.
     /// 为目标会话写入一条隐藏探索输出，从而让项目级上下文在持久化后仍可恢复。
-    fn append_session_explore_output(&mut self, session_id: usize, project_id: Option<&str>) {
+    fn append_session_explore_output(&mut self, session_id: SessionId, project_id: Option<&str>) {
         let derived_record = {
             let project = project_id
                 .and_then(|resolved_project_id| self.task_project_by_id(resolved_project_id));
@@ -9665,7 +10150,7 @@ impl VulcanWorkbench {
     /// 当会话标题仍处于自动管理状态时，根据最新用户提示词生成新的会话标题。
     fn maybe_generate_session_title_from_prompt(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         prompt: &str,
     ) -> Option<String> {
         let (current_title, current_title_source) = self
@@ -9694,7 +10179,11 @@ impl VulcanWorkbench {
 
     /// Appends one hidden summary output after a real execution run completes.
     /// 在一次真实执行完成后追加一条隐藏摘要输出。
-    fn append_session_summary_output(&mut self, session_id: usize, report: &ExecutionRunReport) {
+    fn append_session_summary_output(
+        &mut self,
+        session_id: SessionId,
+        report: &ExecutionRunReport,
+    ) {
         let derived_record = self
             .session_skill_chain
             .run_summary_skill(SummarySkillInput { report });
@@ -9705,7 +10194,7 @@ impl VulcanWorkbench {
     /// 根据最近一次执行准备结果更新该会话的运行时状态快照。
     fn update_session_runtime_identity_from_preparation(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         preparation: &ExecutionPreparation,
     ) {
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
@@ -9820,6 +10309,7 @@ impl VulcanWorkbench {
         self.append_session_summary_output(session_id, &report);
         self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
         self.refresh_session_agent_view_buffers(session_id);
 
         Task::batch([
@@ -9830,7 +10320,7 @@ impl VulcanWorkbench {
 
     /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
     /// 当可见历史增长到当前阈值以上时创建一条隐藏压缩摘要。
-    fn maybe_compact_session_history(&mut self, session_id: usize) {
+    fn maybe_compact_session_history(&mut self, session_id: SessionId) {
         let Some(messages) = self.session_messages.get(&session_id).cloned() else {
             return;
         };
@@ -9867,7 +10357,7 @@ impl VulcanWorkbench {
 
     /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
     /// 从起点或最近一次压缩锚点开始为单个会话构建当前面向模型的上下文历史。
-    fn session_context_history(&self, session_id: usize) -> Vec<SessionMessageEntry> {
+    fn session_context_history(&self, session_id: SessionId) -> Vec<SessionMessageEntry> {
         let Some(messages) = self.session_messages.get(&session_id) else {
             return Vec::new();
         };
@@ -9902,10 +10392,10 @@ impl VulcanWorkbench {
         self.archived_session_compactions = snapshot.archived_session_compactions;
         self.session_runtime_state = snapshot.session_runtime_state;
         self.archived_session_runtime_state = snapshot.archived_session_runtime_state;
+        self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
         self.expanded_task_projects = snapshot.expanded_task_projects;
         self.selected_session = snapshot.selected_session;
-        self.next_session_id = snapshot.next_session_id;
         self.hovered_task_project = None;
         self.hovered_task_session = None;
         self.active_task_project_drop_target = None;
@@ -9987,6 +10477,7 @@ impl VulcanWorkbench {
         self.active_transcript_drag_auto_scroll = None;
         self.active_thinking_overlay_drag_auto_scroll = None;
         self.active_thinking_modal = None;
+        self.active_tool_modal = None;
         self.pending_thinking_inline_toggle = None;
 
         let mut known_session_ids = self
@@ -10004,7 +10495,7 @@ impl VulcanWorkbench {
 
     /// Refreshes the unified structured and raw transcript buffers for one session.
     /// 刷新某个会话对应的统一结构化与原始转录缓冲区。
-    fn refresh_session_agent_view_buffers(&mut self, session_id: usize) {
+    fn refresh_session_agent_view_buffers(&mut self, session_id: SessionId) {
         let messages = self.visible_session_messages_for_agent_view(session_id);
         let runtime_events = self
             .session_runtime_events
@@ -10048,7 +10539,7 @@ impl VulcanWorkbench {
     /// 在保留用户切换结果的同时，将统一块折叠状态映射同步到最新文档结构。
     fn sync_session_agent_view_block_collapsed_state(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         document: &vulcan_agent_view::AgentViewDocument,
     ) {
         self.session_agent_view_follow_tail
@@ -10073,7 +10564,7 @@ impl VulcanWorkbench {
 
     /// Removes all read-only runtime-event source buffers associated with one session.
     /// 删除与某个会话关联的全部只读运行时事件原文缓冲区。
-    fn remove_runtime_event_raw_buffers(&mut self, session_id: usize) {
+    fn remove_runtime_event_raw_buffers(&mut self, session_id: SessionId) {
         let prefix = format!("session-{session_id}-runtime-event-");
         self.runtime_event_raw_buffers
             .retain(|event_id, _| !event_id.starts_with(&prefix));
@@ -10085,7 +10576,7 @@ impl VulcanWorkbench {
 
     /// Clears active streaming message identifiers associated with one session before or after a live run.
     /// 在一次实时运行前后清理与某个会话关联的当前流式消息标识。
-    fn clear_streaming_message_ids(&mut self, session_id: usize) {
+    fn clear_streaming_message_ids(&mut self, session_id: SessionId) {
         self.clear_transcript_drag_auto_scroll_for_session(session_id);
         self.clear_thinking_overlay_drag_auto_scroll(session_id);
         self.cancel_pending_thinking_inline_toggle(Some(session_id), None);
@@ -10097,13 +10588,18 @@ impl VulcanWorkbench {
         self.session_streaming_thinking_viewports
             .remove(&session_id);
         self.close_thinking_modal_for_session(session_id);
+        self.close_tool_modal_for_session(session_id);
         self.streaming_output_message_ids.remove(&session_id);
     }
 
     /// Clears transient transcript view caches associated with one session identifier.
     /// 清理与某个会话标识关联的临时转录视图缓存。
-    fn clear_session_transcript_view_state(&mut self, session_id: usize) {
-        if let Some(messages) = self.session_messages.get(&session_id) {
+    fn clear_session_transcript_view_state(&mut self, session_id: SessionId) {
+        if let Some(messages) = self
+            .session_messages
+            .get(&session_id)
+            .or_else(|| self.archived_session_messages.get(&session_id))
+        {
             for message in messages {
                 self.session_message_raw_buffers.remove(&message.id);
                 self.session_message_markdown.remove(&message.id);
@@ -10112,6 +10608,7 @@ impl VulcanWorkbench {
         }
         self.markdown_session_message_ids.remove(&session_id);
         self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
         self.collapsed_runtime_event_ids.remove(&session_id);
         self.markdown_runtime_event_ids.remove(&session_id);
         self.remove_runtime_event_raw_buffers(session_id);
@@ -10128,6 +10625,99 @@ impl VulcanWorkbench {
         self.floating_streaming_thinking_sessions
             .remove(&session_id);
         self.close_thinking_modal_for_session(session_id);
+        self.close_tool_modal_for_session(session_id);
+    }
+
+    /// Builds one asynchronous hard-delete task for the currently confirmed archived item.
+    /// 为当前已确认的归档项构建一次异步硬删除任务。
+    fn permanently_delete_archived_item_task(
+        &self,
+        confirmation: ArchivedDeleteConfirmationState,
+    ) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::done(Message::PermanentDeleteArchivedItemFinished(Err(
+                String::from("控制器运行时尚未就绪，无法彻底删除归档项。"),
+            )));
+        };
+
+        match confirmation.target.clone() {
+            ArchivedDeleteTarget::Project(project_id) => {
+                let session_ids = self
+                    .archived_task_projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                    .map(|project| project.session_ids.clone())
+                    .unwrap_or_default();
+                let title = confirmation.title.clone();
+
+                Task::perform(
+                    async move {
+                        workspace_store::permanently_delete_archived_project(
+                            controller_runtime,
+                            project_id.clone(),
+                            session_ids,
+                        )
+                        .await
+                        .map(|_| ArchivedDeleteOutcome {
+                            target: ArchivedDeleteTarget::Project(project_id),
+                            title,
+                        })
+                    },
+                    Message::PermanentDeleteArchivedItemFinished,
+                )
+            }
+            ArchivedDeleteTarget::Session(session_id) => {
+                let title = confirmation.title.clone();
+                Task::perform(
+                    async move {
+                        workspace_store::permanently_delete_archived_session(
+                            controller_runtime,
+                            session_id,
+                        )
+                        .await
+                        .map(|_| ArchivedDeleteOutcome {
+                            target: ArchivedDeleteTarget::Session(session_id),
+                            title,
+                        })
+                    },
+                    Message::PermanentDeleteArchivedItemFinished,
+                )
+            }
+        }
+    }
+
+    /// Applies one successful archived-item hard-delete outcome to the in-memory workspace state.
+    /// 将单次成功的归档项硬删除结果应用到内存中的工作台状态。
+    fn apply_archived_delete_outcome(&mut self, outcome: &ArchivedDeleteOutcome) {
+        match &outcome.target {
+            ArchivedDeleteTarget::Project(project_id) => {
+                if let Some(project_index) = self
+                    .archived_task_projects
+                    .iter()
+                    .position(|project| project.id == *project_id)
+                {
+                    let project = self.archived_task_projects.remove(project_index);
+                    for session_id in project.session_ids {
+                        self.archived_sessions
+                            .retain(|session| session.id != session_id);
+                        self.archived_session_messages.remove(&session_id);
+                        self.archived_session_compactions.remove(&session_id);
+                        self.archived_session_runtime_state.remove(&session_id);
+                        self.clear_session_transcript_view_state(session_id);
+                    }
+                }
+            }
+            ArchivedDeleteTarget::Session(session_id) => {
+                self.archived_sessions
+                    .retain(|session| session.id != *session_id);
+                self.archived_session_messages.remove(session_id);
+                self.archived_session_compactions.remove(session_id);
+                self.archived_session_runtime_state.remove(session_id);
+                self.clear_session_transcript_view_state(*session_id);
+            }
+        }
+
+        self.ensure_valid_selected_session();
     }
 
     /// Builds one asynchronous persistence task for the current visible workspace snapshot.
@@ -10149,7 +10739,7 @@ impl VulcanWorkbench {
 
     /// Replaces the runtime-event list for one session with a fresh snapshot.
     /// 使用新的快照替换某个会话的运行时事件列表。
-    fn replace_session_runtime_events(&mut self, session_id: usize, events: Vec<RuntimeEvent>) {
+    fn replace_session_runtime_events(&mut self, session_id: SessionId, events: Vec<RuntimeEvent>) {
         self.collapsed_runtime_event_ids.remove(&session_id);
         self.markdown_runtime_event_ids.remove(&session_id);
         self.remove_runtime_event_raw_buffers(session_id);
@@ -10171,9 +10761,119 @@ impl VulcanWorkbench {
         self.refresh_session_agent_view_buffers(session_id);
     }
 
+    /// Seals the current streaming thinking/output segments so later deltas start a fresh transcript block.
+    /// 封口当前流式思考与输出片段，从而让后续增量开启新的转录区块。
+    fn seal_streaming_message_segments(&mut self, session_id: SessionId) {
+        self.streaming_thinking_message_ids.remove(&session_id);
+        self.streaming_output_message_ids.remove(&session_id);
+        self.floating_streaming_thinking_sessions
+            .remove(&session_id);
+        self.session_streaming_thinking_follow_tail
+            .remove(&session_id);
+        self.session_streaming_thinking_viewports
+            .remove(&session_id);
+        self.clear_thinking_overlay_drag_auto_scroll(session_id);
+    }
+
+    /// Applies one tool start/finish runtime event directly into the visible transcript at the current execution position.
+    /// 将一条工具开始或结束运行时事件直接写入当前执行位置对应的可见转录。
+    fn absorb_tool_runtime_event_into_transcript(
+        &mut self,
+        session_id: SessionId,
+        event: &RuntimeEvent,
+    ) -> bool {
+        match event.kind {
+            RuntimeEventKind::ToolStarted => {
+                let Some((tool_call_id, tool_name)) =
+                    parse_tool_started_runtime_event_title(&event.title)
+                else {
+                    return false;
+                };
+
+                self.seal_streaming_message_segments(session_id);
+                let title = format!("调用 {tool_name} 工具");
+                let message_id = self.push_visible_session_record_message(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::ToolCallOutput,
+                    title,
+                    event.detail.clone(),
+                    false,
+                );
+                self.session_tool_call_message_ids
+                    .entry(session_id)
+                    .or_default()
+                    .insert(tool_call_id, message_id);
+                true
+            }
+            RuntimeEventKind::ToolFinished => {
+                let Some(tool_call_id) = parse_tool_finished_runtime_event_title(&event.title)
+                else {
+                    return false;
+                };
+
+                self.seal_streaming_message_segments(session_id);
+                let existing_message_id = self
+                    .session_tool_call_message_ids
+                    .get(&session_id)
+                    .and_then(|entries| entries.get(&tool_call_id))
+                    .cloned();
+
+                if let Some(message_id) = existing_message_id {
+                    let existing_body = self
+                        .session_messages
+                        .get(&session_id)
+                        .and_then(|messages| {
+                            messages
+                                .iter()
+                                .find(|message| message.id == message_id)
+                                .map(|message| message.body.clone())
+                        })
+                        .unwrap_or_default();
+                    let merged_body = if existing_body.trim().is_empty() {
+                        event.detail.clone()
+                    } else {
+                        format!("{existing_body}\n\n{}\n", event.detail.trim())
+                    };
+                    self.replace_session_message_payload(
+                        session_id,
+                        &message_id,
+                        self.session_messages
+                            .get(&session_id)
+                            .and_then(|messages| {
+                                messages
+                                    .iter()
+                                    .find(|message| message.id == message_id)
+                                    .map(|message| message.title.clone())
+                            })
+                            .unwrap_or_else(|| String::from("工具调用")),
+                        merged_body,
+                        SessionMessageRecordKind::ToolCallOutput,
+                    );
+                } else {
+                    self.push_visible_session_record_message(
+                        session_id,
+                        SessionMessageKind::Assistant,
+                        SessionMessageRecordKind::ToolCallOutput,
+                        format!("工具调用 {tool_call_id}"),
+                        event.detail.clone(),
+                        false,
+                    );
+                }
+
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Appends one runtime event to the current session event stream and refreshes the corresponding raw/Markdown caches.
     /// 向当前会话事件流追加一条运行时事件，并刷新对应的原文与 Markdown 缓存。
-    fn push_session_runtime_event(&mut self, session_id: usize, event: RuntimeEvent) {
+    fn push_session_runtime_event(&mut self, session_id: SessionId, event: RuntimeEvent) {
+        if self.absorb_tool_runtime_event_into_transcript(session_id, &event) {
+            return;
+        }
+
         let event_index = self
             .session_runtime_events
             .get(&session_id)
@@ -10199,7 +10899,7 @@ impl VulcanWorkbench {
 
     /// Returns whether one unified rendered block is currently collapsed for the target session.
     /// 返回目标会话中的某个统一渲染区块当前是否处于折叠状态。
-    fn session_agent_view_block_is_collapsed(&self, session_id: usize, block_id: &str) -> bool {
+    fn session_agent_view_block_is_collapsed(&self, session_id: SessionId, block_id: &str) -> bool {
         self.session_agent_view_block_collapsed
             .get(&session_id)
             .and_then(|entry| entry.get(block_id))
@@ -10209,7 +10909,7 @@ impl VulcanWorkbench {
 
     /// Toggles one unified rendered block between collapsed and expanded states for the target session.
     /// 为目标会话切换某个统一渲染区块的折叠与展开状态。
-    fn toggle_session_agent_view_block_collapsed(&mut self, session_id: usize, block_id: &str) {
+    fn toggle_session_agent_view_block_collapsed(&mut self, session_id: SessionId, block_id: &str) {
         let entry = self
             .session_agent_view_block_collapsed
             .entry(session_id)
@@ -10220,7 +10920,7 @@ impl VulcanWorkbench {
 
     /// Updates the execution phase tracked for one session transcript.
     /// 更新某个会话转录区跟踪的执行阶段。
-    fn set_session_run_phase(&mut self, session_id: usize, phase: SessionRunPhase) {
+    fn set_session_run_phase(&mut self, session_id: SessionId, phase: SessionRunPhase) {
         self.session_run_phases.insert(session_id, phase);
     }
 
@@ -10228,7 +10928,7 @@ impl VulcanWorkbench {
     /// 返回某个会话中应参与统一 agent-view 文档构建的可见消息集合。
     fn visible_session_messages_for_agent_view(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Vec<SessionMessageEntry> {
         let floating_thinking_message_id = if self.active_run_session_id == Some(session_id)
             && self
@@ -10261,7 +10961,7 @@ impl VulcanWorkbench {
 
     /// Returns the currently streaming thinking message for one session when it is still actively floating above the transcript.
     /// 返回某个会话当前仍以浮层方式展示的流式思考消息。
-    fn streaming_thinking_message(&self, session_id: usize) -> Option<&SessionMessageEntry> {
+    fn streaming_thinking_message(&self, session_id: SessionId) -> Option<&SessionMessageEntry> {
         if self.active_run_session_id != Some(session_id) {
             return None;
         }
@@ -10302,7 +11002,7 @@ impl VulcanWorkbench {
     /// 构建主渲染转录表面使用的运行时增强文档。
     fn rendered_session_agent_view_document(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Option<vulcan_agent_view::AgentViewDocument> {
         let mut document = self
             .session_agent_view_documents
@@ -10331,7 +11031,7 @@ impl VulcanWorkbench {
     /// 使用折叠状态与思考指标等仅运行时元数据装饰单个 agent-view 区块。
     fn decorate_agent_view_block_for_render(
         &self,
-        session_id: usize,
+        session_id: SessionId,
         block_id: &str,
         block: &mut vulcan_agent_view::AgentViewBlock,
     ) {
@@ -10367,7 +11067,7 @@ impl VulcanWorkbench {
     /// 构建展示在转录标题行与显式居中弹层中的内联思考标题。
     fn session_thinking_title(
         &self,
-        session_id: usize,
+        session_id: SessionId,
         directive: &vulcan_agent_view::AgentViewDirectiveBlock,
     ) -> String {
         let duration_label = directive
@@ -10383,7 +11083,7 @@ impl VulcanWorkbench {
     /// 根据思考消息时间戳与下一条可见消息或运行时快照推导最佳努力思考时长。
     fn session_thinking_duration_millis(
         &self,
-        session_id: usize,
+        session_id: SessionId,
         message_id: &str,
     ) -> Option<u128> {
         let messages = self.session_messages.get(&session_id)?;
@@ -10441,7 +11141,7 @@ impl VulcanWorkbench {
 
     /// Returns whether one session transcript should keep auto-following the latest tail output.
     /// 返回某个会话转录是否应继续自动追随最新尾部输出。
-    fn session_agent_view_should_follow_tail(&self, session_id: usize) -> bool {
+    fn session_agent_view_should_follow_tail(&self, session_id: SessionId) -> bool {
         self.session_agent_view_follow_tail
             .get(&session_id)
             .copied()
@@ -10452,7 +11152,7 @@ impl VulcanWorkbench {
     /// 根据一次回传的转录视口更新会话级自动追随标记。
     fn update_session_agent_view_follow_tail(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         viewport: scrollable::Viewport,
     ) {
         self.session_agent_view_follow_tail
@@ -10461,7 +11161,10 @@ impl VulcanWorkbench {
 
     /// Builds one task that snaps the selected-session transcript to its tail when the user has not manually scrolled away.
     /// 当用户尚未手动滚离底部时，构建将当前选中会话转录吸附到尾部的任务。
-    fn maybe_follow_selected_session_transcript_tail(&self, session_id: usize) -> Task<Message> {
+    fn maybe_follow_selected_session_transcript_tail(
+        &self,
+        session_id: SessionId,
+    ) -> Task<Message> {
         if self.selected_session().map(|session| session.id) != Some(session_id) {
             return Task::none();
         }
@@ -10477,7 +11180,7 @@ impl VulcanWorkbench {
     /// 更新主渲染转录表面的当前拖拽自动滚动状态。
     fn update_transcript_drag_auto_scroll_state(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         request: Option<SelectableTranscriptDragAutoScroll>,
     ) {
         if self.selected_session().map(|session| session.id) != Some(session_id) {
@@ -10496,7 +11199,7 @@ impl VulcanWorkbench {
     /// 更新流式思考浮层正文的当前拖拽自动滚动状态。
     fn update_thinking_overlay_drag_auto_scroll_state(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         request: Option<SelectableTranscriptDragAutoScroll>,
     ) {
         if self.selected_session().map(|session| session.id) != Some(session_id) {
@@ -10520,7 +11223,7 @@ impl VulcanWorkbench {
 
     /// Clears the main transcript drag auto-scroll snapshot when it belongs to the provided session.
     /// 当主转录拖拽自动滚动快照属于给定会话时清空它。
-    fn clear_transcript_drag_auto_scroll_for_session(&mut self, session_id: usize) {
+    fn clear_transcript_drag_auto_scroll_for_session(&mut self, session_id: SessionId) {
         if self
             .active_transcript_drag_auto_scroll
             .as_ref()
@@ -10532,7 +11235,7 @@ impl VulcanWorkbench {
 
     /// Clears the floating thinking overlay drag auto-scroll snapshot when it belongs to the provided session.
     /// 当流式思考浮层拖拽自动滚动快照属于给定会话时清空它。
-    fn clear_thinking_overlay_drag_auto_scroll(&mut self, session_id: usize) {
+    fn clear_thinking_overlay_drag_auto_scroll(&mut self, session_id: SessionId) {
         if self
             .active_thinking_overlay_drag_auto_scroll
             .as_ref()
@@ -10594,7 +11297,7 @@ impl VulcanWorkbench {
 
     /// Returns whether one floating streaming-thinking overlay should keep auto-following the latest tail.
     /// 返回某个流式思考浮层是否应继续自动追随最新尾部。
-    fn session_streaming_thinking_should_follow_tail(&self, session_id: usize) -> bool {
+    fn session_streaming_thinking_should_follow_tail(&self, session_id: SessionId) -> bool {
         self.session_streaming_thinking_follow_tail
             .get(&session_id)
             .copied()
@@ -10605,7 +11308,7 @@ impl VulcanWorkbench {
     /// 根据一次回传的浮层视口更新会话级流式思考自动追随标记。
     fn update_session_streaming_thinking_follow_tail(
         &mut self,
-        session_id: usize,
+        session_id: SessionId,
         viewport: scrollable::Viewport,
     ) {
         self.session_streaming_thinking_follow_tail
@@ -10616,7 +11319,7 @@ impl VulcanWorkbench {
     /// 当用户尚未手动滚离底部时，构建将当前选中会话流式思考浮层吸附到尾部的任务。
     fn maybe_follow_selected_session_thinking_overlay_tail(
         &self,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Task<Message> {
         if self.selected_session().map(|session| session.id) != Some(session_id) {
             return Task::none();
@@ -10637,7 +11340,7 @@ impl VulcanWorkbench {
     /// 当待执行内联思考切换与给定会话及可选区块标识过滤条件匹配时，取消该待执行切换。
     fn cancel_pending_thinking_inline_toggle(
         &mut self,
-        session_id: Option<usize>,
+        session_id: Option<SessionId>,
         block_id: Option<&str>,
     ) {
         let should_clear = self
@@ -10673,7 +11376,7 @@ impl VulcanWorkbench {
 
     /// Opens one centered thinking modal for the provided block identifier and restarts the opening animation.
     /// 为给定区块标识打开一个居中思考弹层，并重新启动入场动画。
-    fn open_thinking_modal(&mut self, session_id: usize, block_id: String) {
+    fn open_thinking_modal(&mut self, session_id: SessionId, block_id: String) {
         if self
             .active_thinking_modal
             .as_ref()
@@ -10686,7 +11389,28 @@ impl VulcanWorkbench {
             return;
         }
 
+        self.active_tool_modal = None;
         self.active_thinking_modal = Some(ThinkingModalState {
+            session_id,
+            block_id,
+            phase: ThinkingModalPhase::Opening,
+            started_at: Instant::now(),
+        });
+    }
+
+    /// Opens one centered tool modal for the provided block identifier and restarts the opening animation.
+    /// 为给定区块标识打开一个居中工具弹层，并重新启动入场动画。
+    fn open_tool_modal(&mut self, session_id: SessionId, block_id: String) {
+        if self.active_tool_modal.as_ref().is_some_and(|modal_state| {
+            modal_state.session_id == session_id
+                && modal_state.block_id == block_id
+                && modal_state.phase != ThinkingModalPhase::Closing
+        }) {
+            return;
+        }
+
+        self.active_thinking_modal = None;
+        self.active_tool_modal = Some(ToolModalState {
             session_id,
             block_id,
             phase: ThinkingModalPhase::Opening,
@@ -10705,15 +11429,38 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Starts closing the centered tool modal when it is currently visible.
+    /// 当居中工具弹层当前可见时，启动它的关闭动画。
+    fn begin_close_tool_modal(&mut self) {
+        if let Some(modal_state) = self.active_tool_modal.as_mut() {
+            if modal_state.phase != ThinkingModalPhase::Closing {
+                modal_state.phase = ThinkingModalPhase::Closing;
+                modal_state.started_at = Instant::now();
+            }
+        }
+    }
+
     /// Clears the centered thinking modal immediately when it belongs to the provided session.
     /// 当居中思考弹层属于给定会话时，立即清理该弹层。
-    fn close_thinking_modal_for_session(&mut self, session_id: usize) {
+    fn close_thinking_modal_for_session(&mut self, session_id: SessionId) {
         if self
             .active_thinking_modal
             .as_ref()
             .is_some_and(|modal_state| modal_state.session_id == session_id)
         {
             self.active_thinking_modal = None;
+        }
+    }
+
+    /// Clears the centered tool modal immediately when it belongs to the provided session.
+    /// 当居中工具弹层属于给定会话时，立即清理该弹层。
+    fn close_tool_modal_for_session(&mut self, session_id: SessionId) {
+        if self
+            .active_tool_modal
+            .as_ref()
+            .is_some_and(|modal_state| modal_state.session_id == session_id)
+        {
+            self.active_tool_modal = None;
         }
     }
 
@@ -10740,9 +11487,32 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Advances the centered tool modal animation and removes the modal once the closing phase completes.
+    /// 推进居中工具弹层动画，并在关闭阶段完成后移除该弹层。
+    fn advance_tool_modal_animation(&mut self) {
+        let Some(modal_state) = self.active_tool_modal.as_mut() else {
+            return;
+        };
+
+        if modal_state.started_at.elapsed() < THINKING_MODAL_ANIMATION_DURATION {
+            return;
+        }
+
+        match modal_state.phase {
+            ThinkingModalPhase::Opening => {
+                modal_state.phase = ThinkingModalPhase::Open;
+                modal_state.started_at = Instant::now();
+            }
+            ThinkingModalPhase::Open => {}
+            ThinkingModalPhase::Closing => {
+                self.active_tool_modal = None;
+            }
+        }
+    }
+
     /// Returns the session summary matching one identifier, if it still exists.
     /// 返回与某个标识匹配的会话摘要（如果仍然存在）。
-    fn session_by_id(&self, session_id: usize) -> Option<&SessionSummary> {
+    fn session_by_id(&self, session_id: SessionId) -> Option<&SessionSummary> {
         self.sessions
             .iter()
             .find(|session| session.id == session_id)
@@ -10771,6 +11541,32 @@ impl VulcanWorkbench {
             .iter()
             .find(|project| project.session_ids.contains(&self.selected_session))
             .map(|project| project.id.clone())
+    }
+
+    /// Schedule one background cleanup pass for every currently known project temp directory.
+    /// 为当前已知的全部项目临时目录安排一次后台清理。
+    fn schedule_project_temp_cleanup_for_all_projects(&self) -> Task<Message> {
+        let mut project_paths = self
+            .task_projects
+            .iter()
+            .chain(self.archived_task_projects.iter())
+            .map(|project| PathBuf::from(project.path.clone()))
+            .collect::<Vec<_>>();
+        project_paths.sort();
+        project_paths.dedup();
+        self.schedule_project_temp_cleanup_for_paths(project_paths)
+    }
+
+    /// Schedule one background cleanup pass for the provided project-root list.
+    /// 为给定项目根目录列表安排一次后台清理。
+    fn schedule_project_temp_cleanup_for_paths(
+        &self,
+        project_paths: Vec<PathBuf>,
+    ) -> Task<Message> {
+        Task::perform(
+            async move { project_temp_maintenance::maintain_project_temp_dirs(&project_paths) },
+            Message::ProjectTempMaintenanceFinished,
+        )
     }
 
     /// Returns the next project identifier in the same pinned or regular section.
@@ -10942,8 +11738,7 @@ impl VulcanWorkbench {
     fn create_task_project_session(&mut self, project_id: &str) {
         self.prune_unmaterialized_sessions(None);
 
-        let session_id = self.next_session_id;
-        self.next_session_id += 1;
+        let session_id = Uuid::new_v4();
 
         let project_title = self
             .task_project_by_id(project_id)
@@ -11066,7 +11861,11 @@ impl VulcanWorkbench {
             .iter()
             .all(|session| session.id != self.selected_session)
         {
-            self.selected_session = self.sessions.first().map(|session| session.id).unwrap_or(0);
+            self.selected_session = self
+                .sessions
+                .first()
+                .map(|session| session.id)
+                .unwrap_or_default();
         }
     }
 
@@ -11162,7 +11961,7 @@ impl VulcanWorkbench {
 
     /// Restores one archived session row back into its still-visible owning project.
     /// 将一个归档会话行恢复回其仍然可见的所属项目。
-    fn restore_archived_task_session(&mut self, session_id: usize) -> bool {
+    fn restore_archived_task_session(&mut self, session_id: SessionId) -> bool {
         let Some(archived_index) = self
             .archived_sessions
             .iter()
@@ -11306,7 +12105,7 @@ fn compact_relative_label(value: &str) -> String {
 
 /// Builds the stable scrollable identifier used by one session transcript surface across all transcript presentation modes.
 /// 为单个会话转录表面在全部展示模式下构建稳定滚动容器标识。
-fn transcript_scrollable_id(session_id: usize) -> iced::widget::Id {
+fn transcript_scrollable_id(session_id: SessionId) -> iced::widget::Id {
     iced::widget::Id::from(format!("session-{session_id}-agent-transcript-scrollable"))
 }
 
@@ -11644,12 +12443,45 @@ fn session_message_into_execution_context(message: SessionMessageEntry) -> Execu
 
 /// Builds one stable runtime-event identifier within the current session event stream.
 /// 在当前会话事件流内部构建一条稳定运行时事件标识。
-fn session_runtime_event_id(session_id: usize, event_index: usize, event: &RuntimeEvent) -> String {
+fn session_runtime_event_id(
+    session_id: SessionId,
+    event_index: usize,
+    event: &RuntimeEvent,
+) -> String {
     format!(
         "session-{session_id}-runtime-event-{event_index}-{}-{}",
         runtime_event_kind_label(event.kind),
         slugify_runtime_event_title(&event.title)
     )
+}
+
+/// Parses one tool-start runtime headline into its stable tool-call identifier and visible tool name.
+/// 将一条工具开始运行时标题解析为稳定工具调用标识及可见工具名称。
+fn parse_tool_started_runtime_event_title(title: &str) -> Option<(String, String)> {
+    let mut segments = title.split(" · ");
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some("工具调用"), Some(tool_call_id), Some(tool_name))
+            if !tool_call_id.trim().is_empty() && !tool_name.trim().is_empty() =>
+        {
+            Some((
+                tool_call_id.trim().to_string(),
+                tool_name.trim().to_string(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Parses one tool-finish runtime headline into its stable tool-call identifier.
+/// 将一条工具结束运行时标题解析为稳定工具调用标识。
+fn parse_tool_finished_runtime_event_title(title: &str) -> Option<String> {
+    let mut segments = title.split(" · ");
+    match (segments.next(), segments.next()) {
+        (Some("工具返回"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
+            Some(tool_call_id.trim().to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Returns the compact label rendered for one runtime-event kind inside the transcript stream.

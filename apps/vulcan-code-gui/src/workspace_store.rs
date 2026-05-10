@@ -3,14 +3,17 @@
 
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
-    SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-    SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource,
-    SessionTranscriptUiState, TaskProjectSummary,
+    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
+    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
+    SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
 };
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
 
 /// Stable in-memory snapshot hydrated from the controller-backed workspace database.
@@ -31,34 +34,31 @@ pub struct WorkspaceSnapshot {
     pub archived_sessions: Vec<SessionSummary>,
     /// Session-scoped transcript history kept fully in memory for the current runtime.
     /// 当前运行时完整保留在内存中的按会话归属转录历史。
-    pub session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    pub session_messages: BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     /// Archived session-scoped transcript history retained for restoration.
     /// 为后续恢复保留的按归档会话归属转录历史集合。
-    pub archived_session_messages: BTreeMap<usize, Vec<SessionMessageEntry>>,
+    pub archived_session_messages: BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     /// Session-scoped hidden compaction checkpoints retained for future context reconstruction.
     /// 为未来上下文重建保留的按会话归属隐藏压缩检查点集合。
-    pub session_compactions: BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    pub session_compactions: BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
     /// Archived hidden compaction checkpoints retained for restoration.
     /// 为后续恢复保留的按归档会话归属隐藏压缩检查点集合。
-    pub archived_session_compactions: BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    pub archived_session_compactions: BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
     /// Session-scoped runtime state used to rebuild context start points and active identities.
     /// 用于重建上下文起点与激活身份的按会话归属运行时状态集合。
-    pub session_runtime_state: BTreeMap<usize, SessionRuntimeStateEntry>,
+    pub session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
     /// Archived session-scoped runtime state retained for restoration.
     /// 为后续恢复保留的按归档会话归属运行时状态集合。
-    pub archived_session_runtime_state: BTreeMap<usize, SessionRuntimeStateEntry>,
+    pub archived_session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
     /// Fresh execution-phase defaults reconstructed from the loaded sessions.
     /// 根据已加载会话重建出的全新执行阶段默认值集合。
-    pub session_run_phases: BTreeMap<usize, SessionRunPhase>,
+    pub session_run_phases: BTreeMap<SessionId, SessionRunPhase>,
     /// Expanded project identifiers restored for the task tree.
     /// 为任务树恢复出的项目展开标识集合。
     pub expanded_task_projects: BTreeSet<String>,
     /// Selected session identifier restored after startup.
     /// 启动完成后恢复出的当前选中会话标识。
-    pub selected_session: usize,
-    /// Next numeric session identifier seed.
-    /// 下一条数值型会话标识种子。
-    pub next_session_id: usize,
+    pub selected_session: SessionId,
 }
 
 /// Raw project row decoded from the controller SQLite query payload.
@@ -225,7 +225,10 @@ pub async fn load_workspace_snapshot(
     controller: ControllerRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
     let project_rows = query_project_rows(&controller).await?;
-    let session_rows = query_session_rows(&controller).await?;
+    let mut session_rows = query_session_rows(&controller).await?;
+    if migrate_legacy_session_ids_if_needed(&controller, &session_rows).await? {
+        session_rows = query_session_rows(&controller).await?;
+    }
     let message_rows = query_session_message_rows(&controller).await?;
     let compaction_rows = query_session_compaction_rows(&controller).await?;
     let runtime_state_rows = query_session_runtime_state_rows(&controller).await?;
@@ -255,8 +258,9 @@ pub async fn load_workspace_snapshot(
         .filter_map(|row| parse_session_id(&row.id).ok())
         .collect::<BTreeSet<_>>();
 
-    let mut transcript_map: BTreeMap<usize, Vec<SessionMessageEntry>> = BTreeMap::new();
-    let mut archived_transcript_map: BTreeMap<usize, Vec<SessionMessageEntry>> = BTreeMap::new();
+    let mut transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
+    let mut archived_transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> =
+        BTreeMap::new();
     let mut ordered_message_rows = message_rows;
     ordered_message_rows.sort_by_key(|row| (row.session_id.clone(), row.ordinal));
 
@@ -287,8 +291,9 @@ pub async fn load_workspace_snapshot(
         }
     }
 
-    let mut compaction_map: BTreeMap<usize, Vec<SessionCompactionEntry>> = BTreeMap::new();
-    let mut archived_compaction_map: BTreeMap<usize, Vec<SessionCompactionEntry>> = BTreeMap::new();
+    let mut compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
+    let mut archived_compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> =
+        BTreeMap::new();
     for row in compaction_rows {
         let session_id = parse_session_id(&row.session_id)?;
         let entry = SessionCompactionEntry {
@@ -309,8 +314,9 @@ pub async fn load_workspace_snapshot(
         }
     }
 
-    let mut runtime_state_map: BTreeMap<usize, SessionRuntimeStateEntry> = BTreeMap::new();
-    let mut archived_runtime_state_map: BTreeMap<usize, SessionRuntimeStateEntry> = BTreeMap::new();
+    let mut runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
+    let mut archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> =
+        BTreeMap::new();
     for row in runtime_state_rows {
         let session_id = parse_session_id(&row.session_id)?;
         let entry = SessionRuntimeStateEntry {
@@ -336,11 +342,8 @@ pub async fn load_workspace_snapshot(
 
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
-    let mut next_session_id = 1usize;
-
     for row in &session_rows {
         let session_id = parse_session_id(&row.id)?;
-        next_session_id = next_session_id.max(session_id.saturating_add(1));
         let focus = session_focus_preview(
             transcript_map
                 .get(&session_id)
@@ -365,7 +368,7 @@ pub async fn load_workspace_snapshot(
                 .iter_mut()
                 .find(|project| project.id == row.project_id)
             {
-                project.session_ids.push(session_id);
+                project.session_ids.push(session_id.clone());
             }
             archived_sessions.push(session_summary);
         } else {
@@ -373,7 +376,7 @@ pub async fn load_workspace_snapshot(
                 .iter_mut()
                 .find(|project| project.id == row.project_id)
             {
-                project.session_ids.push(session_id);
+                project.session_ids.push(session_id.clone());
             }
             visible_sessions.push(session_summary);
         }
@@ -423,11 +426,11 @@ pub async fn load_workspace_snapshot(
         .collect::<BTreeSet<_>>();
     let selected_session = visible_sessions
         .first()
-        .map(|session| session.id)
-        .unwrap_or(0);
+        .map(|session| session.id.clone())
+        .unwrap_or_default();
     let session_run_phases = visible_sessions
         .iter()
-        .map(|session| (session.id, SessionRunPhase::Idle))
+        .map(|session| (session.id.clone(), SessionRunPhase::Idle))
         .collect::<BTreeMap<_, _>>();
 
     Ok(WorkspaceSnapshot {
@@ -444,7 +447,6 @@ pub async fn load_workspace_snapshot(
         session_run_phases,
         expanded_task_projects,
         selected_session,
-        next_session_id,
     })
 }
 
@@ -555,8 +557,7 @@ fn build_empty_workspace_snapshot() -> WorkspaceSnapshot {
         archived_session_runtime_state: BTreeMap::new(),
         session_run_phases: BTreeMap::new(),
         expanded_task_projects: BTreeSet::new(),
-        selected_session: 0,
-        next_session_id: 1,
+        selected_session: SessionId::nil(),
     }
 }
 
@@ -949,7 +950,7 @@ async fn upsert_sessions(
                 .enumerate()
                 .map(move |(index, session_id)| (*session_id, (project.id.clone(), index)))
         })
-        .collect::<BTreeMap<usize, (String, usize)>>();
+        .collect::<BTreeMap<SessionId, (String, usize)>>();
     let now = current_unix_millis();
     let mut batch_params = Vec::new();
 
@@ -1050,14 +1051,124 @@ async fn archive_missing_sessions(
     Ok(())
 }
 
+/// Permanently deletes one archived session together with all persisted transcript and runtime artifacts.
+/// 彻底删除一个已归档会话及其全部已持久化的转录与运行时工件。
+pub async fn permanently_delete_archived_session(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let session_id_text = session_id.to_string();
+    let session_ids = vec![session_id_text.clone()];
+
+    delete_session_scoped_rows(
+        &controller,
+        "session_messages",
+        &session_ids,
+        "删除归档会话转录消息失败",
+    )
+    .await?;
+    delete_session_scoped_rows(
+        &controller,
+        "session_compactions",
+        &session_ids,
+        "删除归档会话压缩检查点失败",
+    )
+    .await?;
+    delete_session_scoped_rows(
+        &controller,
+        "session_runtime_state",
+        &session_ids,
+        "删除归档会话运行时状态失败",
+    )
+    .await?;
+
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "DELETE FROM sessions WHERE id = ?1 AND archived != 0;",
+            vec![vec![ControllerSqliteValue::String(session_id_text)]],
+        )
+        .await
+        .map_err(|error| format!("删除归档会话记录失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Permanently deletes one archived project together with all child archived sessions and persisted artifacts.
+/// 彻底删除一个已归档项目及其全部子归档会话与已持久化工件。
+pub async fn permanently_delete_archived_project(
+    controller: ControllerRuntimeHandle,
+    project_id: String,
+    session_ids: Vec<SessionId>,
+) -> Result<(), String> {
+    let session_id_texts = session_ids
+        .into_iter()
+        .map(|session_id| session_id.to_string())
+        .collect::<Vec<_>>();
+
+    delete_session_scoped_rows(
+        &controller,
+        "session_messages",
+        &session_id_texts,
+        "删除归档项目下的转录消息失败",
+    )
+    .await?;
+    delete_session_scoped_rows(
+        &controller,
+        "session_compactions",
+        &session_id_texts,
+        "删除归档项目下的压缩检查点失败",
+    )
+    .await?;
+    delete_session_scoped_rows(
+        &controller,
+        "session_runtime_state",
+        &session_id_texts,
+        "删除归档项目下的运行时状态失败",
+    )
+    .await?;
+
+    if !session_id_texts.is_empty() {
+        let session_delete_params = session_id_texts
+            .into_iter()
+            .map(|session_id| vec![ControllerSqliteValue::String(session_id)])
+            .collect::<Vec<_>>();
+        controller
+            .client
+            .execute_sqlite_batch_typed(
+                APP_SPACE_ID,
+                app_sqlite_binding_id(&controller),
+                "DELETE FROM sessions WHERE id = ?1 AND archived != 0;",
+                session_delete_params,
+            )
+            .await
+            .map_err(|error| format!("删除归档项目下的会话记录失败：{error}"))?;
+    }
+
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "DELETE FROM projects WHERE id = ?1 AND archived != 0;",
+            vec![vec![ControllerSqliteValue::String(project_id)]],
+        )
+        .await
+        .map_err(|error| format!("删除归档项目记录失败：{error}"))?;
+
+    Ok(())
+}
+
 /// Replaces all transcript message rows for the currently visible sessions while leaving archived sessions intact.
 /// 在保留已归档会话数据的前提下替换当前可见会话的全部转录消息行。
 async fn replace_session_messages(
     controller: &ControllerRuntimeHandle,
     sessions: &[SessionSummary],
-    session_messages: &BTreeMap<usize, Vec<SessionMessageEntry>>,
+    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     archived_sessions: &[SessionSummary],
-    archived_session_messages: &BTreeMap<usize, Vec<SessionMessageEntry>>,
+    archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
 ) -> Result<(), String> {
     let active_session_ids = sessions
         .iter()
@@ -1116,9 +1227,9 @@ INSERT INTO session_messages (
 async fn replace_session_compactions(
     controller: &ControllerRuntimeHandle,
     sessions: &[SessionSummary],
-    session_compactions: &BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
     archived_sessions: &[SessionSummary],
-    archived_session_compactions: &BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    archived_session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
 ) -> Result<(), String> {
     let active_session_ids = sessions
         .iter()
@@ -1174,9 +1285,9 @@ INSERT INTO session_compactions (
 async fn replace_session_runtime_state(
     controller: &ControllerRuntimeHandle,
     sessions: &[SessionSummary],
-    session_runtime_state: &BTreeMap<usize, SessionRuntimeStateEntry>,
+    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
     archived_sessions: &[SessionSummary],
-    archived_session_runtime_state: &BTreeMap<usize, SessionRuntimeStateEntry>,
+    archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
 ) -> Result<(), String> {
     let active_session_ids = sessions
         .iter()
@@ -1234,7 +1345,7 @@ INSERT INTO session_runtime_state (
 fn push_session_message_batch_rows(
     batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
     sessions: &[SessionSummary],
-    session_messages: &BTreeMap<usize, Vec<SessionMessageEntry>>,
+    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
 ) {
     for session in sessions {
         if let Some(messages) = session_messages.get(&session.id) {
@@ -1271,7 +1382,7 @@ fn push_session_message_batch_rows(
 fn push_session_compaction_batch_rows(
     batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
     sessions: &[SessionSummary],
-    session_compactions: &BTreeMap<usize, Vec<SessionCompactionEntry>>,
+    session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
 ) {
     for session in sessions {
         if let Some(compactions) = session_compactions.get(&session.id) {
@@ -1294,7 +1405,7 @@ fn push_session_compaction_batch_rows(
 fn push_session_runtime_state_batch_rows(
     batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
     sessions: &[SessionSummary],
-    session_runtime_state: &BTreeMap<usize, SessionRuntimeStateEntry>,
+    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
 ) {
     for session in sessions {
         if let Some(entry) = session_runtime_state.get(&session.id) {
@@ -1355,12 +1466,102 @@ where
         .map_err(|error| format!("解析控制器 SQLite 查询结果失败：{error}"))
 }
 
-/// Parses one persisted session identifier back into the in-memory numeric session key.
-/// 将一条持久化会话标识解析回内存中的数值型会话键。
-fn parse_session_id(value: &str) -> Result<usize, String> {
-    value.parse::<usize>().map_err(|error| {
-        format!("解析持久化会话标识 `{value}` 失败，当前实现要求数值型会话标识：{error}")
-    })
+/// Parses one persisted session identifier back into the in-memory UUID session key.
+/// 将一条持久化会话标识解析回内存中的 UUID 会话键。
+fn parse_session_id(value: &str) -> Result<SessionId, String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(String::from("解析持久化会话标识失败：会话标识不能为空。"));
+    }
+
+    if let Ok(uuid) = Uuid::parse_str(normalized) {
+        return Ok(uuid);
+    }
+
+    Ok(legacy_session_id_fallback(normalized))
+}
+
+/// Migrates legacy non-UUID persisted session identifiers to canonical UUID text so scoped deletes keep working.
+/// 将旧版非 UUID 持久化会话标识迁移为规范 UUID 文本，确保后续按会话范围删除旧行时能够正确命中。
+async fn migrate_legacy_session_ids_if_needed(
+    controller: &ControllerRuntimeHandle,
+    session_rows: &[StoredSessionRow],
+) -> Result<bool, String> {
+    let legacy_mappings = session_rows
+        .iter()
+        .filter(|row| !is_uuid_session_id_text(&row.id))
+        .map(|row| {
+            (
+                row.id.clone(),
+                legacy_session_id_fallback(&row.id).to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if legacy_mappings.is_empty() {
+        return Ok(false);
+    }
+
+    let mut migration_script =
+        String::from("PRAGMA foreign_keys = OFF;\nBEGIN IMMEDIATE TRANSACTION;\n");
+    for (legacy_id, canonical_id) in &legacy_mappings {
+        let escaped_legacy_id = sqlite_escape_text(legacy_id);
+        let escaped_canonical_id = sqlite_escape_text(canonical_id);
+        migration_script.push_str(&format!(
+            "UPDATE session_messages SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
+        ));
+        migration_script.push_str(&format!(
+            "UPDATE session_compactions SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
+        ));
+        migration_script.push_str(&format!(
+            "UPDATE session_runtime_state SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
+        ));
+        migration_script.push_str(&format!(
+            "UPDATE sessions SET id = '{escaped_canonical_id}' WHERE id = '{escaped_legacy_id}';\n"
+        ));
+    }
+    migration_script.push_str("COMMIT;\nPRAGMA foreign_keys = ON;\n");
+
+    controller
+        .client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            migration_script,
+            Vec::<ControllerSqliteValue>::new(),
+        )
+        .await
+        .map_err(|error| format!("迁移旧版会话 UUID 标识失败：{error}"))?;
+
+    Ok(true)
+}
+
+/// Returns whether one persisted session identifier already matches UUID text.
+/// 返回一条持久化会话标识是否已经符合 UUID 文本格式。
+fn is_uuid_session_id_text(value: &str) -> bool {
+    Uuid::parse_str(value.trim()).is_ok()
+}
+
+/// Builds one deterministic UUID fallback from one legacy non-UUID session identifier.
+/// 根据旧版非 UUID 会话标识构建一条确定性的 UUID 兼容回退值。
+fn legacy_session_id_fallback(value: &str) -> SessionId {
+    let mut high_hasher = DefaultHasher::new();
+    "vulcan-legacy-session-id-high".hash(&mut high_hasher);
+    value.hash(&mut high_hasher);
+    let high = high_hasher.finish() as u128;
+
+    let mut low_hasher = DefaultHasher::new();
+    "vulcan-legacy-session-id-low".hash(&mut low_hasher);
+    value.hash(&mut low_hasher);
+    let low = low_hasher.finish() as u128;
+
+    Uuid::from_u128((high << 64) | low)
+}
+
+/// Escapes one SQLite text literal used inside a migration script.
+/// 转义迁移脚本中使用的一条 SQLite 文本字面量。
+fn sqlite_escape_text(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 /// Converts one persisted message-role string back into the session message kind.

@@ -85,7 +85,7 @@ pub type VulcanToolInvokeFuture = Pin<Box<dyn Future<Output = Result<Value, Stri
 /// Shared host-owned asynchronous tool invoker closure.
 /// 宿主自有共享异步工具调用闭包。
 pub type VulcanToolInvokeHandler =
-    Arc<dyn Fn(Value, Option<usize>) -> VulcanToolInvokeFuture + Send + Sync>;
+    Arc<dyn Fn(Value, Option<String>) -> VulcanToolInvokeFuture + Send + Sync>;
 
 /// One candidate tool surface item provided by the host before mode-based filtering.
 /// 宿主在模式过滤前提供的单个候选工具面条目。
@@ -195,7 +195,7 @@ impl VulcanToolsManager {
         &self,
         tool: &ResolvedToolDefinition,
         args: Value,
-        session_id: Option<usize>,
+        session_id: Option<String>,
     ) -> Result<Value, String> {
         (tool.invoke)(args, session_id).await
     }

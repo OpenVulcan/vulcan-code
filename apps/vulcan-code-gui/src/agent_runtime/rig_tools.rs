@@ -1,6 +1,7 @@
 //! Rig-facing dynamic tool adapters backed by the standalone Vulcan tools manager crate.
 //! 基于独立 VulcanToolsManager crate 的面向 rig 的动态工具适配器。
 
+use crate::model::SessionId;
 use rig::completion::ToolDefinition;
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
@@ -40,7 +41,7 @@ pub struct VulcanManagedRigTool {
     definition: ResolvedToolDefinition,
     /// Optional GUI session identifier used for request-scoped diagnostics.
     /// 用于请求级诊断的可选图形界面会话标识。
-    session_id: usize,
+    session_id: SessionId,
 }
 
 impl VulcanManagedRigTool {
@@ -49,7 +50,7 @@ impl VulcanManagedRigTool {
     pub fn new(
         manager: Arc<VulcanToolsManager>,
         definition: ResolvedToolDefinition,
-        session_id: usize,
+        session_id: SessionId,
     ) -> Self {
         Self {
             manager,
@@ -85,12 +86,19 @@ impl ToolDyn for VulcanManagedRigTool {
             let args_json: Value = serde_json::from_str(&args)?;
             let result = self
                 .manager
-                .invoke_tool(&self.definition, args_json, Some(self.session_id))
+                .invoke_tool(
+                    &self.definition,
+                    args_json,
+                    Some(self.session_id.to_string()),
+                )
                 .await
                 .map_err(|error| {
                     ToolError::ToolCallError(Box::new(VulcanRigToolError { message: error }))
                 })?;
-            serde_json::to_string(&result).map_err(ToolError::JsonError)
+            match result {
+                Value::String(text) => Ok(text),
+                other => serde_json::to_string(&other).map_err(ToolError::JsonError),
+            }
         })
     }
 }
@@ -99,7 +107,7 @@ impl ToolDyn for VulcanManagedRigTool {
 /// 为单个图形界面会话构建面向 rig 的统一动态工具集合。
 pub fn build_vulcan_rig_tools(
     manager: VulcanToolsManager,
-    session_id: usize,
+    session_id: SessionId,
     definitions: &[ResolvedToolDefinition],
 ) -> Vec<Box<dyn ToolDyn>> {
     let manager = Arc::new(manager);

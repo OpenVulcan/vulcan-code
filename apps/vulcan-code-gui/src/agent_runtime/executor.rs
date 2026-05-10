@@ -9,6 +9,7 @@ use crate::agent_runtime::rig_tools::build_vulcan_rig_tools;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
+use crate::model::SessionId;
 use crate::provider_config::{
     PersistedProviderOptions, ProviderConfigurationFile, ProviderRuntimeKind,
 };
@@ -18,14 +19,14 @@ use async_stream::stream;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::agent::{AgentBuilder, MultiTurnStreamItem};
-use rig::message::ReasoningContent;
+use rig::message::{ReasoningContent, ToolResultContent};
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
 use serde_json::Value;
 use std::pin::Pin;
-use std::{fs, path::Path};
+use std::{fs, path::Path, path::PathBuf};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
 };
@@ -90,7 +91,7 @@ pub struct ExecutionContextMessage {
 pub struct ExecutionPreparationRequest {
     /// Target session identifier.
     /// 目标会话标识。
-    pub session_id: usize,
+    pub session_id: SessionId,
     /// Target session title.
     /// 目标会话标题。
     pub session_title: String,
@@ -117,7 +118,7 @@ pub struct ExecutionPreparationRequest {
 pub struct ExecutionPreparation {
     /// Active session identifier.
     /// 当前激活会话标识。
-    pub session_id: usize,
+    pub session_id: SessionId,
     /// Active session title.
     /// 当前激活会话标题。
     pub session_title: String,
@@ -265,7 +266,7 @@ impl ExecutionPreparation {
 pub struct ExecutionRunReport {
     /// Session identifier owning the run.
     /// 拥有本次运行的会话标识。
-    pub session_id: usize,
+    pub session_id: SessionId,
     /// Prepared execution snapshot when preparation succeeded.
     /// 当准备阶段成功时生成的执行准备快照。
     pub preparation: Option<ExecutionPreparation>,
@@ -293,7 +294,7 @@ impl ExecutionRunReport {
     /// Creates one success report.
     /// 创建一份成功执行报告。
     fn success(
-        session_id: usize,
+        session_id: SessionId,
         preparation: ExecutionPreparation,
         thinking_output: Option<String>,
         assistant_output: String,
@@ -316,7 +317,7 @@ impl ExecutionRunReport {
     /// Creates one failure report.
     /// 创建一份失败执行报告。
     fn failure(
-        session_id: usize,
+        session_id: SessionId,
         preparation: Option<ExecutionPreparation>,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
@@ -369,6 +370,7 @@ pub fn prepare_execution(
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
         mcp_runtime,
+        (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
         foundation.resolved_native_tools_for_agent(&active_agent.id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
         foundation.resolved_mcp_tools_for_agent(&active_agent.id),
@@ -470,6 +472,8 @@ pub fn stream_runtime_run(
             foundation.native_tool_catalog().clone(),
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
+            (!preparation.workspace_path.is_empty())
+                .then(|| PathBuf::from(preparation.workspace_path.clone())),
             foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
             foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
             foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
@@ -643,21 +647,11 @@ fn collect_enabled_mcp_runtime_events(
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     let Some(runtime) = mcp_runtime else {
-        runtime_events.push(RuntimeEvent::new(
-            RuntimeEventKind::ToolFinished,
-            "MCP 运行时",
-            "当前没有可用的 MCP 运行时句柄，本次执行将跳过 MCP 工具注册。",
-        ));
         return (runtime_events, rows, errors, warnings);
     };
     let snapshot = runtime.snapshot();
 
     if snapshot.servers.is_empty() {
-        runtime_events.push(RuntimeEvent::new(
-            RuntimeEventKind::ToolFinished,
-            "MCP 运行时",
-            "当前没有已配置的 MCP 服务器，本次执行将跳过 MCP 工具注册。",
-        ));
         return (runtime_events, rows, errors, warnings);
     }
 
@@ -935,6 +929,7 @@ fn execute_provider_prompt_stream(
         .and_then(|agent| agent.temperature)
         .or(preparation.temperature)
         .map(|value| value.clamp(0.0, 2.0) as f64);
+    let max_turns = resolve_runtime_max_turns(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
     let request_headers = match build_provider_request_headers(&preparation.model_blueprint) {
@@ -963,6 +958,7 @@ fn execute_provider_prompt_stream(
             system_preamble,
             prompt,
             temperature,
+            max_turns,
             &request_headers,
             build_runtime_tools(),
             additional_params,
@@ -979,6 +975,7 @@ fn execute_provider_prompt_stream(
             system_preamble,
             prompt,
             temperature,
+            max_turns,
             &request_headers,
             build_runtime_tools(),
             additional_params,
@@ -989,6 +986,7 @@ fn execute_provider_prompt_stream(
             system_preamble,
             prompt,
             temperature,
+            max_turns,
             &request_headers,
             build_runtime_tools(),
             additional_params,
@@ -1000,6 +998,7 @@ fn execute_provider_prompt_stream(
             system_preamble,
             prompt,
             temperature,
+            max_turns,
             &request_headers,
             build_runtime_tools(),
             additional_params,
@@ -1018,6 +1017,16 @@ fn execute_provider_prompt_stream(
     }
 }
 
+/// Resolves one safe default max-turn budget for multi-turn tool-calling providers.
+/// 为支持多轮工具调用的 Provider 解析一份安全的默认轮次预算。
+fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> usize {
+    active_agent
+        .and_then(|agent| agent.max_turns)
+        .filter(|value| *value > 0)
+        .map(|value| value as usize)
+        .unwrap_or(12)
+}
+
 /// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client and streams deltas.
 /// 使用兼容 Chat Completions 的 rig 客户端执行一次 OpenAI 兼容提示词调用并流式返回增量。
 fn execute_openai_compatible_stream(
@@ -1027,6 +1036,7 @@ fn execute_openai_compatible_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1051,7 +1061,8 @@ fn execute_openai_compatible_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Worker")
-        .preamble(system_preamble);
+        .preamble(system_preamble)
+        .default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1156,11 +1167,7 @@ fn provider_deltas_from_multi_turn_item<R>(
             vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
                 RuntimeEventKind::ToolFinished,
                 format!("工具返回 · {}", tool_result.id),
-                format!(
-                    "工具 `{}` 已返回 {} 项结果。",
-                    tool_result.id,
-                    tool_result.content.iter().count()
-                ),
+                format_tool_result_runtime_detail(&tool_result),
             ))]
         }
         MultiTurnStreamItem::FinalResponse(_) => Vec::new(),
@@ -1199,21 +1206,14 @@ fn provider_deltas_from_assistant_content<R>(
         StreamedAssistantContent::ToolCall { tool_call, .. } => {
             vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,
-                format!("工具调用 · {}", tool_call.function.name),
-                format!(
-                    "模型请求调用工具 `{}`，参数：{}。",
-                    tool_call.function.name,
-                    truncate_preview(&tool_call.function.arguments.to_string(), 160)
+                format!("工具调用 · {} · {}", tool_call.id, tool_call.function.name),
+                format_tool_call_runtime_detail(
+                    &tool_call.function.name,
+                    &tool_call.function.arguments,
                 ),
             ))]
         }
-        StreamedAssistantContent::ToolCallDelta { id, content, .. } => {
-            vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
-                RuntimeEventKind::ToolStarted,
-                format!("工具增量 · {id}"),
-                format!("模型正在补充工具 `{id}` 的参数片段：{:?}。", content),
-            ))]
-        }
+        StreamedAssistantContent::ToolCallDelta { .. } => Vec::new(),
         StreamedAssistantContent::Final(_) => Vec::new(),
     }
 }
@@ -1234,6 +1234,45 @@ fn flatten_reasoning_content(content: &[ReasoningContent]) -> String {
         .join("\n")
 }
 
+/// Formats one tool-call detail body into the full Markdown payload shown by the inline transcript and modal.
+/// 将单次工具调用详情正文格式化为内联转录与弹窗使用的完整 Markdown 载荷。
+fn format_tool_call_runtime_detail(tool_name: &str, arguments: &Value) -> String {
+    let pretty_arguments =
+        serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
+    format!("## 调用工具\n\n`{tool_name}`\n\n## 调用参数\n\n```json\n{pretty_arguments}\n```")
+}
+
+/// Formats one tool-result payload into the full Markdown body shown by the inline transcript and modal.
+/// 将单次工具返回载荷格式化为内联转录与弹窗使用的完整 Markdown 正文。
+fn format_tool_result_runtime_detail(tool_result: &rig::message::ToolResult) -> String {
+    let rendered_content = render_tool_result_content_markdown(&tool_result.content);
+    format!(
+        "## 返回标识\n\n`{}`\n\n{}",
+        tool_result.id, rendered_content
+    )
+}
+
+/// Renders one tool-result content list into readable Markdown text.
+/// 将一组工具返回内容渲染为可读的 Markdown 文本。
+fn render_tool_result_content_markdown(content: &rig::OneOrMany<ToolResultContent>) -> String {
+    let segments = content
+        .iter()
+        .map(|item| match item {
+            ToolResultContent::Text(text) => text.text.trim().to_string(),
+            ToolResultContent::Image(image) => serde_json::to_string_pretty(image)
+                .map(|json| format!("```json\n{json}\n```"))
+                .unwrap_or_else(|_| String::from("```json\n{}\n```")),
+        })
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    if segments.is_empty() {
+        return String::from("## 工具返回\n\n（空结果）");
+    }
+
+    format!("## 工具返回\n\n{}", segments.join("\n\n---\n\n"))
+}
+
 /// Executes one OpenAI Responses prompt using rig's default OpenAI responses client and streams deltas.
 /// 使用 rig 默认的 OpenAI Responses 客户端执行一次 OpenAI Responses 提示词调用并流式返回增量。
 fn execute_openai_responses_stream(
@@ -1243,6 +1282,7 @@ fn execute_openai_responses_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1267,7 +1307,8 @@ fn execute_openai_responses_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Responses Worker")
-        .preamble(system_preamble);
+        .preamble(system_preamble)
+        .default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1312,6 +1353,7 @@ fn execute_anthropic_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1336,7 +1378,8 @@ fn execute_anthropic_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Anthropic Worker")
-        .preamble(system_preamble);
+        .preamble(system_preamble)
+        .default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1380,6 +1423,7 @@ fn execute_openrouter_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1400,7 +1444,8 @@ fn execute_openrouter_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code OpenRouter Worker")
-        .preamble(system_preamble);
+        .preamble(system_preamble)
+        .default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);

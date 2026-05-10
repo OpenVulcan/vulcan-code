@@ -40,6 +40,15 @@ const USER_PROMPT_BUBBLE_MAX_WIDTH_RATIO: f32 = 0.70;
 /// 可选择转录用于识别复制用户提示词交互的链接动作前缀。
 const USER_PROMPT_COPY_ACTION_PREFIX: &str = "vulcan-agent-view://copy-user-prompt/";
 
+#[allow(dead_code)]
+/// Link-action prefix used by compact collapsible semantic blocks such as tool call and tool result rows.
+/// 工具调用与工具结果等紧凑折叠语义区块使用的链接动作前缀。
+const BLOCK_TOGGLE_ACTION_PREFIX: &str = "vulcan-agent-view://toggle-block-inline/";
+
+/// Link-action prefix used by compact tool rows that should open one dedicated modal instead of expanding inline.
+/// 应打开专用弹窗而不是在正文中内联展开的紧凑工具行使用的链接动作前缀。
+const TOOL_MODAL_ACTION_PREFIX: &str = "vulcan-agent-view://open-tool-modal/";
+
 /// Link-action prefix used by the selectable transcript to identify inline thinking-header interactions.
 /// 可选择转录用于识别内联思考标题交互的链接动作前缀。
 const THINKING_TOGGLE_ACTION_PREFIX: &str = "vulcan-agent-view://toggle-thinking-inline/";
@@ -76,12 +85,18 @@ pub enum SelectableTranscriptDragAutoScrollDirection {
 /// 由渲染转录内部合成交互外框片段发出的高层转录交互。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectableTranscriptInteraction {
+    /// Toggles one generic inline semantic block between collapsed and expanded states.
+    /// 切换某个通用内联语义区块的折叠与展开状态。
+    ToggleBlockInline(String),
     /// Toggles one inline thinking block between collapsed and expanded states.
     /// 切换某个内联思考区块的折叠与展开状态。
     ToggleThinkingInline(String),
     /// Opens one thinking block in the dedicated centered modal surface.
     /// 在专用居中弹层中打开某个思考区块。
     OpenThinkingModal(String),
+    /// Opens one tool block in the dedicated centered modal surface.
+    /// 在专用居中弹层中打开某个工具区块。
+    OpenToolModal(String),
 }
 
 /// Builds one selectable rendered transcript element from the provided structured agent document.
@@ -167,6 +182,9 @@ struct SelectableTranscriptState {
     /// Monotonic timestamp captured for the last synthetic link click.
     /// 上一次合成链接点击时捕获的单调时间戳。
     last_click_instant: Option<Instant>,
+    /// Body scroll offsets retained per collapsible semantic block.
+    /// 按折叠语义区块保留的正文滚动偏移量。
+    collapsible_body_scroll_offsets: BTreeMap<String, f32>,
 }
 
 impl Default for SelectableTranscriptState {
@@ -184,6 +202,7 @@ impl Default for SelectableTranscriptState {
             drag_auto_scroll_request: None,
             last_click_link_target: None,
             last_click_instant: None,
+            collapsible_body_scroll_offsets: BTreeMap::new(),
         }
     }
 }
@@ -286,6 +305,21 @@ impl RenderedTranscriptDocument {
         for node in &self.nodes {
             match node {
                 RenderedTranscriptNode::Panel(_) => {}
+                RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                    if let Some(link_url) =
+                        paragraph_link_at_char_offset(&collapsible_node.summary, global_char_offset)
+                    {
+                        return Some(link_url);
+                    }
+
+                    if let Some(body_node) = collapsible_node.body.as_ref() {
+                        if let Some(link_url) =
+                            paragraph_link_at_char_offset(body_node, global_char_offset)
+                        {
+                            return Some(link_url);
+                        }
+                    }
+                }
                 RenderedTranscriptNode::Paragraph(paragraph_node) => {
                     if let Some(link_url) =
                         paragraph_link_at_char_offset(paragraph_node, global_char_offset)
@@ -320,12 +354,19 @@ impl RenderedTranscriptDocument {
 /// 由合成转录外框片段发出的链接级交互动作。
 #[derive(Debug, Clone)]
 enum RenderedTranscriptLinkAction {
+    #[allow(dead_code)]
+    /// Toggles one generic inline semantic block when the synthetic header chrome is clicked.
+    /// 当点击合成标题外框时切换某个通用内联语义区块。
+    ToggleBlockInline(String),
     /// Copies the provided payload into the clipboard instead of copying the synthetic link string itself.
     /// 将提供的载荷复制到剪贴板，而不是复制合成链接字符串本身。
     CopyText(String),
     /// Toggles one inline thinking block when the synthetic header chrome is clicked once.
     /// 当合成标题外框被单击时切换某个内联思考区块。
     ToggleThinkingInline(String),
+    /// Opens one tool block in a dedicated centered modal surface.
+    /// 在专用居中弹层表面中打开某个工具区块。
+    OpenToolModal(String),
 }
 
 /// One rendered visual node in the transcript flow.
@@ -335,6 +376,10 @@ enum RenderedTranscriptNode {
     /// Non-selectable background panel rendered behind a contiguous run of following child nodes.
     /// 绘制在一段连续后续子节点背后的不可选择背景面板节点。
     Panel(RenderedPanelNode),
+    #[allow(dead_code)]
+    /// Compact collapsible semantic block rendered as one lightweight summary row plus one optional expandable body viewport.
+    /// 以轻量摘要行加可选展开正文视口形式渲染的紧凑折叠语义区块。
+    Collapsible(RenderedCollapsibleDirectiveNode),
     /// Text-bearing paragraph node that can participate in selection and copy.
     /// 参与选择与复制的带文本段落节点。
     Paragraph(RenderedParagraphNode),
@@ -356,6 +401,36 @@ struct RenderedPanelNode {
     /// Background treatment drawn behind the covered child nodes.
     /// 绘制在被覆盖子节点背后的背景样式。
     background: RenderedParagraphBackground,
+}
+
+/// One compact collapsible semantic block rendered inside the transcript flow.
+/// 渲染在转录流中的单个紧凑折叠语义区块。
+#[derive(Debug, Clone)]
+struct RenderedCollapsibleDirectiveNode {
+    /// Stable block identifier used for collapse-state toggling and per-block body scroll persistence.
+    /// 用于折叠状态切换与区块级正文滚动持久化的稳定区块标识。
+    block_id: String,
+    /// Summary paragraph rendered as the always-visible clickable row.
+    /// 作为始终可见点击行渲染的摘要段落。
+    summary: RenderedParagraphNode,
+    /// Optional body paragraph rendered inside the expandable viewport.
+    /// 渲染在可展开视口内部的可选正文段落。
+    body: Option<RenderedParagraphNode>,
+    /// Whether the block is currently collapsed.
+    /// 当前区块是否处于折叠状态。
+    collapsed: bool,
+    /// Maximum visible line count before the body viewport starts scrolling.
+    /// 在正文视口开始滚动前允许显示的最大行数。
+    max_visible_lines: usize,
+    /// Background treatment used by the expandable body viewport.
+    /// 可展开正文视口使用的背景样式。
+    body_background: RenderedParagraphBackground,
+    /// Scrollbar track color used when the body overflows.
+    /// 正文溢出时滚动条轨道使用的颜色。
+    scrollbar_track_color: Color,
+    /// Scrollbar thumb color used when the body overflows.
+    /// 正文溢出时滚动条滑块使用的颜色。
+    scrollbar_thumb_color: Color,
 }
 
 /// One text-bearing paragraph node in the rendered transcript flow.
@@ -792,6 +867,46 @@ impl RenderedTranscriptBuilder {
         fit_width_to_content: bool,
         max_width_ratio: Option<f32>,
     ) {
+        let paragraph_node = self.build_rich_paragraph_node_with_layout(
+            spans,
+            text_size,
+            line_height,
+            wrapping,
+            indent_left,
+            gap_before,
+            gap_after,
+            inner_padding,
+            background,
+            quote_depth,
+            horizontal_placement,
+            fit_width_to_content,
+            max_width_ratio,
+        );
+
+        self.nodes
+            .push(RenderedTranscriptNode::Paragraph(paragraph_node));
+
+        self.pending_separator = Some("\n");
+    }
+
+    /// Builds one rendered paragraph node while projecting its text into the global selectable transcript buffer.
+    /// 构建一个渲染段落节点，同时将其文本投影到全局可选择转录缓冲区中。
+    fn build_rich_paragraph_node_with_layout(
+        &mut self,
+        spans: Vec<Span<'static, markdown::Uri, Font>>,
+        text_size: Pixels,
+        line_height: text::LineHeight,
+        wrapping: text::Wrapping,
+        indent_left: f32,
+        gap_before: f32,
+        gap_after: f32,
+        inner_padding: Padding,
+        background: Option<RenderedParagraphBackground>,
+        quote_depth: usize,
+        horizontal_placement: RenderedParagraphHorizontalPlacement,
+        fit_width_to_content: bool,
+        max_width_ratio: Option<f32>,
+    ) -> RenderedParagraphNode {
         let separator = self.pending_separator.take().unwrap_or("\n");
         let separator_char_count = separator.chars().count();
         if !separator.is_empty() {
@@ -807,32 +922,29 @@ impl RenderedTranscriptBuilder {
         let paragraph_end = self.full_text.chars().count();
         let (grapheme_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
 
-        self.nodes
-            .push(RenderedTranscriptNode::Paragraph(RenderedParagraphNode {
-                display_text: paragraph_text,
-                spans: grapheme_spans,
-                global_char_range: paragraph_start..paragraph_end,
-                local_grapheme_ranges,
-                text_size,
-                line_height,
-                wrapping,
-                indent_left,
-                horizontal_placement,
-                gap_before: if separator_char_count > 1 {
-                    gap_before.max(6.0)
-                } else {
-                    gap_before
-                },
-                gap_after,
-                inner_padding,
-                fit_width_to_content,
-                max_width_ratio,
-                background,
-                background_action_link: None,
-                quote_depth,
-            }));
-
-        self.pending_separator = Some("\n");
+        RenderedParagraphNode {
+            display_text: paragraph_text,
+            spans: grapheme_spans,
+            global_char_range: paragraph_start..paragraph_end,
+            local_grapheme_ranges,
+            text_size,
+            line_height,
+            wrapping,
+            indent_left,
+            horizontal_placement,
+            gap_before: if separator_char_count > 1 {
+                gap_before.max(6.0)
+            } else {
+                gap_before
+            },
+            gap_after,
+            inner_padding,
+            fit_width_to_content,
+            max_width_ratio,
+            background,
+            background_action_link: None,
+            quote_depth,
+        }
     }
 
     /// Pushes one plain-text paragraph by routing it through the current font fallback strategy.
@@ -1031,6 +1143,21 @@ struct MeasuredRenderedPanelNode {
     outer_bounds: Rectangle,
 }
 
+/// Measured bounds resolved for one compact collapsible semantic block node.
+/// 为一个紧凑折叠语义区块节点解析出的测量边界。
+#[derive(Debug, Clone, Copy)]
+struct MeasuredRenderedCollapsibleDirectiveNode {
+    /// Outer bounds occupied by the summary row.
+    /// 摘要行占据的外部边界。
+    summary_outer_bounds: Rectangle,
+    /// Optional outer bounds occupied by the expandable body viewport.
+    /// 可展开正文视口占据的可选外部边界。
+    body_outer_bounds: Option<Rectangle>,
+    /// Full unclipped text height of the body paragraph before viewport clipping is applied.
+    /// 在应用视口裁剪前正文段落的完整未裁剪文本高度。
+    body_full_text_height: f32,
+}
+
 /// Returns the number of renderer paragraph slots needed by the whole rendered transcript document.
 /// 返回整份渲染转录文档需要的渲染器段落槽位数量。
 fn count_rendered_paragraph_slots(document: &RenderedTranscriptDocument) -> usize {
@@ -1039,6 +1166,9 @@ fn count_rendered_paragraph_slots(document: &RenderedTranscriptDocument) -> usiz
         .iter()
         .map(|node| match node {
             RenderedTranscriptNode::Panel(_) => 0,
+            RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                1 + usize::from(collapsible_node.body.is_some())
+            }
             RenderedTranscriptNode::Paragraph(_) => 1,
             RenderedTranscriptNode::Table(table_node) => table_node.cells.len(),
             RenderedTranscriptNode::Rule(_) => 0,
@@ -1064,6 +1194,72 @@ fn build_renderer_paragraph(
         shaping: text::Shaping::Advanced,
         wrapping: paragraph_node.wrapping,
     })
+}
+
+/// Returns the height cap used by the visible body viewport of one collapsible semantic block.
+/// 返回某个折叠语义区块正文视口使用的可见高度上限。
+fn collapsible_body_visible_height_cap(
+    body_node: &RenderedParagraphNode,
+    max_visible_lines: usize,
+) -> f32 {
+    let line_height = match body_node.line_height {
+        text::LineHeight::Relative(value) => body_node.text_size.0 * value,
+        text::LineHeight::Absolute(value) => value.0,
+    };
+
+    body_node.inner_padding.top
+        + (line_height * max_visible_lines.max(1) as f32)
+        + body_node.inner_padding.bottom
+}
+
+/// Measures one compact collapsible semantic block node using the provided cached renderer paragraphs.
+/// 使用给定缓存渲染段落测量单个紧凑折叠语义区块节点。
+fn measure_rendered_collapsible_directive_node(
+    collapsible_node: &RenderedCollapsibleDirectiveNode,
+    summary_paragraph: &RendererParagraph,
+    body_paragraph: Option<&RendererParagraph>,
+    widget_bounds: Rectangle,
+    current_y: f32,
+) -> MeasuredRenderedCollapsibleDirectiveNode {
+    let summary_outer_bounds = resolve_paragraph_outer_bounds(
+        widget_bounds,
+        current_y + collapsible_node.summary.gap_before,
+        &collapsible_node.summary,
+        summary_paragraph,
+    );
+
+    let (body_outer_bounds, body_full_text_height) = match (&collapsible_node.body, body_paragraph)
+    {
+        (Some(body_node), Some(body_paragraph)) if !collapsible_node.collapsed => {
+            let full_body_height = body_paragraph.min_bounds().height
+                + body_node.inner_padding.top
+                + body_node.inner_padding.bottom;
+            let visible_body_height = full_body_height
+                .min(collapsible_body_visible_height_cap(
+                    body_node,
+                    collapsible_node.max_visible_lines,
+                ))
+                .max(1.0);
+            let body_y =
+                summary_outer_bounds.y + summary_outer_bounds.height + body_node.gap_before;
+            let body_width = (widget_bounds.width - body_node.indent_left).max(1.0);
+
+            (
+                Some(Rectangle::new(
+                    Point::new(widget_bounds.x + body_node.indent_left, body_y),
+                    Size::new(body_width, visible_body_height),
+                )),
+                full_body_height.max(1.0),
+            )
+        }
+        _ => (None, 0.0),
+    };
+
+    MeasuredRenderedCollapsibleDirectiveNode {
+        summary_outer_bounds,
+        body_outer_bounds,
+        body_full_text_height,
+    }
 }
 
 /// Lays out one rendered table node and returns both its cached geometry and total flow height.
@@ -1263,6 +1459,37 @@ fn measure_rendered_panel_node(
     {
         match child_node {
             RenderedTranscriptNode::Panel(_) => {}
+            RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                let summary_paragraph = &paragraphs[local_paragraph_index];
+                let body_paragraph = collapsible_node
+                    .body
+                    .as_ref()
+                    .map(|_| &paragraphs[local_paragraph_index + 1]);
+                let measured_collapsible = measure_rendered_collapsible_directive_node(
+                    collapsible_node,
+                    summary_paragraph,
+                    body_paragraph,
+                    widget_bounds,
+                    local_y,
+                );
+                first_y.get_or_insert(measured_collapsible.summary_outer_bounds.y);
+                let mut node_bottom = measured_collapsible.summary_outer_bounds.y
+                    + measured_collapsible.summary_outer_bounds.height
+                    + collapsible_node.summary.gap_after;
+                local_y = node_bottom;
+                local_paragraph_index += 1;
+
+                if let Some(body_node) = collapsible_node.body.as_ref() {
+                    if let Some(body_outer_bounds) = measured_collapsible.body_outer_bounds {
+                        node_bottom =
+                            body_outer_bounds.y + body_outer_bounds.height + body_node.gap_after;
+                        local_y = node_bottom;
+                    }
+                    local_paragraph_index += 1;
+                }
+
+                last_y = Some(node_bottom);
+            }
             RenderedTranscriptNode::Paragraph(paragraph_node) => {
                 local_y += paragraph_node.gap_before;
                 let paragraph = &paragraphs[local_paragraph_index];
@@ -1540,6 +1767,52 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         while node_index < self.document.nodes.len() {
             match &self.document.nodes[node_index] {
                 RenderedTranscriptNode::Panel(_) => {}
+                RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                    state.paragraphs[paragraph_index] = build_renderer_paragraph(
+                        &collapsible_node.summary,
+                        Size::new(
+                            paragraph_measurement_width(
+                                measurement_bounds,
+                                &collapsible_node.summary,
+                            ),
+                            f32::INFINITY,
+                        ),
+                        text::Alignment::Default,
+                    );
+                    let summary_height = collapsible_node.summary.gap_before
+                        + collapsible_node.summary.inner_padding.top
+                        + state.paragraphs[paragraph_index].min_bounds().height
+                        + collapsible_node.summary.inner_padding.bottom
+                        + collapsible_node.summary.gap_after;
+                    paragraph_index += 1;
+                    total_height += summary_height;
+
+                    if let Some(body_node) = collapsible_node.body.as_ref() {
+                        state.paragraphs[paragraph_index] = build_renderer_paragraph(
+                            body_node,
+                            Size::new(
+                                paragraph_measurement_width(measurement_bounds, body_node),
+                                f32::INFINITY,
+                            ),
+                            text::Alignment::Default,
+                        );
+
+                        if !collapsible_node.collapsed {
+                            let full_body_height =
+                                state.paragraphs[paragraph_index].min_bounds().height
+                                    + body_node.inner_padding.top
+                                    + body_node.inner_padding.bottom;
+                            total_height += body_node.gap_before
+                                + full_body_height.min(collapsible_body_visible_height_cap(
+                                    body_node,
+                                    collapsible_node.max_visible_lines,
+                                ))
+                                + body_node.gap_after;
+                        }
+
+                        paragraph_index += 1;
+                    }
+                }
                 RenderedTranscriptNode::Paragraph(paragraph_node) => {
                     let text_bounds = Size::new(
                         paragraph_measurement_width(measurement_bounds, paragraph_node),
@@ -1639,6 +1912,165 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                             panel_border_overlays
                                 .push((measured_panel.outer_bounds, panel_node.background.border));
                         }
+                    }
+                }
+                RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                    let summary_paragraph = &state.paragraphs[paragraph_index];
+                    let body_paragraph = collapsible_node
+                        .body
+                        .as_ref()
+                        .map(|_| &state.paragraphs[paragraph_index + 1]);
+                    let measured_collapsible = measure_rendered_collapsible_directive_node(
+                        collapsible_node,
+                        summary_paragraph,
+                        body_paragraph,
+                        layout.bounds(),
+                        current_y,
+                    );
+
+                    if let Some(background) = collapsible_node.summary.background {
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: measured_collapsible.summary_outer_bounds,
+                                border: background.border,
+                                ..renderer::Quad::default()
+                            },
+                            background.background,
+                        );
+                    }
+
+                    renderer.fill_paragraph(
+                        summary_paragraph,
+                        paragraph_local_origin(
+                            measured_collapsible.summary_outer_bounds,
+                            &collapsible_node.summary,
+                        ),
+                        collapsible_node
+                            .summary
+                            .spans
+                            .first()
+                            .and_then(|span| span.color)
+                            .unwrap_or(defaults.text_color),
+                        *viewport,
+                    );
+
+                    current_y = measured_collapsible.summary_outer_bounds.y
+                        + measured_collapsible.summary_outer_bounds.height
+                        + collapsible_node.summary.gap_after;
+                    paragraph_index += 1;
+
+                    if let (Some(body_node), Some(body_paragraph)) =
+                        (collapsible_node.body.as_ref(), body_paragraph)
+                    {
+                        if let Some(body_outer_bounds) = measured_collapsible.body_outer_bounds {
+                            renderer.fill_quad(
+                                renderer::Quad {
+                                    bounds: body_outer_bounds,
+                                    border: collapsible_node.body_background.border,
+                                    ..renderer::Quad::default()
+                                },
+                                collapsible_node.body_background.background,
+                            );
+
+                            let max_scroll = (measured_collapsible.body_full_text_height
+                                - body_outer_bounds.height)
+                                .max(0.0);
+                            let scroll_offset = state
+                                .collapsible_body_scroll_offsets
+                                .get(&collapsible_node.block_id)
+                                .copied()
+                                .unwrap_or(0.0)
+                                .clamp(0.0, max_scroll);
+                            let text_clip_bounds = Rectangle::new(
+                                Point::new(
+                                    body_outer_bounds.x + body_node.inner_padding.left,
+                                    body_outer_bounds.y + body_node.inner_padding.top,
+                                ),
+                                Size::new(
+                                    (body_outer_bounds.width
+                                        - body_node.inner_padding.left
+                                        - body_node.inner_padding.right
+                                        - if max_scroll > 0.0 { 10.0 } else { 0.0 })
+                                    .max(1.0),
+                                    (body_outer_bounds.height
+                                        - body_node.inner_padding.top
+                                        - body_node.inner_padding.bottom)
+                                        .max(1.0),
+                                ),
+                            );
+
+                            renderer.with_layer(text_clip_bounds, |renderer| {
+                                renderer.fill_paragraph(
+                                    body_paragraph,
+                                    Point::new(
+                                        text_clip_bounds.x,
+                                        text_clip_bounds.y - scroll_offset,
+                                    ),
+                                    body_node
+                                        .spans
+                                        .first()
+                                        .and_then(|span| span.color)
+                                        .unwrap_or(defaults.text_color),
+                                    *viewport,
+                                );
+                            });
+
+                            if max_scroll > 0.0 {
+                                let track_bounds = Rectangle::new(
+                                    Point::new(
+                                        body_outer_bounds.x + body_outer_bounds.width - 6.0,
+                                        body_outer_bounds.y + 6.0,
+                                    ),
+                                    Size::new(3.0, (body_outer_bounds.height - 12.0).max(18.0)),
+                                );
+                                renderer.fill_quad(
+                                    renderer::Quad {
+                                        bounds: track_bounds,
+                                        border: Border {
+                                            color: Color::TRANSPARENT,
+                                            width: 0.0,
+                                            radius: 2.0.into(),
+                                        },
+                                        ..renderer::Quad::default()
+                                    },
+                                    Background::Color(collapsible_node.scrollbar_track_color),
+                                );
+
+                                let thumb_height = ((track_bounds.height
+                                    * (body_outer_bounds.height
+                                        / measured_collapsible.body_full_text_height))
+                                    .clamp(18.0, track_bounds.height))
+                                .max(18.0);
+                                let travel = (track_bounds.height - thumb_height).max(0.0);
+                                let thumb_y = track_bounds.y
+                                    + if max_scroll <= f32::EPSILON {
+                                        0.0
+                                    } else {
+                                        (scroll_offset / max_scroll) * travel
+                                    };
+                                renderer.fill_quad(
+                                    renderer::Quad {
+                                        bounds: Rectangle::new(
+                                            Point::new(track_bounds.x, thumb_y),
+                                            Size::new(track_bounds.width, thumb_height),
+                                        ),
+                                        border: Border {
+                                            color: Color::TRANSPARENT,
+                                            width: 0.0,
+                                            radius: 2.0.into(),
+                                        },
+                                        ..renderer::Quad::default()
+                                    },
+                                    Background::Color(collapsible_node.scrollbar_thumb_color),
+                                );
+                            }
+
+                            current_y = body_outer_bounds.y
+                                + body_outer_bounds.height
+                                + body_node.gap_after;
+                        }
+
+                        paragraph_index += 1;
                     }
                 }
                 RenderedTranscriptNode::Paragraph(paragraph_node) => {
@@ -1799,6 +2231,24 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
 
         match event {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                if let Some(position) = cursor.position_over(layout.bounds()) {
+                    let delta_y = match delta {
+                        mouse::ScrollDelta::Lines { y, .. } => -y * 36.0,
+                        mouse::ScrollDelta::Pixels { y, .. } => -y,
+                    };
+
+                    if scroll_collapsible_body_at_position(
+                        &self.document,
+                        state,
+                        layout.bounds(),
+                        position,
+                        delta_y,
+                    ) {
+                        shell.capture_event();
+                    }
+                }
+            }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(position) = cursor.position_over(layout.bounds()) {
                     if let Some(hit_char) =
@@ -1875,6 +2325,15 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                                 self.document.link_action_for_target(&link_url)
                             {
                                 match link_action {
+                                    RenderedTranscriptLinkAction::ToggleBlockInline(block_id) => {
+                                        shell.publish((self.on_interaction.as_ref())(
+                                            SelectableTranscriptInteraction::ToggleBlockInline(
+                                                block_id.clone(),
+                                            ),
+                                        ));
+                                        state.last_click_link_target = Some(link_url);
+                                        state.last_click_instant = Some(Instant::now());
+                                    }
                                     RenderedTranscriptLinkAction::CopyText(copy_payload) => {
                                         clipboard
                                             .write(ClipboardKind::Standard, copy_payload.clone());
@@ -1909,6 +2368,15 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                                             state.last_click_link_target = Some(link_url);
                                             state.last_click_instant = Some(now);
                                         }
+                                    }
+                                    RenderedTranscriptLinkAction::OpenToolModal(block_id) => {
+                                        shell.publish((self.on_interaction.as_ref())(
+                                            SelectableTranscriptInteraction::OpenToolModal(
+                                                block_id.clone(),
+                                            ),
+                                        ));
+                                        state.last_click_link_target = Some(link_url);
+                                        state.last_click_instant = Some(Instant::now());
                                     }
                                 }
                             } else {
@@ -2016,6 +2484,14 @@ fn render_directive_block(
 
     if block.kind == AgentViewDirectiveKind::Thinking {
         render_thinking_block(builder, block, markdown_settings, app_theme);
+        return;
+    }
+
+    if matches!(
+        block.kind,
+        AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+    ) {
+        render_compact_tool_modal_directive_block(builder, block, markdown_settings, app_theme);
         return;
     }
 
@@ -2148,6 +2624,230 @@ fn render_directive_block(
     }
 }
 
+/// Renders one compact tool row that opens a dedicated modal instead of expanding inline.
+/// 渲染一条会打开专用弹窗而不是在正文中内联展开的紧凑工具行。
+fn render_compact_tool_modal_directive_block(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    markdown_settings: markdown::Settings,
+    app_theme: &Theme,
+) {
+    let block_id = block
+        .attributes
+        .get("ui-block-id")
+        .cloned()
+        .unwrap_or_else(|| block.selectable_title());
+    let action_link_target = format!("{TOOL_MODAL_ACTION_PREFIX}{block_id}");
+    builder.register_link_action(
+        action_link_target.clone(),
+        RenderedTranscriptLinkAction::OpenToolModal(block_id),
+    );
+
+    let (icon, summary_color, fallback_title) = match block.kind {
+        AgentViewDirectiveKind::ToolCall => ("🛠", iced::color!(0xA8D5FF), String::from("调用工具")),
+        AgentViewDirectiveKind::ToolResult => {
+            ("📦", iced::color!(0xAEE8C8), String::from("工具返回"))
+        }
+        _ => return,
+    };
+    let title = block
+        .attributes
+        .get("title")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback_title);
+    let summary_text = format!("{icon} {title} >");
+    let summary_spans = build_agent_view_plain_text_spans(
+        &summary_text,
+        theme::ui_font(),
+        PlainTextRenderKind::Flow,
+        Some(summary_color),
+        app_theme,
+    );
+    let mut summary_node = builder.build_rich_paragraph_node_with_layout(
+        summary_spans,
+        markdown_settings.text_size,
+        text::LineHeight::default(),
+        text::Wrapping::Word,
+        0.0,
+        0.0,
+        8.0,
+        Padding::from([6.0, 0.0]),
+        None,
+        0,
+        RenderedParagraphHorizontalPlacement::Leading,
+        false,
+        None,
+    );
+    summary_node.background_action_link = Some(action_link_target);
+    builder
+        .nodes
+        .push(RenderedTranscriptNode::Paragraph(summary_node));
+    builder.pending_separator = Some("\n");
+}
+
+#[allow(dead_code)]
+/// Renders one compact collapsible directive block used by tool-call, tool-result, and inline thinking rows.
+/// 渲染工具调用、工具结果以及内联思考行共用的紧凑折叠指令区块。
+fn render_compact_collapsible_directive_block(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    markdown_settings: markdown::Settings,
+    app_theme: &Theme,
+) {
+    let palette = app_theme.extended_palette();
+    let (icon, summary_color, body_background, body_text_color) = match block.kind {
+        AgentViewDirectiveKind::Thinking => (
+            "🧠",
+            iced::color!(0xD8E8FF),
+            directive_background(
+                iced::color!(0x151E2A),
+                iced::color!(0x46566B).scale_alpha(0.70),
+            ),
+            iced::color!(0xEAF1FA),
+        ),
+        AgentViewDirectiveKind::ToolCall => (
+            "🛠",
+            iced::color!(0xCDE7FF),
+            directive_background(
+                palette.primary.weak.color.scale_alpha(0.08),
+                palette.primary.strong.color.scale_alpha(0.24),
+            ),
+            palette.background.base.text,
+        ),
+        AgentViewDirectiveKind::ToolResult => (
+            "📦",
+            iced::color!(0xD7F6E6),
+            directive_background(
+                palette.success.weak.color.scale_alpha(0.08),
+                palette.success.strong.color.scale_alpha(0.24),
+            ),
+            palette.background.base.text,
+        ),
+        _ => return,
+    };
+    let block_id = block
+        .attributes
+        .get("ui-block-id")
+        .cloned()
+        .unwrap_or_else(|| block.selectable_title());
+    let is_collapsed = block
+        .attributes
+        .get("ui-inline-collapsed")
+        .map(|value| value == "true")
+        .or_else(|| {
+            block
+                .attributes
+                .get("collapsed")
+                .map(|value| value == "true")
+        })
+        .unwrap_or(block.collapsed_by_default);
+    let toggle_link_target = if block.kind == AgentViewDirectiveKind::Thinking {
+        thinking_toggle_action_link(block)
+    } else {
+        Some(format!("{BLOCK_TOGGLE_ACTION_PREFIX}{block_id}"))
+    };
+    if let Some(toggle_link_target) = toggle_link_target.as_ref() {
+        builder.register_link_action(
+            toggle_link_target.clone(),
+            if block.kind == AgentViewDirectiveKind::Thinking {
+                RenderedTranscriptLinkAction::ToggleThinkingInline(block_id.clone())
+            } else {
+                RenderedTranscriptLinkAction::ToggleBlockInline(block_id.clone())
+            },
+        );
+    }
+
+    let title_suffix = block
+        .attributes
+        .get("title")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| match block.kind {
+            AgentViewDirectiveKind::Thinking => "思考过程",
+            AgentViewDirectiveKind::ToolCall => "调用工具",
+            AgentViewDirectiveKind::ToolResult => "工具返回",
+            _ => "",
+        });
+    let toggle_glyph = if is_collapsed { ">" } else { "v" };
+    let summary_text = format!("{icon} {title_suffix} {toggle_glyph}");
+    let summary_spans = build_agent_view_plain_text_spans(
+        &summary_text,
+        theme::ui_font(),
+        PlainTextRenderKind::Flow,
+        Some(summary_color),
+        app_theme,
+    );
+    let mut summary_node = builder.build_rich_paragraph_node_with_layout(
+        summary_spans,
+        markdown_settings.text_size,
+        text::LineHeight::default(),
+        text::Wrapping::Word,
+        0.0,
+        0.0,
+        if is_collapsed { 8.0 } else { 4.0 },
+        Padding::from([8.0, 0.0]),
+        None,
+        0,
+        RenderedParagraphHorizontalPlacement::Leading,
+        false,
+        None,
+    );
+    summary_node.background_action_link = toggle_link_target;
+
+    let body_node = if block.body.trim().is_empty() {
+        None
+    } else {
+        Some(builder.build_rich_paragraph_node_with_layout(
+            build_agent_view_plain_text_spans(
+                block.body.trim_end(),
+                if block.kind == AgentViewDirectiveKind::Thinking {
+                    theme::ui_font()
+                } else {
+                    theme::code_font()
+                },
+                if block.kind == AgentViewDirectiveKind::Thinking {
+                    PlainTextRenderKind::Flow
+                } else {
+                    PlainTextRenderKind::Code
+                },
+                Some(body_text_color),
+                app_theme,
+            ),
+            if block.kind == AgentViewDirectiveKind::Thinking {
+                markdown_settings.text_size
+            } else {
+                markdown_settings.code_size
+            },
+            text::LineHeight::default(),
+            text::Wrapping::WordOrGlyph,
+            0.0,
+            0.0,
+            8.0,
+            Padding::from([10.0, 12.0]),
+            Some(body_background),
+            0,
+            RenderedParagraphHorizontalPlacement::Leading,
+            false,
+            None,
+        ))
+    };
+
+    builder.nodes.push(RenderedTranscriptNode::Collapsible(
+        RenderedCollapsibleDirectiveNode {
+            block_id,
+            summary: summary_node,
+            body: body_node,
+            collapsed: is_collapsed,
+            max_visible_lines: 10,
+            body_background,
+            scrollbar_track_color: palette.background.strong.color.scale_alpha(0.20),
+            scrollbar_thumb_color: palette.background.base.text.scale_alpha(0.35),
+        },
+    ));
+    builder.pending_separator = Some("\n");
+}
+
 /// Renders one inline thinking block with a full-width dark panel treatment, single-click inline expand, and double-click modal-open chrome.
 /// 使用全宽深色面板样式渲染单个内联思考区块，并支持单击内联展开与双击打开弹层。
 fn render_thinking_block(
@@ -2156,24 +2856,13 @@ fn render_thinking_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
+    let thinking_surface = block
+        .attributes
+        .get("ui-thinking-surface")
+        .map(String::as_str)
+        .unwrap_or("inline");
     let outer_panel_background = RenderedParagraphBackground {
         background: Background::Color(iced::color!(0x1C2230)),
-        border: Border {
-            color: iced::color!(0x68748A).scale_alpha(0.84),
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-    };
-    let header_background = RenderedParagraphBackground {
-        background: Background::Color(iced::color!(0x222A3A)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-    };
-    let collapsed_header_background = RenderedParagraphBackground {
-        background: Background::Color(iced::color!(0x222A3A)),
         border: Border {
             color: iced::color!(0x68748A).scale_alpha(0.84),
             width: 1.0,
@@ -2183,11 +2872,6 @@ fn render_thinking_block(
     let body_foreground = iced::color!(0xEEF2F7);
     let body_content_padding = Padding::from([0.0, 16.0]);
     let toggle_link_target = thinking_toggle_action_link(block);
-    let thinking_surface = block
-        .attributes
-        .get("ui-thinking-surface")
-        .map(String::as_str)
-        .unwrap_or("inline");
     let is_inline_surface = thinking_surface == "inline";
     let is_collapsed = block
         .attributes
@@ -2205,8 +2889,7 @@ fn render_thinking_block(
         .get("ui-render-thinking-header")
         .map(|value| value != "false")
         .unwrap_or(true);
-    let block_node_start = builder.node_count();
-    let header_padding = Padding::from([14.0, 16.0]);
+    let header_padding = Padding::from([14.0, 10.0]);
 
     if let Some(toggle_link_target) = toggle_link_target.as_ref() {
         if let Some(block_id) = block.attributes.get("ui-block-id").map(String::as_str) {
@@ -2240,11 +2923,7 @@ fn render_thinking_block(
             0.0,
             if is_collapsed { 12.0 } else { 0.0 },
             header_padding,
-            Some(if is_collapsed || !is_inline_surface {
-                collapsed_header_background
-            } else {
-                header_background
-            }),
+            None,
             0,
             RenderedParagraphHorizontalPlacement::Leading,
             false,
@@ -2259,6 +2938,7 @@ fn render_thinking_block(
         return;
     }
 
+    let body_node_start = builder.node_count();
     let prepared_body = prepare_markdown_source_for_rendering(&block.body);
     let paragraph_style = PlainParagraphStyle {
         background: None,
@@ -2306,8 +2986,10 @@ fn render_thinking_block(
     }
 
     if is_inline_surface {
-        let block_node_count = builder.node_count().saturating_sub(block_node_start);
-        builder.insert_panel(block_node_start, block_node_count, outer_panel_background);
+        let body_node_count = builder.node_count().saturating_sub(body_node_start);
+        if body_node_count > 0 {
+            builder.insert_panel(body_node_start, body_node_count, outer_panel_background);
+        }
     }
 }
 
@@ -2483,9 +3165,9 @@ fn build_thinking_header_spans(
     foreground: Color,
     app_theme: &Theme,
 ) -> Vec<Span<'static, markdown::Uri, Font>> {
-    let chevron = if is_collapsed { "▸ " } else { "▾ " };
+    let chevron = if is_collapsed { "▸" } else { "▾" };
     let mut spans = build_agent_view_plain_text_spans(
-        &format!("{chevron}{title}"),
+        &format!("🧠 {chevron} {title}"),
         Font {
             weight: font::Weight::Semibold,
             ..theme::ui_font()
@@ -4097,6 +4779,105 @@ fn hit_test_rendered_document(
     for node in &document.nodes {
         match node {
             RenderedTranscriptNode::Panel(_) => {}
+            RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                let summary_paragraph = state.paragraphs.get(paragraph_index)?;
+                let body_paragraph = collapsible_node
+                    .body
+                    .as_ref()
+                    .and_then(|_| state.paragraphs.get(paragraph_index + 1));
+                let measured_collapsible = measure_rendered_collapsible_directive_node(
+                    collapsible_node,
+                    summary_paragraph,
+                    body_paragraph,
+                    widget_bounds,
+                    current_y,
+                );
+                current_y = measured_collapsible.summary_outer_bounds.y
+                    + measured_collapsible.summary_outer_bounds.height
+                    + collapsible_node.summary.gap_after;
+                paragraph_index += 1;
+
+                if measured_collapsible.summary_outer_bounds.contains(position) {
+                    let summary_height = summary_paragraph.min_bounds().height;
+                    let local_point = clamp_hit_test_point_to_paragraph_text_bounds(
+                        Point::new(
+                            position.x
+                                - measured_collapsible.summary_outer_bounds.x
+                                - collapsible_node.summary.inner_padding.left,
+                            position.y
+                                - measured_collapsible.summary_outer_bounds.y
+                                - collapsible_node.summary.inner_padding.top,
+                        ),
+                        &collapsible_node.summary,
+                        measured_collapsible.summary_outer_bounds.size(),
+                        summary_height,
+                    );
+                    let local_byte_offset = paragraph_hit_test_to_byte_offset(
+                        summary_paragraph,
+                        &collapsible_node.summary.display_text,
+                        local_point,
+                    )?;
+                    let local_char_offset = byte_offset_to_char_offset(
+                        &collapsible_node.summary.display_text,
+                        local_byte_offset,
+                    );
+                    return Some(
+                        (collapsible_node.summary.global_char_range.start + local_char_offset)
+                            .min(collapsible_node.summary.global_char_range.end),
+                    );
+                }
+
+                if let Some(body_node) = collapsible_node.body.as_ref() {
+                    if let Some(body_outer_bounds) = measured_collapsible.body_outer_bounds {
+                        if body_outer_bounds.contains(position) {
+                            if let Some(body_paragraph) = body_paragraph {
+                                let max_scroll = (measured_collapsible.body_full_text_height
+                                    - body_outer_bounds.height)
+                                    .max(0.0);
+                                let scroll_offset = state
+                                    .collapsible_body_scroll_offsets
+                                    .get(&collapsible_node.block_id)
+                                    .copied()
+                                    .unwrap_or(0.0)
+                                    .clamp(0.0, max_scroll);
+                                let body_height = body_paragraph.min_bounds().height;
+                                let local_point = clamp_hit_test_point_to_paragraph_text_bounds(
+                                    Point::new(
+                                        position.x
+                                            - body_outer_bounds.x
+                                            - body_node.inner_padding.left,
+                                        position.y
+                                            - body_outer_bounds.y
+                                            - body_node.inner_padding.top
+                                            + scroll_offset,
+                                    ),
+                                    body_node,
+                                    body_outer_bounds.size(),
+                                    body_height,
+                                );
+                                let local_byte_offset = paragraph_hit_test_to_byte_offset(
+                                    body_paragraph,
+                                    &body_node.display_text,
+                                    local_point,
+                                )?;
+                                let local_char_offset = byte_offset_to_char_offset(
+                                    &body_node.display_text,
+                                    local_byte_offset,
+                                );
+                                return Some(
+                                    (body_node.global_char_range.start + local_char_offset)
+                                        .min(body_node.global_char_range.end),
+                                );
+                            }
+                        }
+
+                        current_y =
+                            body_outer_bounds.y + body_outer_bounds.height + body_node.gap_after;
+                    }
+
+                    paragraph_index += 1;
+                }
+            }
             RenderedTranscriptNode::Paragraph(paragraph_node) => {
                 current_y += paragraph_node.gap_before;
                 let paragraph = state.paragraphs.get(paragraph_index)?;
@@ -4410,6 +5191,41 @@ fn background_action_link_at_position(
     for node in &document.nodes {
         match node {
             RenderedTranscriptNode::Panel(_) => {}
+            RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                let summary_paragraph = &state.paragraphs[paragraph_index];
+                let body_paragraph = collapsible_node
+                    .body
+                    .as_ref()
+                    .map(|_| &state.paragraphs[paragraph_index + 1]);
+                let measured_collapsible = measure_rendered_collapsible_directive_node(
+                    collapsible_node,
+                    summary_paragraph,
+                    body_paragraph,
+                    widget_bounds,
+                    current_y,
+                );
+
+                if measured_collapsible.summary_outer_bounds.contains(position) {
+                    if let Some(link_target) =
+                        collapsible_node.summary.background_action_link.as_ref()
+                    {
+                        return Some(link_target.clone());
+                    }
+                }
+
+                current_y = measured_collapsible.summary_outer_bounds.y
+                    + measured_collapsible.summary_outer_bounds.height
+                    + collapsible_node.summary.gap_after;
+                paragraph_index += 1;
+
+                if let Some(body_node) = collapsible_node.body.as_ref() {
+                    if let Some(body_outer_bounds) = measured_collapsible.body_outer_bounds {
+                        current_y =
+                            body_outer_bounds.y + body_outer_bounds.height + body_node.gap_after;
+                    }
+                    paragraph_index += 1;
+                }
+            }
             RenderedTranscriptNode::Paragraph(paragraph_node) => {
                 current_y += paragraph_node.gap_before;
                 let paragraph = &state.paragraphs[paragraph_index];
@@ -4448,6 +5264,95 @@ fn background_action_link_at_position(
     }
 
     None
+}
+
+/// Applies one wheel-scroll delta to the collapsible semantic block body below the provided pointer position.
+/// 将一段滚轮滚动增量应用到给定指针位置下方的折叠语义区块正文。
+fn scroll_collapsible_body_at_position(
+    document: &RenderedTranscriptDocument,
+    state: &mut SelectableTranscriptState,
+    widget_bounds: Rectangle,
+    position: Point,
+    delta_y: f32,
+) -> bool {
+    let mut paragraph_index = 0usize;
+    let mut table_index = 0usize;
+    let mut current_y = widget_bounds.y;
+
+    for node in &document.nodes {
+        match node {
+            RenderedTranscriptNode::Panel(_) => {}
+            RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                let summary_paragraph = &state.paragraphs[paragraph_index];
+                let body_paragraph = collapsible_node
+                    .body
+                    .as_ref()
+                    .map(|_| &state.paragraphs[paragraph_index + 1]);
+                let measured_collapsible = measure_rendered_collapsible_directive_node(
+                    collapsible_node,
+                    summary_paragraph,
+                    body_paragraph,
+                    widget_bounds,
+                    current_y,
+                );
+                current_y = measured_collapsible.summary_outer_bounds.y
+                    + measured_collapsible.summary_outer_bounds.height
+                    + collapsible_node.summary.gap_after;
+                paragraph_index += 1;
+
+                if let Some(body_node) = collapsible_node.body.as_ref() {
+                    if let Some(body_outer_bounds) = measured_collapsible.body_outer_bounds {
+                        let max_scroll = (measured_collapsible.body_full_text_height
+                            - body_outer_bounds.height)
+                            .max(0.0);
+                        if body_outer_bounds.contains(position) && max_scroll > f32::EPSILON {
+                            let entry = state
+                                .collapsible_body_scroll_offsets
+                                .entry(collapsible_node.block_id.clone())
+                                .or_insert(0.0);
+                            *entry = (*entry + delta_y).clamp(0.0, max_scroll);
+                            return true;
+                        }
+
+                        current_y =
+                            body_outer_bounds.y + body_outer_bounds.height + body_node.gap_after;
+                    }
+                    paragraph_index += 1;
+                }
+            }
+            RenderedTranscriptNode::Paragraph(paragraph_node) => {
+                current_y += paragraph_node.gap_before;
+                let paragraph = &state.paragraphs[paragraph_index];
+                let outer_bounds = resolve_paragraph_outer_bounds(
+                    widget_bounds,
+                    current_y,
+                    paragraph_node,
+                    paragraph,
+                );
+                current_y += outer_bounds.height + paragraph_node.gap_after;
+                paragraph_index += 1;
+            }
+            RenderedTranscriptNode::Table(table_node) => {
+                let table_layout = &state.table_layouts[table_index];
+                let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
+                let measured_table = measure_rendered_table_node(
+                    table_node,
+                    table_layout,
+                    table_paragraphs,
+                    widget_bounds,
+                    current_y,
+                );
+                current_y += measured_table.outer_bounds.height + table_node.gap_after;
+                paragraph_index = table_layout.paragraph_range.end;
+                table_index += 1;
+            }
+            RenderedTranscriptNode::Rule(rule_node) => {
+                current_y += rule_node.gap_before + 8.0 + rule_node.gap_after;
+            }
+        }
+    }
+
+    false
 }
 
 /// Blends two colors using the provided interpolation ratio so semantic surfaces can derive subtle tonal variants.

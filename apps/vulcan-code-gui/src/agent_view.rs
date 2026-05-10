@@ -2,7 +2,7 @@
 //! 将会话转录映射为统一 vulcan-agent-view 文档的图形界面适配器。
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+use crate::model::{SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use vulcan_agent_view::{
@@ -50,7 +50,7 @@ pub fn agent_view_document_raw_source(document: &AgentViewDocument) -> String {
 /// Builds one stable GUI-side block identifier for a unified agent-view document block.
 /// 为统一 agent-view 文档区块构建一个稳定的图形界面侧标识。
 pub fn agent_view_block_id(
-    session_id: usize,
+    session_id: SessionId,
     block_index: usize,
     block: &AgentViewBlock,
 ) -> String {
@@ -81,6 +81,18 @@ fn append_session_message_blocks(document: &mut AgentViewDocument, message: &Ses
         }
         (_, SessionMessageRecordKind::ThinkingOutput) => {
             document.push_directive(build_thinking_block(message));
+        }
+        (_, SessionMessageRecordKind::ToolCallOutput) => {
+            document.push_directive(build_tool_record_block(
+                AgentViewDirectiveKind::ToolCall,
+                message,
+            ));
+        }
+        (_, SessionMessageRecordKind::ToolResultOutput) => {
+            document.push_directive(build_tool_record_block(
+                AgentViewDirectiveKind::ToolResult,
+                message,
+            ));
         }
         (SessionMessageKind::Error, _) => {
             document.push_directive(build_error_notice_block(message));
@@ -154,6 +166,25 @@ fn build_thinking_block(message: &SessionMessageEntry) -> AgentViewDirectiveBloc
     )
 }
 
+/// Builds one tool-call or tool-result directive block from the visible session message.
+/// 根据可见会话消息构建一条工具调用或工具返回指令区块。
+fn build_tool_record_block(
+    kind: AgentViewDirectiveKind,
+    message: &SessionMessageEntry,
+) -> AgentViewDirectiveBlock {
+    let mut attributes = AgentViewAttributes::new();
+    attributes.insert(String::from("message-id"), message.id.clone());
+    if !message.created_at.trim().is_empty() {
+        attributes.insert(String::from("created-at"), message.created_at.clone());
+    }
+    if !message.title.trim().is_empty() {
+        attributes.insert(String::from("title"), message.title.clone());
+    }
+    let raw_source = render_directive_source(&kind, &attributes, &message.body);
+
+    AgentViewDirectiveBlock::new(kind, attributes, message.body.clone(), raw_source, false)
+}
+
 /// Builds one error notice directive block from the visible session message.
 /// 根据可见会话消息构建一条错误提示指令区块。
 fn build_error_notice_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
@@ -210,7 +241,10 @@ fn append_runtime_event_block(document: &mut AgentViewDocument, runtime_event: &
 fn should_render_runtime_event_in_agent_view(runtime_event: &RuntimeEvent) -> bool {
     let title = runtime_event.title.trim();
 
-    !matches!(title, "执行上下文" | "模型输出完成" | "MCP 工具发现")
+    !matches!(
+        runtime_event.kind,
+        RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished
+    ) && !matches!(title, "执行上下文" | "模型输出完成" | "MCP 工具发现")
         && !title.starts_with("MCP 工具发现 · ")
         && !title.starts_with("MCP 工具发现失败 · ")
 }

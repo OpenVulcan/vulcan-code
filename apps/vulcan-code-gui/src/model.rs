@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
+use uuid::Uuid;
 
 /// Execution modes for AI coding tasks.
 /// AI 编码任务的执行模式。
@@ -104,13 +105,17 @@ impl PaneKind {
     }
 }
 
+/// Stable UUID session identifier used across the workbench, persistence, and runtime layers.
+/// 跨工作台、持久化与运行时层统一使用的稳定 UUID 会话标识。
+pub type SessionId = Uuid;
+
 /// Lightweight summary of a coding session.
 /// 编码会话的轻量级摘要信息。
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     /// Stable session identifier for selection.
     /// 用于选择状态的稳定会话标识。
-    pub id: usize,
+    pub id: SessionId,
     /// Owning project identifier used to restore the session back into the correct project tree.
     /// 用于将会话恢复回正确项目树的所属项目标识。
     pub project_id: Option<String>,
@@ -141,7 +146,7 @@ impl SessionSummary {
     /// Creates a new session summary with explicit metadata.
     /// 使用明确元数据创建新的会话摘要。
     pub fn new(
-        id: usize,
+        id: impl Into<SessionId>,
         project_id: Option<String>,
         title: impl Into<String>,
         focus: impl Into<String>,
@@ -151,7 +156,7 @@ impl SessionSummary {
         last_updated_label: impl Into<String>,
     ) -> Self {
         Self {
-            id,
+            id: id.into(),
             project_id,
             title: title.into(),
             title_source: SessionTitleSource::Generated,
@@ -175,7 +180,7 @@ impl SessionSummary {
     pub fn seeded() -> Vec<Self> {
         vec![
             Self::new(
-                1,
+                Uuid::from_u128(1),
                 Some(String::from("vulcan-luaskills")),
                 "重命名中枢系统",
                 "收敛工作台命名与主入口语义",
@@ -186,7 +191,7 @@ impl SessionSummary {
             )
             .with_title_source(SessionTitleSource::Seeded),
             Self::new(
-                2,
+                Uuid::from_u128(2),
                 Some(String::from("vulcan-luaskills")),
                 "评估 LuaSkills 会话声明机制",
                 "梳理技能、工具与角色接入策略",
@@ -197,7 +202,7 @@ impl SessionSummary {
             )
             .with_title_source(SessionTitleSource::Seeded),
             Self::new(
-                3,
+                Uuid::from_u128(3),
                 Some(String::from("vulcan-memory-mesh")),
                 "检查构建脚本异常相关问题",
                 "核对桌面窗口、打包与启动细节",
@@ -208,7 +213,7 @@ impl SessionSummary {
             )
             .with_title_source(SessionTitleSource::Seeded),
             Self::new(
-                4,
+                Uuid::from_u128(4),
                 Some(String::from("vulcan-memory-mesh")),
                 "为 opencode.json 引用安装",
                 "梳理供应商配置读取与安装体验",
@@ -280,7 +285,7 @@ pub struct TaskProjectSummary {
     pub order: usize,
     /// Session identifiers nested under the project node.
     /// 挂载在项目节点下的会话标识集合。
-    pub session_ids: Vec<usize>,
+    pub session_ids: Vec<SessionId>,
 }
 
 impl TaskProjectSummary {
@@ -292,7 +297,7 @@ impl TaskProjectSummary {
         path: impl Into<String>,
         pinned: bool,
         order: usize,
-        session_ids: Vec<usize>,
+        session_ids: Vec<SessionId>,
     ) -> Self {
         Self {
             id: id.into(),
@@ -314,7 +319,7 @@ impl TaskProjectSummary {
                 "D:/projects/LuaSkills",
                 false,
                 0,
-                vec![1, 2],
+                vec![Uuid::from_u128(1), Uuid::from_u128(2)],
             ),
             Self::new(
                 "vulcan-memory-mesh",
@@ -322,7 +327,7 @@ impl TaskProjectSummary {
                 "D:/projects/VulcanMemoryMesh",
                 false,
                 1,
-                vec![3, 4],
+                vec![Uuid::from_u128(3), Uuid::from_u128(4)],
             ),
             Self::new(
                 "vulcan-plugins-opencode",
@@ -452,6 +457,12 @@ pub enum SessionMessageRecordKind {
     /// Visible assistant final output kept inside future model context.
     /// 展示给用户且纳入后续模型上下文的正式输出。
     AssistantOutput,
+    /// Visible tool-call summary row kept outside future model context.
+    /// 展示给用户但不纳入后续模型上下文的工具调用摘要行。
+    ToolCallOutput,
+    /// Visible tool-result row kept outside future model context.
+    /// 展示给用户但不纳入后续模型上下文的工具返回行。
+    ToolResultOutput,
     /// Hidden title-generation output kept for traceability.
     /// 为了可追溯性保留的隐藏标题生成输出。
     TitleOutput,
@@ -474,6 +485,8 @@ impl SessionMessageRecordKind {
             Self::Transcript => "transcript",
             Self::ThinkingOutput => "thinking-output",
             Self::AssistantOutput => "assistant-output",
+            Self::ToolCallOutput => "tool-call-output",
+            Self::ToolResultOutput => "tool-result-output",
             Self::TitleOutput => "title-output",
             Self::SummaryOutput => "summary-output",
             Self::ExploreOutput => "explore-output",
@@ -484,7 +497,13 @@ impl SessionMessageRecordKind {
     /// Returns whether the record should be included when rebuilding the next LLM context.
     /// 返回在重建下一轮 LLM 上下文时是否应纳入该记录。
     pub const fn contributes_to_context(self) -> bool {
-        !matches!(self, Self::TitleOutput | Self::ThinkingOutput)
+        !matches!(
+            self,
+            Self::TitleOutput
+                | Self::ThinkingOutput
+                | Self::ToolCallOutput
+                | Self::ToolResultOutput
+        )
     }
 
     /// Parses one persisted text key back into the durable record kind enum.
@@ -493,6 +512,8 @@ impl SessionMessageRecordKind {
         match value {
             "thinking-output" => Self::ThinkingOutput,
             "assistant-output" => Self::AssistantOutput,
+            "tool-call-output" => Self::ToolCallOutput,
+            "tool-result-output" => Self::ToolResultOutput,
             "title-output" => Self::TitleOutput,
             "summary-output" => Self::SummaryOutput,
             "explore-output" => Self::ExploreOutput,

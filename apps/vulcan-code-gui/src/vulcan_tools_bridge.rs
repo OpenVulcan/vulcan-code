@@ -2,12 +2,16 @@
 //! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的 GUI 侧桥接层。
 
 use crate::luaskills_runtime::{
-    LuaSkillsRuntimeHandle, build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
-    luaskills_entry_args_schema, serialize_luaskills_invocation_result,
+    LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
+    build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
+    luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
 use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor};
 use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
 use luaskills::RuntimeEntryDescriptor;
+use serde_json::Value;
+use std::path::PathBuf;
+use uuid::Uuid;
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolSourceKind,
     VulcanToolsManager,
@@ -19,6 +23,7 @@ pub fn build_vulcan_tools_manager(
     native_catalog: NativeToolCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime: Option<McpRuntimeHandle>,
+    workspace_root: Option<PathBuf>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolDescriptor>,
@@ -52,9 +57,12 @@ pub fn build_vulcan_tools_manager(
 
     for entry in candidate_luaskills_tools {
         let descriptor = luaskills_descriptor_to_vulcan(&entry);
-        let parameters_schema = luaskills_entry_args_schema(&entry);
+        let parameters_schema = luaskills_entry_args_schema(&entry, true);
         let canonical_name = entry.canonical_name.clone();
+        let skill_id = entry.skill_id.clone();
+        let entry_declares_luaskill_sid = entry_declares_luaskill_sid(&entry);
         let runtime = luaskills_runtime.clone();
+        let workspace_root = workspace_root.clone();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
@@ -63,6 +71,8 @@ pub fn build_vulcan_tools_manager(
             invoke: std::sync::Arc::new(move |args, session_id| {
                 let runtime = runtime.clone();
                 let canonical_name = canonical_name.clone();
+                let skill_id = skill_id.clone();
+                let workspace_root = workspace_root.clone();
                 Box::pin(async move {
                     let Some(handle) = runtime else {
                         return Err(format!(
@@ -70,13 +80,23 @@ pub fn build_vulcan_tools_manager(
                             canonical_name
                         ));
                     };
+                    let args = inject_host_managed_luaskill_sid_if_needed(
+                        args,
+                        entry_declares_luaskill_sid,
+                        session_id.as_deref(),
+                        &canonical_name,
+                    )?;
+                    let parsed_session_id = session_id
+                        .as_deref()
+                        .and_then(|value| Uuid::parse_str(value).ok());
                     let invocation_context = build_luaskills_tool_invocation_context(
-                        session_id,
+                        parsed_session_id,
                         "rig-tool",
                         &canonical_name,
                     );
+                    let call_handle = handle.clone();
                     let result = call_luaskills_tool_entry(
-                        handle,
+                        call_handle,
                         canonical_name.clone(),
                         args,
                         Some(invocation_context),
@@ -85,14 +105,13 @@ pub fn build_vulcan_tools_manager(
                     .map_err(|error| {
                         format!("LuaSkills 工具 `{}` 调用失败：{}。", canonical_name, error)
                     })?;
-                    serde_json::to_value(serialize_luaskills_invocation_result(&result)).map_err(
-                        |error| {
-                            format!(
-                                "LuaSkills 工具 `{}` 结果序列化失败：{}。",
-                                canonical_name, error
-                            )
-                        },
-                    )
+                    Ok(Value::String(render_luaskills_invocation_result_text(
+                        &handle,
+                        &canonical_name,
+                        Some(&skill_id),
+                        &result,
+                        workspace_root.as_deref(),
+                    )))
                 })
             }),
         });
@@ -179,4 +198,50 @@ fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPlanToolPolicy
     } else {
         VulcanPlanToolPolicy::Hidden
     }
+}
+
+/// Returns whether one LuaSkills runtime entry declares the reserved managed identity field.
+/// 返回单个 LuaSkills 运行时入口是否声明了保留托管身份字段。
+fn entry_declares_luaskill_sid(entry: &RuntimeEntryDescriptor) -> bool {
+    entry
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name == LUASKILL_SID_PARAMETER_NAME)
+}
+
+/// Inject one host-managed LuaSkills SID when the entry declares it and the caller did not provide it.
+/// 当入口声明该字段且调用方未提供时，注入一份宿主管理 LuaSkills SID。
+fn inject_host_managed_luaskill_sid_if_needed(
+    args: Value,
+    entry_declares_luaskill_sid: bool,
+    session_id: Option<&str>,
+    tool_name: &str,
+) -> Result<Value, String> {
+    if !entry_declares_luaskill_sid {
+        return Ok(args);
+    }
+
+    let stable_session_id = session_id.ok_or_else(|| {
+        format!("LuaSkills 工具 `{tool_name}` 需要宿主管理的 LUASKILL_SID，但当前会话标识不可用。")
+    })?;
+
+    let mut object = match args {
+        Value::Object(map) => map,
+        _ => {
+            return Err(format!(
+                "LuaSkills 工具 `{tool_name}` 的参数必须是 JSON 对象，才能注入宿主管理 LUASKILL_SID。"
+            ));
+        }
+    };
+
+    if !object.contains_key(LUASKILL_SID_PARAMETER_NAME) {
+        object.insert(
+            String::from(LUASKILL_SID_PARAMETER_NAME),
+            Value::String(format!(
+                "{LUASKILLS_HOST_MANAGED_SID_PREFIX}{stable_session_id}"
+            )),
+        );
+    }
+
+    Ok(Value::Object(object))
 }

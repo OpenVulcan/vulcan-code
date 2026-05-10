@@ -3,8 +3,8 @@
 
 use crate::agent_runtime::ExecutionRunReport;
 use crate::model::{
-    SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-    SessionRuntimeStateEntry, SessionTitleSource, TaskProjectSummary,
+    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
+    SessionMessageRecordKind, SessionRuntimeStateEntry, SessionTitleSource, TaskProjectSummary,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -126,7 +126,7 @@ pub struct SummarySkillInput<'a> {
 pub struct CompactionSkillInput<'a> {
     /// Owning session identifier.
     /// 所属会话标识。
-    pub session_id: usize,
+    pub session_id: SessionId,
     /// Full transcript history for the session.
     /// 该会话的完整转录历史。
     pub messages: &'a [SessionMessageEntry],
@@ -323,6 +323,8 @@ impl CompactionSkill {
                     SessionMessageRecordKind::Transcript => message.kind.label(),
                     SessionMessageRecordKind::ThinkingOutput => "THINKING",
                     SessionMessageRecordKind::AssistantOutput => "OUTPUT",
+                    SessionMessageRecordKind::ToolCallOutput => "TOOL_CALL",
+                    SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
                     SessionMessageRecordKind::SummaryOutput => "SUMMARY",
                     SessionMessageRecordKind::ExploreOutput => "EXPLORE",
                     SessionMessageRecordKind::CompactionSummary => "COMPACTION",

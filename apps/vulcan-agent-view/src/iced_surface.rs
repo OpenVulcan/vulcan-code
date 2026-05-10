@@ -6,7 +6,10 @@ use crate::iced::{
     view_selectable_rendered_transcript,
 };
 use crate::iced_style::{thinking_modal_backdrop_style, thinking_modal_card_style};
-use crate::{AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewDocument};
+use crate::{
+    AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewDocument,
+    parse_agent_view_document,
+};
 use iced::widget::Id;
 use iced::widget::button;
 use iced::widget::scrollable;
@@ -269,6 +272,44 @@ pub fn build_overlay_thinking_surface_document(
     None
 }
 
+/// Builds one single-block tool surface document by selecting one decorated tool directive from the provided source document.
+/// 通过从给定源文档中选取一个已装饰工具指令块，构建单区块工具表面文档。
+pub fn build_modal_tool_surface_document(
+    document: AgentViewDocument,
+    block_id: &str,
+) -> Option<(String, AgentViewDocument)> {
+    for block in document.blocks {
+        let AgentViewBlock::Directive(directive) = block else {
+            continue;
+        };
+        if !matches!(
+            directive.kind,
+            AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+        ) {
+            continue;
+        }
+        let current_block_id = directive
+            .attributes
+            .get("ui-block-id")
+            .map(String::as_str)
+            .unwrap_or_default();
+        if current_block_id != block_id {
+            continue;
+        }
+
+        let title = directive
+            .attributes
+            .get("title")
+            .cloned()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| String::from("工具调用详情"));
+        let surface_document = parse_agent_view_document(&directive.body);
+        return Some((title, surface_document));
+    }
+
+    None
+}
+
 /// Estimates one readable token count for a thinking body so titles can surface a stable scale hint.
 /// 为思考正文估算一个可读 token 数量，以便标题展示稳定的规模提示。
 pub fn estimate_thinking_token_count(body: &str) -> usize {
@@ -307,7 +348,7 @@ pub fn format_thinking_duration_label(duration_millis: u128) -> String {
 
 /// Builds the stable scrollable identifier used by one floating streaming-thinking overlay.
 /// 为单个流式思考浮层构建稳定滚动容器标识。
-pub fn thinking_overlay_scrollable_id(session_id: usize) -> Id {
+pub fn thinking_overlay_scrollable_id(session_id: impl std::fmt::Display) -> Id {
     Id::from(format!("session-{session_id}-thinking-overlay-scrollable"))
 }
 
