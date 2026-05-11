@@ -331,8 +331,8 @@ mod tests {
         assert!(normalized.contains("```rust\nlet value = 1;\nlet next = 2;\n```"));
     }
 
-    /// Verifies collapsed inline thinking headers keep larger inner padding so the folded title no longer hugs the panel edges.
-    /// 验证折叠态内联思考头部会保留更大的内边距，从而避免折叠标题紧贴面板边缘。
+    /// Verifies collapsed inline thinking headers now match compact tool rows on both horizontal and vertical spacing.
+    /// 验证折叠态内联思考头部现在会在水平和垂直留白上都与紧凑工具行一致。
     #[test]
     fn collapsed_thinking_header_uses_relaxed_padding() {
         let app_theme = Theme::Dark;
@@ -363,12 +363,12 @@ mod tests {
             })
             .expect("collapsed thinking should still render one header paragraph");
 
-        assert_eq!(header_node.inner_padding, Padding::from([14.0, 16.0]));
-        assert_eq!(header_node.gap_after, 12.0);
+        assert_eq!(header_node.inner_padding, Padding::ZERO);
+        assert_eq!(header_node.gap_after, 0.0);
     }
 
-    /// Verifies expanded inline thinking keeps the same header inset while giving descendant markdown content a stable horizontal padding.
-    /// 验证展开态内联思考会保持与折叠态一致的头部内缩，并为后续 Markdown 内容提供稳定的水平内边距。
+    /// Verifies expanded inline thinking keeps a tool-row-equivalent header rhythm while still removing the extra body-side horizontal inset.
+    /// 验证展开态内联思考会保持与工具行等价的头部节奏，同时仍会移除正文额外的水平内缩。
     #[test]
     fn expanded_thinking_keeps_stable_header_and_body_padding() {
         let app_theme = Theme::Dark;
@@ -401,13 +401,14 @@ mod tests {
             .next()
             .expect("expanded thinking should render at least one body paragraph");
 
-        assert_eq!(header_node.inner_padding, Padding::from([14.0, 16.0]));
-        assert_eq!(body_node.inner_padding, Padding::from([0.0, 16.0]));
+        assert_eq!(header_node.inner_padding, Padding::ZERO);
+        assert_eq!(header_node.gap_after, 0.0);
+        assert_eq!(body_node.inner_padding, Padding::ZERO);
         assert!(body_node.display_text.contains('\n'));
     }
 
-    /// Verifies inline thinking tables inherit the body-side horizontal inset and retain a visible header tint.
-    /// 验证内联思考表格会继承正文两侧水平留白，并保留可见的表头着色。
+    /// Verifies inline thinking tables no longer add an extra horizontal inset while still retaining a visible header tint.
+    /// 验证内联思考表格不再追加额外水平内缩，同时仍会保留可见的表头着色。
     #[test]
     fn inline_thinking_tables_keep_inset_and_header_tint() {
         let app_theme = Theme::Dark;
@@ -438,8 +439,8 @@ mod tests {
             })
             .expect("inline thinking should render one table node");
 
-        assert_eq!(table_node.outer_padding.left, 16.0);
-        assert_eq!(table_node.outer_padding.right, 16.0);
+        assert_eq!(table_node.outer_padding.left, 0.0);
+        assert_eq!(table_node.outer_padding.right, 0.0);
         assert!(matches!(
             table_node.header_background,
             Background::Color(color) if color != Color::TRANSPARENT

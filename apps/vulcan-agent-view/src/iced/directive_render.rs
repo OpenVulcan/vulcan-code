@@ -457,7 +457,7 @@ pub(super) fn render_thinking_block(
         },
     };
     let body_foreground = iced::color!(0xEEF2F7);
-    let body_content_padding = Padding::from([0.0, 16.0]);
+    let body_content_padding = Padding::ZERO;
     let action_link_target = thinking_modal_action_link(block);
     let is_inline_surface = thinking_surface == "inline";
     let is_inline_collapsed = is_inline_surface
@@ -477,12 +477,8 @@ pub(super) fn render_thinking_block(
         .get("ui-render-thinking-header")
         .map(|value| value != "false")
         .unwrap_or(true);
-    let header_padding = if is_inline_surface {
-        Padding::from([14.0, 16.0])
-    } else {
-        Padding::ZERO
-    };
-    let header_gap_after = if is_inline_collapsed { 12.0 } else { 6.0 };
+    let header_padding = Padding::ZERO;
+    let header_gap_after = 0.0;
 
     if let Some(action_link_target) = action_link_target.as_ref() {
         if let Some(block_id) = block.attributes.get("ui-block-id").map(String::as_str) {
@@ -509,7 +505,7 @@ pub(super) fn render_thinking_block(
         builder.push_rich_paragraph_with_layout(
             header_spans,
             markdown_settings.text_size,
-            text::LineHeight::Relative(0.92),
+            text::LineHeight::default(),
             text::Wrapping::Word,
             0.0,
             0.0,
