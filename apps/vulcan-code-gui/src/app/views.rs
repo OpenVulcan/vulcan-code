@@ -1985,6 +1985,10 @@ impl VulcanWorkbench {
 
         let mut layered_surfaces = vec![base_surface];
 
+        if let Some(overlay) = self.view_selected_session_rendered_transcript_fade_overlay() {
+            layered_surfaces.push(overlay);
+        }
+
         if let Some(overlay) = self.view_selected_session_streaming_thinking_overlay(session_id) {
             layered_surfaces.push(overlay);
         }
@@ -2002,6 +2006,33 @@ impl VulcanWorkbench {
         }
 
         stack(layered_surfaces).into()
+    }
+
+    /// Builds the passive lower-half fade overlay used only by the rendered transcript mode so bottom content gradually blends into the panel background.
+    /// 构建仅用于渲染态转录视图的被动下半区淡隐遮罩，让底部内容逐渐融入面板背景。
+    pub(super) fn view_selected_session_rendered_transcript_fade_overlay(
+        &self,
+    ) -> Option<Element<'_, Message>> {
+        if self.agent_transcript_surface_mode != AgentTranscriptSurfaceMode::DetailCards {
+            return None;
+        }
+
+        Some(
+            container(
+                column![
+                    space::vertical().height(FillPortion(1)),
+                    container(space())
+                        .width(Fill)
+                        .height(FillPortion(1))
+                        .style(style::rendered_transcript_bottom_fade_overlay_style),
+                ]
+                .width(Fill)
+                .height(Fill),
+            )
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
     }
 
     /// Builds the floating jump-to-bottom affordance shown after the user scrolls away from the newest transcript tail.
@@ -2348,30 +2379,41 @@ impl VulcanWorkbench {
         self.decorate_agent_view_block_for_render(session_id, &block_id, block);
         let (title, document) = build_overlay_thinking_surface_document(document)?;
 
-        Some(view_thinking_overlay_surface(
-            title,
-            String::from("运行中思考会先停留在这里，完成后再回收到主会话。"),
-            &document,
-            &self.app_theme,
-            thinking_overlay_scrollable_id(session_id),
-            move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
-                session_id,
-                request,
-            },
-            |interaction| match interaction {
-                SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
-                    Message::OpenSelectedSessionThinkingModal(block_id)
-                }
-                SelectableTranscriptInteraction::OpenToolModal(block_id) => {
-                    Message::OpenSelectedSessionToolModal(block_id)
-                }
-                SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
-            },
-            move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
-                session_id,
-                viewport,
-            },
-        ))
+        Some(
+            container(view_thinking_overlay_surface(
+                title,
+                String::from("运行中思考会先停留在这里，完成后再回收到主会话。"),
+                &document,
+                &self.app_theme,
+                thinking_overlay_scrollable_id(session_id),
+                move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
+                    session_id,
+                    request,
+                },
+                |interaction| match interaction {
+                    SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
+                        Message::OpenSelectedSessionThinkingModal(block_id)
+                    }
+                    SelectableTranscriptInteraction::OpenToolModal(block_id) => {
+                        Message::OpenSelectedSessionToolModal(block_id)
+                    }
+                    SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+                },
+                move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
+                    session_id,
+                    viewport,
+                },
+            ))
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: self.floating_composer_footprint_height(),
+                left: 0.0,
+            })
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
     }
 
     /// Builds the reusable workspace surface shown by the example panel.

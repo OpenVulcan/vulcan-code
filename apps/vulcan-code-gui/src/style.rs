@@ -6,7 +6,7 @@ use crate::model::SessionRunPhase;
 use crate::theme::ThemePaletteExt;
 use iced::overlay::menu;
 use iced::widget::{button, container, pick_list, text_editor};
-use iced::{Background, Border, Color, Shadow, Theme, Vector};
+use iced::{Background, Border, Color, Shadow, Theme, Vector, gradient};
 
 /// Returns the gutter background style for a semantic diff line kind.
 /// 返回某个语义 diff 行类型对应的 gutter 背景样式。
@@ -420,6 +420,33 @@ pub fn transcript_jump_to_bottom_button_style(
             shadow: Shadow::default(),
             ..base
         },
+    }
+}
+
+/// Returns the bottom fade overlay style used by the rendered transcript view so lower content softly dissolves into the panel background.
+/// 返回渲染态转录视图底部淡隐遮罩使用的样式，让下半区内容柔和地融入面板背景。
+pub fn rendered_transcript_bottom_fade_overlay_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    let gradient = gradient::Linear::new(iced::Degrees(180.0))
+        .add_stop(
+            0.0,
+            Color {
+                a: 0.0,
+                ..palette.background.base.color
+            },
+        )
+        .add_stop(
+            1.0,
+            Color {
+                a: 0.98,
+                ..palette.background.base.color
+            },
+        );
+
+    container::Style {
+        background: Some(gradient.into()),
+        border: Border::default(),
+        ..Default::default()
     }
 }
 
