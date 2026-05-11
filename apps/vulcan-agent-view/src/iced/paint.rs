@@ -199,8 +199,9 @@ pub(super) fn draw_visible_transcript_content(
     visible_flow_range: Range<usize>,
 ) {
     let mut panel_border_overlays = Vec::new();
+    let render_cache = &state.render_cache;
 
-    for panel_layout in state.panel_layouts.iter().filter(|panel_layout| {
+    for panel_layout in render_cache.panel_layouts.iter().filter(|panel_layout| {
         translate_rectangle(panel_layout.outer_bounds, widget_origin).intersects(viewport)
     }) {
         let RenderedTranscriptNode::Panel(panel_node) = &document.nodes[panel_layout.node_index]
@@ -225,7 +226,7 @@ pub(super) fn draw_visible_transcript_content(
         }
     }
 
-    for flow_layout in &state.flow_layouts[visible_flow_range] {
+    for flow_layout in &render_cache.flow_layouts[visible_flow_range] {
         match flow_layout {
             LaidOutFlowNode::Collapsible(layout_node) => {
                 let RenderedTranscriptNode::Collapsible(collapsible_node) =
@@ -233,7 +234,8 @@ pub(super) fn draw_visible_transcript_content(
                 else {
                     continue;
                 };
-                let summary_paragraph = &state.paragraphs[layout_node.summary_paragraph_index];
+                let summary_paragraph =
+                    &render_cache.paragraphs[layout_node.summary_paragraph_index];
                 let summary_outer_bounds =
                     translate_rectangle(layout_node.summary_outer_bounds, widget_origin);
 
@@ -265,7 +267,7 @@ pub(super) fn draw_visible_transcript_content(
                     layout_node.body_paragraph_index,
                     layout_node.body_outer_bounds,
                 ) {
-                    let body_paragraph = &state.paragraphs[body_paragraph_index];
+                    let body_paragraph = &render_cache.paragraphs[body_paragraph_index];
                     let body_outer_bounds = translate_rectangle(body_outer_bounds, widget_origin);
                     renderer.fill_quad(
                         renderer::Quad {
@@ -371,7 +373,7 @@ pub(super) fn draw_visible_transcript_content(
                 else {
                     continue;
                 };
-                let paragraph = &state.paragraphs[layout_node.paragraph_index];
+                let paragraph = &render_cache.paragraphs[layout_node.paragraph_index];
                 let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
 
                 if let Some(background) = paragraph_node.background {
@@ -443,8 +445,9 @@ pub(super) fn draw_visible_transcript_content(
                 else {
                     continue;
                 };
-                let table_layout = &state.table_layouts[layout_node.table_index];
-                let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
+                let table_layout = &render_cache.table_layouts[layout_node.table_index];
+                let table_paragraphs =
+                    &render_cache.paragraphs[table_layout.paragraph_range.clone()];
                 let measured_table =
                     translate_measured_table_node(&layout_node.measured_table, widget_origin);
 

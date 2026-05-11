@@ -43,6 +43,7 @@ pub(super) fn rebuild_layout_cache(
     local_widget_bounds: Rectangle,
     available_width: f32,
 ) -> f32 {
+    let render_cache = &mut state.render_cache;
     let paragraph_count = count_rendered_paragraph_slots(document);
     let table_count = document
         .nodes
@@ -50,20 +51,20 @@ pub(super) fn rebuild_layout_cache(
         .filter(|node| matches!(node, RenderedTranscriptNode::Table(_)))
         .count();
 
-    if state.paragraphs.len() != paragraph_count {
-        state.paragraphs = (0..paragraph_count)
+    if render_cache.paragraphs.len() != paragraph_count {
+        render_cache.paragraphs = (0..paragraph_count)
             .map(|_| RendererParagraph::default())
             .collect();
     }
 
-    if state.table_layouts.len() != table_count {
-        state.table_layouts = (0..table_count)
+    if render_cache.table_layouts.len() != table_count {
+        render_cache.table_layouts = (0..table_count)
             .map(|_| CachedTableLayout::default())
             .collect();
     }
 
-    state.flow_layouts.clear();
-    state.panel_layouts.clear();
+    render_cache.flow_layouts.clear();
+    render_cache.panel_layouts.clear();
 
     let mut paragraph_index = 0usize;
     let mut table_index = 0usize;
@@ -74,7 +75,7 @@ pub(super) fn rebuild_layout_cache(
             RenderedTranscriptNode::Panel(_) => {}
             RenderedTranscriptNode::Collapsible(collapsible_node) => {
                 let summary_paragraph_index = paragraph_index;
-                state.paragraphs[summary_paragraph_index] = build_renderer_paragraph(
+                render_cache.paragraphs[summary_paragraph_index] = build_renderer_paragraph(
                     &collapsible_node.summary,
                     Size::new(
                         paragraph_measurement_width(local_widget_bounds, &collapsible_node.summary),
@@ -85,7 +86,7 @@ pub(super) fn rebuild_layout_cache(
 
                 let body_paragraph_index = collapsible_node.body.as_ref().map(|body_node| {
                     let body_index = summary_paragraph_index + 1;
-                    state.paragraphs[body_index] = build_renderer_paragraph(
+                    render_cache.paragraphs[body_index] = build_renderer_paragraph(
                         body_node,
                         Size::new(
                             paragraph_measurement_width(local_widget_bounds, body_node),
@@ -98,8 +99,8 @@ pub(super) fn rebuild_layout_cache(
 
                 let measured_collapsible = measure_rendered_collapsible_directive_node(
                     collapsible_node,
-                    &state.paragraphs[summary_paragraph_index],
-                    body_paragraph_index.map(|body_index| &state.paragraphs[body_index]),
+                    &render_cache.paragraphs[summary_paragraph_index],
+                    body_paragraph_index.map(|body_index| &render_cache.paragraphs[body_index]),
                     local_widget_bounds,
                     current_y,
                 );
@@ -114,7 +115,7 @@ pub(super) fn rebuild_layout_cache(
                         + collapsible_node.summary.gap_after
                 };
 
-                state.flow_layouts.push(LaidOutFlowNode::Collapsible(
+                render_cache.flow_layouts.push(LaidOutFlowNode::Collapsible(
                     super::scene::LaidOutCollapsibleNode {
                         node_index,
                         summary_paragraph_index,
@@ -130,7 +131,7 @@ pub(super) fn rebuild_layout_cache(
                 paragraph_index += 1 + usize::from(body_paragraph_index.is_some());
             }
             RenderedTranscriptNode::Paragraph(paragraph_node) => {
-                state.paragraphs[paragraph_index] = build_renderer_paragraph(
+                render_cache.paragraphs[paragraph_index] = build_renderer_paragraph(
                     paragraph_node,
                     Size::new(
                         paragraph_measurement_width(local_widget_bounds, paragraph_node),
@@ -142,11 +143,11 @@ pub(super) fn rebuild_layout_cache(
                     local_widget_bounds,
                     current_y + paragraph_node.gap_before,
                     paragraph_node,
-                    &state.paragraphs[paragraph_index],
+                    &render_cache.paragraphs[paragraph_index],
                 );
                 let flow_end_y = outer_bounds.y + outer_bounds.height + paragraph_node.gap_after;
 
-                state.flow_layouts.push(LaidOutFlowNode::Paragraph(
+                render_cache.flow_layouts.push(LaidOutFlowNode::Paragraph(
                     super::scene::LaidOutParagraphNode {
                         node_index,
                         paragraph_index,
@@ -161,14 +162,14 @@ pub(super) fn rebuild_layout_cache(
             RenderedTranscriptNode::Table(table_node) => {
                 let (table_layout, _) = layout_rendered_table_node(
                     table_node,
-                    &mut state.paragraphs,
+                    &mut render_cache.paragraphs,
                     paragraph_index,
                     available_width,
                 );
                 let measured_table = measure_rendered_table_node(
                     table_node,
                     &table_layout,
-                    &state.paragraphs[table_layout.paragraph_range.clone()],
+                    &render_cache.paragraphs[table_layout.paragraph_range.clone()],
                     local_widget_bounds,
                     current_y,
                 );
@@ -177,15 +178,15 @@ pub(super) fn rebuild_layout_cache(
                     + table_node.gap_after;
 
                 paragraph_index = table_layout.paragraph_range.end;
-                state.table_layouts[table_index] = table_layout;
-                state
-                    .flow_layouts
-                    .push(LaidOutFlowNode::Table(super::scene::LaidOutTableNode {
+                render_cache.table_layouts[table_index] = table_layout;
+                render_cache.flow_layouts.push(LaidOutFlowNode::Table(
+                    super::scene::LaidOutTableNode {
                         node_index,
                         table_index,
                         measured_table,
                         flow_end_y,
-                    }));
+                    },
+                ));
 
                 current_y = flow_end_y;
                 table_index += 1;
@@ -198,20 +199,20 @@ pub(super) fn rebuild_layout_cache(
                 );
                 let flow_end_y = rule_y + 8.0 + rule_node.gap_after;
 
-                state
-                    .flow_layouts
-                    .push(LaidOutFlowNode::Rule(super::scene::LaidOutRuleNode {
+                render_cache.flow_layouts.push(LaidOutFlowNode::Rule(
+                    super::scene::LaidOutRuleNode {
                         node_index,
                         outer_bounds,
                         flow_end_y,
-                    }));
+                    },
+                ));
 
                 current_y = flow_end_y;
             }
         }
     }
 
-    state.panel_layouts = document
+    render_cache.panel_layouts = document
         .nodes
         .iter()
         .enumerate()
@@ -222,18 +223,18 @@ pub(super) fn rebuild_layout_cache(
             measure_laid_out_panel_node(
                 node_index,
                 panel_node,
-                &state.flow_layouts,
+                &render_cache.flow_layouts,
                 available_width,
             )
         })
         .collect();
 
-    state.layout_cache_ready = true;
-    state.cached_layout_width = available_width;
-    state.cached_layout_signature = document.layout_signature;
-    state.cached_layout_height = current_y.max(1.0);
+    render_cache.layout_ready = true;
+    render_cache.cached_width = available_width;
+    render_cache.cached_signature = document.layout_signature;
+    render_cache.cached_height = current_y.max(1.0);
 
-    state.cached_layout_height
+    render_cache.cached_height
 }
 
 /// Builds one renderer paragraph from a rendered paragraph node and the provided text bounds.

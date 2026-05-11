@@ -1,8 +1,7 @@
 //! Surface-state and interaction types shared by the selectable transcript shell and its helper modules.
 //! 由可选择转录外壳及其辅助模块共享的表面状态与交互类型。
 
-use super::RendererParagraph;
-use super::scene::{CachedTableLayout, LaidOutFlowNode, LaidOutPanelNode};
+use super::render_cache::TranscriptRenderCache;
 use iced::Point;
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -70,30 +69,9 @@ pub(super) struct TranscriptContextMenuState {
 /// Runtime state retained by the selectable transcript widget.
 /// 可选择转录组件保留的运行时状态。
 pub(super) struct SelectableTranscriptState {
-    /// Cached paragraphs aligned with text-bearing nodes in the rendered transcript.
-    /// 与渲染转录中文本节点对齐的缓存段落集合。
-    pub(super) paragraphs: Vec<RendererParagraph>,
-    /// Cached table layouts aligned with rendered table nodes in the transcript.
-    /// 与转录中渲染表格节点对齐的缓存表格布局集合。
-    pub(super) table_layouts: Vec<CachedTableLayout>,
-    /// Cached flow-node layout metrics kept in visual order for viewport-range culling and hit testing.
-    /// 按可视顺序保留的流式节点布局指标缓存，用于视口裁剪与命中测试。
-    pub(super) flow_layouts: Vec<LaidOutFlowNode>,
-    /// Cached background-panel layout metrics resolved from the current flow-node geometry.
-    /// 根据当前流式节点几何信息解析得到的背景面板布局指标缓存。
-    pub(super) panel_layouts: Vec<LaidOutPanelNode>,
-    /// Whether the current paragraph and flow-layout caches are valid for the last measured width and document signature.
-    /// 当前段落与流式布局缓存是否对上一次测量宽度和文档签名仍然有效。
-    pub(super) layout_cache_ready: bool,
-    /// Width used by the last successful layout-cache build.
-    /// 最近一次成功构建布局缓存时使用的宽度。
-    pub(super) cached_layout_width: f32,
-    /// Stable rendered-document signature used to invalidate cached layout metrics when content or theme changes.
-    /// 当内容或主题变化时用于使布局缓存失效的稳定渲染文档签名。
-    pub(super) cached_layout_signature: u64,
-    /// Height produced by the last successful layout-cache build.
-    /// 最近一次成功构建布局缓存时产出的高度。
-    pub(super) cached_layout_height: f32,
+    /// Heavy render-cache payload storing paragraphs, table geometry, and flow-layout measurements.
+    /// 存储段落、表格几何与流式布局测量结果的重型渲染缓存载荷。
+    pub(super) render_cache: TranscriptRenderCache,
     /// Whether the transcript currently owns keyboard focus for copy and select-all shortcuts.
     /// 当前转录是否拥有键盘焦点，以处理复制和全选快捷键。
     pub(super) focused: bool,
@@ -131,14 +109,7 @@ impl Default for SelectableTranscriptState {
     /// 创建一个不带活动选择的空可选择转录状态。
     fn default() -> Self {
         Self {
-            paragraphs: Vec::new(),
-            table_layouts: Vec::new(),
-            flow_layouts: Vec::new(),
-            panel_layouts: Vec::new(),
-            layout_cache_ready: false,
-            cached_layout_width: 0.0,
-            cached_layout_signature: 0,
-            cached_layout_height: 1.0,
+            render_cache: TranscriptRenderCache::default(),
             focused: false,
             dragging: false,
             drag_moved: false,

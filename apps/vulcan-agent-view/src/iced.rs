@@ -11,6 +11,7 @@ mod layout_engine;
 mod markdown_render;
 mod markdown_source;
 mod paint;
+mod render_cache;
 mod scene;
 mod surface_state;
 mod text_routing;
@@ -147,13 +148,13 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             Size::new(available_width, max_size.height.max(1.0)),
         );
 
-        if state.layout_cache_ready
-            && state.cached_layout_signature == self.document.layout_signature
-            && (state.cached_layout_width - available_width).abs() <= 0.5
+        if state
+            .render_cache
+            .matches_layout(self.document.layout_signature, available_width)
         {
             return layout::Node::new(Size::new(
                 available_width,
-                state.cached_layout_height.max(1.0),
+                state.render_cache.cached_height.max(1.0),
             ));
         }
         let layout_height =
@@ -186,7 +187,8 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             .map(|position| localize_point(position, widget_origin));
         let selection =
             effective_selection(state, &self.document, local_viewport, local_cursor_position);
-        let visible_flow_range = visible_flow_layout_range(&state.flow_layouts, local_viewport);
+        let visible_flow_range =
+            visible_flow_layout_range(&state.render_cache.flow_layouts, local_viewport);
         draw_visible_transcript_content(
             renderer,
             &self.document,

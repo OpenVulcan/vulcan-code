@@ -20,16 +20,19 @@ pub(super) fn hit_test_rendered_document(
     state: &SelectableTranscriptState,
     position: Point,
 ) -> Option<usize> {
-    let flow_layout_index = flow_layout_index_at_local_y(&state.flow_layouts, position.y)?;
+    let render_cache = &state.render_cache;
+    let flow_layout_index = flow_layout_index_at_local_y(&render_cache.flow_layouts, position.y)?;
 
-    match state.flow_layouts.get(flow_layout_index)? {
+    match render_cache.flow_layouts.get(flow_layout_index)? {
         LaidOutFlowNode::Collapsible(layout_node) => {
             let RenderedTranscriptNode::Collapsible(collapsible_node) =
                 &document.nodes[layout_node.node_index]
             else {
                 return None;
             };
-            let summary_paragraph = state.paragraphs.get(layout_node.summary_paragraph_index)?;
+            let summary_paragraph = render_cache
+                .paragraphs
+                .get(layout_node.summary_paragraph_index)?;
 
             if layout_node.summary_outer_bounds.contains(position) {
                 let summary_height = summary_paragraph.min_bounds().height;
@@ -67,7 +70,7 @@ pub(super) fn hit_test_rendered_document(
                 layout_node.body_outer_bounds,
             ) {
                 if body_outer_bounds.contains(position) {
-                    let body_paragraph = state.paragraphs.get(body_paragraph_index)?;
+                    let body_paragraph = render_cache.paragraphs.get(body_paragraph_index)?;
                     let max_scroll =
                         (layout_node.body_full_text_height - body_outer_bounds.height).max(0.0);
                     let scroll_offset = state
@@ -115,7 +118,7 @@ pub(super) fn hit_test_rendered_document(
                 return None;
             }
 
-            let paragraph = state.paragraphs.get(layout_node.paragraph_index)?;
+            let paragraph = render_cache.paragraphs.get(layout_node.paragraph_index)?;
             let paragraph_height = paragraph.min_bounds().height;
             let local_point = clamp_hit_test_point_to_paragraph_text_bounds(
                 Point::new(
@@ -143,8 +146,8 @@ pub(super) fn hit_test_rendered_document(
             else {
                 return None;
             };
-            let table_layout = state.table_layouts.get(layout_node.table_index)?;
-            let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
+            let table_layout = render_cache.table_layouts.get(layout_node.table_index)?;
+            let table_paragraphs = &render_cache.paragraphs[table_layout.paragraph_range.clone()];
             hit_test_rendered_table_node(
                 table_node,
                 table_paragraphs,
@@ -267,9 +270,10 @@ fn projected_hit_test_rendered_document(
     state: &SelectableTranscriptState,
     position: Point,
 ) -> Option<usize> {
-    let flow_layout_index = flow_layout_index_at_local_y(&state.flow_layouts, position.y)?;
+    let render_cache = &state.render_cache;
+    let flow_layout_index = flow_layout_index_at_local_y(&render_cache.flow_layouts, position.y)?;
 
-    match state.flow_layouts.get(flow_layout_index)? {
+    match render_cache.flow_layouts.get(flow_layout_index)? {
         LaidOutFlowNode::Collapsible(layout_node) => {
             let RenderedTranscriptNode::Collapsible(collapsible_node) =
                 &document.nodes[layout_node.node_index]
@@ -298,7 +302,7 @@ fn projected_hit_test_rendered_document(
                 body_candidate
                 && body_distance < summary_distance
             {
-                let body_paragraph = state.paragraphs.get(body_paragraph_index)?;
+                let body_paragraph = render_cache.paragraphs.get(body_paragraph_index)?;
                 let max_scroll =
                     (layout_node.body_full_text_height - body_outer_bounds.height).max(0.0);
                 let scroll_offset = state
@@ -317,7 +321,9 @@ fn projected_hit_test_rendered_document(
                 );
             }
 
-            let summary_paragraph = state.paragraphs.get(layout_node.summary_paragraph_index)?;
+            let summary_paragraph = render_cache
+                .paragraphs
+                .get(layout_node.summary_paragraph_index)?;
             projected_hit_test_rendered_paragraph(
                 &collapsible_node.summary,
                 summary_paragraph,
@@ -332,7 +338,7 @@ fn projected_hit_test_rendered_document(
             else {
                 return None;
             };
-            let paragraph = state.paragraphs.get(layout_node.paragraph_index)?;
+            let paragraph = render_cache.paragraphs.get(layout_node.paragraph_index)?;
 
             projected_hit_test_rendered_paragraph(
                 paragraph_node,
@@ -347,8 +353,8 @@ fn projected_hit_test_rendered_document(
             else {
                 return None;
             };
-            let table_layout = state.table_layouts.get(layout_node.table_index)?;
-            let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
+            let table_layout = render_cache.table_layouts.get(layout_node.table_index)?;
+            let table_paragraphs = &render_cache.paragraphs[table_layout.paragraph_range.clone()];
             let projected_position =
                 clamp_point_to_rectangle(position, layout_node.measured_table.outer_bounds);
 
@@ -457,9 +463,10 @@ pub(super) fn background_action_link_at_position(
     state: &SelectableTranscriptState,
     position: Point,
 ) -> Option<String> {
-    let flow_layout_index = flow_layout_index_at_local_y(&state.flow_layouts, position.y)?;
+    let render_cache = &state.render_cache;
+    let flow_layout_index = flow_layout_index_at_local_y(&render_cache.flow_layouts, position.y)?;
 
-    match state.flow_layouts.get(flow_layout_index)? {
+    match render_cache.flow_layouts.get(flow_layout_index)? {
         LaidOutFlowNode::Collapsible(layout_node) => {
             let RenderedTranscriptNode::Collapsible(collapsible_node) =
                 &document.nodes[layout_node.node_index]
@@ -496,11 +503,14 @@ pub(super) fn scroll_collapsible_body_at_position(
     position: Point,
     delta_y: f32,
 ) -> bool {
-    let Some(flow_layout_index) = flow_layout_index_at_local_y(&state.flow_layouts, position.y)
+    let render_cache = &state.render_cache;
+    let Some(flow_layout_index) =
+        flow_layout_index_at_local_y(&render_cache.flow_layouts, position.y)
     else {
         return false;
     };
-    let Some(LaidOutFlowNode::Collapsible(layout_node)) = state.flow_layouts.get(flow_layout_index)
+    let Some(LaidOutFlowNode::Collapsible(layout_node)) =
+        render_cache.flow_layouts.get(flow_layout_index)
     else {
         return false;
     };
