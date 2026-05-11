@@ -1,13 +1,13 @@
 //! Layout and viewport-geometry helpers for the selectable transcript surface.
 //! 可选择转录表面的布局与视口几何辅助逻辑。
 
+use super::RendererParagraph;
 use super::scene::{
     CachedTableLayout, LaidOutFlowNode, LaidOutPanelNode, MeasuredRenderedCollapsibleDirectiveNode,
     MeasuredRenderedTableNode, RenderedCollapsibleDirectiveNode, RenderedPanelNode,
-    RenderedParagraphNode, RenderedTableNode, RenderedTranscriptDocument,
-    RenderedTranscriptNode, SelectableTableAlignment,
+    RenderedParagraphNode, RenderedTableNode, RenderedTranscriptDocument, RenderedTranscriptNode,
+    SelectableTableAlignment,
 };
-use super::RendererParagraph;
 use crate::iced_theme as theme;
 use iced::advanced::text;
 use iced::advanced::text::Paragraph as _;

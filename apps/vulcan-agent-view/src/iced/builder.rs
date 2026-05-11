@@ -3,19 +3,19 @@
 
 use super::scene::{
     ParsedMarkdownTable, PlainParagraphStyle, PlainTextRenderKind, RenderedParagraphBackground,
-    RenderedParagraphHorizontalPlacement, RenderedTableCellNode, RenderedTableStyle,
-    RenderedTranscriptLinkAction, RenderedTranscriptNode,
+    RenderedParagraphHorizontalPlacement, RenderedParagraphNode, RenderedTableCellNode,
+    RenderedTableStyle, RenderedTranscriptLinkAction, RenderedTranscriptNode,
 };
 use super::text_routing::build_agent_view_plain_text_spans;
-use super::{
-    build_table_cell_paragraph_node, explode_spans_to_graphemes,
-};
 use crate::iced_theme as theme;
 use iced::advanced::text;
+use iced::font;
 use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Color, Font, Padding, Pixels, Theme};
 use std::collections::BTreeMap;
+use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Builder responsible for flattening rich transcript content into renderable nodes and copy text.
 /// 负责将富文本转录内容展平为可渲染节点和复制文本的构建器。
@@ -331,8 +331,8 @@ impl RenderedTranscriptBuilder {
             row_index += 1;
         }
 
-        self.nodes
-            .push(RenderedTranscriptNode::Table(super::scene::RenderedTableNode {
+        self.nodes.push(RenderedTranscriptNode::Table(
+            super::scene::RenderedTableNode {
                 cells,
                 column_count: table.alignments.len(),
                 row_count: row_index,
@@ -349,19 +349,108 @@ impl RenderedTranscriptBuilder {
                 header_background: style.header_background,
                 body_background: style.body_background,
                 quote_depth: style.quote_depth,
-            }));
+            },
+        ));
         self.pending_separator = Some("\n");
     }
 
     /// Pushes one horizontal rule node and updates the separator state for following paragraphs.
     /// 推入一个水平分隔线节点，并为后续段落更新分隔状态。
     pub(super) fn push_rule(&mut self, color: Color) {
-        self.nodes
-            .push(RenderedTranscriptNode::Rule(super::scene::RenderedRuleNode {
+        self.nodes.push(RenderedTranscriptNode::Rule(
+            super::scene::RenderedRuleNode {
                 gap_before: 8.0,
                 gap_after: 8.0,
                 color,
-            }));
+            },
+        ));
         self.pending_separator = Some("\n\n");
     }
+}
+
+/// Builds one rendered table-cell paragraph node with script-aware font routing and a stable global character range.
+/// 构建一个带脚本感知字体路由和稳定全局字符范围的渲染表格单元格段落节点。
+fn build_table_cell_paragraph_node(
+    cell_text: String,
+    global_char_range: Range<usize>,
+    is_header: bool,
+    text_size: Pixels,
+    text_color: Color,
+    app_theme: &Theme,
+) -> RenderedParagraphNode {
+    let requested_font = if is_header {
+        Font {
+            weight: font::Weight::Semibold,
+            ..theme::ui_font()
+        }
+    } else {
+        theme::ui_font()
+    };
+    let spans = if cell_text.is_empty() {
+        Vec::new()
+    } else {
+        build_agent_view_plain_text_spans(
+            &cell_text,
+            requested_font,
+            PlainTextRenderKind::Flow,
+            Some(text_color),
+            app_theme,
+        )
+    };
+    let (grapheme_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
+
+    RenderedParagraphNode {
+        display_text: cell_text,
+        spans: grapheme_spans,
+        global_char_range,
+        local_grapheme_ranges,
+        text_size,
+        line_height: text::LineHeight::default(),
+        wrapping: text::Wrapping::Word,
+        indent_left: 0.0,
+        horizontal_placement: RenderedParagraphHorizontalPlacement::Leading,
+        gap_before: 0.0,
+        gap_after: 0.0,
+        inner_padding: Padding::ZERO,
+        fit_width_to_content: false,
+        max_width_ratio: None,
+        background: None,
+        background_action_link: None,
+        quote_depth: 0,
+    }
+}
+
+/// Converts rich Markdown spans into grapheme-sized spans so selection rectangles can be derived from `span_bounds`.
+/// 将富 Markdown 片段转换为字素粒度片段，以便从 `span_bounds` 推导选择矩形。
+fn explode_spans_to_graphemes(
+    spans: &[Span<'static, markdown::Uri, Font>],
+) -> (Vec<Span<'static, markdown::Uri, Font>>, Vec<Range<usize>>) {
+    let mut grapheme_spans = Vec::new();
+    let mut local_ranges = Vec::new();
+    let mut local_char_offset = 0usize;
+
+    for span in spans {
+        let fragment = span.text.as_ref();
+        if fragment.is_empty() {
+            continue;
+        }
+
+        for grapheme in UnicodeSegmentation::graphemes(fragment, true) {
+            let grapheme_char_count = grapheme.chars().count();
+            let mut grapheme_span = span.clone();
+            grapheme_span.text = grapheme.to_owned().into();
+            grapheme_spans.push(grapheme_span);
+            local_ranges.push(local_char_offset..local_char_offset + grapheme_char_count);
+            local_char_offset += grapheme_char_count;
+        }
+    }
+
+    if grapheme_spans.is_empty() {
+        let mut placeholder_span = Span::new(" ");
+        placeholder_span.font = Some(theme::ui_font());
+        grapheme_spans.push(placeholder_span);
+        local_ranges.push(0..0);
+    }
+
+    (grapheme_spans, local_ranges)
 }

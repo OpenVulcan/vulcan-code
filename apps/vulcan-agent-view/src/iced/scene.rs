@@ -29,6 +29,73 @@ pub(super) struct RenderedTranscriptDocument {
     pub(super) layout_signature: u64,
 }
 
+impl RenderedTranscriptDocument {
+    /// Returns the selected rendered text slice bounded by the provided global character offsets.
+    /// 返回由提供的全局字符偏移限定的已选渲染文本切片。
+    pub(super) fn selected_text(&self, start_char: usize, end_char: usize) -> String {
+        slice_char_range(&self.full_text, start_char, end_char)
+    }
+
+    /// Returns the total rendered character count available for transcript selection.
+    /// 返回可用于转录选择的总渲染字符数量。
+    pub(super) fn len_chars(&self) -> usize {
+        self.full_text.chars().count()
+    }
+
+    /// Returns the Markdown link target covering the provided global character offset, if any.
+    /// 返回覆盖给定全局字符偏移的 Markdown 链接目标（如果存在）。
+    pub(super) fn link_at_char_offset(&self, global_char_offset: usize) -> Option<String> {
+        for node in &self.nodes {
+            match node {
+                RenderedTranscriptNode::Panel(_) => {}
+                RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                    if let Some(link_url) =
+                        paragraph_link_at_char_offset(&collapsible_node.summary, global_char_offset)
+                    {
+                        return Some(link_url);
+                    }
+
+                    if let Some(body_node) = collapsible_node.body.as_ref() {
+                        if let Some(link_url) =
+                            paragraph_link_at_char_offset(body_node, global_char_offset)
+                        {
+                            return Some(link_url);
+                        }
+                    }
+                }
+                RenderedTranscriptNode::Paragraph(paragraph_node) => {
+                    if let Some(link_url) =
+                        paragraph_link_at_char_offset(paragraph_node, global_char_offset)
+                    {
+                        return Some(link_url);
+                    }
+                }
+                RenderedTranscriptNode::Table(table_node) => {
+                    for cell_node in &table_node.cells {
+                        if let Some(link_url) =
+                            paragraph_link_at_char_offset(&cell_node.paragraph, global_char_offset)
+                        {
+                            return Some(link_url);
+                        }
+                    }
+                }
+                RenderedTranscriptNode::Rule(_) => {}
+            }
+        }
+
+        None
+    }
+
+    /// Returns the synthetic transcript action associated with one link target, if any.
+    /// 返回与某个链接目标关联的合成转录动作（如果存在）。
+    pub(super) fn link_action_for_target(
+        &self,
+        link_target: &str,
+    ) -> Option<&RenderedTranscriptLinkAction> {
+        self.link_actions.get(link_target)
+    }
+}
+
 /// Link-scoped interaction emitted by synthetic transcript chrome spans.
 /// 由合成转录外框片段发出的链接级交互动作。
 #[derive(Debug, Clone)]
@@ -46,6 +113,49 @@ pub(super) enum RenderedTranscriptLinkAction {
     /// Opens one tool block in a dedicated centered modal surface.
     /// 在专用居中弹层表面中打开某个工具区块。
     OpenToolModal(String),
+}
+
+/// Extracts one character-based slice from a string without panicking when the range exceeds bounds.
+/// 在范围超出边界时也不会 panic 地从字符串中提取一个基于字符的切片。
+fn slice_char_range(text: &str, start_char: usize, end_char: usize) -> String {
+    let clamped_start = start_char.min(text.chars().count());
+    let clamped_end = end_char.min(text.chars().count());
+    if clamped_start >= clamped_end {
+        return String::new();
+    }
+
+    text.chars()
+        .skip(clamped_start)
+        .take(clamped_end - clamped_start)
+        .collect()
+}
+
+/// Returns the hyperlink target covering one global character offset inside the provided paragraph, if any.
+/// 返回给定段落中覆盖某个全局字符偏移的超链接目标（如果存在）。
+fn paragraph_link_at_char_offset(
+    paragraph_node: &RenderedParagraphNode,
+    global_char_offset: usize,
+) -> Option<String> {
+    if !paragraph_node
+        .global_char_range
+        .contains(&global_char_offset)
+    {
+        return None;
+    }
+
+    let local_char_offset =
+        global_char_offset.saturating_sub(paragraph_node.global_char_range.start);
+    for (span, local_range) in paragraph_node
+        .spans
+        .iter()
+        .zip(&paragraph_node.local_grapheme_ranges)
+    {
+        if local_range.contains(&local_char_offset) {
+            return span.link.clone().map(Into::into);
+        }
+    }
+
+    None
 }
 
 /// One rendered visual node in the transcript flow.

@@ -2,13 +2,13 @@
 //! 转录命中测试、选区投影与拖拽自动滚动的交互辅助逻辑。
 
 use super::layout_engine::flow_layout_index_at_local_y;
+use super::paint::hit_test_rendered_table_node;
 use super::scene::{
     LaidOutFlowNode, RenderedParagraphNode, RenderedTranscriptDocument, RenderedTranscriptNode,
 };
 use super::{
     RendererParagraph, SelectableTranscriptDragAutoScroll,
     SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptState,
-    hit_test_rendered_table_node,
 };
 use iced::advanced::text::Paragraph as _;
 use iced::{Point, Rectangle, Size};
@@ -92,8 +92,10 @@ pub(super) fn hit_test_rendered_document(
                         &body_node.display_text,
                         local_point,
                     )?;
-                    let local_char_offset =
-                        super::byte_offset_to_char_offset(&body_node.display_text, local_byte_offset);
+                    let local_char_offset = super::byte_offset_to_char_offset(
+                        &body_node.display_text,
+                        local_byte_offset,
+                    );
                     return Some(
                         (body_node.global_char_range.start + local_char_offset)
                             .min(body_node.global_char_range.end),
@@ -276,24 +278,21 @@ fn projected_hit_test_rendered_document(
             };
 
             let summary_distance = layout_node.summary_outer_bounds.distance(position);
-            let body_candidate = if let (
-                Some(body_node),
-                Some(body_paragraph_index),
-                Some(body_outer_bounds),
-            ) = (
-                collapsible_node.body.as_ref(),
-                layout_node.body_paragraph_index,
-                layout_node.body_outer_bounds,
-            ) {
-                Some((
-                    body_node,
-                    body_paragraph_index,
-                    body_outer_bounds,
-                    body_outer_bounds.distance(position),
-                ))
-            } else {
-                None
-            };
+            let body_candidate =
+                if let (Some(body_node), Some(body_paragraph_index), Some(body_outer_bounds)) = (
+                    collapsible_node.body.as_ref(),
+                    layout_node.body_paragraph_index,
+                    layout_node.body_outer_bounds,
+                ) {
+                    Some((
+                        body_node,
+                        body_paragraph_index,
+                        body_outer_bounds,
+                        body_outer_bounds.distance(position),
+                    ))
+                } else {
+                    None
+                };
 
             if let Some((body_node, body_paragraph_index, body_outer_bounds, body_distance)) =
                 body_candidate
@@ -378,7 +377,8 @@ fn projected_hit_test_rendered_paragraph(
     let local_point = clamp_hit_test_point_to_paragraph_text_bounds(
         Point::new(
             projected_position.x - outer_bounds.x - paragraph_node.inner_padding.left,
-            projected_position.y - outer_bounds.y - paragraph_node.inner_padding.top + scroll_offset,
+            projected_position.y - outer_bounds.y - paragraph_node.inner_padding.top
+                + scroll_offset,
         ),
         paragraph_node,
         outer_bounds.size(),
@@ -448,28 +448,6 @@ pub(super) fn drag_auto_scroll_request_for_position(
             overshoot: position.y - bottom,
         })
     }
-}
-
-/// Returns the Markdown link target covering one global character offset inside the provided paragraph node.
-/// 返回提供的段落节点内覆盖某个全局字符偏移的 Markdown 链接目标。
-pub(super) fn paragraph_link_at_char_offset(
-    paragraph_node: &RenderedParagraphNode,
-    global_char_offset: usize,
-) -> Option<String> {
-    if !paragraph_node.global_char_range.contains(&global_char_offset) {
-        return None;
-    }
-
-    let local_char_offset =
-        global_char_offset.saturating_sub(paragraph_node.global_char_range.start);
-
-    paragraph_node
-        .local_grapheme_ranges
-        .iter()
-        .enumerate()
-        .find(|(_, grapheme_range)| grapheme_range.contains(&local_char_offset))
-        .and_then(|(grapheme_index, _)| paragraph_node.spans.get(grapheme_index))
-        .and_then(|span| span.link.clone())
 }
 
 /// Returns the synthetic background action link hit by the provided pointer position, if any.

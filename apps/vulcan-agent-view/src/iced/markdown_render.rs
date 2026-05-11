@@ -2,13 +2,14 @@
 //! 转录指令区与正文表面共享的 Markdown 渲染管线辅助逻辑。
 
 use super::builder::RenderedTranscriptBuilder;
+use super::directive_render::{
+    classify_diff_line_kind, diff_line_color, directive_background, mix_color,
+};
 use super::markdown_source::*;
 use super::scene::{
-    MarkdownRenderKind, PlainParagraphStyle, PlainTextRenderKind, RenderContext,
-    RenderedTableStyle,
+    MarkdownRenderKind, PlainParagraphStyle, PlainTextRenderKind, RenderContext, RenderedTableStyle,
 };
 use super::text_routing::{build_agent_view_markdown_spans, build_agent_view_plain_text_spans};
-use super::{classify_diff_line_kind, diff_line_color, directive_background, mix_color};
 use crate::iced_theme as theme;
 use iced::advanced::text;
 use iced::widget::markdown;
