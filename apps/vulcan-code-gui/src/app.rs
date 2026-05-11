@@ -221,6 +221,14 @@ const TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD: f32 = 28.0;
 /// 保留在转录表面尾部的共享底部留白，用于避免最新内容紧贴底边。
 const TRANSCRIPT_BOTTOM_SPACER_HEIGHT: f32 = 72.0;
 
+/// Shared square size used by the floating transcript jump-to-bottom button.
+/// 转录区浮动回底按钮使用的共享方形尺寸。
+const TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE: f32 = 38.0;
+
+/// Shared bottom inset used by the floating transcript jump-to-bottom button overlay.
+/// 转录区浮动回底按钮覆盖层使用的共享底部内边距。
+const TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET: u16 = 26;
+
 /// Shared animation tick used by drag-driven transcript auto-scroll while the pointer is kept outside the visible viewport.
 /// 当指针持续停留在可见视口之外时，拖拽驱动的转录自动滚动使用的共享动画 Tick。
 const TRANSCRIPT_DRAG_AUTO_SCROLL_TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -1820,6 +1828,9 @@ enum Message {
         /// 当前可见转录滚动容器回传的最新视口。
         viewport: scrollable::Viewport,
     },
+    /// Snaps the currently selected session transcript back to the newest bottom tail.
+    /// 将当前选中会话的转录重新吸附回最新底部尾端。
+    JumpSelectedSessionTranscriptToBottom,
     /// Updates the active drag auto-scroll request emitted by the main rendered transcript surface.
     /// 更新主渲染转录表面发出的当前拖拽自动滚动请求。
     SelectedSessionTranscriptDragAutoScrollChanged {
@@ -3592,6 +3603,14 @@ impl VulcanWorkbench {
                 }
 
                 Task::none()
+            }
+            Message::JumpSelectedSessionTranscriptToBottom => {
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+
+                self.session_agent_view_follow_tail.insert(session_id, true);
+                operation::snap_to_end(transcript_scrollable_id(session_id))
             }
             Message::SelectedSessionTranscriptScrolled {
                 session_id,
@@ -5989,6 +6008,10 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
 
+        if let Some(overlay) = self.view_selected_session_jump_to_bottom_overlay(session_id) {
+            layered_surfaces.push(overlay);
+        }
+
         if let Some(overlay) = self.view_selected_session_thinking_modal(session_id) {
             layered_surfaces.push(overlay);
         }
@@ -5998,6 +6021,62 @@ impl VulcanWorkbench {
         }
 
         stack(layered_surfaces).into()
+    }
+
+    /// Builds the floating jump-to-bottom affordance shown after the user scrolls away from the newest transcript tail.
+    /// 构建当用户滚离最新转录尾部后显示的浮动回底按钮。
+    fn view_selected_session_jump_to_bottom_overlay(
+        &self,
+        session_id: SessionId,
+    ) -> Option<Element<'_, Message>> {
+        if self.session_agent_view_should_follow_tail(session_id)
+            || !self.session_agent_view_viewports.contains_key(&session_id)
+        {
+            return None;
+        }
+
+        let button = tooltip(
+            button(
+                container(codicon::chevron_down().size(18).line_height(1.0))
+                    .width(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+                    .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+                    .center(Fill),
+            )
+            .padding(0)
+            .width(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+            .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+            .style(style::transcript_jump_to_bottom_button_style)
+            .on_press(Message::JumpSelectedSessionTranscriptToBottom),
+            "回到底部",
+            tooltip::Position::Top,
+        )
+        .style(container::rounded_box);
+
+        Some(
+            container(
+                column![
+                    space::vertical().height(Fill),
+                    row![
+                        space::horizontal().width(Fill),
+                        button,
+                        space::horizontal().width(Fill)
+                    ]
+                    .width(Fill)
+                    .align_y(Center),
+                ]
+                .width(Fill)
+                .height(Fill),
+            )
+            .padding(iced::Padding {
+                top: 14.0,
+                right: 14.0,
+                bottom: f32::from(TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET),
+                left: 14.0,
+            })
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
     }
 
     /// Builds the unified rendered transcript stream used for per-block inspection during the transition period.

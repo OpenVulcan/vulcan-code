@@ -357,6 +357,71 @@ pub fn subtle_panel_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
+/// Returns the floating circular button style used by the transcript jump-to-bottom affordance.
+/// 返回转录区回到底部浮动圆形按钮使用的样式。
+pub fn transcript_jump_to_bottom_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.96),
+        )),
+        text_color: palette.background.base.text.scale_alpha(0.90),
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.20),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.18,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 7.0),
+            blur_radius: 18.0,
+        },
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(
+                palette.background.weak.color.scale_alpha(0.98),
+            )),
+            text_color: palette.primary.strong.color,
+            border: Border {
+                color: palette.primary.weak.color.scale_alpha(0.42),
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(
+                palette.background.strong.color.scale_alpha(0.94),
+            )),
+            text_color: palette.primary.strong.color,
+            border: Border {
+                color: palette.primary.base.color.scale_alpha(0.56),
+                ..base.border
+            },
+            shadow: Shadow {
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+                ..base.shadow
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.28),
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
 /// Returns the style of the restore rail shown when the main task drawer is collapsed.
 /// 返回主任务抽屉折叠后显示的恢复导轨样式。
 pub fn main_task_panel_restore_rail_style(theme: &Theme) -> container::Style {

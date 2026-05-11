@@ -60,7 +60,9 @@ pub fn markdown_style(theme: &Theme) -> markdown::Style {
 /// Returns one Markdown settings bundle aligned with the transcript typography defaults.
 /// 返回与转录排版默认值对齐的一组 Markdown 设置。
 pub fn markdown_settings(theme: &Theme) -> markdown::Settings {
-    markdown::Settings::with_text_size(14.0, markdown_style(theme))
+    let mut settings = markdown::Settings::with_text_size(14.0, markdown_style(theme));
+    settings.code_size = settings.text_size;
+    settings
 }
 
 /// Normalizes one requested prose font onto the Latin UI family while preserving the requested emphasis metadata.
