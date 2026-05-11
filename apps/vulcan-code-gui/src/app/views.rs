@@ -1777,8 +1777,6 @@ impl VulcanWorkbench {
         let has_selected_session = self.selected_session().is_some();
         let is_detail_mode =
             self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::DetailCards;
-        let is_structured_mode =
-            self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::Structured;
         let is_raw_mode =
             self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::RawSource;
         let detail_mode_button = {
@@ -1791,24 +1789,6 @@ impl VulcanWorkbench {
 
             if has_selected_session && !is_detail_mode {
                 button.on_press(Message::ShowSelectedSessionDocumentDetailCards)
-            } else {
-                button
-            }
-        };
-        let structured_mode_button = {
-            let button =
-                button(text("正文").size(12))
-                    .padding([6, 10])
-                    .style(move |theme, status| {
-                        style::workbench_transcript_mode_button_style(
-                            theme,
-                            status,
-                            is_structured_mode,
-                        )
-                    });
-
-            if has_selected_session && !is_structured_mode {
-                button.on_press(Message::ShowSelectedSessionDocumentStructured)
             } else {
                 button
             }
@@ -1828,7 +1808,7 @@ impl VulcanWorkbench {
             }
         };
 
-        row![detail_mode_button, structured_mode_button, raw_mode_button]
+        row![detail_mode_button, raw_mode_button]
             .spacing(8)
             .align_y(Center)
             .into()
@@ -2173,6 +2153,49 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Builds one reusable code-preview body that matches the patch/scaffold preview surface while keeping transcript text selectable.
+    /// 构建一块与补丁/骨架预览表面一致且仍保留可选能力的可复用代码预览正文。
+    pub(super) fn view_workbench_code_preview_body<'a>(
+        &'a self,
+        buffer: Option<&'a text_editor::Content>,
+        fallback: String,
+        syntax_token: &'a str,
+        on_action: impl Fn(text_editor::Action) -> Message + 'a,
+    ) -> Element<'a, Message> {
+        if let Some(buffer) = buffer {
+            WheelPassthrough::new(
+                text_editor(buffer)
+                    .height(Shrink)
+                    .padding(14)
+                    .size(WORKBENCH_TRANSCRIPT_CODE_PREVIEW_TEXT_SIZE)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .wrapping(iced::advanced::text::Wrapping::None)
+                    .font(theme::code_font())
+                    .style(style::diff_code_editor_style)
+                    .highlight_with::<iced::highlighter::Highlighter>(
+                        iced::highlighter::Settings {
+                            theme: theme::code_theme(&self.app_theme),
+                            token: syntax_token.to_string(),
+                        },
+                        theme::code_highlight_format,
+                    )
+                    .on_action(on_action),
+            )
+            .into()
+        } else {
+            container(
+                text(fallback)
+                    .size(WORKBENCH_TRANSCRIPT_CODE_PREVIEW_TEXT_SIZE)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .font(theme::code_font())
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            )
+            .padding(14)
+            .width(Fill)
+            .into()
+        }
+    }
+
     /// Builds the selectable unified transcript panel for the selected session.
     /// 构建当前选中会话使用的可选统一转录面板。
     pub(super) fn view_selected_session_agent_document_surface(
@@ -2181,14 +2204,6 @@ impl VulcanWorkbench {
     ) -> Element<'_, Message> {
         let (buffer, on_action, fallback_text) = match self.agent_transcript_surface_mode {
             AgentTranscriptSurfaceMode::DetailCards => (
-                self.session_agent_view_buffers.get(&session_id),
-                Message::SelectedSessionDocumentStructuredAction
-                    as fn(text_editor::Action) -> Message,
-                self.selected_session_agent_view_selectable_document()
-                    .map(|document| document.buffer().to_string())
-                    .unwrap_or_default(),
-            ),
-            AgentTranscriptSurfaceMode::Structured => (
                 self.session_agent_view_buffers.get(&session_id),
                 Message::SelectedSessionDocumentStructuredAction
                     as fn(text_editor::Action) -> Message,
@@ -2206,18 +2221,12 @@ impl VulcanWorkbench {
             ),
         };
 
-        let body: Element<'_, Message> = if let Some(buffer) = buffer {
-            text_editor(buffer)
-                .height(Shrink)
-                .wrapping(iced::widget::text::Wrapping::Word)
-                .padding(0)
-                .size(14)
-                .style(style::workbench_transcript_raw_view_style)
-                .on_action(on_action)
-                .into()
-        } else {
-            text(fallback_text).size(14).into()
-        };
+        let body = self.view_workbench_code_preview_body(
+            buffer,
+            fallback_text,
+            "markdown",
+            on_action,
+        );
         let body_flow = column![
             body,
             space::vertical().height(self.transcript_bottom_spacer_height()),

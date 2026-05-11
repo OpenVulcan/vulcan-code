@@ -123,6 +123,10 @@ const CODE_EDITOR_TEXT_SIZE: f32 = 16.0;
 /// 首页编辑器与 diff 编辑器共用的绝对行高。
 const CODE_EDITOR_LINE_HEIGHT: f32 = 20.0;
 
+/// Text size used by the workbench raw-source transcript preview so it matches the default Markdown reading size.
+/// 工作台原文转录预览使用的字号，与默认 Markdown 阅读字号保持一致。
+const WORKBENCH_TRANSCRIPT_CODE_PREVIEW_TEXT_SIZE: f32 = 14.0;
+
 /// Legacy pick-list helper that preserves the older option-first call shape on top of iced 0.15-dev.
 /// 在 iced 0.15-dev 之上保留旧版“选项在前”调用形式的下拉列表兼容辅助函数。
 fn pick_list<'a, T, L, V, Message>(
@@ -883,9 +887,6 @@ enum AgentTranscriptSurfaceMode {
     /// Legacy segmented rendered-preview stream kept as the primary per-block visual inspection surface.
     /// 作为首要逐块视觉检查表面的旧式分段渲染流。
     DetailCards,
-    /// Selectable structured transcript projection backed by the unified agent-view document.
-    /// 由统一 agent-view 文档支撑的可选结构化转录投影。
-    Structured,
     /// Selectable raw-source projection backed by the unified agent-view document.
     /// 由统一 agent-view 文档支撑的可选原始源码投影。
     RawSource,
@@ -1966,9 +1967,6 @@ enum Message {
     /// Session selected from the navigator.
     /// 从导航区选择了某个会话。
     SessionSelected(SessionId),
-    /// Switches the unified transcript panel into the structured selectable-document mode.
-    /// 将统一转录面板切换到结构化可选文档模式。
-    ShowSelectedSessionDocumentStructured,
     /// Switches the unified transcript panel into the raw-source selectable-document mode.
     /// 将统一转录面板切换到原始源码可选文档模式。
     ShowSelectedSessionDocumentRawSource,
@@ -3753,20 +3751,6 @@ impl VulcanWorkbench {
                     .unwrap_or_else(|| String::from("未知会话"));
 
                 self.status_message = format!("当前会话已切换为：{selected_title}。");
-                Task::batch([
-                    self.maybe_follow_selected_session_transcript_tail(session_id),
-                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
-                ])
-            }
-            Message::ShowSelectedSessionDocumentStructured => {
-                self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::Structured;
-                self.clear_transcript_drag_auto_scrolls();
-                self.active_thinking_modal = None;
-                self.active_tool_modal = None;
-                let Some(session_id) = self.selected_session().map(|session| session.id) else {
-                    return Task::none();
-                };
-                self.refresh_session_agent_view_buffers(session_id);
                 Task::batch([
                     self.maybe_follow_selected_session_transcript_tail(session_id),
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),

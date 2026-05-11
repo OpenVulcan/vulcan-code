@@ -62,6 +62,12 @@ pub fn markdown_style(theme: &Theme) -> markdown::Style {
 pub fn markdown_settings(theme: &Theme) -> markdown::Settings {
     let mut settings = markdown::Settings::with_text_size(14.0, markdown_style(theme));
     settings.code_size = settings.text_size;
+    settings.h1_size = settings.text_size * 1.4;
+    settings.h2_size = settings.text_size * 1.3;
+    settings.h3_size = settings.text_size * 1.2;
+    settings.h4_size = settings.text_size * 1.1;
+    settings.h5_size = settings.text_size;
+    settings.h6_size = settings.text_size;
     settings
 }
 
