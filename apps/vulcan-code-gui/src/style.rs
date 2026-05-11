@@ -4,7 +4,8 @@
 use crate::diff::DiffLineKind;
 use crate::model::SessionRunPhase;
 use crate::theme::ThemePaletteExt;
-use iced::widget::{button, container, text_editor};
+use iced::overlay::menu;
+use iced::widget::{button, container, pick_list, text_editor};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
 /// Returns the gutter background style for a semantic diff line kind.
@@ -558,6 +559,78 @@ pub fn workbench_model_trigger_button_style(
     }
 }
 
+/// Returns the compact pick-list field style used by the workbench composer control row.
+/// 返回工作台提示词控制行使用的紧凑下拉框字段样式。
+pub fn workbench_compact_pick_list_style(
+    theme: &Theme,
+    status: pick_list::Status,
+) -> pick_list::Style {
+    let palette = theme.extended_palette();
+    let base = pick_list::Style {
+        text_color: palette.background.base.text,
+        placeholder_color: palette.background.base.text.scale_alpha(0.56),
+        handle_color: palette.background.base.text.scale_alpha(0.56),
+        background: Background::Color(palette.background.base.color.scale_alpha(0.98)),
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+    };
+
+    match status {
+        pick_list::Status::Active => base,
+        pick_list::Status::Hovered => pick_list::Style {
+            background: Background::Color(palette.background.weak.color.scale_alpha(0.98)),
+            border: Border {
+                color: palette.primary.base.color.scale_alpha(0.58),
+                ..base.border
+            },
+            ..base
+        },
+        pick_list::Status::Opened { .. } => pick_list::Style {
+            background: Background::Color(palette.background.weak.color.scale_alpha(0.98)),
+            border: Border {
+                color: palette.primary.strong.color.scale_alpha(0.68),
+                ..base.border
+            },
+            ..base
+        },
+        pick_list::Status::Disabled => pick_list::Style {
+            text_color: palette.background.base.text.scale_alpha(0.34),
+            placeholder_color: palette.background.base.text.scale_alpha(0.34),
+            handle_color: palette.background.base.text.scale_alpha(0.34),
+            ..base
+        },
+    }
+}
+
+/// Returns the dropdown-menu style paired with the compact workbench composer pick lists.
+/// 返回与紧凑工作台提示词下拉框配套的下拉菜单样式。
+pub fn workbench_compact_pick_list_menu_style(theme: &Theme) -> menu::Style {
+    let palette = theme.extended_palette();
+
+    menu::Style {
+        background: Background::Color(palette.background.base.color.scale_alpha(0.98)),
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        text_color: palette.background.base.text,
+        selected_text_color: palette.primary.strong.text,
+        selected_background: Background::Color(palette.primary.base.color.scale_alpha(0.22)),
+        shadow: Shadow {
+            color: Color {
+                a: 0.10,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 16.0,
+        },
+    }
+}
+
 /// Returns the rounded panel style used by the centered workbench composer surface.
 /// 返回居中工作台提示词面板使用的圆角样式。
 pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {
@@ -565,12 +638,12 @@ pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {
 
     container::Style {
         background: Some(Background::Color(
-            palette.background.base.color.scale_alpha(0.98),
+            palette.background.weak.color.scale_alpha(0.96),
         )),
         border: Border {
             radius: 20.0.into(),
             width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.24),
+            color: palette.background.strong.color.scale_alpha(0.30),
         },
         shadow: Shadow {
             color: Color {
@@ -581,6 +654,27 @@ pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {
             blur_radius: 24.0,
         },
         ..Default::default()
+    }
+}
+
+/// Returns the rounded editable text-editor style used inside the floating workbench composer panel.
+/// 返回浮动工作台提示词面板内部使用的圆角可编辑文本框样式。
+pub fn workbench_composer_editor_style(
+    theme: &Theme,
+    _status: text_editor::Status,
+) -> text_editor::Style {
+    let palette = theme.extended_palette();
+
+    text_editor::Style {
+        background: Background::Color(palette.background.base.color.scale_alpha(0.82)),
+        border: Border {
+            radius: 20.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.20),
+        },
+        placeholder: palette.background.base.text.scale_alpha(0.42),
+        value: palette.background.base.text,
+        selection: palette.primary.weak.color.scale_alpha(0.88),
     }
 }
 

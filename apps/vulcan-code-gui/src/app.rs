@@ -4722,11 +4722,15 @@ impl VulcanWorkbench {
         .style(style::workbench_model_trigger_button_style)
         .on_press(Message::CloseWorkbenchModelPicker);
         let option_list: Element<'_, Message> = if filtered_choices.is_empty() {
-            container(text("没有匹配的模型。").size(13))
-                .width(Fill)
-                .height(WORKBENCH_MODEL_PICKER_LIST_HEIGHT)
-                .center(Fill)
-                .into()
+            container(
+                container(text("没有匹配的模型。").size(14))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKBENCH_MODEL_PICKER_LIST_HEIGHT)
+            .into()
         } else {
             scrollable(
                 column(
@@ -4748,12 +4752,22 @@ impl VulcanWorkbench {
                                 container(
                                     row![
                                         container(indicator).width(18).center_y(Fill),
-                                        container(text(choice.model_name.clone()).size(13))
+                                        container(text(choice.model_name.clone()).size(14))
                                             .width(Fill)
                                             .clip(true),
-                                        text(choice.provider_label.clone())
-                                            .size(12)
-                                            .color(palette.background.base.text.scale_alpha(0.56)),
+                                        container(
+                                            text(choice.provider_label.clone()).size(13).color(
+                                                palette.background.base.text.scale_alpha(0.56),
+                                            ),
+                                        )
+                                        .padding(
+                                            iced::Padding {
+                                                top: 0.0,
+                                                right: 28.0,
+                                                bottom: 0.0,
+                                                left: 0.0,
+                                            }
+                                        ),
                                     ]
                                     .spacing(10)
                                     .align_y(Center),
@@ -6144,8 +6158,11 @@ impl VulcanWorkbench {
         )
         .width(WORKBENCH_REASONING_SELECTOR_WIDTH)
         .placeholder("级别")
-        .padding([6, 10])
+        .padding([8, 10])
         .text_size(13)
+        .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
+        .style(style::workbench_compact_pick_list_style)
+        .menu_style(style::workbench_compact_pick_list_menu_style)
         .into()
     }
 
@@ -6235,6 +6252,7 @@ impl VulcanWorkbench {
             )))
             .padding([10, 12])
             .placeholder("输入当前会话要执行的任务指令")
+            .style(style::workbench_composer_editor_style)
             .key_binding(move |key_press| match key_press.key.as_ref() {
                 keyboard::Key::Named(keyboard::key::Named::Enter)
                     if !key_press.modifiers.shift() =>
@@ -6366,16 +6384,20 @@ impl VulcanWorkbench {
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
         let composer_overlay = self.view_composer_expanded_overlay();
+        let execution_mode_selector = pick_list(
+            ExecutionMode::ALL,
+            Some(self.execution_mode),
+            Message::ExecutionModeSelected,
+        )
+        .width(WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH)
+        .placeholder("模式")
+        .padding([8, 10])
+        .text_size(13)
+        .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
+        .style(style::workbench_compact_pick_list_style)
+        .menu_style(style::workbench_compact_pick_list_menu_style);
         let composer_primary_controls = row![
-            pick_list(
-                ExecutionMode::ALL,
-                Some(self.execution_mode),
-                Message::ExecutionModeSelected
-            )
-            .width(WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH)
-            .placeholder("模式")
-            .padding([6, 10])
-            .text_size(13),
+            execution_mode_selector,
             self.view_workbench_model_selector(),
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)
