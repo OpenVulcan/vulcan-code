@@ -17,6 +17,7 @@ mod surface_state;
 mod text_routing;
 mod text_utils;
 mod viewport_materialization;
+mod viewport_scene;
 
 use self::context_menu::*;
 use self::event_routing::*;
@@ -29,7 +30,7 @@ pub use self::surface_state::{
     SelectableTranscriptInteraction,
 };
 use self::text_utils::*;
-use self::viewport_materialization::*;
+use self::viewport_scene::*;
 #[cfg(test)]
 use self::{
     builder::RenderedTranscriptBuilder, directive_render::*, interaction::*, markdown_render::*,
@@ -182,24 +183,9 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         }
 
         let state = tree.state.downcast_ref::<SelectableTranscriptState>();
-        let materialized_viewport = materialize_transcript_viewport(
-            &self.document,
-            state,
-            layout.bounds(),
-            cursor,
-            *viewport,
-        );
-        draw_visible_transcript_content(
-            renderer,
-            &self.document,
-            state,
-            defaults,
-            materialized_viewport.selection,
-            layout.bounds(),
-            materialized_viewport.widget_origin,
-            viewport,
-            materialized_viewport.visible_flow_range,
-        );
+        let materialized_scene =
+            materialize_transcript_scene(&self.document, state, layout.bounds(), cursor, *viewport);
+        draw_visible_transcript_content(renderer, defaults, &materialized_scene);
         let _ = app_theme;
     }
 

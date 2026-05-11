@@ -2,7 +2,6 @@
 //! 转录选区高亮、渲染表格及相关命中测试的绘制辅助逻辑。
 
 use super::RendererParagraph;
-use super::SelectableTranscriptState;
 use super::interaction::{
     clamp_hit_test_point_to_paragraph_text_bounds, paragraph_hit_test_to_byte_offset,
 };
@@ -11,14 +10,14 @@ use super::layout_engine::{
 };
 use super::scene::{
     LaidOutFlowNode, MeasuredRenderedTableNode, RenderedParagraphNode, RenderedTableNode,
-    RenderedTranscriptDocument, RenderedTranscriptNode,
+    RenderedTranscriptDocument,
 };
+use super::viewport_scene::MaterializedTranscriptScene;
 use iced::advanced::Renderer as _;
 use iced::advanced::renderer;
 use iced::advanced::text::Paragraph as _;
 use iced::advanced::text::Renderer as _;
 use iced::{Background, Border, Color, Point, Rectangle, Renderer, Size};
-use std::ops::Range;
 
 /// Draws the active selection portion intersecting one paragraph node.
 /// 绘制与某个段落节点相交的当前活动选择区域。
@@ -189,26 +188,16 @@ pub(super) fn draw_rendered_table_node(
 /// 绘制单个转录视口中的面板背景以及全部可见流式节点。
 pub(super) fn draw_visible_transcript_content(
     renderer: &mut Renderer,
-    document: &RenderedTranscriptDocument,
-    state: &SelectableTranscriptState,
     defaults: &renderer::Style,
-    selection: Option<(usize, usize)>,
-    widget_bounds: Rectangle,
-    widget_origin: Point,
-    viewport: &Rectangle,
-    visible_flow_range: Range<usize>,
+    scene: &MaterializedTranscriptScene<'_>,
 ) {
     let mut panel_border_overlays = Vec::new();
-    let render_cache = &state.render_cache;
 
-    for panel_layout in render_cache.panel_layouts.iter().filter(|panel_layout| {
-        translate_rectangle(panel_layout.outer_bounds, widget_origin).intersects(viewport)
-    }) {
-        let RenderedTranscriptNode::Panel(panel_node) = &document.nodes[panel_layout.node_index]
-        else {
+    for panel_layout in scene.visible_panel_layouts() {
+        let Some(panel_node) = scene.panel_node(panel_layout) else {
             continue;
         };
-        let outer_bounds = translate_rectangle(panel_layout.outer_bounds, widget_origin);
+        let outer_bounds = translate_rectangle(panel_layout.outer_bounds, scene.widget_origin);
         renderer.fill_quad(
             renderer::Quad {
                 bounds: outer_bounds,
@@ -226,18 +215,18 @@ pub(super) fn draw_visible_transcript_content(
         }
     }
 
-    for flow_layout in &render_cache.flow_layouts[visible_flow_range] {
+    for flow_layout in scene.visible_flow_layouts() {
         match flow_layout {
             LaidOutFlowNode::Collapsible(layout_node) => {
-                let RenderedTranscriptNode::Collapsible(collapsible_node) =
-                    &document.nodes[layout_node.node_index]
+                let Some(collapsible_node) = scene.collapsible_node(layout_node) else {
+                    continue;
+                };
+                let Some(summary_paragraph) = scene.paragraph(layout_node.summary_paragraph_index)
                 else {
                     continue;
                 };
-                let summary_paragraph =
-                    &render_cache.paragraphs[layout_node.summary_paragraph_index];
                 let summary_outer_bounds =
-                    translate_rectangle(layout_node.summary_outer_bounds, widget_origin);
+                    translate_rectangle(layout_node.summary_outer_bounds, scene.widget_origin);
 
                 if let Some(background) = collapsible_node.summary.background {
                     renderer.fill_quad(
@@ -259,7 +248,7 @@ pub(super) fn draw_visible_transcript_content(
                         .first()
                         .and_then(|span| span.color)
                         .unwrap_or(defaults.text_color),
-                    *viewport,
+                    scene.viewport,
                 );
 
                 if let (Some(body_node), Some(body_paragraph_index), Some(body_outer_bounds)) = (
@@ -267,8 +256,11 @@ pub(super) fn draw_visible_transcript_content(
                     layout_node.body_paragraph_index,
                     layout_node.body_outer_bounds,
                 ) {
-                    let body_paragraph = &render_cache.paragraphs[body_paragraph_index];
-                    let body_outer_bounds = translate_rectangle(body_outer_bounds, widget_origin);
+                    let Some(body_paragraph) = scene.paragraph(body_paragraph_index) else {
+                        continue;
+                    };
+                    let body_outer_bounds =
+                        translate_rectangle(body_outer_bounds, scene.widget_origin);
                     renderer.fill_quad(
                         renderer::Quad {
                             bounds: body_outer_bounds,
@@ -280,12 +272,8 @@ pub(super) fn draw_visible_transcript_content(
 
                     let max_scroll =
                         (layout_node.body_full_text_height - body_outer_bounds.height).max(0.0);
-                    let scroll_offset = state
-                        .collapsible_body_scroll_offsets
-                        .get(&collapsible_node.block_id)
-                        .copied()
-                        .unwrap_or(0.0)
-                        .clamp(0.0, max_scroll);
+                    let scroll_offset = scene
+                        .collapsible_body_scroll_offset(&collapsible_node.block_id, max_scroll);
                     let text_clip_bounds = Rectangle::new(
                         Point::new(
                             body_outer_bounds.x + body_node.inner_padding.left,
@@ -313,7 +301,7 @@ pub(super) fn draw_visible_transcript_content(
                                 .first()
                                 .and_then(|span| span.color)
                                 .unwrap_or(defaults.text_color),
-                            *viewport,
+                            scene.viewport,
                         );
                     });
 
@@ -368,13 +356,14 @@ pub(super) fn draw_visible_transcript_content(
                 }
             }
             LaidOutFlowNode::Paragraph(layout_node) => {
-                let RenderedTranscriptNode::Paragraph(paragraph_node) =
-                    &document.nodes[layout_node.node_index]
-                else {
+                let Some(paragraph_node) = scene.paragraph_node(layout_node) else {
                     continue;
                 };
-                let paragraph = &render_cache.paragraphs[layout_node.paragraph_index];
-                let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
+                let Some(paragraph) = scene.paragraph(layout_node.paragraph_index) else {
+                    continue;
+                };
+                let outer_bounds =
+                    translate_rectangle(layout_node.outer_bounds, scene.widget_origin);
 
                 if let Some(background) = paragraph_node.background {
                     let background_bounds = if background.border.width <= f32::EPSILON {
@@ -402,7 +391,7 @@ pub(super) fn draw_visible_transcript_content(
                 }
 
                 if paragraph_node.quote_depth > 0 {
-                    let quote_bar_x = (outer_bounds.x - 10.0).max(widget_bounds.x);
+                    let quote_bar_x = (outer_bounds.x - 10.0).max(scene.widget_bounds.x);
                     renderer.fill_quad(
                         renderer::Quad {
                             bounds: Rectangle::new(
@@ -415,16 +404,16 @@ pub(super) fn draw_visible_transcript_content(
                     );
                 }
 
-                if let Some((selection_start, selection_end)) = selection {
+                if let Some((selection_start, selection_end)) = scene.selection {
                     draw_paragraph_selection(
                         renderer,
-                        document,
+                        scene.document,
                         paragraph_node,
                         paragraph,
                         selection_start,
                         selection_end,
                         paragraph_local_origin(outer_bounds, paragraph_node),
-                        viewport,
+                        &scene.viewport,
                     );
                 }
 
@@ -436,39 +425,37 @@ pub(super) fn draw_visible_transcript_content(
                         .first()
                         .and_then(|span| span.color)
                         .unwrap_or(defaults.text_color),
-                    *viewport,
+                    scene.viewport,
                 );
             }
             LaidOutFlowNode::Table(layout_node) => {
-                let RenderedTranscriptNode::Table(table_node) =
-                    &document.nodes[layout_node.node_index]
-                else {
+                let Some(table_node) = scene.table_node(layout_node) else {
                     continue;
                 };
-                let table_layout = &render_cache.table_layouts[layout_node.table_index];
-                let table_paragraphs =
-                    &render_cache.paragraphs[table_layout.paragraph_range.clone()];
+                let Some(table_layout) = scene.table_layout(layout_node.table_index) else {
+                    continue;
+                };
+                let table_paragraphs = scene.table_paragraphs(table_layout);
                 let measured_table =
-                    translate_measured_table_node(&layout_node.measured_table, widget_origin);
+                    translate_measured_table_node(&layout_node.measured_table, scene.widget_origin);
 
                 draw_rendered_table_node(
                     renderer,
-                    document,
+                    scene.document,
                     defaults,
-                    selection,
+                    scene.selection,
                     table_node,
                     table_paragraphs,
                     &measured_table,
-                    viewport,
+                    &scene.viewport,
                 );
             }
             LaidOutFlowNode::Rule(layout_node) => {
-                let RenderedTranscriptNode::Rule(rule_node) =
-                    &document.nodes[layout_node.node_index]
-                else {
+                let Some(rule_node) = scene.rule_node(layout_node) else {
                     continue;
                 };
-                let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
+                let outer_bounds =
+                    translate_rectangle(layout_node.outer_bounds, scene.widget_origin);
                 let rule_y = outer_bounds.y + 3.0;
                 renderer.fill_quad(
                     renderer::Quad {
