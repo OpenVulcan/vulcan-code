@@ -674,11 +674,11 @@ pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {
         },
         shadow: Shadow {
             color: Color {
-                a: 0.10,
+                a: 0.25,
                 ..Color::BLACK
             },
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 24.0,
+            offset: Vector::new(8.0, 10.0),
+            blur_radius: 12.0,
         },
         ..Default::default()
     }
