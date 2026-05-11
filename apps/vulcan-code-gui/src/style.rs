@@ -3,6 +3,7 @@
 
 use crate::diff::DiffLineKind;
 use crate::model::SessionRunPhase;
+use crate::theme::ThemePaletteExt;
 use iced::widget::{button, container, text_editor};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
@@ -708,7 +709,7 @@ pub fn workbench_run_phase_chip_style(theme: &Theme, phase: SessionRunPhase) -> 
     };
 
     container::Style {
-        background: Some(background.into()),
+        background: Some(Background::Color(background)),
         border: Border {
             radius: 2.0.into(),
             width: 1.0,

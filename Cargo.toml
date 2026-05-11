@@ -3,7 +3,13 @@ members = [
     "apps/vulcan-code-gui",
     "apps/vulcan-mcp-runtime",
     "apps/vulcan-agent-view",
+    "apps/vulcan-iced-widget",
     "apps/vulcan-tools-manager",
+]
+exclude = [
+    "third_party/iced",
+    "third_party/iced_aw",
+    "third_party/iced_fonts",
 ]
 resolver = "2"
 
@@ -14,10 +20,13 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
-iced = { version = "0.14.0", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced"] }
+iced = { path = "third_party/iced", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced", "lazy"] }
+iced_aw = { path = "third_party/iced_aw", default-features = false, features = ["context_menu"] }
+iced_fonts = { path = "third_party/iced_fonts", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
 rig = { package = "rig-core", version = "0.36.0", default-features = false, features = ["reqwest", "rustls", "derive"] }
 vulcan-mcp-runtime = { path = "apps/vulcan-mcp-runtime" }
 vulcan-agent-view = { path = "apps/vulcan-agent-view" }
+vulcan-iced-widget = { path = "apps/vulcan-iced-widget" }
 vulcan-tools-manager = { path = "apps/vulcan-tools-manager" }
 vldb-controller-client = "0.2.1"
 luaskills = { path = "../../projects/vulcan-luaskills" }

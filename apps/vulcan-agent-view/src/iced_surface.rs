@@ -3,7 +3,7 @@
 
 use crate::iced::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptInteraction,
-    view_selectable_rendered_transcript,
+    view_selectable_rendered_transcript, view_selectable_rendered_transcript_owned,
 };
 use crate::iced_style::{thinking_modal_backdrop_style, thinking_modal_card_style};
 use crate::{
@@ -12,18 +12,22 @@ use crate::{
 };
 use iced::widget::Id;
 use iced::widget::button;
+use iced::widget::lazy;
 use iced::widget::scrollable;
 use iced::widget::{column, container, mouse_area, opaque, row, rule, space, stack, text};
 use iced::{Center, Element, Fill, FillPortion, Theme};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// Shared duration used by the centered thinking modal open-and-close animation.
 /// 居中思考弹层打开与关闭动画使用的共享时长。
-pub const THINKING_MODAL_ANIMATION_DURATION: Duration = Duration::from_millis(220);
+pub const THINKING_MODAL_ANIMATION_DURATION: Duration = Duration::from_millis(320);
 
 /// Shared tick interval used while the centered thinking modal animation is active.
 /// 居中思考弹层动画激活期间使用的共享刷新间隔。
-pub const THINKING_MODAL_TICK_INTERVAL: Duration = Duration::from_millis(16);
+pub const THINKING_MODAL_TICK_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Shared width used by the floating streaming-thinking overlay.
 /// 流式思考浮动面板使用的共享宽度。
@@ -48,40 +52,71 @@ pub enum ThinkingModalPhase {
     Closing,
 }
 
+/// Stable dependency key used by the lazy modal body so expensive transcript widgets only rebuild when content or theme actually changes.
+/// 供惰性弹层正文使用的稳定依赖键，使昂贵的转录组件仅在内容或主题真正变化时重建。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ModalBodyLazyDependency {
+    /// Stable content signature computed from the prepared modal document snapshot.
+    /// 基于已准备弹层文档快照计算得到的稳定内容签名。
+    document_signature: u64,
+    /// Stable theme signature used to invalidate the cached body when the visible palette changes.
+    /// 当可见调色板变化时用于使缓存正文失效的稳定主题签名。
+    theme_signature: u64,
+}
+
 /// Builds the centered thinking modal surface on top of one prepared thinking document.
 /// 基于一份已准备好的思考文档构建居中思考弹层表面。
-pub fn view_thinking_modal_surface<'a, Message: Clone + 'a>(
+pub fn view_thinking_modal_surface<'a, Message: Clone + 'a + 'static>(
     title: String,
     helper_text: String,
     document: &AgentViewDocument,
+    document_signature: u64,
     app_theme: &Theme,
     progress: f32,
     scrollable_id: Id,
-    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
-    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
-    on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a + 'static,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a + 'static,
+    on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a + 'static,
     on_close: Message,
 ) -> Element<'a, Message> {
-    let vertical_inset = 22.0 + (1.0 - progress) * 22.0;
+    let reveal_progress = progress.clamp(0.0, 1.0);
+    let vertical_inset = 22.0 + (1.0 - reveal_progress) * 6.0;
     let header_secondary = app_theme
-        .extended_palette()
+        .palette()
         .background
         .base
         .text
-        .scale_alpha(0.58 + progress * 0.20);
+        .scale_alpha(0.54 + reveal_progress * 0.24);
 
-    let modal_body = scrollable(
-        container(view_selectable_rendered_transcript::<Message>(
-            document,
-            app_theme,
-            on_drag_auto_scroll,
-            on_interaction,
-        ))
-        .width(Fill),
-    )
-    .id(scrollable_id)
-    .height(Fill)
-    .on_scroll(on_scroll);
+    let transcript_document = document.clone();
+    let transcript_theme = app_theme.clone();
+    let transcript_scrollable_id = scrollable_id.clone();
+    let on_drag_auto_scroll = Rc::new(on_drag_auto_scroll);
+    let on_interaction = Rc::new(on_interaction);
+    let on_scroll = Rc::new(on_scroll);
+    let modal_body_dependency = ModalBodyLazyDependency {
+        document_signature,
+        theme_signature: hash_modal_theme(app_theme),
+    };
+    let modal_body: Element<'a, Message> = lazy(modal_body_dependency, move |_| {
+        let drag_callback = Rc::clone(&on_drag_auto_scroll);
+        let interaction_callback = Rc::clone(&on_interaction);
+        let scroll_callback = Rc::clone(&on_scroll);
+
+        scrollable(
+            container(view_selectable_rendered_transcript_owned::<Message>(
+                transcript_document.clone(),
+                transcript_theme.clone(),
+                move |request| drag_callback(request),
+                move |interaction| interaction_callback(interaction),
+            ))
+            .width(Fill),
+        )
+        .id(transcript_scrollable_id.clone())
+        .height(Fill)
+        .on_scroll(move |viewport| scroll_callback(viewport))
+    })
+    .into();
 
     let modal_panel = container(
         column![
@@ -162,12 +197,7 @@ pub fn view_thinking_overlay_surface<'a, Message: 'a>(
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
     on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let helper_color = app_theme
-        .extended_palette()
-        .background
-        .base
-        .text
-        .scale_alpha(0.56);
+    let helper_color = app_theme.palette().background.base.text.scale_alpha(0.56);
 
     let overlay_body = scrollable(
         container(view_selectable_rendered_transcript::<Message>(
@@ -363,11 +393,43 @@ pub fn thinking_modal_progress(started_at: Instant, phase: ThinkingModalPhase) -
         (elapsed.as_secs_f32() / duration).clamp(0.0, 1.0)
     };
 
+    let eased_progress = smooth_modal_animation_progress(raw_progress);
+
     match phase {
-        ThinkingModalPhase::Opening => raw_progress,
+        ThinkingModalPhase::Opening => eased_progress,
         ThinkingModalPhase::Open => 1.0,
-        ThinkingModalPhase::Closing => 1.0 - raw_progress,
+        ThinkingModalPhase::Closing => 1.0 - eased_progress,
     }
+}
+
+/// Converts linear modal timeline progress into a softer eased curve without the abrupt first-frame jump.
+/// 将线性弹层时间轴进度转换为更柔和的缓动曲线，避免首帧突兀跳变。
+fn smooth_modal_animation_progress(progress: f32) -> f32 {
+    let clamped_progress = progress.clamp(0.0, 1.0);
+    clamped_progress * clamped_progress * (3.0 - 2.0 * clamped_progress)
+}
+
+/// Hashes the visible modal theme treatment into one stable signature so lazy modal bodies rebuild when palette changes propagate.
+/// 将可见弹层主题外观哈希为稳定签名，使惰性弹层正文能在调色板变化传播时重建。
+fn hash_modal_theme(theme: &Theme) -> u64 {
+    let palette = theme.palette();
+    let mut hasher = DefaultHasher::new();
+
+    hash_color(palette.background.base.color, &mut hasher);
+    hash_color(palette.background.base.text, &mut hasher);
+    hash_color(palette.primary.strong.color, &mut hasher);
+    hash_color(palette.secondary.strong.color, &mut hasher);
+
+    hasher.finish()
+}
+
+/// Pushes one RGBA color into the provided hash state using raw float bit patterns to preserve visual identity changes.
+/// 使用原始浮点位模式将一组 RGBA 颜色分量写入给定哈希状态，以保留可见外观变化。
+fn hash_color(color: iced::Color, hasher: &mut DefaultHasher) {
+    color.r.to_bits().hash(hasher);
+    color.g.to_bits().hash(hasher);
+    color.b.to_bits().hash(hasher);
+    color.a.to_bits().hash(hasher);
 }
 
 /// Finalizes one thinking directive into a standalone single-block surface document with the requested surface mode.

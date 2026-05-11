@@ -549,11 +549,14 @@ pub fn stream_runtime_run(
                     }
                 }
                 Ok(ProviderStreamDelta::Output(delta)) => {
-                    if !thinking_completed_emitted && !thinking_visible_output.trim().is_empty() {
-                        thinking_completed_emitted = true;
-                        yield ExecutionStreamEvent::ThinkingCompleted {
-                            session_id: request.session_id,
-                        };
+                    if let Some(thinking_completed_event) =
+                        take_current_thinking_phase_completed_event(
+                            request.session_id,
+                            &thinking_visible_output,
+                            &mut thinking_completed_emitted,
+                        )
+                    {
+                        yield thinking_completed_event;
                     }
                     assistant_output.push_str(&delta);
                     yield ExecutionStreamEvent::OutputDelta {
@@ -562,6 +565,22 @@ pub fn stream_runtime_run(
                     };
                 }
                 Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
+                    if is_provider_tool_boundary_runtime_event(&event) {
+                        if let Some(thinking_completed_event) =
+                            take_current_thinking_phase_completed_event(
+                                request.session_id,
+                                &thinking_visible_output,
+                                &mut thinking_completed_emitted,
+                            )
+                        {
+                            yield thinking_completed_event;
+                        }
+                        reset_current_thinking_phase_tracking(
+                            &mut thinking_raw_output,
+                            &mut thinking_visible_output,
+                            &mut thinking_completed_emitted,
+                        );
+                    }
                     runtime_events.push(event.clone());
                     yield ExecutionStreamEvent::RuntimeEvent {
                         session_id: request.session_id,
@@ -576,10 +595,12 @@ pub fn stream_runtime_run(
         }
 
         if let Some(error) = terminal_error {
-            if !thinking_completed_emitted && !thinking_visible_output.trim().is_empty() {
-                yield ExecutionStreamEvent::ThinkingCompleted {
-                    session_id: request.session_id,
-                };
+            if let Some(thinking_completed_event) = take_current_thinking_phase_completed_event(
+                request.session_id,
+                &thinking_visible_output,
+                &mut thinking_completed_emitted,
+            ) {
+                yield thinking_completed_event;
             }
             let failed_event = RuntimeEvent::new(
                 RuntimeEventKind::Failed,
@@ -603,10 +624,12 @@ pub fn stream_runtime_run(
             return;
         }
 
-        if !thinking_completed_emitted && !thinking_visible_output.trim().is_empty() {
-            yield ExecutionStreamEvent::ThinkingCompleted {
-                session_id: request.session_id,
-            };
+        if let Some(thinking_completed_event) = take_current_thinking_phase_completed_event(
+            request.session_id,
+            &thinking_visible_output,
+            &mut thinking_completed_emitted,
+        ) {
+            yield thinking_completed_event;
         }
 
         let normalized_output = normalize_assistant_output(assistant_output);
@@ -1216,6 +1239,43 @@ fn provider_deltas_from_assistant_content<R>(
         StreamedAssistantContent::ToolCallDelta { .. } => Vec::new(),
         StreamedAssistantContent::Final(_) => Vec::new(),
     }
+}
+
+/// Returns whether one provider runtime event represents a real tool boundary that should seal the current floating thinking phase.
+/// 返回某条 Provider 运行时事件是否代表真实工具边界，从而应封口当前浮动思考阶段。
+fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
+    match event.kind {
+        RuntimeEventKind::ToolStarted => event.title.starts_with("工具调用 · "),
+        RuntimeEventKind::ToolFinished => event.title.starts_with("工具返回 · "),
+        _ => false,
+    }
+}
+
+/// Converts the currently accumulated thinking phase into one completion event exactly once when visible content exists.
+/// 当当前累计的思考阶段存在可见内容时，将其恰好一次转换为完成事件。
+fn take_current_thinking_phase_completed_event(
+    session_id: SessionId,
+    thinking_visible_output: &str,
+    thinking_completed_emitted: &mut bool,
+) -> Option<ExecutionStreamEvent> {
+    if *thinking_completed_emitted || thinking_visible_output.trim().is_empty() {
+        return None;
+    }
+
+    *thinking_completed_emitted = true;
+    Some(ExecutionStreamEvent::ThinkingCompleted { session_id })
+}
+
+/// Clears the current thinking-phase buffers after one tool boundary so later reasoning starts a fresh floating segment.
+/// 在一次工具边界后清空当前思考阶段缓冲，使后续推理从新的浮动片段开始。
+fn reset_current_thinking_phase_tracking(
+    thinking_raw_output: &mut String,
+    thinking_visible_output: &mut String,
+    thinking_completed_emitted: &mut bool,
+) {
+    thinking_raw_output.clear();
+    thinking_visible_output.clear();
+    *thinking_completed_emitted = false;
 }
 
 /// Flattens structured reasoning content into one readable text block for the transcript thinking section.

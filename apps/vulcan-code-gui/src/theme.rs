@@ -5,6 +5,20 @@ use iced::highlighter;
 use iced::widget::markdown;
 use iced::{Font, Theme};
 
+/// Theme palette compatibility trait that preserves the older extended-palette accessor.
+/// 保留旧版扩展调色盘访问方式的主题调色盘兼容 trait。
+pub trait ThemePaletteExt {
+    /// Returns the theme palette using the legacy accessor name expected by current GUI code.
+    /// 使用当前 GUI 代码期望的旧访问器名称返回主题调色盘。
+    fn extended_palette(&self) -> &iced::theme::Palette;
+}
+
+impl ThemePaletteExt for Theme {
+    fn extended_palette(&self) -> &iced::theme::Palette {
+        self.palette()
+    }
+}
+
 /// Bundled UI font family name used across all supported platforms.
 /// 所有支持平台统一使用的内置界面字体族名称。
 const BUNDLED_UI_FONT_NAME: &str = "Roboto";
@@ -142,19 +156,19 @@ pub fn cjk_code_italic_font_bytes() -> &'static [u8] {
 /// Returns the bundled UI font used by normal text widgets.
 /// 返回普通文本控件使用的内置界面字体。
 pub fn ui_font() -> Font {
-    Font::with_name(BUNDLED_UI_FONT_NAME)
+    Font::new(BUNDLED_UI_FONT_NAME)
 }
 
 /// Returns the bundled code font used by source-like widgets.
 /// 返回源码类控件使用的内置代码字体。
 pub fn code_font() -> Font {
-    Font::with_name(BUNDLED_CODE_FONT_NAME)
+    Font::new(BUNDLED_CODE_FONT_NAME)
 }
 
 /// Returns the bundled CJK-safe monospace font used for italic highlight fallback.
 /// 返回用于斜体高亮回退的内置 CJK 安全等宽字体。
 pub fn cjk_code_font() -> Font {
-    Font::with_name(BUNDLED_CJK_CODE_FONT_NAME)
+    Font::new(BUNDLED_CJK_CODE_FONT_NAME)
 }
 
 /// Returns one Markdown style that keeps prose on the Latin UI family and code on the bundled monospace family.

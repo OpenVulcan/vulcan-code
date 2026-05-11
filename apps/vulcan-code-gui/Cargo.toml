@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 iced.workspace = true
-iced_aw = { version = "0.14.1", default-features = false, features = ["context_menu"] }
-iced_fonts = { version = "0.3.0", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
+iced_aw.workspace = true
+iced_fonts.workspace = true
 async-stream = "0.3.6"
 dirs = "6.0.0"
 futures-util = "0.3.31"

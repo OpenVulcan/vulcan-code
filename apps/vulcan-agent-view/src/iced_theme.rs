@@ -26,25 +26,25 @@ const BUNDLED_CJK_CODE_FONT_NAME: &str = "Noto Sans Mono CJK SC";
 /// Returns the bundled UI font used by normal text widgets.
 /// 返回普通文本控件使用的内置界面字体。
 pub fn ui_font() -> Font {
-    Font::with_name(BUNDLED_UI_FONT_NAME)
+    Font::new(BUNDLED_UI_FONT_NAME)
 }
 
 /// Returns the bundled fallback CJK UI font used when one rendered span contains East Asian content.
 /// 返回渲染区间包含东亚文本时使用的内置 CJK 兜底界面字体。
 pub fn ui_cjk_font() -> Font {
-    Font::with_name(BUNDLED_CJK_UI_FONT_NAME)
+    Font::new(BUNDLED_CJK_UI_FONT_NAME)
 }
 
 /// Returns the bundled code font used by source-like widgets.
 /// 返回源码类控件使用的内置代码字体。
 pub fn code_font() -> Font {
-    Font::with_name(BUNDLED_CODE_FONT_NAME)
+    Font::new(BUNDLED_CODE_FONT_NAME)
 }
 
 /// Returns the bundled CJK-safe monospace font used for italic highlight fallback.
 /// 返回用于斜体高亮回退的内置 CJK 安全等宽字体。
 pub fn cjk_code_font() -> Font {
-    Font::with_name(BUNDLED_CJK_CODE_FONT_NAME)
+    Font::new(BUNDLED_CJK_CODE_FONT_NAME)
 }
 
 /// Returns one Markdown style that keeps prose on the Latin UI family and code on the bundled monospace family.

@@ -4,14 +4,13 @@
 use crate::iced_theme as theme;
 use crate::{AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewDocument};
 use iced::advanced::Renderer as _;
-use iced::advanced::clipboard::Kind as ClipboardKind;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::text::Renderer as _;
 use iced::advanced::text::{self, Paragraph};
 use iced::advanced::widget::tree;
-use iced::advanced::{Clipboard, Shell, Widget, overlay};
+use iced::advanced::{Shell, Widget, overlay};
 use iced::font;
 use iced::keyboard;
 use iced::widget::markdown;
@@ -20,7 +19,8 @@ use iced::{
     Background, Border, Color, Element, Event, Font, Length, Padding, Pixels, Point, Rectangle,
     Renderer, Size, Theme, Vector,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::time::Instant;
@@ -149,6 +149,22 @@ pub fn view_selectable_rendered_transcript<'a, Message: 'a>(
     ))
 }
 
+/// Builds one selectable rendered transcript element from owned structured agent-document inputs so lazy wrappers can cache the heavy widget tree without borrowing external state.
+/// 根据拥有所有权的结构化代理文档输入构建一个可选择的渲染转录元素，使惰性包装器能够缓存重型组件树而不借用外部状态。
+pub fn view_selectable_rendered_transcript_owned<'a, Message: 'a>(
+    document: AgentViewDocument,
+    app_theme: Theme,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
+) -> Element<'a, Message> {
+    let rendered_document = RenderedTranscriptDocument::from_agent_document(&document, &app_theme);
+    Element::new(SelectableTranscript::new(
+        rendered_document,
+        on_drag_auto_scroll,
+        on_interaction,
+    ))
+}
+
 /// Custom widget keeping the rendered transcript selectable without falling back to a text editor surface.
 /// 在不退回文本编辑器表面的情况下保持渲染转录可选择的自定义组件。
 struct SelectableTranscript<'a, Message> {
@@ -198,6 +214,18 @@ struct SelectableTranscriptState {
     /// Cached background-panel layout metrics resolved from the current flow-node geometry.
     /// 根据当前流式节点几何信息解析得到的背景面板布局指标缓存。
     panel_layouts: Vec<LaidOutPanelNode>,
+    /// Whether the current paragraph and flow-layout caches are valid for the last measured width and document signature.
+    /// 当前段落与流式布局缓存是否对上一次测量宽度和文档签名仍然有效。
+    layout_cache_ready: bool,
+    /// Width used by the last successful layout-cache build.
+    /// 最近一次成功构建布局缓存时使用的宽度。
+    cached_layout_width: f32,
+    /// Stable rendered-document signature used to invalidate cached layout metrics when content or theme changes.
+    /// 当内容或主题变化时用于使布局缓存失效的稳定渲染文档签名。
+    cached_layout_signature: u64,
+    /// Height produced by the last successful layout-cache build.
+    /// 最近一次成功构建布局缓存时产出的高度。
+    cached_layout_height: f32,
     /// Whether the transcript currently owns keyboard focus for copy and select-all shortcuts.
     /// 当前转录是否拥有键盘焦点，以处理复制和全选快捷键。
     focused: bool,
@@ -239,6 +267,10 @@ impl Default for SelectableTranscriptState {
             table_layouts: Vec::new(),
             flow_layouts: Vec::new(),
             panel_layouts: Vec::new(),
+            layout_cache_ready: false,
+            cached_layout_width: 0.0,
+            cached_layout_signature: 0,
+            cached_layout_height: 1.0,
             focused: false,
             dragging: false,
             drag_moved: false,
@@ -273,14 +305,18 @@ struct RenderedTranscriptDocument {
     /// Link-scoped transcript actions keyed by their synthetic link target.
     /// 以合成链接目标为键保存的链接级转录动作集合。
     link_actions: BTreeMap<String, RenderedTranscriptLinkAction>,
+    /// Stable layout signature used to reuse expensive paragraph geometry while the transcript width and render-affecting inputs stay unchanged.
+    /// 当转录宽度和影响渲染的输入保持不变时，用于复用昂贵段落几何信息的稳定布局签名。
+    layout_signature: u64,
 }
 
 impl RenderedTranscriptDocument {
     /// Builds one rendered transcript model from the structured agent document.
     /// 根据结构化代理文档构建一份渲染转录模型。
     fn from_agent_document(document: &AgentViewDocument, app_theme: &Theme) -> Self {
-        let palette = app_theme.extended_palette();
+        let palette = app_theme.palette();
         let markdown_settings = theme::markdown_settings(app_theme);
+        let layout_signature = compute_rendered_transcript_layout_signature(document, app_theme);
         let mut builder = RenderedTranscriptBuilder::new(
             palette.primary.weak.color.scale_alpha(0.28),
             palette.background.base.text.scale_alpha(0.94),
@@ -330,6 +366,7 @@ impl RenderedTranscriptDocument {
             full_text: builder.full_text,
             selection_color: builder.selection_color,
             link_actions: builder.link_actions,
+            layout_signature,
         }
     }
 
@@ -394,6 +431,40 @@ impl RenderedTranscriptDocument {
     fn link_action_for_target(&self, link_target: &str) -> Option<&RenderedTranscriptLinkAction> {
         self.link_actions.get(link_target)
     }
+}
+
+/// Computes one stable transcript-layout signature from the source document and render-affecting theme inputs.
+/// 根据源文档与影响渲染的主题输入计算一份稳定的转录布局签名。
+fn compute_rendered_transcript_layout_signature(
+    document: &AgentViewDocument,
+    app_theme: &Theme,
+) -> u64 {
+    let markdown_settings = theme::markdown_settings(app_theme);
+    let palette = app_theme.palette();
+    let mut hasher = DefaultHasher::new();
+
+    document.blocks.len().hash(&mut hasher);
+    markdown_settings.text_size.0.to_bits().hash(&mut hasher);
+    hash_render_color(palette.background.base.color, &mut hasher);
+    hash_render_color(palette.background.base.text, &mut hasher);
+    hash_render_color(palette.primary.weak.color, &mut hasher);
+    hash_render_color(palette.primary.strong.color, &mut hasher);
+    hash_render_color(palette.secondary.strong.color, &mut hasher);
+
+    for block in &document.blocks {
+        block.raw_source().hash(&mut hasher);
+    }
+
+    hasher.finish()
+}
+
+/// Hashes one RGBA color into the provided transcript-layout hash state using raw float bit patterns.
+/// 使用原始浮点位模式将一组 RGBA 颜色写入给定的转录布局哈希状态。
+fn hash_render_color(color: Color, hasher: &mut DefaultHasher) {
+    color.r.to_bits().hash(hasher);
+    color.g.to_bits().hash(hasher);
+    color.b.to_bits().hash(hasher);
+    color.a.to_bits().hash(hasher);
 }
 
 /// Link-scoped interaction emitted by synthetic transcript chrome spans.
@@ -1373,6 +1444,8 @@ fn build_renderer_paragraph(
         align_y: iced::alignment::Vertical::Top,
         shaping: text::Shaping::Advanced,
         wrapping: paragraph_node.wrapping,
+        ellipsis: text::Ellipsis::None,
+        hint_factor: None,
     })
 }
 
@@ -1913,6 +1986,16 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             Size::new(available_width, max_size.height.max(1.0)),
         );
 
+        if state.layout_cache_ready
+            && state.cached_layout_signature == self.document.layout_signature
+            && (state.cached_layout_width - available_width).abs() <= 0.5
+        {
+            return layout::Node::new(Size::new(
+                available_width,
+                state.cached_layout_height.max(1.0),
+            ));
+        }
+
         let paragraph_count = count_rendered_paragraph_slots(&self.document);
         let table_count = self
             .document
@@ -2104,7 +2187,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             })
             .collect();
 
-        layout::Node::new(Size::new(available_width, current_y.max(1.0)))
+        state.layout_cache_ready = true;
+        state.cached_layout_width = available_width;
+        state.cached_layout_signature = self.document.layout_signature;
+        state.cached_layout_height = current_y.max(1.0);
+
+        layout::Node::new(Size::new(available_width, state.cached_layout_height))
     }
 
     /// Draws the transcript widget, its block backgrounds, quote bars, text, and active selection highlight.
@@ -2127,12 +2215,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         let widget_origin = layout.bounds().position();
         let local_viewport = localize_rectangle(*viewport, widget_origin);
         let local_cursor_position = cursor
-            .position()
+            .position_including_levitation()
             .map(|position| localize_point(position, widget_origin));
         let selection = effective_selection(
             state,
             &self.document,
-            layout.bounds().size(),
+            local_viewport,
             local_cursor_position,
         );
         let visible_flow_range = visible_flow_layout_range(&state.flow_layouts, local_viewport);
@@ -2443,11 +2531,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+
+        let local_viewport = localize_rectangle(*_viewport, layout.bounds().position());
 
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -2511,12 +2600,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
-                if let Some(position) = cursor.position() {
+                if let Some(position) = cursor.position_including_levitation() {
                     let local_position = localize_point(position, layout.bounds().position());
                     if let Some(hit_char) = drag_selection_head_char(
                         &self.document,
                         state,
-                        Rectangle::new(Point::ORIGIN, layout.bounds().size()),
+                        local_viewport,
                         local_position,
                     ) {
                         if hit_char != state.head_char {
@@ -2529,7 +2618,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
 
                     self.publish_drag_auto_scroll_request(
                         state,
-                        drag_auto_scroll_request_for_position(layout.bounds(), position),
+                        drag_auto_scroll_request_for_position(local_viewport, local_position),
                         shell,
                     );
                 } else {
@@ -2537,12 +2626,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.dragging => {
-                if let Some(position) = cursor.position() {
+                if let Some(position) = cursor.position_including_levitation() {
                     let local_position = localize_point(position, layout.bounds().position());
                     if let Some(hit_char) = drag_selection_head_char(
                         &self.document,
                         state,
-                        Rectangle::new(Point::ORIGIN, layout.bounds().size()),
+                        local_viewport,
                         local_position,
                     ) {
                         if hit_char != state.head_char {
@@ -2581,8 +2670,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                                         state.last_click_instant = Some(Instant::now());
                                     }
                                     RenderedTranscriptLinkAction::CopyText(copy_payload) => {
-                                        clipboard
-                                            .write(ClipboardKind::Standard, copy_payload.clone());
+                                        shell.write_clipboard(copy_payload.clone().into());
                                     }
                                     RenderedTranscriptLinkAction::OpenThinkingModal(block_id) => {
                                         shell.publish((self.on_interaction.as_ref())(
@@ -2604,7 +2692,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                                     }
                                 }
                             } else {
-                                clipboard.write(ClipboardKind::Standard, link_url);
+                                shell.write_clipboard(link_url.into());
                             }
                         }
                     }
@@ -2625,14 +2713,15 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 if let Some((selection_start, selection_end)) = effective_selection(
                     state,
                     &self.document,
-                    layout.bounds().size(),
+                    local_viewport,
                     cursor
-                        .position()
+                        .position_including_levitation()
                         .map(|position| localize_point(position, layout.bounds().position())),
                 ) {
-                    clipboard.write(
-                        ClipboardKind::Standard,
-                        self.document.selected_text(selection_start, selection_end),
+                    shell.write_clipboard(
+                        self.document
+                            .selected_text(selection_start, selection_end)
+                            .into(),
                     );
                     shell.request_redraw();
                     shell.capture_event();
@@ -2771,7 +2860,7 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
         let menu_bounds = layout.bounds();
         let actions =
             transcript_context_menu_actions(current_selection_for_state(self.state).is_some());
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let hovered_action = cursor.position().and_then(|position| {
             hit_test_transcript_context_menu_action(menu_bounds, actions.as_slice(), position)
         });
@@ -2834,6 +2923,8 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
                             align_y: iced::alignment::Vertical::Center,
                             shaping: text::Shaping::Advanced,
                             wrapping: text::Wrapping::None,
+                            ellipsis: text::Ellipsis::None,
+                            hint_factor: None,
                         },
                         Point::new(TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X, item_bounds.y),
                         style.text_color,
@@ -2852,7 +2943,6 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
         match event {
@@ -2872,7 +2962,7 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
                             action,
                             self.state,
                             self.document,
-                            clipboard,
+                            shell,
                         );
                         self.state.context_menu = None;
                         shell.request_redraw();
@@ -2954,7 +3044,7 @@ fn render_directive_block(
         return;
     }
 
-    let palette = app_theme.extended_palette();
+    let palette = app_theme.palette();
     let title_background = match block.kind {
         AgentViewDirectiveKind::UserPrompt => directive_background(
             palette.secondary.weak.color.scale_alpha(0.12),
@@ -3154,7 +3244,7 @@ fn render_compact_collapsible_directive_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
-    let palette = app_theme.extended_palette();
+    let palette = app_theme.palette();
     let (icon, summary_color, body_background, body_text_color) = match block.kind {
         AgentViewDirectiveKind::Thinking => (
             "🧠",
@@ -3454,7 +3544,7 @@ fn render_user_prompt_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
-    let palette = app_theme.extended_palette();
+    let palette = app_theme.palette();
     let bubble_fill = mix_color(
         palette.background.strong.color,
         palette.primary.strong.color,
@@ -3741,12 +3831,9 @@ fn render_markdown_items(
                                     Background::Color(color) => {
                                         mix_color(color, Color::BLACK.scale_alpha(0.12), 0.08)
                                     }
-                                    _ => app_theme
-                                        .extended_palette()
-                                        .background
-                                        .weak
-                                        .color
-                                        .scale_alpha(0.22),
+                                    _ => {
+                                        app_theme.palette().background.weak.color.scale_alpha(0.22)
+                                    }
                                 },
                                 background.border.color.scale_alpha(
                                     if background.border.width <= f32::EPSILON {
@@ -3759,14 +3846,9 @@ fn render_markdown_items(
                         })
                         .or_else(|| {
                             Some(directive_background(
+                                app_theme.palette().background.weak.color.scale_alpha(0.24),
                                 app_theme
-                                    .extended_palette()
-                                    .background
-                                    .weak
-                                    .color
-                                    .scale_alpha(0.24),
-                                app_theme
-                                    .extended_palette()
+                                    .palette()
                                     .background
                                     .strong
                                     .color
@@ -3875,7 +3957,7 @@ fn render_markdown_items(
             markdown::Item::Rule => {
                 builder.push_rule(
                     app_theme
-                        .extended_palette()
+                        .palette()
                         .background
                         .strong
                         .color
@@ -3986,7 +4068,7 @@ fn render_markdown_list(
 ) {
     let list_text_color = context
         .foreground_color
-        .unwrap_or(app_theme.extended_palette().background.base.text);
+        .unwrap_or(app_theme.palette().background.base.text);
     let list_gap_after = if context.block_background.is_some() {
         4.0
     } else {
@@ -4909,7 +4991,7 @@ fn rendered_table_style(
     settings: markdown::Settings,
     app_theme: &Theme,
 ) -> RenderedTableStyle {
-    let palette = app_theme.extended_palette();
+    let palette = app_theme.palette();
     let inherited_background = paragraph_style
         .surface_background
         .or(paragraph_style.background)
@@ -5438,10 +5520,9 @@ fn normalized_selection_for_offsets(
 fn effective_selection(
     state: &SelectableTranscriptState,
     document: &RenderedTranscriptDocument,
-    widget_size: Size,
+    widget_bounds: Rectangle,
     cursor_position: Option<Point>,
 ) -> Option<(usize, usize)> {
-    let widget_bounds = Rectangle::new(Point::ORIGIN, widget_size);
     let head_char = if state.dragging {
         cursor_position
             .and_then(|position| drag_selection_head_char(document, state, widget_bounds, position))
@@ -5457,6 +5538,133 @@ fn effective_selection(
 /// 在不需要实时拖拽外推时返回当前静态转录选区。
 fn current_selection_for_state(state: &SelectableTranscriptState) -> Option<(usize, usize)> {
     normalized_selection_for_offsets(state.anchor_char, state.head_char)
+}
+
+/// Projects one pointer position onto the nearest selectable content inside the owning flow node.
+/// 将一个指针位置投影到所属流式节点内最近的可选择文本内容上。
+fn projected_hit_test_rendered_document(
+    document: &RenderedTranscriptDocument,
+    state: &SelectableTranscriptState,
+    position: Point,
+) -> Option<usize> {
+    let flow_layout_index = flow_layout_index_at_local_y(&state.flow_layouts, position.y)?;
+
+    match state.flow_layouts.get(flow_layout_index)? {
+        LaidOutFlowNode::Collapsible(layout_node) => {
+            let RenderedTranscriptNode::Collapsible(collapsible_node) =
+                &document.nodes[layout_node.node_index]
+            else {
+                return None;
+            };
+
+            let summary_distance = layout_node.summary_outer_bounds.distance(position);
+            let body_candidate = if let (Some(body_node), Some(body_paragraph_index), Some(body_outer_bounds)) = (
+                collapsible_node.body.as_ref(),
+                layout_node.body_paragraph_index,
+                layout_node.body_outer_bounds,
+            ) {
+                Some((body_node, body_paragraph_index, body_outer_bounds, body_outer_bounds.distance(position)))
+            } else {
+                None
+            };
+
+            if let Some((body_node, body_paragraph_index, body_outer_bounds, body_distance)) = body_candidate
+                && body_distance < summary_distance
+            {
+                let body_paragraph = state.paragraphs.get(body_paragraph_index)?;
+                let max_scroll =
+                    (layout_node.body_full_text_height - body_outer_bounds.height).max(0.0);
+                let scroll_offset = state
+                    .collapsible_body_scroll_offsets
+                    .get(&collapsible_node.block_id)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .clamp(0.0, max_scroll);
+
+                return projected_hit_test_rendered_paragraph(
+                    body_node,
+                    body_paragraph,
+                    body_outer_bounds,
+                    position,
+                    scroll_offset,
+                );
+            }
+
+            let summary_paragraph = state.paragraphs.get(layout_node.summary_paragraph_index)?;
+            projected_hit_test_rendered_paragraph(
+                &collapsible_node.summary,
+                summary_paragraph,
+                layout_node.summary_outer_bounds,
+                position,
+                0.0,
+            )
+        }
+        LaidOutFlowNode::Paragraph(layout_node) => {
+            let RenderedTranscriptNode::Paragraph(paragraph_node) =
+                &document.nodes[layout_node.node_index]
+            else {
+                return None;
+            };
+            let paragraph = state.paragraphs.get(layout_node.paragraph_index)?;
+
+            projected_hit_test_rendered_paragraph(
+                paragraph_node,
+                paragraph,
+                layout_node.outer_bounds,
+                position,
+                0.0,
+            )
+        }
+        LaidOutFlowNode::Table(layout_node) => {
+            let RenderedTranscriptNode::Table(table_node) = &document.nodes[layout_node.node_index]
+            else {
+                return None;
+            };
+            let table_layout = state.table_layouts.get(layout_node.table_index)?;
+            let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
+            let projected_position =
+                clamp_point_to_rectangle(position, layout_node.measured_table.outer_bounds);
+
+            hit_test_rendered_table_node(
+                table_node,
+                table_paragraphs,
+                &layout_node.measured_table,
+                projected_position,
+            )
+        }
+        LaidOutFlowNode::Rule(_) => None,
+    }
+}
+
+/// Resolves one projected character hit inside a rendered paragraph while preserving line and column intent.
+/// 在保留行列意图的前提下，解析一个渲染段落内部的投影字符命中结果。
+fn projected_hit_test_rendered_paragraph(
+    paragraph_node: &RenderedParagraphNode,
+    paragraph: &RendererParagraph,
+    outer_bounds: Rectangle,
+    position: Point,
+    scroll_offset: f32,
+) -> Option<usize> {
+    let projected_position = clamp_point_to_rectangle(position, outer_bounds);
+    let paragraph_height = paragraph.min_bounds().height;
+    let local_point = clamp_hit_test_point_to_paragraph_text_bounds(
+        Point::new(
+            projected_position.x - outer_bounds.x - paragraph_node.inner_padding.left,
+            projected_position.y - outer_bounds.y - paragraph_node.inner_padding.top + scroll_offset,
+        ),
+        paragraph_node,
+        outer_bounds.size(),
+        paragraph_height,
+    );
+    let local_byte_offset =
+        paragraph_hit_test_to_byte_offset(paragraph, &paragraph_node.display_text, local_point)?;
+    let local_char_offset =
+        byte_offset_to_char_offset(&paragraph_node.display_text, local_byte_offset);
+
+    Some(
+        (paragraph_node.global_char_range.start + local_char_offset)
+            .min(paragraph_node.global_char_range.end),
+    )
 }
 
 /// Returns the lightweight transcript context-menu actions visible under the current selection state.
@@ -5534,18 +5742,19 @@ fn hit_test_transcript_context_menu_action(
 
 /// Executes one transcript context-menu action against the current selection state and clipboard.
 /// 针对当前选区状态与剪贴板执行一次转录右键菜单动作。
-fn execute_transcript_context_menu_action(
+fn execute_transcript_context_menu_action<Message>(
     action: TranscriptContextMenuAction,
     state: &mut SelectableTranscriptState,
     document: &RenderedTranscriptDocument,
-    clipboard: &mut dyn Clipboard,
+    shell: &mut Shell<'_, Message>,
 ) {
     match action {
         TranscriptContextMenuAction::CopySelection => {
             if let Some((selection_start, selection_end)) = current_selection_for_state(state) {
-                clipboard.write(
-                    ClipboardKind::Standard,
-                    document.selected_text(selection_start, selection_end),
+                shell.write_clipboard(
+                    document
+                        .selected_text(selection_start, selection_end)
+                        .into(),
                 );
             }
         }
@@ -5566,19 +5775,17 @@ fn drag_selection_head_char(
 ) -> Option<usize> {
     let clamped_position = clamp_point_to_rectangle(position, widget_bounds);
 
-    hit_test_rendered_document(document, state, clamped_position).or_else(|| {
-        if position.y <= widget_bounds.y {
-            Some(0)
-        } else if position.y >= widget_bounds.y + widget_bounds.height {
-            Some(document.len_chars())
-        } else if position.x <= widget_bounds.x {
-            Some(0)
-        } else if position.x >= widget_bounds.x + widget_bounds.width {
-            Some(document.len_chars())
-        } else {
-            None
-        }
-    })
+    hit_test_rendered_document(document, state, clamped_position)
+        .or_else(|| projected_hit_test_rendered_document(document, state, clamped_position))
+        .or_else(|| {
+            if position.y <= widget_bounds.y {
+                Some(0)
+            } else if position.y >= widget_bounds.y + widget_bounds.height {
+                Some(document.len_chars())
+            } else {
+                None
+            }
+        })
 }
 
 /// Clamps one absolute pointer position into the provided rectangle while preserving the closest edge semantics.
@@ -5799,7 +6006,7 @@ enum DiffLineKind {
 /// Returns the semantic diff color used for one rendered diff line.
 /// 返回某个渲染 diff 行使用的语义颜色。
 fn diff_line_color(app_theme: &Theme, line_kind: DiffLineKind) -> Color {
-    let palette = app_theme.extended_palette();
+    let palette = app_theme.palette();
 
     match line_kind {
         DiffLineKind::Added => palette.success.strong.color,

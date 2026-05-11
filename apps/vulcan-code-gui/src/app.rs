@@ -42,14 +42,15 @@ use crate::skills::{
     SummarySkillInput, TitleAgentInput,
 };
 use crate::style;
-use crate::theme;
+use crate::theme::{self, ThemePaletteExt};
 use crate::wheel_passthrough::WheelPassthrough;
 use crate::workspace_store::{self, WorkspaceSnapshot};
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
-    button, checkbox, column, container, markdown, mouse_area, pick_list, progress_bar, radio, row,
-    rule, scrollable, slider, space, stack, svg, text, text_editor, text_input, toggler, tooltip,
+    PickList, button, checkbox, column, container, markdown, mouse_area,
+    pick_list as iced_pick_list, progress_bar, radio, row, rule, scrollable, slider, space, stack,
+    svg, text, text_editor, text_input, toggler, tooltip,
 };
 use iced::window;
 use iced::{
@@ -57,7 +58,8 @@ use iced::{
 };
 use iced_aw::ContextMenu;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::borrow::Borrow;
+use std::collections::{BTreeMap, BTreeSet, HashSet, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -114,6 +116,22 @@ const CODE_EDITOR_TEXT_SIZE: f32 = 16.0;
 /// Shared absolute line height used by both the home-page editor and the diff editor.
 /// 首页编辑器与 diff 编辑器共用的绝对行高。
 const CODE_EDITOR_LINE_HEIGHT: f32 = 20.0;
+
+/// Legacy pick-list helper that preserves the older option-first call shape on top of iced 0.15-dev.
+/// 在 iced 0.15-dev 之上保留旧版“选项在前”调用形式的下拉列表兼容辅助函数。
+fn pick_list<'a, T, L, V, Message>(
+    options: L,
+    selected: Option<V>,
+    on_select: impl Fn(T) -> Message + 'a,
+) -> PickList<'a, T, L, V, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+    L: Borrow<[T]> + 'a,
+    V: Borrow<T> + 'a,
+    Message: Clone + 'a,
+{
+    iced_pick_list(selected, options, |value| value.to_string()).on_select(on_select)
+}
 
 /// Shared fixed height used by each diff file header row.
 /// 每个 diff 文件头部行使用的共享固定高度。
@@ -311,6 +329,48 @@ const DIFF_HUNK_VIRTUAL_OVERSCAN_LINES: usize = 48;
 /// 结构化 diff 审查流使用的稳定滚动容器标识。
 const DIFF_PANEL_SCROLLABLE_ID: &str = "vulcan-code.diff-panel-scrollable";
 
+/// Stable widget identifier shared by the main prompt composer editor across compact and expanded surfaces.
+/// 主提示词编辑器在紧凑态与展开态之间共用的稳定部件标识。
+const COMPOSER_EDITOR_ID: &str = "vulcan-code.composer-editor";
+
+/// Stable scrollable identifier used by the overflowed main prompt composer surface.
+/// 主提示词编辑器溢出后滚动表面使用的稳定滚动容器标识。
+const COMPOSER_EDITOR_SCROLLABLE_ID: &str = "vulcan-code.composer-editor-scrollable";
+
+/// Shared logical line height used by the main prompt composer.
+/// 主提示词编辑器使用的共享逻辑行高。
+const COMPOSER_EDITOR_LINE_HEIGHT: f32 = 24.0;
+
+/// Shared combined vertical inset used by the main prompt composer surface.
+/// 主提示词编辑器表面使用的共享纵向合计内边距。
+const COMPOSER_EDITOR_VERTICAL_INSET: f32 = 20.0;
+
+/// Returns the logical visible line count of one composer buffer while preserving trailing blank lines.
+/// 返回一个提示词编辑器缓冲区的逻辑可见行数，并保留尾部空白行。
+fn composer_visible_line_count(buffer: &text_editor::Content) -> usize {
+    buffer.line_count().max(1)
+}
+
+/// Returns the outer scroll offset required to keep the active composer cursor line visible inside the capped viewport.
+/// 返回让当前提示词光标行保持在封顶视口内可见所需的外层滚动偏移量。
+fn composer_caret_scroll_target(
+    cursor_line: usize,
+    viewport_height: f32,
+    current_scroll_offset: f32,
+) -> f32 {
+    let caret_top = (cursor_line as f32 * COMPOSER_EDITOR_LINE_HEIGHT) + 10.0;
+    let caret_bottom = caret_top + COMPOSER_EDITOR_LINE_HEIGHT;
+    let current_viewport_bottom = current_scroll_offset + viewport_height;
+
+    if caret_top < current_scroll_offset {
+        caret_top
+    } else if caret_bottom > current_viewport_bottom {
+        (caret_bottom - viewport_height).max(0.0)
+    } else {
+        current_scroll_offset.max(0.0)
+    }
+}
+
 /// Launches the GUI application using the official iced crate.
 /// 使用官方 iced crate 启动图形界面应用。
 pub fn run() -> iced::Result {
@@ -396,6 +456,9 @@ pub struct VulcanWorkbench {
     /// Prompt composer editor buffer used by the main Build/Plan input surface.
     /// 主 Build/Plan 输入表面使用的提示词编辑器缓冲区。
     composer_buffer: text_editor::Content,
+    /// Current outer scroll offset used by the overflowed prompt composer viewport.
+    /// 当前溢出提示词编辑器视口使用的外层滚动偏移量。
+    composer_scroll_offset: f32,
     /// Text editor content for patch and scaffold previews.
     /// 用于补丁与骨架预览的文本编辑器内容。
     editor_content: text_editor::Content,
@@ -813,6 +876,24 @@ struct PendingTaskProjectInteraction {
 /// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
 /// 当某个内联思考区块被显式打开到转录上方时保留的居中弹层状态。
 #[derive(Debug, Clone)]
+struct ModalSurfacePayload {
+    /// Stable title rendered in the modal header without needing to rebuild it on every animation tick.
+    /// 渲染在弹层头部的稳定标题，无需在每个动画帧里重复重建。
+    title: String,
+    /// Stable helper copy rendered below the modal title.
+    /// 渲染在弹层标题下方的稳定辅助文案。
+    helper_text: String,
+    /// Snapshot document rendered inside the modal body.
+    /// 渲染在弹层正文中的快照文档。
+    document: vulcan_agent_view::AgentViewDocument,
+    /// Stable hash used by lazy body rendering so heavy transcript content only rebuilds when payload really changes.
+    /// 供惰性正文渲染使用的稳定哈希，使重型转录内容仅在载荷真正变化时重建。
+    document_signature: u64,
+}
+
+/// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
+/// 当某个内联思考区块被显式打开到转录上方时保留的居中弹层状态。
+#[derive(Debug, Clone)]
 struct ThinkingModalState {
     /// Session identifier owning the currently opened thinking block.
     /// 当前已打开思考区块所属的会话标识。
@@ -826,6 +907,9 @@ struct ThinkingModalState {
     /// Monotonic timestamp captured when the current phase began.
     /// 当前阶段开始时捕获的单调时间戳。
     started_at: Instant,
+    /// Stable snapshot payload reused across animation ticks.
+    /// 跨动画帧复用的稳定快照载荷。
+    payload: ModalSurfacePayload,
 }
 
 /// Centered modal state retained while one inline tool block is explicitly opened above the transcript.
@@ -844,6 +928,9 @@ struct ToolModalState {
     /// Monotonic timestamp captured when the current phase began.
     /// 当前阶段开始时捕获的单调时间戳。
     started_at: Instant,
+    /// Stable snapshot payload reused across animation ticks.
+    /// 跨动画帧复用的稳定快照载荷。
+    payload: ModalSurfacePayload,
 }
 
 /// Active drag auto-scroll snapshot retained while one transcript-like surface keeps selecting beyond its visible viewport.
@@ -1519,6 +1606,9 @@ enum Message {
     /// Applies one text-editor action inside the main prompt composer.
     /// 应用主提示词编辑器中的一条文本编辑动作。
     ComposerEditorAction(text_editor::Action),
+    /// Records the current viewport of the overflowed prompt composer surface.
+    /// 记录溢出提示词编辑器表面的当前视口状态。
+    ComposerEditorScrolled(scrollable::Viewport),
     /// Embedded editor emitted an editing action.
     /// 嵌入式编辑器发出了编辑动作。
     EditorActionPerformed(text_editor::Action),
@@ -2065,6 +2155,7 @@ impl VulcanWorkbench {
                 workspace_path: String::from("D:/openvulcan/vulcan-code"),
                 composer: String::new(),
                 composer_buffer: text_editor::Content::with_text(""),
+                composer_scroll_offset: 0.0,
                 editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
                 diff_summary: placeholder_diff_panel.summary_text(),
                 diff_panel: placeholder_diff_panel,
@@ -2922,8 +3013,60 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ComposerEditorAction(action) => {
+                if let text_editor::Action::Scroll { lines } = action {
+                    if self.composer_line_count() > 10 && lines != 0 {
+                        let delta_y = lines as f32 * COMPOSER_EDITOR_LINE_HEIGHT;
+
+                        return operation::scroll_by(
+                            COMPOSER_EDITOR_SCROLLABLE_ID,
+                            scrollable::AbsoluteOffset { x: 0.0, y: delta_y },
+                        );
+                    }
+
+                    return Task::none();
+                }
+
+                let used_expanded_surface_before = self.composer_uses_expanded_surface();
                 self.composer_buffer.perform(action);
                 self.composer = self.composer_buffer.text();
+                let used_expanded_surface_after = self.composer_uses_expanded_surface();
+
+                let mut tasks = Vec::new();
+
+                if used_expanded_surface_before != used_expanded_surface_after {
+                    tasks.push(operation::focus(COMPOSER_EDITOR_ID));
+                }
+
+                if self.composer_line_count() > 10 {
+                    let cursor_line = self.composer_buffer.cursor().position.line;
+                    let target_offset = composer_caret_scroll_target(
+                        cursor_line,
+                        self.composer_editor_height(),
+                        self.composer_scroll_offset,
+                    );
+
+                    if (target_offset - self.composer_scroll_offset).abs() > f32::EPSILON {
+                        self.composer_scroll_offset = target_offset;
+                        tasks.push(operation::scroll_to(
+                            COMPOSER_EDITOR_SCROLLABLE_ID,
+                            scrollable::AbsoluteOffset {
+                                x: 0.0,
+                                y: target_offset,
+                            },
+                        ));
+                    }
+                } else {
+                    self.composer_scroll_offset = 0.0;
+                }
+
+                if tasks.is_empty() {
+                    Task::none()
+                } else {
+                    Task::batch(tasks)
+                }
+            }
+            Message::ComposerEditorScrolled(viewport) => {
+                self.composer_scroll_offset = viewport.absolute_offset().y;
                 Task::none()
             }
             Message::EditorActionPerformed(action) => {
@@ -3339,6 +3482,9 @@ impl VulcanWorkbench {
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
                 self.refresh_session_agent_view_buffers(session_id);
+                self.session_agent_view_follow_tail.insert(session_id, true);
+                self.session_streaming_thinking_follow_tail
+                    .insert(session_id, true);
                 // Capture the selected session title to keep footer feedback specific.
                 // 记录被选中的会话标题，保证底部反馈足够具体。
                 let selected_title = self
@@ -4029,6 +4175,7 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在发起真实执行，请稍候。");
                 self.composer.clear();
                 self.composer_buffer = text_editor::Content::with_text("");
+                self.composer_scroll_offset = 0.0;
 
                 let run_id = self.next_run_id;
                 self.next_run_id = self.next_run_id.saturating_add(1);
@@ -5506,7 +5653,7 @@ impl VulcanWorkbench {
     /// Returns the current visible line count of the main prompt composer.
     /// 返回主提示词编辑器当前可见的逻辑行数量。
     fn composer_line_count(&self) -> usize {
-        self.composer_buffer.text().lines().count().max(1)
+        composer_visible_line_count(&self.composer_buffer)
     }
 
     /// Returns the current dynamic height of the main prompt composer editor.
@@ -5517,7 +5664,7 @@ impl VulcanWorkbench {
         if visible_lines <= 1.0 {
             44.0
         } else {
-            20.0 + visible_lines * 24.0
+            COMPOSER_EDITOR_VERTICAL_INSET + visible_lines * COMPOSER_EDITOR_LINE_HEIGHT
         }
     }
 
@@ -5535,10 +5682,11 @@ impl VulcanWorkbench {
         let full_content_height = if logical_line_count <= 1 {
             visible_height
         } else {
-            20.0 + logical_line_count as f32 * 24.0
+            COMPOSER_EDITOR_VERTICAL_INSET + logical_line_count as f32 * COMPOSER_EDITOR_LINE_HEIGHT
         };
 
         let editor = text_editor(&self.composer_buffer)
+            .id(COMPOSER_EDITOR_ID)
             .height(full_content_height)
             .padding([10, 12])
             .placeholder("输入当前会话要执行的任务指令")
@@ -5554,6 +5702,7 @@ impl VulcanWorkbench {
 
         if logical_line_count > 10 {
             scrollable(container(editor).width(Fill))
+                .id(COMPOSER_EDITOR_SCROLLABLE_ID)
                 .height(visible_height)
                 .direction(scrollable::Direction::Vertical(
                     scrollable::Scrollbar::new()
@@ -5561,6 +5710,7 @@ impl VulcanWorkbench {
                         .scroller_width(8)
                         .spacing(6),
                 ))
+                .on_scroll(Message::ComposerEditorScrolled)
                 .into()
         } else {
             container(editor).width(Fill).into()
@@ -6020,14 +6170,12 @@ impl VulcanWorkbench {
             .active_thinking_modal
             .as_ref()
             .filter(|modal_state| modal_state.session_id == session_id)?;
-        let document = self.rendered_session_agent_view_document(modal_state.session_id)?;
-        let (title, document) =
-            build_modal_thinking_surface_document(document, &modal_state.block_id)?;
         let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
         Some(view_thinking_modal_surface(
-            title,
-            String::from("点击会话内思考标题可再次打开这里查看完整内容。"),
-            &document,
+            modal_state.payload.title.clone(),
+            modal_state.payload.helper_text.clone(),
+            &modal_state.payload.document,
+            modal_state.payload.document_signature,
             &self.app_theme,
             progress,
             thinking_overlay_scrollable_id(session_id),
@@ -6062,13 +6210,12 @@ impl VulcanWorkbench {
             .active_tool_modal
             .as_ref()
             .filter(|modal_state| modal_state.session_id == session_id)?;
-        let document = self.rendered_session_agent_view_document(modal_state.session_id)?;
-        let (title, document) = build_modal_tool_surface_document(document, &modal_state.block_id)?;
         let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
         Some(view_thinking_modal_surface(
-            title,
-            String::from("这里会显示完整的工具调用参数与返回结果。"),
-            &document,
+            modal_state.payload.title.clone(),
+            modal_state.payload.helper_text.clone(),
+            &modal_state.payload.document,
+            modal_state.payload.document_signature,
             &self.app_theme,
             progress,
             thinking_overlay_scrollable_id(session_id),
@@ -10496,11 +10643,66 @@ impl VulcanWorkbench {
     /// 先刷新结构化转录缓存，再仅在当前活动表面确实需要时物化较重的文本投影。
     fn refresh_session_agent_view_buffers(&mut self, session_id: SessionId) {
         self.refresh_session_agent_view_document_cache(session_id);
+        self.refresh_active_modal_payloads_for_session(session_id);
 
         if self.should_materialize_session_agent_view_text_buffers(session_id) {
             self.refresh_session_agent_view_text_buffers(session_id);
         } else {
             self.clear_session_agent_view_text_buffers(session_id);
+        }
+    }
+
+    /// Refreshes active centered-modal payload snapshots for the provided session so animation ticks can reuse them without rescanning the whole transcript.
+    /// 刷新给定会话当前激活的居中弹层快照载荷，使动画帧能够复用它们而无需重扫整份转录。
+    fn refresh_active_modal_payloads_for_session(&mut self, session_id: SessionId) {
+        if self
+            .active_thinking_modal
+            .as_ref()
+            .is_some_and(|modal_state| modal_state.session_id == session_id)
+        {
+            let Some(block_id) = self
+                .active_thinking_modal
+                .as_ref()
+                .map(|modal_state| modal_state.block_id.clone())
+            else {
+                return;
+            };
+
+            match self.build_thinking_modal_surface_payload(session_id, &block_id) {
+                Some(payload) => {
+                    if let Some(modal_state) = self.active_thinking_modal.as_mut() {
+                        modal_state.payload = payload;
+                    }
+                }
+                None => {
+                    self.active_thinking_modal = None;
+                }
+            }
+        }
+
+        if self
+            .active_tool_modal
+            .as_ref()
+            .is_some_and(|modal_state| modal_state.session_id == session_id)
+        {
+            let Some(block_id) = self
+                .active_tool_modal
+                .as_ref()
+                .map(|modal_state| modal_state.block_id.clone())
+            else {
+                return;
+            };
+
+            match self.build_tool_modal_surface_payload(session_id, &block_id) {
+                Some(payload) => {
+                    if let Some(modal_state) = self.active_tool_modal.as_mut() {
+                        modal_state.payload = payload;
+                    }
+                }
+                None => {
+                    self.active_tool_modal = None;
+                }
+            }
         }
     }
 
@@ -11293,6 +11495,69 @@ impl VulcanWorkbench {
         operation::snap_to_end(thinking_overlay_scrollable_id(session_id))
     }
 
+    /// Builds one stable centered-thinking modal payload snapshot from the latest rendered session document.
+    /// 基于最新渲染的会话文档构建一份稳定的居中思考弹层载荷快照。
+    fn build_thinking_modal_surface_payload(
+        &self,
+        session_id: SessionId,
+        block_id: &str,
+    ) -> Option<ModalSurfacePayload> {
+        let document = self.rendered_session_agent_view_document(session_id)?;
+        let (title, document) = build_modal_thinking_surface_document(document, block_id)?;
+
+        Some(self.build_modal_surface_payload(
+            title,
+            String::from("点击会话内思考标题可再次打开这里查看完整内容。"),
+            document,
+        ))
+    }
+
+    /// Builds one stable centered-tool modal payload snapshot from the latest rendered session document.
+    /// 基于最新渲染的会话文档构建一份稳定的居中工具弹层载荷快照。
+    fn build_tool_modal_surface_payload(
+        &self,
+        session_id: SessionId,
+        block_id: &str,
+    ) -> Option<ModalSurfacePayload> {
+        let document = self.rendered_session_agent_view_document(session_id)?;
+        let (title, document) = build_modal_tool_surface_document(document, block_id)?;
+
+        Some(self.build_modal_surface_payload(
+            title,
+            String::from("这里会显示完整的工具调用参数与返回结果。"),
+            document,
+        ))
+    }
+
+    /// Packs one modal title, helper copy, and document snapshot into a reusable payload with a stable lazy-render signature.
+    /// 将弹层标题、辅助文案与文档快照打包成可复用载荷，并附带稳定的惰性渲染签名。
+    fn build_modal_surface_payload(
+        &self,
+        title: String,
+        helper_text: String,
+        document: vulcan_agent_view::AgentViewDocument,
+    ) -> ModalSurfacePayload {
+        ModalSurfacePayload {
+            title,
+            helper_text,
+            document_signature: self.hash_agent_view_document(&document),
+            document,
+        }
+    }
+
+    /// Hashes one agent-view document into a stable signature used to invalidate lazy modal-body rebuilds only when the rendered content really changes.
+    /// 将一份 agent-view 文档哈希为稳定签名，仅在实际渲染内容变化时触发惰性弹层正文重建失效。
+    fn hash_agent_view_document(&self, document: &vulcan_agent_view::AgentViewDocument) -> u64 {
+        let mut hasher = DefaultHasher::new();
+
+        for block in &document.blocks {
+            block.raw_source().hash(&mut hasher);
+        }
+
+        document.blocks.len().hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Opens one centered thinking modal for the provided block identifier and restarts the opening animation.
     /// 为给定区块标识打开一个居中思考弹层，并重新启动入场动画。
     fn open_thinking_modal(&mut self, session_id: SessionId, block_id: String) {
@@ -11308,12 +11573,17 @@ impl VulcanWorkbench {
             return;
         }
 
+        let Some(payload) = self.build_thinking_modal_surface_payload(session_id, &block_id) else {
+            return;
+        };
+
         self.active_tool_modal = None;
         self.active_thinking_modal = Some(ThinkingModalState {
             session_id,
             block_id,
             phase: ThinkingModalPhase::Opening,
             started_at: Instant::now(),
+            payload,
         });
     }
 
@@ -11328,12 +11598,17 @@ impl VulcanWorkbench {
             return;
         }
 
+        let Some(payload) = self.build_tool_modal_surface_payload(session_id, &block_id) else {
+            return;
+        };
+
         self.active_thinking_modal = None;
         self.active_tool_modal = Some(ToolModalState {
             session_id,
             block_id,
             phase: ThinkingModalPhase::Opening,
             started_at: Instant::now(),
+            payload,
         });
     }
 
@@ -13059,4 +13334,51 @@ fn omitted_context_line_count(
 /// 为省略行计算选择最有用的可视行号。
 fn preferred_display_line_number(line: &crate::diff::DiffLine) -> Option<usize> {
     line.new_number.or(line.old_number)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        COMPOSER_EDITOR_LINE_HEIGHT, composer_caret_scroll_target, composer_visible_line_count,
+    };
+    use iced::widget::text_editor;
+
+    /// Verifies that an empty composer still reserves one visible line.
+    /// 验证空提示词编辑器仍会保留一条可见逻辑行。
+    #[test]
+    fn composer_visible_line_count_keeps_one_line_for_empty_content() {
+        let buffer = text_editor::Content::with_text("");
+
+        assert_eq!(composer_visible_line_count(&buffer), 1);
+    }
+
+    /// Verifies that a trailing newline immediately expands the composer to the next logical line.
+    /// 验证尾部换行会立刻把提示词编辑器扩展到下一条逻辑行。
+    #[test]
+    fn composer_visible_line_count_preserves_trailing_blank_line() {
+        let buffer = text_editor::Content::with_text("第一行\n");
+
+        assert_eq!(composer_visible_line_count(&buffer), 2);
+    }
+
+    /// Verifies the overflowed composer scroll target advances when the active caret line moves below the visible viewport.
+    /// 验证当活动光标行移动到可见视口下方时，溢出提示词编辑器的滚动目标会向下推进。
+    #[test]
+    fn composer_caret_scroll_target_advances_for_hidden_lower_line() {
+        let target_offset = composer_caret_scroll_target(12, 260.0, 0.0);
+
+        assert_eq!(
+            target_offset,
+            (12.0 * COMPOSER_EDITOR_LINE_HEIGHT) + 10.0 + COMPOSER_EDITOR_LINE_HEIGHT - 260.0
+        );
+    }
+
+    /// Verifies the overflowed composer keeps its current scroll offset when the active caret line is still visible.
+    /// 验证当活动光标行仍处于可见范围内时，溢出提示词编辑器会保持当前滚动偏移不变。
+    #[test]
+    fn composer_caret_scroll_target_keeps_visible_line_stable() {
+        let target_offset = composer_caret_scroll_target(6, 260.0, 24.0);
+
+        assert_eq!(target_offset, 24.0);
+    }
 }
