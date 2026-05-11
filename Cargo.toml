@@ -29,7 +29,7 @@ vulcan-agent-view = { path = "apps/vulcan-agent-view" }
 vulcan-iced-widget = { path = "apps/vulcan-iced-widget" }
 vulcan-tools-manager = { path = "apps/vulcan-tools-manager" }
 vldb-controller-client = "0.2.1"
-luaskills = { path = "../../projects/vulcan-luaskills" }
+luaskills = "=0.4.1"
 async-trait = "0.1.89"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }

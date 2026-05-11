@@ -422,6 +422,231 @@ pub fn transcript_jump_to_bottom_button_style(
     }
 }
 
+/// Returns the circular trailing-button style used by the workbench composer send or stop affordance.
+/// 返回工作台提示词发送或停止触发按钮使用的圆形尾部按钮样式。
+pub fn workbench_composer_trigger_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_running: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let accent_color = if is_running {
+        palette.danger.strong.color
+    } else {
+        palette.primary.strong.color
+    };
+    let accent_border = if is_running {
+        palette.danger.weak.color.scale_alpha(0.40)
+    } else {
+        palette.primary.weak.color.scale_alpha(0.42)
+    };
+    let pressed_background = if is_running {
+        palette.danger.base.color.scale_alpha(0.14)
+    } else {
+        palette.primary.base.color.scale_alpha(0.14)
+    };
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.98),
+        )),
+        text_color: accent_color,
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: accent_border,
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.14,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 16.0,
+        },
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(
+                palette.background.weak.color.scale_alpha(0.98),
+            )),
+            border: Border {
+                color: accent_color.scale_alpha(0.55),
+                ..base.border
+            },
+            shadow: Shadow {
+                offset: Vector::new(0.0, 7.0),
+                blur_radius: 18.0,
+                ..base.shadow
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(pressed_background)),
+            border: Border {
+                color: accent_color.scale_alpha(0.62),
+                ..base.border
+            },
+            shadow: Shadow {
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+                ..base.shadow
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.28),
+            border: Border {
+                color: palette.background.strong.color.scale_alpha(0.18),
+                ..base.border
+            },
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+/// Returns the compact bordered trigger style used by the inline workbench model selector surface.
+/// 返回工作台内联模型选择触发表面使用的紧凑描边样式。
+pub fn workbench_model_trigger_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.98),
+        )),
+        text_color: palette.background.base.text,
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            border: Border {
+                color: palette.primary.base.color.scale_alpha(0.58),
+                ..base.border
+            },
+            background: Some(Background::Color(
+                palette.background.weak.color.scale_alpha(0.98),
+            )),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            border: Border {
+                color: palette.primary.strong.color.scale_alpha(0.68),
+                ..base.border
+            },
+            background: Some(Background::Color(
+                palette.background.strong.color.scale_alpha(0.94),
+            )),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.34),
+            ..base
+        },
+    }
+}
+
+/// Returns the rounded panel style used by the centered workbench composer surface.
+/// 返回居中工作台提示词面板使用的圆角样式。
+pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.98),
+        )),
+        border: Border {
+            radius: 20.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.10,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 24.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the list-row style used by each option inside the in-app workbench model-picker modal.
+/// 返回工作台内嵌模型选择弹窗中每个选项行使用的列表样式。
+pub fn workbench_model_picker_option_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_selected: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let selected_background = palette.primary.base.color.scale_alpha(0.16);
+    let selected_border = palette.primary.base.color.scale_alpha(0.48);
+    let base = button::Style {
+        background: Some(Background::Color(if is_selected {
+            selected_background
+        } else {
+            Color::TRANSPARENT
+        })),
+        text_color: palette.background.base.text,
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: if is_selected {
+                selected_border
+            } else {
+                Color::TRANSPARENT
+            },
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(if is_selected {
+                selected_background
+            } else {
+                palette.background.strong.color.scale_alpha(0.12)
+            })),
+            border: Border {
+                color: if is_selected {
+                    selected_border
+                } else {
+                    palette.background.strong.color.scale_alpha(0.28)
+                },
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(if is_selected {
+                palette.primary.base.color.scale_alpha(0.22)
+            } else {
+                palette.background.strong.color.scale_alpha(0.18)
+            })),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.34),
+            ..base
+        },
+    }
+}
+
 /// Returns the style of the restore rail shown when the main task drawer is collapsed.
 /// 返回主任务抽屉折叠后显示的恢复导轨样式。
 pub fn main_task_panel_restore_rail_style(theme: &Theme) -> container::Style {

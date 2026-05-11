@@ -239,14 +239,9 @@ fn append_runtime_event_block(document: &mut AgentViewDocument, runtime_event: &
 /// Returns whether one runtime event should surface inside the unified agent transcript instead of staying only in diagnostics.
 /// 返回某条运行时事件是否应进入统一代理转录，而不是仅保留在诊断视图中。
 fn should_render_runtime_event_in_agent_view(runtime_event: &RuntimeEvent) -> bool {
-    let title = runtime_event.title.trim();
+    let _ = runtime_event;
 
-    !matches!(
-        runtime_event.kind,
-        RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished
-    ) && !matches!(title, "执行上下文" | "模型输出完成" | "MCP 工具发现")
-        && !title.starts_with("MCP 工具发现 · ")
-        && !title.starts_with("MCP 工具发现失败 · ")
+    false
 }
 
 /// Builds one runtime-owned tool-call or tool-result directive block from the runtime event.
@@ -324,7 +319,7 @@ mod tests {
     //! Targeted adapter tests that validate the GUI transcript-to-document mapping rules.
     //! 验证 GUI 转录到文档映射规则的定向适配器测试。
 
-    use super::{agent_view_document_raw_source, build_agent_view_document};
+    use super::build_agent_view_document;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use vulcan_agent_view::{AgentViewBlock, AgentViewDirectiveKind};
@@ -378,30 +373,22 @@ mod tests {
         assert!(matches!(&document.blocks[2], AgentViewBlock::Markdown(_)));
     }
 
-    /// Verifies that runtime tool events become directive blocks and the raw-source projection keeps their fences.
-    /// 验证运行时工具事件会转换为指令区块，且源码投影会保留它们的围栏表示。
+    /// Verifies that runtime events no longer sink to the bottom of the unified transcript, even when tool-like payloads are passed directly into the adapter.
+    /// 验证运行时事件即使直接传入适配器，也不会再作为沉底内容进入统一转录。
     #[test]
-    fn builds_runtime_tool_blocks_and_raw_projection() {
+    fn filters_tool_runtime_events_from_unified_transcript() {
         let runtime_events = vec![RuntimeEvent::new(
             RuntimeEventKind::ToolStarted,
             "工具调用 · cargo check",
             "cargo check -p vulcan-code-gui",
         )];
         let document = build_agent_view_document(&[], &runtime_events);
-        let raw_source = agent_view_document_raw_source(&document);
 
-        assert_eq!(document.blocks.len(), 1);
-        assert!(matches!(
-            &document.blocks[0],
-            AgentViewBlock::Directive(block)
-                if block.kind == AgentViewDirectiveKind::ToolCall
-        ));
-        assert!(raw_source.contains(":::tool-call"));
-        assert!(raw_source.contains("cargo check -p vulcan-code-gui"));
+        assert!(document.blocks.is_empty());
     }
 
-    /// Verifies that runtime-only diagnostic discovery and completion events stay out of the unified transcript document.
-    /// 验证仅面向运行诊断的发现类与完成类事件不会进入统一转录文档。
+    /// Verifies that all runtime-only diagnostics and delegate status events stay out of the unified transcript document so no bottom-only rows remain.
+    /// 验证全部仅运行时可见的诊断与委派状态事件都会留在诊断层，从而不再产生沉底行。
     #[test]
     fn filters_runtime_diagnostic_scaffolding_events() {
         let runtime_events = vec![
@@ -427,14 +414,19 @@ mod tests {
                 "工具调用 · cargo check",
                 "cargo check -p vulcan-code-gui",
             ),
+            RuntimeEvent::new(
+                RuntimeEventKind::DelegateStarted,
+                "委派开始 · lua-specialist",
+                "开始委派给 lua-specialist",
+            ),
+            RuntimeEvent::new(
+                RuntimeEventKind::DelegateFinished,
+                "委派完成 · lua-specialist",
+                "lua-specialist 已返回",
+            ),
         ];
         let document = build_agent_view_document(&[], &runtime_events);
 
-        assert_eq!(document.blocks.len(), 1);
-        assert!(matches!(
-            &document.blocks[0],
-            AgentViewBlock::Directive(block)
-                if block.kind == AgentViewDirectiveKind::ToolCall
-        ));
+        assert!(document.blocks.is_empty());
     }
 }

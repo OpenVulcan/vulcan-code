@@ -345,18 +345,82 @@ const COMPOSER_EDITOR_ID: &str = "vulcan-code.composer-editor";
 /// 主提示词编辑器溢出后滚动表面使用的稳定滚动容器标识。
 const COMPOSER_EDITOR_SCROLLABLE_ID: &str = "vulcan-code.composer-editor-scrollable";
 
+/// Stable widget identifier used by the inline workbench model-picker filter input.
+/// 工作台内嵌模型选择弹窗过滤输入框使用的稳定部件标识。
+const WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID: &str =
+    "vulcan-code.workbench-model-picker-filter-input";
+
 /// Shared logical line height used by the main prompt composer.
 /// 主提示词编辑器使用的共享逻辑行高。
 const COMPOSER_EDITOR_LINE_HEIGHT: f32 = 24.0;
+
+/// Shared text size used by the main prompt composer editor content.
+/// 主提示词编辑器正文内容使用的共享字号。
+const COMPOSER_EDITOR_TEXT_SIZE: f32 = 16.0;
 
 /// Shared combined vertical inset used by the main prompt composer surface.
 /// 主提示词编辑器表面使用的共享纵向合计内边距。
 const COMPOSER_EDITOR_VERTICAL_INSET: f32 = 20.0;
 
+/// Shared fixed height used by the single-line main prompt composer surface.
+/// 主提示词编辑器单行表面使用的共享固定高度。
+const COMPOSER_SINGLE_LINE_HEIGHT: f32 = 44.0;
+
+/// Shared outer inset used by the workbench composer panel around every child control.
+/// 工作台提示词面板为每个子控件保留的共享外侧边距。
+const COMPOSER_PANEL_EDGE_PADDING: u16 = 10;
+
+/// Shared gap used between controls inside the workbench composer panel.
+/// 工作台提示词面板内部控件之间使用的共享间距。
+const COMPOSER_PANEL_CONTROL_GAP: f32 = 10.0;
+
+/// Shared target height used by the low-profile control row under the main prompt composer.
+/// 主提示词编辑器下方低矮控制行使用的共享目标高度。
+const COMPOSER_CONTROL_ROW_HEIGHT: f32 = 36.0;
+
+/// Shared square size used by the fixed send-or-stop button beside the main prompt composer.
+/// 主提示词编辑器右侧固定发送或停止按钮使用的共享方形尺寸。
+const COMPOSER_TRIGGER_BUTTON_SIZE: f32 = COMPOSER_CONTROL_ROW_HEIGHT;
+
+/// Shared icon size used by the trailing circular send-or-stop button.
+/// 尾部圆形发送或停止按钮使用的共享图标尺寸。
+const COMPOSER_TRIGGER_BUTTON_ICON_SIZE: f32 = 18.0;
+
+/// Shared vertical offset reserved below the floating multi-line composer overlay for the control row.
+/// 为多行提示词浮动遮罩下方控制行预留的共享垂直偏移量。
+const COMPOSER_OVERLAY_BOTTOM_OFFSET: f32 =
+    COMPOSER_CONTROL_ROW_HEIGHT + COMPOSER_PANEL_CONTROL_GAP + COMPOSER_PANEL_EDGE_PADDING as f32;
+
+/// Shared fixed width used by the compact execution-mode selector under the main prompt composer.
+/// 主提示词编辑器下方紧凑执行模式选择器使用的共享固定宽度。
+const WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH: f32 = 66.0;
+
+/// Shared fixed width used by the inline workbench model trigger surface.
+/// 工作台内联模型触发表面使用的共享固定宽度。
+const WORKBENCH_MODEL_SELECTOR_WIDTH: f32 = 244.0;
+
+/// Shared fixed width used by the compact reasoning-effort selector placed before the send button.
+/// 放置在发送按钮之前的紧凑推理级别选择器使用的共享固定宽度。
+const WORKBENCH_REASONING_SELECTOR_WIDTH: f32 = 76.0;
+
+/// Shared fixed width used by the in-app workbench model-picker modal card.
+/// 工作台内嵌模型选择弹窗卡片使用的共享固定宽度。
+const WORKBENCH_MODEL_PICKER_MODAL_WIDTH: f32 = 680.0;
+
+/// Shared fixed height used by the scrollable result list inside the workbench model-picker modal.
+/// 工作台模型选择弹窗内部滚动结果列表使用的共享固定高度。
+const WORKBENCH_MODEL_PICKER_LIST_HEIGHT: f32 = 340.0;
+
 /// Returns the logical visible line count of one composer buffer while preserving trailing blank lines.
 /// 返回一个提示词编辑器缓冲区的逻辑可见行数，并保留尾部空白行。
 fn composer_visible_line_count(buffer: &text_editor::Content) -> usize {
     buffer.line_count().max(1)
+}
+
+/// Returns whether one composer text payload contains any submittable non-whitespace content.
+/// 返回某段提示词文本是否包含任何可提交的非空白内容。
+fn composer_text_has_submittable_content(text: &str) -> bool {
+    !text.trim().is_empty()
 }
 
 /// Returns the outer scroll offset required to keep the active composer cursor line visible inside the capped viewport.
@@ -750,6 +814,18 @@ pub struct VulcanWorkbench {
     /// Selected execution mode.
     /// 当前选择的执行模式。
     execution_mode: ExecutionMode,
+    /// Selected compact reasoning-effort preset shown beside the send button in the workbench composer.
+    /// 显示在工作台提示词发送按钮旁边的已选紧凑推理级别预设。
+    workbench_reasoning_effort: WorkbenchReasoningEffort,
+    /// Whether the in-app workbench model-picker modal is currently visible.
+    /// 工作台内嵌模型选择弹窗当前是否可见。
+    workbench_model_picker_open: bool,
+    /// Current free-text filter value applied inside the workbench model-picker modal.
+    /// 当前在工作台模型选择弹窗内部应用的自由文本过滤值。
+    workbench_model_picker_filter: String,
+    /// Currently highlighted filtered option index inside the workbench model-picker modal.
+    /// 当前在工作台模型选择弹窗中过滤结果内高亮的选项索引。
+    workbench_model_picker_highlighted_index: Option<usize>,
     /// Active visual theme.
     /// 当前使用的视觉主题。
     app_theme: Theme,
@@ -1168,6 +1244,75 @@ impl std::fmt::Display for AgentChoice {
     /// 渲染单个代理选择项的面向用户标签。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.label)
+    }
+}
+
+/// Workbench-scoped model option that keeps the visible model name and the owning provider label together.
+/// 工作台作用域内的模型选项，同时保留可见模型名称与所属供应商标签。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkbenchModelChoice {
+    /// Stable provider identifier owning the current model option.
+    /// 拥有当前模型选项的稳定供应商标识。
+    provider_id: String,
+    /// Human-readable provider label shown together with the chosen model.
+    /// 与已选模型一起展示的人类可读供应商标签。
+    provider_label: String,
+    /// Stable model identifier persisted into the shared configuration file.
+    /// 持久化到共享配置文件中的稳定模型标识。
+    model_id: String,
+    /// Human-readable model name rendered inside the workbench trigger surface.
+    /// 渲染在工作台触发表面内部的人类可读模型名称。
+    model_name: String,
+}
+
+impl std::fmt::Display for WorkbenchModelChoice {
+    /// Renders the visible model-name label shown inside the workbench trigger surface.
+    /// 渲染显示在工作台触发表面内部的可见模型名称标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.model_name)
+    }
+}
+
+/// Compact reasoning-effort choice shown in the workbench composer control row.
+/// 显示在工作台提示词控制行中的紧凑推理级别选项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchReasoningEffort {
+    /// Disables any explicit extra reasoning level override.
+    /// 关闭任何显式附加推理级别覆盖。
+    Off,
+    /// Uses a light reasoning profile for faster responses.
+    /// 使用较轻的推理配置以获得更快响应。
+    Low,
+    /// Uses a balanced reasoning profile.
+    /// 使用平衡的推理配置。
+    Medium,
+    /// Uses a deep reasoning profile.
+    /// 使用较深的推理配置。
+    High,
+    /// Uses the strongest reasoning profile offered by the workbench picker.
+    /// 使用工作台选择器提供的最高推理配置。
+    XHigh,
+}
+
+impl WorkbenchReasoningEffort {
+    /// Shared static list of all reasoning-effort choices exposed by the workbench composer.
+    /// 工作台提示词区域暴露的全部推理级别选项静态列表。
+    const ALL: [Self; 5] = [Self::Off, Self::Low, Self::Medium, Self::High, Self::XHigh];
+}
+
+impl std::fmt::Display for WorkbenchReasoningEffort {
+    /// Renders the user-facing compact reasoning-effort label.
+    /// 渲染面向用户的紧凑推理级别标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Off => "关闭",
+            Self::Low => "低",
+            Self::Medium => "中",
+            Self::High => "高",
+            Self::XHigh => "超高",
+        };
+
+        formatter.write_str(label)
     }
 }
 
@@ -1644,6 +1789,27 @@ enum Message {
     /// Selects the active global model from the current provider model list.
     /// 从当前供应商模型列表中选择全局激活模型。
     ActiveModelSelected(ModelChoice),
+    /// Selects one globally configured model from the in-app workbench model picker.
+    /// 从工作台内嵌模型选择器中选中一个全局已配置模型。
+    WorkbenchModelSelected(WorkbenchModelChoice),
+    /// Opens the in-app workbench model-picker modal.
+    /// 打开工作台内嵌模型选择弹窗。
+    OpenWorkbenchModelPicker,
+    /// Closes the in-app workbench model-picker modal without changing the active model.
+    /// 在不修改当前激活模型的前提下关闭工作台内嵌模型选择弹窗。
+    CloseWorkbenchModelPicker,
+    /// Updates the live filter text shown at the top of the workbench model-picker modal.
+    /// 更新显示在工作台模型选择弹窗顶部的实时过滤文本。
+    WorkbenchModelPickerFilterChanged(String),
+    /// Moves the highlighted option upward inside the filtered workbench model-picker result list.
+    /// 在工作台模型选择弹窗的过滤结果列表中向上移动高亮选项。
+    WorkbenchModelPickerMoveSelectionUp,
+    /// Moves the highlighted option downward inside the filtered workbench model-picker result list.
+    /// 在工作台模型选择弹窗的过滤结果列表中向下移动高亮选项。
+    WorkbenchModelPickerMoveSelectionDown,
+    /// Confirms the currently highlighted option inside the workbench model-picker modal.
+    /// 确认工作台模型选择弹窗中当前高亮的选项。
+    ConfirmWorkbenchModelPickerSelection,
     /// Selects one already-configured provider entry for editing.
     /// 选中一个已配置的供应商条目进行编辑。
     ConfiguredProviderSelected(String),
@@ -1767,6 +1933,9 @@ enum Message {
     /// Execution mode selected from the radio group.
     /// 从单选组中选择了执行模式。
     ExecutionModeSelected(ExecutionMode),
+    /// Compact reasoning-effort selection changed inside the workbench composer footer row.
+    /// 工作台提示词底部控制行中的紧凑推理级别选择发生变化。
+    WorkbenchReasoningEffortSelected(WorkbenchReasoningEffort),
     /// Cycles the current execution mode from the main-input shortcut.
     /// 通过主输入区快捷键循环切换当前执行模式。
     CycleExecutionMode,
@@ -2146,139 +2315,145 @@ impl VulcanWorkbench {
 
         let startup_controller_configuration = controller_configuration.clone();
 
-        (
-            Self {
-                main_window_id: Some(main_window_id),
-                diff_window_id: None,
-                main_window_size: main_window_settings().size,
-                main_window_maximized: main_window_settings().maximized,
-                diff_window_size: diff_window_settings().size,
-                diff_window_maximized: diff_window_settings().maximized,
-                main_window_cursor_position: None,
-                title_bar_pointer_position: None,
-                pending_title_bar_drag: None,
-                main_task_panel_width: MAIN_TASK_PANEL_DEFAULT_WIDTH,
-                main_task_panel_expanded: true,
-                pending_main_task_panel_resize: None,
-                main_task_panel_resize_handle_hovered: false,
-                panes,
-                focus,
-                workspace_path: String::from("D:/openvulcan/vulcan-code"),
-                composer: String::new(),
-                composer_buffer: text_editor::Content::with_text(""),
-                composer_scroll_offset: 0.0,
-                editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
-                diff_summary: placeholder_diff_panel.summary_text(),
-                diff_panel: placeholder_diff_panel,
-                collapsed_diff_files: BTreeSet::new(),
-                diff_code_buffers: BTreeMap::new(),
-                diff_wrapped_hunks: BTreeMap::new(),
-                diff_buffer_slices: BTreeMap::new(),
-                hovered_diff_line: None,
-                diff_scroll_offset: 0.0,
-                diff_viewport_height: 0.0,
-                quick_guide_markdown_buffer,
-                sessions: Vec::new(),
-                task_projects: Vec::new(),
-                archived_task_projects: Vec::new(),
-                expanded_task_projects: BTreeSet::new(),
-                hovered_task_project: None,
-                hovered_task_session: None,
-                active_task_project_drop_target: None,
-                suppress_task_session_hover: false,
-                pending_task_project_interaction: None,
-                dragging_task_project: None,
-                selected_session: SessionId::nil(),
-                activities,
-                activity_raw_buffers,
-                session_messages: BTreeMap::new(),
-                archived_sessions: Vec::new(),
-                archived_session_messages: BTreeMap::new(),
-                session_compactions: BTreeMap::new(),
-                archived_session_compactions: BTreeMap::new(),
-                session_runtime_state: BTreeMap::new(),
-                archived_session_runtime_state: BTreeMap::new(),
-                pending_archived_delete_confirmation: None,
-                session_runtime_events: BTreeMap::new(),
-                collapsed_runtime_event_ids: BTreeMap::new(),
-                markdown_session_message_ids: BTreeMap::new(),
-                markdown_runtime_event_ids: BTreeMap::new(),
-                session_message_raw_buffers: BTreeMap::new(),
-                session_message_markdown: BTreeMap::new(),
-                session_message_markdown_buffers: BTreeMap::new(),
-                streaming_thinking_message_ids: BTreeMap::new(),
-                floating_streaming_thinking_sessions: BTreeSet::new(),
-                session_streaming_thinking_follow_tail: BTreeMap::new(),
-                active_thinking_modal: None,
-                active_tool_modal: None,
-                streaming_output_message_ids: BTreeMap::new(),
-                session_tool_call_message_ids: BTreeMap::new(),
-                runtime_event_raw_buffers: BTreeMap::new(),
-                runtime_event_markdown: BTreeMap::new(),
-                runtime_event_markdown_buffers: BTreeMap::new(),
-                session_agent_view_buffers: BTreeMap::new(),
-                session_agent_view_raw_buffers: BTreeMap::new(),
-                session_agent_view_selectable_documents: BTreeMap::new(),
-                session_agent_view_documents: BTreeMap::new(),
-                session_agent_view_block_collapsed: BTreeMap::new(),
-                session_agent_view_follow_tail: BTreeMap::new(),
-                session_agent_view_viewports: BTreeMap::new(),
-                active_transcript_drag_auto_scroll: None,
-                session_streaming_thinking_viewports: BTreeMap::new(),
-                active_thinking_overlay_drag_auto_scroll: None,
-                agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
-                session_run_phases: BTreeMap::new(),
-                next_run_id: 1,
-                active_run_id: None,
-                active_run_session_id: None,
-                active_run_handle: None,
-                startup_lifecycle: StartupLifecycle::Bootstrapping {
-                    message: String::from("正在初始化 vldb 数据平面，请稍候。"),
-                },
-                controller_runtime: None,
-                luaskills_runtime: None,
-                mcp_runtime: None,
-                luaskills_catalog: None,
-                luaskills_notice: String::from("LuaSkills 面板尚未加载技能目录。"),
-                luaskills_install_source_choice: LuaSkillsInstallSourceChoice::Github,
-                luaskills_install_skill_id: String::new(),
-                luaskills_install_source: String::new(),
-                luaskills_operation_in_flight: false,
-                provider_configuration,
-                agent_profile_catalog,
-                selected_user_agent_profile_id,
-                agent_profile_form,
-                agent_profile_notice: String::from(
-                    "系统默认代理会按模型自动路由；这里管理的是用户自定义主代理。",
-                ),
-                controller_configuration,
-                runtime_foundation,
-                session_skill_chain: SessionDerivedSkillChain::default(),
-                active_main_panel: MainDisplayPanel::Main,
-                selected_provider,
-                provider_form,
-                provider_notice,
-                mcp_notice: if selected_mcp_server_id.is_some() {
-                    String::from("已载入 MCP 服务器配置。")
-                } else {
-                    String::from("尚未配置 MCP 服务器，可在此新增一个 stdio 或 http 服务器。")
-                },
-                selected_mcp_server_id,
-                mcp_server_form,
-                last_execution_preparation: None,
-                last_mcp_discovery_rows: Vec::new(),
-                last_mcp_discovery_errors: Vec::new(),
-                execution_mode: ExecutionMode::Build,
-                app_theme,
-                temperature_enabled: false,
-                temperature: 0.25,
-                context_usage: 42.0,
-                generate_plan: false,
-                run_cargo_check: true,
-                persist_memory: true,
-                auto_approve: false,
-                status_message: String::from("正在初始化 vldb 数据平面。"),
+        let application = Self {
+            main_window_id: Some(main_window_id),
+            diff_window_id: None,
+            main_window_size: main_window_settings().size,
+            main_window_maximized: main_window_settings().maximized,
+            diff_window_size: diff_window_settings().size,
+            diff_window_maximized: diff_window_settings().maximized,
+            main_window_cursor_position: None,
+            title_bar_pointer_position: None,
+            pending_title_bar_drag: None,
+            main_task_panel_width: MAIN_TASK_PANEL_DEFAULT_WIDTH,
+            main_task_panel_expanded: true,
+            pending_main_task_panel_resize: None,
+            main_task_panel_resize_handle_hovered: false,
+            panes,
+            focus,
+            workspace_path: String::from("D:/openvulcan/vulcan-code"),
+            composer: String::new(),
+            composer_buffer: text_editor::Content::with_text(""),
+            composer_scroll_offset: 0.0,
+            editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
+            diff_summary: placeholder_diff_panel.summary_text(),
+            diff_panel: placeholder_diff_panel,
+            collapsed_diff_files: BTreeSet::new(),
+            diff_code_buffers: BTreeMap::new(),
+            diff_wrapped_hunks: BTreeMap::new(),
+            diff_buffer_slices: BTreeMap::new(),
+            hovered_diff_line: None,
+            diff_scroll_offset: 0.0,
+            diff_viewport_height: 0.0,
+            quick_guide_markdown_buffer,
+            sessions: Vec::new(),
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            expanded_task_projects: BTreeSet::new(),
+            hovered_task_project: None,
+            hovered_task_session: None,
+            active_task_project_drop_target: None,
+            suppress_task_session_hover: false,
+            pending_task_project_interaction: None,
+            dragging_task_project: None,
+            selected_session: SessionId::nil(),
+            activities,
+            activity_raw_buffers,
+            session_messages: BTreeMap::new(),
+            archived_sessions: Vec::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            pending_archived_delete_confirmation: None,
+            session_runtime_events: BTreeMap::new(),
+            collapsed_runtime_event_ids: BTreeMap::new(),
+            markdown_session_message_ids: BTreeMap::new(),
+            markdown_runtime_event_ids: BTreeMap::new(),
+            session_message_raw_buffers: BTreeMap::new(),
+            session_message_markdown: BTreeMap::new(),
+            session_message_markdown_buffers: BTreeMap::new(),
+            streaming_thinking_message_ids: BTreeMap::new(),
+            floating_streaming_thinking_sessions: BTreeSet::new(),
+            session_streaming_thinking_follow_tail: BTreeMap::new(),
+            active_thinking_modal: None,
+            active_tool_modal: None,
+            streaming_output_message_ids: BTreeMap::new(),
+            session_tool_call_message_ids: BTreeMap::new(),
+            runtime_event_raw_buffers: BTreeMap::new(),
+            runtime_event_markdown: BTreeMap::new(),
+            runtime_event_markdown_buffers: BTreeMap::new(),
+            session_agent_view_buffers: BTreeMap::new(),
+            session_agent_view_raw_buffers: BTreeMap::new(),
+            session_agent_view_selectable_documents: BTreeMap::new(),
+            session_agent_view_documents: BTreeMap::new(),
+            session_agent_view_block_collapsed: BTreeMap::new(),
+            session_agent_view_follow_tail: BTreeMap::new(),
+            session_agent_view_viewports: BTreeMap::new(),
+            active_transcript_drag_auto_scroll: None,
+            session_streaming_thinking_viewports: BTreeMap::new(),
+            active_thinking_overlay_drag_auto_scroll: None,
+            agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
+            session_run_phases: BTreeMap::new(),
+            next_run_id: 1,
+            active_run_id: None,
+            active_run_session_id: None,
+            active_run_handle: None,
+            startup_lifecycle: StartupLifecycle::Bootstrapping {
+                message: String::from("正在初始化 vldb 数据平面，请稍候。"),
             },
+            controller_runtime: None,
+            luaskills_runtime: None,
+            mcp_runtime: None,
+            luaskills_catalog: None,
+            luaskills_notice: String::from("LuaSkills 面板尚未加载技能目录。"),
+            luaskills_install_source_choice: LuaSkillsInstallSourceChoice::Github,
+            luaskills_install_skill_id: String::new(),
+            luaskills_install_source: String::new(),
+            luaskills_operation_in_flight: false,
+            provider_configuration,
+            agent_profile_catalog,
+            selected_user_agent_profile_id,
+            agent_profile_form,
+            agent_profile_notice: String::from(
+                "系统默认代理会按模型自动路由；这里管理的是用户自定义主代理。",
+            ),
+            controller_configuration,
+            runtime_foundation,
+            session_skill_chain: SessionDerivedSkillChain::default(),
+            active_main_panel: MainDisplayPanel::Main,
+            selected_provider,
+            provider_form,
+            provider_notice,
+            mcp_notice: if selected_mcp_server_id.is_some() {
+                String::from("已载入 MCP 服务器配置。")
+            } else {
+                String::from("尚未配置 MCP 服务器，可在此新增一个 stdio 或 http 服务器。")
+            },
+            selected_mcp_server_id,
+            mcp_server_form,
+            last_execution_preparation: None,
+            last_mcp_discovery_rows: Vec::new(),
+            last_mcp_discovery_errors: Vec::new(),
+            execution_mode: ExecutionMode::Build,
+            workbench_reasoning_effort: WorkbenchReasoningEffort::Off,
+            workbench_model_picker_open: false,
+            workbench_model_picker_filter: String::new(),
+            workbench_model_picker_highlighted_index: None,
+            app_theme,
+            temperature_enabled: false,
+            temperature: 0.25,
+            context_usage: 42.0,
+            generate_plan: false,
+            run_cargo_check: true,
+            persist_memory: true,
+            auto_approve: false,
+            status_message: String::from("正在初始化 vldb 数据平面。"),
+        };
+
+        (
+            application,
             Task::batch([
                 open_main_window.map(Message::MainWindowOpened),
                 Task::perform(
@@ -3228,6 +3403,68 @@ impl VulcanWorkbench {
                 self.status_message = format!("当前激活模型已切换为 `{}`。", model);
                 Task::none()
             }
+            Message::WorkbenchModelSelected(choice) => self.apply_workbench_model_choice(choice),
+            Message::OpenWorkbenchModelPicker => self.open_workbench_model_picker(),
+            Message::CloseWorkbenchModelPicker => {
+                self.workbench_model_picker_open = false;
+                self.workbench_model_picker_filter.clear();
+                self.workbench_model_picker_highlighted_index = None;
+                Task::none()
+            }
+            Message::WorkbenchModelPickerFilterChanged(value) => {
+                self.workbench_model_picker_filter = value;
+                self.workbench_model_picker_highlighted_index =
+                    self.preferred_workbench_model_picker_index();
+                self.clamp_workbench_model_picker_highlight();
+                Task::none()
+            }
+            Message::WorkbenchModelPickerMoveSelectionUp => {
+                if !self.workbench_model_picker_open {
+                    return Task::none();
+                }
+
+                let filtered_len = self.filtered_workbench_model_choices().len();
+                self.workbench_model_picker_highlighted_index = if filtered_len == 0 {
+                    None
+                } else {
+                    Some(
+                        self.workbench_model_picker_highlighted_index
+                            .unwrap_or(0)
+                            .checked_sub(1)
+                            .unwrap_or(filtered_len.saturating_sub(1)),
+                    )
+                };
+                Task::none()
+            }
+            Message::WorkbenchModelPickerMoveSelectionDown => {
+                if !self.workbench_model_picker_open {
+                    return Task::none();
+                }
+
+                let filtered_len = self.filtered_workbench_model_choices().len();
+                self.workbench_model_picker_highlighted_index = if filtered_len == 0 {
+                    None
+                } else {
+                    Some(
+                        self.workbench_model_picker_highlighted_index
+                            .unwrap_or(0)
+                            .saturating_add(1)
+                            % filtered_len,
+                    )
+                };
+                Task::none()
+            }
+            Message::ConfirmWorkbenchModelPickerSelection => {
+                if !self.workbench_model_picker_open {
+                    return Task::none();
+                }
+
+                let Some(choice) = self.highlighted_workbench_model_choice() else {
+                    return Task::none();
+                };
+
+                self.apply_workbench_model_choice(choice)
+            }
             Message::ConfiguredProviderSelected(provider_id) => {
                 if let Some(choice) = provider_config::supported_provider_choices()
                     .into_iter()
@@ -3448,6 +3685,12 @@ impl VulcanWorkbench {
                 self.status_message = format!("执行模式已切换为 {mode}。");
                 Task::none()
             }
+            Message::WorkbenchReasoningEffortSelected(effort) => {
+                self.workbench_reasoning_effort = effort;
+                self.status_message =
+                    format!("推理级别已切换为 {}。", self.workbench_reasoning_effort);
+                Task::none()
+            }
             Message::CycleExecutionMode => {
                 self.execution_mode = match self.execution_mode {
                     ExecutionMode::Build => ExecutionMode::Plan,
@@ -3566,6 +3809,9 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::CloseSelectedSessionThinkingModal => {
+                self.workbench_model_picker_open = false;
+                self.workbench_model_picker_filter.clear();
+                self.workbench_model_picker_highlighted_index = None;
                 self.begin_close_thinking_modal();
                 self.begin_close_tool_modal();
                 Task::none()
@@ -4130,6 +4376,10 @@ impl VulcanWorkbench {
 
                 let current_prompt = self.composer_buffer.text();
                 self.composer = current_prompt.clone();
+                if !composer_text_has_submittable_content(&current_prompt) {
+                    self.status_message = String::from("请输入任务指令后再启动执行。");
+                    return Task::none();
+                }
 
                 let request = if let Some(session) = self.selected_session() {
                     let context_history = self
@@ -4151,23 +4401,8 @@ impl VulcanWorkbench {
                     return Task::none();
                 };
 
-                if request.prompt.trim().is_empty() {
-                    self.status_message = String::from("当前提示词为空，无法启动执行。");
-                    self.push_session_message(
-                        request.session_id,
-                        SessionMessageKind::Error,
-                        "执行启动失败",
-                        "请输入任务指令后再启动执行。",
-                    );
-                    self.replace_session_runtime_events(
-                        request.session_id,
-                        vec![RuntimeEvent::new(
-                            RuntimeEventKind::Failed,
-                            "执行启动失败",
-                            "当前提示词为空，系统已拒绝本次运行请求。",
-                        )],
-                    );
-                    self.set_session_run_phase(request.session_id, SessionRunPhase::Failed);
+                if !composer_text_has_submittable_content(&request.prompt) {
+                    self.status_message = String::from("请输入任务指令后再启动执行。");
                     return Task::none();
                 }
 
@@ -4362,10 +4597,16 @@ impl VulcanWorkbench {
         .into();
 
         let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_startup_overlay() {
+            if let Some(overlay) = self.view_workbench_model_picker_modal() {
                 stack([main_surface, overlay]).into()
             } else {
                 main_surface
+            };
+        let composed_surface: Element<'_, Message> =
+            if let Some(overlay) = self.view_startup_overlay() {
+                stack([composed_surface, overlay]).into()
+            } else {
+                composed_surface
             };
 
         self.wrap_with_window_resize_handles(window_id, composed_surface)
@@ -4452,6 +4693,130 @@ impl VulcanWorkbench {
                 .into(),
             ),
         }
+    }
+
+    /// Builds the in-app workbench model-picker modal shown above the main workbench when model switching is requested.
+    /// 构建在请求切换模型时显示在主工作台之上的内嵌工作台模型选择弹窗。
+    fn view_workbench_model_picker_modal(&self) -> Option<Element<'_, Message>> {
+        if !self.workbench_model_picker_open {
+            return None;
+        }
+
+        let filtered_choices = self.filtered_workbench_model_choices();
+        let highlighted_index = self.workbench_model_picker_highlighted_index;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseWorkbenchModelPicker);
+        let option_list: Element<'_, Message> = if filtered_choices.is_empty() {
+            container(text("没有匹配的模型。").size(13))
+                .width(Fill)
+                .height(WORKBENCH_MODEL_PICKER_LIST_HEIGHT)
+                .center(Fill)
+                .into()
+        } else {
+            scrollable(
+                column(
+                    filtered_choices
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, choice)| {
+                            let is_selected = highlighted_index == Some(index);
+                            let indicator: Element<'_, Message> = if is_selected {
+                                codicon::chevron_right()
+                                    .size(14)
+                                    .line_height(1.0)
+                                    .color(palette.primary.base.color)
+                                    .into()
+                            } else {
+                                text("").size(14).into()
+                            };
+                            button(
+                                container(
+                                    row![
+                                        container(indicator).width(18).center_y(Fill),
+                                        container(text(choice.model_name.clone()).size(13))
+                                            .width(Fill)
+                                            .clip(true),
+                                        text(choice.provider_label.clone())
+                                            .size(12)
+                                            .color(palette.background.base.text.scale_alpha(0.56)),
+                                    ]
+                                    .spacing(10)
+                                    .align_y(Center),
+                                )
+                                .width(Fill)
+                                .center_y(Fill),
+                            )
+                            .width(Fill)
+                            .padding([8, 12])
+                            .style(move |theme, status| {
+                                style::workbench_model_picker_option_button_style(
+                                    theme,
+                                    status,
+                                    is_selected,
+                                )
+                            })
+                            .on_press(Message::WorkbenchModelSelected(choice.clone()))
+                            .into()
+                        }),
+                )
+                .spacing(6),
+            )
+            .height(WORKBENCH_MODEL_PICKER_LIST_HEIGHT)
+            .into()
+        };
+        let modal_card = container(
+            column![
+                row![text("选择模型").size(20), space::horizontal(), close_button,].align_y(Center),
+                text_input(
+                    "输入模型或供应商进行过滤",
+                    &self.workbench_model_picker_filter
+                )
+                .id(WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID)
+                .on_input(Message::WorkbenchModelPickerFilterChanged)
+                .on_submit(Message::ConfirmWorkbenchModelPickerSelection)
+                .padding([10, 12]),
+                option_list,
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(WORKBENCH_MODEL_PICKER_MODAL_WIDTH)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseWorkbenchModelPicker);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(modal_card)
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
     }
 
     /// Builds the currently selected top-level panel shown inside the main display region.
@@ -5632,40 +5997,155 @@ impl VulcanWorkbench {
         self.active_run_handle = None;
     }
 
+    /// Returns whether the current composer buffer contains any submittable user instruction text.
+    /// 返回当前提示词缓冲区是否包含任何可提交的用户指令文本。
+    fn composer_has_submittable_content(&self) -> bool {
+        composer_text_has_submittable_content(&self.composer_buffer.text())
+    }
+
     /// Builds the compact send-or-stop button shown at the right side of prompt inputs.
     /// 构建显示在提示词输入框右侧的紧凑发送或停止按钮。
     fn view_run_trigger_button(&self) -> Element<'_, Message> {
         let is_running = self.has_active_run();
+        let can_submit = self.composer_has_submittable_content();
         let tooltip_text = if is_running {
             "停止当前 AI 调用"
-        } else {
+        } else if can_submit {
             "发送当前任务指令"
-        };
-        let button_style: fn(&Theme, button::Status) -> button::Style = if is_running {
-            button::danger
         } else {
-            button::primary
+            "请输入任务指令后再发送"
         };
         let trigger_message = if is_running {
             Message::StopRun
         } else {
             Message::StartRun
         };
-        let icon: Element<'_, Message> = if is_running {
-            codicon::debug_stop().size(16).line_height(1.0).into()
+        let icon = if is_running {
+            codicon::debug_stop()
+                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+                .line_height(1.0)
         } else {
-            lucide::send().size(16).line_height(1.0).into()
+            lucide::send()
+                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+                .line_height(1.0)
+        };
+        let icon_surface: Element<'_, Message> = container(icon)
+            .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+            .height(COMPOSER_TRIGGER_BUTTON_SIZE)
+            .center(Fill)
+            .into();
+
+        let button = button(icon_surface).padding(0).style(move |theme, status| {
+            style::workbench_composer_trigger_button_style(theme, status, is_running)
+        });
+        let button = if is_running || can_submit {
+            button.on_press(trigger_message)
+        } else {
+            button
         };
 
         tooltip(
-            button(icon)
-                .padding([10, 12])
-                .style(button_style)
-                .on_press(trigger_message),
+            button
+                .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+                .height(COMPOSER_TRIGGER_BUTTON_SIZE),
             tooltip_text,
             tooltip::Position::Bottom,
         )
         .style(container::rounded_box)
+        .into()
+    }
+
+    /// Builds the clickable workbench model trigger shown below the main prompt composer.
+    /// 构建显示在主提示词编辑器下方的可点击工作台模型触发表面。
+    fn view_workbench_model_selector(&self) -> Element<'_, Message> {
+        let selected_choice = self.active_workbench_model_choice();
+        let palette = self.app_theme.extended_palette();
+        let has_selected_choice = selected_choice.is_some();
+        let model_label = selected_choice
+            .as_ref()
+            .map(|choice| choice.model_name.clone())
+            .unwrap_or_else(|| String::from("选择模型"));
+        let provider_label = selected_choice
+            .as_ref()
+            .map(|choice| choice.provider_label.clone())
+            .unwrap_or_default();
+        let has_choices = !self.configured_workbench_model_choices().is_empty();
+        let provider_line: Element<'_, Message> = if provider_label.is_empty() {
+            container(space::vertical().height(11))
+                .height(11)
+                .width(Fill)
+                .into()
+        } else {
+            container(
+                text(provider_label)
+                    .size(11)
+                    .color(palette.background.base.text.scale_alpha(0.56))
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            )
+            .height(11)
+            .width(Fill)
+            .clip(true)
+            .center_x(Fill)
+            .into()
+        };
+        let text_row = row![
+            container(
+                column![
+                    container(
+                        text(model_label)
+                            .size(13)
+                            .color(if has_selected_choice {
+                                iced::Color::WHITE
+                            } else {
+                                palette.background.base.text.scale_alpha(0.56)
+                            })
+                            .wrapping(iced::advanced::text::Wrapping::None),
+                    )
+                    .height(14)
+                    .width(Fill)
+                    .clip(true)
+                    .center_x(Fill),
+                    provider_line,
+                ]
+                .spacing(2)
+                .align_x(iced::Alignment::Center),
+            )
+            .width(Fill)
+            .height(COMPOSER_CONTROL_ROW_HEIGHT)
+            .center_x(Fill)
+            .center_y(Fill),
+            codicon::chevron_down()
+                .size(14)
+                .line_height(1.0)
+                .color(palette.background.base.text.scale_alpha(0.48)),
+        ]
+        .spacing(10)
+        .align_y(Center);
+        let trigger = button(container(text_row).width(Fill).center_y(Fill))
+            .width(WORKBENCH_MODEL_SELECTOR_WIDTH)
+            .height(COMPOSER_CONTROL_ROW_HEIGHT)
+            .padding([0, 12])
+            .style(style::workbench_model_trigger_button_style);
+
+        if has_choices {
+            trigger.on_press(Message::OpenWorkbenchModelPicker).into()
+        } else {
+            trigger.into()
+        }
+    }
+
+    /// Builds the compact reasoning-effort selector shown before the trailing send button.
+    /// 构建显示在尾部发送按钮之前的紧凑推理级别选择器。
+    fn view_workbench_reasoning_effort_selector(&self) -> Element<'_, Message> {
+        pick_list(
+            WorkbenchReasoningEffort::ALL,
+            Some(self.workbench_reasoning_effort),
+            Message::WorkbenchReasoningEffortSelected,
+        )
+        .width(WORKBENCH_REASONING_SELECTOR_WIDTH)
+        .placeholder("级别")
+        .padding([6, 10])
+        .text_size(13)
         .into()
     }
 
@@ -5681,10 +6161,51 @@ impl VulcanWorkbench {
         let visible_lines = self.composer_line_count().min(10) as f32;
 
         if visible_lines <= 1.0 {
-            44.0
+            COMPOSER_SINGLE_LINE_HEIGHT
         } else {
             COMPOSER_EDITOR_VERTICAL_INSET + visible_lines * COMPOSER_EDITOR_LINE_HEIGHT
         }
+    }
+
+    /// Returns the centered composer-panel width budget derived from the current main workbench canvas.
+    /// 返回根据当前主工作台画布推导出的居中提示词面板宽度预算。
+    fn composer_panel_width(&self) -> f32 {
+        let left_region_width = if self.main_task_panel_expanded {
+            self.main_task_panel_width + MAIN_TASK_PANEL_RESIZE_HANDLE_WIDTH
+        } else {
+            MAIN_TASK_PANEL_RESTORE_RAIL_WIDTH
+        };
+        let chrome_width = MAIN_PANEL_ACTIVITY_BAR_WIDTH + left_region_width + 36.0;
+        let canvas_width = (self.main_window_size.width - chrome_width).max(420.0);
+
+        (canvas_width * 0.80).max(420.0)
+    }
+
+    /// Returns the floating composer footprint currently covering the bottom of the transcript viewport.
+    /// 返回当前覆盖在转录视口底部的浮动提示词区域占用高度。
+    fn floating_composer_footprint_height(&self) -> f32 {
+        let visible_editor_height = if self.composer_uses_expanded_surface() {
+            self.composer_editor_height()
+        } else {
+            COMPOSER_SINGLE_LINE_HEIGHT
+        };
+
+        visible_editor_height
+            + COMPOSER_CONTROL_ROW_HEIGHT
+            + COMPOSER_PANEL_CONTROL_GAP
+            + (COMPOSER_PANEL_EDGE_PADDING as f32 * 2.0)
+    }
+
+    /// Returns the transcript tail spacer needed to keep the latest content clear of the floating composer.
+    /// 返回用于让最新转录内容避开浮动提示词区域的尾部留白高度。
+    fn transcript_bottom_spacer_height(&self) -> f32 {
+        TRANSCRIPT_BOTTOM_SPACER_HEIGHT + self.floating_composer_footprint_height()
+    }
+
+    /// Returns the actual inner input-surface width after subtracting the composer-panel horizontal padding.
+    /// 返回扣除提示词面板水平内边距后的实际输入表面宽度。
+    fn composer_input_surface_width(&self) -> f32 {
+        self.composer_panel_width() - (COMPOSER_PANEL_EDGE_PADDING as f32 * 2.0)
     }
 
     /// Returns whether the main prompt composer should expand upward as a multi-line surface.
@@ -5698,6 +6219,7 @@ impl VulcanWorkbench {
     fn view_composer_editor_surface(&self) -> Element<'_, Message> {
         let logical_line_count = self.composer_line_count();
         let visible_height = self.composer_editor_height();
+        let can_submit = self.composer_has_submittable_content();
         let full_content_height = if logical_line_count <= 1 {
             visible_height
         } else {
@@ -5707,13 +6229,21 @@ impl VulcanWorkbench {
         let editor = text_editor(&self.composer_buffer)
             .id(COMPOSER_EDITOR_ID)
             .height(full_content_height)
+            .size(COMPOSER_EDITOR_TEXT_SIZE)
+            .line_height(iced::widget::text::LineHeight::Absolute(Pixels(
+                COMPOSER_EDITOR_LINE_HEIGHT,
+            )))
             .padding([10, 12])
             .placeholder("输入当前会话要执行的任务指令")
-            .key_binding(|key_press| match key_press.key.as_ref() {
+            .key_binding(move |key_press| match key_press.key.as_ref() {
                 keyboard::Key::Named(keyboard::key::Named::Enter)
                     if !key_press.modifiers.shift() =>
                 {
-                    Some(text_editor::Binding::Custom(Message::StartRun))
+                    if can_submit {
+                        Some(text_editor::Binding::Custom(Message::StartRun))
+                    } else {
+                        Some(text_editor::Binding::Sequence(Vec::new()))
+                    }
                 }
                 _ => text_editor::Binding::from_key_press(key_press),
             })
@@ -5740,7 +6270,9 @@ impl VulcanWorkbench {
     /// 构建固定提示词面板行内使用的紧凑占位输入槽。
     fn view_compact_composer_editor(&self) -> Element<'_, Message> {
         if self.composer_uses_expanded_surface() {
-            container(space::vertical().height(44)).width(Fill).into()
+            container(space::vertical().height(COMPOSER_SINGLE_LINE_HEIGHT))
+                .width(Fill)
+                .into()
         } else {
             self.view_composer_editor_surface()
         }
@@ -5753,7 +6285,11 @@ impl VulcanWorkbench {
             return None;
         }
 
-        Some(self.view_composer_editor_surface())
+        Some(
+            container(self.view_composer_editor_surface())
+                .width(self.composer_input_surface_width())
+                .into(),
+        )
     }
 
     /// Builds the compact transcript surface-mode switcher shown at the trailing end of the session-status row.
@@ -5822,130 +6358,115 @@ impl VulcanWorkbench {
     /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     fn view_main_canvas(&self) -> Element<'_, Message> {
-        let active_session = self.selected_session();
-        let runtime_summary = self.runtime_foundation.summary();
         let run_phase = self.selected_session_run_phase();
-        let session_title = active_session
+        let session_title = self
+            .selected_session()
             .map(|session| session.title.as_str())
             .unwrap_or("未选择会话");
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
         let composer_overlay = self.view_composer_expanded_overlay();
+        let composer_primary_controls = row![
+            pick_list(
+                ExecutionMode::ALL,
+                Some(self.execution_mode),
+                Message::ExecutionModeSelected
+            )
+            .width(WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH)
+            .placeholder("模式")
+            .padding([6, 10])
+            .text_size(13),
+            self.view_workbench_model_selector(),
+        ]
+        .spacing(COMPOSER_PANEL_CONTROL_GAP)
+        .align_y(Center);
+        let composer_secondary_controls = row![
+            self.view_workbench_reasoning_effort_selector(),
+            self.view_run_trigger_button(),
+        ]
+        .spacing(COMPOSER_PANEL_CONTROL_GAP)
+        .align_y(Center);
+        let composer_controls_row = row![
+            composer_primary_controls,
+            space::horizontal(),
+            composer_secondary_controls,
+        ]
+        .spacing(COMPOSER_PANEL_CONTROL_GAP)
+        .align_y(Center)
+        .height(COMPOSER_CONTROL_ROW_HEIGHT)
+        .width(Fill);
         let composer_panel = container(
-            column![
-                row![
-                    text("任务输入").size(16),
-                    space::horizontal(),
-                    text(format!("执行模式：{}", self.execution_mode)).size(13),
-                    text(if self.temperature_enabled {
-                        format!("温度：{:.2}", self.temperature)
-                    } else {
-                        String::from("温度：模型默认")
-                    })
-                    .size(13),
-                ]
-                .spacing(12)
-                .align_y(Center),
-                row![
-                    text("执行后将把用户输入、AI 输出与运行时事件写入当前会话。").size(12),
-                    space::horizontal(),
-                    text(if self.has_active_run() {
-                        "运行中，可点击右侧停止按钮中止当前 AI 调用。"
-                    } else {
-                        "点击输入框右侧纸飞机按钮即可发起 AI 调用。"
-                    })
-                    .size(12),
-                ]
-                .spacing(10)
-                .align_y(Center),
-                row![
-                    pick_list(
-                        ExecutionMode::ALL,
-                        Some(self.execution_mode),
-                        Message::ExecutionModeSelected
-                    )
-                    .width(110)
-                    .placeholder("模式"),
-                    self.view_compact_composer_editor(),
-                    self.view_run_trigger_button(),
-                ]
-                .spacing(10)
-                .align_y(iced::Alignment::End),
-            ]
-            .spacing(10),
+            column![self.view_compact_composer_editor(), composer_controls_row,]
+                .spacing(COMPOSER_PANEL_CONTROL_GAP),
         )
-        .padding(14)
-        .style(container::bordered_box);
-
-        let main_canvas_content = column![
+        .padding(COMPOSER_PANEL_EDGE_PADDING)
+        .width(self.composer_panel_width())
+        .style(style::workbench_composer_panel_style);
+        let title_section = column![
             row![
-                column![
-                    text("AI 执行工作台").size(26),
-                    text("当前区域用于承载会话输出、执行事件和最小运行闭环。").size(13),
-                ]
-                .spacing(4),
+                text(session_title).size(26),
                 space::horizontal(),
-                container(text(run_phase.label()).size(12))
-                    .padding([4, 10])
-                    .style(move |theme| style::workbench_run_phase_chip_style(theme, run_phase)),
+                row![
+                    transcript_surface_mode_switcher,
+                    container(text(run_phase.label()).size(12))
+                        .padding([4, 10])
+                        .style(move |theme| style::workbench_run_phase_chip_style(
+                            theme, run_phase
+                        )),
+                ]
+                .spacing(10)
+                .align_y(Center),
             ]
             .align_y(Center),
-            container(
-                row![
-                    text(format!("当前会话：{session_title}")).size(14),
-                    text(format!("当前模型：{}", self.active_model_summary())).size(13),
-                    text(format!("激活代理：{}", runtime_summary.active_agent_name)).size(13),
-                    text(format!(
-                        "会话状态：{}",
-                        active_session
-                            .map(|session| session.status.label())
-                            .unwrap_or("未选择")
-                    ))
-                    .size(13),
-                    space::horizontal(),
-                    transcript_surface_mode_switcher,
-                ]
-                .spacing(16)
-                .align_y(Center)
-                .width(Fill),
-            )
-            .width(Fill)
-            .padding([12, 14])
-            .style(container::bordered_box),
-            transcript_stream,
-            composer_panel,
+            container(space())
+                .width(Fill)
+                .height(1)
+                .style(style::main_display_bottom_separator_style),
+        ]
+        .spacing(12);
+
+        let main_canvas_content = column![
+            title_section,
+            container(transcript_stream).width(Fill).height(Fill),
         ]
         .spacing(14)
         .height(Fill);
 
-        let layered_canvas: Element<'_, Message> = if let Some(overlay) = composer_overlay {
-            stack([
-                main_canvas_content.into(),
+        let mut layered_surfaces = vec![main_canvas_content.into()];
+        layered_surfaces.push(
+            container(
+                column![
+                    space::vertical().height(Fill),
+                    container(composer_panel).width(Fill).center_x(Fill),
+                ]
+                .width(Fill)
+                .height(Fill),
+            )
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        );
+
+        if let Some(overlay) = composer_overlay {
+            layered_surfaces.push(
                 container(
                     column![
                         space::vertical().height(Fill),
-                        row![
-                            space::horizontal().width(110),
-                            space::horizontal().width(10),
-                            overlay,
-                            space::horizontal().width(10),
-                            space::horizontal().width(44),
-                        ]
-                        .width(Fill)
-                        .align_y(iced::Alignment::End),
+                        container(overlay)
+                            .width(self.composer_input_surface_width())
+                            .center_x(Fill),
+                        space::vertical().height(COMPOSER_OVERLAY_BOTTOM_OFFSET),
                     ]
                     .width(Fill)
                     .height(Fill),
                 )
                 .width(Fill)
                 .height(Fill)
-                .padding([14, 14])
                 .into(),
-            ])
-            .into()
-        } else {
-            main_canvas_content.into()
-        };
+            );
+        }
+
+        let layered_canvas: Element<'_, Message> = stack(layered_surfaces).into();
 
         container(layered_canvas)
             .padding([16, 16])
@@ -5969,7 +6490,6 @@ impl VulcanWorkbench {
             .width(Fill)
             .height(Fill)
             .center(Fill)
-            .style(container::bordered_box)
             .into();
         };
 
@@ -5982,8 +6502,7 @@ impl VulcanWorkbench {
             return container(
                 column![
                     text("尚未开始执行").size(18),
-                    text("点击上方输入框右侧发送按钮后，用户输入、AI 输出和运行时事件都会在这里持续沉淀。")
-                        .size(13),
+                    text("输入任务并开始执行后，当前会话的输出会显示在这里。").size(13),
                 ]
                 .spacing(8)
                 .align_x(iced::Alignment::Center),
@@ -5991,7 +6510,6 @@ impl VulcanWorkbench {
             .width(Fill)
             .height(Fill)
             .center(Fill)
-            .style(container::bordered_box)
             .into();
         }
 
@@ -6070,7 +6588,8 @@ impl VulcanWorkbench {
             .padding(iced::Padding {
                 top: 14.0,
                 right: 14.0,
-                bottom: f32::from(TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET),
+                bottom: self.floating_composer_footprint_height()
+                    + f32::from(TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET),
                 left: 14.0,
             })
             .width(Fill)
@@ -6089,7 +6608,6 @@ impl VulcanWorkbench {
             return container(text("当前没有可渲染的统一输出块。").size(14))
                 .padding(14)
                 .height(Fill)
-                .style(container::bordered_box)
                 .into();
         };
         let content_column = column![
@@ -6110,7 +6628,7 @@ impl VulcanWorkbench {
                     SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
                 },
             ),
-            space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT),
+            space::vertical().height(self.transcript_bottom_spacer_height()),
         ]
         .width(Fill);
 
@@ -6126,7 +6644,6 @@ impl VulcanWorkbench {
         )
         .padding(14)
         .height(Fill)
-        .style(container::bordered_box)
         .into()
     }
 
@@ -6220,7 +6737,7 @@ impl VulcanWorkbench {
         };
         let body_flow = column![
             body,
-            space::vertical().height(TRANSCRIPT_BOTTOM_SPACER_HEIGHT),
+            space::vertical().height(self.transcript_bottom_spacer_height()),
         ]
         .width(Fill);
 
@@ -6235,7 +6752,6 @@ impl VulcanWorkbench {
         )
         .padding([14, 16])
         .height(Fill)
-        .style(container::bordered_box)
         .into()
     }
 
@@ -7544,6 +8060,45 @@ impl VulcanWorkbench {
                 repeat,
                 ..
             }) if !repeat => Some(Message::CloseSelectedSessionThinkingModal),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::ArrowUp),
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && !modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                Some(Message::WorkbenchModelPickerMoveSelectionUp)
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::ArrowDown),
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && !modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                Some(Message::WorkbenchModelPickerMoveSelectionDown)
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Enter),
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && !modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                Some(Message::ConfirmWorkbenchModelPickerSelection)
+            }
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
                 physical_key,
@@ -9113,6 +9668,160 @@ impl VulcanWorkbench {
             &self.selected_provider.id,
             &self.provider_configuration,
         )
+    }
+
+    /// Returns the globally configured workbench model choices across every currently configured provider.
+    /// 返回横跨全部当前已配置供应商的全局工作台模型选项集合。
+    fn configured_workbench_model_choices(&self) -> Vec<WorkbenchModelChoice> {
+        let mut choices = provider_config::supported_provider_choices()
+            .into_iter()
+            .filter(|provider_choice| {
+                self.provider_configuration
+                    .provider
+                    .contains_key(&provider_choice.id)
+            })
+            .flat_map(|provider_choice| {
+                let provider_id = provider_choice.id.clone();
+                let provider_label = provider_choice.name.clone();
+
+                provider_config::effective_model_choices(&provider_id, &self.provider_configuration)
+                    .into_iter()
+                    .map(move |model_choice| WorkbenchModelChoice {
+                        provider_id: provider_id.clone(),
+                        provider_label: provider_label.clone(),
+                        model_id: model_choice.id,
+                        model_name: model_choice.name,
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        choices.sort_by(|left, right| {
+            left.model_name
+                .cmp(&right.model_name)
+                .then_with(|| left.provider_label.cmp(&right.provider_label))
+                .then_with(|| left.model_id.cmp(&right.model_id))
+        });
+        choices
+    }
+
+    /// Returns the currently active workbench model choice when it still exists in the configured global model catalog.
+    /// 返回当前激活且仍存在于已配置全局模型目录中的工作台模型选项。
+    fn active_workbench_model_choice(&self) -> Option<WorkbenchModelChoice> {
+        let (active_provider_id, active_model_id) = self
+            .provider_configuration
+            .model
+            .as_deref()
+            .and_then(provider_config::parse_active_model_reference)?;
+
+        self.configured_workbench_model_choices()
+            .into_iter()
+            .find(|choice| {
+                choice.provider_id == active_provider_id && choice.model_id == active_model_id
+            })
+    }
+
+    /// Returns the currently visible workbench model choices after applying the in-modal filter text.
+    /// 返回应用弹窗内过滤文本后当前可见的工作台模型选项集合。
+    fn filtered_workbench_model_choices(&self) -> Vec<WorkbenchModelChoice> {
+        let filter = self.workbench_model_picker_filter.trim().to_lowercase();
+
+        if filter.is_empty() {
+            return self.configured_workbench_model_choices();
+        }
+
+        self.configured_workbench_model_choices()
+            .into_iter()
+            .filter(|choice| {
+                choice.model_name.to_lowercase().contains(&filter)
+                    || choice.provider_label.to_lowercase().contains(&filter)
+                    || choice.model_id.to_lowercase().contains(&filter)
+            })
+            .collect()
+    }
+
+    /// Returns the preferred highlighted index when the model-picker modal opens with a fresh filter.
+    /// 返回模型选择弹窗以全新过滤状态打开时优先高亮的索引。
+    fn preferred_workbench_model_picker_index(&self) -> Option<usize> {
+        let filtered_choices = self.filtered_workbench_model_choices();
+
+        if filtered_choices.is_empty() {
+            return None;
+        }
+
+        let active_choice = self.active_workbench_model_choice();
+
+        active_choice
+            .and_then(|choice| {
+                filtered_choices
+                    .iter()
+                    .position(|candidate| candidate == &choice)
+            })
+            .or(Some(0))
+    }
+
+    /// Opens the in-app workbench model-picker modal and focuses its filter field.
+    /// 打开工作台内嵌模型选择弹窗并聚焦其过滤输入框。
+    fn open_workbench_model_picker(&mut self) -> Task<Message> {
+        self.workbench_model_picker_open = true;
+        self.workbench_model_picker_filter.clear();
+        self.workbench_model_picker_highlighted_index =
+            self.preferred_workbench_model_picker_index();
+
+        operation::focus(WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID)
+    }
+
+    /// Keeps the highlighted index inside the visible bounds of the filtered model-picker result list.
+    /// 使模型选择弹窗的高亮索引始终保持在过滤结果列表的可见边界内。
+    fn clamp_workbench_model_picker_highlight(&mut self) {
+        let filtered_len = self.filtered_workbench_model_choices().len();
+
+        self.workbench_model_picker_highlighted_index = if filtered_len == 0 {
+            None
+        } else {
+            Some(
+                self.workbench_model_picker_highlighted_index
+                    .unwrap_or(0)
+                    .min(filtered_len.saturating_sub(1)),
+            )
+        };
+    }
+
+    /// Resolves the currently highlighted model choice from the filtered model-picker result list.
+    /// 从过滤后的模型选择结果列表中解析当前高亮的模型选项。
+    fn highlighted_workbench_model_choice(&self) -> Option<WorkbenchModelChoice> {
+        let index = self.workbench_model_picker_highlighted_index?;
+
+        self.filtered_workbench_model_choices().get(index).cloned()
+    }
+
+    /// Applies one chosen workbench model to the persisted global runtime selection and closes the picker.
+    /// 将某个工作台模型应用到持久化全局运行时选择并关闭选择弹窗。
+    fn apply_workbench_model_choice(&mut self, choice: WorkbenchModelChoice) -> Task<Message> {
+        self.provider_configuration.model =
+            Some(format!("{}/{}", choice.provider_id, choice.model_id));
+        if let Some(provider_choice) = provider_config::supported_provider_choices()
+            .into_iter()
+            .find(|provider_choice| provider_choice.id == choice.provider_id)
+        {
+            self.selected_provider = provider_choice;
+            self.reload_selected_provider_form();
+        }
+
+        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
+            self.provider_notice = error.clone();
+            self.status_message = error;
+            return Task::none();
+        }
+
+        self.refresh_runtime_foundation();
+        self.workbench_model_picker_open = false;
+        self.workbench_model_picker_filter.clear();
+        self.workbench_model_picker_highlighted_index = None;
+        self.status_message = format!(
+            "当前模型已切换为 `{}`（{}）。",
+            choice.model_name, choice.provider_label
+        );
+        Task::none()
     }
 
     /// Returns the resolved endpoint summary for the currently selected provider form state.
@@ -13418,7 +14127,8 @@ fn preferred_display_line_number(line: &crate::diff::DiffLine) -> Option<usize> 
 #[cfg(test)]
 mod tests {
     use super::{
-        COMPOSER_EDITOR_LINE_HEIGHT, composer_caret_scroll_target, composer_visible_line_count,
+        COMPOSER_EDITOR_LINE_HEIGHT, composer_caret_scroll_target,
+        composer_text_has_submittable_content, composer_visible_line_count,
     };
     use iced::widget::text_editor;
 
@@ -13438,6 +14148,16 @@ mod tests {
         let buffer = text_editor::Content::with_text("第一行\n");
 
         assert_eq!(composer_visible_line_count(&buffer), 2);
+    }
+
+    /// Verifies whitespace-only composer payloads stay non-submittable until visible content is entered.
+    /// 验证仅含空白字符的提示词载荷会保持不可提交，直到输入了可见内容。
+    #[test]
+    fn composer_text_requires_visible_content_before_submit() {
+        assert!(!composer_text_has_submittable_content(""));
+        assert!(!composer_text_has_submittable_content("   \n\t  "));
+        assert!(composer_text_has_submittable_content("执行这个任务"));
+        assert!(composer_text_has_submittable_content("\n  执行这个任务  "));
     }
 
     /// Verifies the overflowed composer scroll target advances when the active caret line moves below the visible viewport.
