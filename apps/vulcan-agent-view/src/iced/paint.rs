@@ -2,17 +2,23 @@
 //! 转录选区高亮、渲染表格及相关命中测试的绘制辅助逻辑。
 
 use super::RendererParagraph;
+use super::SelectableTranscriptState;
 use super::interaction::{
     clamp_hit_test_point_to_paragraph_text_bounds, paragraph_hit_test_to_byte_offset,
 };
+use super::layout_engine::{
+    paragraph_local_origin, translate_measured_table_node, translate_rectangle,
+};
 use super::scene::{
-    MeasuredRenderedTableNode, RenderedParagraphNode, RenderedTableNode, RenderedTranscriptDocument,
+    LaidOutFlowNode, MeasuredRenderedTableNode, RenderedParagraphNode, RenderedTableNode,
+    RenderedTranscriptDocument, RenderedTranscriptNode,
 };
 use iced::advanced::Renderer as _;
 use iced::advanced::renderer;
 use iced::advanced::text::Paragraph as _;
 use iced::advanced::text::Renderer as _;
 use iced::{Background, Border, Color, Point, Rectangle, Renderer, Size};
+use std::ops::Range;
 
 /// Draws the active selection portion intersecting one paragraph node.
 /// 绘制与某个段落节点相交的当前活动选择区域。
@@ -176,6 +182,314 @@ pub(super) fn draw_rendered_table_node(
                 Background::Color(table_node.border_color),
             );
         }
+    }
+}
+
+/// Draws panel backgrounds and all visible flow nodes for one transcript viewport.
+/// 绘制单个转录视口中的面板背景以及全部可见流式节点。
+pub(super) fn draw_visible_transcript_content(
+    renderer: &mut Renderer,
+    document: &RenderedTranscriptDocument,
+    state: &SelectableTranscriptState,
+    defaults: &renderer::Style,
+    selection: Option<(usize, usize)>,
+    widget_bounds: Rectangle,
+    widget_origin: Point,
+    viewport: &Rectangle,
+    visible_flow_range: Range<usize>,
+) {
+    let mut panel_border_overlays = Vec::new();
+
+    for panel_layout in state.panel_layouts.iter().filter(|panel_layout| {
+        translate_rectangle(panel_layout.outer_bounds, widget_origin).intersects(viewport)
+    }) {
+        let RenderedTranscriptNode::Panel(panel_node) = &document.nodes[panel_layout.node_index]
+        else {
+            continue;
+        };
+        let outer_bounds = translate_rectangle(panel_layout.outer_bounds, widget_origin);
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: outer_bounds,
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: panel_node.background.border.radius,
+                },
+                ..renderer::Quad::default()
+            },
+            panel_node.background.background,
+        );
+        if panel_node.background.border.width > f32::EPSILON {
+            panel_border_overlays.push((outer_bounds, panel_node.background.border));
+        }
+    }
+
+    for flow_layout in &state.flow_layouts[visible_flow_range] {
+        match flow_layout {
+            LaidOutFlowNode::Collapsible(layout_node) => {
+                let RenderedTranscriptNode::Collapsible(collapsible_node) =
+                    &document.nodes[layout_node.node_index]
+                else {
+                    continue;
+                };
+                let summary_paragraph = &state.paragraphs[layout_node.summary_paragraph_index];
+                let summary_outer_bounds =
+                    translate_rectangle(layout_node.summary_outer_bounds, widget_origin);
+
+                if let Some(background) = collapsible_node.summary.background {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: summary_outer_bounds,
+                            border: background.border,
+                            ..renderer::Quad::default()
+                        },
+                        background.background,
+                    );
+                }
+
+                renderer.fill_paragraph(
+                    summary_paragraph,
+                    paragraph_local_origin(summary_outer_bounds, &collapsible_node.summary),
+                    collapsible_node
+                        .summary
+                        .spans
+                        .first()
+                        .and_then(|span| span.color)
+                        .unwrap_or(defaults.text_color),
+                    *viewport,
+                );
+
+                if let (Some(body_node), Some(body_paragraph_index), Some(body_outer_bounds)) = (
+                    collapsible_node.body.as_ref(),
+                    layout_node.body_paragraph_index,
+                    layout_node.body_outer_bounds,
+                ) {
+                    let body_paragraph = &state.paragraphs[body_paragraph_index];
+                    let body_outer_bounds = translate_rectangle(body_outer_bounds, widget_origin);
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: body_outer_bounds,
+                            border: collapsible_node.body_background.border,
+                            ..renderer::Quad::default()
+                        },
+                        collapsible_node.body_background.background,
+                    );
+
+                    let max_scroll =
+                        (layout_node.body_full_text_height - body_outer_bounds.height).max(0.0);
+                    let scroll_offset = state
+                        .collapsible_body_scroll_offsets
+                        .get(&collapsible_node.block_id)
+                        .copied()
+                        .unwrap_or(0.0)
+                        .clamp(0.0, max_scroll);
+                    let text_clip_bounds = Rectangle::new(
+                        Point::new(
+                            body_outer_bounds.x + body_node.inner_padding.left,
+                            body_outer_bounds.y + body_node.inner_padding.top,
+                        ),
+                        Size::new(
+                            (body_outer_bounds.width
+                                - body_node.inner_padding.left
+                                - body_node.inner_padding.right
+                                - if max_scroll > 0.0 { 10.0 } else { 0.0 })
+                            .max(1.0),
+                            (body_outer_bounds.height
+                                - body_node.inner_padding.top
+                                - body_node.inner_padding.bottom)
+                                .max(1.0),
+                        ),
+                    );
+
+                    renderer.with_layer(text_clip_bounds, |renderer| {
+                        renderer.fill_paragraph(
+                            body_paragraph,
+                            Point::new(text_clip_bounds.x, text_clip_bounds.y - scroll_offset),
+                            body_node
+                                .spans
+                                .first()
+                                .and_then(|span| span.color)
+                                .unwrap_or(defaults.text_color),
+                            *viewport,
+                        );
+                    });
+
+                    if max_scroll > f32::EPSILON {
+                        let track_bounds = Rectangle::new(
+                            Point::new(
+                                body_outer_bounds.x + body_outer_bounds.width - 6.0,
+                                body_outer_bounds.y + 6.0,
+                            ),
+                            Size::new(3.0, (body_outer_bounds.height - 12.0).max(18.0)),
+                        );
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: track_bounds,
+                                border: Border {
+                                    color: Color::TRANSPARENT,
+                                    width: 0.0,
+                                    radius: 2.0.into(),
+                                },
+                                ..renderer::Quad::default()
+                            },
+                            Background::Color(collapsible_node.scrollbar_track_color),
+                        );
+
+                        let thumb_height = ((track_bounds.height
+                            * (body_outer_bounds.height / layout_node.body_full_text_height))
+                            .clamp(18.0, track_bounds.height))
+                        .max(18.0);
+                        let travel = (track_bounds.height - thumb_height).max(0.0);
+                        let thumb_y = track_bounds.y
+                            + if max_scroll <= f32::EPSILON {
+                                0.0
+                            } else {
+                                (scroll_offset / max_scroll) * travel
+                            };
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: Rectangle::new(
+                                    Point::new(track_bounds.x, thumb_y),
+                                    Size::new(track_bounds.width, thumb_height),
+                                ),
+                                border: Border {
+                                    color: Color::TRANSPARENT,
+                                    width: 0.0,
+                                    radius: 2.0.into(),
+                                },
+                                ..renderer::Quad::default()
+                            },
+                            Background::Color(collapsible_node.scrollbar_thumb_color),
+                        );
+                    }
+                }
+            }
+            LaidOutFlowNode::Paragraph(layout_node) => {
+                let RenderedTranscriptNode::Paragraph(paragraph_node) =
+                    &document.nodes[layout_node.node_index]
+                else {
+                    continue;
+                };
+                let paragraph = &state.paragraphs[layout_node.paragraph_index];
+                let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
+
+                if let Some(background) = paragraph_node.background {
+                    let background_bounds = if background.border.width <= f32::EPSILON {
+                        Rectangle::new(
+                            outer_bounds.position(),
+                            Size::new(
+                                outer_bounds.width,
+                                outer_bounds.height
+                                    + (layout_node.flow_end_y
+                                        - layout_node.outer_bounds.y
+                                        - layout_node.outer_bounds.height),
+                            ),
+                        )
+                    } else {
+                        outer_bounds
+                    };
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: background_bounds,
+                            border: background.border,
+                            ..renderer::Quad::default()
+                        },
+                        background.background,
+                    );
+                }
+
+                if paragraph_node.quote_depth > 0 {
+                    let quote_bar_x = (outer_bounds.x - 10.0).max(widget_bounds.x);
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: Rectangle::new(
+                                Point::new(quote_bar_x, outer_bounds.y),
+                                Size::new(4.0, outer_bounds.height),
+                            ),
+                            ..renderer::Quad::default()
+                        },
+                        Background::Color(defaults.text_color.scale_alpha(0.18)),
+                    );
+                }
+
+                if let Some((selection_start, selection_end)) = selection {
+                    draw_paragraph_selection(
+                        renderer,
+                        document,
+                        paragraph_node,
+                        paragraph,
+                        selection_start,
+                        selection_end,
+                        paragraph_local_origin(outer_bounds, paragraph_node),
+                        viewport,
+                    );
+                }
+
+                renderer.fill_paragraph(
+                    paragraph,
+                    paragraph_local_origin(outer_bounds, paragraph_node),
+                    paragraph_node
+                        .spans
+                        .first()
+                        .and_then(|span| span.color)
+                        .unwrap_or(defaults.text_color),
+                    *viewport,
+                );
+            }
+            LaidOutFlowNode::Table(layout_node) => {
+                let RenderedTranscriptNode::Table(table_node) =
+                    &document.nodes[layout_node.node_index]
+                else {
+                    continue;
+                };
+                let table_layout = &state.table_layouts[layout_node.table_index];
+                let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
+                let measured_table =
+                    translate_measured_table_node(&layout_node.measured_table, widget_origin);
+
+                draw_rendered_table_node(
+                    renderer,
+                    document,
+                    defaults,
+                    selection,
+                    table_node,
+                    table_paragraphs,
+                    &measured_table,
+                    viewport,
+                );
+            }
+            LaidOutFlowNode::Rule(layout_node) => {
+                let RenderedTranscriptNode::Rule(rule_node) =
+                    &document.nodes[layout_node.node_index]
+                else {
+                    continue;
+                };
+                let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
+                let rule_y = outer_bounds.y + 3.0;
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle::new(
+                            Point::new(outer_bounds.x, rule_y),
+                            Size::new(outer_bounds.width.max(1.0), 2.0),
+                        ),
+                        ..renderer::Quad::default()
+                    },
+                    Background::Color(rule_node.color),
+                );
+            }
+        }
+    }
+
+    for (bounds, border) in panel_border_overlays {
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border,
+                ..renderer::Quad::default()
+            },
+            Background::Color(Color::TRANSPARENT),
+        );
     }
 }
 

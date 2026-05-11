@@ -4,103 +4,43 @@
 mod builder;
 mod context_menu;
 mod directive_render;
+mod document_model;
+mod event_routing;
 mod interaction;
 mod layout_engine;
 mod markdown_render;
 mod markdown_source;
 mod paint;
 mod scene;
+mod surface_state;
 mod text_routing;
+mod text_utils;
 
-use self::builder::RenderedTranscriptBuilder;
 use self::context_menu::*;
-use self::directive_render::*;
+use self::event_routing::*;
 use self::interaction::*;
 use self::layout_engine::*;
-use self::markdown_render::*;
-use self::markdown_source::*;
 use self::paint::*;
 use self::scene::*;
-use crate::iced_theme as theme;
-use crate::{AgentViewBlock, AgentViewDocument};
-use iced::advanced::Renderer as _;
+use self::surface_state::*;
+pub use self::surface_state::{
+    SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
+    SelectableTranscriptInteraction,
+};
+use self::text_utils::*;
+#[cfg(test)]
+use self::{
+    builder::RenderedTranscriptBuilder, directive_render::*, markdown_render::*, markdown_source::*,
+};
+use crate::AgentViewDocument;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::mouse;
 use iced::advanced::renderer;
-use iced::advanced::text::Renderer as _;
 use iced::advanced::text::{self};
 use iced::advanced::widget::tree;
 use iced::advanced::{Shell, Widget, overlay};
-use iced::keyboard;
-use iced::widget::markdown;
-use iced::{
-    Background, Border, Color, Element, Event, Length, Pixels, Point, Rectangle, Renderer, Size,
-    Theme, Vector,
-};
-use std::collections::{BTreeMap, hash_map::DefaultHasher};
-use std::hash::{Hash, Hasher};
+use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 use std::marker::PhantomData;
-use std::time::Instant;
-
-/// Describes one active transcript drag auto-scroll request emitted while the pointer drags outside the visible bounds.
-/// 描述一次当指针拖拽越出可见边界时发出的转录自动滚动请求。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SelectableTranscriptDragAutoScroll {
-    /// Vertical direction that should be auto-scrolled while dragging.
-    /// 拖拽期间应执行自动滚动的垂直方向。
-    pub direction: SelectableTranscriptDragAutoScrollDirection,
-    /// Pointer overshoot distance beyond the top or bottom edge, expressed in logical pixels.
-    /// 指针超出顶部或底部边界的距离，单位为逻辑像素。
-    pub overshoot: f32,
-}
-
-/// Enumerates the vertical auto-scroll direction requested by the transcript drag gesture.
-/// 枚举转录拖拽手势请求的垂直自动滚动方向。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectableTranscriptDragAutoScrollDirection {
-    /// Scrolls upward while the pointer stays above the visible transcript viewport.
-    /// 当指针停留在可见转录视口上方时向上滚动。
-    Up,
-    /// Scrolls downward while the pointer stays below the visible transcript viewport.
-    /// 当指针停留在可见转录视口下方时向下滚动。
-    Down,
-}
-
-/// High-level transcript interaction emitted by synthetic chrome spans inside the rendered transcript.
-/// 由渲染转录内部合成交互外框片段发出的高层转录交互。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SelectableTranscriptInteraction {
-    /// Toggles one generic inline semantic block between collapsed and expanded states.
-    /// 切换某个通用内联语义区块的折叠与展开状态。
-    ToggleBlockInline(String),
-    /// Opens one thinking block in the dedicated centered modal surface.
-    /// 在专用居中弹层中打开某个思考区块。
-    OpenThinkingModal(String),
-    /// Opens one tool block in the dedicated centered modal surface.
-    /// 在专用居中弹层中打开某个工具区块。
-    OpenToolModal(String),
-}
-
-/// Enumerates the lightweight context-menu actions exposed by the selectable transcript.
-/// 枚举可选择转录公开的轻量右键菜单动作。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TranscriptContextMenuAction {
-    /// Copies the current non-empty transcript selection into the system clipboard.
-    /// 将当前非空转录选区复制到系统剪贴板。
-    CopySelection,
-    /// Expands the current selection to cover the whole rendered transcript.
-    /// 将当前选区扩展为覆盖整个渲染转录。
-    SelectAll,
-}
-
-/// Captures one open transcript context-menu request anchored to a widget-space pointer position.
-/// 记录一个锚定到组件空间指针位置的转录右键菜单打开请求。
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct TranscriptContextMenuState {
-    /// Pointer position used to anchor the top-left corner of the context menu after clamping.
-    /// 在钳制之后用于锚定右键菜单左上角的指针位置。
-    anchor_position: Point,
-}
 
 /// Builds one selectable rendered transcript element from the provided structured agent document.
 /// 根据提供的结构化代理文档构建一个可选择的渲染转录元素。
@@ -168,190 +108,9 @@ impl<'a, Message> SelectableTranscript<'a, Message> {
     }
 }
 
-/// Runtime state retained by the selectable transcript widget.
-/// 可选择转录组件保留的运行时状态。
-struct SelectableTranscriptState {
-    /// Cached paragraphs aligned with text-bearing nodes in the rendered transcript.
-    /// 与渲染转录中文本节点对齐的缓存段落集合。
-    paragraphs: Vec<RendererParagraph>,
-    /// Cached table layouts aligned with rendered table nodes in the transcript.
-    /// 与转录中渲染表格节点对齐的缓存表格布局集合。
-    table_layouts: Vec<CachedTableLayout>,
-    /// Cached flow-node layout metrics kept in visual order for viewport-range culling and hit testing.
-    /// 按可视顺序保留的流式节点布局指标缓存，用于视口裁剪与命中测试。
-    flow_layouts: Vec<LaidOutFlowNode>,
-    /// Cached background-panel layout metrics resolved from the current flow-node geometry.
-    /// 根据当前流式节点几何信息解析得到的背景面板布局指标缓存。
-    panel_layouts: Vec<LaidOutPanelNode>,
-    /// Whether the current paragraph and flow-layout caches are valid for the last measured width and document signature.
-    /// 当前段落与流式布局缓存是否对上一次测量宽度和文档签名仍然有效。
-    layout_cache_ready: bool,
-    /// Width used by the last successful layout-cache build.
-    /// 最近一次成功构建布局缓存时使用的宽度。
-    cached_layout_width: f32,
-    /// Stable rendered-document signature used to invalidate cached layout metrics when content or theme changes.
-    /// 当内容或主题变化时用于使布局缓存失效的稳定渲染文档签名。
-    cached_layout_signature: u64,
-    /// Height produced by the last successful layout-cache build.
-    /// 最近一次成功构建布局缓存时产出的高度。
-    cached_layout_height: f32,
-    /// Whether the transcript currently owns keyboard focus for copy and select-all shortcuts.
-    /// 当前转录是否拥有键盘焦点，以处理复制和全选快捷键。
-    focused: bool,
-    /// Whether the pointer is actively dragging one transcript selection.
-    /// 当前指针是否正在拖拽一个转录选择区域。
-    dragging: bool,
-    /// Whether the current drag interaction has already moved away from its initial anchor.
-    /// 当前拖拽交互是否已经离开最初锚点位置。
-    drag_moved: bool,
-    /// Fixed anchor character offset used by the current selection.
-    /// 当前选择使用的固定锚点字符偏移。
-    anchor_char: usize,
-    /// Moving head character offset used by the current selection.
-    /// 当前选择使用的移动头部字符偏移。
-    head_char: usize,
-    /// Last drag auto-scroll request already published to the parent scroll container.
-    /// 已经发布给父级滚动容器的最近一次拖拽自动滚动请求。
-    drag_auto_scroll_request: Option<SelectableTranscriptDragAutoScroll>,
-    /// Last synthetic link target clicked without dragging so double-click intent can be inferred.
-    /// 最近一次未拖拽点击的合成链接目标，用于推导双击意图。
-    last_click_link_target: Option<String>,
-    /// Monotonic timestamp captured for the last synthetic link click.
-    /// 上一次合成链接点击时捕获的单调时间戳。
-    last_click_instant: Option<Instant>,
-    /// Body scroll offsets retained per collapsible semantic block.
-    /// 按折叠语义区块保留的正文滚动偏移量。
-    collapsible_body_scroll_offsets: BTreeMap<String, f32>,
-    /// Currently open lightweight context menu anchored inside the transcript surface.
-    /// 当前在转录表面内部打开的轻量右键菜单。
-    context_menu: Option<TranscriptContextMenuState>,
-}
-
-impl Default for SelectableTranscriptState {
-    /// Creates one empty selectable transcript state with no active selection.
-    /// 创建一个不带活动选择的空可选择转录状态。
-    fn default() -> Self {
-        Self {
-            paragraphs: Vec::new(),
-            table_layouts: Vec::new(),
-            flow_layouts: Vec::new(),
-            panel_layouts: Vec::new(),
-            layout_cache_ready: false,
-            cached_layout_width: 0.0,
-            cached_layout_signature: 0,
-            cached_layout_height: 1.0,
-            focused: false,
-            dragging: false,
-            drag_moved: false,
-            anchor_char: 0,
-            head_char: 0,
-            drag_auto_scroll_request: None,
-            last_click_link_target: None,
-            last_click_instant: None,
-            collapsible_body_scroll_offsets: BTreeMap::new(),
-            context_menu: None,
-        }
-    }
-}
-
 /// Concrete paragraph type used by the default iced renderer.
 /// 默认 iced 渲染器使用的具体段落类型。
 type RendererParagraph = <Renderer as text::Renderer>::Paragraph;
-
-impl RenderedTranscriptDocument {
-    /// Builds one rendered transcript model from the structured agent document.
-    /// 根据结构化代理文档构建一份渲染转录模型。
-    fn from_agent_document(document: &AgentViewDocument, app_theme: &Theme) -> Self {
-        let palette = app_theme.palette();
-        let markdown_settings = theme::markdown_settings(app_theme);
-        let layout_signature = compute_rendered_transcript_layout_signature(document, app_theme);
-        let mut builder = RenderedTranscriptBuilder::new(
-            palette.primary.weak.color.scale_alpha(0.28),
-            palette.background.base.text.scale_alpha(0.94),
-        );
-
-        for block in &document.blocks {
-            builder.begin_block();
-
-            match block {
-                AgentViewBlock::Markdown(markdown_block) => {
-                    let prepared_source =
-                        prepare_markdown_source_for_rendering(&markdown_block.raw_source);
-                    if raw_source_contains_markdown_table(&prepared_source) {
-                        render_markdown_source_with_table_fallback(
-                            &mut builder,
-                            &prepared_source,
-                            PlainParagraphStyle::flow(markdown_settings.text_size),
-                            markdown_settings,
-                            app_theme,
-                        );
-                    } else {
-                        let normalized_source =
-                            normalize_markdown_source_for_transcript_display(&prepared_source);
-                        let markdown_content = markdown::Content::parse(&normalized_source);
-                        render_markdown_items(
-                            &mut builder,
-                            markdown_content.items(),
-                            RenderContext::default(),
-                            markdown_settings,
-                            app_theme,
-                        );
-                    }
-                }
-                AgentViewBlock::Directive(directive_block) => {
-                    render_directive_block(
-                        &mut builder,
-                        directive_block,
-                        markdown_settings,
-                        app_theme,
-                    );
-                }
-            }
-        }
-
-        Self {
-            nodes: builder.nodes,
-            full_text: builder.full_text,
-            selection_color: builder.selection_color,
-            link_actions: builder.link_actions,
-            layout_signature,
-        }
-    }
-}
-
-/// Computes one stable transcript-layout signature from the source document and render-affecting theme inputs.
-/// 根据源文档与影响渲染的主题输入计算一份稳定的转录布局签名。
-fn compute_rendered_transcript_layout_signature(
-    document: &AgentViewDocument,
-    app_theme: &Theme,
-) -> u64 {
-    let markdown_settings = theme::markdown_settings(app_theme);
-    let palette = app_theme.palette();
-    let mut hasher = DefaultHasher::new();
-
-    document.blocks.len().hash(&mut hasher);
-    markdown_settings.text_size.0.to_bits().hash(&mut hasher);
-    hash_render_color(palette.background.base.color, &mut hasher);
-    hash_render_color(palette.background.base.text, &mut hasher);
-    hash_render_color(palette.primary.weak.color, &mut hasher);
-    hash_render_color(palette.primary.strong.color, &mut hasher);
-    hash_render_color(palette.secondary.strong.color, &mut hasher);
-
-    for block in &document.blocks {
-        block.raw_source().hash(&mut hasher);
-    }
-
-    hasher.finish()
-}
-
-/// Hashes one RGBA color into the provided transcript-layout hash state using raw float bit patterns.
-/// 使用原始浮点位模式将一组 RGBA 颜色写入给定的转录布局哈希状态。
-fn hash_render_color(color: Color, hasher: &mut DefaultHasher) {
-    color.r.to_bits().hash(hasher);
-    color.g.to_bits().hash(hasher);
-    color.b.to_bits().hash(hasher);
-    color.a.to_bits().hash(hasher);
-}
 
 impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, Message> {
     /// Returns the runtime state tag used by the selectable transcript widget.
@@ -397,204 +156,10 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 state.cached_layout_height.max(1.0),
             ));
         }
+        let layout_height =
+            rebuild_layout_cache(&self.document, state, local_widget_bounds, available_width);
 
-        let paragraph_count = count_rendered_paragraph_slots(&self.document);
-        let table_count = self
-            .document
-            .nodes
-            .iter()
-            .filter(|node| matches!(node, RenderedTranscriptNode::Table(_)))
-            .count();
-
-        if state.paragraphs.len() != paragraph_count {
-            state.paragraphs = (0..paragraph_count)
-                .map(|_| RendererParagraph::default())
-                .collect();
-        }
-
-        if state.table_layouts.len() != table_count {
-            state.table_layouts = (0..table_count)
-                .map(|_| CachedTableLayout::default())
-                .collect();
-        }
-
-        state.flow_layouts.clear();
-        state.panel_layouts.clear();
-
-        let mut paragraph_index = 0usize;
-        let mut table_index = 0usize;
-        let mut current_y = 0.0f32;
-
-        for (node_index, node) in self.document.nodes.iter().enumerate() {
-            match node {
-                RenderedTranscriptNode::Panel(_) => {}
-                RenderedTranscriptNode::Collapsible(collapsible_node) => {
-                    let summary_paragraph_index = paragraph_index;
-                    state.paragraphs[summary_paragraph_index] = build_renderer_paragraph(
-                        &collapsible_node.summary,
-                        Size::new(
-                            paragraph_measurement_width(
-                                local_widget_bounds,
-                                &collapsible_node.summary,
-                            ),
-                            f32::INFINITY,
-                        ),
-                        text::Alignment::Default,
-                    );
-
-                    let body_paragraph_index = collapsible_node.body.as_ref().map(|body_node| {
-                        let body_index = summary_paragraph_index + 1;
-                        state.paragraphs[body_index] = build_renderer_paragraph(
-                            body_node,
-                            Size::new(
-                                paragraph_measurement_width(local_widget_bounds, body_node),
-                                f32::INFINITY,
-                            ),
-                            text::Alignment::Default,
-                        );
-                        body_index
-                    });
-
-                    let measured_collapsible = measure_rendered_collapsible_directive_node(
-                        collapsible_node,
-                        &state.paragraphs[summary_paragraph_index],
-                        body_paragraph_index.map(|body_index| &state.paragraphs[body_index]),
-                        local_widget_bounds,
-                        current_y,
-                    );
-                    let flow_end_y = if let (Some(body_node), Some(body_outer_bounds)) = (
-                        collapsible_node.body.as_ref(),
-                        measured_collapsible.body_outer_bounds,
-                    ) {
-                        body_outer_bounds.y + body_outer_bounds.height + body_node.gap_after
-                    } else {
-                        measured_collapsible.summary_outer_bounds.y
-                            + measured_collapsible.summary_outer_bounds.height
-                            + collapsible_node.summary.gap_after
-                    };
-
-                    state
-                        .flow_layouts
-                        .push(LaidOutFlowNode::Collapsible(LaidOutCollapsibleNode {
-                            node_index,
-                            summary_paragraph_index,
-                            body_paragraph_index,
-                            summary_outer_bounds: measured_collapsible.summary_outer_bounds,
-                            body_outer_bounds: measured_collapsible.body_outer_bounds,
-                            body_full_text_height: measured_collapsible.body_full_text_height,
-                            flow_end_y,
-                        }));
-
-                    current_y = flow_end_y;
-                    paragraph_index += 1 + usize::from(body_paragraph_index.is_some());
-                }
-                RenderedTranscriptNode::Paragraph(paragraph_node) => {
-                    state.paragraphs[paragraph_index] = build_renderer_paragraph(
-                        paragraph_node,
-                        Size::new(
-                            paragraph_measurement_width(local_widget_bounds, paragraph_node),
-                            f32::INFINITY,
-                        ),
-                        text::Alignment::Default,
-                    );
-                    let outer_bounds = resolve_paragraph_outer_bounds(
-                        local_widget_bounds,
-                        current_y + paragraph_node.gap_before,
-                        paragraph_node,
-                        &state.paragraphs[paragraph_index],
-                    );
-                    let flow_end_y =
-                        outer_bounds.y + outer_bounds.height + paragraph_node.gap_after;
-
-                    state
-                        .flow_layouts
-                        .push(LaidOutFlowNode::Paragraph(LaidOutParagraphNode {
-                            node_index,
-                            paragraph_index,
-                            outer_bounds,
-                            flow_end_y,
-                        }));
-
-                    current_y = flow_end_y;
-                    paragraph_index += 1;
-                }
-                RenderedTranscriptNode::Table(table_node) => {
-                    let (table_layout, _) = layout_rendered_table_node(
-                        table_node,
-                        &mut state.paragraphs,
-                        paragraph_index,
-                        available_width,
-                    );
-                    let measured_table = measure_rendered_table_node(
-                        table_node,
-                        &table_layout,
-                        &state.paragraphs[table_layout.paragraph_range.clone()],
-                        local_widget_bounds,
-                        current_y,
-                    );
-                    let flow_end_y = measured_table.outer_bounds.y
-                        + measured_table.outer_bounds.height
-                        + table_node.gap_after;
-
-                    paragraph_index = table_layout.paragraph_range.end;
-                    state.table_layouts[table_index] = table_layout;
-                    state
-                        .flow_layouts
-                        .push(LaidOutFlowNode::Table(LaidOutTableNode {
-                            node_index,
-                            table_index,
-                            measured_table,
-                            flow_end_y,
-                        }));
-
-                    current_y = flow_end_y;
-                    table_index += 1;
-                }
-                RenderedTranscriptNode::Rule(rule_node) => {
-                    let rule_y = current_y + rule_node.gap_before;
-                    let outer_bounds = Rectangle::new(
-                        Point::new(0.0, rule_y),
-                        Size::new(available_width.max(1.0), 8.0),
-                    );
-                    let flow_end_y = rule_y + 8.0 + rule_node.gap_after;
-
-                    state
-                        .flow_layouts
-                        .push(LaidOutFlowNode::Rule(LaidOutRuleNode {
-                            node_index,
-                            outer_bounds,
-                            flow_end_y,
-                        }));
-
-                    current_y = flow_end_y;
-                }
-            }
-        }
-
-        state.panel_layouts = self
-            .document
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(node_index, node)| {
-                let RenderedTranscriptNode::Panel(panel_node) = node else {
-                    return None;
-                };
-                measure_laid_out_panel_node(
-                    node_index,
-                    panel_node,
-                    &state.flow_layouts,
-                    available_width,
-                )
-            })
-            .collect();
-
-        state.layout_cache_ready = true;
-        state.cached_layout_width = available_width;
-        state.cached_layout_signature = self.document.layout_signature;
-        state.cached_layout_height = current_y.max(1.0);
-
-        layout::Node::new(Size::new(available_width, state.cached_layout_height))
+        layout::Node::new(Size::new(available_width, layout_height))
     }
 
     /// Draws the transcript widget, its block backgrounds, quote bars, text, and active selection highlight.
@@ -622,301 +187,17 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         let selection =
             effective_selection(state, &self.document, local_viewport, local_cursor_position);
         let visible_flow_range = visible_flow_layout_range(&state.flow_layouts, local_viewport);
-        let mut panel_border_overlays = Vec::new();
-
-        for panel_layout in state.panel_layouts.iter().filter(|panel_layout| {
-            translate_rectangle(panel_layout.outer_bounds, widget_origin).intersects(viewport)
-        }) {
-            let RenderedTranscriptNode::Panel(panel_node) =
-                &self.document.nodes[panel_layout.node_index]
-            else {
-                continue;
-            };
-            let outer_bounds = translate_rectangle(panel_layout.outer_bounds, widget_origin);
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: outer_bounds,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: panel_node.background.border.radius,
-                    },
-                    ..renderer::Quad::default()
-                },
-                panel_node.background.background,
-            );
-            if panel_node.background.border.width > f32::EPSILON {
-                panel_border_overlays.push((outer_bounds, panel_node.background.border));
-            }
-        }
-
-        for flow_layout in &state.flow_layouts[visible_flow_range] {
-            match flow_layout {
-                LaidOutFlowNode::Collapsible(layout_node) => {
-                    let RenderedTranscriptNode::Collapsible(collapsible_node) =
-                        &self.document.nodes[layout_node.node_index]
-                    else {
-                        continue;
-                    };
-                    let summary_paragraph = &state.paragraphs[layout_node.summary_paragraph_index];
-                    let summary_outer_bounds =
-                        translate_rectangle(layout_node.summary_outer_bounds, widget_origin);
-
-                    if let Some(background) = collapsible_node.summary.background {
-                        renderer.fill_quad(
-                            renderer::Quad {
-                                bounds: summary_outer_bounds,
-                                border: background.border,
-                                ..renderer::Quad::default()
-                            },
-                            background.background,
-                        );
-                    }
-
-                    renderer.fill_paragraph(
-                        summary_paragraph,
-                        paragraph_local_origin(summary_outer_bounds, &collapsible_node.summary),
-                        collapsible_node
-                            .summary
-                            .spans
-                            .first()
-                            .and_then(|span| span.color)
-                            .unwrap_or(defaults.text_color),
-                        *viewport,
-                    );
-
-                    if let (Some(body_node), Some(body_paragraph_index), Some(body_outer_bounds)) = (
-                        collapsible_node.body.as_ref(),
-                        layout_node.body_paragraph_index,
-                        layout_node.body_outer_bounds,
-                    ) {
-                        let body_paragraph = &state.paragraphs[body_paragraph_index];
-                        let body_outer_bounds =
-                            translate_rectangle(body_outer_bounds, widget_origin);
-                        renderer.fill_quad(
-                            renderer::Quad {
-                                bounds: body_outer_bounds,
-                                border: collapsible_node.body_background.border,
-                                ..renderer::Quad::default()
-                            },
-                            collapsible_node.body_background.background,
-                        );
-
-                        let max_scroll =
-                            (layout_node.body_full_text_height - body_outer_bounds.height).max(0.0);
-                        let scroll_offset = state
-                            .collapsible_body_scroll_offsets
-                            .get(&collapsible_node.block_id)
-                            .copied()
-                            .unwrap_or(0.0)
-                            .clamp(0.0, max_scroll);
-                        let text_clip_bounds = Rectangle::new(
-                            Point::new(
-                                body_outer_bounds.x + body_node.inner_padding.left,
-                                body_outer_bounds.y + body_node.inner_padding.top,
-                            ),
-                            Size::new(
-                                (body_outer_bounds.width
-                                    - body_node.inner_padding.left
-                                    - body_node.inner_padding.right
-                                    - if max_scroll > 0.0 { 10.0 } else { 0.0 })
-                                .max(1.0),
-                                (body_outer_bounds.height
-                                    - body_node.inner_padding.top
-                                    - body_node.inner_padding.bottom)
-                                    .max(1.0),
-                            ),
-                        );
-
-                        renderer.with_layer(text_clip_bounds, |renderer| {
-                            renderer.fill_paragraph(
-                                body_paragraph,
-                                Point::new(text_clip_bounds.x, text_clip_bounds.y - scroll_offset),
-                                body_node
-                                    .spans
-                                    .first()
-                                    .and_then(|span| span.color)
-                                    .unwrap_or(defaults.text_color),
-                                *viewport,
-                            );
-                        });
-
-                        if max_scroll > f32::EPSILON {
-                            let track_bounds = Rectangle::new(
-                                Point::new(
-                                    body_outer_bounds.x + body_outer_bounds.width - 6.0,
-                                    body_outer_bounds.y + 6.0,
-                                ),
-                                Size::new(3.0, (body_outer_bounds.height - 12.0).max(18.0)),
-                            );
-                            renderer.fill_quad(
-                                renderer::Quad {
-                                    bounds: track_bounds,
-                                    border: Border {
-                                        color: Color::TRANSPARENT,
-                                        width: 0.0,
-                                        radius: 2.0.into(),
-                                    },
-                                    ..renderer::Quad::default()
-                                },
-                                Background::Color(collapsible_node.scrollbar_track_color),
-                            );
-
-                            let thumb_height = ((track_bounds.height
-                                * (body_outer_bounds.height / layout_node.body_full_text_height))
-                                .clamp(18.0, track_bounds.height))
-                            .max(18.0);
-                            let travel = (track_bounds.height - thumb_height).max(0.0);
-                            let thumb_y = track_bounds.y
-                                + if max_scroll <= f32::EPSILON {
-                                    0.0
-                                } else {
-                                    (scroll_offset / max_scroll) * travel
-                                };
-                            renderer.fill_quad(
-                                renderer::Quad {
-                                    bounds: Rectangle::new(
-                                        Point::new(track_bounds.x, thumb_y),
-                                        Size::new(track_bounds.width, thumb_height),
-                                    ),
-                                    border: Border {
-                                        color: Color::TRANSPARENT,
-                                        width: 0.0,
-                                        radius: 2.0.into(),
-                                    },
-                                    ..renderer::Quad::default()
-                                },
-                                Background::Color(collapsible_node.scrollbar_thumb_color),
-                            );
-                        }
-                    }
-                }
-                LaidOutFlowNode::Paragraph(layout_node) => {
-                    let RenderedTranscriptNode::Paragraph(paragraph_node) =
-                        &self.document.nodes[layout_node.node_index]
-                    else {
-                        continue;
-                    };
-                    let paragraph = &state.paragraphs[layout_node.paragraph_index];
-                    let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
-
-                    if let Some(background) = paragraph_node.background {
-                        let background_bounds = if background.border.width <= f32::EPSILON {
-                            Rectangle::new(
-                                outer_bounds.position(),
-                                Size::new(
-                                    outer_bounds.width,
-                                    outer_bounds.height
-                                        + (layout_node.flow_end_y
-                                            - layout_node.outer_bounds.y
-                                            - layout_node.outer_bounds.height),
-                                ),
-                            )
-                        } else {
-                            outer_bounds
-                        };
-                        renderer.fill_quad(
-                            renderer::Quad {
-                                bounds: background_bounds,
-                                border: background.border,
-                                ..renderer::Quad::default()
-                            },
-                            background.background,
-                        );
-                    }
-
-                    if paragraph_node.quote_depth > 0 {
-                        let quote_bar_x = (outer_bounds.x - 10.0).max(layout.bounds().x);
-                        renderer.fill_quad(
-                            renderer::Quad {
-                                bounds: Rectangle::new(
-                                    Point::new(quote_bar_x, outer_bounds.y),
-                                    Size::new(4.0, outer_bounds.height),
-                                ),
-                                ..renderer::Quad::default()
-                            },
-                            Background::Color(defaults.text_color.scale_alpha(0.18)),
-                        );
-                    }
-
-                    if let Some((selection_start, selection_end)) = selection {
-                        draw_paragraph_selection(
-                            renderer,
-                            &self.document,
-                            paragraph_node,
-                            paragraph,
-                            selection_start,
-                            selection_end,
-                            paragraph_local_origin(outer_bounds, paragraph_node),
-                            viewport,
-                        );
-                    }
-
-                    renderer.fill_paragraph(
-                        paragraph,
-                        paragraph_local_origin(outer_bounds, paragraph_node),
-                        paragraph_node
-                            .spans
-                            .first()
-                            .and_then(|span| span.color)
-                            .unwrap_or(defaults.text_color),
-                        *viewport,
-                    );
-                }
-                LaidOutFlowNode::Table(layout_node) => {
-                    let RenderedTranscriptNode::Table(table_node) =
-                        &self.document.nodes[layout_node.node_index]
-                    else {
-                        continue;
-                    };
-                    let table_layout = &state.table_layouts[layout_node.table_index];
-                    let table_paragraphs = &state.paragraphs[table_layout.paragraph_range.clone()];
-                    let measured_table =
-                        translate_measured_table_node(&layout_node.measured_table, widget_origin);
-
-                    draw_rendered_table_node(
-                        renderer,
-                        &self.document,
-                        defaults,
-                        selection,
-                        table_node,
-                        table_paragraphs,
-                        &measured_table,
-                        viewport,
-                    );
-                }
-                LaidOutFlowNode::Rule(layout_node) => {
-                    let RenderedTranscriptNode::Rule(rule_node) =
-                        &self.document.nodes[layout_node.node_index]
-                    else {
-                        continue;
-                    };
-                    let outer_bounds = translate_rectangle(layout_node.outer_bounds, widget_origin);
-                    let rule_y = outer_bounds.y + 3.0;
-                    renderer.fill_quad(
-                        renderer::Quad {
-                            bounds: Rectangle::new(
-                                Point::new(outer_bounds.x, rule_y),
-                                Size::new(outer_bounds.width.max(1.0), 2.0),
-                            ),
-                            ..renderer::Quad::default()
-                        },
-                        Background::Color(rule_node.color),
-                    );
-                }
-            }
-        }
-
-        for (bounds, border) in panel_border_overlays {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border,
-                    ..renderer::Quad::default()
-                },
-                Background::Color(Color::TRANSPARENT),
-            );
-        }
+        draw_visible_transcript_content(
+            renderer,
+            &self.document,
+            state,
+            defaults,
+            selection,
+            layout.bounds(),
+            widget_origin,
+            viewport,
+            visible_flow_range,
+        );
         let _ = app_theme;
     }
 
@@ -933,218 +214,17 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
-
-        let local_viewport = localize_rectangle(*_viewport, layout.bounds().position());
-
-        match event {
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                state.context_menu = None;
-                shell.request_redraw();
-                if let Some(position) = cursor.position_over(layout.bounds()) {
-                    let local_position = localize_point(position, layout.bounds().position());
-                    let delta_y = match delta {
-                        mouse::ScrollDelta::Lines { y, .. } => -y * 36.0,
-                        mouse::ScrollDelta::Pixels { y, .. } => -y,
-                    };
-
-                    if scroll_collapsible_body_at_position(
-                        &self.document,
-                        state,
-                        local_position,
-                        delta_y,
-                    ) {
-                        shell.capture_event();
-                    }
-                }
-            }
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                state.context_menu = None;
-                if let Some(position) = cursor.position_over(layout.bounds()) {
-                    let local_position = localize_point(position, layout.bounds().position());
-                    if let Some(hit_char) =
-                        hit_test_rendered_document(&self.document, state, local_position)
-                    {
-                        state.focused = true;
-                        state.dragging = true;
-                        state.drag_moved = false;
-                        state.anchor_char = hit_char;
-                        state.head_char = hit_char;
-                        shell.request_redraw();
-                        self.publish_drag_auto_scroll_request(state, None, shell);
-                        shell.capture_event();
-                    } else {
-                        state.focused = false;
-                        shell.request_redraw();
-                        self.publish_drag_auto_scroll_request(state, None, shell);
-                    }
-                } else {
-                    state.focused = false;
-                    shell.request_redraw();
-                    self.publish_drag_auto_scroll_request(state, None, shell);
-                }
-            }
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                if let Some(position) = cursor.position_over(layout.bounds()) {
-                    state.focused = true;
-                    state.context_menu = Some(TranscriptContextMenuState {
-                        anchor_position: position,
-                    });
-                    shell.request_redraw();
-                    self.publish_drag_auto_scroll_request(state, None, shell);
-                    shell.capture_event();
-                } else {
-                    state.context_menu = None;
-                    shell.request_redraw();
-                }
-            }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
-                if let Some(position) = cursor.position_including_levitation() {
-                    let local_position = localize_point(position, layout.bounds().position());
-                    if let Some(hit_char) = drag_selection_head_char(
-                        &self.document,
-                        state,
-                        local_viewport,
-                        local_position,
-                    ) {
-                        if hit_char != state.head_char {
-                            state.drag_moved = true;
-                        }
-                        state.head_char = hit_char;
-                        shell.request_redraw();
-                        shell.capture_event();
-                    }
-
-                    self.publish_drag_auto_scroll_request(
-                        state,
-                        drag_auto_scroll_request_for_position(local_viewport, local_position),
-                        shell,
-                    );
-                } else {
-                    self.publish_drag_auto_scroll_request(state, None, shell);
-                }
-            }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.dragging => {
-                if let Some(position) = cursor.position_including_levitation() {
-                    let local_position = localize_point(position, layout.bounds().position());
-                    if let Some(hit_char) = drag_selection_head_char(
-                        &self.document,
-                        state,
-                        local_viewport,
-                        local_position,
-                    ) {
-                        if hit_char != state.head_char {
-                            state.drag_moved = true;
-                        }
-                        state.head_char = hit_char;
-                        shell.request_redraw();
-                    }
-                }
-                if !state.drag_moved && state.anchor_char == state.head_char {
-                    if let Some(position) = cursor.position_over(layout.bounds()) {
-                        let local_position = localize_point(position, layout.bounds().position());
-                        let clicked_link_target =
-                            hit_test_rendered_document(&self.document, state, local_position)
-                                .and_then(|hit_char| self.document.link_at_char_offset(hit_char))
-                                .or_else(|| {
-                                    background_action_link_at_position(
-                                        &self.document,
-                                        state,
-                                        local_position,
-                                    )
-                                });
-
-                        if let Some(link_url) = clicked_link_target {
-                            if let Some(link_action) =
-                                self.document.link_action_for_target(&link_url)
-                            {
-                                match link_action {
-                                    RenderedTranscriptLinkAction::ToggleBlockInline(block_id) => {
-                                        shell.publish((self.on_interaction.as_ref())(
-                                            SelectableTranscriptInteraction::ToggleBlockInline(
-                                                block_id.clone(),
-                                            ),
-                                        ));
-                                        state.last_click_link_target = Some(link_url);
-                                        state.last_click_instant = Some(Instant::now());
-                                    }
-                                    RenderedTranscriptLinkAction::CopyText(copy_payload) => {
-                                        shell.write_clipboard(copy_payload.clone().into());
-                                    }
-                                    RenderedTranscriptLinkAction::OpenThinkingModal(block_id) => {
-                                        shell.publish((self.on_interaction.as_ref())(
-                                            SelectableTranscriptInteraction::OpenThinkingModal(
-                                                block_id.clone(),
-                                            ),
-                                        ));
-                                        state.last_click_link_target = Some(link_url);
-                                        state.last_click_instant = Some(Instant::now());
-                                    }
-                                    RenderedTranscriptLinkAction::OpenToolModal(block_id) => {
-                                        shell.publish((self.on_interaction.as_ref())(
-                                            SelectableTranscriptInteraction::OpenToolModal(
-                                                block_id.clone(),
-                                            ),
-                                        ));
-                                        state.last_click_link_target = Some(link_url);
-                                        state.last_click_instant = Some(Instant::now());
-                                    }
-                                }
-                            } else {
-                                shell.write_clipboard(link_url.into());
-                            }
-                        }
-                    }
-                }
-                state.dragging = false;
-                state.drag_moved = false;
-                shell.request_redraw();
-                self.publish_drag_auto_scroll_request(state, None, shell);
-                shell.capture_event();
-            }
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key,
-                modifiers,
-                text,
-                ..
-            }) if state.focused && shortcut_matches_copy(key, *modifiers, text.as_deref()) => {
-                state.context_menu = None;
-                if let Some((selection_start, selection_end)) = effective_selection(
-                    state,
-                    &self.document,
-                    local_viewport,
-                    cursor
-                        .position_including_levitation()
-                        .map(|position| localize_point(position, layout.bounds().position())),
-                ) {
-                    shell.write_clipboard(
-                        self.document
-                            .selected_text(selection_start, selection_end)
-                            .into(),
-                    );
-                    shell.request_redraw();
-                    shell.capture_event();
-                }
-            }
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key,
-                modifiers,
-                text,
-                ..
-            }) if state.focused
-                && shortcut_matches_select_all(key, *modifiers, text.as_deref()) =>
-            {
-                state.context_menu = None;
-                state.anchor_char = 0;
-                state.head_char = self.document.len_chars();
-                shell.request_redraw();
-                shell.capture_event();
-            }
-            Event::Keyboard(keyboard::Event::KeyPressed { .. }) => {
-                state.context_menu = None;
-                shell.request_redraw();
-            }
-            _ => {}
-        }
+        handle_transcript_widget_event(
+            &self.document,
+            self.on_drag_auto_scroll.as_ref(),
+            self.on_interaction.as_ref(),
+            state,
+            event,
+            layout.bounds(),
+            cursor,
+            shell,
+            *_viewport,
+        );
     }
 
     /// Returns the mouse interaction shown while hovering the selectable transcript widget.
@@ -1157,31 +237,8 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        let Some(position) = cursor.position_over(layout.bounds()) else {
-            return mouse::Interaction::None;
-        };
         let state = tree.state.downcast_ref::<SelectableTranscriptState>();
-        let local_position = localize_point(position, layout.bounds().position());
-
-        if let Some(menu_state) = state.context_menu {
-            let menu_actions =
-                transcript_context_menu_actions(current_selection_for_state(state).is_some());
-            let menu_bounds =
-                transcript_context_menu_bounds(layout.bounds(), menu_state, menu_actions.len());
-            if menu_bounds.contains(position) {
-                return mouse::Interaction::Pointer;
-            }
-        }
-
-        if hit_test_rendered_document(&self.document, state, local_position)
-            .and_then(|hit_char| self.document.link_at_char_offset(hit_char))
-            .or_else(|| background_action_link_at_position(&self.document, state, local_position))
-            .is_some()
-        {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::Text
-        }
+        transcript_mouse_interaction(&self.document, state, layout.bounds(), cursor)
     }
 
     /// Returns the transcript context-menu overlay when one right-click menu is currently open.
@@ -1204,239 +261,19 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             layout.bounds().size(),
         );
 
-        Some(overlay::Element::new(Box::new(
-            SelectableTranscriptContextMenuOverlay {
-                state,
-                document: &self.document,
-                widget_bounds: translated_bounds,
-                menu_state,
-            },
-        )))
+        Some(build_context_menu_overlay(
+            state,
+            &self.document,
+            translated_bounds,
+            menu_state,
+        ))
     }
-}
-
-/// Overlay responsible for presenting and executing the selectable transcript context menu.
-/// 负责展示并执行可选择转录右键菜单的浮层。
-struct SelectableTranscriptContextMenuOverlay<'a> {
-    /// Mutable transcript runtime state so menu actions can update selection and dismiss themselves.
-    /// 可变转录运行时状态，用于让菜单动作更新选区并自行关闭。
-    state: &'a mut SelectableTranscriptState,
-    /// Rendered transcript document used to copy selected text and compute the full character span.
-    /// 用于复制选中文本并计算全文字符跨度的渲染转录文档。
-    document: &'a RenderedTranscriptDocument,
-    /// Absolute widget bounds used to clamp the menu overlay inside the transcript surface.
-    /// 用于将菜单浮层钳制在转录表面内部的绝对组件边界。
-    widget_bounds: Rectangle,
-    /// Open menu anchor captured from the right-click gesture.
-    /// 从右键手势捕获的已打开菜单锚点。
-    menu_state: TranscriptContextMenuState,
-}
-
-impl<Message> overlay::Overlay<Message, Theme, Renderer>
-    for SelectableTranscriptContextMenuOverlay<'_>
-{
-    /// Lays out the transcript context menu using one clamped fixed-size floating rectangle.
-    /// 使用一个经过钳制的固定尺寸浮动矩形对转录右键菜单进行布局。
-    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
-        let actions =
-            transcript_context_menu_actions(current_selection_for_state(self.state).is_some());
-        let menu_bounds =
-            transcript_context_menu_bounds(self.widget_bounds, self.menu_state, actions.len());
-        layout::Node::new(menu_bounds.size()).move_to(menu_bounds.position())
-    }
-
-    /// Draws the floating transcript context menu above the transcript surface.
-    /// 在转录表面之上绘制浮动转录右键菜单。
-    fn draw(
-        &self,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-    ) {
-        let menu_bounds = layout.bounds();
-        let actions =
-            transcript_context_menu_actions(current_selection_for_state(self.state).is_some());
-        let palette = theme.palette();
-        let hovered_action = cursor.position().and_then(|position| {
-            hit_test_transcript_context_menu_action(menu_bounds, actions.as_slice(), position)
-        });
-
-        renderer.with_layer(menu_bounds, |renderer| {
-            renderer.with_translation(Vector::new(menu_bounds.x, menu_bounds.y), |renderer| {
-                let local_menu_bounds = Rectangle::new(Point::ORIGIN, menu_bounds.size());
-
-                renderer.fill_quad(
-                    renderer::Quad {
-                        bounds: local_menu_bounds,
-                        border: Border {
-                            color: palette.background.strong.color.scale_alpha(0.28),
-                            width: 1.0,
-                            radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
-                        },
-                        shadow: iced::Shadow {
-                            color: Color::BLACK.scale_alpha(0.18),
-                            offset: iced::Vector::new(0.0, 8.0),
-                            blur_radius: 18.0,
-                        },
-                        ..renderer::Quad::default()
-                    },
-                    Background::Color(mix_color(
-                        palette.background.base.color,
-                        palette.background.weak.color,
-                        0.18,
-                    )),
-                );
-
-                for (index, action) in actions.iter().enumerate() {
-                    let item_bounds = transcript_context_menu_item_bounds(local_menu_bounds, index);
-                    if hovered_action == Some(*action) {
-                        renderer.fill_quad(
-                            renderer::Quad {
-                                bounds: item_bounds,
-                                border: Border {
-                                    color: Color::TRANSPARENT,
-                                    width: 0.0,
-                                    radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
-                                },
-                                ..renderer::Quad::default()
-                            },
-                            Background::Color(palette.primary.weak.color.scale_alpha(0.24)),
-                        );
-                    }
-
-                    renderer.fill_text(
-                        text::Text {
-                            content: transcript_context_menu_action_label(*action).to_string(),
-                            bounds: Size::new(
-                                (item_bounds.width - TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X * 2.0)
-                                    .max(1.0),
-                                item_bounds.height.max(1.0),
-                            ),
-                            size: Pixels(14.0),
-                            line_height: text::LineHeight::default(),
-                            font: theme::ui_font(),
-                            align_x: text::Alignment::Left,
-                            align_y: iced::alignment::Vertical::Center,
-                            shaping: text::Shaping::Advanced,
-                            wrapping: text::Wrapping::None,
-                            ellipsis: text::Ellipsis::None,
-                            hint_factor: None,
-                        },
-                        Point::new(TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X, item_bounds.y),
-                        style.text_color,
-                        local_menu_bounds,
-                    );
-                }
-            });
-        });
-    }
-
-    /// Updates the floating transcript context menu, executing menu actions or dismissing itself on outside clicks.
-    /// 更新浮动转录右键菜单，在点击菜单动作或外部区域时执行动作或自行关闭。
-    fn update(
-        &mut self,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _renderer: &Renderer,
-        shell: &mut Shell<'_, Message>,
-    ) {
-        match event {
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let actions = transcript_context_menu_actions(
-                    current_selection_for_state(self.state).is_some(),
-                );
-                let menu_bounds = layout.bounds();
-
-                if let Some(position) = cursor.position() {
-                    if let Some(action) = hit_test_transcript_context_menu_action(
-                        menu_bounds,
-                        actions.as_slice(),
-                        position,
-                    ) {
-                        execute_transcript_context_menu_action(
-                            action,
-                            self.state,
-                            self.document,
-                            shell,
-                        );
-                        self.state.context_menu = None;
-                        shell.request_redraw();
-                        shell.capture_event();
-                        return;
-                    }
-                }
-
-                self.state.context_menu = None;
-                shell.request_redraw();
-            }
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
-            | Event::Keyboard(keyboard::Event::KeyPressed { .. })
-            | Event::Mouse(mouse::Event::WheelScrolled { .. }) => {
-                self.state.context_menu = None;
-                shell.request_redraw();
-            }
-            _ => {}
-        }
-    }
-
-    /// Returns pointer interaction while hovering the context-menu overlay.
-    /// 返回悬停在右键菜单浮层上时的指针交互。
-    fn mouse_interaction(
-        &self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        cursor
-            .position()
-            .filter(|position| layout.bounds().contains(*position))
-            .map(|_| mouse::Interaction::Pointer)
-            .unwrap_or(mouse::Interaction::default())
-    }
-}
-
-impl<'a, Message> SelectableTranscript<'a, Message> {
-    /// Publishes one changed drag auto-scroll request to the parent scroll container while suppressing duplicates.
-    /// 在抑制重复消息的前提下向父级滚动容器发布一次变更后的拖拽自动滚动请求。
-    fn publish_drag_auto_scroll_request(
-        &self,
-        state: &mut SelectableTranscriptState,
-        request: Option<SelectableTranscriptDragAutoScroll>,
-        shell: &mut Shell<'_, Message>,
-    ) {
-        if state.drag_auto_scroll_request == request {
-            return;
-        }
-
-        state.drag_auto_scroll_request = request;
-        shell.publish((self.on_drag_auto_scroll.as_ref())(request));
-    }
-}
-
-/// Converts one byte offset reported by the text backend into a safe character offset.
-/// 将文本后端返回的字节偏移转换为安全的字符偏移。
-fn byte_offset_to_char_offset(text: &str, byte_offset: usize) -> usize {
-    let clamped_byte_offset = byte_offset.min(text.len());
-    let safe_byte_offset = if text.is_char_boundary(clamped_byte_offset) {
-        clamped_byte_offset
-    } else {
-        let mut safe_byte_offset = clamped_byte_offset;
-        while safe_byte_offset > 0 && !text.is_char_boundary(safe_byte_offset) {
-            safe_byte_offset -= 1;
-        }
-        safe_byte_offset
-    };
-
-    text[..safe_byte_offset].chars().count()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Background, MARKDOWN_LIST_INDENT_STEP, PlainParagraphStyle, RenderContext,
+        MARKDOWN_LIST_INDENT_STEP, PlainParagraphStyle, RenderContext,
         RenderedParagraphHorizontalPlacement, RenderedParagraphNode, RenderedTranscriptBuilder,
         RenderedTranscriptNode, SelectableTableAlignment,
         SelectableTranscriptDragAutoScrollDirection, build_markdown_image_spans,
@@ -1454,7 +291,7 @@ mod tests {
     use iced::advanced::text;
     use iced::widget::markdown;
     use iced::widget::text::Span;
-    use iced::{Color, Padding, Pixels, Point, Size, Theme};
+    use iced::{Background, Color, Padding, Pixels, Point, Size, Theme};
     use std::ops::Range;
 
     /// Verifies ASCII byte offsets remain identical after conversion because one byte still means one visible character.
