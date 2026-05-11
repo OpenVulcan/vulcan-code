@@ -16,10 +16,10 @@ mod scene;
 mod surface_state;
 mod text_routing;
 mod text_utils;
+mod viewport_materialization;
 
 use self::context_menu::*;
 use self::event_routing::*;
-use self::interaction::*;
 use self::layout_engine::*;
 use self::paint::*;
 use self::scene::*;
@@ -29,9 +29,11 @@ pub use self::surface_state::{
     SelectableTranscriptInteraction,
 };
 use self::text_utils::*;
+use self::viewport_materialization::*;
 #[cfg(test)]
 use self::{
-    builder::RenderedTranscriptBuilder, directive_render::*, markdown_render::*, markdown_source::*,
+    builder::RenderedTranscriptBuilder, directive_render::*, interaction::*, markdown_render::*,
+    markdown_source::*,
 };
 use crate::AgentViewDocument;
 use iced::advanced::layout::{self, Layout};
@@ -180,25 +182,23 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         }
 
         let state = tree.state.downcast_ref::<SelectableTranscriptState>();
-        let widget_origin = layout.bounds().position();
-        let local_viewport = localize_rectangle(*viewport, widget_origin);
-        let local_cursor_position = cursor
-            .position_including_levitation()
-            .map(|position| localize_point(position, widget_origin));
-        let selection =
-            effective_selection(state, &self.document, local_viewport, local_cursor_position);
-        let visible_flow_range =
-            visible_flow_layout_range(&state.render_cache.flow_layouts, local_viewport);
+        let materialized_viewport = materialize_transcript_viewport(
+            &self.document,
+            state,
+            layout.bounds(),
+            cursor,
+            *viewport,
+        );
         draw_visible_transcript_content(
             renderer,
             &self.document,
             state,
             defaults,
-            selection,
+            materialized_viewport.selection,
             layout.bounds(),
-            widget_origin,
+            materialized_viewport.widget_origin,
             viewport,
-            visible_flow_range,
+            materialized_viewport.visible_flow_range,
         );
         let _ = app_theme;
     }
