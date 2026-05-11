@@ -203,10 +203,6 @@ const TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD: f32 = 28.0;
 /// 保留在转录表面尾部的共享底部留白，用于避免最新内容紧贴底边。
 const TRANSCRIPT_BOTTOM_SPACER_HEIGHT: f32 = 72.0;
 
-/// Shared delay used to distinguish one confirmed single click from one double click on the inline thinking header.
-/// 用于区分内联思考标题确认单击与双击的共享延迟。
-const THINKING_INLINE_TOGGLE_DELAY: Duration = Duration::from_millis(180);
-
 /// Shared animation tick used by drag-driven transcript auto-scroll while the pointer is kept outside the visible viewport.
 /// 当指针持续停留在可见视口之外时，拖拽驱动的转录自动滚动使用的共享动画 Tick。
 const TRANSCRIPT_DRAG_AUTO_SCROLL_TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -532,9 +528,6 @@ pub struct VulcanWorkbench {
     /// Centered modal state retained when the user explicitly opens one inline tool block for closer inspection.
     /// 当用户显式打开某个内联工具区块进行聚焦查看时保留的居中弹层状态。
     active_tool_modal: Option<ToolModalState>,
-    /// Pending inline-thinking toggle waiting for the double-click window to elapse before it is committed.
-    /// 等待双击判定窗口结束后再正式提交的待执行内联思考折叠切换状态。
-    pending_thinking_inline_toggle: Option<PendingThinkingInlineToggleState>,
     /// Active streaming output-message identifiers keyed by session id.
     /// 以会话标识为键保存的当前流式输出消息标识集合。
     streaming_output_message_ids: BTreeMap<SessionId, String>,
@@ -850,21 +843,6 @@ struct ToolModalState {
     phase: ThinkingModalPhase,
     /// Monotonic timestamp captured when the current phase began.
     /// 当前阶段开始时捕获的单调时间戳。
-    started_at: Instant,
-}
-
-/// Pending inline-thinking toggle retained until the double-click window has elapsed.
-/// 在双击判定窗口结束前保留的待执行内联思考折叠切换状态。
-#[derive(Debug, Clone)]
-struct PendingThinkingInlineToggleState {
-    /// Session identifier owning the inline thinking block that may still toggle.
-    /// 拥有当前待切换内联思考区块的会话标识。
-    session_id: SessionId,
-    /// Stable rendered-transcript block identifier targeted by the pending inline toggle.
-    /// 当前待执行内联切换所针对的稳定渲染转录区块标识。
-    block_id: String,
-    /// Monotonic timestamp captured when the click that scheduled the pending toggle was received.
-    /// 收到创建该待执行切换的点击时捕获的单调时间戳。
     started_at: Instant,
 }
 
@@ -1724,18 +1702,12 @@ enum Message {
     /// Switches the transcript panel into the segmented rendered-preview mode.
     /// 将转录面板切换到分段渲染预览模式。
     ShowSelectedSessionDocumentDetailCards,
-    /// Toggles one inline thinking block rendered inside the selectable transcript surface.
-    /// 切换可选择转录表面内部的某个内联思考区块。
-    ToggleSelectedSessionThinkingInline(String),
     /// Opens one inline thinking block in the centered modal surface.
     /// 在居中弹层表面中打开某个内联思考区块。
     OpenSelectedSessionThinkingModal(String),
     /// Opens one inline tool block in the centered modal surface.
     /// 在居中弹层表面中打开某个内联工具区块。
     OpenSelectedSessionToolModal(String),
-    /// Commits one previously scheduled inline-thinking toggle after the double-click grace window has elapsed.
-    /// 在双击宽限窗口结束后，正式提交一次先前调度的内联思考切换。
-    FlushPendingThinkingInlineToggle,
     /// Starts or completes closing the centered thinking modal.
     /// 启动或完成关闭居中思考弹层。
     CloseSelectedSessionThinkingModal,
@@ -2091,10 +2063,8 @@ impl VulcanWorkbench {
                 panes,
                 focus,
                 workspace_path: String::from("D:/openvulcan/vulcan-code"),
-                composer: String::from("为 Rust + iced AI Coding 客户端搭建可扩展的桌面基础设施。"),
-                composer_buffer: text_editor::Content::with_text(
-                    "为 Rust + iced AI Coding 客户端搭建可扩展的桌面基础设施。",
-                ),
+                composer: String::new(),
+                composer_buffer: text_editor::Content::with_text(""),
                 editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
                 diff_summary: placeholder_diff_panel.summary_text(),
                 diff_panel: placeholder_diff_panel,
@@ -2139,7 +2109,6 @@ impl VulcanWorkbench {
                 session_streaming_thinking_follow_tail: BTreeMap::new(),
                 active_thinking_modal: None,
                 active_tool_modal: None,
-                pending_thinking_inline_toggle: None,
                 streaming_output_message_ids: BTreeMap::new(),
                 session_tool_call_message_ids: BTreeMap::new(),
                 runtime_event_raw_buffers: BTreeMap::new(),
@@ -2262,7 +2231,6 @@ impl VulcanWorkbench {
                 self.session_streaming_thinking_follow_tail.clear();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
-                self.pending_thinking_inline_toggle = None;
                 self.streaming_output_message_ids.clear();
                 self.runtime_event_raw_buffers.clear();
                 self.runtime_event_markdown.clear();
@@ -3370,8 +3338,7 @@ impl VulcanWorkbench {
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
-                self.pending_thinking_inline_toggle = None;
-
+                self.refresh_session_agent_view_buffers(session_id);
                 // Capture the selected session title to keep footer feedback specific.
                 // 记录被选中的会话标题，保证底部反馈足够具体。
                 let selected_title = self
@@ -3390,62 +3357,47 @@ impl VulcanWorkbench {
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
-                self.pending_thinking_inline_toggle = None;
-                self.selected_session()
-                    .map(|session| {
-                        Task::batch([
-                            self.maybe_follow_selected_session_transcript_tail(session.id),
-                            self.maybe_follow_selected_session_thinking_overlay_tail(session.id),
-                        ])
-                    })
-                    .unwrap_or_else(Task::none)
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                self.refresh_session_agent_view_buffers(session_id);
+                Task::batch([
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                ])
             }
             Message::ShowSelectedSessionDocumentRawSource => {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::RawSource;
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
-                self.pending_thinking_inline_toggle = None;
-                self.selected_session()
-                    .map(|session| {
-                        Task::batch([
-                            self.maybe_follow_selected_session_transcript_tail(session.id),
-                            self.maybe_follow_selected_session_thinking_overlay_tail(session.id),
-                        ])
-                    })
-                    .unwrap_or_else(Task::none)
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                self.refresh_session_agent_view_buffers(session_id);
+                Task::batch([
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                ])
             }
             Message::ShowSelectedSessionDocumentDetailCards => {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
-                self.pending_thinking_inline_toggle = None;
-                self.selected_session()
-                    .map(|session| {
-                        Task::batch([
-                            self.maybe_follow_selected_session_transcript_tail(session.id),
-                            self.maybe_follow_selected_session_thinking_overlay_tail(session.id),
-                        ])
-                    })
-                    .unwrap_or_else(Task::none)
-            }
-            Message::ToggleSelectedSessionThinkingInline(block_id) => {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.pending_thinking_inline_toggle = Some(PendingThinkingInlineToggleState {
-                    session_id,
-                    block_id,
-                    started_at: Instant::now(),
-                });
-                Task::none()
+                self.refresh_session_agent_view_buffers(session_id);
+                Task::batch([
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                ])
             }
             Message::OpenSelectedSessionThinkingModal(block_id) => {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.cancel_pending_thinking_inline_toggle(Some(session_id), Some(&block_id));
                 self.open_thinking_modal(session_id, block_id);
                 Task::none()
             }
@@ -3453,12 +3405,7 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.cancel_pending_thinking_inline_toggle(Some(session_id), None);
                 self.open_tool_modal(session_id, block_id);
-                Task::none()
-            }
-            Message::FlushPendingThinkingInlineToggle => {
-                self.flush_pending_thinking_inline_toggle();
                 Task::none()
             }
             Message::CloseSelectedSessionThinkingModal => {
@@ -5559,62 +5506,85 @@ impl VulcanWorkbench {
     /// Returns the current visible line count of the main prompt composer.
     /// 返回主提示词编辑器当前可见的逻辑行数量。
     fn composer_line_count(&self) -> usize {
-        self.composer.lines().count().max(1)
+        self.composer_buffer.text().lines().count().max(1)
     }
 
-    /// Builds the compact one-line composer editor that stays in the main toolbar row.
-    /// 构建保留在主工具栏行内的紧凑单行提示词编辑器。
+    /// Returns the current dynamic height of the main prompt composer editor.
+    /// 返回主提示词编辑器当前的动态高度。
+    fn composer_editor_height(&self) -> f32 {
+        let visible_lines = self.composer_line_count().min(10) as f32;
+
+        if visible_lines <= 1.0 {
+            44.0
+        } else {
+            20.0 + visible_lines * 24.0
+        }
+    }
+
+    /// Returns whether the main prompt composer should expand upward as a multi-line surface.
+    /// 返回主提示词编辑器当前是否应作为向上展开的多行输入表面显示。
+    fn composer_uses_expanded_surface(&self) -> bool {
+        self.composer_line_count() > 1
+    }
+
+    /// Builds the shared main prompt composer editor surface.
+    /// 构建主提示词编辑器共用的实际输入表面。
+    fn view_composer_editor_surface(&self) -> Element<'_, Message> {
+        let logical_line_count = self.composer_line_count();
+        let visible_height = self.composer_editor_height();
+        let full_content_height = if logical_line_count <= 1 {
+            visible_height
+        } else {
+            20.0 + logical_line_count as f32 * 24.0
+        };
+
+        let editor = text_editor(&self.composer_buffer)
+            .height(full_content_height)
+            .padding([10, 12])
+            .placeholder("输入当前会话要执行的任务指令")
+            .key_binding(|key_press| match key_press.key.as_ref() {
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+                    if !key_press.modifiers.shift() =>
+                {
+                    Some(text_editor::Binding::Custom(Message::StartRun))
+                }
+                _ => text_editor::Binding::from_key_press(key_press),
+            })
+            .on_action(Message::ComposerEditorAction);
+
+        if logical_line_count > 10 {
+            scrollable(container(editor).width(Fill))
+                .height(visible_height)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new()
+                        .width(8)
+                        .scroller_width(8)
+                        .spacing(6),
+                ))
+                .into()
+        } else {
+            container(editor).width(Fill).into()
+        }
+    }
+
+    /// Builds the compact placeholder slot used by the fixed composer panel row.
+    /// 构建固定提示词面板行内使用的紧凑占位输入槽。
     fn view_compact_composer_editor(&self) -> Element<'_, Message> {
-        container(
-            text_editor(&self.composer_buffer)
-                .height(44)
-                .padding([10, 12])
-                .placeholder("输入当前会话要执行的任务指令")
-                .key_binding(|key_press| match key_press.key.as_ref() {
-                    keyboard::Key::Named(keyboard::key::Named::Enter)
-                        if !key_press.modifiers.shift() =>
-                    {
-                        Some(text_editor::Binding::Custom(Message::StartRun))
-                    }
-                    _ => text_editor::Binding::from_key_press(key_press),
-                })
-                .on_action(Message::ComposerEditorAction),
-        )
-        .width(Fill)
-        .into()
+        if self.composer_uses_expanded_surface() {
+            container(space::vertical().height(44)).width(Fill).into()
+        } else {
+            self.view_composer_editor_surface()
+        }
     }
 
-    /// Builds the floating multiline composer overlay when the current prompt spans multiple lines.
-    /// 当当前提示词跨越多行时构建浮动多行编辑器遮罩。
-    fn view_composer_multiline_overlay(&self) -> Option<Element<'_, Message>> {
-        if self.composer_line_count() <= 1 {
+    /// Builds the expanded upward-growing composer overlay anchored above the fixed composer panel.
+    /// 构建锚定在固定提示词面板上方的向上展开编辑器遮罩。
+    fn view_composer_expanded_overlay(&self) -> Option<Element<'_, Message>> {
+        if !self.composer_uses_expanded_surface() {
             return None;
         }
 
-        let visible_lines = self.composer_line_count().min(15) as f32;
-        let editor_height = 20.0 + visible_lines * 24.0;
-
-        Some(
-            container(
-                text_editor(&self.composer_buffer)
-                    .height(editor_height)
-                    .padding([12, 14])
-                    .placeholder("输入当前会话要执行的任务指令")
-                    .key_binding(|key_press| match key_press.key.as_ref() {
-                        keyboard::Key::Named(keyboard::key::Named::Enter)
-                            if !key_press.modifiers.shift() =>
-                        {
-                            Some(text_editor::Binding::Custom(Message::StartRun))
-                        }
-                        _ => text_editor::Binding::from_key_press(key_press),
-                    })
-                    .on_action(Message::ComposerEditorAction),
-            )
-            .padding(0)
-            .style(container::bordered_box)
-            .width(Fill)
-            .into(),
-        )
+        Some(self.view_composer_editor_surface())
     }
 
     /// Builds the compact transcript surface-mode switcher shown at the trailing end of the session-status row.
@@ -5691,7 +5661,7 @@ impl VulcanWorkbench {
             .unwrap_or("未选择会话");
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
-        let composer_overlay = self.view_composer_multiline_overlay();
+        let composer_overlay = self.view_composer_expanded_overlay();
         let composer_panel = container(
             column![
                 row![
@@ -5708,19 +5678,6 @@ impl VulcanWorkbench {
                 .spacing(12)
                 .align_y(Center),
                 row![
-                    pick_list(
-                        ExecutionMode::ALL,
-                        Some(self.execution_mode),
-                        Message::ExecutionModeSelected
-                    )
-                    .width(110)
-                    .placeholder("模式"),
-                    self.view_compact_composer_editor(),
-                    self.view_run_trigger_button(),
-                ]
-                .spacing(10)
-                .align_y(Center),
-                row![
                     text("执行后将把用户输入、AI 输出与运行时事件写入当前会话。").size(12),
                     space::horizontal(),
                     text(if self.has_active_run() {
@@ -5732,22 +5689,78 @@ impl VulcanWorkbench {
                 ]
                 .spacing(10)
                 .align_y(Center),
+                row![
+                    pick_list(
+                        ExecutionMode::ALL,
+                        Some(self.execution_mode),
+                        Message::ExecutionModeSelected
+                    )
+                    .width(110)
+                    .placeholder("模式"),
+                    self.view_compact_composer_editor(),
+                    self.view_run_trigger_button(),
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::End),
             ]
             .spacing(10),
         )
         .padding(14)
         .style(container::bordered_box);
 
-        let transcript_surface: Element<'_, Message> = if let Some(overlay) = composer_overlay {
+        let main_canvas_content = column![
+            row![
+                column![
+                    text("AI 执行工作台").size(26),
+                    text("当前区域用于承载会话输出、执行事件和最小运行闭环。").size(13),
+                ]
+                .spacing(4),
+                space::horizontal(),
+                container(text(run_phase.label()).size(12))
+                    .padding([4, 10])
+                    .style(move |theme| style::workbench_run_phase_chip_style(theme, run_phase)),
+            ]
+            .align_y(Center),
+            container(
+                row![
+                    text(format!("当前会话：{session_title}")).size(14),
+                    text(format!("当前模型：{}", self.active_model_summary())).size(13),
+                    text(format!("激活代理：{}", runtime_summary.active_agent_name)).size(13),
+                    text(format!(
+                        "会话状态：{}",
+                        active_session
+                            .map(|session| session.status.label())
+                            .unwrap_or("未选择")
+                    ))
+                    .size(13),
+                    space::horizontal(),
+                    transcript_surface_mode_switcher,
+                ]
+                .spacing(16)
+                .align_y(Center)
+                .width(Fill),
+            )
+            .width(Fill)
+            .padding([12, 14])
+            .style(container::bordered_box),
+            transcript_stream,
+            composer_panel,
+        ]
+        .spacing(14)
+        .height(Fill);
+
+        let layered_canvas: Element<'_, Message> = if let Some(overlay) = composer_overlay {
             stack([
-                transcript_stream,
+                main_canvas_content.into(),
                 container(
                     column![
                         space::vertical().height(Fill),
                         row![
-                            space::horizontal().width(120),
+                            space::horizontal().width(110),
+                            space::horizontal().width(10),
                             overlay,
-                            space::horizontal().width(52),
+                            space::horizontal().width(10),
+                            space::horizontal().width(44),
                         ]
                         .width(Fill)
                         .align_y(iced::Alignment::End),
@@ -5757,62 +5770,19 @@ impl VulcanWorkbench {
                 )
                 .width(Fill)
                 .height(Fill)
-                .padding([8, 14])
+                .padding([14, 14])
                 .into(),
             ])
             .into()
         } else {
-            transcript_stream
+            main_canvas_content.into()
         };
 
-        container(
-            column![
-                row![
-                    column![
-                        text("AI 执行工作台").size(26),
-                        text("当前区域用于承载会话输出、执行事件和最小运行闭环。").size(13),
-                    ]
-                    .spacing(4),
-                    space::horizontal(),
-                    container(text(run_phase.label()).size(12))
-                        .padding([4, 10])
-                        .style(move |theme| style::workbench_run_phase_chip_style(
-                            theme, run_phase
-                        )),
-                ]
-                .align_y(Center),
-                container(
-                    row![
-                        text(format!("当前会话：{session_title}")).size(14),
-                        text(format!("当前模型：{}", self.active_model_summary())).size(13),
-                        text(format!("激活代理：{}", runtime_summary.active_agent_name)).size(13),
-                        text(format!(
-                            "会话状态：{}",
-                            active_session
-                                .map(|session| session.status.label())
-                                .unwrap_or("未选择")
-                        ))
-                        .size(13),
-                        space::horizontal(),
-                        transcript_surface_mode_switcher,
-                    ]
-                    .spacing(16)
-                    .align_y(Center)
-                    .width(Fill),
-                )
-                .width(Fill)
-                .padding([12, 14])
-                .style(container::bordered_box),
-                transcript_surface,
-                composer_panel,
-            ]
-            .spacing(14)
-            .height(Fill),
-        )
-        .padding([16, 16])
-        .width(Fill)
-        .height(Fill)
-        .into()
+        container(layered_canvas)
+            .padding([16, 16])
+            .width(Fill)
+            .height(Fill)
+            .into()
     }
 
     /// Builds the transcript content surface shown in the center of the main workbench canvas.
@@ -5902,9 +5872,6 @@ impl VulcanWorkbench {
                     request,
                 },
                 |interaction| match interaction {
-                    SelectableTranscriptInteraction::ToggleThinkingInline(block_id) => {
-                        Message::ToggleSelectedSessionThinkingInline(block_id)
-                    }
                     SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                         Message::OpenSelectedSessionThinkingModal(block_id)
                     }
@@ -6059,7 +6026,7 @@ impl VulcanWorkbench {
         let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
         Some(view_thinking_modal_surface(
             title,
-            String::from("单击会话内标题可内联展开，双击可再次聚焦到这里。"),
+            String::from("点击会话内思考标题可再次打开这里查看完整内容。"),
             &document,
             &self.app_theme,
             progress,
@@ -6069,9 +6036,6 @@ impl VulcanWorkbench {
                 request,
             },
             |interaction| match interaction {
-                SelectableTranscriptInteraction::ToggleThinkingInline(block_id) => {
-                    Message::ToggleSelectedSessionThinkingInline(block_id)
-                }
                 SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                     Message::OpenSelectedSessionThinkingModal(block_id)
                 }
@@ -6113,9 +6077,6 @@ impl VulcanWorkbench {
                 request,
             },
             |interaction| match interaction {
-                SelectableTranscriptInteraction::ToggleThinkingInline(block_id) => {
-                    Message::ToggleSelectedSessionThinkingInline(block_id)
-                }
                 SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                     Message::OpenSelectedSessionThinkingModal(block_id)
                 }
@@ -6164,9 +6125,6 @@ impl VulcanWorkbench {
                 request,
             },
             |interaction| match interaction {
-                SelectableTranscriptInteraction::ToggleThinkingInline(block_id) => {
-                    Message::ToggleSelectedSessionThinkingInline(block_id)
-                }
                 SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
                     Message::OpenSelectedSessionThinkingModal(block_id)
                 }
@@ -7322,14 +7280,6 @@ impl VulcanWorkbench {
             Subscription::none()
         };
 
-        let pending_thinking_inline_toggle_subscription =
-            if self.pending_thinking_inline_toggle.is_some() {
-                iced::time::every(THINKING_MODAL_TICK_INTERVAL)
-                    .map(|_| Message::FlushPendingThinkingInlineToggle)
-            } else {
-                Subscription::none()
-            };
-
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
@@ -7339,7 +7289,6 @@ impl VulcanWorkbench {
             transcript_drag_auto_scroll_subscription,
             thinking_overlay_drag_auto_scroll_subscription,
             thinking_modal_animation_subscription,
-            pending_thinking_inline_toggle_subscription,
         ])
     }
 
@@ -9984,24 +9933,10 @@ impl VulcanWorkbench {
         message_id: &str,
         delta: &str,
     ) {
-        let body = {
-            let Some(message) = self.session_message_entry_mut(session_id, message_id) else {
-                return;
-            };
-            message.body.push_str(delta);
-            message.body.clone()
+        let Some(message) = self.session_message_entry_mut(session_id, message_id) else {
+            return;
         };
-
-        self.session_message_raw_buffers.insert(
-            message_id.to_string(),
-            text_editor::Content::with_text(&body),
-        );
-        let (markdown_content, markdown_buffer) =
-            parse_selectable_markdown_body(&body, &self.app_theme);
-        self.session_message_markdown
-            .insert(message_id.to_string(), markdown_content);
-        self.session_message_markdown_buffers
-            .insert(message_id.to_string(), markdown_buffer);
+        message.body.push_str(delta);
         self.refresh_session_agent_view_buffers(session_id);
     }
 
@@ -10410,7 +10345,6 @@ impl VulcanWorkbench {
         self.floating_streaming_thinking_sessions.clear();
         self.session_streaming_thinking_follow_tail.clear();
         self.active_thinking_modal = None;
-        self.pending_thinking_inline_toggle = None;
         self.streaming_output_message_ids.clear();
         self.rebuild_session_message_raw_buffers();
         self.rebuild_session_message_markdown();
@@ -10478,7 +10412,6 @@ impl VulcanWorkbench {
         self.active_thinking_overlay_drag_auto_scroll = None;
         self.active_thinking_modal = None;
         self.active_tool_modal = None;
-        self.pending_thinking_inline_toggle = None;
 
         let mut known_session_ids = self
             .sessions
@@ -10493,9 +10426,26 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Refreshes the unified structured and raw transcript buffers for one session.
-    /// 刷新某个会话对应的统一结构化与原始转录缓冲区。
-    fn refresh_session_agent_view_buffers(&mut self, session_id: SessionId) {
+    /// Returns whether one session currently needs fully materialized selectable/raw transcript buffers.
+    /// 返回某个会话当前是否确实需要完整物化的可选结构化/原文转录缓冲区。
+    fn should_materialize_session_agent_view_text_buffers(&self, session_id: SessionId) -> bool {
+        self.selected_session()
+            .is_some_and(|session| session.id == session_id)
+            && self.agent_transcript_surface_mode != AgentTranscriptSurfaceMode::DetailCards
+    }
+
+    /// Clears the heavyweight selectable/raw transcript projections while keeping the structural document cache intact.
+    /// 清理较重的可选结构化/原文转录投影，同时保留结构化文档缓存本身。
+    fn clear_session_agent_view_text_buffers(&mut self, session_id: SessionId) {
+        self.session_agent_view_buffers.remove(&session_id);
+        self.session_agent_view_raw_buffers.remove(&session_id);
+        self.session_agent_view_selectable_documents
+            .remove(&session_id);
+    }
+
+    /// Rebuilds the structural agent-view document cache for one session without forcing every text projection to refresh.
+    /// 为单个会话重建结构化 agent-view 文档缓存，而不强制刷新全部文本投影。
+    fn refresh_session_agent_view_document_cache(&mut self, session_id: SessionId) {
         let messages = self.visible_session_messages_for_agent_view(session_id);
         let runtime_events = self
             .session_runtime_events
@@ -10505,10 +10455,7 @@ impl VulcanWorkbench {
         let document = build_agent_view_document(&messages, &runtime_events);
 
         if document.blocks.is_empty() {
-            self.session_agent_view_buffers.remove(&session_id);
-            self.session_agent_view_raw_buffers.remove(&session_id);
-            self.session_agent_view_selectable_documents
-                .remove(&session_id);
+            self.clear_session_agent_view_text_buffers(session_id);
             self.session_agent_view_documents.remove(&session_id);
             self.session_agent_view_block_collapsed.remove(&session_id);
             self.session_agent_view_follow_tail.remove(&session_id);
@@ -10516,6 +10463,18 @@ impl VulcanWorkbench {
         }
 
         self.sync_session_agent_view_block_collapsed_state(session_id, &document);
+        self.session_agent_view_documents
+            .insert(session_id, document);
+    }
+
+    /// Rebuilds the selectable structured/raw transcript projections from the already cached structural document.
+    /// 基于已经缓存好的结构化文档重建可选结构化/原文转录投影。
+    fn refresh_session_agent_view_text_buffers(&mut self, session_id: SessionId) {
+        let Some(document) = self.session_agent_view_documents.get(&session_id).cloned() else {
+            self.clear_session_agent_view_text_buffers(session_id);
+            return;
+        };
+
         let selectable_document =
             vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
         let selectable_text = selectable_document.buffer().to_string();
@@ -10531,8 +10490,18 @@ impl VulcanWorkbench {
         );
         self.session_agent_view_selectable_documents
             .insert(session_id, selectable_document);
-        self.session_agent_view_documents
-            .insert(session_id, document);
+    }
+
+    /// Refreshes the structural transcript cache first, then materializes heavyweight text projections only when the active surface needs them.
+    /// 先刷新结构化转录缓存，再仅在当前活动表面确实需要时物化较重的文本投影。
+    fn refresh_session_agent_view_buffers(&mut self, session_id: SessionId) {
+        self.refresh_session_agent_view_document_cache(session_id);
+
+        if self.should_materialize_session_agent_view_text_buffers(session_id) {
+            self.refresh_session_agent_view_text_buffers(session_id);
+        } else {
+            self.clear_session_agent_view_text_buffers(session_id);
+        }
     }
 
     /// Synchronizes the unified block collapsed-state map with the latest document shape while preserving user toggles.
@@ -10579,7 +10548,6 @@ impl VulcanWorkbench {
     fn clear_streaming_message_ids(&mut self, session_id: SessionId) {
         self.clear_transcript_drag_auto_scroll_for_session(session_id);
         self.clear_thinking_overlay_drag_auto_scroll(session_id);
-        self.cancel_pending_thinking_inline_toggle(Some(session_id), None);
         self.streaming_thinking_message_ids.remove(&session_id);
         self.floating_streaming_thinking_sessions
             .remove(&session_id);
@@ -10905,17 +10873,6 @@ impl VulcanWorkbench {
             .and_then(|entry| entry.get(block_id))
             .copied()
             .unwrap_or(false)
-    }
-
-    /// Toggles one unified rendered block between collapsed and expanded states for the target session.
-    /// 为目标会话切换某个统一渲染区块的折叠与展开状态。
-    fn toggle_session_agent_view_block_collapsed(&mut self, session_id: SessionId, block_id: &str) {
-        let entry = self
-            .session_agent_view_block_collapsed
-            .entry(session_id)
-            .or_default();
-        let current_value = entry.get(block_id).copied().unwrap_or(false);
-        entry.insert(block_id.to_string(), !current_value);
     }
 
     /// Updates the execution phase tracked for one session transcript.
@@ -11334,44 +11291,6 @@ impl VulcanWorkbench {
         }
 
         operation::snap_to_end(thinking_overlay_scrollable_id(session_id))
-    }
-
-    /// Cancels one pending inline-thinking toggle when it matches the provided session and optional block identifier filter.
-    /// 当待执行内联思考切换与给定会话及可选区块标识过滤条件匹配时，取消该待执行切换。
-    fn cancel_pending_thinking_inline_toggle(
-        &mut self,
-        session_id: Option<SessionId>,
-        block_id: Option<&str>,
-    ) {
-        let should_clear = self
-            .pending_thinking_inline_toggle
-            .as_ref()
-            .is_some_and(|pending| {
-                session_id.is_none_or(|target_session_id| pending.session_id == target_session_id)
-                    && block_id.is_none_or(|target_block_id| pending.block_id == target_block_id)
-            });
-
-        if should_clear {
-            self.pending_thinking_inline_toggle = None;
-        }
-    }
-
-    /// Commits one pending inline-thinking toggle once the double-click grace window has fully elapsed.
-    /// 在双击宽限窗口完全结束后，正式提交一条待执行的内联思考切换。
-    fn flush_pending_thinking_inline_toggle(&mut self) {
-        let should_flush = self
-            .pending_thinking_inline_toggle
-            .as_ref()
-            .is_some_and(|pending| pending.started_at.elapsed() >= THINKING_INLINE_TOGGLE_DELAY);
-
-        if !should_flush {
-            return;
-        }
-
-        let Some(pending) = self.pending_thinking_inline_toggle.take() else {
-            return;
-        };
-        self.toggle_session_agent_view_block_collapsed(pending.session_id, &pending.block_id);
     }
 
     /// Opens one centered thinking modal for the provided block identifier and restarts the opening animation.

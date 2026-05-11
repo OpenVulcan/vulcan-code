@@ -11,19 +11,19 @@ use iced::advanced::renderer;
 use iced::advanced::text::Renderer as _;
 use iced::advanced::text::{self, Paragraph};
 use iced::advanced::widget::tree;
-use iced::advanced::{Clipboard, Shell, Widget};
+use iced::advanced::{Clipboard, Shell, Widget, overlay};
 use iced::font;
 use iced::keyboard;
 use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{
     Background, Border, Color, Element, Event, Font, Length, Padding, Pixels, Point, Rectangle,
-    Renderer, Size, Theme,
+    Renderer, Size, Theme, Vector,
 };
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::ops::Range;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -65,13 +65,9 @@ const BLOCK_TOGGLE_ACTION_PREFIX: &str = "vulcan-agent-view://toggle-block-inlin
 /// 应打开专用弹窗而不是在正文中内联展开的紧凑工具行使用的链接动作前缀。
 const TOOL_MODAL_ACTION_PREFIX: &str = "vulcan-agent-view://open-tool-modal/";
 
-/// Link-action prefix used by the selectable transcript to identify inline thinking-header interactions.
-/// 可选择转录用于识别内联思考标题交互的链接动作前缀。
-const THINKING_TOGGLE_ACTION_PREFIX: &str = "vulcan-agent-view://toggle-thinking-inline/";
-
-/// Maximum interval between two header clicks that should be treated as one double-click open request.
-/// 两次标题点击之间仍应视为双击打开请求的最大间隔。
-const TRANSCRIPT_DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(320);
+/// Link-action prefix used by the selectable transcript to identify inline thinking rows that should open the dedicated modal.
+/// 可选择转录用于识别应打开专用弹层的内联思考行交互的链接动作前缀。
+const THINKING_MODAL_ACTION_PREFIX: &str = "vulcan-agent-view://open-thinking-modal/";
 
 /// Describes one active transcript drag auto-scroll request emitted while the pointer drags outside the visible bounds.
 /// 描述一次当指针拖拽越出可见边界时发出的转录自动滚动请求。
@@ -104,9 +100,6 @@ pub enum SelectableTranscriptInteraction {
     /// Toggles one generic inline semantic block between collapsed and expanded states.
     /// 切换某个通用内联语义区块的折叠与展开状态。
     ToggleBlockInline(String),
-    /// Toggles one inline thinking block between collapsed and expanded states.
-    /// 切换某个内联思考区块的折叠与展开状态。
-    ToggleThinkingInline(String),
     /// Opens one thinking block in the dedicated centered modal surface.
     /// 在专用居中弹层中打开某个思考区块。
     OpenThinkingModal(String),
@@ -402,9 +395,9 @@ enum RenderedTranscriptLinkAction {
     /// Copies the provided payload into the clipboard instead of copying the synthetic link string itself.
     /// 将提供的载荷复制到剪贴板，而不是复制合成链接字符串本身。
     CopyText(String),
-    /// Toggles one inline thinking block when the synthetic header chrome is clicked once.
-    /// 当合成标题外框被单击时切换某个内联思考区块。
-    ToggleThinkingInline(String),
+    /// Opens one inline thinking block inside the dedicated centered modal surface.
+    /// 在专用居中弹层表面中打开某个内联思考区块。
+    OpenThinkingModal(String),
     /// Opens one tool block in a dedicated centered modal surface.
     /// 在专用居中弹层表面中打开某个工具区块。
     OpenToolModal(String),
@@ -2253,85 +2246,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             );
         }
 
-        if let Some(menu_state) = state.context_menu {
-            let menu_actions =
-                transcript_context_menu_actions(current_selection_for_state(state).is_some());
-            let menu_bounds =
-                transcript_context_menu_bounds(layout.bounds(), menu_state, menu_actions.len());
-            let palette = app_theme.extended_palette();
-            let hovered_action = cursor.position().and_then(|position| {
-                hit_test_transcript_context_menu_action(
-                    menu_bounds,
-                    menu_actions.as_slice(),
-                    position,
-                )
-            });
-
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: menu_bounds,
-                    border: Border {
-                        color: palette.background.strong.color.scale_alpha(0.28),
-                        width: 1.0,
-                        radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
-                    },
-                    shadow: iced::Shadow {
-                        color: Color::BLACK.scale_alpha(0.18),
-                        offset: iced::Vector::new(0.0, 8.0),
-                        blur_radius: 18.0,
-                    },
-                    ..renderer::Quad::default()
-                },
-                Background::Color(mix_color(
-                    palette.background.base.color,
-                    palette.background.weak.color,
-                    0.18,
-                )),
-            );
-
-            for (index, action) in menu_actions.iter().enumerate() {
-                let item_bounds = transcript_context_menu_item_bounds(menu_bounds, index);
-                if hovered_action == Some(*action) {
-                    renderer.fill_quad(
-                        renderer::Quad {
-                            bounds: item_bounds,
-                            border: Border {
-                                color: Color::TRANSPARENT,
-                                width: 0.0,
-                                radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
-                            },
-                            ..renderer::Quad::default()
-                        },
-                        Background::Color(palette.primary.weak.color.scale_alpha(0.24)),
-                    );
-                }
-
-                renderer.fill_text(
-                    text::Text {
-                        content: transcript_context_menu_action_label(*action).to_string(),
-                        bounds: Size::new(
-                            (item_bounds.width - TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X * 2.0)
-                                .max(1.0),
-                            item_bounds.height.max(1.0),
-                        ),
-                        size: Pixels(14.0),
-                        line_height: text::LineHeight::default(),
-                        font: theme::ui_font(),
-                        align_x: text::Alignment::Left,
-                        align_y: iced::alignment::Vertical::Center,
-                        shaping: text::Shaping::Advanced,
-                        wrapping: text::Wrapping::None,
-                    },
-                    Point::new(
-                        item_bounds.x + TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X,
-                        item_bounds.y,
-                    ),
-                    defaults.text_color,
-                    *viewport,
-                );
-            }
-        }
-
+        let _ = app_theme;
         let _ = cursor;
     }
 
@@ -2353,6 +2268,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 state.context_menu = None;
+                shell.request_redraw();
                 if let Some(position) = cursor.position_over(layout.bounds()) {
                     let delta_y = match delta {
                         mouse::ScrollDelta::Lines { y, .. } => -y * 36.0,
@@ -2371,35 +2287,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if let Some(menu_state) = state.context_menu {
-                    if let Some(position) = cursor.position() {
-                        let menu_actions = transcript_context_menu_actions(
-                            current_selection_for_state(state).is_some(),
-                        );
-                        let menu_bounds = transcript_context_menu_bounds(
-                            layout.bounds(),
-                            menu_state,
-                            menu_actions.len(),
-                        );
-                        if let Some(action) = hit_test_transcript_context_menu_action(
-                            menu_bounds,
-                            menu_actions.as_slice(),
-                            position,
-                        ) {
-                            execute_transcript_context_menu_action(
-                                action,
-                                state,
-                                &self.document,
-                                clipboard,
-                            );
-                            state.focused = true;
-                            state.context_menu = None;
-                            shell.capture_event();
-                            return;
-                        }
-                    }
-                    state.context_menu = None;
-                }
+                state.context_menu = None;
                 if let Some(position) = cursor.position_over(layout.bounds()) {
                     if let Some(hit_char) =
                         hit_test_rendered_document(&self.document, state, layout.bounds(), position)
@@ -2409,14 +2297,17 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                         state.drag_moved = false;
                         state.anchor_char = hit_char;
                         state.head_char = hit_char;
+                        shell.request_redraw();
                         self.publish_drag_auto_scroll_request(state, None, shell);
                         shell.capture_event();
                     } else {
                         state.focused = false;
+                        shell.request_redraw();
                         self.publish_drag_auto_scroll_request(state, None, shell);
                     }
                 } else {
                     state.focused = false;
+                    shell.request_redraw();
                     self.publish_drag_auto_scroll_request(state, None, shell);
                 }
             }
@@ -2426,10 +2317,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                     state.context_menu = Some(TranscriptContextMenuState {
                         anchor_position: position,
                     });
+                    shell.request_redraw();
                     self.publish_drag_auto_scroll_request(state, None, shell);
                     shell.capture_event();
                 } else {
                     state.context_menu = None;
+                    shell.request_redraw();
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
@@ -2441,6 +2334,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                             state.drag_moved = true;
                         }
                         state.head_char = hit_char;
+                        shell.request_redraw();
                         shell.capture_event();
                     }
 
@@ -2462,6 +2356,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                             state.drag_moved = true;
                         }
                         state.head_char = hit_char;
+                        shell.request_redraw();
                     }
                 }
                 if !state.drag_moved && state.anchor_char == state.head_char {
@@ -2500,36 +2395,14 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                                         clipboard
                                             .write(ClipboardKind::Standard, copy_payload.clone());
                                     }
-                                    RenderedTranscriptLinkAction::ToggleThinkingInline(
-                                        block_id,
-                                    ) => {
-                                        let now = Instant::now();
-                                        let is_double_click = state
-                                            .last_click_link_target
-                                            .as_deref()
-                                            == Some(link_url.as_str())
-                                            && state.last_click_instant.is_some_and(|instant| {
-                                                now.duration_since(instant)
-                                                    <= TRANSCRIPT_DOUBLE_CLICK_INTERVAL
-                                            });
-
-                                        if is_double_click {
-                                            shell.publish((self.on_interaction.as_ref())(
-                                                SelectableTranscriptInteraction::OpenThinkingModal(
-                                                    block_id.clone(),
-                                                ),
-                                            ));
-                                            state.last_click_link_target = None;
-                                            state.last_click_instant = None;
-                                        } else {
-                                            shell.publish((self.on_interaction.as_ref())(
-                                                SelectableTranscriptInteraction::ToggleThinkingInline(
-                                                    block_id.clone(),
-                                                ),
-                                            ));
-                                            state.last_click_link_target = Some(link_url);
-                                            state.last_click_instant = Some(now);
-                                        }
+                                    RenderedTranscriptLinkAction::OpenThinkingModal(block_id) => {
+                                        shell.publish((self.on_interaction.as_ref())(
+                                            SelectableTranscriptInteraction::OpenThinkingModal(
+                                                block_id.clone(),
+                                            ),
+                                        ));
+                                        state.last_click_link_target = Some(link_url);
+                                        state.last_click_instant = Some(Instant::now());
                                     }
                                     RenderedTranscriptLinkAction::OpenToolModal(block_id) => {
                                         shell.publish((self.on_interaction.as_ref())(
@@ -2549,6 +2422,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 }
                 state.dragging = false;
                 state.drag_moved = false;
+                shell.request_redraw();
                 self.publish_drag_auto_scroll_request(state, None, shell);
                 shell.capture_event();
             }
@@ -2566,6 +2440,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                         ClipboardKind::Standard,
                         self.document.selected_text(selection_start, selection_end),
                     );
+                    shell.request_redraw();
                     shell.capture_event();
                 }
             }
@@ -2580,10 +2455,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
                 state.context_menu = None;
                 state.anchor_char = 0;
                 state.head_char = self.document.len_chars();
+                shell.request_redraw();
                 shell.capture_event();
             }
             Event::Keyboard(keyboard::Event::KeyPressed { .. }) => {
                 state.context_menu = None;
+                shell.request_redraw();
             }
             _ => {}
         }
@@ -2625,6 +2502,218 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         } else {
             mouse::Interaction::Text
         }
+    }
+
+    /// Returns the transcript context-menu overlay when one right-click menu is currently open.
+    /// 当存在一个已打开右键菜单时返回其转录上下文菜单浮层。
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut tree::Tree,
+        layout: Layout<'b>,
+        _renderer: &Renderer,
+        _viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+        let menu_state = state.context_menu?;
+        let translated_bounds = Rectangle::new(
+            Point::new(
+                layout.bounds().x + translation.x,
+                layout.bounds().y + translation.y,
+            ),
+            layout.bounds().size(),
+        );
+
+        Some(overlay::Element::new(Box::new(
+            SelectableTranscriptContextMenuOverlay {
+                state,
+                document: &self.document,
+                widget_bounds: translated_bounds,
+                menu_state,
+            },
+        )))
+    }
+}
+
+/// Overlay responsible for presenting and executing the selectable transcript context menu.
+/// 负责展示并执行可选择转录右键菜单的浮层。
+struct SelectableTranscriptContextMenuOverlay<'a> {
+    /// Mutable transcript runtime state so menu actions can update selection and dismiss themselves.
+    /// 可变转录运行时状态，用于让菜单动作更新选区并自行关闭。
+    state: &'a mut SelectableTranscriptState,
+    /// Rendered transcript document used to copy selected text and compute the full character span.
+    /// 用于复制选中文本并计算全文字符跨度的渲染转录文档。
+    document: &'a RenderedTranscriptDocument,
+    /// Absolute widget bounds used to clamp the menu overlay inside the transcript surface.
+    /// 用于将菜单浮层钳制在转录表面内部的绝对组件边界。
+    widget_bounds: Rectangle,
+    /// Open menu anchor captured from the right-click gesture.
+    /// 从右键手势捕获的已打开菜单锚点。
+    menu_state: TranscriptContextMenuState,
+}
+
+impl<Message> overlay::Overlay<Message, Theme, Renderer>
+    for SelectableTranscriptContextMenuOverlay<'_>
+{
+    /// Lays out the transcript context menu using one clamped fixed-size floating rectangle.
+    /// 使用一个经过钳制的固定尺寸浮动矩形对转录右键菜单进行布局。
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
+        let actions =
+            transcript_context_menu_actions(current_selection_for_state(self.state).is_some());
+        let menu_bounds =
+            transcript_context_menu_bounds(self.widget_bounds, self.menu_state, actions.len());
+        layout::Node::new(menu_bounds.size()).move_to(menu_bounds.position())
+    }
+
+    /// Draws the floating transcript context menu above the transcript surface.
+    /// 在转录表面之上绘制浮动转录右键菜单。
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) {
+        let menu_bounds = layout.bounds();
+        let actions =
+            transcript_context_menu_actions(current_selection_for_state(self.state).is_some());
+        let palette = theme.extended_palette();
+        let hovered_action = cursor.position().and_then(|position| {
+            hit_test_transcript_context_menu_action(menu_bounds, actions.as_slice(), position)
+        });
+
+        renderer.with_layer(menu_bounds, |renderer| {
+            renderer.with_translation(Vector::new(menu_bounds.x, menu_bounds.y), |renderer| {
+                let local_menu_bounds = Rectangle::new(Point::ORIGIN, menu_bounds.size());
+
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: local_menu_bounds,
+                        border: Border {
+                            color: palette.background.strong.color.scale_alpha(0.28),
+                            width: 1.0,
+                            radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
+                        },
+                        shadow: iced::Shadow {
+                            color: Color::BLACK.scale_alpha(0.18),
+                            offset: iced::Vector::new(0.0, 8.0),
+                            blur_radius: 18.0,
+                        },
+                        ..renderer::Quad::default()
+                    },
+                    Background::Color(mix_color(
+                        palette.background.base.color,
+                        palette.background.weak.color,
+                        0.18,
+                    )),
+                );
+
+                for (index, action) in actions.iter().enumerate() {
+                    let item_bounds = transcript_context_menu_item_bounds(local_menu_bounds, index);
+                    if hovered_action == Some(*action) {
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: item_bounds,
+                                border: Border {
+                                    color: Color::TRANSPARENT,
+                                    width: 0.0,
+                                    radius: TRANSCRIPT_CONTEXT_MENU_RADIUS.into(),
+                                },
+                                ..renderer::Quad::default()
+                            },
+                            Background::Color(palette.primary.weak.color.scale_alpha(0.24)),
+                        );
+                    }
+
+                    renderer.fill_text(
+                        text::Text {
+                            content: transcript_context_menu_action_label(*action).to_string(),
+                            bounds: Size::new(
+                                (item_bounds.width - TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X * 2.0)
+                                    .max(1.0),
+                                item_bounds.height.max(1.0),
+                            ),
+                            size: Pixels(14.0),
+                            line_height: text::LineHeight::default(),
+                            font: theme::ui_font(),
+                            align_x: text::Alignment::Left,
+                            align_y: iced::alignment::Vertical::Center,
+                            shaping: text::Shaping::Advanced,
+                            wrapping: text::Wrapping::None,
+                        },
+                        Point::new(TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X, item_bounds.y),
+                        style.text_color,
+                        local_menu_bounds,
+                    );
+                }
+            });
+        });
+    }
+
+    /// Updates the floating transcript context menu, executing menu actions or dismissing itself on outside clicks.
+    /// 更新浮动转录右键菜单，在点击菜单动作或外部区域时执行动作或自行关闭。
+    fn update(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let actions = transcript_context_menu_actions(
+                    current_selection_for_state(self.state).is_some(),
+                );
+                let menu_bounds = layout.bounds();
+
+                if let Some(position) = cursor.position() {
+                    if let Some(action) = hit_test_transcript_context_menu_action(
+                        menu_bounds,
+                        actions.as_slice(),
+                        position,
+                    ) {
+                        execute_transcript_context_menu_action(
+                            action,
+                            self.state,
+                            self.document,
+                            clipboard,
+                        );
+                        self.state.context_menu = None;
+                        shell.request_redraw();
+                        shell.capture_event();
+                        return;
+                    }
+                }
+
+                self.state.context_menu = None;
+                shell.request_redraw();
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+            | Event::Keyboard(keyboard::Event::KeyPressed { .. })
+            | Event::Mouse(mouse::Event::WheelScrolled { .. }) => {
+                self.state.context_menu = None;
+                shell.request_redraw();
+            }
+            _ => {}
+        }
+    }
+
+    /// Returns pointer interaction while hovering the context-menu overlay.
+    /// 返回悬停在右键菜单浮层上时的指针交互。
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        cursor
+            .position()
+            .filter(|position| layout.bounds().contains(*position))
+            .map(|_| mouse::Interaction::Pointer)
+            .unwrap_or(mouse::Interaction::default())
     }
 }
 
@@ -2833,7 +2922,7 @@ fn render_compact_tool_modal_directive_block(
         .cloned()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(fallback_title);
-    let summary_text = format!("{icon} {title} >");
+    let summary_text = format!("{icon} {title}");
     let summary_spans = build_agent_view_plain_text_spans(
         &summary_text,
         theme::ui_font(),
@@ -2848,8 +2937,8 @@ fn render_compact_tool_modal_directive_block(
         text::Wrapping::Word,
         0.0,
         0.0,
-        8.0,
-        Padding::from([6.0, 0.0]),
+        0.0,
+        Padding::ZERO,
         None,
         0,
         RenderedParagraphHorizontalPlacement::Leading,
@@ -2920,7 +3009,7 @@ fn render_compact_collapsible_directive_block(
         })
         .unwrap_or(block.collapsed_by_default);
     let toggle_link_target = if block.kind == AgentViewDirectiveKind::Thinking {
-        thinking_toggle_action_link(block)
+        thinking_modal_action_link(block)
     } else {
         Some(format!("{BLOCK_TOGGLE_ACTION_PREFIX}{block_id}"))
     };
@@ -2928,7 +3017,7 @@ fn render_compact_collapsible_directive_block(
         builder.register_link_action(
             toggle_link_target.clone(),
             if block.kind == AgentViewDirectiveKind::Thinking {
-                RenderedTranscriptLinkAction::ToggleThinkingInline(block_id.clone())
+                RenderedTranscriptLinkAction::OpenThinkingModal(block_id.clone())
             } else {
                 RenderedTranscriptLinkAction::ToggleBlockInline(block_id.clone())
             },
@@ -2946,7 +3035,13 @@ fn render_compact_collapsible_directive_block(
             AgentViewDirectiveKind::ToolResult => "工具返回",
             _ => "",
         });
-    let toggle_glyph = if is_collapsed { ">" } else { "v" };
+    let toggle_glyph = if block.kind == AgentViewDirectiveKind::Thinking {
+        ">"
+    } else if is_collapsed {
+        ">"
+    } else {
+        "v"
+    };
     let summary_text = format!("{icon} {title_suffix} {toggle_glyph}");
     let summary_spans = build_agent_view_plain_text_spans(
         &summary_text,
@@ -3025,8 +3120,8 @@ fn render_compact_collapsible_directive_block(
     builder.pending_separator = Some("\n");
 }
 
-/// Renders one inline thinking block with a full-width dark panel treatment, single-click inline expand, and double-click modal-open chrome.
-/// 使用全宽深色面板样式渲染单个内联思考区块，并支持单击内联展开与双击打开弹层。
+/// Renders one thinking block with a full-width dark panel treatment; inline rows open the dedicated modal instead of expanding in place.
+/// 使用全宽深色面板样式渲染单个思考区块；内联标题行会直接打开专用弹层，而不会在正文中原地展开。
 fn render_thinking_block(
     builder: &mut RenderedTranscriptBuilder,
     block: &AgentViewDirectiveBlock,
@@ -3048,31 +3143,20 @@ fn render_thinking_block(
     };
     let body_foreground = iced::color!(0xEEF2F7);
     let body_content_padding = Padding::from([0.0, 16.0]);
-    let toggle_link_target = thinking_toggle_action_link(block);
+    let action_link_target = thinking_modal_action_link(block);
     let is_inline_surface = thinking_surface == "inline";
-    let is_collapsed = block
-        .attributes
-        .get("ui-inline-collapsed")
-        .map(|value| value == "true")
-        .or_else(|| {
-            block
-                .attributes
-                .get("collapsed")
-                .map(|value| value == "true")
-        })
-        .unwrap_or(true);
     let render_header = block
         .attributes
         .get("ui-render-thinking-header")
         .map(|value| value != "false")
         .unwrap_or(true);
-    let header_padding = Padding::from([14.0, 10.0]);
+    let header_padding = Padding::ZERO;
 
-    if let Some(toggle_link_target) = toggle_link_target.as_ref() {
+    if let Some(action_link_target) = action_link_target.as_ref() {
         if let Some(block_id) = block.attributes.get("ui-block-id").map(String::as_str) {
             builder.register_link_action(
-                toggle_link_target.clone(),
-                RenderedTranscriptLinkAction::ToggleThinkingInline(block_id.to_string()),
+                action_link_target.clone(),
+                RenderedTranscriptLinkAction::OpenThinkingModal(block_id.to_string()),
             );
         }
     }
@@ -3085,8 +3169,7 @@ fn render_thinking_block(
             .unwrap_or_else(|| String::from("思考过程"));
         let header_spans = build_thinking_header_spans(
             &header_title,
-            is_collapsed,
-            toggle_link_target.as_deref(),
+            action_link_target.as_deref(),
             body_foreground,
             app_theme,
         );
@@ -3094,11 +3177,11 @@ fn render_thinking_block(
         builder.push_rich_paragraph_with_layout(
             header_spans,
             markdown_settings.text_size,
-            text::LineHeight::default(),
+            text::LineHeight::Relative(0.92),
             text::Wrapping::Word,
             0.0,
             0.0,
-            if is_collapsed { 12.0 } else { 0.0 },
+            0.0,
             header_padding,
             None,
             0,
@@ -3107,11 +3190,11 @@ fn render_thinking_block(
             None,
         );
         if let Some(RenderedTranscriptNode::Paragraph(header_node)) = builder.nodes.last_mut() {
-            header_node.background_action_link = toggle_link_target.clone();
+            header_node.background_action_link = action_link_target.clone();
         }
     }
 
-    if is_collapsed {
+    if is_inline_surface {
         return;
     }
 
@@ -3337,14 +3420,12 @@ fn user_prompt_copy_action_link(block: &AgentViewDirectiveBlock) -> Option<Strin
 /// 构建单个内联思考标题使用的可点击标题行片段。
 fn build_thinking_header_spans(
     title: &str,
-    is_collapsed: bool,
-    toggle_link_target: Option<&str>,
+    action_link_target: Option<&str>,
     foreground: Color,
     app_theme: &Theme,
 ) -> Vec<Span<'static, markdown::Uri, Font>> {
-    let chevron = if is_collapsed { "▸" } else { "▾" };
     let mut spans = build_agent_view_plain_text_spans(
-        &format!("🧠 {chevron} {title}"),
+        &format!("🧠 {title}"),
         Font {
             weight: font::Weight::Semibold,
             ..theme::ui_font()
@@ -3354,20 +3435,20 @@ fn build_thinking_header_spans(
         app_theme,
     );
 
-    if let Some(toggle_link_target) = toggle_link_target {
+    if let Some(action_link_target) = action_link_target {
         for span in &mut spans {
-            span.link = Some(toggle_link_target.into());
+            span.link = Some(action_link_target.into());
         }
     }
 
     spans
 }
 
-/// Returns the synthetic link target used by one inline thinking header to drive click and double-click behavior.
-/// 返回单个内联思考标题使用的合成链接目标，用于驱动单击与双击行为。
-fn thinking_toggle_action_link(block: &AgentViewDirectiveBlock) -> Option<String> {
+/// Returns the synthetic link target used by one inline thinking header to open the dedicated modal surface.
+/// 返回单个内联思考标题使用的合成链接目标，用于打开专用弹层表面。
+fn thinking_modal_action_link(block: &AgentViewDirectiveBlock) -> Option<String> {
     let block_id = block.attributes.get("ui-block-id")?.trim();
-    (!block_id.is_empty()).then(|| format!("{THINKING_TOGGLE_ACTION_PREFIX}{block_id}"))
+    (!block_id.is_empty()).then(|| format!("{THINKING_MODAL_ACTION_PREFIX}{block_id}"))
 }
 
 /// Renders one slice of Markdown items recursively into the transcript builder.
