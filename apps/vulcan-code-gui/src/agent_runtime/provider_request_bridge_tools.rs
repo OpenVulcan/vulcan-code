@@ -1,7 +1,7 @@
 //! Tool-definition bridge helpers reused by provider request snapshots and low-level transport dispatch.
 //! 供 Provider 请求快照与低层传输分发复用的工具定义桥接辅助逻辑。
 
-use crate::agent_runtime::provider_request_bridge_snapshot::tool_source_label;
+use crate::agent_runtime::provider_request_snapshot_support::tool_source_label;
 use rig::completion::ToolDefinition as RigToolDefinition;
 use vulcan_core::types::ProviderRequestToolSchema as CoreProviderRequestToolSchema;
 use vulcan_tools_manager::ResolvedToolDefinition;

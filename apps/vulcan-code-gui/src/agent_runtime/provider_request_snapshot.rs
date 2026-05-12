@@ -3,10 +3,10 @@
 
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
-use crate::agent_runtime::provider_request_bridge_snapshot::serialize_provider_request_headers;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 pub(crate) use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
 use crate::agent_runtime::provider_request_snapshot_adapter::PreviewSnapshotProviderAdapter;
+use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
 use crate::agent_runtime::provider_runtime_dispatch::DEFAULT_RUNTIME_MAX_TURNS_LIMIT;
 use crate::conversation_protocol::SessionConversationState;
 use serde_json::Value;

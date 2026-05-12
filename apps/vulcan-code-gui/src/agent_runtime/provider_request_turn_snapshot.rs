@@ -1,9 +1,10 @@
-//! Provider request snapshot helpers layered on top of the shared request-bridge protocol conversions.
-//! 构建在共享请求桥协议转换层之上的 Provider 请求快照辅助模块。
+//! Host-controlled single-turn request snapshot helpers used by transport dispatch and regression tests.
+//! 供传输分发与回归测试使用的宿主控制单回合请求快照辅助逻辑。
 
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
+use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
 use crate::conversation_protocol::{SessionConversationState, replace_messages_from_rig_history};
 use reqwest::header::HeaderMap;
 use rig::OneOrMany;
@@ -11,26 +12,10 @@ use rig::message::{
     AssistantContent as RigAssistantContent, Message as RigMessage, ToolResultContent,
     UserContent as RigUserContent,
 };
-use serde_json::{Map as JsonMap, Value};
+use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_core::types::ProviderRequestSnapshot as CoreProviderRequestSnapshot;
-use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolSourceKind};
-
-/// Serializes one request-header map into plain JSON for request-snapshot persistence and inspection.
-/// 将一份请求头映射序列化为普通 JSON，供请求快照持久化与检查使用。
-pub(crate) fn serialize_provider_request_headers(headers: &HeaderMap) -> Option<Value> {
-    let mut object = JsonMap::new();
-    for (name, value) in headers {
-        if let Ok(value_text) = value.to_str() {
-            object.insert(
-                name.as_str().to_string(),
-                Value::String(value_text.to_string()),
-            );
-        }
-    }
-
-    (!object.is_empty()).then_some(Value::Object(object))
-}
+use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Builds the exact structured request snapshot for one host-controlled OpenAI-compatible turn right before dispatch.
 /// 在真正分发前为单次宿主控制的 OpenAI 兼容回合构建精确结构化请求快照。
@@ -120,16 +105,6 @@ fn flatten_rig_tool_result_content(content: &OneOrMany<ToolResultContent>) -> St
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n---\n\n")
-}
-
-/// Renders one tool-source label used by the request-preview tab.
-/// 渲染请求预览页签使用的单个工具来源标签。
-pub(crate) fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
-    match source {
-        VulcanToolSourceKind::Native => "原生工具",
-        VulcanToolSourceKind::LuaSkills => "LuaSkills",
-        VulcanToolSourceKind::Mcp => "MCP",
-    }
 }
 
 /// Returns the current Unix timestamp in milliseconds as one text value for protocol-state refreshes inside provider request snapshot helpers.

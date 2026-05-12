@@ -4,8 +4,8 @@
 use crate::agent_runtime::provider_request_bridge_rig::{
     core_message_to_rig_message, core_messages_to_rig_history,
 };
-use crate::agent_runtime::provider_request_bridge_snapshot::build_openai_compatible_turn_request_snapshot;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_rig_tool_definition;
+use crate::agent_runtime::provider_request_turn_snapshot::build_openai_compatible_turn_request_snapshot;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
