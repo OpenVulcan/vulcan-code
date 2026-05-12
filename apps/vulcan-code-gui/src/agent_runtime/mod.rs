@@ -15,6 +15,8 @@ pub mod provider_transport_common;
 pub mod provider_transport_openai;
 pub mod provider_transport_openai_responses;
 pub mod provider_transport_openrouter;
+pub mod provider_transport_request;
+pub mod provider_transport_router;
 pub mod runtime;
 pub mod tool_runtime_bridge;
 
