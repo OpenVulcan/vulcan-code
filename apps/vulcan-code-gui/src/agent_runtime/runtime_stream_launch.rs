@@ -7,10 +7,11 @@ use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
 };
-use crate::agent_runtime::execution_preparation::prepare_execution;
-use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
+use crate::agent_runtime::runtime_stream_preparation::{
+    RuntimePreparedLaunchInput, prepare_runtime_launch_input,
+};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::model::SessionId;
@@ -75,33 +76,28 @@ pub(crate) async fn prepare_runtime_stream_launch(
     mcp_runtime: Option<McpRuntimeHandle>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
-    let foundation = RuntimeFoundation::build(
+    let prepared_launch_input = prepare_runtime_launch_input(
         config,
         agent_profile_catalog,
-        luaskills_runtime.clone(),
-        mcp_runtime.clone(),
-    );
-    let preparation = match prepare_execution(
-        &foundation,
-        luaskills_runtime.clone(),
-        mcp_runtime.clone(),
-        config,
-        &request,
-    ) {
-        Ok(preparation) => preparation,
-        Err(error) => {
-            return Err(ExecutionRunReport::failure(
-                request.session_id,
-                None,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                error,
-            ));
-        }
-    };
+        luaskills_runtime,
+        mcp_runtime,
+        request,
+    )?;
+    build_runtime_stream_launch_from_prepared_input(prepared_launch_input).await
+}
 
+/// Assembles the final runtime-stream launch payload from one already prepared launch input.
+/// 根据一份已经准备完成的启动输入组装最终运行时流启动载荷。
+async fn build_runtime_stream_launch_from_prepared_input(
+    prepared_launch_input: RuntimePreparedLaunchInput,
+) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
+    let RuntimePreparedLaunchInput {
+        foundation,
+        luaskills_runtime,
+        mcp_runtime,
+        request,
+        preparation,
+    } = prepared_launch_input;
     let bootstrap = bootstrap_runtime_stream(
         &foundation,
         luaskills_runtime,

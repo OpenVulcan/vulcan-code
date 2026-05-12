@@ -34,6 +34,7 @@ pub mod runtime_stream_delta;
 pub mod runtime_stream_driver;
 pub mod runtime_stream_finalize;
 pub mod runtime_stream_launch;
+pub mod runtime_stream_preparation;
 pub mod runtime_stream_setup;
 pub mod tool_runtime_bridge;
 
