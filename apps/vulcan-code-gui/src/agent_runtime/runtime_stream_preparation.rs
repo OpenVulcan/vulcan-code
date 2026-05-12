@@ -7,6 +7,10 @@ use crate::agent_runtime::execution_models::{
 };
 use crate::agent_runtime::execution_preparation::prepare_execution;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::runtime_stream_preparation_failure::build_preparation_failure_report;
+use crate::agent_runtime::runtime_stream_preparation_resources::{
+    RuntimePreparationResources, build_runtime_preparation_resources,
+};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
@@ -31,6 +35,23 @@ pub(crate) struct RuntimePreparedLaunchInput {
     pub preparation: ExecutionPreparation,
 }
 
+impl RuntimePreparedLaunchInput {
+    /// Builds one prepared launch input from an already assembled preparation-resource bundle and one validated execution preparation.
+    /// 根据一份已组装的准备资源打包对象与一份通过校验的执行准备构建一份启动准备输入。
+    fn from_resources(
+        resources: RuntimePreparationResources,
+        preparation: ExecutionPreparation,
+    ) -> Self {
+        Self {
+            foundation: resources.foundation,
+            luaskills_runtime: resources.luaskills_runtime,
+            mcp_runtime: resources.mcp_runtime,
+            request: resources.request,
+            preparation,
+        }
+    }
+}
+
 /// Builds one prepared runtime-launch input or converts one preparation failure into the terminal execution report expected by the outer shell.
 /// 构建一份运行时启动准备输入，或在准备失败时转换成外层执行壳期望的终态执行报告。
 pub(crate) fn prepare_runtime_launch_input(
@@ -40,38 +61,31 @@ pub(crate) fn prepare_runtime_launch_input(
     mcp_runtime: Option<McpRuntimeHandle>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
-    let foundation = RuntimeFoundation::build(
+    let resources = build_runtime_preparation_resources(
         config,
         agent_profile_catalog,
-        luaskills_runtime.clone(),
-        mcp_runtime.clone(),
+        luaskills_runtime,
+        mcp_runtime,
+        request,
     );
     let preparation = match prepare_execution(
-        &foundation,
-        luaskills_runtime.clone(),
-        mcp_runtime.clone(),
+        &resources.foundation,
+        resources.luaskills_runtime.clone(),
+        resources.mcp_runtime.clone(),
         config,
-        &request,
+        &resources.request,
     ) {
         Ok(preparation) => preparation,
         Err(error) => {
-            return Err(ExecutionRunReport::failure(
-                request.session_id,
-                None,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
+            return Err(build_preparation_failure_report(
+                resources.request.session_id,
                 error,
             ));
         }
     };
 
-    Ok(RuntimePreparedLaunchInput {
-        foundation,
-        luaskills_runtime,
-        mcp_runtime,
-        request,
+    Ok(RuntimePreparedLaunchInput::from_resources(
+        resources,
         preparation,
-    })
+    ))
 }
