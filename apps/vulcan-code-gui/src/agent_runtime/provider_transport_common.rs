@@ -1,37 +1,29 @@
 //! Shared host-controlled provider transport helpers reused by the provider-specific adapters.
 //! 供各 Provider 专用适配器复用的共享宿主控制 Provider 传输辅助逻辑。
 
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::provider_protocol_bridge::{
-    attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
-    build_tool_result_runtime_metadata, format_host_tool_result_runtime_detail,
-    format_tool_call_runtime_detail,
-};
 use crate::agent_runtime::provider_request_bridge::{
     build_openai_compatible_turn_request_snapshot, core_message_to_rig_message,
     core_messages_to_rig_history, core_snapshot_to_session_conversation_state,
     resolved_tool_definition_to_rig_tool_definition,
 };
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
+use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
 use async_stream::stream;
-use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use rig::completion::ToolDefinition as RigToolDefinition;
 use rig::message::Message as RigMessage;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::provider::VulcanStreamingProviderAdapter;
-use vulcan_core::tool::{AllowAllToolPolicy, VulcanToolExecutor};
+use vulcan_core::tool::AllowAllToolPolicy;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     CoreError as VulcanCoreError, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderTurnResponse as CoreProviderTurnResponse,
-    ToolInvocationRequest as CoreToolInvocationRequest,
-    ToolInvocationResult as CoreToolInvocationResult,
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -134,63 +126,6 @@ pub(crate) fn prepare_host_tool_runtime_context(
     }
 }
 
-/// Streaming tool executor that forwards host-side tool boundary events live while delegating the real tool invocation to the shared bridge.
-/// 在把真实工具调用委派给共享桥接层的同时，实时转发宿主侧工具边界事件的流式工具执行器。
-#[derive(Clone)]
-struct StreamingRuntimeToolExecutor {
-    /// Shared host-managed bridge that owns the real tool dispatch and metadata normalization.
-    /// 持有真实工具调度与元数据规范化能力的共享宿主管理桥接层。
-    runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    /// Live sender used to forward tool boundary runtime events into the GUI stream.
-    /// 用于把工具边界运行时事件转发进图形界面流中的实时发送器。
-    live_sender: ProviderLiveDeltaSender,
-}
-
-#[async_trait]
-impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
-    /// Executes one host-managed tool request, forwards start and finish runtime events, and returns the normalized tool result to the controller.
-    /// 执行一次宿主管理工具请求，转发开始与完成运行时事件，并将规范化工具结果返回给控制器。
-    async fn execute_tool(
-        &self,
-        request: &CoreToolInvocationRequest,
-    ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-            RuntimeEvent::new(
-                RuntimeEventKind::ToolStarted,
-                format!(
-                    "工具调用 · {} · {}",
-                    request.tool_call_id, request.tool_name
-                ),
-                format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
-            )
-            .with_metadata(Some(json!({
-                "tool_call_id": request.tool_call_id,
-                "tool_name": request.tool_name,
-                "arguments": request.arguments,
-            }))),
-        )));
-        let result = self.runtime_bridge.execute_tool(request).await?;
-        let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
-        let event_metadata = attach_tool_name_to_runtime_metadata(
-            build_tool_result_runtime_metadata(
-                &request.tool_call_id,
-                &tool_result_id,
-                result.host_result.as_ref(),
-            ),
-            &request.tool_name,
-        );
-        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-            RuntimeEvent::new(
-                RuntimeEventKind::ToolFinished,
-                format!("工具返回 · {}", request.tool_call_id),
-                format_host_tool_result_runtime_detail(&tool_result_id, &result.model_output),
-            )
-            .with_metadata(event_metadata),
-        )));
-        Ok(result)
-    }
-}
-
 /// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the GUI layer.
 /// 通过 `vulcan-core` 执行一次宿主控制的 Provider 流，转发实时增量，并把最终规范状态返回给图形界面层。
 pub(crate) fn execute_host_controlled_stream<A, F>(
@@ -211,10 +146,8 @@ where
         let task_sender = live_sender.clone();
         let mut controller = VulcanCoreController::new(controller_config, core_snapshot);
         let provider_adapter = provider_factory(live_sender.clone());
-        let tool_executor = StreamingRuntimeToolExecutor {
-            runtime_bridge,
-            live_sender: live_sender.clone(),
-        };
+        let tool_executor =
+            StreamingRuntimeToolExecutor::new(runtime_bridge, live_sender.clone());
         let controller_prompt = prompt.clone();
         let controller_task = tokio::spawn(async move {
             let tool_policy = AllowAllToolPolicy;
