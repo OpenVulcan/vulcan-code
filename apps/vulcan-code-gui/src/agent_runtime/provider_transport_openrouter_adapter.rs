@@ -7,6 +7,7 @@ use crate::agent_runtime::provider_transport_adapter_support::{
     map_provider_client_build_result, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
@@ -47,6 +48,34 @@ pub(crate) struct OpenRouterCoreStreamingAdapter {
     /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
     /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
     pub(crate) live_sender: ProviderLiveDeltaSender,
+}
+
+impl OpenRouterCoreStreamingAdapter {
+    /// Creates one OpenRouter streaming adapter from the shared prepared adapter inputs plus provider-specific launch fields.
+    /// 使用共享的已准备适配器输入与 Provider 专用启动字段创建一个 OpenRouter 流式适配器。
+    pub(crate) fn new(
+        adapter_inputs: PreparedProviderTransportAdapterInputs,
+        api_key: String,
+        resolved_tools: Vec<ResolvedToolDefinition>,
+        live_sender: ProviderLiveDeltaSender,
+    ) -> Self {
+        let PreparedProviderTransportAdapterInputs {
+            provider_id,
+            model_id,
+            request_headers,
+            rig_tool_definitions,
+        } = adapter_inputs;
+
+        Self {
+            provider_id,
+            api_key,
+            model_id,
+            request_headers,
+            resolved_tools,
+            rig_tool_definitions,
+            live_sender,
+        }
+    }
 }
 
 #[async_trait]

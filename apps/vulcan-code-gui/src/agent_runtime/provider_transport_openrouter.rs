@@ -48,15 +48,12 @@ pub(crate) fn execute_openrouter_stream(
         prepared_runtime_inputs,
         core_snapshot,
         move |live_sender, adapter_inputs| {
-            crate::agent_runtime::provider_transport_openrouter_adapter::OpenRouterCoreStreamingAdapter {
-            provider_id: adapter_inputs.provider_id,
-            api_key,
-            model_id: adapter_inputs.model_id,
-            request_headers: adapter_inputs.request_headers,
-            resolved_tools,
-            rig_tool_definitions: adapter_inputs.rig_tool_definitions,
-            live_sender,
-        }
+            crate::agent_runtime::provider_transport_openrouter_adapter::OpenRouterCoreStreamingAdapter::new(
+                adapter_inputs,
+                api_key,
+                resolved_tools,
+                live_sender,
+            )
         },
         "OpenRouter",
     )
