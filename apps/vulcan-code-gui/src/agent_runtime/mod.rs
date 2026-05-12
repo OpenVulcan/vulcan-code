@@ -5,6 +5,7 @@ pub mod config;
 pub mod events;
 pub mod execution_models;
 pub mod executor;
+pub mod mcp_runtime_projection;
 pub mod provider;
 pub mod provider_prompt_loader;
 pub mod provider_protocol_bridge;
