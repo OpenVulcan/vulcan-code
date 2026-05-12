@@ -844,12 +844,15 @@ fn build_provider_request_preview_markdown(
     system_preamble: &str,
     effective_prompt: &str,
     resolved_tools: &[ResolvedToolDefinition],
-    max_turns: usize,
+    max_turns: Option<usize>,
 ) -> String {
     let temperature_label = preparation
         .temperature
         .map(|value| format!("{value:.2}"))
         .unwrap_or_else(|| String::from("使用模型默认值"));
+    let max_turns_label = max_turns
+        .map(|value| format!("`{value}`"))
+        .unwrap_or_else(|| String::from("不限制"));
     let extra_body_markdown = preparation
         .model_blueprint
         .extra_body
@@ -879,7 +882,7 @@ fn build_provider_request_preview_markdown(
             "- 接口：`{}`\n",
             "- 执行模式：`{}`\n",
             "- 温度：{}\n",
-            "- 最大轮次：`{}`\n",
+            "- 最大轮次：{}\n",
             "- 历史上下文：`{}` 条\n",
             "- 工具数量：`{}` 个\n\n",
             "## System Preamble\n",
@@ -905,7 +908,7 @@ fn build_provider_request_preview_markdown(
         preparation.model_blueprint.endpoint_summary(),
         preparation.execution_mode,
         temperature_label,
-        max_turns,
+        max_turns_label,
         preparation.context_history_count,
         resolved_tools.len(),
         render_text_code_fence(system_preamble),
@@ -1078,14 +1081,13 @@ fn execute_provider_prompt_stream(
     }
 }
 
-/// Resolves one safe default max-turn budget for multi-turn tool-calling providers.
-/// 为支持多轮工具调用的 Provider 解析一份安全的默认轮次预算。
-fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> usize {
+/// Resolves one optional max-turn override for multi-turn tool-calling providers.
+/// 为支持多轮工具调用的 Provider 解析一份可选的最大轮次覆盖值。
+fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> Option<usize> {
     active_agent
         .and_then(|agent| agent.max_turns)
         .filter(|value| *value > 0)
         .map(|value| value as usize)
-        .unwrap_or(12)
 }
 
 /// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client and streams deltas.
@@ -1097,7 +1099,7 @@ fn execute_openai_compatible_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: usize,
+    max_turns: Option<usize>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1122,8 +1124,11 @@ fn execute_openai_compatible_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Worker")
-        .preamble(system_preamble)
-        .default_max_turns(max_turns);
+        .preamble(system_preamble);
+
+    if let Some(max_turns) = max_turns {
+        agent_builder = agent_builder.default_max_turns(max_turns);
+    }
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1380,7 +1385,7 @@ fn execute_openai_responses_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: usize,
+    max_turns: Option<usize>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1405,8 +1410,11 @@ fn execute_openai_responses_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Responses Worker")
-        .preamble(system_preamble)
-        .default_max_turns(max_turns);
+        .preamble(system_preamble);
+
+    if let Some(max_turns) = max_turns {
+        agent_builder = agent_builder.default_max_turns(max_turns);
+    }
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1451,7 +1459,7 @@ fn execute_anthropic_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: usize,
+    max_turns: Option<usize>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1476,8 +1484,11 @@ fn execute_anthropic_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code Anthropic Worker")
-        .preamble(system_preamble)
-        .default_max_turns(max_turns);
+        .preamble(system_preamble);
+
+    if let Some(max_turns) = max_turns {
+        agent_builder = agent_builder.default_max_turns(max_turns);
+    }
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1521,7 +1532,7 @@ fn execute_openrouter_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: usize,
+    max_turns: Option<usize>,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1542,8 +1553,11 @@ fn execute_openrouter_stream(
     let model = client.completion_model(model_id);
     let mut agent_builder = AgentBuilder::new(model)
         .name("Vulcan Code OpenRouter Worker")
-        .preamble(system_preamble)
-        .default_max_turns(max_turns);
+        .preamble(system_preamble);
+
+    if let Some(max_turns) = max_turns {
+        agent_builder = agent_builder.default_max_turns(max_turns);
+    }
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1727,7 +1741,9 @@ mod tests {
         ExecutionPreparation, SyntheticThinkingPreambleState,
         build_provider_request_preview_markdown, build_runtime_system_preamble,
         classify_synthetic_thinking_preamble, normalize_streamed_thinking_output,
+        resolve_runtime_max_turns,
     };
+    use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::provider_config::ProviderRuntimeKind;
     use serde_json::json;
@@ -1826,7 +1842,7 @@ mod tests {
             "system prompt body",
             "effective prompt body",
             &resolved_tools,
-            12,
+            None,
         );
 
         assert!(preview.contains("# 最后一次真实 API 请求快照"));
@@ -1837,6 +1853,33 @@ mod tests {
         assert!(preview.contains("### `read_file`"));
         assert!(preview.contains("\"path\""));
         assert!(preview.contains("\"effort\": \"high\""));
+        assert!(preview.contains("- 最大轮次：不限制"));
+    }
+
+    /// Verifies the runtime leaves multi-turn providers unlimited when no explicit max-turn override exists.
+    /// 验证当未显式提供最大轮次覆盖值时，运行时会让多轮 Provider 保持不限制状态。
+    #[test]
+    fn runtime_max_turns_default_to_unlimited_without_override() {
+        assert_eq!(resolve_runtime_max_turns(None), None);
+
+        let worker_agent = RuntimeAgentDefinition {
+            id: String::from("worker"),
+            name: String::from("worker"),
+            kind: RuntimeAgentKind::Worker,
+            description: String::new(),
+            system_prompt: String::new(),
+            skill_ids: Vec::new(),
+            native_tools: Vec::new(),
+            mcp_tools: Vec::new(),
+            delegates: Vec::new(),
+            tool_policy: None,
+            routes: Vec::new(),
+            fallback_delegate: None,
+            model: None,
+            temperature: None,
+            max_turns: None,
+        };
+        assert_eq!(resolve_runtime_max_turns(Some(&worker_agent)), None);
     }
 
     /// Verifies runtime system preamble no longer embeds agent-authored prompt text or duplicated tool catalogs.

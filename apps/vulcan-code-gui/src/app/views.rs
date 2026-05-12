@@ -1627,22 +1627,37 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Returns the current visible line count of the main prompt composer.
-    /// 返回主提示词编辑器当前可见的逻辑行数量。
+    /// Returns the current estimated visible line count of the main prompt composer.
+    /// 返回主提示词编辑器当前估算得到的可见行数量。
     pub(super) fn composer_line_count(&self) -> usize {
-        composer_visible_line_count(&self.composer_buffer)
+        composer_visible_line_count(&self.composer_buffer, self.composer_input_surface_width())
     }
 
     /// Returns the current dynamic height of the main prompt composer editor.
     /// 返回主提示词编辑器当前的动态高度。
     pub(super) fn composer_editor_height(&self) -> f32 {
-        let visible_lines = self.composer_line_count().min(10) as f32;
+        let measured_text_height = composer_measured_text_height(
+            &self.composer_buffer,
+            self.composer_input_surface_width(),
+        );
+        let max_visible_text_height = COMPOSER_EDITOR_LINE_HEIGHT * 10.0;
+        let visible_text_height = measured_text_height.min(max_visible_text_height);
 
-        if visible_lines <= 1.0 {
-            COMPOSER_SINGLE_LINE_HEIGHT
-        } else {
-            COMPOSER_EDITOR_VERTICAL_INSET + visible_lines * COMPOSER_EDITOR_LINE_HEIGHT
-        }
+        COMPOSER_EDITOR_VERTICAL_INSET + visible_text_height
+    }
+
+    /// Returns the current content height, viewport height, and vertical scroll offset of the main prompt composer editor.
+    /// 返回主提示词编辑器当前的内容高度、视口高度与纵向滚动偏移量。
+    pub(super) fn composer_editor_scroll_metrics(&self) -> (f32, f32, f32) {
+        let content_height = COMPOSER_EDITOR_VERTICAL_INSET
+            + composer_measured_text_height(
+                &self.composer_buffer,
+                self.composer_input_surface_width(),
+            );
+        let (_, scroll_offset) = self.composer_buffer.plain_text_scroll_metrics();
+        let viewport_height = self.composer_editor_height();
+
+        (content_height, viewport_height, scroll_offset.max(0.0))
     }
 
     /// Returns the centered composer-panel width budget derived from the current main workbench canvas.
@@ -1695,22 +1710,17 @@ impl VulcanWorkbench {
     /// Builds the shared main prompt composer editor surface.
     /// 构建主提示词编辑器共用的实际输入表面。
     pub(super) fn view_composer_editor_surface(&self) -> Element<'_, Message> {
-        let logical_line_count = self.composer_line_count();
         let visible_height = self.composer_editor_height();
         let can_submit = self.composer_has_submittable_content();
-        let full_content_height = if logical_line_count <= 1 {
-            visible_height
-        } else {
-            COMPOSER_EDITOR_VERTICAL_INSET + logical_line_count as f32 * COMPOSER_EDITOR_LINE_HEIGHT
-        };
 
         let editor = text_editor(&self.composer_buffer)
             .id(COMPOSER_EDITOR_ID)
-            .height(full_content_height)
+            .height(visible_height)
             .size(COMPOSER_EDITOR_TEXT_SIZE)
             .line_height(iced::widget::text::LineHeight::Absolute(Pixels(
                 COMPOSER_EDITOR_LINE_HEIGHT,
             )))
+            .wrapping(iced::advanced::text::Wrapping::WordOrGlyph)
             .padding([10, 12])
             .placeholder("输入当前会话要执行的任务指令")
             .style(style::workbench_composer_editor_style)
@@ -1728,21 +1738,54 @@ impl VulcanWorkbench {
             })
             .on_action(Message::ComposerEditorAction);
 
-        if logical_line_count > 10 {
-            scrollable(container(editor).width(Fill))
-                .id(COMPOSER_EDITOR_SCROLLABLE_ID)
-                .height(visible_height)
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new()
-                        .width(8)
-                        .scroller_width(8)
-                        .spacing(6),
-                ))
-                .on_scroll(Message::ComposerEditorScrolled)
-                .into()
+        let (content_height, viewport_height, scroll_offset) =
+            self.composer_editor_scroll_metrics();
+        let max_scroll_offset = (content_height - viewport_height).max(0.0);
+        let scrollbar_overlay: Element<'_, Message> = if max_scroll_offset > 0.5 {
+            let track_height = (visible_height - 16.0).max(0.0);
+            let thumb_height =
+                ((viewport_height / content_height) * track_height).clamp(24.0, track_height);
+            let thumb_travel = (track_height - thumb_height).max(0.0);
+            let thumb_top = if thumb_travel > 0.0 {
+                (scroll_offset / max_scroll_offset).clamp(0.0, 1.0) * thumb_travel
+            } else {
+                0.0
+            };
+
+            container(
+                column![
+                    space::vertical().height(thumb_top),
+                    container(space::vertical())
+                        .width(6)
+                        .height(thumb_height)
+                        .style(style::workbench_composer_editor_scrollbar_style),
+                    space::vertical().height(Fill),
+                ]
+                .width(Fill)
+                .height(Fill)
+                .align_x(iced::Alignment::End),
+            )
+            .padding(iced::Padding {
+                top: 8.0,
+                right: 4.0,
+                bottom: 8.0,
+                left: 0.0,
+            })
+            .width(Fill)
+            .height(visible_height)
+            .into()
         } else {
-            container(editor).width(Fill).into()
-        }
+            container(space::vertical().height(0)).into()
+        };
+
+        container(stack([
+            container(editor).width(Fill).into(),
+            scrollbar_overlay,
+        ]))
+        .width(Fill)
+        .height(visible_height)
+        .clip(true)
+        .into()
     }
 
     /// Builds the compact placeholder slot used by the fixed composer panel row.

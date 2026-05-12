@@ -529,7 +529,7 @@ fn default_worker_agent() -> RuntimeAgentDefinition {
         fallback_delegate: None,
         model: None,
         temperature: Some(0.2),
-        max_turns: Some(12),
+        max_turns: None,
     }
 }
 
@@ -554,7 +554,7 @@ fn default_lua_agent() -> RuntimeAgentDefinition {
         fallback_delegate: None,
         model: None,
         temperature: Some(0.15),
-        max_turns: Some(10),
+        max_turns: None,
     }
 }
 
@@ -579,7 +579,7 @@ fn default_memory_agent() -> RuntimeAgentDefinition {
         fallback_delegate: None,
         model: None,
         temperature: Some(0.1),
-        max_turns: Some(8),
+        max_turns: None,
     }
 }
 
@@ -614,7 +614,7 @@ fn default_coordinator_agent() -> RuntimeAgentDefinition {
         fallback_delegate: Some(String::from(DEFAULT_WORKER_AGENT_ID)),
         model: None,
         temperature: Some(0.15),
-        max_turns: Some(12),
+        max_turns: None,
     }
 }
 

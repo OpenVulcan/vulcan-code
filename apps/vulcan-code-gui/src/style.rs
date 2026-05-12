@@ -705,6 +705,24 @@ pub fn workbench_composer_editor_style(
     }
 }
 
+/// Returns the scrollbar-thumb style rendered inside the workbench composer editor surface.
+/// 返回渲染在工作台提示词编辑器表面内部的滚动条滑块样式。
+pub fn workbench_composer_editor_scrollbar_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.strong.color.scale_alpha(0.42),
+        )),
+        border: Border {
+            radius: 999.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the list-row style used by each option inside the in-app workbench model-picker modal.
 /// 返回工作台内嵌模型选择弹窗中每个选项行使用的列表样式。
 pub fn workbench_model_picker_option_button_style(

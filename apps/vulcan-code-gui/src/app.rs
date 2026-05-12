@@ -351,10 +351,6 @@ const DIFF_PANEL_SCROLLABLE_ID: &str = "vulcan-code.diff-panel-scrollable";
 /// 主提示词编辑器在紧凑态与展开态之间共用的稳定部件标识。
 const COMPOSER_EDITOR_ID: &str = "vulcan-code.composer-editor";
 
-/// Stable scrollable identifier used by the overflowed main prompt composer surface.
-/// 主提示词编辑器溢出后滚动表面使用的稳定滚动容器标识。
-const COMPOSER_EDITOR_SCROLLABLE_ID: &str = "vulcan-code.composer-editor-scrollable";
-
 /// Stable widget identifier used by the inline workbench model-picker filter input.
 /// 工作台内嵌模型选择弹窗过滤输入框使用的稳定部件标识。
 const WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID: &str =
@@ -371,6 +367,10 @@ const COMPOSER_EDITOR_TEXT_SIZE: f32 = 16.0;
 /// Shared combined vertical inset used by the main prompt composer surface.
 /// 主提示词编辑器表面使用的共享纵向合计内边距。
 const COMPOSER_EDITOR_VERTICAL_INSET: f32 = 20.0;
+
+/// Shared combined horizontal inset used by the main prompt composer surface.
+/// 主提示词编辑器表面使用的共享横向合计内边距。
+const COMPOSER_EDITOR_HORIZONTAL_INSET: f32 = 24.0;
 
 /// Shared fixed height used by the single-line main prompt composer surface.
 /// 主提示词编辑器单行表面使用的共享固定高度。
@@ -421,36 +421,47 @@ const WORKBENCH_MODEL_PICKER_MODAL_WIDTH: f32 = 680.0;
 /// 工作台模型选择弹窗内部滚动结果列表使用的共享固定高度。
 const WORKBENCH_MODEL_PICKER_LIST_HEIGHT: f32 = 340.0;
 
-/// Returns the logical visible line count of one composer buffer while preserving trailing blank lines.
-/// 返回一个提示词编辑器缓冲区的逻辑可见行数，并保留尾部空白行。
-fn composer_visible_line_count(buffer: &text_editor::Content) -> usize {
-    buffer.line_count().max(1)
+/// Returns the inner text width available to the main prompt composer after subtracting the editor padding.
+/// 返回主提示词编辑器在扣除内部边距之后可用于文本排版的实际宽度。
+fn composer_available_text_width(surface_width: f32) -> f32 {
+    (surface_width - COMPOSER_EDITOR_HORIZONTAL_INSET).max(COMPOSER_EDITOR_TEXT_SIZE)
+}
+
+/// Measures the current composer content with the native editor layout engine and returns its minimum bounds plus caret position.
+/// 使用原生编辑器布局引擎测量当前提示词内容，并返回其最小边界与光标位置。
+fn measure_composer_layout(
+    buffer: &text_editor::Content,
+    surface_width: f32,
+) -> (iced::Size, iced::Point) {
+    buffer.measure_plain_text_layout(
+        iced::Size::new(composer_available_text_width(surface_width), 100_000.0),
+        theme::ui_font(),
+        Pixels(COMPOSER_EDITOR_TEXT_SIZE),
+        iced::widget::text::LineHeight::Absolute(Pixels(COMPOSER_EDITOR_LINE_HEIGHT)),
+        iced::advanced::text::Wrapping::WordOrGlyph,
+        Some(1.0),
+    )
+}
+
+/// Returns the visible line count of one composer buffer measured by the native editor layout engine.
+/// 返回由原生编辑器布局引擎测量得到的提示词编辑器可见行数量。
+fn composer_visible_line_count(buffer: &text_editor::Content, surface_width: f32) -> usize {
+    let text_height = composer_measured_text_height(buffer, surface_width);
+
+    (text_height / COMPOSER_EDITOR_LINE_HEIGHT).ceil().max(1.0) as usize
+}
+
+/// Returns the measured text height of one composer buffer using the native editor layout engine.
+/// 返回由原生编辑器布局引擎测量得到的提示词编辑器文本高度。
+fn composer_measured_text_height(buffer: &text_editor::Content, surface_width: f32) -> f32 {
+    let (min_bounds, _) = measure_composer_layout(buffer, surface_width);
+    min_bounds.height.max(COMPOSER_EDITOR_LINE_HEIGHT)
 }
 
 /// Returns whether one composer text payload contains any submittable non-whitespace content.
 /// 返回某段提示词文本是否包含任何可提交的非空白内容。
 fn composer_text_has_submittable_content(text: &str) -> bool {
     !text.trim().is_empty()
-}
-
-/// Returns the outer scroll offset required to keep the active composer cursor line visible inside the capped viewport.
-/// 返回让当前提示词光标行保持在封顶视口内可见所需的外层滚动偏移量。
-fn composer_caret_scroll_target(
-    cursor_line: usize,
-    viewport_height: f32,
-    current_scroll_offset: f32,
-) -> f32 {
-    let caret_top = (cursor_line as f32 * COMPOSER_EDITOR_LINE_HEIGHT) + 10.0;
-    let caret_bottom = caret_top + COMPOSER_EDITOR_LINE_HEIGHT;
-    let current_viewport_bottom = current_scroll_offset + viewport_height;
-
-    if caret_top < current_scroll_offset {
-        caret_top
-    } else if caret_bottom > current_viewport_bottom {
-        (caret_bottom - viewport_height).max(0.0)
-    } else {
-        current_scroll_offset.max(0.0)
-    }
 }
 
 /// Launches the GUI application using the official iced crate.
@@ -538,9 +549,6 @@ pub struct VulcanWorkbench {
     /// Prompt composer editor buffer used by the main Build/Plan input surface.
     /// 主 Build/Plan 输入表面使用的提示词编辑器缓冲区。
     composer_buffer: text_editor::Content,
-    /// Current outer scroll offset used by the overflowed prompt composer viewport.
-    /// 当前溢出提示词编辑器视口使用的外层滚动偏移量。
-    composer_scroll_offset: f32,
     /// Text editor content for patch and scaffold previews.
     /// 用于补丁与骨架预览的文本编辑器内容。
     editor_content: text_editor::Content,
@@ -1772,9 +1780,6 @@ enum Message {
     /// Applies one text-editor action inside the main prompt composer.
     /// 应用主提示词编辑器中的一条文本编辑动作。
     ComposerEditorAction(text_editor::Action),
-    /// Records the current viewport of the overflowed prompt composer surface.
-    /// 记录溢出提示词编辑器表面的当前视口状态。
-    ComposerEditorScrolled(scrollable::Viewport),
     /// Embedded editor emitted an editing action.
     /// 嵌入式编辑器发出了编辑动作。
     EditorActionPerformed(text_editor::Action),
@@ -2350,7 +2355,6 @@ impl VulcanWorkbench {
             workspace_path: String::from("D:/openvulcan/vulcan-code"),
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
-            composer_scroll_offset: 0.0,
             editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
             diff_summary: placeholder_diff_panel.summary_text(),
             diff_panel: placeholder_diff_panel,
@@ -3217,61 +3221,24 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ComposerEditorAction(action) => {
-                if let text_editor::Action::Scroll { lines } = action {
-                    if self.composer_line_count() > 10 && lines != 0 {
-                        let delta_y = lines as f32 * COMPOSER_EDITOR_LINE_HEIGHT;
-
-                        return operation::scroll_by(
-                            COMPOSER_EDITOR_SCROLLABLE_ID,
-                            scrollable::AbsoluteOffset { x: 0.0, y: delta_y },
-                        );
-                    }
-
-                    return Task::none();
-                }
-
-                let used_expanded_surface_before = self.composer_uses_expanded_surface();
+                let composer_surface_width = self.composer_input_surface_width();
+                let visible_line_count_before =
+                    composer_visible_line_count(&self.composer_buffer, composer_surface_width);
+                let used_expanded_surface_before = visible_line_count_before > 1;
+                let used_overflow_scroll_before = visible_line_count_before > 10;
                 self.composer_buffer.perform(action);
                 self.composer = self.composer_buffer.text();
-                let used_expanded_surface_after = self.composer_uses_expanded_surface();
-
-                let mut tasks = Vec::new();
-
-                if used_expanded_surface_before != used_expanded_surface_after {
-                    tasks.push(operation::focus(COMPOSER_EDITOR_ID));
-                }
-
-                if self.composer_line_count() > 10 {
-                    let cursor_line = self.composer_buffer.cursor().position.line;
-                    let target_offset = composer_caret_scroll_target(
-                        cursor_line,
-                        self.composer_editor_height(),
-                        self.composer_scroll_offset,
-                    );
-
-                    if (target_offset - self.composer_scroll_offset).abs() > f32::EPSILON {
-                        self.composer_scroll_offset = target_offset;
-                        tasks.push(operation::scroll_to(
-                            COMPOSER_EDITOR_SCROLLABLE_ID,
-                            scrollable::AbsoluteOffset {
-                                x: 0.0,
-                                y: target_offset,
-                            },
-                        ));
-                    }
+                let visible_line_count_after =
+                    composer_visible_line_count(&self.composer_buffer, composer_surface_width);
+                let used_expanded_surface_after = visible_line_count_after > 1;
+                let used_overflow_scroll_after = visible_line_count_after > 10;
+                if used_expanded_surface_before != used_expanded_surface_after
+                    || used_overflow_scroll_before != used_overflow_scroll_after
+                {
+                    operation::focus(COMPOSER_EDITOR_ID)
                 } else {
-                    self.composer_scroll_offset = 0.0;
-                }
-
-                if tasks.is_empty() {
                     Task::none()
-                } else {
-                    Task::batch(tasks)
                 }
-            }
-            Message::ComposerEditorScrolled(viewport) => {
-                self.composer_scroll_offset = viewport.absolute_offset().y;
-                Task::none()
             }
             Message::EditorActionPerformed(action) => {
                 self.editor_content.perform(action);
@@ -4466,7 +4433,6 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在发起真实执行，请稍候。");
                 self.composer.clear();
                 self.composer_buffer = text_editor::Content::with_text("");
-                self.composer_scroll_offset = 0.0;
 
                 let run_id = self.next_run_id;
                 self.next_run_id = self.next_run_id.saturating_add(1);
@@ -7070,10 +7036,7 @@ impl VulcanWorkbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        COMPOSER_EDITOR_LINE_HEIGHT, composer_caret_scroll_target,
-        composer_text_has_submittable_content, composer_visible_line_count,
-    };
+    use super::{composer_text_has_submittable_content, composer_visible_line_count};
     use iced::widget::text_editor;
 
     /// Verifies that an empty composer still reserves one visible line.
@@ -7082,7 +7045,7 @@ mod tests {
     fn composer_visible_line_count_keeps_one_line_for_empty_content() {
         let buffer = text_editor::Content::with_text("");
 
-        assert_eq!(composer_visible_line_count(&buffer), 1);
+        assert_eq!(composer_visible_line_count(&buffer, 420.0), 1);
     }
 
     /// Verifies that a trailing newline immediately expands the composer to the next logical line.
@@ -7091,7 +7054,18 @@ mod tests {
     fn composer_visible_line_count_preserves_trailing_blank_line() {
         let buffer = text_editor::Content::with_text("第一行\n");
 
-        assert_eq!(composer_visible_line_count(&buffer), 2);
+        assert_eq!(composer_visible_line_count(&buffer, 420.0), 2);
+    }
+
+    /// Verifies that one long logical line expands into multiple visible lines when the composer width becomes narrow enough.
+    /// 验证当提示词编辑器宽度变窄时，单条超长逻辑行会自动扩展为多条可见行。
+    #[test]
+    fn composer_visible_line_count_expands_for_soft_wrapped_content() {
+        let buffer = text_editor::Content::with_text(
+            "This is a long composer line that should wrap automatically inside a narrow surface.",
+        );
+
+        assert!(composer_visible_line_count(&buffer, 180.0) > 1);
     }
 
     /// Verifies whitespace-only composer payloads stay non-submittable until visible content is entered.
@@ -7102,26 +7076,5 @@ mod tests {
         assert!(!composer_text_has_submittable_content("   \n\t  "));
         assert!(composer_text_has_submittable_content("执行这个任务"));
         assert!(composer_text_has_submittable_content("\n  执行这个任务  "));
-    }
-
-    /// Verifies the overflowed composer scroll target advances when the active caret line moves below the visible viewport.
-    /// 验证当活动光标行移动到可见视口下方时，溢出提示词编辑器的滚动目标会向下推进。
-    #[test]
-    fn composer_caret_scroll_target_advances_for_hidden_lower_line() {
-        let target_offset = composer_caret_scroll_target(12, 260.0, 0.0);
-
-        assert_eq!(
-            target_offset,
-            (12.0 * COMPOSER_EDITOR_LINE_HEIGHT) + 10.0 + COMPOSER_EDITOR_LINE_HEIGHT - 260.0
-        );
-    }
-
-    /// Verifies the overflowed composer keeps its current scroll offset when the active caret line is still visible.
-    /// 验证当活动光标行仍处于可见范围内时，溢出提示词编辑器会保持当前滚动偏移不变。
-    #[test]
-    fn composer_caret_scroll_target_keeps_visible_line_stable() {
-        let target_offset = composer_caret_scroll_target(6, 260.0, 24.0);
-
-        assert_eq!(target_offset, 24.0);
     }
 }
