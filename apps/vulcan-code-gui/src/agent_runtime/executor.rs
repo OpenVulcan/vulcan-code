@@ -14,7 +14,7 @@ use crate::agent_runtime::provider_request_bridge::{
 };
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::provider_transport::{
-    ProviderTransportExecutionRequest, execute_provider_transport_stream,
+    build_provider_transport_execution_request, execute_provider_transport_stream,
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
@@ -1011,25 +1011,25 @@ fn execute_provider_prompt_stream(
     };
     let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
 
-    execute_provider_transport_stream(ProviderTransportExecutionRequest {
-        runtime_kind: preparation.model_blueprint.runtime_kind,
-        provider_id: preparation.model_blueprint.provider_id.clone(),
-        runtime_label: preparation.model_blueprint.runtime_label.clone(),
+    execute_provider_transport_stream(build_provider_transport_execution_request(
+        preparation.model_blueprint.runtime_kind,
+        preparation.model_blueprint.provider_id.clone(),
+        preparation.model_blueprint.runtime_label.clone(),
         api_key,
-        base_url: base_url.map(ToString::to_string),
-        model_id: model_id.to_string(),
-        system_preamble: system_preamble.to_string(),
-        prompt: prompt.to_string(),
+        base_url,
+        model_id,
+        system_preamble,
+        prompt,
         request_history,
         core_snapshot,
         temperature,
         max_turns,
-        headers: request_headers,
+        request_headers,
         tools_manager,
-        session_id: preparation.session_id,
+        preparation.session_id,
         resolved_tools,
         additional_params,
-    })
+    ))
 }
 
 /// Resolves one optional max-turn override for multi-turn tool-calling providers.

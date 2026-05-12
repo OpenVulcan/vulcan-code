@@ -73,6 +73,48 @@ pub(crate) struct ProviderTransportExecutionRequest {
     pub(crate) additional_params: Option<Value>,
 }
 
+/// Builds one owned provider transport execution request from already resolved runtime inputs.
+/// 根据已经解析完成的运行时输入构建一份自有的 Provider 传输执行请求。
+pub(crate) fn build_provider_transport_execution_request(
+    runtime_kind: ProviderRuntimeKind,
+    provider_id: String,
+    runtime_label: String,
+    api_key: String,
+    base_url: Option<&str>,
+    model_id: &str,
+    system_preamble: &str,
+    prompt: &str,
+    request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
+    temperature: Option<f64>,
+    max_turns: usize,
+    headers: HeaderMap,
+    tools_manager: VulcanToolsManager,
+    session_id: SessionId,
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    additional_params: Option<Value>,
+) -> ProviderTransportExecutionRequest {
+    ProviderTransportExecutionRequest {
+        runtime_kind,
+        provider_id,
+        runtime_label,
+        api_key,
+        base_url: base_url.map(ToString::to_string),
+        model_id: model_id.to_string(),
+        system_preamble: system_preamble.to_string(),
+        prompt: prompt.to_string(),
+        request_history,
+        core_snapshot,
+        temperature,
+        max_turns,
+        headers,
+        tools_manager,
+        session_id,
+        resolved_tools,
+        additional_params,
+    }
+}
+
 /// Dispatches one prepared provider execution request into the correct provider-family transport adapter.
 /// 将一份已准备好的 Provider 执行请求分发到正确的 Provider 家族传输适配器。
 pub(crate) fn execute_provider_transport_stream(
