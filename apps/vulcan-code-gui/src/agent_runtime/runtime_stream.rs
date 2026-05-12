@@ -5,7 +5,7 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
-use crate::agent_runtime::runtime_stream_setup::prepare_runtime_stream_launch;
+use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
