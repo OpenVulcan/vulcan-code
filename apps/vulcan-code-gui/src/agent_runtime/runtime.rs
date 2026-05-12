@@ -64,8 +64,8 @@ pub struct RuntimeFoundation {
     /// Registered native tool catalog.
     /// 已注册的原生工具目录。
     native_tools: NativeToolCatalog,
-    /// LuaSkills-backed runtime tool descriptors exposed to rig-driven execution flows.
-    /// 暴露给 rig 驱动执行链的 LuaSkills 运行时工具描述集合。
+    /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
+    /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
     /// MCP server registry.
     /// MCP 服务器注册表。

@@ -5,8 +5,8 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
-use crate::agent_runtime::rig_tools::VulcanManagedToolRuntimeBridge;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
     SessionConversationState, SessionConversationToolCall, SessionProviderContinuationState,
@@ -295,8 +295,8 @@ pub struct ExecutionRunReport {
     /// Assistant thinking output returned by the real provider call.
     /// 真实 Provider 调用返回的助手思考输出。
     pub thinking_output: Option<String>,
-    /// Canonical conversation state rebuilt from the final rig history when the run succeeds.
-    /// 当运行成功时根据最终 rig 历史重建出的规范会话状态。
+    /// Canonical conversation state returned from the final host-controlled controller run when execution succeeds.
+    /// 当执行成功时由最终宿主控制器运行返回的规范会话状态。
     pub conversation_state: Option<SessionConversationState>,
     /// Successful MCP discovery summary rows collected during the run.
     /// 运行期间收集到的 MCP 成功发现摘要行集合。
