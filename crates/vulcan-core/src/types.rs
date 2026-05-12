@@ -322,6 +322,26 @@ pub struct ProviderTurnResponse {
     pub continuation: Option<ProviderContinuation>,
 }
 
+/// Represents one streaming delta emitted while the provider is still building the normalized turn response.
+/// 表示 Provider 在构建规范化回合响应期间持续发出的单条流式增量。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProviderTurnDelta {
+    /// One reasoning delta emitted by the provider stream.
+    /// Provider 流发出的一条思考增量。
+    Thinking {
+        /// Raw visible reasoning delta text.
+        /// 原始可见思考增量文本。
+        delta: String,
+    },
+    /// One assistant output delta emitted by the provider stream.
+    /// Provider 流发出的一条助手输出增量。
+    Output {
+        /// Raw visible assistant output delta text.
+        /// 原始可见助手输出增量文本。
+        delta: String,
+    },
+}
+
 /// Represents one summary of a completed host-owned controller loop.
 /// 表示一份已完成的宿主自有控制器循环摘要。
 #[derive(Debug, Clone, Serialize, Deserialize)]

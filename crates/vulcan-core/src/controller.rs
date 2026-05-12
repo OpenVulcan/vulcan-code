@@ -1,13 +1,15 @@
 //! Core controller state machine owned by `vulcan-core`.
 //! `vulcan-core` 自有的控制器状态机。
 
-use crate::provider::VulcanProviderAdapter;
+use crate::provider::{
+    VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
+};
 use crate::tool::{VulcanToolExecutor, VulcanToolPolicy};
 use crate::types::{
     ControllerConfig, ControllerRunResult, ConversationMessage, ConversationPayload,
     ConversationRecord, ConversationSnapshot, CoreError, CoreEvent, CoreEventKind,
-    ProviderTurnResponse, ToolInvocationRequest, ToolInvocationResult, TranscriptRecordKind,
-    TranscriptRole,
+    ProviderTurnDelta, ProviderTurnResponse, ToolInvocationRequest, ToolInvocationResult,
+    TranscriptRecordKind, TranscriptRole,
 };
 use serde_json::{Map as JsonMap, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -55,6 +57,23 @@ pub struct VulcanCoreController {
     /// Local identifier counter used for synthesized message and record identifiers.
     /// 用于合成消息与记录标识的本地递增计数器。
     local_id_counter: u64,
+}
+
+/// Collects provider-stream deltas during one request so the controller can apply them in order after the turn finishes.
+/// 在单次请求期间收集 Provider 流式增量，以便控制器在回合结束后按顺序应用它们。
+#[derive(Debug, Default)]
+struct BufferedProviderDeltaSink {
+    /// Buffered provider deltas captured during the current request lifecycle.
+    /// 在当前请求生命周期内捕获到的 Provider 增量缓冲集合。
+    deltas: Vec<ProviderTurnDelta>,
+}
+
+impl VulcanProviderDeltaSink for BufferedProviderDeltaSink {
+    /// Pushes one provider-stream delta into the in-memory buffer.
+    /// 将一条 Provider 流式增量推入内存缓冲区。
+    fn push_delta(&mut self, delta: ProviderTurnDelta) {
+        self.deltas.push(delta);
+    }
 }
 
 impl VulcanCoreController {
@@ -359,6 +378,86 @@ impl VulcanCoreController {
         }
     }
 
+    /// Runs one complete user-authored turn through one streaming-capable provider adapter while preserving streamed thinking and output deltas.
+    /// 通过一个支持流式增量的 Provider 适配器运行一次完整用户回合，并保留流式思考与输出增量。
+    pub async fn run_user_turn_streaming<A, E, P>(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        user_prompt: impl Into<String>,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+    {
+        let user_prompt = user_prompt.into();
+        let trimmed_prompt = user_prompt.trim();
+        if trimmed_prompt.is_empty() {
+            let error = CoreError::InvalidState {
+                message: String::from("控制器无法执行空白用户输入。"),
+            };
+            self.mark_failed(error.to_string());
+            return Err(error);
+        }
+
+        self.append_user_turn(trimmed_prompt);
+        let mut provider_turns_executed = 0usize;
+        let mut tool_calls_processed = 0usize;
+
+        loop {
+            if provider_turns_executed >= self.config.max_turns {
+                let error = CoreError::InvalidState {
+                    message: format!(
+                        "控制器已达到最大 Provider 回合限制 `{}`，仍存在未收敛的工具循环。",
+                        self.config.max_turns
+                    ),
+                };
+                self.mark_failed(error.to_string());
+                return Err(error);
+            }
+
+            let (response, deltas) = self.execute_provider_turn_streaming(adapter).await?;
+            provider_turns_executed += 1;
+            self.apply_provider_turn_deltas(&deltas);
+
+            let assistant_message_id = self.append_assistant_turn(&response);
+            self.refresh_continuation(&response);
+
+            if response.tool_calls.is_empty() {
+                self.phase = ControllerPhase::Completed;
+                self.push_final_event(
+                    provider_turns_executed,
+                    tool_calls_processed,
+                    Some(assistant_message_id.as_str()),
+                );
+                return Ok(ControllerRunResult {
+                    provider_turns_executed,
+                    tool_calls_processed,
+                    final_assistant_message_id: Some(assistant_message_id),
+                });
+            }
+
+            for tool_call in &response.tool_calls {
+                let request = ToolInvocationRequest {
+                    tool_call_id: resolved_tool_call_id(tool_call),
+                    tool_name: tool_call.tool_name.clone(),
+                    arguments: tool_call.arguments.clone(),
+                };
+                let result = match self.execute_tool(executor, policy, &request).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.mark_failed(error.to_string());
+                        return Err(error);
+                    }
+                };
+                tool_calls_processed += 1;
+                self.append_tool_result_message(&result);
+            }
+        }
+    }
+
     /// Executes one normalized provider turn without emitting an artificial final event.
     /// 执行一次规范化 Provider 回合，但不额外发出人为合成的完成事件。
     async fn execute_provider_turn<A>(
@@ -384,6 +483,47 @@ impl VulcanCoreController {
             Err(error) => {
                 self.mark_failed(error.to_string());
                 Err(error)
+            }
+        }
+    }
+
+    /// Executes one normalized provider turn through the streaming adapter and returns both the final turn response and buffered deltas.
+    /// 通过流式适配器执行一次规范化 Provider 回合，并返回最终回合响应与缓冲增量。
+    async fn execute_provider_turn_streaming<A>(
+        &mut self,
+        adapter: &A,
+    ) -> Result<(ProviderTurnResponse, Vec<ProviderTurnDelta>), CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+    {
+        let request = match self.build_request(adapter).await {
+            Ok(request) => request,
+            Err(error) => {
+                self.mark_failed(error.to_string());
+                return Err(error);
+            }
+        };
+        self.phase = ControllerPhase::WaitingForProvider;
+        let mut sink = BufferedProviderDeltaSink::default();
+        match adapter.execute_request_streaming(request, &mut sink).await {
+            Ok(response) => {
+                self.phase = ControllerPhase::Idle;
+                Ok((response, sink.deltas))
+            }
+            Err(error) => {
+                self.mark_failed(error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    /// Applies buffered provider-stream deltas to the controller-owned event trace in the original emission order.
+    /// 按原始发出顺序将缓冲的 Provider 流式增量应用到控制器自有事件轨迹。
+    fn apply_provider_turn_deltas(&mut self, deltas: &[ProviderTurnDelta]) {
+        for delta in deltas {
+            match delta {
+                ProviderTurnDelta::Thinking { delta } => self.record_thinking(delta.clone()),
+                ProviderTurnDelta::Output { delta } => self.record_output(delta.clone()),
             }
         }
     }
@@ -624,10 +764,11 @@ mod tests {
     //! 面向产品自有宿主执行流的控制器循环测试。
 
     use super::*;
+    use crate::provider::{VulcanProviderDeltaSink, VulcanStreamingProviderAdapter};
     use crate::tool::{AllowAllToolPolicy, ExactToolSetPolicy};
     use crate::types::{
         ConversationPayload, ConversationToolCall, ProviderContinuation, ProviderRequestSnapshot,
-        ProviderRequestToolSchema,
+        ProviderRequestToolSchema, ProviderTurnDelta,
     };
     use async_trait::async_trait;
     use std::collections::{BTreeMap, VecDeque};
@@ -670,6 +811,37 @@ mod tests {
                 .lock()
                 .expect("lock built requests")
                 .clone()
+        }
+    }
+
+    /// Captures pre-planned streaming provider responses and emits buffered turn deltas before returning the final normalized response.
+    /// 持有预先规划的流式 Provider 响应，并在返回最终规范化响应前发出缓冲回合增量。
+    #[derive(Debug, Clone)]
+    struct MockStreamingProviderAdapter {
+        /// Stable provider identifier exposed by the mock streaming adapter.
+        /// 由模拟流式适配器暴露的稳定 Provider 标识。
+        provider_id: String,
+        /// Stable model identifier exposed by the mock streaming adapter.
+        /// 由模拟流式适配器暴露的稳定模型标识。
+        model_id: String,
+        /// Planned normalized provider responses paired with the deltas that should be emitted before each final response.
+        /// 与每次最终响应之前应发出的增量配对保存的规范化 Provider 响应计划队列。
+        planned_turns: Arc<Mutex<VecDeque<(Vec<ProviderTurnDelta>, ProviderTurnResponse)>>>,
+        /// Built request snapshots captured before execution.
+        /// 执行前捕获到的请求快照集合。
+        built_requests: Arc<Mutex<Vec<ProviderRequestSnapshot>>>,
+    }
+
+    impl MockStreamingProviderAdapter {
+        /// Creates one mock streaming provider adapter from the planned turn sequence.
+        /// 根据计划中的回合序列创建一个模拟流式 Provider 适配器。
+        fn new(planned_turns: Vec<(Vec<ProviderTurnDelta>, ProviderTurnResponse)>) -> Self {
+            Self {
+                provider_id: String::from("mock-openai-streaming"),
+                model_id: String::from("mock-model"),
+                planned_turns: Arc::new(Mutex::new(VecDeque::from(planned_turns))),
+                built_requests: Arc::new(Mutex::new(Vec::new())),
+            }
         }
     }
 
@@ -736,6 +908,95 @@ mod tests {
                 .ok_or_else(|| CoreError::InvalidState {
                     message: String::from("模拟 Provider 响应队列已耗尽。"),
                 })
+        }
+    }
+
+    #[async_trait]
+    impl VulcanProviderAdapter for MockStreamingProviderAdapter {
+        type Request = ProviderRequestSnapshot;
+        type Response = ProviderTurnResponse;
+
+        /// Returns the stable provider identifier owned by the mock streaming adapter.
+        /// 返回由模拟流式适配器持有的稳定 Provider 标识。
+        fn provider_id(&self) -> &str {
+            &self.provider_id
+        }
+
+        /// Returns the stable model identifier owned by the mock streaming adapter.
+        /// 返回由模拟流式适配器持有的稳定模型标识。
+        fn model_id(&self) -> &str {
+            &self.model_id
+        }
+
+        /// Builds one request snapshot directly from the controller snapshot for later assertions.
+        /// 直接根据控制器快照构建一份请求快照，供后续断言使用。
+        async fn build_request(
+            &self,
+            snapshot: &ConversationSnapshot,
+            config: &ControllerConfig,
+        ) -> Result<Self::Request, CoreError> {
+            let request = ProviderRequestSnapshot {
+                provider_id: config.provider_id.clone(),
+                model_id: config.model_id.clone(),
+                system_prompt: config.system_prompt.clone(),
+                prompt: String::from("mock-streaming-user-prompt"),
+                history: snapshot.messages.clone(),
+                temperature: config.temperature,
+                max_turns: config.max_turns,
+                tool_schemas: vec![ProviderRequestToolSchema {
+                    id: String::from("mock-tool"),
+                    name: String::from("mock-tool"),
+                    description: String::from("mock tool"),
+                    source_label: String::from("test"),
+                    parameters_schema: json!({"type":"object"}),
+                }],
+                additional_params: config.additional_params.clone(),
+                request_headers: None,
+                continuation: snapshot.continuation.clone(),
+            };
+            self.built_requests
+                .lock()
+                .expect("lock built requests")
+                .push(request.clone());
+            Ok(request)
+        }
+
+        /// Mock streaming adapters are expected to use `execute_request_streaming` instead of the one-shot request path.
+        /// 模拟流式适配器应当使用 `execute_request_streaming`，而不是一次性请求路径。
+        async fn execute_request(
+            &self,
+            _request: Self::Request,
+        ) -> Result<Self::Response, CoreError> {
+            Err(CoreError::InvalidState {
+                message: String::from("模拟流式适配器不支持一次性 execute_request 调用。"),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl VulcanStreamingProviderAdapter for MockStreamingProviderAdapter {
+        /// Emits the pre-planned delta sequence into the provided sink and then returns the next final turn response.
+        /// 将预先规划的增量序列写入给定 sink，并在随后返回下一条最终回合响应。
+        async fn execute_request_streaming<S>(
+            &self,
+            _request: Self::Request,
+            sink: &mut S,
+        ) -> Result<Self::Response, CoreError>
+        where
+            S: VulcanProviderDeltaSink,
+        {
+            let (deltas, response) = self
+                .planned_turns
+                .lock()
+                .expect("lock planned streaming turns")
+                .pop_front()
+                .ok_or_else(|| CoreError::InvalidState {
+                    message: String::from("模拟流式 Provider 响应队列已耗尽。"),
+                })?;
+            for delta in deltas {
+                sink.push_delta(delta);
+            }
+            Ok(response)
         }
     }
 
@@ -929,6 +1190,81 @@ mod tests {
                         .and_then(Value::as_u64)
                         == Some(2)
             }));
+        });
+    }
+
+    /// Executes a full host-owned streaming loop and preserves provider deltas in the controller event trace before finalizing the assistant turn.
+    /// 执行一条完整的宿主自有流式循环，并在完成最终助手回合前把 Provider 增量保留到控制器事件轨迹中。
+    #[test]
+    fn run_user_turn_streaming_records_provider_deltas_before_finalizing() {
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let adapter = MockStreamingProviderAdapter::new(vec![(
+                vec![
+                    ProviderTurnDelta::Thinking {
+                        delta: String::from("先读取文件。"),
+                    },
+                    ProviderTurnDelta::Output {
+                        delta: String::from("已完成分析。"),
+                    },
+                ],
+                ProviderTurnResponse {
+                    assistant_text: String::from("已完成分析。"),
+                    assistant_reasoning: String::from("先读取文件。"),
+                    provider_message_id: Some(String::from("resp-stream-1")),
+                    tool_calls: Vec::new(),
+                    continuation: Some(ProviderContinuation {
+                        provider_id: Some(String::from("mock-openai-streaming")),
+                        model_id: Some(String::from("mock-model")),
+                        last_provider_message_id: Some(String::from("resp-stream-1")),
+                        updated_at: Some(String::from("2001")),
+                    }),
+                },
+            )]);
+            let executor = MockToolExecutor::new();
+            let mut controller =
+                VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default());
+
+            let result = controller
+                .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "请先分析文件")
+                .await
+                .expect("run streaming user turn");
+
+            assert_eq!(result.provider_turns_executed, 1);
+            assert_eq!(result.tool_calls_processed, 0);
+            assert_eq!(controller.phase(), ControllerPhase::Completed);
+
+            let thinking_events = controller
+                .events()
+                .iter()
+                .filter(|event| matches!(event.kind, CoreEventKind::Thinking))
+                .collect::<Vec<_>>();
+            let output_events = controller
+                .events()
+                .iter()
+                .filter(|event| matches!(event.kind, CoreEventKind::Output))
+                .collect::<Vec<_>>();
+
+            assert_eq!(thinking_events.len(), 1);
+            assert_eq!(thinking_events[0].body, "先读取文件。");
+            assert_eq!(output_events.len(), 1);
+            assert_eq!(output_events[0].body, "已完成分析。");
+            assert!(controller.events().iter().any(|event| {
+                matches!(event.kind, CoreEventKind::Final)
+                    && event.body.contains("Provider 回合数为 1")
+            }));
+            assert!(matches!(
+                &controller.snapshot().messages[1].payload,
+                ConversationPayload::Assistant {
+                    text,
+                    reasoning,
+                    provider_message_id,
+                    tool_calls,
+                } if text == "已完成分析。"
+                    && reasoning == "先读取文件。"
+                    && provider_message_id.as_deref() == Some("resp-stream-1")
+                    && tool_calls.is_empty()
+            ));
         });
     }
 

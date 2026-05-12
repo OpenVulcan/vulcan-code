@@ -1,7 +1,7 @@
 //! Provider adapter traits owned by `vulcan-core`.
 //! `vulcan-core` 自有的 Provider 适配器 trait。
 
-use crate::types::{ControllerConfig, ConversationSnapshot, CoreError};
+use crate::types::{ControllerConfig, ConversationSnapshot, CoreError, ProviderTurnDelta};
 use async_trait::async_trait;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -36,4 +36,29 @@ pub trait VulcanProviderAdapter: Send + Sync {
     /// Sends one provider request and returns the raw provider response.
     /// 发送一份 Provider 请求并返回原始 Provider 响应。
     async fn execute_request(&self, request: Self::Request) -> Result<Self::Response, CoreError>;
+}
+
+/// Receives normalized provider-stream deltas while one request is still in flight.
+/// 在单次请求仍在执行期间接收规范化 Provider 流式增量。
+pub trait VulcanProviderDeltaSink: Send {
+    /// Pushes one provider delta into the current sink implementation.
+    /// 向当前 sink 实现推送一条 Provider 增量。
+    fn push_delta(&mut self, delta: ProviderTurnDelta);
+}
+
+/// Describes one provider adapter that can emit normalized stream deltas before returning the final turn response.
+/// 表示一个能够在返回最终回合响应前发出规范化流式增量的 Provider 适配器。
+#[async_trait]
+pub trait VulcanStreamingProviderAdapter:
+    VulcanProviderAdapter<Response = crate::types::ProviderTurnResponse>
+{
+    /// Sends one provider request, emits streaming deltas into the supplied sink, and then returns the normalized final turn response.
+    /// 发送一份 Provider 请求，将流式增量写入给定 sink，随后返回规范化的最终回合响应。
+    async fn execute_request_streaming<S>(
+        &self,
+        request: Self::Request,
+        sink: &mut S,
+    ) -> Result<Self::Response, CoreError>
+    where
+        S: VulcanProviderDeltaSink;
 }
