@@ -10,6 +10,10 @@ use crate::agent_runtime::provider_transport_turn_request::{
 };
 use futures_util::{Stream, StreamExt};
 use reqwest::header::HeaderMap;
+use rig::completion::{
+    CompletionModel, CompletionRequestBuilder, ToolDefinition as RigToolDefinition,
+};
+use rig::streaming::StreamingCompletionResponse;
 use std::fmt::Display;
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
@@ -75,6 +79,67 @@ where
     }
 
     Ok(())
+}
+
+/// Maps one low-level provider client build result into the normalized `vulcan-core` provider failure shape.
+/// 将单个低层 Provider 客户端构建结果映射成规范化的 `vulcan-core` Provider 失败形态。
+pub(crate) fn map_provider_client_build_result<T, E>(
+    provider_id: &str,
+    provider_label: &str,
+    result: Result<T, E>,
+) -> Result<T, VulcanCoreError>
+where
+    E: Display,
+{
+    let provider_label_prefix = format_provider_label_prefix(provider_label);
+    result.map_err(|error| VulcanCoreError::ProviderFailure {
+        provider_id: provider_id.to_string(),
+        message: format!("创建 {provider_label_prefix}客户端失败：{error}"),
+    })
+}
+
+/// Builds one shared streaming completion request builder so provider adapters only supply protocol-specific clients and labels.
+/// 构建一份共享流式 Completion 请求构建器，使各 Provider 适配器只需提供协议专用客户端与标签。
+pub(crate) fn build_streaming_completion_request_builder<M>(
+    model: &M,
+    request: OpenAiCompatibleCoreTurnRequest,
+    rig_tool_definitions: &[RigToolDefinition],
+) -> CompletionRequestBuilder<M>
+where
+    M: CompletionModel,
+{
+    let mut request_builder = model
+        .completion_request(request.current_prompt)
+        .preamble(request.snapshot.system_prompt.clone())
+        .messages(request.current_history)
+        .temperature_opt(request.snapshot.temperature)
+        .additional_params_opt(request.snapshot.additional_params.clone());
+
+    if !rig_tool_definitions.is_empty() {
+        request_builder = request_builder.tools(rig_tool_definitions.to_vec());
+    }
+
+    request_builder
+}
+
+/// Starts one shared streaming completion request and normalizes provider-specific stream bootstrap failures.
+/// 启动一份共享流式 Completion 请求，并规范化 Provider 专用的流式启动失败。
+pub(crate) async fn start_streaming_completion_request<M>(
+    provider_id: &str,
+    provider_label: &str,
+    request_builder: CompletionRequestBuilder<M>,
+) -> Result<StreamingCompletionResponse<M::StreamingResponse>, VulcanCoreError>
+where
+    M: CompletionModel,
+{
+    let provider_label_prefix = format_provider_label_prefix(provider_label);
+    request_builder
+        .stream()
+        .await
+        .map_err(|error| VulcanCoreError::ProviderFailure {
+            provider_id: provider_id.to_string(),
+            message: format!("{provider_label_prefix}流式请求启动失败：{error}"),
+        })
 }
 
 /// Builds one standard host-controlled single-turn request from the canonical controller snapshot and forwards the structured snapshot immediately.

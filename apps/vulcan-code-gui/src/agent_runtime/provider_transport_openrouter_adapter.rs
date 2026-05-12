@@ -5,14 +5,15 @@ use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_deltas_from_assistant_content,
 };
 use crate::agent_runtime::provider_transport_adapter_support::{
-    build_standard_streaming_request, forward_streaming_provider_deltas,
-    unsupported_streaming_execute,
+    build_standard_streaming_request, build_streaming_completion_request_builder,
+    forward_streaming_provider_deltas, map_provider_client_build_result,
+    start_streaming_completion_request, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
-use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
+use rig::completion::ToolDefinition as RigToolDefinition;
 use rig::prelude::CompletionClient;
 use rig::providers::openrouter;
 use vulcan_core::provider::{
@@ -109,34 +110,23 @@ impl VulcanStreamingProviderAdapter for OpenRouterCoreStreamingAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
-        let client = openrouter::Client::builder()
-            .api_key(self.api_key.as_str())
-            .http_headers(self.request_headers.clone())
-            .build()
-            .map_err(|error| VulcanCoreError::ProviderFailure {
-                provider_id: self.provider_id.clone(),
-                message: format!("创建 OpenRouter 客户端失败：{error}"),
-            })?;
+        let client = map_provider_client_build_result(
+            self.provider_id.as_str(),
+            "OpenRouter",
+            openrouter::Client::builder()
+                .api_key(self.api_key.as_str())
+                .http_headers(self.request_headers.clone())
+                .build(),
+        )?;
         let model = client.completion_model(self.model_id.as_str());
-        let mut request_builder = model
-            .completion_request(request.current_prompt)
-            .preamble(request.snapshot.system_prompt.clone())
-            .messages(request.current_history)
-            .temperature_opt(request.snapshot.temperature)
-            .additional_params_opt(request.snapshot.additional_params.clone());
-
-        if !self.rig_tool_definitions.is_empty() {
-            request_builder = request_builder.tools(self.rig_tool_definitions.clone());
-        }
-
-        let mut stream =
-            request_builder
-                .stream()
-                .await
-                .map_err(|error| VulcanCoreError::ProviderFailure {
-                    provider_id: self.provider_id.clone(),
-                    message: format!("OpenRouter 流式请求启动失败：{error}"),
-                })?;
+        let request_builder =
+            build_streaming_completion_request_builder(&model, request, &self.rig_tool_definitions);
+        let mut stream = start_streaming_completion_request(
+            self.provider_id.as_str(),
+            "OpenRouter",
+            request_builder,
+        )
+        .await?;
 
         forward_streaming_provider_deltas(
             self.provider_id.as_str(),

@@ -5,15 +5,16 @@ use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_deltas_from_assistant_content,
 };
 use crate::agent_runtime::provider_transport_adapter_support::{
-    build_openai_responses_streaming_request, forward_streaming_provider_deltas,
-    unsupported_streaming_execute,
+    build_openai_responses_streaming_request, build_streaming_completion_request_builder,
+    forward_streaming_provider_deltas, map_provider_client_build_result,
+    start_streaming_completion_request, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use rig::client::CompletionClient;
-use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
+use rig::completion::ToolDefinition as RigToolDefinition;
 use rig::providers::openai;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -123,32 +124,20 @@ impl VulcanStreamingProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
             builder = builder.base_url(base_url);
         }
 
-        let client = builder
-            .build()
-            .map_err(|error| VulcanCoreError::ProviderFailure {
-                provider_id: self.provider_id.clone(),
-                message: format!("创建 OpenAI Responses 客户端失败：{error}"),
-            })?;
+        let client = map_provider_client_build_result(
+            self.provider_id.as_str(),
+            "OpenAI Responses",
+            builder.build(),
+        )?;
         let model = client.completion_model(self.model_id.as_str());
-        let mut request_builder = model
-            .completion_request(request.current_prompt)
-            .preamble(request.snapshot.system_prompt.clone())
-            .messages(request.current_history)
-            .temperature_opt(request.snapshot.temperature)
-            .additional_params_opt(request.snapshot.additional_params.clone());
-
-        if !self.rig_tool_definitions.is_empty() {
-            request_builder = request_builder.tools(self.rig_tool_definitions.clone());
-        }
-
-        let mut stream =
-            request_builder
-                .stream()
-                .await
-                .map_err(|error| VulcanCoreError::ProviderFailure {
-                    provider_id: self.provider_id.clone(),
-                    message: format!("OpenAI Responses 流式请求启动失败：{error}"),
-                })?;
+        let request_builder =
+            build_streaming_completion_request_builder(&model, request, &self.rig_tool_definitions);
+        let mut stream = start_streaming_completion_request(
+            self.provider_id.as_str(),
+            "OpenAI Responses",
+            request_builder,
+        )
+        .await?;
 
         forward_streaming_provider_deltas(
             self.provider_id.as_str(),
