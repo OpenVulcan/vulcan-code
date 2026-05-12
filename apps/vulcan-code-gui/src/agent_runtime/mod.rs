@@ -10,6 +10,7 @@ pub mod provider_protocol_bridge;
 pub mod provider_request_bridge;
 pub mod provider_stream;
 pub mod provider_transport;
+pub mod provider_transport_anthropic_openrouter;
 pub mod provider_transport_common;
 pub mod provider_transport_openai;
 pub mod runtime;

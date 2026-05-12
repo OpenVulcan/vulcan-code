@@ -6,15 +6,20 @@ use crate::agent_runtime::provider_protocol_bridge::{
     core_provider_turn_deltas_from_assistant_content,
     inject_previous_response_id_into_additional_params,
 };
+use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport_common::{
     OpenAiCompatibleCoreTurnRequest, ProviderLiveDeltaSender, build_host_controlled_turn_request,
+    execute_host_controlled_stream, prepare_host_tool_runtime_context,
 };
+use crate::model::SessionId;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use rig::client::CompletionClient;
 use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
+use rig::message::Message as RigMessage;
 use rig::providers::openai;
+use serde_json::Value;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
 };
@@ -22,7 +27,7 @@ use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     CoreError as VulcanCoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
-use vulcan_tools_manager::ResolvedToolDefinition;
+use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Streaming OpenAI-compatible provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
 /// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 OpenAI 兼容 Provider 适配器。
@@ -334,4 +339,118 @@ impl VulcanStreamingProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
             &stream.choice,
         ))
     }
+}
+
+/// Executes one host-controlled OpenAI-compatible prompt through `vulcan-core` and streams normalized deltas.
+/// 通过 `vulcan-core` 执行一次宿主控制的 OpenAI 兼容提示词调用，并流式返回规范化增量。
+pub(crate) fn execute_openai_compatible_stream(
+    provider_id: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+    model_id: &str,
+    system_preamble: &str,
+    prompt: &str,
+    _request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
+    temperature: Option<f64>,
+    max_turns: usize,
+    headers: &HeaderMap,
+    tools_manager: VulcanToolsManager,
+    session_id: SessionId,
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    additional_params: Option<Value>,
+) -> ProviderDeltaStream {
+    let provider_id = provider_id.to_string();
+    let api_key = api_key.to_string();
+    let base_url = base_url
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string);
+    let model_id = model_id.to_string();
+    let prompt = prompt.to_string();
+    let system_preamble = system_preamble.to_string();
+    let request_headers = headers.clone();
+    let prepared_tool_context =
+        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
+
+    execute_host_controlled_stream(
+        CoreControllerConfig {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            system_prompt: system_preamble,
+            temperature,
+            max_turns,
+            additional_params: additional_params.clone(),
+        },
+        core_snapshot,
+        prompt,
+        move |live_sender| OpenAiCompatibleCoreStreamingAdapter {
+            provider_id: provider_id.clone(),
+            api_key,
+            base_url,
+            model_id,
+            request_headers,
+            resolved_tools,
+            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
+            live_sender,
+        },
+        prepared_tool_context.runtime_bridge,
+        "OpenAI 兼容",
+    )
+}
+
+/// Executes one host-controlled OpenAI Responses prompt through `vulcan-core` and streams normalized deltas.
+/// 通过 `vulcan-core` 执行一次宿主控制的 OpenAI Responses 提示词调用，并流式返回规范化增量。
+pub(crate) fn execute_openai_responses_stream(
+    provider_id: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+    model_id: &str,
+    system_preamble: &str,
+    prompt: &str,
+    _request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
+    temperature: Option<f64>,
+    max_turns: usize,
+    headers: &HeaderMap,
+    tools_manager: VulcanToolsManager,
+    session_id: SessionId,
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    additional_params: Option<Value>,
+) -> ProviderDeltaStream {
+    let provider_id = provider_id.to_string();
+    let api_key = api_key.to_string();
+    let base_url = base_url
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string);
+    let model_id = model_id.to_string();
+    let prompt = prompt.to_string();
+    let system_preamble = system_preamble.to_string();
+    let request_headers = headers.clone();
+    let prepared_tool_context =
+        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
+
+    execute_host_controlled_stream(
+        CoreControllerConfig {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            system_prompt: system_preamble,
+            temperature,
+            max_turns,
+            additional_params: additional_params.clone(),
+        },
+        core_snapshot,
+        prompt,
+        move |live_sender| OpenAiResponsesCoreStreamingAdapter {
+            provider_id: provider_id.clone(),
+            api_key,
+            base_url,
+            model_id,
+            request_headers,
+            resolved_tools,
+            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
+            live_sender,
+        },
+        prepared_tool_context.runtime_bridge,
+        "OpenAI Responses",
+    )
 }
