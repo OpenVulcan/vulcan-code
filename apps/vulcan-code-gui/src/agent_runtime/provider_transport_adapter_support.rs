@@ -1,14 +1,24 @@
 //! Shared streaming adapter support helpers reused by provider-specific transport adapters.
 //! 供各 Provider 专用传输适配器复用的共享流式适配器支持辅助模块。
 
-use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_delta_to_runtime_delta;
+use crate::agent_runtime::provider_protocol_bridge::{
+    core_provider_turn_delta_to_runtime_delta, inject_previous_response_id_into_additional_params,
+};
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_turn_request::{
+    OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
+};
 use futures_util::{Stream, StreamExt};
+use reqwest::header::HeaderMap;
 use std::fmt::Display;
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
+    ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
+};
+use vulcan_core::types::{
     CoreError as VulcanCoreError, ProviderTurnDelta as CoreProviderTurnDelta,
 };
+use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Formats one provider label prefix so mixed English/Chinese runtime messages keep natural spacing automatically.
 /// 格式化单个 Provider 标签前缀，使中英混排运行时文案能够自动保持自然空格。
@@ -65,4 +75,57 @@ where
     }
 
     Ok(())
+}
+
+/// Builds one standard host-controlled single-turn request from the canonical controller snapshot and forwards the structured snapshot immediately.
+/// 根据规范控制器快照构建一份标准宿主控制单回合请求，并立即转发结构化快照。
+pub(crate) fn build_standard_streaming_request(
+    provider_id: &str,
+    model_id: &str,
+    request_label: &str,
+    snapshot: &CoreConversationSnapshot,
+    config: &CoreControllerConfig,
+    resolved_tools: &[ResolvedToolDefinition],
+    request_headers: &HeaderMap,
+    live_sender: &ProviderLiveDeltaSender,
+) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
+    build_host_controlled_turn_request(
+        provider_id,
+        model_id,
+        request_label,
+        snapshot,
+        config,
+        resolved_tools,
+        request_headers,
+        live_sender,
+        config.additional_params.clone(),
+    )
+}
+
+/// Builds one OpenAI Responses host-controlled single-turn request while injecting `previous_response_id` when the current continuation snapshot already carries one.
+/// 构建一份 OpenAI Responses 宿主控制单回合请求，并在当前 continuation 快照已经携带上游响应标识时注入 `previous_response_id`。
+pub(crate) fn build_openai_responses_streaming_request(
+    provider_id: &str,
+    model_id: &str,
+    snapshot: &CoreConversationSnapshot,
+    config: &CoreControllerConfig,
+    resolved_tools: &[ResolvedToolDefinition],
+    request_headers: &HeaderMap,
+    live_sender: &ProviderLiveDeltaSender,
+) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
+    let effective_additional_params = inject_previous_response_id_into_additional_params(
+        config.additional_params.clone(),
+        &snapshot.continuation,
+    );
+    build_host_controlled_turn_request(
+        provider_id,
+        model_id,
+        "OpenAI Responses",
+        snapshot,
+        config,
+        resolved_tools,
+        request_headers,
+        live_sender,
+        effective_additional_params,
+    )
 }

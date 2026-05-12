@@ -3,15 +3,13 @@
 
 use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_deltas_from_assistant_content,
-    inject_previous_response_id_into_additional_params,
 };
 use crate::agent_runtime::provider_transport_adapter_support::{
-    forward_streaming_provider_deltas, unsupported_streaming_execute,
+    build_openai_responses_streaming_request, forward_streaming_provider_deltas,
+    unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
-use crate::agent_runtime::provider_transport_turn_request::{
-    OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
-};
+use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use rig::client::CompletionClient;
@@ -80,20 +78,14 @@ impl VulcanProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
         snapshot: &CoreConversationSnapshot,
         config: &CoreControllerConfig,
     ) -> Result<Self::Request, VulcanCoreError> {
-        let effective_additional_params = inject_previous_response_id_into_additional_params(
-            config.additional_params.clone(),
-            &snapshot.continuation,
-        );
-        build_host_controlled_turn_request(
+        build_openai_responses_streaming_request(
             self.provider_id.as_str(),
             self.model_id.as_str(),
-            "OpenAI Responses",
             snapshot,
             config,
             &self.resolved_tools,
             &self.request_headers,
             &self.live_sender,
-            effective_additional_params,
         )
     }
 
