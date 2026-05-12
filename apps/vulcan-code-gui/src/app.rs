@@ -3750,6 +3750,7 @@ impl VulcanWorkbench {
                 self.prune_unmaterialized_sessions(Some(session_id));
                 self.selected_session = session_id;
                 self.hovered_task_session = Some(session_id);
+                self.sync_workspace_path_with_selected_session();
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
@@ -4420,10 +4421,13 @@ impl VulcanWorkbench {
                         .into_iter()
                         .map(session_message_into_execution_context)
                         .collect::<Vec<_>>();
+                    let workspace_path = self
+                        .workspace_path_for_session_id(session.id)
+                        .unwrap_or_else(|| self.workspace_path.clone());
                     ExecutionPreparationRequest {
                         session_id: session.id,
                         session_title: session.title.clone(),
-                        workspace_path: self.workspace_path.clone(),
+                        workspace_path,
                         prompt: current_prompt,
                         context_history,
                         execution_mode: self.execution_mode.to_string(),

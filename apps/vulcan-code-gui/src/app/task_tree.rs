@@ -13,6 +13,28 @@ impl VulcanWorkbench {
             .find(|session| session.id == session_id)
     }
 
+    /// Resolves the effective workspace path owned by one session through its backing project node.
+    /// 通过所属项目节点解析单个会话实际拥有的工作区路径。
+    pub(super) fn workspace_path_for_session_id(&self, session_id: SessionId) -> Option<String> {
+        let project_id = self.session_by_id(session_id)?.project_id.as_deref()?;
+        self.task_project_by_id(project_id)
+            .map(|project| project.path.clone())
+    }
+
+    /// Synchronizes the visible workspace-path field from one session when the session belongs to a project node.
+    /// 当某个会话归属于项目节点时，根据该会话同步界面上可见的工作区路径字段。
+    pub(super) fn sync_workspace_path_with_session(&mut self, session_id: SessionId) {
+        if let Some(project_path) = self.workspace_path_for_session_id(session_id) {
+            self.workspace_path = project_path;
+        }
+    }
+
+    /// Synchronizes the visible workspace-path field from the currently selected session.
+    /// 根据当前选中会话同步界面上可见的工作区路径字段。
+    pub(super) fn sync_workspace_path_with_selected_session(&mut self) {
+        self.sync_workspace_path_with_session(self.selected_session);
+    }
+
     /// Returns the project node matching one identifier, if it still exists.
     /// 返回与某个标识匹配的项目节点（如果仍然存在）。
     pub(super) fn task_project_by_id(&self, project_id: &str) -> Option<&TaskProjectSummary> {
@@ -278,6 +300,7 @@ impl VulcanWorkbench {
         self.hovered_task_project = Some(project_id.to_string());
         self.hovered_task_session = Some(session_id);
         self.suppress_task_session_hover = false;
+        self.sync_workspace_path_with_session(session_id);
         self.status_message =
             format!("已在项目 `{project_title}` 下创建新的空白对话草稿，等待首条真实输入。");
         self.push_activity(
@@ -369,6 +392,7 @@ impl VulcanWorkbench {
                 .map(|session| session.id)
                 .unwrap_or_default();
         }
+        self.sync_workspace_path_with_selected_session();
     }
 
     /// Builds one stable project identifier from a title and path while avoiding collisions in the current tree.
@@ -450,6 +474,7 @@ impl VulcanWorkbench {
         if let Some(restored_session_id) = restored_session_ids.first().copied() {
             self.selected_session = restored_session_id;
             self.hovered_task_session = Some(restored_session_id);
+            self.sync_workspace_path_with_session(restored_session_id);
         }
         self.ensure_valid_selected_session();
         self.status_message = format!("已恢复归档项目 `{restored_title}`。");
@@ -508,6 +533,7 @@ impl VulcanWorkbench {
         self.expanded_task_projects.insert(project_id);
         self.selected_session = session_id;
         self.hovered_task_session = Some(session_id);
+        self.sync_workspace_path_with_session(session_id);
         self.ensure_valid_selected_session();
         self.status_message = format!("已恢复归档会话 `{restored_title}`。");
         self.push_activity(
@@ -516,5 +542,46 @@ impl VulcanWorkbench {
             format!("归档会话 `{restored_title}` 已恢复到所属项目列表。"),
         );
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies creating a session under a later project also switches the effective workspace path to that project.
+    /// 验证在后续项目下创建会话时，会同步把生效工作区路径切换到该项目路径。
+    #[test]
+    fn create_task_project_session_switches_workspace_path_to_project() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        workbench.sessions.clear();
+        workbench.task_projects.clear();
+        workbench.workspace_path = String::from("D:/workspace/project-a");
+        workbench.task_projects.push(TaskProjectSummary::new(
+            "project-a",
+            "项目 A",
+            "D:/workspace/project-a",
+            false,
+            0,
+            Vec::new(),
+        ));
+        workbench.task_projects.push(TaskProjectSummary::new(
+            "project-b",
+            "项目 B",
+            "D:/workspace/project-b",
+            false,
+            1,
+            Vec::new(),
+        ));
+
+        workbench.create_task_project_session("project-b");
+
+        assert_eq!(workbench.workspace_path, "D:/workspace/project-b");
+        assert_eq!(
+            workbench
+                .session_by_id(workbench.selected_session)
+                .and_then(|session| session.project_id.as_deref()),
+            Some("project-b")
+        );
     }
 }
