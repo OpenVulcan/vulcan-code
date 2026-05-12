@@ -1,19 +1,8 @@
 //! Execution-preparation models and real provider execution helpers for the compose runtime foundation.
 //! compose 运行时基础架构使用的执行准备模型与真实 Provider 执行辅助逻辑。
 
-/// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
-/// 解析供转录卡片与工具结果关联使用的宿主可见工具调用标识。
-#[cfg(test)]
-fn resolve_host_visible_tool_call_id(tool_call: &rig::message::ToolCall) -> String {
-    tool_call
-        .call_id
-        .clone()
-        .unwrap_or_else(|| tool_call.id.clone())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::resolve_host_visible_tool_call_id;
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::execution_models::ExecutionPreparation;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
@@ -58,6 +47,15 @@ mod tests {
     use vulcan_tools_manager::{
         ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind,
     };
+
+    /// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
+    /// 解析供转录卡片与工具结果关联使用的宿主可见工具调用标识。
+    fn resolve_host_visible_tool_call_id(tool_call: &rig::message::ToolCall) -> String {
+        tool_call
+            .call_id
+            .clone()
+            .unwrap_or_else(|| tool_call.id.clone())
+    }
 
     /// Verifies synthetic reasoning preamble text is removed before streamed thinking content enters transcript storage.
     /// 验证合成推理前导语会在流式思考内容进入转录存储之前被移除。
