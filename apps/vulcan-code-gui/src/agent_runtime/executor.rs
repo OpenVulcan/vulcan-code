@@ -10,7 +10,8 @@ use crate::agent_runtime::rig_tools::{
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
-    SessionConversationMessage, SessionConversationPayload, SessionConversationState,
+    SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
+    SessionConversationState, SessionConversationToolCall, SessionProviderContinuationState,
     conversation_messages_to_rig_history, replace_messages_from_rig_history,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
@@ -25,6 +26,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use rig::OneOrMany;
 use rig::agent::{AgentBuilder, MultiTurnStreamItem};
 use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
 use rig::message::{
@@ -40,19 +42,25 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, path::Path, path::PathBuf};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use vulcan_core::controller::VulcanCoreController;
-use vulcan_core::provider::VulcanProviderAdapter;
-use vulcan_core::tool::VulcanToolExecutor;
+use vulcan_core::provider::{
+    VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
+};
+use vulcan_core::tool::{AllowAllToolPolicy, VulcanToolExecutor};
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationMessage as CoreConversationMessage,
-    ConversationPayload as CoreConversationPayload,
+    ConversationPayload as CoreConversationPayload, ConversationRecord as CoreConversationRecord,
     ConversationSnapshot as CoreConversationSnapshot,
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     CoreEvent as CoreControllerEvent, CoreEventKind as CoreControllerEventKind,
     ProviderContinuation as CoreProviderContinuation,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderRequestToolSchema as CoreProviderRequestToolSchema,
+    ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
     ToolInvocationRequest as CoreToolInvocationRequest,
+    ToolInvocationResult as CoreToolInvocationResult,
+    TranscriptRecordKind as CoreTranscriptRecordKind, TranscriptRole as CoreTranscriptRole,
 };
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
@@ -454,6 +462,9 @@ enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
+    /// Final canonical conversation state captured after one host-owned controller run finishes.
+    /// 在一次宿主自有控制器运行结束后捕获的最终规范会话状态。
+    FinalConversationState(SessionConversationState),
     /// Final rig history snapshot captured after the provider finishes one multi-turn run.
     /// 在 Provider 完成一次多轮运行后捕获的最终 rig 历史快照。
     FinalConversationHistory(Vec<RigMessage>),
@@ -593,6 +604,7 @@ pub fn stream_runtime_run(
             &system_preamble,
             request.prompt.trim(),
             request_history,
+            build_core_conversation_snapshot(&request.conversation_state),
             tools_manager,
             resolved_tools.definitions,
         );
@@ -666,6 +678,9 @@ pub fn stream_runtime_run(
                         session_id: request.session_id,
                         event,
                     };
+                }
+                Ok(ProviderStreamDelta::FinalConversationState(conversation_state)) => {
+                    final_conversation_state = Some(conversation_state);
                 }
                 Ok(ProviderStreamDelta::FinalConversationHistory(history)) => {
                     let mut conversation_state = SessionConversationState::default();
@@ -901,7 +916,11 @@ fn build_core_conversation_snapshot(
             .iter()
             .map(session_message_to_core_message)
             .collect(),
-        records: Vec::new(),
+        records: conversation_state
+            .records
+            .iter()
+            .map(session_record_to_core_record)
+            .collect(),
         continuation: session_continuation_to_core_continuation(&conversation_state.continuation),
     }
 }
@@ -972,6 +991,63 @@ fn session_continuation_to_core_continuation(
     }
 }
 
+/// Converts one session-owned durable record into the `vulcan-core` record shape so pre-existing transcript records survive controller round-trips.
+/// 将一条会话持有的持久化记录转换为 `vulcan-core` 记录形状，从而让既有转录记录在控制器往返过程中得以保留。
+fn session_record_to_core_record(record: &SessionConversationRecord) -> CoreConversationRecord {
+    CoreConversationRecord {
+        id: record.id.clone(),
+        role: session_record_to_core_role(record),
+        record_kind: session_record_to_core_record_kind(record.record_kind),
+        visible: record.visible,
+        title: record.title.clone(),
+        body: record.body.clone(),
+        metadata: record.metadata.clone(),
+        created_at: record.created_at.clone(),
+    }
+}
+
+/// Derives the `vulcan-core` record role from one GUI-owned durable record.
+/// 根据一条 GUI 持有的持久化记录推导 `vulcan-core` 记录角色。
+fn session_record_to_core_role(record: &SessionConversationRecord) -> CoreTranscriptRole {
+    match record.record_kind {
+        crate::model::SessionMessageRecordKind::ThinkingOutput => CoreTranscriptRole::Thinking,
+        crate::model::SessionMessageRecordKind::ToolCallOutput
+        | crate::model::SessionMessageRecordKind::ToolResultOutput => CoreTranscriptRole::Tool,
+        crate::model::SessionMessageRecordKind::SummaryOutput
+        | crate::model::SessionMessageRecordKind::CompactionSummary => CoreTranscriptRole::Summary,
+        crate::model::SessionMessageRecordKind::ExploreOutput => CoreTranscriptRole::Explore,
+        _ => match record.kind {
+            crate::model::SessionMessageKind::User => CoreTranscriptRole::User,
+            crate::model::SessionMessageKind::Assistant => CoreTranscriptRole::Assistant,
+            crate::model::SessionMessageKind::Error => CoreTranscriptRole::System,
+        },
+    }
+}
+
+/// Converts one GUI-owned durable record kind into the `vulcan-core` record-kind classification.
+/// 将一种 GUI 持有的持久化记录类型转换为 `vulcan-core` 记录类型分类。
+fn session_record_to_core_record_kind(
+    record_kind: crate::model::SessionMessageRecordKind,
+) -> CoreTranscriptRecordKind {
+    match record_kind {
+        crate::model::SessionMessageRecordKind::Transcript
+        | crate::model::SessionMessageRecordKind::AssistantOutput
+        | crate::model::SessionMessageRecordKind::ToolCallOutput
+        | crate::model::SessionMessageRecordKind::ToolResultOutput => {
+            CoreTranscriptRecordKind::Visible
+        }
+        crate::model::SessionMessageRecordKind::ThinkingOutput
+        | crate::model::SessionMessageRecordKind::TitleOutput
+        | crate::model::SessionMessageRecordKind::SummaryOutput => CoreTranscriptRecordKind::Hidden,
+        crate::model::SessionMessageRecordKind::ExploreOutput => {
+            CoreTranscriptRecordKind::ProjectionOnly
+        }
+        crate::model::SessionMessageRecordKind::CompactionSummary => {
+            CoreTranscriptRecordKind::Checkpoint
+        }
+    }
+}
+
 /// Converts one resolved host tool definition into the `vulcan-core` request-tool schema shape.
 /// 将一条已解析宿主工具定义转换为 `vulcan-core` 请求工具 schema 形状。
 fn resolved_tool_definition_to_core_tool_schema(
@@ -1038,6 +1114,219 @@ fn core_messages_to_provider_visible_history(
             }
         })
         .collect()
+}
+
+/// Converts one `vulcan-core` snapshot back into the GUI-owned canonical session state without dropping durable records or continuation data.
+/// 将一份 `vulcan-core` 快照转换回 GUI 持有的规范会话状态，同时不丢失持久化记录与 continuation 数据。
+fn core_snapshot_to_session_conversation_state(
+    snapshot: &CoreConversationSnapshot,
+) -> SessionConversationState {
+    SessionConversationState {
+        messages: snapshot
+            .messages
+            .iter()
+            .map(core_message_to_session_message)
+            .collect(),
+        records: snapshot
+            .records
+            .iter()
+            .map(core_record_to_session_record)
+            .collect(),
+        continuation: core_continuation_to_session_continuation(&snapshot.continuation),
+    }
+}
+
+/// Converts one `vulcan-core` message back into the GUI-owned canonical session message shape.
+/// 将一条 `vulcan-core` 消息转换回 GUI 持有的规范会话消息形状。
+fn core_message_to_session_message(
+    message: &CoreConversationMessage,
+) -> SessionConversationMessage {
+    let payload = match &message.payload {
+        CoreConversationPayload::UserText { text } => {
+            SessionConversationPayload::UserText { text: text.clone() }
+        }
+        CoreConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id,
+            tool_calls,
+        } => SessionConversationPayload::Assistant {
+            text: text.clone(),
+            reasoning: reasoning.clone(),
+            provider_message_id: provider_message_id.clone(),
+            tool_calls: tool_calls
+                .iter()
+                .map(core_tool_call_to_session_tool_call)
+                .collect(),
+        },
+        CoreConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => SessionConversationPayload::ToolResult {
+            tool_result_id: tool_result_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            text: text.clone(),
+        },
+    };
+
+    SessionConversationMessage {
+        id: message.id.clone(),
+        payload,
+    }
+}
+
+/// Converts one `vulcan-core` tool-call entry back into the GUI-owned canonical tool-call shape.
+/// 将一条 `vulcan-core` 工具调用项转换回 GUI 持有的规范工具调用形状。
+fn core_tool_call_to_session_tool_call(
+    tool_call: &CoreConversationToolCall,
+) -> SessionConversationToolCall {
+    SessionConversationToolCall {
+        id: tool_call.id.clone(),
+        tool_call_id: tool_call.tool_call_id.clone(),
+        tool_name: tool_call.tool_name.clone(),
+        arguments: tool_call.arguments.clone(),
+    }
+}
+
+/// Converts one `vulcan-core` durable record back into the GUI-owned record shape while preserving display metadata.
+/// 将一条 `vulcan-core` 持久化记录转换回 GUI 持有的记录形状，同时保留显示元数据。
+fn core_record_to_session_record(record: &CoreConversationRecord) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: record.id.clone(),
+        kind: core_record_to_session_message_kind(record),
+        record_kind: core_record_to_session_record_kind(record),
+        visible: record.visible,
+        title: record.title.clone(),
+        body: record.body.clone(),
+        metadata: record.metadata.clone(),
+        created_at: record.created_at.clone(),
+    }
+}
+
+/// Converts one `vulcan-core` continuation snapshot back into the GUI-owned continuation shape.
+/// 将一份 `vulcan-core` continuation 快照转换回 GUI 持有的 continuation 形状。
+fn core_continuation_to_session_continuation(
+    continuation: &CoreProviderContinuation,
+) -> SessionProviderContinuationState {
+    SessionProviderContinuationState {
+        provider_id: continuation.provider_id.clone(),
+        model_id: continuation.model_id.clone(),
+        last_provider_message_id: continuation.last_provider_message_id.clone(),
+        updated_at: continuation.updated_at.clone(),
+    }
+}
+
+/// Derives the GUI transcript message kind from one `vulcan-core` durable record role.
+/// 根据一条 `vulcan-core` 持久化记录角色推导 GUI 转录消息类型。
+fn core_record_to_session_message_kind(
+    record: &CoreConversationRecord,
+) -> crate::model::SessionMessageKind {
+    match record.role {
+        CoreTranscriptRole::User => crate::model::SessionMessageKind::User,
+        _ => crate::model::SessionMessageKind::Assistant,
+    }
+}
+
+/// Derives the GUI record kind from one `vulcan-core` durable record while preserving the semantic difference between tool calls, tool results, and hidden nodes.
+/// 根据一条 `vulcan-core` 持久化记录推导 GUI 记录类型，同时保留工具调用、工具结果与隐藏节点之间的语义差异。
+fn core_record_to_session_record_kind(
+    record: &CoreConversationRecord,
+) -> crate::model::SessionMessageRecordKind {
+    match (&record.role, &record.record_kind) {
+        (CoreTranscriptRole::Thinking, _) => crate::model::SessionMessageRecordKind::ThinkingOutput,
+        (CoreTranscriptRole::Summary, _) | (_, CoreTranscriptRecordKind::Checkpoint) => {
+            crate::model::SessionMessageRecordKind::CompactionSummary
+        }
+        (CoreTranscriptRole::Explore, _) | (_, CoreTranscriptRecordKind::ProjectionOnly) => {
+            crate::model::SessionMessageRecordKind::ExploreOutput
+        }
+        (CoreTranscriptRole::Tool, _) if core_record_is_tool_result(record) => {
+            crate::model::SessionMessageRecordKind::ToolResultOutput
+        }
+        (CoreTranscriptRole::Tool, _) => crate::model::SessionMessageRecordKind::ToolCallOutput,
+        (CoreTranscriptRole::Assistant, _) if record.visible => {
+            crate::model::SessionMessageRecordKind::AssistantOutput
+        }
+        (CoreTranscriptRole::Assistant, _) => crate::model::SessionMessageRecordKind::SummaryOutput,
+        _ => crate::model::SessionMessageRecordKind::Transcript,
+    }
+}
+
+/// Returns whether one `vulcan-core` tool record semantically represents a tool result rather than the original tool call request.
+/// 返回一条 `vulcan-core` 工具记录在语义上是否表示工具结果，而不是原始工具调用请求。
+fn core_record_is_tool_result(record: &CoreConversationRecord) -> bool {
+    record
+        .metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|object| object.contains_key("is_error") || object.contains_key("kind"))
+        .unwrap_or(false)
+}
+
+/// Converts one `vulcan-core` canonical message slice into rig history without replaying reasoning text back to the upstream provider.
+/// 将一段 `vulcan-core` 规范消息切片转换为 rig 历史，同时避免把思考文本反向回放给上游 Provider。
+fn core_messages_to_rig_history(messages: &[CoreConversationMessage]) -> Vec<RigMessage> {
+    messages.iter().map(core_message_to_rig_message).collect()
+}
+
+/// Converts one `vulcan-core` canonical message into one rig message visible to the upstream provider.
+/// 将一条 `vulcan-core` 规范消息转换为上游 Provider 可见的 rig 消息。
+fn core_message_to_rig_message(message: &CoreConversationMessage) -> RigMessage {
+    match &message.payload {
+        CoreConversationPayload::UserText { text } => RigMessage::user(text.clone()),
+        CoreConversationPayload::Assistant {
+            text,
+            reasoning: _,
+            provider_message_id,
+            tool_calls,
+        } => {
+            let mut contents = Vec::new();
+            if !text.is_empty() {
+                contents.push(RigAssistantContent::text(text.clone()));
+            }
+            contents.extend(
+                tool_calls
+                    .iter()
+                    .map(core_tool_call_to_rig_assistant_content),
+            );
+            let content = OneOrMany::many(contents)
+                .unwrap_or_else(|_| OneOrMany::one(RigAssistantContent::text(String::new())));
+            RigMessage::Assistant {
+                id: provider_message_id.clone(),
+                content,
+            }
+        }
+        CoreConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => RigMessage::tool_result_with_call_id(
+            tool_result_id.clone(),
+            tool_call_id.clone(),
+            text.clone(),
+        ),
+    }
+}
+
+/// Converts one `vulcan-core` tool-call entry into rig assistant content that keeps both the provider-emitted item identifier and the optional call identifier.
+/// 将一条 `vulcan-core` 工具调用项转换为 rig 助手内容，同时保留 Provider 产出的项标识与可选调用标识。
+fn core_tool_call_to_rig_assistant_content(
+    tool_call: &CoreConversationToolCall,
+) -> RigAssistantContent {
+    match &tool_call.tool_call_id {
+        Some(call_id) => RigAssistantContent::tool_call_with_call_id(
+            tool_call.id.clone(),
+            call_id.clone(),
+            tool_call.tool_name.clone(),
+            tool_call.arguments.clone(),
+        ),
+        None => RigAssistantContent::tool_call(
+            tool_call.id.clone(),
+            tool_call.tool_name.clone(),
+            tool_call.arguments.clone(),
+        ),
+    }
 }
 
 /// Resolves one provider blueprint into the JSON payload passed through `additional_params`.
@@ -1475,6 +1764,7 @@ fn execute_provider_prompt_stream(
     system_preamble: &str,
     prompt: &str,
     request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
@@ -1539,6 +1829,7 @@ fn execute_provider_prompt_stream(
             system_preamble,
             prompt,
             request_history,
+            core_snapshot,
             temperature,
             max_turns,
             &request_headers,
@@ -1630,7 +1921,8 @@ fn execute_openai_compatible_stream(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<RigMessage>,
+    _request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -1639,25 +1931,11 @@ fn execute_openai_compatible_stream(
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
-    let mut builder = openai::CompletionsClient::builder()
-        .api_key(api_key)
-        .http_headers(headers.clone());
-
-    if let Some(base_url) = base_url.filter(|value| !value.trim().is_empty()) {
-        builder = builder.base_url(base_url);
-    }
-
-    let client = match builder.build() {
-        Ok(client) => client,
-        Err(error) => {
-            return one_shot_provider_error_stream(format!(
-                "创建 OpenAI 兼容客户端失败：{}。",
-                error
-            ));
-        }
-    };
-    let model = client.completion_model(model_id);
     let provider_id = provider_id.to_string();
+    let api_key = api_key.to_string();
+    let base_url = base_url
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string);
     let model_id = model_id.to_string();
     let prompt = prompt.to_string();
     let system_preamble = system_preamble.to_string();
@@ -1673,160 +1951,333 @@ fn execute_openai_compatible_stream(
         .collect::<Vec<_>>();
 
     Box::pin(stream! {
-        let mut runtime_history = request_history;
-        runtime_history.push(RigMessage::user(prompt.clone()));
-        let turn_budget_label = if max_turns == DEFAULT_RUNTIME_MAX_TURNS_LIMIT {
-            String::from("未限制")
-        } else {
-            max_turns.to_string()
+        let (live_sender, mut live_receiver) =
+            unbounded_channel::<Result<ProviderStreamDelta, String>>();
+        let task_sender = live_sender.clone();
+        let mut controller = VulcanCoreController::new(
+            CoreControllerConfig {
+                provider_id: provider_id.clone(),
+                model_id: model_id.clone(),
+                system_prompt: system_preamble.clone(),
+                temperature,
+                max_turns,
+                additional_params: additional_params.clone(),
+            },
+            core_snapshot,
+        );
+        let provider_adapter = OpenAiCompatibleCoreStreamingAdapter {
+            provider_id: provider_id.clone(),
+            api_key,
+            base_url,
+            model_id,
+            request_headers,
+            resolved_tools,
+            rig_tool_definitions,
+            live_sender: live_sender.clone(),
         };
-        let mut provider_turns_executed = 0usize;
-
-        loop {
-            if provider_turns_executed >= max_turns {
-                yield Err(format!(
-                    "OpenAI 兼容流式执行失败：宿主工具循环已达到最大回合限制 `{}`，仍未收敛。",
-                    turn_budget_label
-                ));
-                break;
-            }
-            provider_turns_executed = provider_turns_executed.saturating_add(1);
-
-            let Some(current_prompt) = runtime_history.last().cloned() else {
-                yield Err(String::from(
-                    "OpenAI 兼容流式执行失败：宿主侧历史为空，无法构造下一轮请求。",
-                ));
-                break;
-            };
-            let current_history = runtime_history[..runtime_history.len().saturating_sub(1)].to_vec();
-            yield Ok(ProviderStreamDelta::RequestSnapshot(
-                build_openai_compatible_turn_request_snapshot(
-                    provider_id.as_str(),
-                    model_id.as_str(),
-                    system_preamble.as_str(),
-                    &current_history,
-                    &current_prompt,
-                    temperature,
-                    max_turns,
-                    &resolved_tools,
-                    &request_headers,
-                    additional_params.clone(),
-                ),
-            ));
-            let mut request_builder = model
-                .completion_request(current_prompt)
-                .preamble(system_preamble.clone())
-                .messages(current_history)
-                .temperature_opt(temperature)
-                .additional_params_opt(additional_params.clone());
-
-            if !rig_tool_definitions.is_empty() {
-                request_builder = request_builder.tools(rig_tool_definitions.clone());
-            }
-
-            let mut stream = match request_builder.stream().await {
-                Ok(stream) => stream,
+        let tool_executor = StreamingRuntimeToolExecutor {
+            runtime_bridge,
+            live_sender: live_sender.clone(),
+        };
+        let controller_prompt = prompt.clone();
+        let controller_task = tokio::spawn(async move {
+            let tool_policy = AllowAllToolPolicy;
+            match controller
+                .run_user_turn_streaming(
+                    &provider_adapter,
+                    &tool_executor,
+                    &tool_policy,
+                    controller_prompt,
+                )
+                .await
+            {
+                Ok(_) => {
+                    let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
+                        core_snapshot_to_session_conversation_state(controller.snapshot()),
+                    )));
+                }
                 Err(error) => {
-                    yield Err(format!("OpenAI 兼容流式执行失败：{}。", error));
-                    break;
-                }
-            };
-
-            let mut stream_failed = false;
-            while let Some(item) = stream.next().await {
-                match item {
-                    Ok(content) => {
-                        for delta in provider_deltas_from_assistant_content(content) {
-                            yield Ok(delta);
-                        }
-                    }
-                    Err(error) => {
-                        yield Err(format!("OpenAI 兼容流式执行失败：{}。", error));
-                        stream_failed = true;
-                        break;
-                    }
+                    let _ = task_sender.send(Err(format!(
+                        "OpenAI 兼容流式执行失败：{}。",
+                        error
+                    )));
                 }
             }
+        });
+        drop(live_sender);
 
-            if stream_failed {
-                break;
-            }
+        while let Some(item) = live_receiver.recv().await {
+            yield item;
+        }
 
-            let assistant_content = stream.choice.clone();
-            let pending_tool_calls = assistant_content
-                .iter()
-                .filter_map(|item| match item {
-                    RigAssistantContent::ToolCall(tool_call) => Some(tool_call.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            runtime_history.push(RigMessage::Assistant {
-                id: stream.message_id.clone(),
-                content: assistant_content,
-            });
-
-            if pending_tool_calls.is_empty() {
-                yield Ok(ProviderStreamDelta::FinalConversationHistory(runtime_history));
-                break;
-            }
-
-            for tool_call in pending_tool_calls {
-                let resolved_tool_call_id = resolve_host_visible_tool_call_id(&tool_call);
-                let tool_request = CoreToolInvocationRequest {
-                    tool_call_id: resolved_tool_call_id.clone(),
-                    tool_name: tool_call.function.name.clone(),
-                    arguments: tool_call.function.arguments.clone(),
-                };
-                let tool_result = match runtime_bridge.execute_tool(&tool_request).await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        yield Err(format!(
-                            "OpenAI 兼容工具 `{}` 执行失败：{}。",
-                            tool_request.tool_name,
-                            error
-                        ));
-                        stream_failed = true;
-                        break;
-                    }
-                };
-                let tool_result_id = build_host_tool_result_id(&resolved_tool_call_id);
-                let tool_result_message = RigMessage::tool_result_with_call_id(
-                    tool_result_id.clone(),
-                    Some(resolved_tool_call_id.clone()),
-                    tool_result.model_output.clone(),
-                );
-                let event_metadata = build_tool_result_runtime_metadata(
-                    &resolved_tool_call_id,
-                    &tool_result_id,
-                    tool_result.host_result.as_ref(),
-                );
-                let event_metadata = attach_tool_name_to_runtime_metadata(
-                    event_metadata,
-                    &tool_request.tool_name,
-                );
-                yield Ok(ProviderStreamDelta::RuntimeEvent(
-                    RuntimeEvent::new(
-                        RuntimeEventKind::ToolFinished,
-                        format!("工具返回 · {}", resolved_tool_call_id),
-                        format_host_tool_result_runtime_detail(
-                            &tool_result_id,
-                            &tool_result.model_output,
-                        ),
-                    )
-                    .with_metadata(event_metadata),
-                ));
-                runtime_history.push(tool_result_message);
-            }
-
-            if stream_failed {
-                break;
-            }
+        if let Err(error) = controller_task.await {
+            yield Err(format!(
+                "OpenAI 兼容控制器后台任务失败：{}。",
+                error
+            ));
         }
     })
 }
 
+/// Shared live-delta sender used to forward request snapshots, streaming chunks, and runtime events from the host-owned controller task.
+/// 用于从宿主自有控制器任务转发请求快照、流式分片与运行时事件的共享实时增量发送器。
+type ProviderLiveDeltaSender = UnboundedSender<Result<ProviderStreamDelta, String>>;
+
+/// Serializable OpenAI-compatible single-turn request owned by `vulcan-core` while preserving transport-only rig messages outside persistence.
+/// 由 `vulcan-core` 持有的可序列化 OpenAI 兼容单回合请求，同时在持久化之外保留仅供传输使用的 rig 消息。
+#[derive(Debug, Clone, serde::Serialize)]
+struct OpenAiCompatibleCoreTurnRequest {
+    /// Structured request snapshot persisted for inspection and debugging.
+    /// 被持久化用于检查与调试的结构化请求快照。
+    #[serde(flatten)]
+    snapshot: CoreProviderRequestSnapshot,
+    /// Provider-visible history converted into rig messages for the real transport layer.
+    /// 为真实传输层转换出的 Provider 可见 rig 历史消息。
+    #[serde(skip_serializing)]
+    current_history: Vec<RigMessage>,
+    /// Last outgoing prompt message converted into the rig shape expected by the transport layer.
+    /// 被转换为传输层所需 rig 形状的最后一条出站提示消息。
+    #[serde(skip_serializing)]
+    current_prompt: RigMessage,
+}
+
+/// Streaming OpenAI-compatible provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
+/// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 OpenAI 兼容 Provider 适配器。
+#[derive(Clone)]
+struct OpenAiCompatibleCoreStreamingAdapter {
+    /// Stable provider identifier attached to every request and continuation snapshot.
+    /// 附着到每次请求与 continuation 快照上的稳定 Provider 标识。
+    provider_id: String,
+    /// Resolved API key used by the low-level OpenAI-compatible transport.
+    /// 被低层 OpenAI 兼容传输层使用的已解析 API Key。
+    api_key: String,
+    /// Optional base URL override used by the low-level OpenAI-compatible transport.
+    /// 被低层 OpenAI 兼容传输层使用的可选基础地址覆盖值。
+    base_url: Option<String>,
+    /// Stable model identifier used by the low-level transport.
+    /// 被低层传输层使用的稳定模型标识。
+    model_id: String,
+    /// Fully resolved request headers attached to the transport request.
+    /// 附着到传输请求上的完整已解析请求头。
+    request_headers: HeaderMap,
+    /// Resolved host tool definitions exposed to the provider for the current turn.
+    /// 当前回合对 Provider 暴露的已解析宿主工具定义集合。
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    /// Low-level rig tool definitions mirrored from the resolved host tool definitions.
+    /// 从已解析宿主工具定义镜像而来的低层 rig 工具定义集合。
+    rig_tool_definitions: Vec<RigToolDefinition>,
+    /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
+    /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
+    live_sender: ProviderLiveDeltaSender,
+}
+
+#[async_trait]
+impl VulcanProviderAdapter for OpenAiCompatibleCoreStreamingAdapter {
+    type Request = OpenAiCompatibleCoreTurnRequest;
+    type Response = CoreProviderTurnResponse;
+
+    /// Returns the stable provider identifier used by the OpenAI-compatible streaming adapter.
+    /// 返回 OpenAI 兼容流式适配器使用的稳定 Provider 标识。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the stable model identifier used by the OpenAI-compatible streaming adapter.
+    /// 返回 OpenAI 兼容流式适配器使用的稳定模型标识。
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Builds one exact single-turn request from the canonical controller snapshot and forwards the structured snapshot immediately.
+    /// 根据规范控制器快照构建一份精确单回合请求，并立即转发结构化快照。
+    async fn build_request(
+        &self,
+        snapshot: &CoreConversationSnapshot,
+        config: &CoreControllerConfig,
+    ) -> Result<Self::Request, VulcanCoreError> {
+        let Some((current_prompt_message, current_history_messages)) =
+            snapshot.messages.split_last()
+        else {
+            return Err(VulcanCoreError::InvalidState {
+                message: String::from(
+                    "OpenAI 兼容单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
+                ),
+            });
+        };
+        let current_history = core_messages_to_rig_history(current_history_messages);
+        let current_prompt = core_message_to_rig_message(current_prompt_message);
+        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+            self.provider_id.as_str(),
+            self.model_id.as_str(),
+            config.system_prompt.as_str(),
+            &current_history,
+            &current_prompt,
+            config.temperature,
+            config.max_turns,
+            &self.resolved_tools,
+            &self.request_headers,
+            config.additional_params.clone(),
+        );
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RequestSnapshot(
+                request_snapshot.clone(),
+            )));
+
+        Ok(OpenAiCompatibleCoreTurnRequest {
+            snapshot: request_snapshot,
+            current_history,
+            current_prompt,
+        })
+    }
+
+    /// One-shot request execution is intentionally unsupported because the OpenAI-compatible host path is owned by the streaming adapter.
+    /// 单次非流式请求执行被刻意禁用，因为 OpenAI 兼容宿主链路完全由流式适配器持有。
+    async fn execute_request(
+        &self,
+        _request: Self::Request,
+    ) -> Result<Self::Response, VulcanCoreError> {
+        Err(VulcanCoreError::InvalidState {
+            message: String::from(
+                "OpenAI 兼容流式适配器不支持非流式 execute_request 调用，请改用 execute_request_streaming。",
+            ),
+        })
+    }
+}
+
+#[async_trait]
+impl VulcanStreamingProviderAdapter for OpenAiCompatibleCoreStreamingAdapter {
+    /// Executes one exact OpenAI-compatible transport turn, forwards normalized stream deltas live, and returns the normalized final turn response.
+    /// 执行一次精确的 OpenAI 兼容传输回合，实时转发规范化流式增量，并返回规范化后的最终回合响应。
+    async fn execute_request_streaming<S>(
+        &self,
+        request: OpenAiCompatibleCoreTurnRequest,
+        sink: &mut S,
+    ) -> Result<Self::Response, VulcanCoreError>
+    where
+        S: VulcanProviderDeltaSink,
+    {
+        let mut builder = openai::CompletionsClient::builder()
+            .api_key(self.api_key.as_str())
+            .http_headers(self.request_headers.clone());
+
+        if let Some(base_url) = self
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            builder = builder.base_url(base_url);
+        }
+
+        let client = builder
+            .build()
+            .map_err(|error| VulcanCoreError::ProviderFailure {
+                provider_id: self.provider_id.clone(),
+                message: format!("创建 OpenAI 兼容客户端失败：{error}"),
+            })?;
+        let model = client.completion_model(self.model_id.as_str());
+        let mut request_builder = model
+            .completion_request(request.current_prompt)
+            .preamble(request.snapshot.system_prompt.clone())
+            .messages(request.current_history)
+            .temperature_opt(request.snapshot.temperature)
+            .additional_params_opt(request.snapshot.additional_params.clone());
+
+        if !self.rig_tool_definitions.is_empty() {
+            request_builder = request_builder.tools(self.rig_tool_definitions.clone());
+        }
+
+        let mut stream =
+            request_builder
+                .stream()
+                .await
+                .map_err(|error| VulcanCoreError::ProviderFailure {
+                    provider_id: self.provider_id.clone(),
+                    message: format!("OpenAI 兼容流式请求启动失败：{error}"),
+                })?;
+
+        while let Some(item) = stream.next().await {
+            let content = item.map_err(|error| VulcanCoreError::ProviderFailure {
+                provider_id: self.provider_id.clone(),
+                message: format!("OpenAI 兼容流式执行失败：{error}"),
+            })?;
+            for delta in core_provider_turn_deltas_from_assistant_content(content) {
+                sink.push_delta(delta.clone());
+                let _ = self
+                    .live_sender
+                    .send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
+            }
+        }
+
+        Ok(build_openai_compatible_turn_response(
+            self.provider_id.as_str(),
+            self.model_id.as_str(),
+            stream.message_id.clone(),
+            &stream.choice,
+        ))
+    }
+}
+
+/// Streaming tool executor that forwards host-side tool boundary events live while delegating the real tool invocation to the shared bridge.
+/// 在把真实工具调用委派给共享桥接层的同时，实时转发宿主侧工具边界事件的流式工具执行器。
+#[derive(Clone)]
+struct StreamingRuntimeToolExecutor {
+    /// Shared host-managed bridge that owns the real tool dispatch and metadata normalization.
+    /// 持有真实工具调度与元数据规范化能力的共享宿主管理桥接层。
+    runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
+    /// Live sender used to forward tool boundary runtime events into the GUI stream.
+    /// 用于把工具边界运行时事件转发进图形界面流中的实时发送器。
+    live_sender: ProviderLiveDeltaSender,
+}
+
+#[async_trait]
+impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
+    /// Executes one host-managed tool request, forwards start and finish runtime events, and returns the normalized tool result to the controller.
+    /// 执行一次宿主管理工具请求，转发开始与完成运行时事件，并将规范化工具结果返回给控制器。
+    async fn execute_tool(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
+        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+            RuntimeEvent::new(
+                RuntimeEventKind::ToolStarted,
+                format!(
+                    "工具调用 · {} · {}",
+                    request.tool_call_id, request.tool_name
+                ),
+                format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
+            )
+            .with_metadata(Some(json!({
+                "tool_call_id": request.tool_call_id,
+                "tool_name": request.tool_name,
+                "arguments": request.arguments,
+            }))),
+        )));
+        let result = self.runtime_bridge.execute_tool(request).await?;
+        let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
+        let event_metadata = attach_tool_name_to_runtime_metadata(
+            build_tool_result_runtime_metadata(
+                &request.tool_call_id,
+                &tool_result_id,
+                result.host_result.as_ref(),
+            ),
+            &request.tool_name,
+        );
+        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+            RuntimeEvent::new(
+                RuntimeEventKind::ToolFinished,
+                format!("工具返回 · {}", request.tool_call_id),
+                format_host_tool_result_runtime_detail(&tool_result_id, &result.model_output),
+            )
+            .with_metadata(event_metadata),
+        )));
+        Ok(result)
+    }
+}
+
 /// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
 /// 解析供转录卡片与工具结果关联使用的宿主可见工具调用标识。
+#[cfg(test)]
 fn resolve_host_visible_tool_call_id(tool_call: &rig::message::ToolCall) -> String {
     tool_call
         .call_id
@@ -2111,6 +2562,103 @@ fn provider_deltas_from_assistant_content<R>(
         }
         StreamedAssistantContent::ToolCallDelta { .. } => Vec::new(),
         StreamedAssistantContent::Final(_) => Vec::new(),
+    }
+}
+
+/// Converts one assistant streaming content chunk into zero or more `vulcan-core` provider-turn deltas while intentionally ignoring tool-boundary presentation details.
+/// 将一条助手流式内容块转换为零条或多条 `vulcan-core` Provider 回合增量，并刻意忽略工具边界展示细节。
+fn core_provider_turn_deltas_from_assistant_content<R>(
+    content: StreamedAssistantContent<R>,
+) -> Vec<CoreProviderTurnDelta> {
+    match content {
+        StreamedAssistantContent::Text(text) => {
+            if text.text.is_empty() {
+                Vec::new()
+            } else {
+                vec![CoreProviderTurnDelta::Output { delta: text.text }]
+            }
+        }
+        StreamedAssistantContent::Reasoning(reasoning) => {
+            let flattened = flatten_reasoning_content(&reasoning.content);
+            if flattened.is_empty() {
+                Vec::new()
+            } else {
+                vec![CoreProviderTurnDelta::Thinking { delta: flattened }]
+            }
+        }
+        StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+            if reasoning.is_empty() {
+                Vec::new()
+            } else {
+                vec![CoreProviderTurnDelta::Thinking { delta: reasoning }]
+            }
+        }
+        StreamedAssistantContent::ToolCall { .. }
+        | StreamedAssistantContent::ToolCallDelta { .. }
+        | StreamedAssistantContent::Final(_) => Vec::new(),
+    }
+}
+
+/// Converts one `vulcan-core` provider-turn delta into the GUI-facing runtime delta shape without changing the semantic payload.
+/// 将一条 `vulcan-core` Provider 回合增量转换为面向 GUI 的运行时增量形状，同时不改变其语义载荷。
+fn core_provider_turn_delta_to_runtime_delta(delta: CoreProviderTurnDelta) -> ProviderStreamDelta {
+    match delta {
+        CoreProviderTurnDelta::Thinking { delta } => ProviderStreamDelta::Thinking(delta),
+        CoreProviderTurnDelta::Output { delta } => ProviderStreamDelta::Output(delta),
+    }
+}
+
+/// Builds one normalized `vulcan-core` single-turn response from the final rig assistant choice list and provider message identifier.
+/// 根据最终 rig 助手 choice 列表与 Provider 消息标识构建一份规范化的 `vulcan-core` 单回合响应。
+fn build_openai_compatible_turn_response(
+    provider_id: &str,
+    model_id: &str,
+    provider_message_id: Option<String>,
+    assistant_content: &OneOrMany<RigAssistantContent>,
+) -> CoreProviderTurnResponse {
+    let assistant_text = assistant_content
+        .iter()
+        .filter_map(|item| match item {
+            RigAssistantContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let assistant_reasoning = assistant_content
+        .iter()
+        .filter_map(|item| match item {
+            RigAssistantContent::Reasoning(reasoning) => {
+                let flattened = flatten_reasoning_content(&reasoning.content);
+                (!flattened.is_empty()).then_some(flattened)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tool_calls = assistant_content
+        .iter()
+        .filter_map(|item| match item {
+            RigAssistantContent::ToolCall(tool_call) => Some(CoreConversationToolCall {
+                id: tool_call.id.clone(),
+                tool_call_id: tool_call.call_id.clone(),
+                tool_name: tool_call.function.name.clone(),
+                arguments: tool_call.function.arguments.clone(),
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    CoreProviderTurnResponse {
+        assistant_text,
+        assistant_reasoning,
+        provider_message_id: provider_message_id.clone(),
+        tool_calls,
+        continuation: Some(CoreProviderContinuation {
+            provider_id: Some(provider_id.to_string()),
+            model_id: Some(model_id.to_string()),
+            last_provider_message_id: provider_message_id,
+            updated_at: Some(current_unix_millis_text()),
+        }),
     }
 }
 
@@ -2634,18 +3182,21 @@ fn current_unix_millis_text() -> String {
 mod tests {
     use super::{
         DEFAULT_RUNTIME_MAX_TURNS_LIMIT, ExecutionPreparation, SyntheticThinkingPreambleState,
-        attach_tool_name_to_runtime_metadata, build_core_provider_request_snapshot,
-        build_host_tool_result_id, build_openai_compatible_turn_request_snapshot,
-        build_provider_request_preview_markdown, build_runtime_system_preamble,
-        classify_synthetic_thinking_preamble, normalize_streamed_thinking_output,
-        resolve_host_visible_tool_call_id, resolve_runtime_default_max_turns_limit,
-        resolve_runtime_max_turns,
+        attach_tool_name_to_runtime_metadata, build_core_conversation_snapshot,
+        build_core_provider_request_snapshot, build_host_tool_result_id,
+        build_openai_compatible_turn_request_snapshot, build_provider_request_preview_markdown,
+        build_runtime_system_preamble, classify_synthetic_thinking_preamble,
+        core_messages_to_rig_history, core_snapshot_to_session_conversation_state,
+        normalize_streamed_thinking_output, resolve_host_visible_tool_call_id,
+        resolve_runtime_default_max_turns_limit, resolve_runtime_max_turns,
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::conversation_protocol::{
-        SessionConversationMessage, SessionConversationPayload, SessionConversationState,
+        SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
+        SessionConversationState, SessionConversationToolCall, SessionProviderContinuationState,
     };
+    use crate::model::{SessionMessageKind, SessionMessageRecordKind};
     use crate::provider_config::ProviderRuntimeKind;
     use rig::message::Message as RigMessage;
     use rig::message::ToolCall as RigToolCall;
@@ -2925,6 +3476,149 @@ mod tests {
                 "user-agent": "vulcancode/test",
                 "x-trace-id": "trace-1"
             }))
+        );
+    }
+
+    /// Verifies `vulcan-core` snapshot round-trips preserve pre-existing durable records, metadata, and continuation state.
+    /// 验证 `vulcan-core` 快照往返过程会保留既有持久化记录、元数据与 continuation 状态。
+    #[test]
+    fn core_snapshot_round_trip_preserves_records_and_continuation() {
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("user-1"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("请分析这个项目"),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("assistant-1"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("我先读取配置文件。"),
+                        reasoning: String::from("先定位入口再读取配置。"),
+                        provider_message_id: Some(String::from("resp-1")),
+                        tool_calls: vec![SessionConversationToolCall {
+                            id: String::from("tool-1"),
+                            tool_call_id: Some(String::from("call-1")),
+                            tool_name: String::from("read_file"),
+                            arguments: json!({ "path": "Cargo.toml" }),
+                        }],
+                    },
+                },
+            ],
+            records: vec![
+                SessionConversationRecord {
+                    id: String::from("record-user"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户输入"),
+                    body: String::from("请分析这个项目"),
+                    metadata: None,
+                    created_at: String::from("100"),
+                },
+                SessionConversationRecord {
+                    id: String::from("record-tool-call"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolCallOutput,
+                    visible: true,
+                    title: String::from("调用 read_file 工具"),
+                    body: String::from("{\"path\":\"Cargo.toml\"}"),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-1",
+                        "tool_name": "read_file",
+                        "arguments": { "path": "Cargo.toml" }
+                    })),
+                    created_at: String::from("101"),
+                },
+                SessionConversationRecord {
+                    id: String::from("record-tool-result"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolResultOutput,
+                    visible: true,
+                    title: String::from("调用 read_file 工具"),
+                    body: String::from("name = \"vulcan-code\""),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-1",
+                        "tool_name": "read_file",
+                        "kind": "file_read"
+                    })),
+                    created_at: String::from("102"),
+                },
+            ],
+            continuation: SessionProviderContinuationState {
+                provider_id: Some(String::from("openai-compatible")),
+                model_id: Some(String::from("gpt-test")),
+                last_provider_message_id: Some(String::from("resp-1")),
+                updated_at: Some(String::from("123")),
+            },
+        };
+
+        let snapshot = build_core_conversation_snapshot(&conversation_state);
+        let rebuilt_state = core_snapshot_to_session_conversation_state(&snapshot);
+
+        assert_eq!(rebuilt_state.records.len(), 3);
+        assert_eq!(
+            rebuilt_state.records[1].record_kind,
+            SessionMessageRecordKind::ToolCallOutput
+        );
+        assert_eq!(
+            rebuilt_state.records[2].record_kind,
+            SessionMessageRecordKind::ToolResultOutput
+        );
+        assert_eq!(
+            rebuilt_state.records[2].metadata,
+            conversation_state.records[2].metadata
+        );
+        assert_eq!(
+            rebuilt_state
+                .continuation
+                .last_provider_message_id
+                .as_deref(),
+            Some("resp-1")
+        );
+    }
+
+    /// Verifies `vulcan-core` messages projected back into rig history preserve tool calls while still excluding reasoning replay.
+    /// 验证 `vulcan-core` 消息投影回 rig 历史时会保留工具调用，同时仍然排除思考回放。
+    #[test]
+    fn core_messages_to_rig_history_preserve_tool_calls_without_reasoning_replay() {
+        let messages = vec![CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("我先读取文件。"),
+                reasoning: String::from("这段思考不应回放。"),
+                provider_message_id: Some(String::from("resp-1")),
+                tool_calls: vec![vulcan_core::types::ConversationToolCall {
+                    id: String::from("tool-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    tool_name: String::from("read_file"),
+                    arguments: json!({ "path": "src/main.rs" }),
+                }],
+            },
+        }];
+
+        let history = core_messages_to_rig_history(&messages);
+        let [RigMessage::Assistant { id, content }] = history.as_slice() else {
+            panic!("history should contain one assistant message");
+        };
+
+        assert_eq!(id.as_deref(), Some("resp-1"));
+        assert!(content.iter().any(|item| matches!(
+            item,
+            rig::message::AssistantContent::Text(text) if text.text == "我先读取文件。"
+        )));
+        assert!(content.iter().any(|item| matches!(
+            item,
+            rig::message::AssistantContent::ToolCall(tool_call)
+                if tool_call.id == "tool-1"
+                && tool_call.call_id.as_deref() == Some("call-1")
+                && tool_call.function.name == "read_file"
+        )));
+        assert!(
+            !content
+                .iter()
+                .any(|item| matches!(item, rig::message::AssistantContent::Reasoning(_)))
         );
     }
 
