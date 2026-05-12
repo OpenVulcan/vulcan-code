@@ -14,8 +14,7 @@ use crate::agent_runtime::provider_request_bridge::{
 };
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::provider_transport::{
-    execute_anthropic_stream, execute_openai_compatible_stream, execute_openai_responses_stream,
-    execute_openrouter_stream,
+    ProviderTransportExecutionRequest, execute_provider_transport_stream,
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
@@ -24,9 +23,7 @@ use crate::conversation_protocol::{
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::model::SessionId;
-use crate::provider_config::{
-    PersistedProviderOptions, ProviderConfigurationFile, ProviderRuntimeKind,
-};
+use crate::provider_config::{PersistedProviderOptions, ProviderConfigurationFile};
 use crate::runtime_assets;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use async_stream::stream;
@@ -1014,91 +1011,25 @@ fn execute_provider_prompt_stream(
     };
     let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
 
-    match preparation.model_blueprint.runtime_kind {
-        ProviderRuntimeKind::OpenAi => execute_openai_responses_stream(
-            &preparation.model_blueprint.provider_id,
-            &api_key,
-            base_url,
-            model_id,
-            system_preamble,
-            prompt,
-            request_history,
-            core_snapshot,
-            temperature,
-            max_turns,
-            &request_headers,
-            tools_manager,
-            preparation.session_id,
-            resolved_tools,
-            additional_params,
-        ),
-        ProviderRuntimeKind::OpenAiCompatible
-        | ProviderRuntimeKind::XAi
-        | ProviderRuntimeKind::Mistral
-        | ProviderRuntimeKind::Groq
-        | ProviderRuntimeKind::TogetherAi
-        | ProviderRuntimeKind::Perplexity => execute_openai_compatible_stream(
-            &preparation.model_blueprint.provider_id,
-            &api_key,
-            base_url,
-            model_id,
-            system_preamble,
-            prompt,
-            request_history,
-            core_snapshot,
-            temperature,
-            max_turns,
-            &request_headers,
-            tools_manager,
-            preparation.session_id,
-            resolved_tools,
-            additional_params,
-        ),
-        ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
-            &preparation.model_blueprint.provider_id,
-            &api_key,
-            model_id,
-            system_preamble,
-            prompt,
-            request_history,
-            core_snapshot,
-            temperature,
-            max_turns,
-            &request_headers,
-            tools_manager,
-            preparation.session_id,
-            resolved_tools,
-            additional_params,
-        ),
-        ProviderRuntimeKind::Anthropic => execute_anthropic_stream(
-            &preparation.model_blueprint.provider_id,
-            &api_key,
-            base_url,
-            model_id,
-            system_preamble,
-            prompt,
-            request_history,
-            core_snapshot,
-            temperature,
-            max_turns,
-            &request_headers,
-            tools_manager,
-            preparation.session_id,
-            resolved_tools,
-            additional_params,
-        ),
-        ProviderRuntimeKind::AzureOpenAi
-        | ProviderRuntimeKind::GoogleGemini
-        | ProviderRuntimeKind::Cohere => {
-            let runtime_label = preparation.model_blueprint.runtime_label.clone();
-            Box::pin(stream! {
-                yield Err(format!(
-                    "当前阶段尚未接通 `{}` 的真实流式执行链路，请优先选择 OpenAI 兼容接口、百炼 Coding Plan、OpenRouter 或 Anthropic。",
-                    runtime_label
-                ));
-            })
-        }
-    }
+    execute_provider_transport_stream(ProviderTransportExecutionRequest {
+        runtime_kind: preparation.model_blueprint.runtime_kind,
+        provider_id: preparation.model_blueprint.provider_id.clone(),
+        runtime_label: preparation.model_blueprint.runtime_label.clone(),
+        api_key,
+        base_url: base_url.map(ToString::to_string),
+        model_id: model_id.to_string(),
+        system_preamble: system_preamble.to_string(),
+        prompt: prompt.to_string(),
+        request_history,
+        core_snapshot,
+        temperature,
+        max_turns,
+        headers: request_headers,
+        tools_manager,
+        session_id: preparation.session_id,
+        resolved_tools,
+        additional_params,
+    })
 }
 
 /// Resolves one optional max-turn override for multi-turn tool-calling providers.
