@@ -12,14 +12,13 @@ use crate::agent_runtime::provider_request_bridge::{
     build_core_conversation_snapshot, core_messages_to_provider_visible_history,
     resolved_tool_definition_to_core_tool_schema, serialize_provider_request_headers,
 };
+use crate::agent_runtime::provider_runtime_dispatch::{
+    DEFAULT_RUNTIME_MAX_TURNS_LIMIT, execute_provider_prompt_stream,
+};
 use crate::agent_runtime::provider_runtime_inputs::{
-    build_provider_request_headers, one_shot_provider_error_stream,
-    resolve_provider_additional_params, resolve_provider_options,
+    build_provider_request_headers, resolve_provider_additional_params,
 };
-use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
-use crate::agent_runtime::provider_transport::{
-    build_provider_transport_execution_request, execute_provider_transport_stream,
-};
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
     SessionConversationState, conversation_messages_to_rig_history,
@@ -33,7 +32,6 @@ use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
-use rig::message::Message as RigMessage;
 use serde_json::{Value, json};
 use std::{fs, path::Path, path::PathBuf};
 use vulcan_core::controller::VulcanCoreController;
@@ -47,7 +45,7 @@ use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderRequestToolSchema as CoreProviderRequestToolSchema,
 };
-use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
+use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Relative resource directory name that stores provider base system prompts.
 /// 存放 Provider 基础系统提示词的相对资源目录名称。
@@ -964,67 +962,6 @@ fn render_json_code_fence(value: &Value) -> String {
     format!("````json\n{}\n````", pretty)
 }
 
-/// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
-/// 针对当前选中的运行时族执行一次 Provider 提示词调用，并返回增量流。
-fn execute_provider_prompt_stream(
-    config: &ProviderConfigurationFile,
-    preparation: &ExecutionPreparation,
-    active_agent: Option<&RuntimeAgentDefinition>,
-    system_preamble: &str,
-    prompt: &str,
-    request_history: Vec<RigMessage>,
-    core_snapshot: CoreConversationSnapshot,
-    tools_manager: VulcanToolsManager,
-    resolved_tools: Vec<ResolvedToolDefinition>,
-) -> ProviderDeltaStream {
-    let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
-        Ok(options) => options,
-        Err(error) => return one_shot_provider_error_stream(error),
-    };
-    let api_key = match options.resolved_api_key() {
-        Ok(Some(api_key)) => api_key,
-        Ok(None) => {
-            return one_shot_provider_error_stream(format!(
-                "供应商 `{}` 当前缺少可用 API Key，无法启动真实执行。",
-                preparation.model_blueprint.provider_name
-            ));
-        }
-        Err(error) => return one_shot_provider_error_stream(error),
-    };
-    let temperature = active_agent
-        .and_then(|agent| agent.temperature)
-        .or(preparation.temperature)
-        .map(|value| value.clamp(0.0, 2.0) as f64);
-    let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
-    let model_id = preparation.model_blueprint.model_id.as_str();
-    let base_url = preparation.model_blueprint.base_url.as_deref();
-    let request_headers = match build_provider_request_headers(&preparation.model_blueprint) {
-        Ok(headers) => headers,
-        Err(error) => return one_shot_provider_error_stream(error),
-    };
-    let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
-
-    execute_provider_transport_stream(build_provider_transport_execution_request(
-        preparation.model_blueprint.runtime_kind,
-        preparation.model_blueprint.provider_id.clone(),
-        preparation.model_blueprint.runtime_label.clone(),
-        api_key,
-        base_url,
-        model_id,
-        system_preamble,
-        prompt,
-        request_history,
-        core_snapshot,
-        temperature,
-        max_turns,
-        request_headers,
-        tools_manager,
-        preparation.session_id,
-        resolved_tools,
-        additional_params,
-    ))
-}
-
 /// Resolves one optional max-turn override for multi-turn tool-calling providers.
 /// 为支持多轮工具调用的 Provider 解析一份可选的最大轮次覆盖值。
 fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> Option<usize> {
@@ -1032,20 +969,6 @@ fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> O
         .and_then(|agent| agent.max_turns)
         .filter(|value| *value > 0)
         .map(|value| value as usize)
-}
-
-/// Returns one safe runtime default turn budget when no explicit override is configured.
-/// 在未配置显式覆盖时返回一个安全的运行时默认轮次预算。
-const DEFAULT_RUNTIME_MAX_TURNS_LIMIT: usize = usize::MAX - 1;
-
-/// Resolves one effective max-turn budget for the rig agent builder.
-/// 为 rig 代理构建器解析一个生效中的最大轮次预算。
-fn resolve_runtime_default_max_turns_limit(active_agent: Option<&RuntimeAgentDefinition>) -> usize {
-    active_agent
-        .and_then(|agent| agent.max_turns)
-        .filter(|value| *value > 0)
-        .map(|value| value as usize)
-        .unwrap_or(DEFAULT_RUNTIME_MAX_TURNS_LIMIT)
 }
 
 /// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
@@ -1244,11 +1167,10 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RUNTIME_MAX_TURNS_LIMIT, ExecutionPreparation, SyntheticThinkingPreambleState,
-        build_core_conversation_snapshot, build_core_provider_request_snapshot,
-        build_provider_request_preview_markdown, build_runtime_system_preamble,
-        classify_synthetic_thinking_preamble, normalize_streamed_thinking_output,
-        resolve_host_visible_tool_call_id, resolve_runtime_default_max_turns_limit,
+        ExecutionPreparation, SyntheticThinkingPreambleState, build_core_conversation_snapshot,
+        build_core_provider_request_snapshot, build_provider_request_preview_markdown,
+        build_runtime_system_preamble, classify_synthetic_thinking_preamble,
+        normalize_streamed_thinking_output, resolve_host_visible_tool_call_id,
         resolve_runtime_max_turns,
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
@@ -1260,6 +1182,9 @@ mod tests {
     use crate::agent_runtime::provider_request_bridge::{
         build_openai_compatible_turn_request_snapshot, core_messages_to_rig_history,
         core_snapshot_to_session_conversation_state,
+    };
+    use crate::agent_runtime::provider_runtime_dispatch::{
+        DEFAULT_RUNTIME_MAX_TURNS_LIMIT, resolve_runtime_default_max_turns_limit,
     };
     use crate::conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,

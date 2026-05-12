@@ -8,6 +8,7 @@ pub mod executor;
 pub mod provider;
 pub mod provider_protocol_bridge;
 pub mod provider_request_bridge;
+pub mod provider_runtime_dispatch;
 pub mod provider_runtime_inputs;
 pub mod provider_stream;
 pub mod provider_transport;
