@@ -60,7 +60,8 @@ use iced::widget::{
 };
 use iced::window;
 use iced::{
-    Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, keyboard, task,
+    Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, clipboard,
+    keyboard, task,
 };
 use iced_aw::ContextMenu;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
@@ -396,10 +397,17 @@ const COMPOSER_TRIGGER_BUTTON_SIZE: f32 = COMPOSER_CONTROL_ROW_HEIGHT;
 /// 尾部圆形发送或停止按钮使用的共享图标尺寸。
 const COMPOSER_TRIGGER_BUTTON_ICON_SIZE: f32 = 18.0;
 
-/// Shared vertical offset reserved below the floating multi-line composer overlay for the control row.
-/// 为多行提示词浮动遮罩下方控制行预留的共享垂直偏移量。
-const COMPOSER_OVERLAY_BOTTOM_OFFSET: f32 =
-    COMPOSER_CONTROL_ROW_HEIGHT + COMPOSER_PANEL_CONTROL_GAP + COMPOSER_PANEL_EDGE_PADDING as f32;
+/// Shared width used by the composer context menu shown on right click.
+/// 右键点击时显示的提示词输入框上下文菜单使用的共享宽度。
+const COMPOSER_CONTEXT_MENU_WIDTH: f32 = 168.0;
+
+/// Shared row height used by the composer context menu actions.
+/// 提示词输入框上下文菜单动作项使用的共享行高。
+const COMPOSER_CONTEXT_MENU_ROW_HEIGHT: f32 = 34.0;
+
+/// Shared maximal undo snapshot count retained for the composer editor.
+/// 提示词编辑器保留的共享最大撤销快照数量。
+const COMPOSER_UNDO_HISTORY_LIMIT: usize = 64;
 
 /// Shared fixed width used by the compact execution-mode selector under the main prompt composer.
 /// 主提示词编辑器下方紧凑执行模式选择器使用的共享固定宽度。
@@ -458,10 +466,78 @@ fn composer_measured_text_height(buffer: &text_editor::Content, surface_width: f
     min_bounds.height.max(COMPOSER_EDITOR_LINE_HEIGHT)
 }
 
+/// Returns the internal scroll target required to keep the measured composer caret visible.
+/// 返回用于让测量得到的提示词光标保持可见所需的内部滚动目标。
+fn composer_caret_scroll_target(
+    caret_top: f32,
+    current_scroll_offset: f32,
+    viewport_text_height: f32,
+    max_scroll_offset: f32,
+) -> f32 {
+    let caret_bottom = caret_top + COMPOSER_EDITOR_LINE_HEIGHT;
+    let current_viewport_bottom = current_scroll_offset + viewport_text_height;
+
+    if caret_top < current_scroll_offset {
+        caret_top.clamp(0.0, max_scroll_offset)
+    } else if caret_bottom > current_viewport_bottom {
+        (caret_bottom - viewport_text_height).clamp(0.0, max_scroll_offset)
+    } else {
+        current_scroll_offset.clamp(0.0, max_scroll_offset)
+    }
+}
+
 /// Returns whether one composer text payload contains any submittable non-whitespace content.
 /// 返回某段提示词文本是否包含任何可提交的非空白内容。
 fn composer_text_has_submittable_content(text: &str) -> bool {
     !text.trim().is_empty()
+}
+
+/// Returns whether the given composer selection payload contains any effective text.
+/// 返回给定提示词选区载荷是否包含任何有效文本。
+fn composer_selection_has_content(selection: Option<&str>) -> bool {
+    selection.is_some_and(|text| !text.is_empty())
+}
+
+/// Returns whether one clipboard text payload should enable the composer paste action.
+/// 返回某段剪贴板文本载荷是否应启用提示词粘贴动作。
+fn composer_clipboard_text_is_pastable(text: Option<&str>) -> bool {
+    text.is_some_and(|value| !value.is_empty())
+}
+
+/// One undo snapshot retained for the composer editor.
+/// 为提示词编辑器保留的一条撤销快照。
+#[derive(Debug, Clone)]
+struct ComposerUndoSnapshot {
+    /// Full text payload captured before one mutating composer action.
+    /// 在某次会修改提示词内容的动作之前捕获的完整文本载荷。
+    text: String,
+    /// Cursor and selection position captured before one mutating composer action.
+    /// 在某次会修改提示词内容的动作之前捕获的光标与选区位置。
+    cursor: text_editor::Cursor,
+    /// Internal scroll offset mirrored from the composer editor at capture time.
+    /// 捕获快照时从提示词编辑器镜像得到的内部滚动偏移量。
+    scroll_offset: f32,
+}
+
+/// Live scrollbar geometry derived from the current composer editor content and viewport.
+/// 根据当前提示词编辑器内容与视口推导出的实时滚动条几何信息。
+#[derive(Debug, Clone, Copy)]
+struct ComposerScrollbarLayout {
+    /// Height of the scrollbar track after applying vertical paddings.
+    /// 应用上下留白后的滚动条轨道高度。
+    track_height: f32,
+    /// Height of the draggable scrollbar thumb.
+    /// 可拖拽滚动条滑块高度。
+    thumb_height: f32,
+    /// Maximal distance the scrollbar thumb can travel inside the track.
+    /// 滚动条滑块在轨道内部可移动的最大距离。
+    thumb_travel: f32,
+    /// Current thumb top offset inside the track.
+    /// 当前滑块在轨道内部的顶部偏移量。
+    thumb_top: f32,
+    /// Maximal vertical scroll offset allowed by the current content.
+    /// 当前内容允许的最大纵向滚动偏移量。
+    max_scroll_offset: f32,
 }
 
 /// Launches the GUI application using the official iced crate.
@@ -549,6 +625,27 @@ pub struct VulcanWorkbench {
     /// Prompt composer editor buffer used by the main Build/Plan input surface.
     /// 主 Build/Plan 输入表面使用的提示词编辑器缓冲区。
     composer_buffer: text_editor::Content,
+    /// Undo snapshots retained for the main prompt composer.
+    /// 为主提示词编辑器保留的撤销快照集合。
+    composer_undo_history: Vec<ComposerUndoSnapshot>,
+    /// Current internal scroll offset mirrored from the capped prompt composer editor.
+    /// 从封顶提示词编辑器内部镜像得到的当前滚动偏移量。
+    composer_scroll_offset: f32,
+    /// Latest pointer y position tracked inside the composer editor surface for scrollbar interactions.
+    /// 为滚动条交互跟踪的提示词编辑器表面内部最近一次指针纵向位置。
+    composer_scrollbar_pointer_y: Option<f32>,
+    /// Current grabbed offset inside the draggable composer scrollbar thumb, when dragging is active.
+    /// 当前处于激活拖拽状态时在提示词滚动条滑块内部抓取到的偏移量。
+    composer_scrollbar_drag_grab_offset: Option<f32>,
+    /// Whether the composer context menu is currently visible.
+    /// 当前提示词编辑器上下文菜单是否可见。
+    composer_context_menu_open: bool,
+    /// Last main-window anchor position used to place the composer context menu.
+    /// 最近一次用于放置提示词上下文菜单的主窗口锚点位置。
+    composer_context_menu_anchor: iced::Point,
+    /// Latest clipboard text snapshot loaded for composer menu availability and paste actions.
+    /// 为提示词菜单可用性与粘贴动作载入的最新剪贴板文本快照。
+    composer_context_clipboard_text: Option<String>,
     /// Text editor content for patch and scaffold previews.
     /// 用于补丁与骨架预览的文本编辑器内容。
     editor_content: text_editor::Content,
@@ -1780,6 +1877,36 @@ enum Message {
     /// Applies one text-editor action inside the main prompt composer.
     /// 应用主提示词编辑器中的一条文本编辑动作。
     ComposerEditorAction(text_editor::Action),
+    /// Restores the previous composer snapshot requested by the undo shortcut.
+    /// 恢复由撤销快捷键请求的上一条提示词快照。
+    ComposerUndo,
+    /// Opens the composer context menu at the latest tracked cursor position.
+    /// 在最近一次追踪到的鼠标位置打开提示词上下文菜单。
+    OpenComposerContextMenu,
+    /// Closes the composer context menu without mutating the editor contents.
+    /// 在不修改编辑器内容的前提下关闭提示词上下文菜单。
+    CloseComposerContextMenu,
+    /// Copies the current composer selection through the context menu.
+    /// 通过上下文菜单复制当前提示词选区。
+    ComposerContextMenuCopy,
+    /// Cuts the current composer selection through the context menu.
+    /// 通过上下文菜单剪切当前提示词选区。
+    ComposerContextMenuCut,
+    /// Pastes the current clipboard text through the context menu.
+    /// 通过上下文菜单粘贴当前剪贴板文本。
+    ComposerContextMenuPaste,
+    /// Selects all composer contents through the context menu.
+    /// 通过上下文菜单全选提示词内容。
+    ComposerContextMenuSelectAll,
+    /// Applies the clipboard text snapshot loaded for the composer context menu.
+    /// 应用为提示词上下文菜单载入的剪贴板文本快照。
+    ComposerContextClipboardLoaded(Result<std::sync::Arc<String>, clipboard::Error>),
+    /// Updates the latest local pointer y position tracked inside the composer editor surface.
+    /// 更新在提示词编辑器表面内部追踪到的最新局部纵向指针位置。
+    ComposerScrollbarPointerMoved(f32),
+    /// Starts one scrollbar drag interaction using the latest tracked pointer position.
+    /// 使用最近一次追踪到的指针位置启动一次滚动条拖拽交互。
+    StartComposerScrollbarDrag,
     /// Embedded editor emitted an editing action.
     /// 嵌入式编辑器发出了编辑动作。
     EditorActionPerformed(text_editor::Action),
@@ -2355,6 +2482,13 @@ impl VulcanWorkbench {
             workspace_path: String::from("D:/openvulcan/vulcan-code"),
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
+            composer_undo_history: Vec::new(),
+            composer_scroll_offset: 0.0,
+            composer_scrollbar_pointer_y: None,
+            composer_scrollbar_drag_grab_offset: None,
+            composer_context_menu_open: false,
+            composer_context_menu_anchor: iced::Point::ORIGIN,
+            composer_context_clipboard_text: None,
             editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
             diff_summary: placeholder_diff_panel.summary_text(),
             diff_panel: placeholder_diff_panel,
@@ -2483,6 +2617,179 @@ impl VulcanWorkbench {
                 ),
             ]),
         )
+    }
+
+    /// Captures the current composer contents into one undo snapshot before a mutating action.
+    /// 在某个会修改提示词内容的动作之前，将当前提示词内容捕获为一条撤销快照。
+    fn push_composer_undo_snapshot(&mut self) {
+        let snapshot = ComposerUndoSnapshot {
+            text: self.composer_buffer.text(),
+            cursor: self.composer_buffer.cursor(),
+            scroll_offset: self.composer_scroll_offset,
+        };
+
+        if self
+            .composer_undo_history
+            .last()
+            .is_some_and(|last| last.text == snapshot.text && last.cursor == snapshot.cursor)
+        {
+            return;
+        }
+
+        self.composer_undo_history.push(snapshot);
+
+        if self.composer_undo_history.len() > COMPOSER_UNDO_HISTORY_LIMIT {
+            let overflow = self.composer_undo_history.len() - COMPOSER_UNDO_HISTORY_LIMIT;
+            self.composer_undo_history.drain(0..overflow);
+        }
+    }
+
+    /// Restores the latest retained composer undo snapshot when one exists.
+    /// 在存在撤销快照时恢复最近保留的一条提示词撤销快照。
+    fn restore_latest_composer_undo_snapshot(&mut self) -> Task<Message> {
+        let Some(snapshot) = self.composer_undo_history.pop() else {
+            return Task::none();
+        };
+
+        let mut restored_buffer = text_editor::Content::with_text(&snapshot.text);
+        restored_buffer.move_to(snapshot.cursor);
+        self.composer_buffer = restored_buffer;
+        self.composer = snapshot.text;
+        self.composer_scroll_offset = snapshot.scroll_offset.max(0.0);
+        self.composer_context_menu_open = false;
+
+        operation::focus(COMPOSER_EDITOR_ID)
+    }
+
+    /// Applies one composer editor action while keeping undo history, focus, and mirrored scroll state in sync.
+    /// 应用一条提示词编辑器动作，并同步维护撤销历史、焦点以及镜像滚动状态。
+    fn apply_composer_editor_action(&mut self, action: text_editor::Action) -> Task<Message> {
+        let composer_surface_width = self.composer_input_surface_width();
+        let action_is_scroll = matches!(action, text_editor::Action::Scroll { .. });
+        let action_is_mutating = action.is_edit();
+        let visible_line_count_before =
+            composer_visible_line_count(&self.composer_buffer, composer_surface_width);
+        let used_expanded_surface_before = visible_line_count_before > 1;
+        let used_overflow_scroll_before = visible_line_count_before > 10;
+
+        if action_is_mutating {
+            self.push_composer_undo_snapshot();
+        }
+
+        self.composer_buffer.perform(action);
+        self.composer = self.composer_buffer.text();
+
+        let visible_line_count_after =
+            composer_visible_line_count(&self.composer_buffer, composer_surface_width);
+        let used_expanded_surface_after = visible_line_count_after > 1;
+        let used_overflow_scroll_after = visible_line_count_after > 10;
+        let mut tasks = Vec::new();
+
+        if used_overflow_scroll_after {
+            let (content_bounds, caret_position) =
+                measure_composer_layout(&self.composer_buffer, composer_surface_width);
+            let content_height = COMPOSER_EDITOR_VERTICAL_INSET
+                + content_bounds.height.max(COMPOSER_EDITOR_LINE_HEIGHT);
+            let viewport_height = self.composer_editor_height();
+            let viewport_text_height =
+                (viewport_height - COMPOSER_EDITOR_VERTICAL_INSET).max(COMPOSER_EDITOR_LINE_HEIGHT);
+            let max_scroll_offset = (content_height - viewport_height).max(0.0);
+
+            if action_is_scroll {
+                let (_, actual_scroll_offset) = self.composer_buffer.plain_text_scroll_metrics();
+                self.composer_scroll_offset = actual_scroll_offset.clamp(0.0, max_scroll_offset);
+            } else {
+                self.composer_scroll_offset = composer_caret_scroll_target(
+                    caret_position.y.max(0.0),
+                    self.composer_scroll_offset,
+                    viewport_text_height,
+                    max_scroll_offset,
+                );
+            }
+        } else {
+            self.composer_scroll_offset = 0.0;
+            self.composer_scrollbar_drag_grab_offset = None;
+        }
+
+        if used_expanded_surface_before != used_expanded_surface_after
+            || used_overflow_scroll_before != used_overflow_scroll_after
+        {
+            tasks.push(operation::focus(COMPOSER_EDITOR_ID));
+        }
+
+        if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        }
+    }
+
+    /// Opens the composer context menu near the current pointer and refreshes the clipboard snapshot used by its action states.
+    /// 在当前指针附近打开提示词上下文菜单，并刷新其动作可用性使用的剪贴板快照。
+    fn open_composer_context_menu(&mut self) -> Task<Message> {
+        self.composer_context_menu_anchor = self
+            .main_window_cursor_position
+            .unwrap_or(iced::Point::ORIGIN);
+        self.composer_context_menu_open = true;
+        self.composer_context_clipboard_text = None;
+
+        clipboard::read_text().map(Message::ComposerContextClipboardLoaded)
+    }
+
+    /// Returns the current draggable scrollbar layout for the capped composer editor, when scrolling is actually needed.
+    /// 返回当前封顶提示词编辑器在真正需要滚动时的可拖拽滚动条布局信息。
+    fn composer_scrollbar_layout(&self) -> Option<ComposerScrollbarLayout> {
+        let (content_height, viewport_height, scroll_offset) =
+            self.composer_editor_scroll_metrics();
+        let max_scroll_offset = (content_height - viewport_height).max(0.0);
+
+        if max_scroll_offset <= 0.5 {
+            return None;
+        }
+
+        let track_height = (self.composer_editor_height() - 16.0).max(0.0);
+        let thumb_height =
+            ((viewport_height / content_height) * track_height).clamp(24.0, track_height);
+        let thumb_travel = (track_height - thumb_height).max(0.0);
+        let thumb_top = if thumb_travel > 0.0 {
+            (scroll_offset / max_scroll_offset).clamp(0.0, 1.0) * thumb_travel
+        } else {
+            0.0
+        };
+
+        Some(ComposerScrollbarLayout {
+            track_height,
+            thumb_height,
+            thumb_travel,
+            thumb_top,
+            max_scroll_offset,
+        })
+    }
+
+    /// Scrolls the composer editor according to one local pointer y position measured inside the editor surface.
+    /// 根据在编辑器表面内部测得的一次局部纵向指针位置滚动提示词编辑器。
+    fn apply_composer_scrollbar_pointer_position(&mut self, pointer_y: f32) {
+        let Some(layout) = self.composer_scrollbar_layout() else {
+            self.composer_scrollbar_drag_grab_offset = None;
+            return;
+        };
+        let Some(grab_offset) = self.composer_scrollbar_drag_grab_offset else {
+            return;
+        };
+
+        let local_track_y = (pointer_y - 8.0).clamp(0.0, layout.track_height);
+        let thumb_top = (local_track_y - grab_offset).clamp(0.0, layout.thumb_travel);
+        let target_scroll_offset = if layout.thumb_travel > 0.0 {
+            (thumb_top / layout.thumb_travel) * layout.max_scroll_offset
+        } else {
+            0.0
+        };
+
+        self.composer_buffer
+            .scroll_to_plain_text_offset(target_scroll_offset);
+
+        let (_, actual_scroll_offset) = self.composer_buffer.plain_text_scroll_metrics();
+        self.composer_scroll_offset = actual_scroll_offset.clamp(0.0, layout.max_scroll_offset);
     }
 
     /// Handles widget messages and mutates the application state.
@@ -3166,6 +3473,7 @@ impl VulcanWorkbench {
             }
             Message::WindowLeftButtonReleased(window_id) => {
                 self.clear_transcript_drag_auto_scrolls();
+                self.composer_scrollbar_drag_grab_offset = None;
                 let mut did_commit_drop = false;
                 if self.main_window_id == Some(window_id) {
                     self.pending_main_task_panel_resize = None;
@@ -3220,24 +3528,91 @@ impl VulcanWorkbench {
                 self.composer = value;
                 Task::none()
             }
-            Message::ComposerEditorAction(action) => {
-                let composer_surface_width = self.composer_input_surface_width();
-                let visible_line_count_before =
-                    composer_visible_line_count(&self.composer_buffer, composer_surface_width);
-                let used_expanded_surface_before = visible_line_count_before > 1;
-                let used_overflow_scroll_before = visible_line_count_before > 10;
-                self.composer_buffer.perform(action);
-                self.composer = self.composer_buffer.text();
-                let visible_line_count_after =
-                    composer_visible_line_count(&self.composer_buffer, composer_surface_width);
-                let used_expanded_surface_after = visible_line_count_after > 1;
-                let used_overflow_scroll_after = visible_line_count_after > 10;
-                if used_expanded_surface_before != used_expanded_surface_after
-                    || used_overflow_scroll_before != used_overflow_scroll_after
+            Message::ComposerEditorAction(action) => self.apply_composer_editor_action(action),
+            Message::ComposerUndo => self.restore_latest_composer_undo_snapshot(),
+            Message::OpenComposerContextMenu => self.open_composer_context_menu(),
+            Message::CloseComposerContextMenu => {
+                self.composer_context_menu_open = false;
+                Task::none()
+            }
+            Message::ComposerContextClipboardLoaded(result) => {
+                self.composer_context_clipboard_text = result
+                    .ok()
+                    .map(|text| text.as_ref().clone())
+                    .filter(|text| composer_clipboard_text_is_pastable(Some(text)));
+                Task::none()
+            }
+            Message::ComposerScrollbarPointerMoved(pointer_y) => {
+                self.composer_scrollbar_pointer_y = Some(pointer_y);
+                self.apply_composer_scrollbar_pointer_position(pointer_y);
+                Task::none()
+            }
+            Message::StartComposerScrollbarDrag => {
+                let Some(layout) = self.composer_scrollbar_layout() else {
+                    return Task::none();
+                };
+                let pointer_y = self.composer_scrollbar_pointer_y.unwrap_or(8.0);
+                let local_track_y = (pointer_y - 8.0).clamp(0.0, layout.track_height);
+                let thumb_bottom = layout.thumb_top + layout.thumb_height;
+                let grab_offset =
+                    if local_track_y >= layout.thumb_top && local_track_y <= thumb_bottom {
+                        local_track_y - layout.thumb_top
+                    } else {
+                        (layout.thumb_height / 2.0).clamp(0.0, layout.thumb_height)
+                    };
+
+                self.composer_scrollbar_drag_grab_offset = Some(grab_offset);
+                self.apply_composer_scrollbar_pointer_position(pointer_y);
+                Task::none()
+            }
+            Message::ComposerContextMenuSelectAll => {
+                self.composer_context_menu_open = false;
+                let task = self.apply_composer_editor_action(text_editor::Action::SelectAll);
+                Task::batch([task, operation::focus(COMPOSER_EDITOR_ID)])
+            }
+            Message::ComposerContextMenuCopy => {
+                self.composer_context_menu_open = false;
+                if let Some(selection) = self
+                    .composer_buffer
+                    .selection()
+                    .filter(|text| composer_selection_has_content(Some(text)))
                 {
-                    operation::focus(COMPOSER_EDITOR_ID)
+                    Task::batch([
+                        clipboard::write(selection).discard(),
+                        operation::focus(COMPOSER_EDITOR_ID),
+                    ])
                 } else {
-                    Task::none()
+                    operation::focus(COMPOSER_EDITOR_ID)
+                }
+            }
+            Message::ComposerContextMenuCut => {
+                self.composer_context_menu_open = false;
+                if let Some(selection) = self
+                    .composer_buffer
+                    .selection()
+                    .filter(|text| composer_selection_has_content(Some(text)))
+                {
+                    let action_task = self.apply_composer_editor_action(text_editor::Action::Edit(
+                        text_editor::Edit::Backspace,
+                    ));
+                    Task::batch([
+                        clipboard::write(selection).discard(),
+                        action_task,
+                        operation::focus(COMPOSER_EDITOR_ID),
+                    ])
+                } else {
+                    operation::focus(COMPOSER_EDITOR_ID)
+                }
+            }
+            Message::ComposerContextMenuPaste => {
+                self.composer_context_menu_open = false;
+                if let Some(text) = self.composer_context_clipboard_text.clone() {
+                    let action_task = self.apply_composer_editor_action(text_editor::Action::Edit(
+                        text_editor::Edit::Paste(std::sync::Arc::new(text)),
+                    ));
+                    Task::batch([action_task, operation::focus(COMPOSER_EDITOR_ID)])
+                } else {
+                    operation::focus(COMPOSER_EDITOR_ID)
                 }
             }
             Message::EditorActionPerformed(action) => {
@@ -4433,6 +4808,12 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在发起真实执行，请稍候。");
                 self.composer.clear();
                 self.composer_buffer = text_editor::Content::with_text("");
+                self.composer_undo_history.clear();
+                self.composer_scroll_offset = 0.0;
+                self.composer_scrollbar_pointer_y = None;
+                self.composer_scrollbar_drag_grab_offset = None;
+                self.composer_context_menu_open = false;
+                self.composer_context_clipboard_text = None;
 
                 let run_id = self.next_run_id;
                 self.next_run_id = self.next_run_id.saturating_add(1);

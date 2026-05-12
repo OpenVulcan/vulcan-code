@@ -3,7 +3,7 @@
 
 use super::helpers::*;
 use super::*;
-use iced::widget::column;
+use iced::widget::{column, pin};
 
 impl VulcanWorkbench {
     /// Builds the full window view by composing header, panes, and footer.
@@ -51,6 +51,12 @@ impl VulcanWorkbench {
                 stack([main_surface, overlay]).into()
             } else {
                 main_surface
+            };
+        let composed_surface: Element<'_, Message> =
+            if let Some(overlay) = self.view_composer_context_menu_overlay() {
+                stack([composed_surface, overlay]).into()
+            } else {
+                composed_surface
             };
         let composed_surface: Element<'_, Message> =
             if let Some(overlay) = self.view_startup_overlay() {
@@ -1654,10 +1660,13 @@ impl VulcanWorkbench {
                 &self.composer_buffer,
                 self.composer_input_surface_width(),
             );
-        let (_, scroll_offset) = self.composer_buffer.plain_text_scroll_metrics();
         let viewport_height = self.composer_editor_height();
 
-        (content_height, viewport_height, scroll_offset.max(0.0))
+        (
+            content_height,
+            viewport_height,
+            self.composer_scroll_offset.max(0.0),
+        )
     }
 
     /// Returns the centered composer-panel width budget derived from the current main workbench canvas.
@@ -1725,6 +1734,9 @@ impl VulcanWorkbench {
             .placeholder("输入当前会话要执行的任务指令")
             .style(style::workbench_composer_editor_style)
             .key_binding(move |key_press| match key_press.key.as_ref() {
+                keyboard::Key::Character("z") if key_press.modifiers.command() => {
+                    Some(text_editor::Binding::Custom(Message::ComposerUndo))
+                }
                 keyboard::Key::Named(keyboard::key::Named::Enter)
                     if !key_press.modifiers.shift() =>
                 {
@@ -1738,80 +1750,173 @@ impl VulcanWorkbench {
             })
             .on_action(Message::ComposerEditorAction);
 
-        let (content_height, viewport_height, scroll_offset) =
-            self.composer_editor_scroll_metrics();
-        let max_scroll_offset = (content_height - viewport_height).max(0.0);
-        let scrollbar_overlay: Element<'_, Message> = if max_scroll_offset > 0.5 {
-            let track_height = (visible_height - 16.0).max(0.0);
-            let thumb_height =
-                ((viewport_height / content_height) * track_height).clamp(24.0, track_height);
-            let thumb_travel = (track_height - thumb_height).max(0.0);
-            let thumb_top = if thumb_travel > 0.0 {
-                (scroll_offset / max_scroll_offset).clamp(0.0, 1.0) * thumb_travel
+        let scrollbar_overlay: Element<'_, Message> =
+            if let Some(layout) = self.composer_scrollbar_layout() {
+                let thumb_bottom_space =
+                    (layout.track_height - layout.thumb_top - layout.thumb_height).max(0.0);
+                let scrollbar_track = mouse_area(
+                    container(
+                        column![
+                            space().height(layout.thumb_top),
+                            container(space())
+                                .width(6)
+                                .height(layout.thumb_height)
+                                .style(style::workbench_composer_editor_scrollbar_style),
+                            space().height(thumb_bottom_space),
+                        ]
+                        .spacing(0)
+                        .width(6)
+                        .height(layout.track_height)
+                        .align_x(iced::Alignment::End),
+                    )
+                    .width(10)
+                    .height(layout.track_height),
+                )
+                .interaction(if self.composer_scrollbar_drag_grab_offset.is_some() {
+                    iced::mouse::Interaction::Grabbing
+                } else {
+                    iced::mouse::Interaction::Grab
+                })
+                .on_move(|position| Message::ComposerScrollbarPointerMoved(position.y))
+                .on_press(Message::StartComposerScrollbarDrag);
+
+                container(scrollbar_track)
+                    .padding(iced::Padding {
+                        top: 8.0,
+                        right: 4.0,
+                        bottom: 8.0,
+                        left: 0.0,
+                    })
+                    .width(Fill)
+                    .height(visible_height)
+                    .align_x(iced::Alignment::End)
+                    .center_y(Fill)
+                    .into()
             } else {
-                0.0
+                container(space::vertical().height(0)).into()
             };
 
-            container(
-                column![
-                    space::vertical().height(thumb_top),
-                    container(space::vertical())
-                        .width(6)
-                        .height(thumb_height)
-                        .style(style::workbench_composer_editor_scrollbar_style),
-                    space::vertical().height(Fill),
-                ]
-                .width(Fill)
-                .height(Fill)
-                .align_x(iced::Alignment::End),
-            )
-            .padding(iced::Padding {
-                top: 8.0,
-                right: 4.0,
-                bottom: 8.0,
-                left: 0.0,
-            })
-            .width(Fill)
-            .height(visible_height)
-            .into()
-        } else {
-            container(space::vertical().height(0)).into()
-        };
-
-        container(stack([
-            container(editor).width(Fill).into(),
-            scrollbar_overlay,
-        ]))
+        container(
+            mouse_area(stack([
+                container(editor).width(Fill).into(),
+                scrollbar_overlay,
+            ]))
+            .on_right_press(Message::OpenComposerContextMenu),
+        )
         .width(Fill)
         .height(visible_height)
         .clip(true)
         .into()
     }
 
-    /// Builds the compact placeholder slot used by the fixed composer panel row.
-    /// 构建固定提示词面板行内使用的紧凑占位输入槽。
-    pub(super) fn view_compact_composer_editor(&self) -> Element<'_, Message> {
-        if self.composer_uses_expanded_surface() {
-            container(space::vertical().height(COMPOSER_SINGLE_LINE_HEIGHT))
-                .width(Fill)
-                .into()
-        } else {
-            self.view_composer_editor_surface()
-        }
-    }
-
-    /// Builds the expanded upward-growing composer overlay anchored above the fixed composer panel.
-    /// 构建锚定在固定提示词面板上方的向上展开编辑器遮罩。
-    pub(super) fn view_composer_expanded_overlay(&self) -> Option<Element<'_, Message>> {
-        if !self.composer_uses_expanded_surface() {
+    /// Builds the floating overlay used by the composer context menu when the user right-clicks inside the editor.
+    /// 构建在用户于编辑器内部右键时使用的提示词上下文菜单浮动覆盖层。
+    pub(super) fn view_composer_context_menu_overlay(&self) -> Option<Element<'_, Message>> {
+        if !self.composer_context_menu_open {
             return None;
         }
 
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseComposerContextMenu)
+            .on_right_press(Message::CloseComposerContextMenu);
+        let menu_position = self.composer_context_menu_position();
+        let menu = pin(self.view_composer_context_menu())
+            .position(menu_position)
+            .width(Fill)
+            .height(Fill);
+
         Some(
-            container(self.view_composer_editor_surface())
-                .width(self.composer_input_surface_width())
+            stack([backdrop.into(), menu.into()])
+                .width(Fill)
+                .height(Fill)
                 .into(),
         )
+    }
+
+    /// Returns the bounded window-relative position used by the composer context menu overlay.
+    /// 返回提示词上下文菜单覆盖层使用的受边界约束的窗口相对位置。
+    pub(super) fn composer_context_menu_position(&self) -> iced::Point {
+        let menu_width = COMPOSER_CONTEXT_MENU_WIDTH;
+        let menu_height = (COMPOSER_CONTEXT_MENU_ROW_HEIGHT * 4.0) + 12.0;
+        let window_width = self.main_window_size.width.max(menu_width + 12.0);
+        let window_height = self.main_window_size.height.max(menu_height + 12.0);
+        let anchor = self.composer_context_menu_anchor;
+
+        iced::Point::new(
+            anchor
+                .x
+                .clamp(8.0, (window_width - menu_width - 8.0).max(8.0)),
+            anchor
+                .y
+                .clamp(8.0, (window_height - menu_height - 8.0).max(8.0)),
+        )
+    }
+
+    /// Builds the menu body used by the composer context menu overlay.
+    /// 构建提示词上下文菜单覆盖层使用的菜单主体。
+    pub(super) fn view_composer_context_menu(&self) -> Element<'_, Message> {
+        let has_any_text = !self.composer_buffer.is_empty();
+        let has_selection =
+            composer_selection_has_content(self.composer_buffer.selection().as_deref());
+        let can_paste =
+            composer_clipboard_text_is_pastable(self.composer_context_clipboard_text.as_deref());
+
+        container(
+            column![
+                self.view_composer_context_menu_button(
+                    "全选",
+                    has_any_text.then_some(Message::ComposerContextMenuSelectAll),
+                ),
+                self.view_composer_context_menu_button(
+                    "复制",
+                    has_selection.then_some(Message::ComposerContextMenuCopy),
+                ),
+                self.view_composer_context_menu_button(
+                    "剪切",
+                    has_selection.then_some(Message::ComposerContextMenuCut),
+                ),
+                self.view_composer_context_menu_button(
+                    "粘贴",
+                    can_paste.then_some(Message::ComposerContextMenuPaste),
+                ),
+            ]
+            .spacing(2)
+            .width(COMPOSER_CONTEXT_MENU_WIDTH),
+        )
+        .padding([6, 6])
+        .width(COMPOSER_CONTEXT_MENU_WIDTH)
+        .style(style::main_task_tree_menu_style)
+        .into()
+    }
+
+    /// Builds one compact menu button used inside the composer context menu overlay.
+    /// 构建提示词上下文菜单覆盖层内部使用的一条紧凑菜单按钮。
+    pub(super) fn view_composer_context_menu_button(
+        &self,
+        label: &'static str,
+        message: Option<Message>,
+    ) -> Element<'static, Message> {
+        let mut button = button(
+            container(text(label).size(13))
+                .padding([6, 10])
+                .width(Fill)
+                .height(COMPOSER_CONTEXT_MENU_ROW_HEIGHT),
+        )
+        .padding(0)
+        .width(Fill)
+        .style(style::main_task_tree_menu_button_style);
+
+        if let Some(message) = message {
+            button = button.on_press(message);
+        }
+
+        button.into()
+    }
+
+    /// Builds the inline composer editor slot used inside the floating composer panel itself.
+    /// 构建直接放置在浮动提示词面板内部的内联编辑器区域。
+    pub(super) fn view_inline_composer_editor(&self) -> Element<'_, Message> {
+        self.view_composer_editor_surface()
     }
 
     /// Builds the compact transcript surface-mode switcher shown at the trailing end of the session-status row.
@@ -1887,7 +1992,6 @@ impl VulcanWorkbench {
             .unwrap_or("未选择会话");
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
-        let composer_overlay = self.view_composer_expanded_overlay();
         let execution_mode_selector = pick_list(
             ExecutionMode::ALL,
             Some(self.execution_mode),
@@ -1922,7 +2026,7 @@ impl VulcanWorkbench {
         .height(COMPOSER_CONTROL_ROW_HEIGHT)
         .width(Fill);
         let composer_panel = container(
-            column![self.view_compact_composer_editor(), composer_controls_row,]
+            column![self.view_inline_composer_editor(), composer_controls_row,]
                 .spacing(COMPOSER_PANEL_CONTROL_GAP),
         )
         .padding(COMPOSER_PANEL_EDGE_PADDING)
@@ -1972,25 +2076,6 @@ impl VulcanWorkbench {
             .height(Fill)
             .into(),
         );
-
-        if let Some(overlay) = composer_overlay {
-            layered_surfaces.push(
-                container(
-                    column![
-                        space::vertical().height(Fill),
-                        container(overlay)
-                            .width(self.composer_input_surface_width())
-                            .center_x(Fill),
-                        space::vertical().height(COMPOSER_OVERLAY_BOTTOM_OFFSET),
-                    ]
-                    .width(Fill)
-                    .height(Fill),
-                )
-                .width(Fill)
-                .height(Fill)
-                .into(),
-            );
-        }
 
         let layered_canvas: Element<'_, Message> = stack(layered_surfaces).into();
 

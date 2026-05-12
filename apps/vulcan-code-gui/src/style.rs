@@ -705,8 +705,8 @@ pub fn workbench_composer_editor_style(
     }
 }
 
-/// Returns the scrollbar-thumb style rendered inside the workbench composer editor surface.
-/// 返回渲染在工作台提示词编辑器表面内部的滚动条滑块样式。
+/// Returns the draggable scrollbar thumb style rendered inside the workbench composer editor surface.
+/// 返回渲染在工作台提示词编辑器表面内部的可拖拽滚动条滑块样式。
 pub fn workbench_composer_editor_scrollbar_style(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 
