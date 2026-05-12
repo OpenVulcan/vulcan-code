@@ -3,18 +3,14 @@
 
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::events::ExecutionStreamEvent;
-use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
-use crate::agent_runtime::execution_preparation::prepare_execution;
+use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
-use crate::agent_runtime::runtime::RuntimeFoundation;
-use crate::agent_runtime::runtime_stream_delta::{
-    RuntimeStreamDeltaState, process_provider_stream_delta,
-};
+use crate::agent_runtime::runtime_stream_delta::process_provider_stream_delta;
 use crate::agent_runtime::runtime_stream_finalize::{
     build_failure_terminal_events, build_success_terminal_events,
 };
 use crate::agent_runtime::runtime_stream_setup::{
-    bootstrap_runtime_stream, build_runtime_start_events,
+    build_runtime_start_events, prepare_runtime_stream_launch,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
@@ -32,58 +28,36 @@ pub fn stream_runtime_run(
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let foundation = RuntimeFoundation::build(
+        let launch = match prepare_runtime_stream_launch(
             &config,
             &agent_profile_catalog,
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
-        );
-        let preparation = match prepare_execution(
-            &foundation,
-            luaskills_runtime.clone(),
-            mcp_runtime.clone(),
-            &config,
-            &request,
-        ) {
-            Ok(preparation) => preparation,
-            Err(error) => {
-                let report = ExecutionRunReport::failure(
-                    request.session_id,
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    error,
-                );
+            request,
+        ).await {
+            Ok(launch) => launch,
+            Err(report) => {
                 yield ExecutionStreamEvent::Finished(report);
                 return;
             }
         };
-
-        let bootstrap = bootstrap_runtime_stream(
-            &foundation,
-            luaskills_runtime.clone(),
-            mcp_runtime.clone(),
-            &request,
-            preparation,
-        )
-        .await;
-        let preparation = bootstrap.preparation;
-        let active_agent = bootstrap.active_agent;
-        let tools_manager = bootstrap.tools_manager;
-        let resolved_tool_definitions = bootstrap.resolved_tool_definitions;
-        let discovery_events = bootstrap.discovery_events;
-        let discovery_rows = bootstrap.discovery_rows;
-        let discovery_errors = bootstrap.discovery_errors;
-        let warnings = bootstrap.warnings;
-        let system_preamble = bootstrap.system_preamble;
-        let request_history = bootstrap.request_history;
-        let core_snapshot = bootstrap.core_snapshot;
-        let mut stream_state = RuntimeStreamDeltaState::new(bootstrap.core_controller);
+        let session_id = launch.session_id;
+        let effective_prompt = launch.effective_prompt;
+        let preparation = launch.preparation;
+        let active_agent = launch.active_agent;
+        let tools_manager = launch.tools_manager;
+        let resolved_tool_definitions = launch.resolved_tool_definitions;
+        let discovery_events = launch.discovery_events;
+        let discovery_rows = launch.discovery_rows;
+        let discovery_errors = launch.discovery_errors;
+        let warnings = launch.warnings;
+        let system_preamble = launch.system_preamble;
+        let request_history = launch.request_history;
+        let core_snapshot = launch.core_snapshot;
+        let mut stream_state = launch.stream_state;
 
         for event in build_runtime_start_events(
-            request.session_id,
+            session_id,
             &preparation,
             discovery_events,
         ) {
@@ -95,7 +69,7 @@ pub fn stream_runtime_run(
             &preparation,
             active_agent.as_ref(),
             &system_preamble,
-            request.prompt.trim(),
+            &effective_prompt,
             request_history,
             core_snapshot,
             tools_manager,
@@ -103,7 +77,7 @@ pub fn stream_runtime_run(
         );
 
         while let Some(item) = provider_stream.next().await {
-            for event in process_provider_stream_delta(request.session_id, &mut stream_state, item) {
+            for event in process_provider_stream_delta(session_id, &mut stream_state, item) {
                 yield event;
             }
             if stream_state.has_terminal_error() {
@@ -113,7 +87,7 @@ pub fn stream_runtime_run(
 
         if let Some(error) = stream_state.take_terminal_error() {
             for event in build_failure_terminal_events(
-                request.session_id,
+                session_id,
                 preparation,
                 discovery_rows,
                 discovery_errors,
@@ -127,7 +101,7 @@ pub fn stream_runtime_run(
         }
 
         for event in build_success_terminal_events(
-            request.session_id,
+            session_id,
             preparation,
             discovery_rows,
             discovery_errors,
