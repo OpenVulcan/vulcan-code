@@ -5,9 +5,8 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport_anthropic_openrouter::{
     execute_anthropic_stream, execute_openrouter_stream,
 };
-use crate::agent_runtime::provider_transport_openai::{
-    execute_openai_compatible_stream, execute_openai_responses_stream,
-};
+use crate::agent_runtime::provider_transport_openai::execute_openai_compatible_stream;
+use crate::agent_runtime::provider_transport_openai_responses::execute_openai_responses_stream;
 use crate::model::SessionId;
 use crate::provider_config::ProviderRuntimeKind;
 use async_stream::stream;
