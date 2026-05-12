@@ -6,6 +6,7 @@ pub mod events;
 pub mod execution_models;
 pub mod executor;
 pub mod provider;
+pub mod provider_prompt_loader;
 pub mod provider_protocol_bridge;
 pub mod provider_request_bridge;
 pub mod provider_request_snapshot;
