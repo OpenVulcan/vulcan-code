@@ -14,9 +14,8 @@ mod tests {
         build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
     };
     use crate::agent_runtime::provider_request_bridge_rig::core_messages_to_rig_history;
-    use crate::agent_runtime::provider_request_snapshot::{
-        build_core_provider_request_snapshot, build_provider_request_preview_markdown,
-    };
+    use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
+    use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
     use crate::agent_runtime::provider_request_turn_snapshot::build_openai_compatible_turn_request_snapshot;
     use crate::agent_runtime::provider_runtime_context::{
         build_runtime_system_preamble, resolve_runtime_max_turns,

@@ -24,7 +24,7 @@ pub(crate) fn apply_latest_request_snapshot(
     };
 
     preparation.provider_request_preview_markdown =
-        crate::agent_runtime::provider_request_snapshot::build_provider_request_preview_markdown(
+        crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown(
             preparation,
             request_snapshot,
         );

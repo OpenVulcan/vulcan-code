@@ -1,19 +1,14 @@
-//! Provider request snapshot and preview builders used by the execution runtime.
-//! 供执行运行时使用的 Provider 请求快照与预览构建模块。
+//! Structured provider request snapshot builders reused by runtime bootstrap and regression tests.
+//! 供运行时 bootstrap 与回归测试复用的结构化 Provider 请求快照构建模块。
 
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
-pub(crate) use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
+use crate::agent_runtime::provider_request_controller_config::build_core_controller_config;
 use crate::agent_runtime::provider_request_snapshot_adapter::PreviewSnapshotProviderAdapter;
 use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
-use crate::agent_runtime::provider_runtime_dispatch::DEFAULT_RUNTIME_MAX_TURNS_LIMIT;
 use crate::conversation_protocol::SessionConversationState;
-use serde_json::Value;
-use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig,
-    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
-};
+use vulcan_core::types::ProviderRequestSnapshot as CoreProviderRequestSnapshot;
 use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Builds one `vulcan-core` request snapshot from the current execution preparation and canonical session state.
@@ -60,22 +55,4 @@ pub(crate) async fn build_core_provider_request_snapshot(
         .build_request(&adapter)
         .await
         .map_err(|error| error.to_string())
-}
-
-/// Builds one `vulcan-core` controller configuration from the current execution preparation.
-/// 根据当前执行准备信息构建一份 `vulcan-core` 控制器配置。
-pub(crate) fn build_core_controller_config(
-    preparation: &ExecutionPreparation,
-    system_preamble: &str,
-    max_turns_override: Option<usize>,
-    additional_params: Option<Value>,
-) -> CoreControllerConfig {
-    CoreControllerConfig {
-        provider_id: preparation.model_blueprint.provider_id.clone(),
-        model_id: preparation.model_blueprint.model_id.clone(),
-        system_prompt: system_preamble.to_string(),
-        temperature: preparation.temperature.map(f64::from),
-        max_turns: max_turns_override.unwrap_or(DEFAULT_RUNTIME_MAX_TURNS_LIMIT),
-        additional_params,
-    }
 }
