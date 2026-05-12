@@ -5,6 +5,7 @@ pub mod config;
 pub mod events;
 pub mod executor;
 pub mod provider;
+pub mod provider_transport;
 pub mod runtime;
 pub mod tool_runtime_bridge;
 
