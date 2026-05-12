@@ -27,6 +27,7 @@ pub mod provider_runtime_inputs;
 pub mod provider_stream;
 pub mod provider_stream_projection;
 pub mod provider_transport;
+pub mod provider_transport_adapter_support;
 pub mod provider_transport_anthropic;
 pub mod provider_transport_anthropic_adapter;
 pub mod provider_transport_entry_inputs;

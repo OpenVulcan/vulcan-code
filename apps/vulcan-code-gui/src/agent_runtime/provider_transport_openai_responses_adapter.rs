@@ -2,16 +2,17 @@
 //! OpenAI Responses 宿主控制 Provider 传输适配器。
 
 use crate::agent_runtime::provider_protocol_bridge::{
-    build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
-    core_provider_turn_deltas_from_assistant_content,
+    build_openai_compatible_turn_response, core_provider_turn_deltas_from_assistant_content,
     inject_previous_response_id_into_additional_params,
+};
+use crate::agent_runtime::provider_transport_adapter_support::{
+    forward_streaming_provider_deltas, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::{
     OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
 };
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use rig::client::CompletionClient;
 use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
@@ -102,11 +103,7 @@ impl VulcanProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
         &self,
         _request: Self::Request,
     ) -> Result<Self::Response, VulcanCoreError> {
-        Err(VulcanCoreError::InvalidState {
-            message: String::from(
-                "OpenAI Responses 流式适配器不支持非流式 execute_request 调用，请改用 execute_request_streaming。",
-            ),
-        })
+        unsupported_streaming_execute("OpenAI Responses")
     }
 }
 
@@ -161,18 +158,15 @@ impl VulcanStreamingProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
                     message: format!("OpenAI Responses 流式请求启动失败：{error}"),
                 })?;
 
-        while let Some(item) = stream.next().await {
-            let content = item.map_err(|error| VulcanCoreError::ProviderFailure {
-                provider_id: self.provider_id.clone(),
-                message: format!("OpenAI Responses 流式执行失败：{error}"),
-            })?;
-            for delta in core_provider_turn_deltas_from_assistant_content(content) {
-                sink.push_delta(delta.clone());
-                let _ = self
-                    .live_sender
-                    .send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
-            }
-        }
+        forward_streaming_provider_deltas(
+            self.provider_id.as_str(),
+            "OpenAI Responses",
+            &self.live_sender,
+            &mut stream,
+            sink,
+            core_provider_turn_deltas_from_assistant_content,
+        )
+        .await?;
 
         Ok(build_openai_compatible_turn_response(
             self.provider_id.as_str(),
