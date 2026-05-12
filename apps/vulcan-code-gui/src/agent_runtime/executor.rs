@@ -3,11 +3,9 @@
 
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::execution_models::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
-};
+use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
+use crate::agent_runtime::execution_preparation::prepare_execution;
 use crate::agent_runtime::mcp_runtime_projection::collect_enabled_mcp_runtime_events;
-use crate::agent_runtime::provider::resolve_active_provider_blueprint;
 use crate::agent_runtime::provider_request_bridge::build_core_conversation_snapshot;
 pub(crate) use crate::agent_runtime::provider_request_snapshot::{
     build_core_controller_config, build_core_provider_request_snapshot,
@@ -23,7 +21,7 @@ use crate::agent_runtime::provider_stream_projection::{
     is_provider_tool_boundary_runtime_event, normalize_assistant_output,
     normalize_optional_stream_output, normalize_streamed_thinking_output,
     reset_current_thinking_phase_tracking, runtime_event_to_core_event,
-    take_current_thinking_phase_completed_event, truncate_preview,
+    take_current_thinking_phase_completed_event,
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::conversation_messages_to_rig_history;
@@ -35,74 +33,6 @@ use async_stream::stream;
 use futures_util::{Stream, StreamExt};
 use std::path::PathBuf;
 use vulcan_core::controller::VulcanCoreController;
-
-/// Builds one validated execution-preparation object from the current runtime foundation and GUI request.
-/// 根据当前运行时基础架构与 GUI 请求构建一份通过校验的执行准备对象。
-pub fn prepare_execution(
-    foundation: &RuntimeFoundation,
-    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
-    config: &ProviderConfigurationFile,
-    request: &ExecutionPreparationRequest,
-) -> Result<ExecutionPreparation, String> {
-    let Some(active_agent) = foundation.active_agent_definition() else {
-        return Err(String::from("当前激活代理未能在运行时基础架构中解析到。"));
-    };
-
-    if !foundation.has_built_agent(&active_agent.id) {
-        return Err(format!(
-            "代理 `{}` 当前尚未成功构建，无法启动执行。",
-            active_agent.name
-        ));
-    }
-
-    let model_blueprint = resolve_active_provider_blueprint(config)?;
-    let mut warnings = Vec::new();
-    let workspace_path = request.workspace_path.trim().to_string();
-    let tools_manager = build_vulcan_tools_manager(
-        foundation.native_tool_catalog().clone(),
-        luaskills_runtime,
-        mcp_runtime,
-        (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
-        foundation.resolved_native_tools_for_agent(&active_agent.id),
-        foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
-        foundation.resolved_mcp_tools_for_agent(&active_agent.id),
-    );
-    let resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
-
-    if workspace_path.is_empty() {
-        warnings.push(String::from(
-            "当前工作区路径为空，后续原生工具可能无法提供完整上下文。",
-        ));
-    }
-
-    if request.prompt.trim().is_empty() {
-        warnings.push(String::from(
-            "当前提示词为空，本次准备计划仅验证运行时链路。",
-        ));
-    }
-
-    Ok(ExecutionPreparation {
-        session_id: request.session_id,
-        session_title: request.session_title.clone(),
-        agent_id: active_agent.id.clone(),
-        agent_name: active_agent.name.clone(),
-        agent_kind: active_agent.kind.label().to_string(),
-        model_blueprint,
-        prompt_preview: truncate_preview(request.prompt.trim(), 180),
-        workspace_path,
-        context_history_count: request.conversation_state.messages.len(),
-        execution_mode: request.execution_mode.clone(),
-        temperature: request.temperature,
-        skill_names: foundation.skill_names_for_agent(&active_agent.id),
-        tool_descriptors: resolved_tools.descriptors,
-        delegate_agents: active_agent.delegates.clone(),
-        enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
-        warnings,
-        provider_request_preview_markdown: String::new(),
-        provider_request_snapshot_json: None,
-    })
-}
 
 /// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
 /// 以增量方式流式执行一次真实 Provider 调用，并依次产出准备、思考、输出与最终报告事件。
@@ -420,19 +350,17 @@ fn resolve_host_visible_tool_call_id(tool_call: &rig::message::ToolCall) -> Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionPreparation, build_core_conversation_snapshot,
-        build_core_provider_request_snapshot, build_provider_request_preview_markdown,
-        build_runtime_system_preamble, normalize_streamed_thinking_output,
-        resolve_host_visible_tool_call_id, resolve_runtime_max_turns,
+        build_core_conversation_snapshot, build_core_provider_request_snapshot,
+        build_provider_request_preview_markdown, build_runtime_system_preamble,
+        normalize_streamed_thinking_output, resolve_host_visible_tool_call_id,
+        resolve_runtime_max_turns,
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
+    use crate::agent_runtime::execution_models::ExecutionPreparation;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::agent_runtime::provider_protocol_bridge::{
         attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
         inject_previous_response_id_into_additional_params,
-    };
-    use crate::agent_runtime::provider_stream_projection::{
-        classify_synthetic_thinking_preamble, SyntheticThinkingPreambleState,
     };
     use crate::agent_runtime::provider_request_bridge::{
         build_openai_compatible_turn_request_snapshot, core_messages_to_rig_history,
@@ -440,6 +368,9 @@ mod tests {
     };
     use crate::agent_runtime::provider_runtime_dispatch::{
         DEFAULT_RUNTIME_MAX_TURNS_LIMIT, resolve_runtime_default_max_turns_limit,
+    };
+    use crate::agent_runtime::provider_stream_projection::{
+        SyntheticThinkingPreambleState, classify_synthetic_thinking_preamble,
     };
     use crate::conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
