@@ -9,6 +9,7 @@ use crate::agent_runtime::provider_request_bridge::{
     build_core_conversation_snapshot, core_messages_to_provider_visible_history,
     resolved_tool_definition_to_core_tool_schema, serialize_provider_request_headers,
 };
+use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::provider_transport::{
     execute_anthropic_stream, execute_openai_compatible_stream, execute_openai_responses_stream,
     execute_openrouter_stream,
@@ -31,7 +32,6 @@ use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::message::Message as RigMessage;
 use serde_json::{Value, json};
-use std::pin::Pin;
 use std::{fs, path::Path, path::PathBuf};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::provider::VulcanProviderAdapter;
@@ -427,26 +427,6 @@ pub fn prepare_execution(
         provider_request_preview_markdown: String::new(),
         provider_request_snapshot_json: None,
     })
-}
-
-/// Lightweight provider-stream delta emitted while one real run is still in progress.
-/// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
-pub(crate) enum ProviderStreamDelta {
-    /// Structured request snapshot captured right before the next provider request is dispatched.
-    /// 在下一次 Provider 请求真正发出前捕获的结构化请求快照。
-    RequestSnapshot(CoreProviderRequestSnapshot),
-    /// Assistant thinking delta returned by the provider stream.
-    /// Provider 流返回的助手思考增量。
-    Thinking(String),
-    /// Assistant final-output delta returned by the provider stream.
-    /// Provider 流返回的助手正式输出增量。
-    Output(String),
-    /// Runtime event emitted from one streamed provider-side tool interaction.
-    /// 来自某次 Provider 侧流式工具交互的运行时事件。
-    RuntimeEvent(RuntimeEvent),
-    /// Final canonical conversation state captured after one host-owned controller run finishes.
-    /// 在一次宿主自有控制器运行结束后捕获的最终规范会话状态。
-    FinalConversationState(SessionConversationState),
 }
 
 /// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
@@ -1269,11 +1249,6 @@ fn render_json_code_fence(value: &Value) -> String {
     let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     format!("````json\n{}\n````", pretty)
 }
-
-/// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.
-/// 供运行时逐步转发思考与输出增量的装箱 Provider 流类型。
-pub(crate) type ProviderDeltaStream =
-    Pin<Box<dyn Stream<Item = Result<ProviderStreamDelta, String>> + Send>>;
 
 /// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
 /// 针对当前选中的运行时族执行一次 Provider 提示词调用，并返回增量流。

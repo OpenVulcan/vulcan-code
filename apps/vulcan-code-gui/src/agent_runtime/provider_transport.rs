@@ -2,7 +2,6 @@
 //! 从图形界面执行器中拆分出的宿主控制 Provider 传输适配层。
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::executor::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::provider_protocol_bridge::{
     attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
     build_openai_compatible_turn_response, build_tool_result_runtime_metadata,
@@ -15,6 +14,7 @@ use crate::agent_runtime::provider_request_bridge::{
     core_messages_to_rig_history, core_snapshot_to_session_conversation_state,
     resolved_tool_definition_to_rig_tool_definition,
 };
+use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
 use async_stream::stream;

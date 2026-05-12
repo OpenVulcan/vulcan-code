@@ -1,7 +1,7 @@
 //! Shared provider-response bridge helpers reused by the executor, transport adapters, and regression tests.
 //! 供执行器、传输适配器与回归测试复用的共享 Provider 响应桥接辅助逻辑。
 
-use crate::agent_runtime::executor::ProviderStreamDelta;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use rig::OneOrMany;
 use rig::message::{AssistantContent as RigAssistantContent, ReasoningContent};
 use rig::streaming::StreamedAssistantContent;
