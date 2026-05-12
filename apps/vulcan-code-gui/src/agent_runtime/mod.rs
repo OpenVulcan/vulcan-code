@@ -28,6 +28,8 @@ pub mod provider_transport_router;
 pub mod runtime;
 pub mod runtime_stream;
 pub mod runtime_stream_bootstrap;
+pub mod runtime_stream_bootstrap_core;
+pub mod runtime_stream_bootstrap_resources;
 pub mod runtime_stream_delta;
 pub mod runtime_stream_driver;
 pub mod runtime_stream_finalize;
