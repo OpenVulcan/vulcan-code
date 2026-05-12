@@ -2,9 +2,10 @@
 //! 将语义转录内容投影为场景节点的构建器。
 
 use super::scene::{
-    ParsedMarkdownTable, PlainParagraphStyle, PlainTextRenderKind, RenderedParagraphBackground,
-    RenderedParagraphHorizontalPlacement, RenderedParagraphNode, RenderedTableCellNode,
-    RenderedTableStyle, RenderedTranscriptLinkAction, RenderedTranscriptNode,
+    ParsedMarkdownTable, PlainParagraphStyle, PlainTextRenderKind, RenderedPanelAccentRule,
+    RenderedParagraphBackground, RenderedParagraphHorizontalPlacement, RenderedParagraphNode,
+    RenderedTableCellNode, RenderedTableStyle, RenderedTranscriptLinkAction,
+    RenderedTranscriptNode,
 };
 use super::text_routing::build_agent_view_plain_text_spans;
 use crate::iced_theme as theme;
@@ -260,6 +261,18 @@ impl RenderedTranscriptBuilder {
         child_node_count: usize,
         background: RenderedParagraphBackground,
     ) {
+        self.insert_panel_with_accent(child_start_index, child_node_count, background, None);
+    }
+
+    /// Inserts one non-selectable background panel before the provided child-node start index and optionally decorates it with one left accent rule.
+    /// 在给定子节点起始索引之前插入一个不可选择背景面板，并可选附加一条左侧强调竖线装饰。
+    pub(super) fn insert_panel_with_accent(
+        &mut self,
+        child_start_index: usize,
+        child_node_count: usize,
+        background: RenderedParagraphBackground,
+        left_accent_rule: Option<RenderedPanelAccentRule>,
+    ) {
         if child_node_count == 0 {
             return;
         }
@@ -269,6 +282,7 @@ impl RenderedTranscriptBuilder {
             RenderedTranscriptNode::Panel(super::scene::RenderedPanelNode {
                 child_node_count,
                 background,
+                left_accent_rule,
             }),
         );
     }

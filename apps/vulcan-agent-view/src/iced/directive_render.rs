@@ -11,7 +11,8 @@ use super::markdown_source::{
 };
 use super::scene::{
     PlainParagraphStyle, PlainTextRenderKind, RenderContext, RenderedCollapsibleDirectiveNode,
-    RenderedParagraphBackground, RenderedParagraphHorizontalPlacement,
+    RenderedPanelAccentRule, RenderedParagraphBackground,
+    RenderedParagraphHorizontalPlacement,
     RenderedTranscriptLinkAction, RenderedTranscriptNode,
 };
 use super::text_routing::build_agent_view_plain_text_spans;
@@ -435,8 +436,8 @@ fn render_compact_collapsible_directive_block(
     builder.pending_separator = Some("\n");
 }
 
-/// Renders one thinking block with a full-width dark panel treatment; inline rows open the dedicated modal instead of expanding in place.
-/// 使用全宽深色面板样式渲染单个思考区块；内联标题行会直接打开专用弹层，而不会在正文中原地展开。
+/// Renders one thinking block; completed inline thinking becomes one quote-style note while modal and overlay surfaces keep the dedicated dark panel treatment.
+/// 渲染单个思考区块；已完成的内联思考会转为引用备注样式，而弹层与流式覆盖层仍保持专用深色面板样式。
 pub(super) fn render_thinking_block(
     builder: &mut RenderedTranscriptBuilder,
     block: &AgentViewDirectiveBlock,
@@ -448,6 +449,13 @@ pub(super) fn render_thinking_block(
         .get("ui-thinking-surface")
         .map(String::as_str)
         .unwrap_or("inline");
+    let is_inline_surface = thinking_surface == "inline";
+
+    if is_inline_surface {
+        render_inline_thinking_note(builder, block, markdown_settings, app_theme);
+        return;
+    }
+
     let outer_panel_background = RenderedParagraphBackground {
         background: Background::Color(iced::color!(0x1C2230)),
         border: Border {
@@ -459,19 +467,6 @@ pub(super) fn render_thinking_block(
     let body_foreground = iced::color!(0xEEF2F7);
     let body_content_padding = Padding::ZERO;
     let action_link_target = thinking_modal_action_link(block);
-    let is_inline_surface = thinking_surface == "inline";
-    let is_inline_collapsed = is_inline_surface
-        && block
-            .attributes
-            .get("ui-inline-collapsed")
-            .map(|value| value == "true")
-            .or_else(|| {
-                block
-                    .attributes
-                    .get("collapsed")
-                    .map(|value| value == "true")
-            })
-            .unwrap_or(block.collapsed_by_default);
     let render_header = block
         .attributes
         .get("ui-render-thinking-header")
@@ -520,10 +515,6 @@ pub(super) fn render_thinking_block(
         if let Some(RenderedTranscriptNode::Paragraph(header_node)) = builder.nodes.last_mut() {
             header_node.background_action_link = action_link_target.clone();
         }
-    }
-
-    if is_inline_collapsed {
-        return;
     }
 
     let body_node_start = builder.node_count();
@@ -578,6 +569,130 @@ pub(super) fn render_thinking_block(
         if body_node_count > 0 {
             builder.insert_panel(body_node_start, body_node_count, outer_panel_background);
         }
+    }
+}
+
+/// Renders one completed inline thinking block as a permanently expanded Markdown-note projection with a quote bar.
+/// 将单个已完成的内联思考区块渲染为永久展开的 Markdown 备注投影，并带有引用竖线。
+fn render_inline_thinking_note(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    markdown_settings: markdown::Settings,
+    app_theme: &Theme,
+) {
+    let content_indent_left = 14.0;
+    let render_header = block
+        .attributes
+        .get("ui-render-thinking-header")
+        .map(|value| value != "false")
+        .unwrap_or(true);
+    let title = block
+        .attributes
+        .get("ui-thinking-title")
+        .cloned()
+        .unwrap_or_else(|| String::from("思考过程"));
+    let title_color = app_theme
+        .palette()
+        .background
+        .base
+        .text
+        .scale_alpha(0.88);
+
+    if render_header {
+        builder.push_rich_paragraph(
+            build_agent_view_plain_text_spans(
+                &title,
+                Font {
+                    weight: font::Weight::Semibold,
+                    ..theme::ui_font()
+                },
+                PlainTextRenderKind::Flow,
+                Some(title_color),
+                app_theme,
+            ),
+            markdown_settings.text_size,
+            text::LineHeight::default(),
+            text::Wrapping::Word,
+            content_indent_left,
+            0.0,
+            if block.body.trim().is_empty() { 0.0 } else { 4.0 },
+            Padding::ZERO,
+            None,
+            0,
+        );
+    }
+
+    let body_node_start = builder.node_count();
+    let prepared_body = prepare_markdown_source_for_rendering(&block.body);
+    let paragraph_style = PlainParagraphStyle {
+        background: None,
+        surface_background: None,
+        inner_padding: Padding::ZERO,
+        color: None,
+        indent_left: content_indent_left,
+        quote_depth: 0,
+        gap_after: 4.0,
+        suppress_embedded_backgrounds: false,
+        ..PlainParagraphStyle::flow(markdown_settings.text_size)
+    };
+
+    if raw_source_contains_markdown_table(&prepared_body) {
+        render_markdown_source_with_table_fallback(
+            builder,
+            &prepared_body,
+            paragraph_style,
+            markdown_settings,
+            app_theme,
+        );
+    } else {
+        let normalized_body = normalize_markdown_source_for_transcript_display(&prepared_body);
+        let body_markdown = markdown::Content::parse(&normalized_body);
+        render_markdown_items(
+            builder,
+            body_markdown.items(),
+            RenderContext {
+                indent_left: content_indent_left,
+                quote_depth: 0,
+                ..RenderContext::default()
+            },
+            markdown_settings,
+            app_theme,
+        );
+    }
+
+    let panel_start_index = if render_header {
+        body_node_start.saturating_sub(1)
+    } else {
+        body_node_start
+    };
+    let panel_child_count = builder.node_count().saturating_sub(panel_start_index);
+    let note_panel_background = RenderedParagraphBackground {
+        background: Background::Color(Color::TRANSPARENT),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+    };
+    let accent_color = app_theme
+        .palette()
+        .background
+        .strong
+        .color
+        .scale_alpha(0.58);
+
+    if panel_child_count > 0 {
+        builder.insert_panel_with_accent(
+            panel_start_index,
+            panel_child_count,
+            note_panel_background,
+            Some(RenderedPanelAccentRule {
+                color: accent_color,
+                width: 3.0,
+                top_inset: 2.0,
+                bottom_inset: 2.0,
+            }),
+        );
     }
 }
 

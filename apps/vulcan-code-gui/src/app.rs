@@ -6777,16 +6777,6 @@ impl VulcanWorkbench {
         self.refresh_session_agent_view_buffers(session_id);
     }
 
-    /// Returns whether one unified rendered block is currently collapsed for the target session.
-    /// 返回目标会话中的某个统一渲染区块当前是否处于折叠状态。
-    fn session_agent_view_block_is_collapsed(&self, session_id: SessionId, block_id: &str) -> bool {
-        self.session_agent_view_block_collapsed
-            .get(&session_id)
-            .and_then(|entry| entry.get(block_id))
-            .copied()
-            .unwrap_or(false)
-    }
-
     /// Updates the execution phase tracked for one session transcript.
     /// 更新某个会话转录区跟踪的执行阶段。
     fn set_session_run_phase(&mut self, session_id: SessionId, phase: SessionRunPhase) {
@@ -6915,8 +6905,7 @@ impl VulcanWorkbench {
         if directive.kind == vulcan_agent_view::AgentViewDirectiveKind::Thinking {
             directive.attributes.insert(
                 String::from("ui-inline-collapsed"),
-                self.session_agent_view_block_is_collapsed(session_id, block_id)
-                    .to_string(),
+                String::from("false"),
             );
             directive.attributes.insert(
                 String::from("ui-render-thinking-header"),

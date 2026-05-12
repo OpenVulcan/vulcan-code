@@ -993,7 +993,7 @@ fn execute_provider_prompt_stream(
         .and_then(|agent| agent.temperature)
         .or(preparation.temperature)
         .map(|value| value.clamp(0.0, 2.0) as f64);
-    let max_turns = resolve_runtime_max_turns(active_agent);
+    let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
     let request_headers = match build_provider_request_headers(&preparation.model_blueprint) {
@@ -1090,6 +1090,22 @@ fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> O
         .map(|value| value as usize)
 }
 
+/// Returns one safe runtime default turn budget when no explicit override is configured.
+/// 在未配置显式覆盖时返回一个安全的运行时默认轮次预算。
+const DEFAULT_RUNTIME_MAX_TURNS_LIMIT: usize = usize::MAX - 1;
+
+/// Resolves one effective max-turn budget for the rig agent builder.
+/// 为 rig 代理构建器解析一个生效中的最大轮次预算。
+fn resolve_runtime_default_max_turns_limit(
+    active_agent: Option<&RuntimeAgentDefinition>,
+) -> usize {
+    active_agent
+        .and_then(|agent| agent.max_turns)
+        .filter(|value| *value > 0)
+        .map(|value| value as usize)
+        .unwrap_or(DEFAULT_RUNTIME_MAX_TURNS_LIMIT)
+}
+
 /// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client and streams deltas.
 /// 使用兼容 Chat Completions 的 rig 客户端执行一次 OpenAI 兼容提示词调用并流式返回增量。
 fn execute_openai_compatible_stream(
@@ -1099,7 +1115,7 @@ fn execute_openai_compatible_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: Option<usize>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1126,9 +1142,7 @@ fn execute_openai_compatible_stream(
         .name("Vulcan Code Worker")
         .preamble(system_preamble);
 
-    if let Some(max_turns) = max_turns {
-        agent_builder = agent_builder.default_max_turns(max_turns);
-    }
+    agent_builder = agent_builder.default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1385,7 +1399,7 @@ fn execute_openai_responses_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: Option<usize>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1412,9 +1426,7 @@ fn execute_openai_responses_stream(
         .name("Vulcan Code Responses Worker")
         .preamble(system_preamble);
 
-    if let Some(max_turns) = max_turns {
-        agent_builder = agent_builder.default_max_turns(max_turns);
-    }
+    agent_builder = agent_builder.default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1459,7 +1471,7 @@ fn execute_anthropic_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: Option<usize>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1486,9 +1498,7 @@ fn execute_anthropic_stream(
         .name("Vulcan Code Anthropic Worker")
         .preamble(system_preamble);
 
-    if let Some(max_turns) = max_turns {
-        agent_builder = agent_builder.default_max_turns(max_turns);
-    }
+    agent_builder = agent_builder.default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1532,7 +1542,7 @@ fn execute_openrouter_stream(
     system_preamble: &str,
     prompt: &str,
     temperature: Option<f64>,
-    max_turns: Option<usize>,
+    max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
     additional_params: Option<Value>,
@@ -1555,9 +1565,7 @@ fn execute_openrouter_stream(
         .name("Vulcan Code OpenRouter Worker")
         .preamble(system_preamble);
 
-    if let Some(max_turns) = max_turns {
-        agent_builder = agent_builder.default_max_turns(max_turns);
-    }
+    agent_builder = agent_builder.default_max_turns(max_turns);
 
     if let Some(temperature) = temperature {
         agent_builder = agent_builder.temperature(temperature);
@@ -1738,9 +1746,10 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionPreparation, SyntheticThinkingPreambleState,
-        build_provider_request_preview_markdown, build_runtime_system_preamble,
-        classify_synthetic_thinking_preamble, normalize_streamed_thinking_output,
+        DEFAULT_RUNTIME_MAX_TURNS_LIMIT, ExecutionPreparation,
+        SyntheticThinkingPreambleState, build_provider_request_preview_markdown,
+        build_runtime_system_preamble, classify_synthetic_thinking_preamble,
+        normalize_streamed_thinking_output, resolve_runtime_default_max_turns_limit,
         resolve_runtime_max_turns,
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
@@ -1861,6 +1870,10 @@ mod tests {
     #[test]
     fn runtime_max_turns_default_to_unlimited_without_override() {
         assert_eq!(resolve_runtime_max_turns(None), None);
+        assert_eq!(
+            resolve_runtime_default_max_turns_limit(None),
+            DEFAULT_RUNTIME_MAX_TURNS_LIMIT
+        );
 
         let worker_agent = RuntimeAgentDefinition {
             id: String::from("worker"),
@@ -1880,6 +1893,10 @@ mod tests {
             max_turns: None,
         };
         assert_eq!(resolve_runtime_max_turns(Some(&worker_agent)), None);
+        assert_eq!(
+            resolve_runtime_default_max_turns_limit(Some(&worker_agent)),
+            DEFAULT_RUNTIME_MAX_TURNS_LIMIT
+        );
     }
 
     /// Verifies runtime system preamble no longer embeds agent-authored prompt text or duplicated tool catalogs.

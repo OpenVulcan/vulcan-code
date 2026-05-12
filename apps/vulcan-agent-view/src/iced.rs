@@ -331,10 +331,10 @@ mod tests {
         assert!(normalized.contains("```rust\nlet value = 1;\nlet next = 2;\n```"));
     }
 
-    /// Verifies collapsed inline thinking headers now match compact tool rows on both horizontal and vertical spacing.
-    /// 验证折叠态内联思考头部现在会在水平和垂直留白上都与紧凑工具行一致。
+    /// Verifies completed inline thinking renders one custom note panel with a single left accent rule and no modal click action.
+    /// 验证已完成的内联思考会渲染为带单条左侧强调线的自定义备注面板，并且不会再挂接弹层点击动作。
     #[test]
-    fn collapsed_thinking_header_uses_relaxed_padding() {
+    fn inline_thinking_note_renders_custom_left_accent_panel() {
         let app_theme = Theme::Dark;
         let markdown_settings = theme::markdown_settings(&app_theme);
         let mut builder = RenderedTranscriptBuilder::new(
@@ -344,6 +344,7 @@ mod tests {
         let mut attributes = AgentViewAttributes::new();
         attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
         attributes.insert(String::from("ui-inline-collapsed"), String::from("true"));
+        attributes.insert(String::from("ui-thinking-title"), String::from("思考过程 · 1.2秒"));
         let block = AgentViewDirectiveBlock::new(
             AgentViewDirectiveKind::Thinking,
             attributes,
@@ -361,16 +362,28 @@ mod tests {
                 RenderedTranscriptNode::Paragraph(paragraph) => Some(paragraph),
                 _ => None,
             })
-            .expect("collapsed thinking should still render one header paragraph");
+            .expect("inline thinking note should still render one title paragraph");
+        let panel_node = builder
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                RenderedTranscriptNode::Panel(panel) => Some(panel),
+                _ => None,
+            })
+            .expect("inline thinking note should wrap content inside one panel");
 
+        assert_eq!(header_node.indent_left, 14.0);
+        assert_eq!(header_node.quote_depth, 0);
         assert_eq!(header_node.inner_padding, Padding::ZERO);
-        assert_eq!(header_node.gap_after, 0.0);
+        assert!(header_node.background_action_link.is_none());
+        assert!(header_node.display_text.contains("思考过程"));
+        assert!(panel_node.left_accent_rule.is_some());
     }
 
-    /// Verifies expanded inline thinking keeps a tool-row-equivalent header rhythm while still removing the extra body-side horizontal inset.
-    /// 验证展开态内联思考会保持与工具行等价的头部节奏，同时仍会移除正文额外的水平内缩。
+    /// Verifies completed inline thinking body now keeps normal Markdown layout while sharing the custom note-panel left accent.
+    /// 验证已完成的内联思考正文现在会保持正常 Markdown 布局，同时共享自定义备注面板的左侧强调线。
     #[test]
-    fn expanded_thinking_keeps_stable_header_and_body_padding() {
+    fn inline_thinking_body_keeps_normal_markdown_layout() {
         let app_theme = Theme::Dark;
         let markdown_settings = theme::markdown_settings(&app_theme);
         let mut builder = RenderedTranscriptBuilder::new(
@@ -380,6 +393,7 @@ mod tests {
         let mut attributes = AgentViewAttributes::new();
         attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
         attributes.insert(String::from("ui-inline-collapsed"), String::from("false"));
+        attributes.insert(String::from("ui-thinking-title"), String::from("思考过程 · 2.0秒"));
         let block = AgentViewDirectiveBlock::new(
             AgentViewDirectiveKind::Thinking,
             attributes,
@@ -401,16 +415,18 @@ mod tests {
             .next()
             .expect("expanded thinking should render at least one body paragraph");
 
-        assert_eq!(header_node.inner_padding, Padding::ZERO);
-        assert_eq!(header_node.gap_after, 0.0);
+        assert_eq!(header_node.indent_left, 14.0);
+        assert_eq!(header_node.quote_depth, 0);
         assert_eq!(body_node.inner_padding, Padding::ZERO);
+        assert_eq!(body_node.indent_left, 14.0);
+        assert_eq!(body_node.quote_depth, 0);
         assert!(body_node.display_text.contains('\n'));
     }
 
-    /// Verifies inline thinking tables no longer add an extra horizontal inset while still retaining a visible header tint.
-    /// 验证内联思考表格不再追加额外水平内缩，同时仍会保留可见的表头着色。
+    /// Verifies inline thinking tables keep their normal table layout while still living inside the custom left-accent note panel.
+    /// 验证内联思考表格会保持正常表格布局，同时仍然位于自定义左侧强调线备注面板内部。
     #[test]
-    fn inline_thinking_tables_keep_inset_and_header_tint() {
+    fn inline_thinking_tables_keep_normal_table_layout() {
         let app_theme = Theme::Dark;
         let markdown_settings = theme::markdown_settings(&app_theme);
         let mut builder = RenderedTranscriptBuilder::new(
@@ -439,16 +455,10 @@ mod tests {
             })
             .expect("inline thinking should render one table node");
 
+        assert_eq!(table_node.indent_left, 14.0);
+        assert_eq!(table_node.quote_depth, 0);
         assert_eq!(table_node.outer_padding.left, 0.0);
         assert_eq!(table_node.outer_padding.right, 0.0);
-        assert!(matches!(
-            table_node.header_background,
-            Background::Color(color) if color != Color::TRANSPARENT
-        ));
-        assert!(matches!(
-            table_node.body_background,
-            Background::Color(color) if color != Color::TRANSPARENT
-        ));
     }
 
     /// Verifies background-suppressed standalone tables stay transparent when no semantic surface background is supplied.

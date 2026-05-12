@@ -190,6 +190,27 @@ pub(super) struct RenderedPanelNode {
     /// Background treatment drawn behind the covered child nodes.
     /// 绘制在被覆盖子节点背后的背景样式。
     pub(super) background: RenderedParagraphBackground,
+    /// Optional left accent rule drawn for note-like panels such as completed inline thinking.
+    /// 为已完成内联思考等备注式面板绘制的可选左侧强调竖线。
+    pub(super) left_accent_rule: Option<RenderedPanelAccentRule>,
+}
+
+/// One decorative left accent rule optionally rendered along the panel edge.
+/// 可选渲染在面板边缘的一条装饰性左侧强调竖线。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RenderedPanelAccentRule {
+    /// Stroke color used by the left accent rule.
+    /// 左侧强调竖线使用的描边颜色。
+    pub(super) color: Color,
+    /// Visual width of the accent rule.
+    /// 强调竖线的可见宽度。
+    pub(super) width: f32,
+    /// Top inset applied before drawing the accent rule.
+    /// 绘制强调竖线之前应用的顶部内缩。
+    pub(super) top_inset: f32,
+    /// Bottom inset applied before ending the accent rule.
+    /// 结束绘制强调竖线之前应用的底部内缩。
+    pub(super) bottom_inset: f32,
 }
 
 /// One compact collapsible semantic block rendered inside the transcript flow.

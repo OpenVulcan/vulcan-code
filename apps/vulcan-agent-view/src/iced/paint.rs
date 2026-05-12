@@ -213,6 +213,23 @@ pub(super) fn draw_visible_transcript_content(
         if panel_node.background.border.width > f32::EPSILON {
             panel_border_overlays.push((outer_bounds, panel_node.background.border));
         }
+        if let Some(accent_rule) = panel_node.left_accent_rule {
+            let accent_height =
+                (outer_bounds.height - accent_rule.top_inset - accent_rule.bottom_inset).max(1.0);
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: Rectangle::new(
+                        Point::new(
+                            outer_bounds.x,
+                            outer_bounds.y + accent_rule.top_inset.max(0.0),
+                        ),
+                        Size::new(accent_rule.width.max(1.0), accent_height),
+                    ),
+                    ..renderer::Quad::default()
+                },
+                Background::Color(accent_rule.color),
+            );
+        }
     }
 
     for flow_layout in scene.visible_flow_layouts() {
