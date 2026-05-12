@@ -10,10 +10,11 @@ mod tests {
         attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
         inject_previous_response_id_into_additional_params,
     };
-    use crate::agent_runtime::provider_request_bridge::{
-        build_core_conversation_snapshot, build_openai_compatible_turn_request_snapshot,
-        core_messages_to_rig_history, core_snapshot_to_session_conversation_state,
+    use crate::agent_runtime::provider_request_bridge_conversation::{
+        build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
     };
+    use crate::agent_runtime::provider_request_bridge_rig::core_messages_to_rig_history;
+    use crate::agent_runtime::provider_request_bridge_snapshot::build_openai_compatible_turn_request_snapshot;
     use crate::agent_runtime::provider_request_snapshot::{
         build_core_provider_request_snapshot, build_provider_request_preview_markdown,
     };

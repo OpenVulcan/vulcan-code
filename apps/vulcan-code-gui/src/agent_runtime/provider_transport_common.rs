@@ -1,10 +1,11 @@
 //! Shared host-controlled provider transport helpers reused by the provider-specific adapters.
 //! 供各 Provider 专用适配器复用的共享宿主控制 Provider 传输辅助逻辑。
 
-use crate::agent_runtime::provider_request_bridge::{
-    build_openai_compatible_turn_request_snapshot, core_message_to_rig_message,
-    core_messages_to_rig_history, resolved_tool_definition_to_rig_tool_definition,
+use crate::agent_runtime::provider_request_bridge_rig::{
+    core_message_to_rig_message, core_messages_to_rig_history,
 };
+use crate::agent_runtime::provider_request_bridge_snapshot::build_openai_compatible_turn_request_snapshot;
+use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_rig_tool_definition;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;

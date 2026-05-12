@@ -1,10 +1,9 @@
 //! Provider request snapshot helpers layered on top of the shared request-bridge protocol conversions.
 //! 构建在共享请求桥协议转换层之上的 Provider 请求快照辅助模块。
 
-use crate::agent_runtime::provider_request_bridge::{
-    build_core_conversation_snapshot, core_messages_to_provider_visible_history,
-    resolved_tool_definition_to_core_tool_schema,
-};
+use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
+use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 use crate::conversation_protocol::{SessionConversationState, replace_messages_from_rig_history};
 use reqwest::header::HeaderMap;
 use rig::OneOrMany;

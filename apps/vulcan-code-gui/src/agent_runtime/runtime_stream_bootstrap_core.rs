@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
-use crate::agent_runtime::provider_request_bridge::build_core_conversation_snapshot;
+use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_snapshot::{
     build_core_controller_config, build_core_provider_request_snapshot,
     build_provider_request_preview_markdown,

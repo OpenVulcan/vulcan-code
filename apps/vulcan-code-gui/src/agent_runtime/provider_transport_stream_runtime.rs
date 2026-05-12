@@ -1,7 +1,7 @@
 //! Host-controlled provider streaming runtime wrapper for shared controller execution.
 //! 面向共享控制器执行的宿主控制 Provider 流式运行时包装模块。
 
-use crate::agent_runtime::provider_request_bridge::core_snapshot_to_session_conversation_state;
+use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::provider_transport_common::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;

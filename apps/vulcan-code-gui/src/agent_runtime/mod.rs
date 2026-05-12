@@ -10,7 +10,7 @@ pub mod mcp_runtime_projection;
 pub mod provider;
 pub mod provider_prompt_loader;
 pub mod provider_protocol_bridge;
-pub mod provider_request_bridge;
+pub mod provider_request_bridge_conversation;
 pub mod provider_request_bridge_messages;
 pub mod provider_request_bridge_records;
 pub mod provider_request_bridge_rig;
