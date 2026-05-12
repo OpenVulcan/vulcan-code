@@ -78,9 +78,52 @@ pub enum VulcanPlanToolPolicy {
     HeuristicText(String),
 }
 
+/// Structured host-only tool result preserved outside the model-visible payload.
+/// 保留在模型可见载荷之外的宿主专用结构化工具结果。
+#[derive(Debug, Clone)]
+pub struct VulcanToolHostResult {
+    /// Stable host-consumed result kind such as `change_set`.
+    /// 供宿主消费的稳定结果类型，例如 `change_set`。
+    pub kind: String,
+    /// JSON-compatible host payload preserved for UI and audit surfaces.
+    /// 为界面与审计表面保留的 JSON 兼容宿主载荷。
+    pub payload: Value,
+}
+
+/// Structured tool invocation result that keeps model-visible output and host-only metadata separate.
+/// 将模型可见输出与宿主专用元数据分离保存的结构化工具调用结果。
+#[derive(Debug, Clone)]
+pub struct VulcanToolInvocationResult {
+    /// Final model-visible output that will be serialized back into the rig tool result body.
+    /// 最终将被序列化回 rig 工具返回正文的模型可见输出。
+    pub model_output: Value,
+    /// Optional host-only structured result reserved for transcript metadata and richer UI projections.
+    /// 为转录元数据与更丰富界面投影保留的可选宿主专用结构化结果。
+    pub host_result: Option<VulcanToolHostResult>,
+}
+
+impl VulcanToolInvocationResult {
+    /// Builds one structured tool result from the model-visible payload only.
+    /// 仅根据模型可见载荷构建一条结构化工具结果。
+    pub fn from_model_output(model_output: Value) -> Self {
+        Self {
+            model_output,
+            host_result: None,
+        }
+    }
+
+    /// Attaches one host-only structured result while preserving the model-visible payload.
+    /// 在保留模型可见载荷的同时附着一条宿主专用结构化结果。
+    pub fn with_host_result(mut self, host_result: VulcanToolHostResult) -> Self {
+        self.host_result = Some(host_result);
+        self
+    }
+}
+
 /// Boxed asynchronous future used by host-owned tool invokers.
 /// 宿主自有工具调用器使用的装箱异步 Future。
-pub type VulcanToolInvokeFuture = Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
+pub type VulcanToolInvokeFuture =
+    Pin<Box<dyn Future<Output = Result<VulcanToolInvocationResult, String>> + Send>>;
 
 /// Shared host-owned asynchronous tool invoker closure.
 /// 宿主自有共享异步工具调用闭包。
@@ -196,7 +239,7 @@ impl VulcanToolsManager {
         tool: &ResolvedToolDefinition,
         args: Value,
         session_id: Option<String>,
-    ) -> Result<Value, String> {
+    ) -> Result<VulcanToolInvocationResult, String> {
         (tool.invoke)(args, session_id).await
     }
 }

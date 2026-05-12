@@ -89,10 +89,18 @@ fn append_session_message_blocks(document: &mut AgentViewDocument, message: &Ses
             ));
         }
         (_, SessionMessageRecordKind::ToolResultOutput) => {
-            document.push_directive(build_tool_record_block(
-                AgentViewDirectiveKind::ToolResult,
-                message,
-            ));
+            let tool_kind = if message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(|value| value.as_str())
+                .is_some()
+            {
+                AgentViewDirectiveKind::ToolCall
+            } else {
+                AgentViewDirectiveKind::ToolResult
+            };
+            document.push_directive(build_tool_record_block(tool_kind, message));
         }
         (SessionMessageKind::Error, _) => {
             document.push_directive(build_error_notice_block(message));
@@ -179,6 +187,18 @@ fn build_tool_record_block(
     }
     if !message.title.trim().is_empty() {
         attributes.insert(String::from("title"), message.title.clone());
+    }
+    if let Some(tool_display_state) = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_display_state"))
+        .and_then(|value| value.as_str())
+        .filter(|state| !state.trim().is_empty())
+    {
+        attributes.insert(
+            String::from("tool-display-state"),
+            tool_display_state.to_string(),
+        );
     }
     let raw_source = render_directive_source(&kind, &attributes, &message.body);
 
@@ -322,6 +342,7 @@ mod tests {
     use super::build_agent_view_document;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+    use serde_json::json;
     use vulcan_agent_view::{AgentViewBlock, AgentViewDirectiveKind};
 
     /// Verifies that user prompts and thinking messages become directive blocks while assistant output keeps Markdown parsing.
@@ -336,6 +357,7 @@ mod tests {
                 visible: true,
                 title: String::from("用户输入"),
                 body: String::from("实现输出面板。"),
+                metadata: None,
                 created_at: String::from("1"),
             },
             SessionMessageEntry {
@@ -345,6 +367,7 @@ mod tests {
                 visible: true,
                 title: String::from("思考"),
                 body: String::from("先统一结构，再处理选择。"),
+                metadata: None,
                 created_at: String::from("2"),
             },
             SessionMessageEntry {
@@ -354,6 +377,7 @@ mod tests {
                 visible: true,
                 title: String::from("输出"),
                 body: String::from("## 结果\n\n支持 **Markdown**。"),
+                metadata: None,
                 created_at: String::from("3"),
             },
         ];
@@ -428,5 +452,35 @@ mod tests {
         let document = build_agent_view_document(&[], &runtime_events);
 
         assert!(document.blocks.is_empty());
+    }
+
+    /// Verifies that one completed tool display row still renders as a tool-call directive so the icon stays stable while the display state drives only styling.
+    /// 验证一条已完成工具显示行仍会渲染为工具调用指令，从而保持图标稳定并仅由显示状态驱动样式变化。
+    #[test]
+    fn completed_tool_display_row_keeps_tool_call_directive_kind() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("tool-result-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("调用 read_file 工具"),
+            body: String::from("## 工具返回\n\n成功读取文件。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-1",
+                "tool_display_state": "completed",
+            })),
+            created_at: String::from("2"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::ToolCall
+                    && block
+                        .attributes
+                        .get("tool-display-state")
+                        .is_some_and(|value| value == "completed")
+        ));
     }
 }

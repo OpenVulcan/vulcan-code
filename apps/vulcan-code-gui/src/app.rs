@@ -24,7 +24,6 @@ use crate::conversation_protocol::{
     append_assistant_text_message, append_record, append_record_body_delta,
     append_user_text_message, compact_conversation_with_summary,
     conversation_state_to_context_records, conversation_state_to_session_messages,
-    replace_record_content,
 };
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
@@ -71,6 +70,7 @@ use iced::{
 };
 use iced_aw::ContextMenu;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
+use serde_json::Value;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, HashSet, hash_map::DefaultHasher};
 use std::fs;
@@ -502,6 +502,146 @@ fn composer_text_has_submittable_content(text: &str) -> bool {
 /// 返回给定提示词选区载荷是否包含任何有效文本。
 fn composer_selection_has_content(selection: Option<&str>) -> bool {
     selection.is_some_and(|text| !text.is_empty())
+}
+
+/// Merges tool-call and tool-result transcript rows into one human-facing display card while keeping the raw session records untouched.
+/// 在保持原始会话记录不变的前提下，将工具调用与工具返回转录行合并为面向人类的一张显示卡片。
+fn merge_tool_display_messages(messages: Vec<SessionMessageEntry>) -> Vec<SessionMessageEntry> {
+    let mut merged_messages = Vec::with_capacity(messages.len());
+    let mut tool_message_indices = BTreeMap::new();
+
+    for message in messages {
+        let Some(tool_call_id) = tool_display_message_call_id(&message) else {
+            merged_messages.push(message);
+            continue;
+        };
+
+        match message.record_kind {
+            SessionMessageRecordKind::ToolCallOutput => {
+                let normalized = normalize_tool_display_message(message);
+                tool_message_indices.insert(tool_call_id, merged_messages.len());
+                merged_messages.push(normalized);
+            }
+            SessionMessageRecordKind::ToolResultOutput => {
+                let normalized = normalize_tool_display_message(message);
+                if let Some(index) = tool_message_indices.get(&tool_call_id).copied() {
+                    merge_tool_result_into_display_entry(&mut merged_messages[index], normalized);
+                } else {
+                    tool_message_indices.insert(tool_call_id, merged_messages.len());
+                    merged_messages.push(normalized);
+                }
+            }
+            _ => merged_messages.push(message),
+        }
+    }
+
+    merged_messages
+}
+
+/// Extracts the stable tool-call identifier from one display-capable transcript message when metadata provides it.
+/// 当元数据中存在稳定工具调用标识时，从单条可显示转录消息中提取该标识。
+fn tool_display_message_call_id(message: &SessionMessageEntry) -> Option<String> {
+    matches!(
+        message.record_kind,
+        SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+    )
+    .then_some(())?;
+    message
+        .metadata
+        .as_ref()?
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Normalizes one tool display message into the unified transcript-card title expected by the merged human-facing view.
+/// 将单条工具显示消息规范化为合并后面向人类视图所需的统一转录卡片标题。
+fn normalize_tool_display_message(mut message: SessionMessageEntry) -> SessionMessageEntry {
+    if let Some(tool_name) = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_name"))
+        .and_then(Value::as_str)
+        .filter(|tool_name| !tool_name.trim().is_empty())
+    {
+        message.title = format!("调用 {tool_name} 工具");
+    }
+    message.metadata = attach_tool_display_state_metadata(
+        message.metadata.take(),
+        tool_display_state_for_record_kind(message.record_kind),
+    );
+    message
+}
+
+/// Merges one completed tool-result display message into the existing tool-call display card shown to the user.
+/// 将一条已完成工具结果显示消息合并到当前展示给用户的工具调用显示卡片中。
+fn merge_tool_result_into_display_entry(
+    existing: &mut SessionMessageEntry,
+    tool_result_message: SessionMessageEntry,
+) {
+    existing.record_kind = SessionMessageRecordKind::ToolCallOutput;
+    if existing.title.trim().is_empty() && !tool_result_message.title.trim().is_empty() {
+        existing.title = tool_result_message.title;
+    }
+    existing.body = merge_tool_display_body(&existing.body, &tool_result_message.body);
+    existing.metadata =
+        merge_tool_display_metadata(existing.metadata.take(), tool_result_message.metadata);
+    existing.metadata =
+        attach_tool_display_state_metadata(existing.metadata.take(), "completed");
+}
+
+/// Combines one tool-call body and one tool-result body into the single Markdown payload shown inside the merged display card.
+/// 将工具调用正文与工具结果正文组合成合并显示卡片中的单份 Markdown 载荷。
+fn merge_tool_display_body(tool_call_body: &str, tool_result_body: &str) -> String {
+    let tool_call_body = tool_call_body.trim();
+    let tool_result_body = tool_result_body.trim();
+    match (tool_call_body.is_empty(), tool_result_body.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => tool_call_body.to_string(),
+        (true, false) => tool_result_body.to_string(),
+        (false, false) => format!("{tool_call_body}\n\n---\n\n{tool_result_body}"),
+    }
+}
+
+/// Shallow-merges one tool-call metadata object with the later tool-result metadata object so the display layer can see the full execution snapshot.
+/// 将工具调用元数据对象与后续工具结果元数据对象做浅层合并，便于显示层看到完整执行快照。
+fn merge_tool_display_metadata(
+    tool_call_metadata: Option<Value>,
+    tool_result_metadata: Option<Value>,
+) -> Option<Value> {
+    match (tool_call_metadata, tool_result_metadata) {
+        (Some(Value::Object(mut tool_call_object)), Some(Value::Object(tool_result_object))) => {
+            tool_call_object.extend(tool_result_object);
+            Some(Value::Object(tool_call_object))
+        }
+        (Some(metadata), None) => Some(metadata),
+        (None, Some(metadata)) => Some(metadata),
+        (Some(_), Some(metadata)) => Some(metadata),
+        (None, None) => None,
+    }
+}
+
+/// Returns the stable display state used by one human-facing tool execution card.
+/// 返回单张面向人类的工具执行卡片所使用的稳定显示状态。
+fn tool_display_state_for_record_kind(record_kind: SessionMessageRecordKind) -> &'static str {
+    match record_kind {
+        SessionMessageRecordKind::ToolResultOutput => "completed",
+        _ => "running",
+    }
+}
+
+/// Injects one display-only execution state flag into tool-card metadata without affecting the model-facing protocol payload.
+/// 向工具卡片元数据注入一个仅用于显示的执行状态标记，而不影响面向模型的协议载荷。
+fn attach_tool_display_state_metadata(metadata: Option<Value>, state: &str) -> Option<Value> {
+    let mut metadata_object = match metadata {
+        Some(Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    };
+    metadata_object.insert(
+        String::from("tool_display_state"),
+        Value::String(state.to_string()),
+    );
+    Some(Value::Object(metadata_object))
 }
 
 /// Returns whether one clipboard text payload should enable the composer paste action.
@@ -5716,6 +5856,29 @@ impl VulcanWorkbench {
         body: impl Into<String>,
         collapsed_by_default: bool,
     ) -> String {
+        self.push_visible_session_record_message_with_metadata(
+            session_id,
+            kind,
+            record_kind,
+            title,
+            body,
+            None,
+            collapsed_by_default,
+        )
+    }
+
+    /// Appends one visible transcript message together with optional structured metadata used only by transcript projections.
+    /// 追加一条带可选结构化元数据的可见转录消息，且该元数据仅供转录投影使用。
+    fn push_visible_session_record_message_with_metadata(
+        &mut self,
+        session_id: SessionId,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        metadata: Option<Value>,
+        collapsed_by_default: bool,
+    ) -> String {
         let title = title.into();
         let body = body.into();
         let message_id = self.append_session_message_entry(
@@ -5727,6 +5890,7 @@ impl VulcanWorkbench {
                 visible: true,
                 title,
                 body,
+                metadata,
                 created_at: String::new(),
             },
         );
@@ -5817,6 +5981,7 @@ impl VulcanWorkbench {
                 visible: entry.visible,
                 title: entry.title.clone(),
                 body: entry.body.clone(),
+                metadata: entry.metadata.clone(),
                 created_at: entry.created_at.clone(),
             },
         );
@@ -5892,45 +6057,6 @@ impl VulcanWorkbench {
         runtime_state.updated_at = current_unix_millis_text();
         self.sync_session_messages_from_conversation_state(session_id);
         self.refresh_session_message_projection_buffers(session_id, message_id);
-        self.refresh_session_agent_view_buffers(session_id);
-    }
-
-    /// Replaces the full visible payload of one existing session message and refreshes every cached projection.
-    /// 替换某条既有会话消息的完整可见载荷，并刷新全部缓存投影。
-    fn replace_session_message_payload(
-        &mut self,
-        session_id: SessionId,
-        message_id: &str,
-        title: impl Into<String>,
-        body: impl Into<String>,
-        record_kind: SessionMessageRecordKind,
-    ) {
-        let title = title.into();
-        let body = body.into();
-        self.ensure_session_conversation_state_loaded(session_id);
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        if !replace_record_content(
-            &mut runtime_state.conversation_state,
-            message_id,
-            title,
-            body.clone(),
-            record_kind,
-        ) {
-            return;
-        }
-        runtime_state.updated_at = current_unix_millis_text();
-
-        self.sync_session_messages_from_conversation_state(session_id);
-        self.session_message_raw_buffers.insert(
-            message_id.to_string(),
-            text_editor::Content::with_text(&body),
-        );
-        let (markdown_content, markdown_buffer) =
-            parse_selectable_markdown_body(&body, &self.app_theme);
-        self.session_message_markdown
-            .insert(message_id.to_string(), markdown_content);
-        self.session_message_markdown_buffers
-            .insert(message_id.to_string(), markdown_buffer);
         self.refresh_session_agent_view_buffers(session_id);
     }
 
@@ -6913,12 +7039,13 @@ impl VulcanWorkbench {
 
                 self.seal_streaming_message_segments(session_id);
                 let title = format!("调用 {tool_name} 工具");
-                let message_id = self.push_visible_session_record_message(
+                let message_id = self.push_visible_session_record_message_with_metadata(
                     session_id,
                     SessionMessageKind::Assistant,
                     SessionMessageRecordKind::ToolCallOutput,
                     title,
                     event.detail.clone(),
+                    event.metadata.clone(),
                     false,
                 );
                 self.session_tool_call_message_ids
@@ -6934,53 +7061,36 @@ impl VulcanWorkbench {
                 };
 
                 self.seal_streaming_message_segments(session_id);
-                let existing_message_id = self
+                let result_title = self
                     .session_tool_call_message_ids
                     .get(&session_id)
                     .and_then(|entries| entries.get(&tool_call_id))
-                    .cloned();
-
-                if let Some(message_id) = existing_message_id {
-                    let existing_body = self
-                        .session_messages
-                        .get(&session_id)
-                        .and_then(|messages| {
+                    .and_then(|message_id| {
+                        self.session_messages.get(&session_id).and_then(|messages| {
                             messages
                                 .iter()
-                                .find(|message| message.id == message_id)
-                                .map(|message| message.body.clone())
+                                .find(|message| message.id == *message_id)
+                                .map(|message| {
+                                    let call_title = message.title.trim();
+                                    if call_title.is_empty() {
+                                        format!("调用 {tool_call_id} 工具")
+                                    } else {
+                                        call_title.to_string()
+                                    }
+                                })
                         })
-                        .unwrap_or_default();
-                    let merged_body = if existing_body.trim().is_empty() {
-                        event.detail.clone()
-                    } else {
-                        format!("{existing_body}\n\n{}\n", event.detail.trim())
-                    };
-                    self.replace_session_message_payload(
-                        session_id,
-                        &message_id,
-                        self.session_messages
-                            .get(&session_id)
-                            .and_then(|messages| {
-                                messages
-                                    .iter()
-                                    .find(|message| message.id == message_id)
-                                    .map(|message| message.title.clone())
-                            })
-                            .unwrap_or_else(|| String::from("工具调用")),
-                        merged_body,
-                        SessionMessageRecordKind::ToolCallOutput,
-                    );
-                } else {
-                    self.push_visible_session_record_message(
-                        session_id,
-                        SessionMessageKind::Assistant,
-                        SessionMessageRecordKind::ToolCallOutput,
-                        format!("工具调用 {tool_call_id}"),
-                        event.detail.clone(),
-                        false,
-                    );
-                }
+                    })
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| format!("调用 {tool_call_id} 工具"));
+                self.push_visible_session_record_message_with_metadata(
+                    session_id,
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::ToolResultOutput,
+                    result_title,
+                    event.detail.clone(),
+                    event.metadata.clone(),
+                    false,
+                );
 
                 true
             }
@@ -7045,7 +7155,8 @@ impl VulcanWorkbench {
         self.session_messages
             .get(&session_id)
             .map(|messages| {
-                messages
+                merge_tool_display_messages(
+                    messages
                     .iter()
                     .filter(|message| {
                         message.is_visible_to_user()
@@ -7054,7 +7165,8 @@ impl VulcanWorkbench {
                                 .is_none_or(|active_id| message.id != active_id)
                     })
                     .cloned()
-                    .collect()
+                    .collect(),
+                )
             })
             .unwrap_or_default()
     }
@@ -7647,8 +7759,13 @@ impl VulcanWorkbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{composer_text_has_submittable_content, composer_visible_line_count};
+    use super::{
+        composer_text_has_submittable_content, composer_visible_line_count,
+        merge_tool_display_messages,
+    };
+    use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use iced::widget::text_editor;
+    use serde_json::json;
 
     /// Verifies that an empty composer still reserves one visible line.
     /// 验证空提示词编辑器仍会保留一条可见逻辑行。
@@ -7687,5 +7804,104 @@ mod tests {
         assert!(!composer_text_has_submittable_content("   \n\t  "));
         assert!(composer_text_has_submittable_content("执行这个任务"));
         assert!(composer_text_has_submittable_content("\n  执行这个任务  "));
+    }
+
+    /// Verifies one tool call and its matching tool result merge into a single human-facing transcript card.
+    /// 验证一条工具调用与其匹配的工具结果会合并成面向人类的单张转录卡片。
+    #[test]
+    fn merge_tool_display_messages_collapses_matching_tool_rows() {
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("tool-call-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::from("调用 read_file 工具"),
+                body: String::from("## 调用参数\n\n```json\n{\"path\":\"src/main.rs\"}\n```"),
+                metadata: Some(json!({
+                    "tool_call_id": "call-1",
+                    "tool_name": "read_file",
+                    "arguments": {
+                        "path": "src/main.rs",
+                    },
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("tool-result-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回 read_file"),
+                body: String::from("## 工具返回\n\n成功读取文件。"),
+                metadata: Some(json!({
+                    "tool_call_id": "call-1",
+                    "tool_result_id": "result-1",
+                    "host_result": {
+                        "kind": "change_set",
+                        "payload": {
+                            "path": "src/main.rs",
+                        },
+                    },
+                })),
+                created_at: String::from("2"),
+            },
+        ];
+
+        let merged = merge_tool_display_messages(messages);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "tool-call-1");
+        assert_eq!(merged[0].record_kind, SessionMessageRecordKind::ToolCallOutput);
+        assert_eq!(merged[0].title, "调用 read_file 工具");
+        assert!(merged[0].body.contains("## 调用参数"));
+        assert!(merged[0].body.contains("## 工具返回"));
+        assert_eq!(
+            merged[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_result_id"))
+                .and_then(|value| value.as_str()),
+            Some("result-1")
+        );
+        assert_eq!(
+            merged[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(|value| value.as_str()),
+            Some("completed")
+        );
+    }
+
+    /// Verifies an in-flight tool call still stays visible on its own when no matching result has arrived yet.
+    /// 验证当尚未收到匹配结果时，进行中的工具调用仍会单独保持可见。
+    #[test]
+    fn merge_tool_display_messages_keeps_inflight_tool_call_visible() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("tool-call-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::from("调用 read_file 工具"),
+            body: String::from("## 调用参数\n\n```json\n{\"path\":\"src/main.rs\"}\n```"),
+            metadata: Some(json!({
+                "tool_call_id": "call-1",
+                "tool_name": "read_file",
+            })),
+            created_at: String::from("1"),
+        }];
+
+        let merged = merge_tool_display_messages(messages);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].record_kind, SessionMessageRecordKind::ToolCallOutput);
+        assert_eq!(merged[0].title, "调用 read_file 工具");
+        assert_eq!(
+            merged[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_display_state"))
+                .and_then(|value| value.as_str()),
+            Some("running")
+        );
     }
 }

@@ -5,6 +5,7 @@
 
 use crate::agent_runtime::executor::{ExecutionPreparation, ExecutionRunReport};
 use crate::model::SessionId;
+use serde_json::Value;
 
 /// High-level runtime event kinds emitted by the compose foundation.
 /// compose 基础架构发出的高层运行时事件类型。
@@ -43,6 +44,9 @@ pub struct RuntimeEvent {
     /// Additional event detail text.
     /// 事件补充说明文本。
     pub detail: String,
+    /// Optional structured metadata reserved for transcript projection and host-side UI enrichments.
+    /// 为转录投影与宿主侧界面增强保留的可选结构化元数据。
+    pub metadata: Option<Value>,
 }
 
 impl RuntimeEvent {
@@ -57,7 +61,15 @@ impl RuntimeEvent {
             kind,
             title: title.into(),
             detail: detail.into(),
+            metadata: None,
         }
+    }
+
+    /// Attaches optional structured metadata without changing the visible runtime headline or detail.
+    /// 在不改变可见运行时标题与正文的前提下附着可选结构化元数据。
+    pub fn with_metadata(mut self, metadata: Option<Value>) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 

@@ -3,8 +3,8 @@
 
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use rig::message::{
-    AssistantContent, Message as RigMessage, Reasoning, ReasoningContent, ToolResult,
-    ToolResultContent, UserContent,
+    AssistantContent, Message as RigMessage, ReasoningContent, ToolResult, ToolResultContent,
+    UserContent,
 };
 use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,9 @@ pub struct SessionConversationRecord {
     /// Primary body payload projected into transcript and modal surfaces.
     /// 被投影到转录与弹层表面的主要正文载荷。
     pub body: String,
+    /// Optional structured metadata reserved for transcript-only enrichments and host-side audit data.
+    /// 为仅限转录的增强信息与宿主侧审计数据保留的可选结构化元数据。
+    pub metadata: Option<Value>,
     /// Unix-millis text captured when the record was created.
     /// 捕获该记录创建时间的 Unix 毫秒文本。
     pub created_at: String,
@@ -201,24 +204,6 @@ pub fn append_record_body_delta(
     let record = state.records.iter_mut().find(|record| record.id == record_id)?;
     record.body.push_str(delta);
     Some(record.body.clone())
-}
-
-/// Replaces the canonical payload of one session record and reports whether the target record was found.
-/// 替换单条会话记录的规范载荷，并返回是否成功命中了目标记录。
-pub fn replace_record_content(
-    state: &mut SessionConversationState,
-    record_id: &str,
-    title: impl Into<String>,
-    body: impl Into<String>,
-    record_kind: SessionMessageRecordKind,
-) -> bool {
-    let Some(record) = state.records.iter_mut().find(|record| record.id == record_id) else {
-        return false;
-    };
-    record.title = title.into();
-    record.body = body.into();
-    record.record_kind = record_kind;
-    true
 }
 
 /// Rewrites the active canonical window using one compaction summary plus the retained recent tail.
@@ -445,16 +430,13 @@ fn conversation_message_to_rig_message(
         }
         SessionConversationPayload::Assistant {
             text,
-            reasoning,
+            reasoning: _,
             provider_message_id,
             tool_calls,
         } => {
             let mut content_items = Vec::new();
             if !text.trim().is_empty() {
                 content_items.push(AssistantContent::text(text.clone()));
-            }
-            if !reasoning.trim().is_empty() {
-                content_items.push(AssistantContent::Reasoning(build_reasoning_item(reasoning)));
             }
             for tool_call in tool_calls {
                 let assistant_content = match &tool_call.tool_call_id {
@@ -503,21 +485,6 @@ fn conversation_message_to_rig_message(
     }
 }
 
-/// Builds one reasoning item from flattened canonical text while preserving paragraph boundaries.
-/// 根据扁平化规范文本构建一条 reasoning 项，并保留段落边界。
-fn build_reasoning_item(reasoning: &str) -> Reasoning {
-    let parts = reasoning
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return Reasoning::new("");
-    }
-    Reasoning::multi(parts)
-}
-
 /// Converts one canonical session record back into the persisted transcript entry shape expected by the current GUI layer.
 /// 将单条规范会话记录重新转换为当前图形界面层期望的持久化转录条目形状。
 fn conversation_record_to_session_message(
@@ -530,6 +497,7 @@ fn conversation_record_to_session_message(
         visible: record.visible,
         title: record.title,
         body: record.body,
+        metadata: record.metadata,
         created_at: record.created_at,
     }
 }
@@ -569,4 +537,67 @@ fn flatten_tool_result_content(content: &OneOrMany<ToolResultContent>) -> String
     }
 
     segments.join("\n\n---\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Verifies that stored assistant reasoning remains local-only and is not replayed into outgoing rig history.
+    /// 验证已存储的助手思考内容保持为本地数据，不会被回放到发出的 rig 历史中。
+    #[test]
+    fn assistant_reasoning_is_not_replayed_into_rig_history() {
+        let messages = vec![SessionConversationMessage {
+            id: String::from("assistant-1"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::from("继续处理。"),
+                reasoning: String::from("先检查工具结果，再决定下一步。"),
+                provider_message_id: Some(String::from("resp-1")),
+                tool_calls: Vec::new(),
+            },
+        }];
+
+        let history = conversation_messages_to_rig_history(&messages);
+        let Some(RigMessage::Assistant { content, .. }) = history.first() else {
+            panic!("expected one assistant history item");
+        };
+
+        assert!(content
+            .iter()
+            .all(|item| !matches!(item, AssistantContent::Reasoning(_))));
+    }
+
+    /// Verifies that transcript projection preserves record metadata for tool-result rich UI surfaces.
+    /// 验证转录投影会保留记录元数据，供工具结果富界面表面继续使用。
+    #[test]
+    fn conversation_record_projection_preserves_metadata() {
+        let metadata = json!({
+            "tool_name": "write_file",
+            "host_result": {
+                "kind": "change_set",
+                "payload": {
+                    "path": "src/main.rs",
+                },
+            },
+        });
+        let state = SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: String::from("record-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回"),
+                body: String::from("已写入文件。"),
+                metadata: Some(metadata.clone()),
+                created_at: String::from("1"),
+            }],
+            continuation: SessionProviderContinuationState::default(),
+        };
+
+        let projected = conversation_state_to_session_messages(&state);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].metadata, Some(metadata));
+    }
 }

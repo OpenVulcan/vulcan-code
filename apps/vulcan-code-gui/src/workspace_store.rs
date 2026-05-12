@@ -10,7 +10,7 @@ use crate::model::{
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
@@ -148,6 +148,20 @@ struct StoredSessionMessageRow {
     created_at: String,
 }
 
+/// Structured transcript-message metadata payload persisted inside the SQLite `meta_json` column.
+/// 持久化在 SQLite `meta_json` 列中的结构化转录消息元数据载荷。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct StoredSessionMessageMeta {
+    /// Optional user-visible transcript card title.
+    /// 可选的用户可见转录卡片标题。
+    #[serde(default)]
+    title: Option<String>,
+    /// Optional structured transcript metadata used only by host-side UI surfaces.
+    /// 仅供宿主侧界面表面使用的可选结构化转录元数据。
+    #[serde(default)]
+    metadata: Option<Value>,
+}
+
 /// Raw compaction checkpoint row decoded from the controller SQLite query payload.
 /// 从控制器 SQLite 查询载荷中解码出的原始压缩检查点行。
 #[derive(Debug, Clone, Deserialize)]
@@ -272,10 +286,13 @@ pub async fn load_workspace_snapshot(
 
     for row in ordered_message_rows {
         let session_id = parse_session_id(&row.session_id)?;
-        let title = row
+        let persisted_meta = row
             .meta_json
             .as_deref()
-            .and_then(parse_message_title_from_meta)
+            .and_then(parse_session_message_meta_from_json)
+            .unwrap_or_default();
+        let title = persisted_meta
+            .title
             .unwrap_or_else(|| default_message_title(&row.role).to_string());
         let entry = SessionMessageEntry {
             id: row.id,
@@ -284,6 +301,7 @@ pub async fn load_workspace_snapshot(
             visible: row.visible != 0,
             title,
             body: row.content,
+            metadata: persisted_meta.metadata,
             created_at: row.created_at,
         };
 
@@ -1379,10 +1397,7 @@ fn push_session_message_batch_rows(
     for session in sessions {
         if let Some(messages) = session_messages.get(&session.id) {
             for (ordinal, message) in messages.iter().enumerate() {
-                let meta_json = serde_json::json!({
-                    "title": message.title,
-                })
-                .to_string();
+                let meta_json = serialize_session_message_meta_to_json(message);
 
                 batch_params.push(vec![
                     ControllerSqliteValue::String(if message.id.trim().is_empty() {
@@ -1398,7 +1413,7 @@ fn push_session_message_batch_rows(
                     ),
                     ControllerSqliteValue::Int64(i64::from(message.visible)),
                     ControllerSqliteValue::String(message.body.clone()),
-                    ControllerSqliteValue::String(meta_json),
+                    optional_sqlite_string(&meta_json),
                     ControllerSqliteValue::String(non_empty_timestamp_text(&message.created_at)),
                 ]);
             }
@@ -1618,14 +1633,24 @@ fn role_from_session_kind(kind: SessionMessageKind) -> &'static str {
     }
 }
 
-/// Parses the optional message title from one persisted metadata JSON payload.
-/// 从一条持久化元数据 JSON 载荷中解析可选的消息标题。
-fn parse_message_title_from_meta(meta_json: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(meta_json).ok()?;
-    value
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+/// Parses one persisted transcript-message metadata JSON payload into the structured helper shape.
+/// 将一条持久化转录消息元数据 JSON 载荷解析为结构化辅助形状。
+fn parse_session_message_meta_from_json(meta_json: &str) -> Option<StoredSessionMessageMeta> {
+    serde_json::from_str(meta_json).ok()
+}
+
+/// Serializes one transcript-message entry into the optional SQLite metadata JSON payload.
+/// 将单条转录消息项序列化为可选的 SQLite 元数据 JSON 载荷。
+fn serialize_session_message_meta_to_json(message: &SessionMessageEntry) -> Option<String> {
+    let metadata = StoredSessionMessageMeta {
+        title: (!message.title.trim().is_empty()).then(|| message.title.clone()),
+        metadata: message.metadata.clone(),
+    };
+    if metadata.title.is_none() && metadata.metadata.is_none() {
+        None
+    } else {
+        serde_json::to_string(&metadata).ok()
+    }
 }
 
 /// Parses one persisted transcript UI-state JSON payload into the typed runtime-state structure.
@@ -1827,5 +1852,43 @@ fn truncate_preview_lines(value: &str, max_lines: usize, max_chars: usize) -> St
             .take(max_chars.saturating_sub(1))
             .collect::<String>();
         format!("{truncated}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Verifies that transcript metadata is preserved when encoding and decoding the SQLite `meta_json` payload.
+    /// 验证转录元数据在编码与解码 SQLite `meta_json` 载荷时能够被完整保留。
+    #[test]
+    fn session_message_meta_json_roundtrip_preserves_metadata() {
+        let message = SessionMessageEntry {
+            id: String::from("message-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回"),
+            body: String::from("已写入文件。"),
+            metadata: Some(json!({
+                "tool_name": "write_file",
+                "host_result": {
+                    "kind": "change_set",
+                    "payload": {
+                        "path": "src/main.rs",
+                    },
+                },
+            })),
+            created_at: String::from("1"),
+        };
+
+        let json_payload = serialize_session_message_meta_to_json(&message)
+            .expect("expected metadata payload to be serialized");
+        let parsed = parse_session_message_meta_from_json(&json_payload)
+            .expect("expected metadata payload to be parsed");
+
+        assert_eq!(parsed.title.as_deref(), Some("工具返回"));
+        assert_eq!(parsed.metadata, message.metadata);
     }
 }

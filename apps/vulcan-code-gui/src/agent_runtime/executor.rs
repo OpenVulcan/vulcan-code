@@ -5,11 +5,12 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
-use crate::agent_runtime::rig_tools::build_vulcan_rig_tools;
+use crate::agent_runtime::rig_tools::{RigToolOutcomeCapture, build_vulcan_rig_tools};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationState,
     conversation_messages_to_rig_history, replace_messages_from_rig_history,
+    rig_history_to_conversation_messages,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
@@ -28,7 +29,7 @@ use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
-use serde_json::Value;
+use serde_json::{Map as JsonMap, Value, json};
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, path::Path, path::PathBuf};
@@ -490,10 +491,11 @@ pub fn stream_runtime_run(
 
         let system_preamble = build_runtime_system_preamble(&preparation);
         let request_history = conversation_messages_to_rig_history(&request.conversation_history);
+        let preview_history = rig_history_to_conversation_messages(&request_history);
         preparation.provider_request_preview_markdown = build_provider_request_preview_markdown(
             &preparation,
             &system_preamble,
-            &request.conversation_history,
+            &preview_history,
             request.prompt.trim(),
             &resolved_tools.definitions,
             resolve_runtime_max_turns(active_agent.as_ref()),
@@ -856,7 +858,7 @@ fn build_provider_request_preview_markdown(
             .collect::<Vec<_>>()
             .join("\n\n")
     };
-    let canonical_history_markdown = render_conversation_history_markdown(conversation_history);
+    let outgoing_history_markdown = render_conversation_history_markdown(conversation_history);
 
     format!(
         concat!(
@@ -875,7 +877,7 @@ fn build_provider_request_preview_markdown(
             "- 工具数量：`{}` 个\n\n",
             "## System Preamble\n",
             "{}\n\n",
-            "## Canonical History\n",
+            "## Outgoing History\n",
             "{}\n\n",
             "## Effective User Prompt\n",
             "{}\n\n",
@@ -899,10 +901,10 @@ fn build_provider_request_preview_markdown(
         preparation.execution_mode,
         temperature_label,
         max_turns_label,
-        preparation.context_history_count,
+        conversation_history.len(),
         resolved_tools.len(),
         render_text_code_fence(system_preamble),
-        canonical_history_markdown,
+        outgoing_history_markdown,
         render_text_code_fence(latest_prompt),
         tool_rows,
         extra_body_markdown,
@@ -1086,11 +1088,13 @@ fn execute_provider_prompt_stream(
         .as_object()
         .filter(|object| !object.is_empty())
         .map(|object| Value::Object(object.clone()));
+    let tool_outcome_capture = RigToolOutcomeCapture::default();
     let build_runtime_tools = || {
         build_vulcan_rig_tools(
             tools_manager.clone(),
             preparation.session_id,
             &resolved_tools,
+            tool_outcome_capture.clone(),
         )
     };
 
@@ -1106,6 +1110,7 @@ fn execute_provider_prompt_stream(
             max_turns,
             &request_headers,
             build_runtime_tools(),
+            tool_outcome_capture.clone(),
             additional_params,
         ),
         ProviderRuntimeKind::OpenAiCompatible
@@ -1124,6 +1129,7 @@ fn execute_provider_prompt_stream(
             max_turns,
             &request_headers,
             build_runtime_tools(),
+            tool_outcome_capture.clone(),
             additional_params,
         ),
         ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
@@ -1136,6 +1142,7 @@ fn execute_provider_prompt_stream(
             max_turns,
             &request_headers,
             build_runtime_tools(),
+            tool_outcome_capture.clone(),
             additional_params,
         ),
         ProviderRuntimeKind::Anthropic => execute_anthropic_stream(
@@ -1149,6 +1156,7 @@ fn execute_provider_prompt_stream(
             max_turns,
             &request_headers,
             build_runtime_tools(),
+            tool_outcome_capture.clone(),
             additional_params,
         ),
         ProviderRuntimeKind::AzureOpenAi
@@ -1203,6 +1211,7 @@ fn execute_openai_compatible_stream(
     max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    tool_outcome_capture: RigToolOutcomeCapture,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::CompletionsClient::builder()
@@ -1254,7 +1263,7 @@ fn execute_openai_compatible_stream(
             let item = item.map_err(|error| format!("OpenAI 兼容流式执行失败：{}。", error));
             match item {
                 Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item) {
+                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
                         yield Ok(delta);
                     }
                 }
@@ -1324,6 +1333,7 @@ fn one_shot_provider_error_stream(error: impl Into<String>) -> ProviderDeltaStre
 /// 将一条多轮流式项转换为零条或多条面向图形界面的 Provider 增量。
 fn provider_deltas_from_multi_turn_item<R>(
     item: MultiTurnStreamItem<R>,
+    tool_outcome_capture: &RigToolOutcomeCapture,
 ) -> Vec<ProviderStreamDelta> {
     match item {
         MultiTurnStreamItem::StreamAssistantItem(content) => {
@@ -1333,11 +1343,22 @@ fn provider_deltas_from_multi_turn_item<R>(
             tool_result,
             ..
         }) => {
+            let tool_call_id = tool_result
+                .call_id
+                .clone()
+                .unwrap_or_else(|| tool_result.id.clone());
+            let tool_metadata = tool_outcome_capture.take_next().and_then(|outcome| outcome.metadata);
+            let event_metadata = build_tool_result_runtime_metadata(
+                &tool_call_id,
+                &tool_result.id,
+                tool_metadata.as_ref(),
+            );
             vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
                 RuntimeEventKind::ToolFinished,
-                format!("工具返回 · {}", tool_result.id),
+                format!("工具返回 · {}", tool_call_id),
                 format_tool_result_runtime_detail(&tool_result),
-            ))]
+            )
+            .with_metadata(event_metadata))]
         }
         MultiTurnStreamItem::FinalResponse(final_response) => final_response
             .history()
@@ -1376,14 +1397,23 @@ fn provider_deltas_from_assistant_content<R>(
             }
         }
         StreamedAssistantContent::ToolCall { tool_call, .. } => {
+            let tool_call_id = tool_call
+                .call_id
+                .clone()
+                .unwrap_or_else(|| tool_call.id.clone());
             vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,
-                format!("工具调用 · {} · {}", tool_call.id, tool_call.function.name),
+                format!("工具调用 · {} · {}", tool_call_id, tool_call.function.name),
                 format_tool_call_runtime_detail(
                     &tool_call.function.name,
                     &tool_call.function.arguments,
                 ),
-            ))]
+            )
+            .with_metadata(Some(json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_call.function.name,
+                "arguments": tool_call.function.arguments,
+            }))))]
         }
         StreamedAssistantContent::ToolCallDelta { .. } => Vec::new(),
         StreamedAssistantContent::Final(_) => Vec::new(),
@@ -1482,6 +1512,32 @@ fn render_tool_result_content_markdown(content: &rig::OneOrMany<ToolResultConten
     format!("## 工具返回\n\n{}", segments.join("\n\n---\n\n"))
 }
 
+/// Builds one structured runtime-event metadata payload for a completed tool result while preserving host-side metadata fields.
+/// 在保留宿主侧元数据字段的前提下，为已完成工具结果构建一份结构化运行时事件元数据载荷。
+fn build_tool_result_runtime_metadata(
+    tool_call_id: &str,
+    tool_result_id: &str,
+    host_metadata: Option<&Value>,
+) -> Option<Value> {
+    let mut metadata = JsonMap::new();
+    metadata.insert(
+        String::from("tool_call_id"),
+        Value::String(tool_call_id.to_string()),
+    );
+    metadata.insert(
+        String::from("tool_result_id"),
+        Value::String(tool_result_id.to_string()),
+    );
+
+    if let Some(Value::Object(object)) = host_metadata {
+        metadata.extend(object.clone());
+    } else if let Some(other) = host_metadata {
+        metadata.insert(String::from("host_metadata"), other.clone());
+    }
+
+    Some(Value::Object(metadata))
+}
+
 /// Executes one OpenAI Responses prompt using rig's default OpenAI responses client and streams deltas.
 /// 使用 rig 默认的 OpenAI Responses 客户端执行一次 OpenAI Responses 提示词调用并流式返回增量。
 fn execute_openai_responses_stream(
@@ -1495,6 +1551,7 @@ fn execute_openai_responses_stream(
     max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    tool_outcome_capture: RigToolOutcomeCapture,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::Client::builder()
@@ -1546,7 +1603,7 @@ fn execute_openai_responses_stream(
             let item = item.map_err(|error| format!("OpenAI Responses 流式执行失败：{}。", error));
             match item {
                 Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item) {
+                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
                         yield Ok(delta);
                     }
                 }
@@ -1572,6 +1629,7 @@ fn execute_anthropic_stream(
     max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    tool_outcome_capture: RigToolOutcomeCapture,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = anthropic::Client::builder()
@@ -1623,7 +1681,7 @@ fn execute_anthropic_stream(
             let item = item.map_err(|error| format!("Anthropic 兼容流式执行失败：{}。", error));
             match item {
                 Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item) {
+                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
                         yield Ok(delta);
                     }
                 }
@@ -1648,6 +1706,7 @@ fn execute_openrouter_stream(
     max_turns: usize,
     headers: &HeaderMap,
     luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
+    tool_outcome_capture: RigToolOutcomeCapture,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let client = match openrouter::Client::builder()
@@ -1695,7 +1754,7 @@ fn execute_openrouter_stream(
             let item = item.map_err(|error| format!("OpenRouter 流式执行失败：{}。", error));
             match item {
                 Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item) {
+                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
                         yield Ok(delta);
                     }
                 }
@@ -1871,7 +1930,10 @@ mod tests {
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
-    use crate::conversation_protocol::{SessionConversationMessage, SessionConversationPayload};
+    use crate::conversation_protocol::{
+        SessionConversationMessage, SessionConversationPayload, conversation_messages_to_rig_history,
+        rig_history_to_conversation_messages,
+    };
     use crate::provider_config::ProviderRuntimeKind;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1980,11 +2042,15 @@ mod tests {
                 },
             },
         ];
+        let outgoing_history =
+            rig_history_to_conversation_messages(&conversation_messages_to_rig_history(
+                &conversation_history,
+            ));
 
         let preview = build_provider_request_preview_markdown(
             &preparation,
             "system prompt body",
-            &conversation_history,
+            &outgoing_history,
             "effective prompt body",
             &resolved_tools,
             None,
@@ -1993,7 +2059,7 @@ mod tests {
         assert!(preview.contains("# 最后一次真实 API 请求快照"));
         assert!(preview.contains("## System Preamble"));
         assert!(preview.contains("system prompt body"));
-        assert!(preview.contains("## Canonical History"));
+        assert!(preview.contains("## Outgoing History"));
         assert!(preview.contains("之前的用户问题"));
         assert!(preview.contains("## Effective User Prompt"));
         assert!(preview.contains("effective prompt body"));
@@ -2001,6 +2067,7 @@ mod tests {
         assert!(preview.contains("\"path\""));
         assert!(preview.contains("\"effort\": \"high\""));
         assert!(preview.contains("- 最大轮次：不限制"));
+        assert!(!preview.contains("之前的推理摘要"));
     }
 
     /// Verifies the runtime leaves multi-turn providers unlimited when no explicit max-turn override exists.

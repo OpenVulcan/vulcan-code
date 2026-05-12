@@ -13,8 +13,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use uuid::Uuid;
 use vulcan_tools_manager::{
-    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolSourceKind,
-    VulcanToolsManager,
+    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
+    VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
 
 /// Builds one standalone host-owned tools manager from the current GUI runtime surfaces.
@@ -49,6 +49,7 @@ pub fn build_vulcan_tools_manager(
                     catalog
                         .invoke(&tool_id, args)
                         .await
+                        .map(VulcanToolInvocationResult::from_model_output)
                         .map_err(|error| error.to_string())
                 })
             }),
@@ -105,13 +106,24 @@ pub fn build_vulcan_tools_manager(
                     .map_err(|error| {
                         format!("LuaSkills 工具 `{}` 调用失败：{}。", canonical_name, error)
                     })?;
-                    Ok(Value::String(render_luaskills_invocation_result_text(
+                    let model_output = Value::String(render_luaskills_invocation_result_text(
                         &handle,
                         &canonical_name,
                         Some(&skill_id),
                         &result,
                         workspace_root.as_deref(),
-                    )))
+                    ));
+                    let invocation_result =
+                        if let Some(host_result) = result.host_result.as_ref() {
+                            VulcanToolInvocationResult::from_model_output(model_output)
+                                .with_host_result(VulcanToolHostResult {
+                                    kind: host_result.kind.clone(),
+                                    payload: host_result.payload.clone(),
+                                })
+                        } else {
+                            VulcanToolInvocationResult::from_model_output(model_output)
+                        };
+                    Ok(invocation_result)
                 })
             }),
         });
@@ -148,6 +160,7 @@ pub fn build_vulcan_tools_manager(
                     transport
                         .call_tool(&tool_name, args)
                         .await
+                        .map(VulcanToolInvocationResult::from_model_output)
                         .map_err(|error| format!("MCP 工具 `{}` 调用失败：{}。", tool_name, error))
                 })
             }),

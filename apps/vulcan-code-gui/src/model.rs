@@ -3,6 +3,7 @@
 
 use crate::conversation_protocol::SessionConversationState;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 use uuid::Uuid;
@@ -546,6 +547,9 @@ pub struct SessionMessageEntry {
     /// Main message body content.
     /// 主要消息正文内容。
     pub body: String,
+    /// Optional structured metadata reserved for transcript-only UI enrichments and audit details.
+    /// 为仅限转录的界面增强与审计细节保留的可选结构化元数据。
+    pub metadata: Option<Value>,
     /// Unix-millis text captured when the entry is created or hydrated from storage.
     /// 在创建或从存储恢复时捕获的 Unix 毫秒文本。
     pub created_at: String,
@@ -566,6 +570,7 @@ impl SessionMessageEntry {
             visible: true,
             title: title.into(),
             body: body.into(),
+            metadata: None,
             created_at: String::new(),
         }
     }
@@ -585,6 +590,7 @@ impl SessionMessageEntry {
             visible: false,
             title: title.into(),
             body: body.into(),
+            metadata: None,
             created_at: String::new(),
         }
     }

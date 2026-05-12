@@ -38,6 +38,64 @@ const USER_PROMPT_BUBBLE_MAX_WIDTH_RATIO: f32 = 0.70;
 /// 可选择转录用于识别复制用户提示词交互的链接动作前缀。
 const USER_PROMPT_COPY_ACTION_PREFIX: &str = "vulcan-agent-view://copy-user-prompt/";
 
+/// Resolves the icon, summary color, body background, body text color, and fallback title used by one tool directive block.
+/// 解析单个工具指令区块所使用的图标、摘要颜色、正文背景、正文文字颜色以及兜底标题。
+fn resolve_tool_directive_visuals(
+    block: &AgentViewDirectiveBlock,
+    app_theme: &Theme,
+) -> Option<(
+    &'static str,
+    Color,
+    RenderedParagraphBackground,
+    Color,
+    &'static str,
+)> {
+    let palette = app_theme.palette();
+    match block.kind {
+        AgentViewDirectiveKind::ToolCall => {
+            let display_state = block
+                .attributes
+                .get("tool-display-state")
+                .map(String::as_str)
+                .unwrap_or("running");
+            if display_state == "completed" {
+                Some((
+                    "🛠",
+                    iced::color!(0xD7F6E6),
+                    directive_background(
+                        palette.success.weak.color.scale_alpha(0.08),
+                        palette.success.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "调用工具",
+                ))
+            } else {
+                Some((
+                    "🛠",
+                    iced::color!(0xCDE7FF),
+                    directive_background(
+                        palette.primary.weak.color.scale_alpha(0.08),
+                        palette.primary.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "调用工具",
+                ))
+            }
+        }
+        AgentViewDirectiveKind::ToolResult => Some((
+            "📦",
+            iced::color!(0xD7F6E6),
+            directive_background(
+                palette.success.weak.color.scale_alpha(0.08),
+                palette.success.strong.color.scale_alpha(0.24),
+            ),
+            palette.background.base.text,
+            "工具返回",
+        )),
+        _ => None,
+    }
+}
+
 #[allow(dead_code)]
 /// Link-action prefix used by compact collapsible semantic blocks such as tool call and tool result rows.
 /// 工具调用与工具结果等紧凑折叠语义区块使用的链接动作前缀。
@@ -225,19 +283,17 @@ fn render_compact_tool_modal_directive_block(
         RenderedTranscriptLinkAction::OpenToolModal(block_id),
     );
 
-    let (icon, summary_color, fallback_title) = match block.kind {
-        AgentViewDirectiveKind::ToolCall => ("🛠", iced::color!(0xA8D5FF), String::from("调用工具")),
-        AgentViewDirectiveKind::ToolResult => {
-            ("📦", iced::color!(0xAEE8C8), String::from("工具返回"))
-        }
-        _ => return,
+    let Some((icon, summary_color, _, _, fallback_title)) =
+        resolve_tool_directive_visuals(block, app_theme)
+    else {
+        return;
     };
     let title = block
         .attributes
         .get("title")
         .cloned()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or(fallback_title);
+        .unwrap_or_else(|| fallback_title.to_string());
     let summary_text = format!("{icon} {title}");
     let summary_spans = build_agent_view_plain_text_spans(
         &summary_text,
@@ -288,24 +344,14 @@ fn render_compact_collapsible_directive_block(
             ),
             iced::color!(0xEAF1FA),
         ),
-        AgentViewDirectiveKind::ToolCall => (
-            "🛠",
-            iced::color!(0xCDE7FF),
-            directive_background(
-                palette.primary.weak.color.scale_alpha(0.08),
-                palette.primary.strong.color.scale_alpha(0.24),
-            ),
-            palette.background.base.text,
-        ),
-        AgentViewDirectiveKind::ToolResult => (
-            "📦",
-            iced::color!(0xD7F6E6),
-            directive_background(
-                palette.success.weak.color.scale_alpha(0.08),
-                palette.success.strong.color.scale_alpha(0.24),
-            ),
-            palette.background.base.text,
-        ),
+        AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult => {
+            let Some((icon, summary_color, body_background, body_text_color, _)) =
+                resolve_tool_directive_visuals(block, app_theme)
+            else {
+                return;
+            };
+            (icon, summary_color, body_background, body_text_color)
+        }
         _ => return,
     };
     let block_id = block
