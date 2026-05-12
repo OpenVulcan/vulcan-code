@@ -43,6 +43,83 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// 用于从宿主自有控制器任务转发请求快照、流式分片与运行时事件的共享实时增量发送器。
 type ProviderLiveDeltaSender = UnboundedSender<Result<ProviderStreamDelta, String>>;
 
+/// Prepared host-side tool runtime context reused by provider transport wrappers so bridge creation and rig-tool mirroring stay consistent.
+/// 供 Provider 传输包装器复用的宿主侧工具运行时上下文，使桥接层创建与 rig 工具镜像保持一致。
+struct PreparedHostToolRuntimeContext {
+    /// Shared host-managed bridge that owns the real tool dispatch path for the current execution turn.
+    /// 持有当前执行回合真实工具调度路径的共享宿主管理桥接层。
+    runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
+    /// Mirrored low-level rig tool definitions exposed to the transport request builder.
+    /// 暴露给传输请求构建器的镜像低层 rig 工具定义集合。
+    rig_tool_definitions: Vec<RigToolDefinition>,
+}
+
+/// Builds one exact host-controlled turn request from the canonical controller snapshot and forwards the structured snapshot immediately.
+/// 根据规范控制器快照构建一份精确宿主控制回合请求，并立即转发结构化快照。
+fn build_host_controlled_turn_request(
+    provider_id: &str,
+    model_id: &str,
+    request_label: &str,
+    snapshot: &CoreConversationSnapshot,
+    config: &CoreControllerConfig,
+    resolved_tools: &[ResolvedToolDefinition],
+    request_headers: &HeaderMap,
+    live_sender: &ProviderLiveDeltaSender,
+    additional_params: Option<Value>,
+) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
+    let Some((current_prompt_message, current_history_messages)) = snapshot.messages.split_last()
+    else {
+        return Err(VulcanCoreError::InvalidState {
+            message: format!(
+                "{request_label} 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。"
+            ),
+        });
+    };
+    let current_history = core_messages_to_rig_history(current_history_messages);
+    let current_prompt = core_message_to_rig_message(current_prompt_message);
+    let request_snapshot = build_openai_compatible_turn_request_snapshot(
+        provider_id,
+        model_id,
+        config.system_prompt.as_str(),
+        &current_history,
+        &current_prompt,
+        config.temperature,
+        config.max_turns,
+        resolved_tools,
+        request_headers,
+        additional_params,
+    );
+    let _ = live_sender.send(Ok(ProviderStreamDelta::RequestSnapshot(
+        request_snapshot.clone(),
+    )));
+
+    Ok(OpenAiCompatibleCoreTurnRequest {
+        snapshot: request_snapshot,
+        current_history,
+        current_prompt,
+    })
+}
+
+/// Prepares one shared host-managed tool bridge plus the mirrored rig tool definitions for the current execution turn.
+/// 为当前执行回合准备共享宿主管理工具桥接层及其镜像 rig 工具定义集合。
+fn prepare_host_tool_runtime_context(
+    tools_manager: VulcanToolsManager,
+    resolved_tools: &[ResolvedToolDefinition],
+    session_id: SessionId,
+) -> PreparedHostToolRuntimeContext {
+    PreparedHostToolRuntimeContext {
+        runtime_bridge: Arc::new(VulcanManagedToolRuntimeBridge::new(
+            Arc::new(tools_manager),
+            resolved_tools,
+            session_id,
+        )),
+        rig_tool_definitions: resolved_tools
+            .iter()
+            .map(resolved_tool_definition_to_rig_tool_definition)
+            .collect(),
+    }
+}
+
 /// Serializable OpenAI-compatible single-turn request owned by `vulcan-core` while preserving transport-only rig messages outside persistence.
 /// 由 `vulcan-core` 持有的可序列化 OpenAI 兼容单回合请求，同时在持久化之外保留仅供传输使用的 rig 消息。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -115,40 +192,17 @@ impl VulcanProviderAdapter for OpenAiCompatibleCoreStreamingAdapter {
         snapshot: &CoreConversationSnapshot,
         config: &CoreControllerConfig,
     ) -> Result<Self::Request, VulcanCoreError> {
-        let Some((current_prompt_message, current_history_messages)) =
-            snapshot.messages.split_last()
-        else {
-            return Err(VulcanCoreError::InvalidState {
-                message: String::from(
-                    "OpenAI 兼容单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
-                ),
-            });
-        };
-        let current_history = core_messages_to_rig_history(current_history_messages);
-        let current_prompt = core_message_to_rig_message(current_prompt_message);
-        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+        build_host_controlled_turn_request(
             self.provider_id.as_str(),
             self.model_id.as_str(),
-            config.system_prompt.as_str(),
-            &current_history,
-            &current_prompt,
-            config.temperature,
-            config.max_turns,
+            "OpenAI 兼容",
+            snapshot,
+            config,
             &self.resolved_tools,
             &self.request_headers,
+            &self.live_sender,
             config.additional_params.clone(),
-        );
-        let _ = self
-            .live_sender
-            .send(Ok(ProviderStreamDelta::RequestSnapshot(
-                request_snapshot.clone(),
-            )));
-
-        Ok(OpenAiCompatibleCoreTurnRequest {
-            snapshot: request_snapshot,
-            current_history,
-            current_prompt,
-        })
+        )
     }
 
     /// One-shot request execution is intentionally unsupported because the OpenAI-compatible host path is owned by the streaming adapter.
@@ -289,40 +343,17 @@ impl VulcanProviderAdapter for OpenRouterCoreStreamingAdapter {
         snapshot: &CoreConversationSnapshot,
         config: &CoreControllerConfig,
     ) -> Result<Self::Request, VulcanCoreError> {
-        let Some((current_prompt_message, current_history_messages)) =
-            snapshot.messages.split_last()
-        else {
-            return Err(VulcanCoreError::InvalidState {
-                message: String::from(
-                    "OpenRouter 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
-                ),
-            });
-        };
-        let current_history = core_messages_to_rig_history(current_history_messages);
-        let current_prompt = core_message_to_rig_message(current_prompt_message);
-        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+        build_host_controlled_turn_request(
             self.provider_id.as_str(),
             self.model_id.as_str(),
-            config.system_prompt.as_str(),
-            &current_history,
-            &current_prompt,
-            config.temperature,
-            config.max_turns,
+            "OpenRouter",
+            snapshot,
+            config,
             &self.resolved_tools,
             &self.request_headers,
+            &self.live_sender,
             config.additional_params.clone(),
-        );
-        let _ = self
-            .live_sender
-            .send(Ok(ProviderStreamDelta::RequestSnapshot(
-                request_snapshot.clone(),
-            )));
-
-        Ok(OpenAiCompatibleCoreTurnRequest {
-            snapshot: request_snapshot,
-            current_history,
-            current_prompt,
-        })
+        )
     }
 
     /// One-shot request execution is intentionally unsupported because the OpenRouter host path is owned by the streaming adapter.
@@ -456,40 +487,17 @@ impl VulcanProviderAdapter for AnthropicCoreStreamingAdapter {
         snapshot: &CoreConversationSnapshot,
         config: &CoreControllerConfig,
     ) -> Result<Self::Request, VulcanCoreError> {
-        let Some((current_prompt_message, current_history_messages)) =
-            snapshot.messages.split_last()
-        else {
-            return Err(VulcanCoreError::InvalidState {
-                message: String::from(
-                    "Anthropic 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
-                ),
-            });
-        };
-        let current_history = core_messages_to_rig_history(current_history_messages);
-        let current_prompt = core_message_to_rig_message(current_prompt_message);
-        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+        build_host_controlled_turn_request(
             self.provider_id.as_str(),
             self.model_id.as_str(),
-            config.system_prompt.as_str(),
-            &current_history,
-            &current_prompt,
-            config.temperature,
-            config.max_turns,
+            "Anthropic",
+            snapshot,
+            config,
             &self.resolved_tools,
             &self.request_headers,
+            &self.live_sender,
             config.additional_params.clone(),
-        );
-        let _ = self
-            .live_sender
-            .send(Ok(ProviderStreamDelta::RequestSnapshot(
-                request_snapshot.clone(),
-            )));
-
-        Ok(OpenAiCompatibleCoreTurnRequest {
-            snapshot: request_snapshot,
-            current_history,
-            current_prompt,
-        })
+        )
     }
 
     /// One-shot request execution is intentionally unsupported because the Anthropic host path is owned by the streaming adapter.
@@ -633,44 +641,21 @@ impl VulcanProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
         snapshot: &CoreConversationSnapshot,
         config: &CoreControllerConfig,
     ) -> Result<Self::Request, VulcanCoreError> {
-        let Some((current_prompt_message, current_history_messages)) =
-            snapshot.messages.split_last()
-        else {
-            return Err(VulcanCoreError::InvalidState {
-                message: String::from(
-                    "OpenAI Responses 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
-                ),
-            });
-        };
-        let current_history = core_messages_to_rig_history(current_history_messages);
-        let current_prompt = core_message_to_rig_message(current_prompt_message);
         let effective_additional_params = inject_previous_response_id_into_additional_params(
             config.additional_params.clone(),
             &snapshot.continuation,
         );
-        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+        build_host_controlled_turn_request(
             self.provider_id.as_str(),
             self.model_id.as_str(),
-            config.system_prompt.as_str(),
-            &current_history,
-            &current_prompt,
-            config.temperature,
-            config.max_turns,
+            "OpenAI Responses",
+            snapshot,
+            config,
             &self.resolved_tools,
             &self.request_headers,
+            &self.live_sender,
             effective_additional_params,
-        );
-        let _ = self
-            .live_sender
-            .send(Ok(ProviderStreamDelta::RequestSnapshot(
-                request_snapshot.clone(),
-            )));
-
-        Ok(OpenAiCompatibleCoreTurnRequest {
-            snapshot: request_snapshot,
-            current_history,
-            current_prompt,
-        })
+        )
     }
 
     /// One-shot request execution is intentionally unsupported because the OpenAI Responses host path is owned by the streaming adapter.
@@ -911,15 +896,8 @@ pub(crate) fn execute_openai_compatible_stream(
     let prompt = prompt.to_string();
     let system_preamble = system_preamble.to_string();
     let request_headers = headers.clone();
-    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
-        Arc::new(tools_manager),
-        &resolved_tools,
-        session_id,
-    ));
-    let rig_tool_definitions = resolved_tools
-        .iter()
-        .map(resolved_tool_definition_to_rig_tool_definition)
-        .collect::<Vec<_>>();
+    let prepared_tool_context =
+        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
     execute_host_controlled_stream(
         CoreControllerConfig {
             provider_id: provider_id.clone(),
@@ -938,10 +916,10 @@ pub(crate) fn execute_openai_compatible_stream(
             model_id,
             request_headers,
             resolved_tools,
-            rig_tool_definitions,
+            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
             live_sender,
         },
-        runtime_bridge,
+        prepared_tool_context.runtime_bridge,
         "OpenAI 兼容",
     )
 }
@@ -974,15 +952,8 @@ pub(crate) fn execute_openai_responses_stream(
     let prompt = prompt.to_string();
     let system_preamble = system_preamble.to_string();
     let request_headers = headers.clone();
-    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
-        Arc::new(tools_manager),
-        &resolved_tools,
-        session_id,
-    ));
-    let rig_tool_definitions = resolved_tools
-        .iter()
-        .map(resolved_tool_definition_to_rig_tool_definition)
-        .collect::<Vec<_>>();
+    let prepared_tool_context =
+        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
 
     execute_host_controlled_stream(
         CoreControllerConfig {
@@ -1002,10 +973,10 @@ pub(crate) fn execute_openai_responses_stream(
             model_id,
             request_headers,
             resolved_tools,
-            rig_tool_definitions,
+            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
             live_sender,
         },
-        runtime_bridge,
+        prepared_tool_context.runtime_bridge,
         "OpenAI Responses",
     )
 }
@@ -1038,15 +1009,8 @@ pub(crate) fn execute_anthropic_stream(
     let prompt = prompt.to_string();
     let system_preamble = system_preamble.to_string();
     let request_headers = headers.clone();
-    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
-        Arc::new(tools_manager),
-        &resolved_tools,
-        session_id,
-    ));
-    let rig_tool_definitions = resolved_tools
-        .iter()
-        .map(resolved_tool_definition_to_rig_tool_definition)
-        .collect::<Vec<_>>();
+    let prepared_tool_context =
+        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
 
     execute_host_controlled_stream(
         CoreControllerConfig {
@@ -1066,10 +1030,10 @@ pub(crate) fn execute_anthropic_stream(
             model_id,
             request_headers,
             resolved_tools,
-            rig_tool_definitions,
+            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
             live_sender,
         },
-        runtime_bridge,
+        prepared_tool_context.runtime_bridge,
         "Anthropic 兼容",
     )
 }
@@ -1098,15 +1062,8 @@ pub(crate) fn execute_openrouter_stream(
     let prompt = prompt.to_string();
     let system_preamble = system_preamble.to_string();
     let request_headers = headers.clone();
-    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
-        Arc::new(tools_manager),
-        &resolved_tools,
-        session_id,
-    ));
-    let rig_tool_definitions = resolved_tools
-        .iter()
-        .map(resolved_tool_definition_to_rig_tool_definition)
-        .collect::<Vec<_>>();
+    let prepared_tool_context =
+        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
 
     execute_host_controlled_stream(
         CoreControllerConfig {
@@ -1125,10 +1082,10 @@ pub(crate) fn execute_openrouter_stream(
             model_id,
             request_headers,
             resolved_tools,
-            rig_tool_definitions,
+            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
             live_sender,
         },
-        runtime_bridge,
+        prepared_tool_context.runtime_bridge,
         "OpenRouter",
     )
 }
