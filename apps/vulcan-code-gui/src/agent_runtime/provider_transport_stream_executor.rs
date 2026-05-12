@@ -18,7 +18,7 @@ use vulcan_core::types::{
     ToolInvocationResult as CoreToolInvocationResult,
 };
 
-use crate::agent_runtime::provider_transport_common::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 
 /// Streaming tool executor that forwards host-side tool boundary events live while delegating the real tool invocation to the shared bridge.
 /// 在把真实工具调用委派给共享桥接层的同时，实时转发宿主侧工具边界事件的流式工具执行器。

@@ -5,8 +5,9 @@ use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
     core_provider_turn_deltas_from_assistant_content,
 };
-use crate::agent_runtime::provider_transport_common::{
-    OpenAiCompatibleCoreTurnRequest, ProviderLiveDeltaSender, build_host_controlled_turn_request,
+use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_turn_request::{
+    OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;

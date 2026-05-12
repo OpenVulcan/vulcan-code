@@ -2,8 +2,8 @@
 //! OpenAI 兼容宿主控制 Provider 传输入口模块。
 
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
-use crate::agent_runtime::provider_transport_common::prepare_host_tool_runtime_context;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream;
+use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use rig::message::Message as RigMessage;

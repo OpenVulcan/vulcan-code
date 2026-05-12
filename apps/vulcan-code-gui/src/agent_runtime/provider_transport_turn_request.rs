@@ -1,40 +1,20 @@
-//! Shared host-controlled provider transport helpers reused by the provider-specific adapters.
-//! 供各 Provider 专用适配器复用的共享宿主控制 Provider 传输辅助逻辑。
+//! Host-controlled single-turn request assembly helpers reused by provider-specific streaming adapters.
+//! 供各 Provider 专用流式适配器复用的宿主控制单回合请求装配辅助逻辑。
 
 use crate::agent_runtime::provider_request_bridge_rig::{
     core_message_to_rig_message, core_messages_to_rig_history,
 };
-use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_rig_tool_definition;
 use crate::agent_runtime::provider_request_turn_snapshot::build_openai_compatible_turn_request_snapshot;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
-use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
-use crate::model::SessionId;
+use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use reqwest::header::HeaderMap;
-use rig::completion::ToolDefinition as RigToolDefinition;
 use rig::message::Message as RigMessage;
 use serde_json::Value;
-use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedSender;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     CoreError as VulcanCoreError, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
 };
-use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
-
-/// Shared live-delta sender used to forward request snapshots, streaming chunks, and runtime events from the host-owned controller task.
-/// 用于从宿主自有控制器任务转发请求快照、流式分片与运行时事件的共享实时增量发送器。
-pub(crate) type ProviderLiveDeltaSender = UnboundedSender<Result<ProviderStreamDelta, String>>;
-
-/// Prepared host-side tool runtime context reused by provider transport wrappers so bridge creation and rig-tool mirroring stay consistent.
-/// 供 Provider 传输包装器复用的宿主侧工具运行时上下文，使桥接层创建与 rig 工具镜像保持一致。
-pub(crate) struct PreparedHostToolRuntimeContext {
-    /// Shared host-managed bridge that owns the real tool dispatch path for the current execution turn.
-    /// 持有当前执行回合真实工具调度路径的共享宿主管理桥接层。
-    pub(crate) runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    /// Mirrored low-level rig tool definitions exposed to the transport request builder.
-    /// 暴露给传输请求构建器的镜像低层 rig 工具定义集合。
-    pub(crate) rig_tool_definitions: Vec<RigToolDefinition>,
-}
+use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Serializable OpenAI-compatible single-turn request owned by `vulcan-core` while preserving transport-only rig messages outside persistence.
 /// 由 `vulcan-core` 持有的可序列化 OpenAI 兼容单回合请求，同时在持久化之外保留仅供传输使用的 rig 消息。
@@ -98,24 +78,4 @@ pub(crate) fn build_host_controlled_turn_request(
         current_history,
         current_prompt,
     })
-}
-
-/// Prepares one shared host-managed tool bridge plus the mirrored rig tool definitions for the current execution turn.
-/// 为当前执行回合准备共享宿主管理工具桥接层及其镜像 rig 工具定义集合。
-pub(crate) fn prepare_host_tool_runtime_context(
-    tools_manager: VulcanToolsManager,
-    resolved_tools: &[ResolvedToolDefinition],
-    session_id: SessionId,
-) -> PreparedHostToolRuntimeContext {
-    PreparedHostToolRuntimeContext {
-        runtime_bridge: Arc::new(VulcanManagedToolRuntimeBridge::new(
-            Arc::new(tools_manager),
-            resolved_tools,
-            session_id,
-        )),
-        rig_tool_definitions: resolved_tools
-            .iter()
-            .map(resolved_tool_definition_to_rig_tool_definition)
-            .collect(),
-    }
 }

@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
-use crate::agent_runtime::provider_transport_common::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use async_stream::stream;
