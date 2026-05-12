@@ -26,6 +26,7 @@ pub mod provider_transport_openrouter;
 pub mod provider_transport_request;
 pub mod provider_transport_router;
 pub mod runtime;
+pub mod runtime_stream_finalize;
 pub mod runtime_stream;
 pub mod runtime_stream_setup;
 pub mod tool_runtime_bridge;

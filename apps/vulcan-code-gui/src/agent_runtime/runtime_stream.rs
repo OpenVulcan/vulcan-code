@@ -2,12 +2,9 @@
 //! Provider 执行与最终报告组装的运行时流式入口模块。
 
 use crate::agent_profile::AgentProfileCatalog;
-use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::execution_preparation::prepare_execution;
-use crate::agent_runtime::provider_request_snapshot::{
-    build_provider_request_preview_markdown,
-};
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_stream_projection::{
@@ -17,6 +14,11 @@ use crate::agent_runtime::provider_stream_projection::{
     take_current_thinking_phase_completed_event,
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::runtime_stream_finalize::{
+    apply_latest_request_snapshot, build_failed_runtime_event,
+    build_failure_execution_report, build_output_completed_event,
+    build_success_execution_report,
+};
 use crate::agent_runtime::runtime_stream_setup::{
     bootstrap_runtime_stream, build_runtime_context_event,
 };
@@ -204,25 +206,16 @@ pub fn stream_runtime_run(
             ) {
                 yield thinking_completed_event;
             }
-            if let Some(request_snapshot) = latest_request_snapshot {
-                preparation.provider_request_preview_markdown =
-                    build_provider_request_preview_markdown(&preparation, &request_snapshot);
-                preparation.provider_request_snapshot_json =
-                    serde_json::to_value(&request_snapshot).ok();
-            }
+            apply_latest_request_snapshot(&mut preparation, latest_request_snapshot.as_ref());
             core_controller.mark_failed(error.clone());
-            let failed_event = RuntimeEvent::new(
-                RuntimeEventKind::Failed,
-                "真实执行失败",
-                error.clone(),
-            );
+            let failed_event = build_failed_runtime_event(&error);
             yield ExecutionStreamEvent::RuntimeEvent {
                 session_id: request.session_id,
                 event: failed_event,
             };
-            let report = ExecutionRunReport::failure(
+            let report = build_failure_execution_report(
                 request.session_id,
-                Some(preparation),
+                preparation,
                 discovery_rows,
                 discovery_errors,
                 warnings,
@@ -241,28 +234,16 @@ pub fn stream_runtime_run(
             yield thinking_completed_event;
         }
 
-        if let Some(request_snapshot) = latest_request_snapshot {
-            preparation.provider_request_preview_markdown =
-                build_provider_request_preview_markdown(&preparation, &request_snapshot);
-            preparation.provider_request_snapshot_json =
-                serde_json::to_value(&request_snapshot).ok();
-        }
+        apply_latest_request_snapshot(&mut preparation, latest_request_snapshot.as_ref());
 
         let normalized_output = normalize_assistant_output(assistant_output);
-        let output_completed_event = RuntimeEvent::new(
-            RuntimeEventKind::TokenDelta,
-            "模型输出完成",
-            format!(
-                "真实 Provider 已返回 {} 个字符的正式输出内容。",
-                normalized_output.chars().count()
-            ),
-        );
+        let output_completed_event = build_output_completed_event(&normalized_output);
         yield ExecutionStreamEvent::RuntimeEvent {
             session_id: request.session_id,
             event: output_completed_event,
         };
 
-        let report = ExecutionRunReport::success(
+        let report = build_success_execution_report(
             request.session_id,
             preparation,
             normalize_optional_stream_output(thinking_visible_output),
