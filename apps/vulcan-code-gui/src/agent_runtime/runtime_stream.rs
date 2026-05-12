@@ -6,18 +6,16 @@ use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::execution_preparation::prepare_execution;
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
-use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_stream_projection::{
-    is_provider_tool_boundary_runtime_event, normalize_assistant_output,
-    normalize_optional_stream_output, normalize_streamed_thinking_output,
-    reset_current_thinking_phase_tracking, runtime_event_to_core_event,
-    take_current_thinking_phase_completed_event,
+    normalize_assistant_output, normalize_optional_stream_output,
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::runtime_stream_delta::{
+    RuntimeStreamDeltaState, process_provider_stream_delta,
+};
 use crate::agent_runtime::runtime_stream_finalize::{
-    apply_latest_request_snapshot, build_failed_runtime_event,
-    build_failure_execution_report, build_output_completed_event,
-    build_success_execution_report,
+    apply_latest_request_snapshot, build_failed_runtime_event, build_failure_execution_report,
+    build_output_completed_event, build_success_execution_report,
 };
 use crate::agent_runtime::runtime_stream_setup::{
     bootstrap_runtime_stream, build_runtime_context_event,
@@ -86,11 +84,7 @@ pub fn stream_runtime_run(
         let system_preamble = bootstrap.system_preamble;
         let request_history = bootstrap.request_history;
         let core_snapshot = bootstrap.core_snapshot;
-        let mut core_controller = bootstrap.core_controller;
-        let mut thinking_raw_output = String::new();
-        let mut thinking_visible_output = String::new();
-        let mut assistant_output = String::new();
-        let mut thinking_completed_emitted = false;
+        let mut stream_state = RuntimeStreamDeltaState::new(bootstrap.core_controller);
 
         yield ExecutionStreamEvent::Prepared(preparation.clone());
 
@@ -119,95 +113,26 @@ pub fn stream_runtime_run(
             resolved_tool_definitions,
         );
 
-        let mut terminal_error = None;
-        let mut final_conversation_state = None;
-        let mut latest_request_snapshot = None;
-
         while let Some(item) = provider_stream.next().await {
-            match item {
-                Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
-                    latest_request_snapshot = Some(snapshot);
-                }
-                Ok(ProviderStreamDelta::Thinking(delta)) => {
-                    core_controller.record_thinking(delta.clone());
-                    thinking_raw_output.push_str(&delta);
-                    let normalized_visible_output =
-                        normalize_streamed_thinking_output(&thinking_raw_output);
-                    let visible_delta = normalized_visible_output
-                        .strip_prefix(&thinking_visible_output)
-                        .unwrap_or(normalized_visible_output.as_str())
-                        .to_string();
-                    thinking_visible_output = normalized_visible_output;
-
-                    if !visible_delta.is_empty() {
-                        yield ExecutionStreamEvent::ThinkingDelta {
-                            session_id: request.session_id,
-                            delta: visible_delta,
-                        };
-                    }
-                }
-                Ok(ProviderStreamDelta::Output(delta)) => {
-                    core_controller.record_output(delta.clone());
-                    if let Some(thinking_completed_event) =
-                        take_current_thinking_phase_completed_event(
-                            request.session_id,
-                            &thinking_visible_output,
-                            &mut thinking_completed_emitted,
-                        )
-                    {
-                        yield thinking_completed_event;
-                    }
-                    assistant_output.push_str(&delta);
-                    yield ExecutionStreamEvent::OutputDelta {
-                        session_id: request.session_id,
-                        delta,
-                    };
-                }
-                Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
-                    if is_provider_tool_boundary_runtime_event(&event) {
-                        if let Some(thinking_completed_event) =
-                            take_current_thinking_phase_completed_event(
-                                request.session_id,
-                                &thinking_visible_output,
-                                &mut thinking_completed_emitted,
-                            )
-                        {
-                            yield thinking_completed_event;
-                        }
-                        reset_current_thinking_phase_tracking(
-                            &mut thinking_raw_output,
-                            &mut thinking_visible_output,
-                            &mut thinking_completed_emitted,
-                        );
-                    }
-                    if let Some(core_event) = runtime_event_to_core_event(&event) {
-                        core_controller.push_event(core_event);
-                    }
-                    yield ExecutionStreamEvent::RuntimeEvent {
-                        session_id: request.session_id,
-                        event,
-                    };
-                }
-                Ok(ProviderStreamDelta::FinalConversationState(conversation_state)) => {
-                    final_conversation_state = Some(conversation_state);
-                }
-                Err(error) => {
-                    terminal_error = Some(error);
-                    break;
-                }
+            for event in process_provider_stream_delta(request.session_id, &mut stream_state, item) {
+                yield event;
+            }
+            if stream_state.has_terminal_error() {
+                break;
             }
         }
 
-        if let Some(error) = terminal_error {
-            if let Some(thinking_completed_event) = take_current_thinking_phase_completed_event(
-                request.session_id,
-                &thinking_visible_output,
-                &mut thinking_completed_emitted,
-            ) {
+        if let Some(error) = stream_state.take_terminal_error() {
+            if let Some(thinking_completed_event) =
+                stream_state.complete_pending_thinking(request.session_id)
+            {
                 yield thinking_completed_event;
             }
-            apply_latest_request_snapshot(&mut preparation, latest_request_snapshot.as_ref());
-            core_controller.mark_failed(error.clone());
+            apply_latest_request_snapshot(
+                &mut preparation,
+                stream_state.latest_request_snapshot(),
+            );
+            stream_state.controller_mut().mark_failed(error.clone());
             let failed_event = build_failed_runtime_event(&error);
             yield ExecutionStreamEvent::RuntimeEvent {
                 session_id: request.session_id,
@@ -219,24 +144,22 @@ pub fn stream_runtime_run(
                 discovery_rows,
                 discovery_errors,
                 warnings,
-                core_controller.events().to_vec(),
+                stream_state.controller().events().to_vec(),
                 error,
             );
             yield ExecutionStreamEvent::Finished(report);
             return;
         }
 
-        if let Some(thinking_completed_event) = take_current_thinking_phase_completed_event(
-            request.session_id,
-            &thinking_visible_output,
-            &mut thinking_completed_emitted,
-        ) {
+        if let Some(thinking_completed_event) =
+            stream_state.complete_pending_thinking(request.session_id)
+        {
             yield thinking_completed_event;
         }
 
-        apply_latest_request_snapshot(&mut preparation, latest_request_snapshot.as_ref());
+        apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
 
-        let normalized_output = normalize_assistant_output(assistant_output);
+        let normalized_output = normalize_assistant_output(stream_state.take_assistant_output());
         let output_completed_event = build_output_completed_event(&normalized_output);
         yield ExecutionStreamEvent::RuntimeEvent {
             session_id: request.session_id,
@@ -246,13 +169,15 @@ pub fn stream_runtime_run(
         let report = build_success_execution_report(
             request.session_id,
             preparation,
-            normalize_optional_stream_output(thinking_visible_output),
+            normalize_optional_stream_output(
+                stream_state.thinking_visible_output().to_string(),
+            ),
             normalized_output,
-            final_conversation_state,
+            stream_state.take_final_conversation_state(),
             discovery_rows,
             discovery_errors,
             warnings,
-            core_controller.events().to_vec(),
+            stream_state.controller().events().to_vec(),
         );
         yield ExecutionStreamEvent::Finished(report);
     }

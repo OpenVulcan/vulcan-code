@@ -20,10 +20,10 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use rig::message::Message as RigMessage;
+use std::path::PathBuf;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
-use std::path::PathBuf;
 
 /// Bootstrap payload that captures the fully prepared runtime turn before provider streaming begins.
 /// 在 Provider 流式执行开始前捕获完整运行时回合准备结果的启动载荷。
@@ -123,13 +123,12 @@ pub(crate) async fn bootstrap_runtime_stream(
         Ok(request_snapshot) => {
             preparation.provider_request_preview_markdown =
                 build_provider_request_preview_markdown(&preparation, &request_snapshot);
-            preparation.provider_request_snapshot_json = serde_json::to_value(&request_snapshot).ok();
+            preparation.provider_request_snapshot_json =
+                serde_json::to_value(&request_snapshot).ok();
         }
         Err(error) => {
-            preparation.provider_request_preview_markdown = format!(
-                "# 最后一次真实 API 请求快照\n\n请求快照构建失败：{}",
-                error
-            );
+            preparation.provider_request_preview_markdown =
+                format!("# 最后一次真实 API 请求快照\n\n请求快照构建失败：{}", error);
             preparation.provider_request_snapshot_json = None;
             warnings.push(format!("请求快照构建失败：{error}"));
         }

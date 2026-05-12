@@ -30,11 +30,7 @@ pub(crate) fn apply_latest_request_snapshot(
 /// Builds the standard failed runtime event emitted when provider execution terminates with one error.
 /// 构建当 Provider 执行以单条错误终止时发出的标准失败运行时事件。
 pub(crate) fn build_failed_runtime_event(error: &str) -> RuntimeEvent {
-    RuntimeEvent::new(
-        RuntimeEventKind::Failed,
-        "真实执行失败",
-        error.to_string(),
-    )
+    RuntimeEvent::new(RuntimeEventKind::Failed, "真实执行失败", error.to_string())
 }
 
 /// Builds the standard output-completed event emitted after successful provider output normalization.
