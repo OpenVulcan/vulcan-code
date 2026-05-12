@@ -5,9 +5,7 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
-use crate::agent_runtime::rig_tools::{
-    RigToolOutcomeCapture, VulcanManagedToolRuntimeBridge, build_vulcan_rig_tools,
-};
+use crate::agent_runtime::rig_tools::VulcanManagedToolRuntimeBridge;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
@@ -27,7 +25,6 @@ use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::OneOrMany;
-use rig::agent::{AgentBuilder, MultiTurnStreamItem};
 use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
 use rig::message::{
     AssistantContent as RigAssistantContent, Message as RigMessage, ReasoningContent,
@@ -35,8 +32,7 @@ use rig::message::{
 };
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
-use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
-use rig::tool::ToolDyn;
+use rig::streaming::StreamedAssistantContent;
 use serde_json::{Map as JsonMap, Value, json};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -465,9 +461,6 @@ enum ProviderStreamDelta {
     /// Final canonical conversation state captured after one host-owned controller run finishes.
     /// 在一次宿主自有控制器运行结束后捕获的最终规范会话状态。
     FinalConversationState(SessionConversationState),
-    /// Final rig history snapshot captured after the provider finishes one multi-turn run.
-    /// 在 Provider 完成一次多轮运行后捕获的最终 rig 历史快照。
-    FinalConversationHistory(Vec<RigMessage>),
 }
 
 /// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
@@ -681,17 +674,6 @@ pub fn stream_runtime_run(
                     };
                 }
                 Ok(ProviderStreamDelta::FinalConversationState(conversation_state)) => {
-                    final_conversation_state = Some(conversation_state);
-                }
-                Ok(ProviderStreamDelta::FinalConversationHistory(history)) => {
-                    let mut conversation_state = SessionConversationState::default();
-                    replace_messages_from_rig_history(
-                        &mut conversation_state,
-                        &history,
-                        Some(&preparation.model_blueprint.provider_id),
-                        Some(&preparation.model_blueprint.model_id),
-                        current_unix_millis_text(),
-                    );
                     final_conversation_state = Some(conversation_state);
                 }
                 Err(error) => {
@@ -1795,26 +1777,23 @@ fn execute_provider_prompt_stream(
         Err(error) => return one_shot_provider_error_stream(error),
     };
     let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
-    let tool_outcome_capture = RigToolOutcomeCapture::default();
 
     match preparation.model_blueprint.runtime_kind {
         ProviderRuntimeKind::OpenAi => execute_openai_responses_stream(
+            &preparation.model_blueprint.provider_id,
             &api_key,
             base_url,
             model_id,
             system_preamble,
             prompt,
             request_history,
+            core_snapshot,
             temperature,
             max_turns,
             &request_headers,
-            build_vulcan_rig_tools(
-                tools_manager.clone(),
-                preparation.session_id,
-                &resolved_tools,
-                tool_outcome_capture.clone(),
-            ),
-            tool_outcome_capture.clone(),
+            tools_manager,
+            preparation.session_id,
+            resolved_tools,
             additional_params,
         ),
         ProviderRuntimeKind::OpenAiCompatible
@@ -2578,6 +2557,187 @@ impl VulcanStreamingProviderAdapter for AnthropicCoreStreamingAdapter {
     }
 }
 
+/// Streaming OpenAI Responses provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
+/// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 OpenAI Responses Provider 适配器。
+#[derive(Clone)]
+struct OpenAiResponsesCoreStreamingAdapter {
+    /// Stable provider identifier attached to every request and continuation snapshot.
+    /// 附着到每次请求与 continuation 快照上的稳定 Provider 标识。
+    provider_id: String,
+    /// Resolved API key used by the low-level OpenAI Responses transport.
+    /// 被低层 OpenAI Responses 传输层使用的已解析 API Key。
+    api_key: String,
+    /// Optional base URL override used by the low-level OpenAI Responses transport.
+    /// 被低层 OpenAI Responses 传输层使用的可选基础地址覆盖值。
+    base_url: Option<String>,
+    /// Stable model identifier used by the low-level transport.
+    /// 被低层传输层使用的稳定模型标识。
+    model_id: String,
+    /// Fully resolved request headers attached to the transport request.
+    /// 附着到传输请求上的完整已解析请求头。
+    request_headers: HeaderMap,
+    /// Resolved host tool definitions exposed to the provider for the current turn.
+    /// 当前回合对 Provider 暴露的已解析宿主工具定义集合。
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    /// Low-level rig tool definitions mirrored from the resolved host tool definitions.
+    /// 从已解析宿主工具定义镜像而来的低层 rig 工具定义集合。
+    rig_tool_definitions: Vec<RigToolDefinition>,
+    /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
+    /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
+    live_sender: ProviderLiveDeltaSender,
+}
+
+#[async_trait]
+impl VulcanProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
+    type Request = OpenAiCompatibleCoreTurnRequest;
+    type Response = CoreProviderTurnResponse;
+
+    /// Returns the stable provider identifier used by the OpenAI Responses streaming adapter.
+    /// 返回 OpenAI Responses 流式适配器使用的稳定 Provider 标识。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the stable model identifier used by the OpenAI Responses streaming adapter.
+    /// 返回 OpenAI Responses 流式适配器使用的稳定模型标识。
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Builds one exact single-turn request from the canonical controller snapshot, injects `previous_response_id` when possible, and forwards the structured snapshot immediately.
+    /// 根据规范控制器快照构建一份精确单回合请求，在可行时注入 `previous_response_id`，并立即转发结构化快照。
+    async fn build_request(
+        &self,
+        snapshot: &CoreConversationSnapshot,
+        config: &CoreControllerConfig,
+    ) -> Result<Self::Request, VulcanCoreError> {
+        let Some((current_prompt_message, current_history_messages)) =
+            snapshot.messages.split_last()
+        else {
+            return Err(VulcanCoreError::InvalidState {
+                message: String::from(
+                    "OpenAI Responses 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
+                ),
+            });
+        };
+        let current_history = core_messages_to_rig_history(current_history_messages);
+        let current_prompt = core_message_to_rig_message(current_prompt_message);
+        let effective_additional_params = inject_previous_response_id_into_additional_params(
+            config.additional_params.clone(),
+            &snapshot.continuation,
+        );
+        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+            self.provider_id.as_str(),
+            self.model_id.as_str(),
+            config.system_prompt.as_str(),
+            &current_history,
+            &current_prompt,
+            config.temperature,
+            config.max_turns,
+            &self.resolved_tools,
+            &self.request_headers,
+            effective_additional_params,
+        );
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RequestSnapshot(
+                request_snapshot.clone(),
+            )));
+
+        Ok(OpenAiCompatibleCoreTurnRequest {
+            snapshot: request_snapshot,
+            current_history,
+            current_prompt,
+        })
+    }
+
+    /// One-shot request execution is intentionally unsupported because the OpenAI Responses host path is owned by the streaming adapter.
+    /// 单次非流式请求执行被刻意禁用，因为 OpenAI Responses 宿主链路完全由流式适配器持有。
+    async fn execute_request(
+        &self,
+        _request: Self::Request,
+    ) -> Result<Self::Response, VulcanCoreError> {
+        Err(VulcanCoreError::InvalidState {
+            message: String::from(
+                "OpenAI Responses 流式适配器不支持非流式 execute_request 调用，请改用 execute_request_streaming。",
+            ),
+        })
+    }
+}
+
+#[async_trait]
+impl VulcanStreamingProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
+    /// Executes one exact OpenAI Responses transport turn, forwards normalized stream deltas live, and returns the normalized final turn response.
+    /// 执行一次精确的 OpenAI Responses 传输回合，实时转发规范化流式增量，并返回规范化后的最终回合响应。
+    async fn execute_request_streaming<S>(
+        &self,
+        request: OpenAiCompatibleCoreTurnRequest,
+        sink: &mut S,
+    ) -> Result<Self::Response, VulcanCoreError>
+    where
+        S: VulcanProviderDeltaSink,
+    {
+        let mut builder = openai::Client::builder()
+            .api_key(self.api_key.as_str())
+            .http_headers(self.request_headers.clone());
+
+        if let Some(base_url) = self
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            builder = builder.base_url(base_url);
+        }
+
+        let client = builder
+            .build()
+            .map_err(|error| VulcanCoreError::ProviderFailure {
+                provider_id: self.provider_id.clone(),
+                message: format!("创建 OpenAI Responses 客户端失败：{error}"),
+            })?;
+        let model = client.completion_model(self.model_id.as_str());
+        let mut request_builder = model
+            .completion_request(request.current_prompt)
+            .preamble(request.snapshot.system_prompt.clone())
+            .messages(request.current_history)
+            .temperature_opt(request.snapshot.temperature)
+            .additional_params_opt(request.snapshot.additional_params.clone());
+
+        if !self.rig_tool_definitions.is_empty() {
+            request_builder = request_builder.tools(self.rig_tool_definitions.clone());
+        }
+
+        let mut stream =
+            request_builder
+                .stream()
+                .await
+                .map_err(|error| VulcanCoreError::ProviderFailure {
+                    provider_id: self.provider_id.clone(),
+                    message: format!("OpenAI Responses 流式请求启动失败：{error}"),
+                })?;
+
+        while let Some(item) = stream.next().await {
+            let content = item.map_err(|error| VulcanCoreError::ProviderFailure {
+                provider_id: self.provider_id.clone(),
+                message: format!("OpenAI Responses 流式执行失败：{error}"),
+            })?;
+            for delta in core_provider_turn_deltas_from_assistant_content(content) {
+                sink.push_delta(delta.clone());
+                let _ = self
+                    .live_sender
+                    .send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
+            }
+        }
+
+        Ok(build_openai_compatible_turn_response(
+            self.provider_id.as_str(),
+            self.model_id.as_str(),
+            stream.message_id.clone(),
+            &stream.choice,
+        ))
+    }
+}
+
 /// Streaming tool executor that forwards host-side tool boundary events live while delegating the real tool invocation to the shared bridge.
 /// 在把真实工具调用委派给共享桥接层的同时，实时转发宿主侧工具边界事件的流式工具执行器。
 #[derive(Clone)]
@@ -2691,6 +2851,37 @@ fn build_openai_compatible_turn_request_snapshot(
         request_headers: serialize_provider_request_headers(headers),
         continuation: core_snapshot.continuation,
     }
+}
+
+/// Injects `previous_response_id` into one additional-params payload when the current continuation snapshot already carries a usable upstream response identifier.
+/// 当当前 continuation 快照已经携带可用的上游响应标识时，将 `previous_response_id` 注入到附加参数载荷中。
+fn inject_previous_response_id_into_additional_params(
+    additional_params: Option<Value>,
+    continuation: &CoreProviderContinuation,
+) -> Option<Value> {
+    let Some(previous_response_id) = continuation
+        .last_provider_message_id
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+    else {
+        return additional_params;
+    };
+
+    let mut object = match additional_params {
+        Some(Value::Object(object)) => object,
+        Some(other) => {
+            let mut object = JsonMap::new();
+            object.insert(String::from("host_additional_params"), other);
+            object
+        }
+        None => JsonMap::new(),
+    };
+
+    object
+        .entry(String::from("previous_response_id"))
+        .or_insert_with(|| Value::String(previous_response_id));
+    Some(Value::Object(object))
 }
 
 /// Renders one provider-visible prompt message into plain text so request snapshots can reflect the exact last outgoing message body.
@@ -2822,107 +3013,6 @@ fn one_shot_provider_error_stream(error: impl Into<String>) -> ProviderDeltaStre
     Box::pin(stream! {
         yield Err(error);
     })
-}
-
-/// Converts one multi-turn streaming item into zero or more GUI-facing provider deltas.
-/// 将一条多轮流式项转换为零条或多条面向图形界面的 Provider 增量。
-fn provider_deltas_from_multi_turn_item<R>(
-    item: MultiTurnStreamItem<R>,
-    tool_outcome_capture: &RigToolOutcomeCapture,
-) -> Vec<ProviderStreamDelta> {
-    match item {
-        MultiTurnStreamItem::StreamAssistantItem(content) => {
-            provider_deltas_from_assistant_content(content)
-        }
-        MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-            tool_result,
-            ..
-        }) => {
-            let tool_call_id = tool_result
-                .call_id
-                .clone()
-                .unwrap_or_else(|| tool_result.id.clone());
-            let tool_metadata = tool_outcome_capture
-                .take_next()
-                .and_then(|outcome| outcome.metadata);
-            let event_metadata = build_tool_result_runtime_metadata(
-                &tool_call_id,
-                &tool_result.id,
-                tool_metadata.as_ref(),
-            );
-            vec![ProviderStreamDelta::RuntimeEvent(
-                RuntimeEvent::new(
-                    RuntimeEventKind::ToolFinished,
-                    format!("工具返回 · {}", tool_call_id),
-                    format_tool_result_runtime_detail(&tool_result),
-                )
-                .with_metadata(event_metadata),
-            )]
-        }
-        MultiTurnStreamItem::FinalResponse(final_response) => final_response
-            .history()
-            .map(|history| {
-                vec![ProviderStreamDelta::FinalConversationHistory(
-                    history.to_vec(),
-                )]
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
-/// Converts one assistant streaming content chunk into zero or more GUI-facing provider deltas.
-/// 将一条助手流式内容块转换为零条或多条面向图形界面的 Provider 增量。
-fn provider_deltas_from_assistant_content<R>(
-    content: StreamedAssistantContent<R>,
-) -> Vec<ProviderStreamDelta> {
-    match content {
-        StreamedAssistantContent::Text(text) => {
-            if text.text.is_empty() {
-                Vec::new()
-            } else {
-                vec![ProviderStreamDelta::Output(text.text)]
-            }
-        }
-        StreamedAssistantContent::Reasoning(reasoning) => {
-            let flattened = flatten_reasoning_content(&reasoning.content);
-            if flattened.is_empty() {
-                Vec::new()
-            } else {
-                vec![ProviderStreamDelta::Thinking(flattened)]
-            }
-        }
-        StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
-            if reasoning.is_empty() {
-                Vec::new()
-            } else {
-                vec![ProviderStreamDelta::Thinking(reasoning)]
-            }
-        }
-        StreamedAssistantContent::ToolCall { tool_call, .. } => {
-            let tool_call_id = tool_call
-                .call_id
-                .clone()
-                .unwrap_or_else(|| tool_call.id.clone());
-            vec![ProviderStreamDelta::RuntimeEvent(
-                RuntimeEvent::new(
-                    RuntimeEventKind::ToolStarted,
-                    format!("工具调用 · {} · {}", tool_call_id, tool_call.function.name),
-                    format_tool_call_runtime_detail(
-                        &tool_call.function.name,
-                        &tool_call.function.arguments,
-                    ),
-                )
-                .with_metadata(Some(json!({
-                    "tool_call_id": tool_call_id,
-                    "tool_name": tool_call.function.name,
-                    "arguments": tool_call.function.arguments,
-                }))),
-            )]
-        }
-        StreamedAssistantContent::ToolCallDelta { .. } => Vec::new(),
-        StreamedAssistantContent::Final(_) => Vec::new(),
-    }
 }
 
 /// Converts one assistant streaming content chunk into zero or more `vulcan-core` provider-turn deltas while intentionally ignoring tool-boundary presentation details.
@@ -3083,37 +3173,6 @@ fn format_tool_call_runtime_detail(tool_name: &str, arguments: &Value) -> String
     format!("## 调用工具\n\n`{tool_name}`\n\n## 调用参数\n\n```json\n{pretty_arguments}\n```")
 }
 
-/// Formats one tool-result payload into the full Markdown body shown by the inline transcript and modal.
-/// 将单次工具返回载荷格式化为内联转录与弹窗使用的完整 Markdown 正文。
-fn format_tool_result_runtime_detail(tool_result: &rig::message::ToolResult) -> String {
-    let rendered_content = render_tool_result_content_markdown(&tool_result.content);
-    format!(
-        "## 返回标识\n\n`{}`\n\n{}",
-        tool_result.id, rendered_content
-    )
-}
-
-/// Renders one tool-result content list into readable Markdown text.
-/// 将一组工具返回内容渲染为可读的 Markdown 文本。
-fn render_tool_result_content_markdown(content: &rig::OneOrMany<ToolResultContent>) -> String {
-    let segments = content
-        .iter()
-        .map(|item| match item {
-            ToolResultContent::Text(text) => text.text.trim().to_string(),
-            ToolResultContent::Image(image) => serde_json::to_string_pretty(image)
-                .map(|json| format!("```json\n{json}\n```"))
-                .unwrap_or_else(|_| String::from("```json\n{}\n```")),
-        })
-        .filter(|segment| !segment.trim().is_empty())
-        .collect::<Vec<_>>();
-
-    if segments.is_empty() {
-        return String::from("## 工具返回\n\n（空结果）");
-    }
-
-    format!("## 工具返回\n\n{}", segments.join("\n\n---\n\n"))
-}
-
 /// Builds one structured runtime-event metadata payload for a completed tool result while preserving host-side metadata fields.
 /// 在保留宿主侧元数据字段的前提下，为已完成工具结果构建一份结构化运行时事件元数据载荷。
 fn build_tool_result_runtime_metadata(
@@ -3157,82 +3216,68 @@ fn runtime_event_to_core_event(event: &RuntimeEvent) -> Option<CoreControllerEve
     })
 }
 
-/// Executes one OpenAI Responses prompt using rig's default OpenAI responses client and streams deltas.
-/// 使用 rig 默认的 OpenAI Responses 客户端执行一次 OpenAI Responses 提示词调用并流式返回增量。
+/// Executes one host-controlled OpenAI Responses prompt through `vulcan-core` and streams normalized deltas.
+/// 通过 `vulcan-core` 执行一次宿主控制的 OpenAI Responses 提示词调用，并流式返回规范化增量。
 fn execute_openai_responses_stream(
+    provider_id: &str,
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<RigMessage>,
+    _request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
-    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
-    tool_outcome_capture: RigToolOutcomeCapture,
+    tools_manager: VulcanToolsManager,
+    session_id: SessionId,
+    resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
-    let mut builder = openai::Client::builder()
-        .api_key(api_key)
-        .http_headers(headers.clone());
-
-    if let Some(base_url) = base_url.filter(|value| !value.trim().is_empty()) {
-        builder = builder.base_url(base_url);
-    }
-
-    let client = match builder.build() {
-        Ok(client) => client,
-        Err(error) => {
-            return one_shot_provider_error_stream(format!(
-                "创建 OpenAI Responses 客户端失败：{}。",
-                error
-            ));
-        }
-    };
-    let model = client.completion_model(model_id);
-    let mut agent_builder = AgentBuilder::new(model)
-        .name("Vulcan Code Responses Worker")
-        .preamble(system_preamble);
-
-    agent_builder = agent_builder.default_max_turns(max_turns);
-
-    if let Some(temperature) = temperature {
-        agent_builder = agent_builder.temperature(temperature);
-    }
-    if let Some(additional_params) = additional_params {
-        agent_builder = agent_builder.additional_params(additional_params);
-    }
-
-    let agent = if luaskills_rig_tools.is_empty() {
-        agent_builder.build()
-    } else {
-        agent_builder.tools(luaskills_rig_tools).build()
-    };
+    let provider_id = provider_id.to_string();
+    let api_key = api_key.to_string();
+    let base_url = base_url
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string);
+    let model_id = model_id.to_string();
     let prompt = prompt.to_string();
+    let system_preamble = system_preamble.to_string();
+    let request_headers = headers.clone();
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(tools_manager),
+        &resolved_tools,
+        session_id,
+    ));
+    let rig_tool_definitions = resolved_tools
+        .iter()
+        .map(resolved_tool_definition_to_rig_tool_definition)
+        .collect::<Vec<_>>();
 
-    Box::pin(stream! {
-        let mut stream = agent
-            .stream_prompt(prompt)
-            .with_history(request_history)
-            .multi_turn(max_turns)
-            .await;
-
-        while let Some(item) = stream.next().await {
-            let item = item.map_err(|error| format!("OpenAI Responses 流式执行失败：{}。", error));
-            match item {
-                Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
-                        yield Ok(delta);
-                    }
-                }
-                Err(error) => {
-                    yield Err(error);
-                    break;
-                }
-            }
-        }
-    })
+    execute_host_controlled_stream(
+        CoreControllerConfig {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            system_prompt: system_preamble,
+            temperature,
+            max_turns,
+            additional_params: additional_params.clone(),
+        },
+        core_snapshot,
+        prompt,
+        move |live_sender| OpenAiResponsesCoreStreamingAdapter {
+            provider_id: provider_id.clone(),
+            api_key,
+            base_url,
+            model_id,
+            request_headers,
+            resolved_tools,
+            rig_tool_definitions,
+            live_sender,
+        },
+        runtime_bridge,
+        "OpenAI Responses",
+    )
 }
 
 /// Executes one host-controlled Anthropic prompt through `vulcan-core` and streams normalized deltas.
@@ -3519,8 +3564,9 @@ mod tests {
         build_openai_compatible_turn_request_snapshot, build_provider_request_preview_markdown,
         build_runtime_system_preamble, classify_synthetic_thinking_preamble,
         core_messages_to_rig_history, core_snapshot_to_session_conversation_state,
-        normalize_streamed_thinking_output, resolve_host_visible_tool_call_id,
-        resolve_runtime_default_max_turns_limit, resolve_runtime_max_turns,
+        inject_previous_response_id_into_additional_params, normalize_streamed_thinking_output,
+        resolve_host_visible_tool_call_id, resolve_runtime_default_max_turns_limit,
+        resolve_runtime_max_turns,
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
@@ -4083,6 +4129,39 @@ mod tests {
         assert_eq!(metadata["tool_result_id"], "result-1");
         assert_eq!(metadata["kind"], "change_set");
         assert_eq!(metadata["tool_name"], "write_file");
+    }
+
+    /// Verifies OpenAI Responses continuation injection preserves existing additional params while adding one missing `previous_response_id`.
+    /// 验证 OpenAI Responses 的 continuation 注入会在补入缺失 `previous_response_id` 的同时保留既有附加参数。
+    #[test]
+    fn openai_responses_continuation_injection_preserves_existing_additional_params() {
+        let continuation = CoreProviderContinuation {
+            provider_id: Some(String::from("openai")),
+            model_id: Some(String::from("gpt-5")),
+            last_provider_message_id: Some(String::from("resp_prev")),
+            updated_at: Some(String::from("123")),
+        };
+
+        let merged = inject_previous_response_id_into_additional_params(
+            Some(json!({
+                "reasoning": { "effort": "high" }
+            })),
+            &continuation,
+        )
+        .expect("merged params should exist");
+        assert_eq!(merged["reasoning"]["effort"], "high");
+        assert_eq!(merged["previous_response_id"], "resp_prev");
+
+        let preserved = inject_previous_response_id_into_additional_params(
+            Some(json!({
+                "previous_response_id": "resp_existing",
+                "reasoning": { "effort": "medium" }
+            })),
+            &continuation,
+        )
+        .expect("preserved params should exist");
+        assert_eq!(preserved["previous_response_id"], "resp_existing");
+        assert_eq!(preserved["reasoning"]["effort"], "medium");
     }
 
     /// Verifies host-controlled OpenAI-compatible snapshots treat tool-result messages as the real outgoing prompt of the next turn.
