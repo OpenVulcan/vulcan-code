@@ -1,23 +1,17 @@
 //! Host-controlled provider transport adapters extracted from the GUI executor.
 //! 从图形界面执行器中拆分出的宿主控制 Provider 传输适配层。
 
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider_protocol_bridge::{
-    attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
-    build_openai_compatible_turn_response, build_tool_result_runtime_metadata,
-    core_provider_turn_delta_to_runtime_delta, core_provider_turn_deltas_from_assistant_content,
-    format_host_tool_result_runtime_detail, format_tool_call_runtime_detail,
+    build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
+    core_provider_turn_deltas_from_assistant_content,
     inject_previous_response_id_into_additional_params,
 };
-use crate::agent_runtime::provider_request_bridge::{
-    build_openai_compatible_turn_request_snapshot, core_message_to_rig_message,
-    core_messages_to_rig_history, core_snapshot_to_session_conversation_state,
-    resolved_tool_definition_to_rig_tool_definition,
+use crate::agent_runtime::provider_stream::ProviderDeltaStream;
+use crate::agent_runtime::provider_transport_common::{
+    OpenAiCompatibleCoreTurnRequest, ProviderLiveDeltaSender, build_host_controlled_turn_request,
+    execute_host_controlled_stream, prepare_host_tool_runtime_context,
 };
-use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
-use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
-use async_stream::stream;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
@@ -25,121 +19,15 @@ use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
 use rig::message::Message as RigMessage;
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
-use serde_json::{Value, json};
-use std::sync::Arc;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
-use vulcan_core::controller::VulcanCoreController;
+use serde_json::Value;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
 };
-use vulcan_core::tool::{AllowAllToolPolicy, VulcanToolExecutor};
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
-    CoreError as VulcanCoreError, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
-    ProviderTurnResponse as CoreProviderTurnResponse,
-    ToolInvocationRequest as CoreToolInvocationRequest,
-    ToolInvocationResult as CoreToolInvocationResult,
+    CoreError as VulcanCoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
-
-/// Shared live-delta sender used to forward request snapshots, streaming chunks, and runtime events from the host-owned controller task.
-/// 用于从宿主自有控制器任务转发请求快照、流式分片与运行时事件的共享实时增量发送器。
-type ProviderLiveDeltaSender = UnboundedSender<Result<ProviderStreamDelta, String>>;
-
-/// Prepared host-side tool runtime context reused by provider transport wrappers so bridge creation and rig-tool mirroring stay consistent.
-/// 供 Provider 传输包装器复用的宿主侧工具运行时上下文，使桥接层创建与 rig 工具镜像保持一致。
-struct PreparedHostToolRuntimeContext {
-    /// Shared host-managed bridge that owns the real tool dispatch path for the current execution turn.
-    /// 持有当前执行回合真实工具调度路径的共享宿主管理桥接层。
-    runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    /// Mirrored low-level rig tool definitions exposed to the transport request builder.
-    /// 暴露给传输请求构建器的镜像低层 rig 工具定义集合。
-    rig_tool_definitions: Vec<RigToolDefinition>,
-}
-
-/// Builds one exact host-controlled turn request from the canonical controller snapshot and forwards the structured snapshot immediately.
-/// 根据规范控制器快照构建一份精确宿主控制回合请求，并立即转发结构化快照。
-fn build_host_controlled_turn_request(
-    provider_id: &str,
-    model_id: &str,
-    request_label: &str,
-    snapshot: &CoreConversationSnapshot,
-    config: &CoreControllerConfig,
-    resolved_tools: &[ResolvedToolDefinition],
-    request_headers: &HeaderMap,
-    live_sender: &ProviderLiveDeltaSender,
-    additional_params: Option<Value>,
-) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
-    let Some((current_prompt_message, current_history_messages)) = snapshot.messages.split_last()
-    else {
-        return Err(VulcanCoreError::InvalidState {
-            message: format!(
-                "{request_label} 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。"
-            ),
-        });
-    };
-    let current_history = core_messages_to_rig_history(current_history_messages);
-    let current_prompt = core_message_to_rig_message(current_prompt_message);
-    let request_snapshot = build_openai_compatible_turn_request_snapshot(
-        provider_id,
-        model_id,
-        config.system_prompt.as_str(),
-        &current_history,
-        &current_prompt,
-        config.temperature,
-        config.max_turns,
-        resolved_tools,
-        request_headers,
-        additional_params,
-    );
-    let _ = live_sender.send(Ok(ProviderStreamDelta::RequestSnapshot(
-        request_snapshot.clone(),
-    )));
-
-    Ok(OpenAiCompatibleCoreTurnRequest {
-        snapshot: request_snapshot,
-        current_history,
-        current_prompt,
-    })
-}
-
-/// Prepares one shared host-managed tool bridge plus the mirrored rig tool definitions for the current execution turn.
-/// 为当前执行回合准备共享宿主管理工具桥接层及其镜像 rig 工具定义集合。
-fn prepare_host_tool_runtime_context(
-    tools_manager: VulcanToolsManager,
-    resolved_tools: &[ResolvedToolDefinition],
-    session_id: SessionId,
-) -> PreparedHostToolRuntimeContext {
-    PreparedHostToolRuntimeContext {
-        runtime_bridge: Arc::new(VulcanManagedToolRuntimeBridge::new(
-            Arc::new(tools_manager),
-            resolved_tools,
-            session_id,
-        )),
-        rig_tool_definitions: resolved_tools
-            .iter()
-            .map(resolved_tool_definition_to_rig_tool_definition)
-            .collect(),
-    }
-}
-
-/// Serializable OpenAI-compatible single-turn request owned by `vulcan-core` while preserving transport-only rig messages outside persistence.
-/// 由 `vulcan-core` 持有的可序列化 OpenAI 兼容单回合请求，同时在持久化之外保留仅供传输使用的 rig 消息。
-#[derive(Debug, Clone, serde::Serialize)]
-struct OpenAiCompatibleCoreTurnRequest {
-    /// Structured request snapshot persisted for inspection and debugging.
-    /// 被持久化用于检查与调试的结构化请求快照。
-    #[serde(flatten)]
-    snapshot: CoreProviderRequestSnapshot,
-    /// Provider-visible history converted into rig messages for the real transport layer.
-    /// 为真实传输层转换出的 Provider 可见 rig 历史消息。
-    #[serde(skip_serializing)]
-    current_history: Vec<RigMessage>,
-    /// Last outgoing prompt message converted into the rig shape expected by the transport layer.
-    /// 被转换为传输层所需 rig 形状的最后一条出站提示消息。
-    #[serde(skip_serializing)]
-    current_prompt: RigMessage,
-}
 
 /// Streaming OpenAI-compatible provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
 /// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 OpenAI 兼容 Provider 适配器。
@@ -746,129 +634,6 @@ impl VulcanStreamingProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
             &stream.choice,
         ))
     }
-}
-
-/// Streaming tool executor that forwards host-side tool boundary events live while delegating the real tool invocation to the shared bridge.
-/// 在把真实工具调用委派给共享桥接层的同时，实时转发宿主侧工具边界事件的流式工具执行器。
-#[derive(Clone)]
-struct StreamingRuntimeToolExecutor {
-    /// Shared host-managed bridge that owns the real tool dispatch and metadata normalization.
-    /// 持有真实工具调度与元数据规范化能力的共享宿主管理桥接层。
-    runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    /// Live sender used to forward tool boundary runtime events into the GUI stream.
-    /// 用于把工具边界运行时事件转发进图形界面流中的实时发送器。
-    live_sender: ProviderLiveDeltaSender,
-}
-
-#[async_trait]
-impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
-    /// Executes one host-managed tool request, forwards start and finish runtime events, and returns the normalized tool result to the controller.
-    /// 执行一次宿主管理工具请求，转发开始与完成运行时事件，并将规范化工具结果返回给控制器。
-    async fn execute_tool(
-        &self,
-        request: &CoreToolInvocationRequest,
-    ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-            RuntimeEvent::new(
-                RuntimeEventKind::ToolStarted,
-                format!(
-                    "工具调用 · {} · {}",
-                    request.tool_call_id, request.tool_name
-                ),
-                format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
-            )
-            .with_metadata(Some(json!({
-                "tool_call_id": request.tool_call_id,
-                "tool_name": request.tool_name,
-                "arguments": request.arguments,
-            }))),
-        )));
-        let result = self.runtime_bridge.execute_tool(request).await?;
-        let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
-        let event_metadata = attach_tool_name_to_runtime_metadata(
-            build_tool_result_runtime_metadata(
-                &request.tool_call_id,
-                &tool_result_id,
-                result.host_result.as_ref(),
-            ),
-            &request.tool_name,
-        );
-        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-            RuntimeEvent::new(
-                RuntimeEventKind::ToolFinished,
-                format!("工具返回 · {}", request.tool_call_id),
-                format_host_tool_result_runtime_detail(&tool_result_id, &result.model_output),
-            )
-            .with_metadata(event_metadata),
-        )));
-        Ok(result)
-    }
-}
-
-/// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the GUI layer.
-/// 通过 `vulcan-core` 执行一次宿主控制的 Provider 流，转发实时增量，并把最终规范状态返回给图形界面层。
-fn execute_host_controlled_stream<A, F>(
-    controller_config: CoreControllerConfig,
-    core_snapshot: CoreConversationSnapshot,
-    prompt: String,
-    provider_factory: F,
-    runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    provider_label: &'static str,
-) -> ProviderDeltaStream
-where
-    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Send + Sync + 'static,
-    F: FnOnce(ProviderLiveDeltaSender) -> A + Send + 'static,
-{
-    Box::pin(stream! {
-        let (live_sender, mut live_receiver) =
-            unbounded_channel::<Result<ProviderStreamDelta, String>>();
-        let task_sender = live_sender.clone();
-        let mut controller = VulcanCoreController::new(controller_config, core_snapshot);
-        let provider_adapter = provider_factory(live_sender.clone());
-        let tool_executor = StreamingRuntimeToolExecutor {
-            runtime_bridge,
-            live_sender: live_sender.clone(),
-        };
-        let controller_prompt = prompt.clone();
-        let controller_task = tokio::spawn(async move {
-            let tool_policy = AllowAllToolPolicy;
-            match controller
-                .run_user_turn_streaming(
-                    &provider_adapter,
-                    &tool_executor,
-                    &tool_policy,
-                    controller_prompt,
-                )
-                .await
-            {
-                Ok(_) => {
-                    let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
-                        core_snapshot_to_session_conversation_state(controller.snapshot()),
-                    )));
-                }
-                Err(error) => {
-                    let _ = task_sender.send(Err(format!(
-                        "{}流式执行失败：{}。",
-                        provider_label,
-                        error
-                    )));
-                }
-            }
-        });
-        drop(live_sender);
-
-        while let Some(item) = live_receiver.recv().await {
-            yield item;
-        }
-
-        if let Err(error) = controller_task.await {
-            yield Err(format!(
-                "{}控制器后台任务失败：{}。",
-                provider_label,
-                error
-            ));
-        }
-    })
 }
 
 /// Executes one host-controlled OpenAI-compatible prompt through `vulcan-core` and streams normalized deltas.
