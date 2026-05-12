@@ -2,17 +2,18 @@
 //! compose 运行时基础架构使用的执行准备模型与真实 Provider 执行辅助逻辑。
 
 use crate::agent_profile::AgentProfileCatalog;
-use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
 };
 use crate::agent_runtime::provider::resolve_active_provider_blueprint;
-use crate::agent_runtime::provider_prompt_loader::load_provider_base_system_prompt;
 use crate::agent_runtime::provider_request_bridge::build_core_conversation_snapshot;
 pub(crate) use crate::agent_runtime::provider_request_snapshot::{
     build_core_controller_config, build_core_provider_request_snapshot,
     build_provider_request_preview_markdown,
+};
+use crate::agent_runtime::provider_runtime_context::{
+    build_runtime_system_preamble, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
@@ -451,29 +452,6 @@ fn collect_enabled_mcp_runtime_events(
     }
 
     (runtime_events, rows, errors, warnings)
-}
-
-/// Builds the effective runtime system prompt sent to the real provider agent.
-/// 构建发送给真实 Provider 代理的生效运行时系统提示词。
-fn build_runtime_system_preamble(preparation: &ExecutionPreparation) -> String {
-    let mut sections = Vec::new();
-    sections.push(
-        load_provider_base_system_prompt(&preparation.model_blueprint)
-            .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent.")),
-    );
-    sections.push(format!("当前工作区：{}", preparation.workspace_path));
-    sections.push(format!("当前执行模式：{}", preparation.execution_mode));
-
-    sections.join("\n")
-}
-
-/// Resolves one optional max-turn override for multi-turn tool-calling providers.
-/// 为支持多轮工具调用的 Provider 解析一份可选的最大轮次覆盖值。
-fn resolve_runtime_max_turns(active_agent: Option<&RuntimeAgentDefinition>) -> Option<usize> {
-    active_agent
-        .and_then(|agent| agent.max_turns)
-        .filter(|value| *value > 0)
-        .map(|value| value as usize)
 }
 
 /// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.

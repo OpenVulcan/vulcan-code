@@ -10,6 +10,7 @@ pub mod provider_prompt_loader;
 pub mod provider_protocol_bridge;
 pub mod provider_request_bridge;
 pub mod provider_request_snapshot;
+pub mod provider_runtime_context;
 pub mod provider_runtime_dispatch;
 pub mod provider_runtime_inputs;
 pub mod provider_stream;
