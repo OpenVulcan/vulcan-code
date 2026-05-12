@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod events;
+pub mod execution_models;
 pub mod executor;
 pub mod provider;
 pub mod provider_protocol_bridge;
@@ -14,7 +15,6 @@ pub mod tool_runtime_bridge;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;
-pub use executor::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport, stream_runtime_run,
-};
+pub use execution_models::{ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport};
+pub use executor::stream_runtime_run;
 pub use runtime::RuntimeFoundation;
