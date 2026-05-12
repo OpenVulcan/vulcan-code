@@ -415,23 +415,6 @@ pub(super) fn parse_unix_millis_text(value: &str) -> Option<u128> {
     value.trim().parse::<u128>().ok()
 }
 
-/// Converts one stored session message entry into the lightweight execution-context row sent to the runtime.
-/// 将一条已存储会话消息项转换为发送到运行时的轻量执行上下文行。
-pub(super) fn session_message_into_execution_context(
-    message: SessionMessageEntry,
-) -> ExecutionContextMessage {
-    ExecutionContextMessage {
-        role: match message.kind {
-            SessionMessageKind::User => String::from("user"),
-            SessionMessageKind::Assistant => String::from("assistant"),
-            SessionMessageKind::Error => String::from("error"),
-        },
-        title: message.title,
-        body: message.body,
-        record_kind: message.record_kind.as_persisted_key().to_string(),
-    }
-}
-
 /// Builds one stable runtime-event identifier within the current session event stream.
 /// 在当前会话事件流内部构建一条稳定运行时事件标识。
 pub(super) fn session_runtime_event_id(

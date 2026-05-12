@@ -6,6 +6,7 @@ mod agent_runtime;
 mod agent_view;
 mod app;
 mod code_view;
+mod conversation_protocol;
 mod data_plane;
 mod diff;
 mod luaskills_runtime;

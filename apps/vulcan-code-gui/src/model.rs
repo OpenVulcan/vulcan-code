@@ -1,6 +1,7 @@
 //! Domain models for the AI coding desktop scaffold.
 //! AI 编程桌面骨架的领域模型定义。
 
+use crate::conversation_protocol::SessionConversationState;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -419,7 +420,7 @@ impl ActivityEntry {
 
 /// Message kinds rendered inside one workbench session transcript.
 /// 渲染在某个工作台会话转录区中的消息类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionMessageKind {
     /// User-authored prompt or follow-up input.
     /// 用户撰写的提示词或跟进输入。
@@ -446,7 +447,7 @@ impl SessionMessageKind {
 
 /// Durable record kinds used for visible transcript rows and hidden internal nodes.
 /// 用于可见转录行与隐藏内部节点的持久化记录类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionMessageRecordKind {
     /// Plain transcript row shown directly to the user.
     /// 直接展示给用户的普通转录行。
@@ -665,6 +666,9 @@ pub struct SessionRuntimeStateEntry {
     /// Persisted transcript UI state restored with the session runtime metadata.
     /// 随会话运行时元数据一起恢复的持久化转录界面状态。
     pub ui_state: SessionTranscriptUiState,
+    /// Canonical conversation state used by the runtime instead of rebuilding history from transcript projections.
+    /// 运行时使用的规范会话状态，用于替代从转录投影重建历史。
+    pub conversation_state: SessionConversationState,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,

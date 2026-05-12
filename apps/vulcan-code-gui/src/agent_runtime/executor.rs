@@ -7,6 +7,10 @@ use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEv
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
 use crate::agent_runtime::rig_tools::build_vulcan_rig_tools;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::conversation_protocol::{
+    SessionConversationMessage, SessionConversationPayload, SessionConversationState,
+    conversation_messages_to_rig_history, replace_messages_from_rig_history,
+};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::model::SessionId;
@@ -19,13 +23,14 @@ use async_stream::stream;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::agent::{AgentBuilder, MultiTurnStreamItem};
-use rig::message::{ReasoningContent, ToolResultContent};
+use rig::message::{Message as RigMessage, ReasoningContent, ToolResultContent};
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
 use serde_json::Value;
 use std::pin::Pin;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, path::Path, path::PathBuf};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
@@ -67,24 +72,6 @@ const KIMI_SYSTEM_PROMPT_FILE_NAME: &str = "kimi.txt";
 /// Trinity 家族 Provider 提示词文件名。
 const TRINITY_SYSTEM_PROMPT_FILE_NAME: &str = "trinity.txt";
 
-/// Lightweight transcript row forwarded into the real runtime as model-facing context.
-/// 作为面向模型上下文转发到真实运行时的轻量转录行。
-#[derive(Debug, Clone)]
-pub struct ExecutionContextMessage {
-    /// Persisted message role label.
-    /// 持久化消息角色标签。
-    pub role: String,
-    /// Human-readable message title.
-    /// 人类可读消息标题。
-    pub title: String,
-    /// Primary message body content.
-    /// 主要消息正文内容。
-    pub body: String,
-    /// Durable record-kind label.
-    /// 持久化记录类型标签。
-    pub record_kind: String,
-}
-
 /// Minimal execution request captured from the current GUI state.
 /// 从当前 GUI 状态捕获的最小执行请求。
 #[derive(Debug, Clone)]
@@ -101,9 +88,9 @@ pub struct ExecutionPreparationRequest {
     /// Current composer prompt.
     /// 当前提示词输入区内容。
     pub prompt: String,
-    /// Model-facing context history reconstructed from the full transcript or the latest compaction checkpoint.
-    /// 从完整转录或最近一次压缩检查点重建出的面向模型上下文历史。
-    pub context_history: Vec<ExecutionContextMessage>,
+    /// Canonical conversation history reconstructed from the session protocol state.
+    /// 从会话协议状态重建出的规范会话历史。
+    pub conversation_history: Vec<SessionConversationMessage>,
     /// Current execution-mode label.
     /// 当前执行模式标签。
     pub execution_mode: String,
@@ -279,6 +266,9 @@ pub struct ExecutionRunReport {
     /// Assistant thinking output returned by the real provider call.
     /// 真实 Provider 调用返回的助手思考输出。
     pub thinking_output: Option<String>,
+    /// Canonical conversation state rebuilt from the final rig history when the run succeeds.
+    /// 当运行成功时根据最终 rig 历史重建出的规范会话状态。
+    pub conversation_state: Option<SessionConversationState>,
     /// Successful MCP discovery summary rows collected during the run.
     /// 运行期间收集到的 MCP 成功发现摘要行集合。
     pub mcp_discovery_rows: Vec<String>,
@@ -301,6 +291,7 @@ impl ExecutionRunReport {
         preparation: ExecutionPreparation,
         thinking_output: Option<String>,
         assistant_output: String,
+        conversation_state: Option<SessionConversationState>,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -310,6 +301,7 @@ impl ExecutionRunReport {
             preparation: Some(preparation),
             assistant_output: Some(assistant_output),
             thinking_output,
+            conversation_state,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -332,6 +324,7 @@ impl ExecutionRunReport {
             preparation,
             assistant_output: None,
             thinking_output: None,
+            conversation_state: None,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -401,7 +394,7 @@ pub fn prepare_execution(
         model_blueprint,
         prompt_preview: truncate_preview(request.prompt.trim(), 180),
         workspace_path,
-        context_history_count: request.context_history.len(),
+        context_history_count: request.conversation_history.len(),
         execution_mode: request.execution_mode.clone(),
         temperature: request.temperature,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
@@ -425,6 +418,9 @@ enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
+    /// Final rig history snapshot captured after the provider finishes one multi-turn run.
+    /// 在 Provider 完成一次多轮运行后捕获的最终 rig 历史快照。
+    FinalConversationHistory(Vec<RigMessage>),
 }
 
 /// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
@@ -493,12 +489,12 @@ pub fn stream_runtime_run(
         warnings.extend(discovery_warnings);
 
         let system_preamble = build_runtime_system_preamble(&preparation);
-        let effective_prompt =
-            build_runtime_user_prompt(&request.context_history, request.prompt.trim());
+        let request_history = conversation_messages_to_rig_history(&request.conversation_history);
         preparation.provider_request_preview_markdown = build_provider_request_preview_markdown(
             &preparation,
             &system_preamble,
-            &effective_prompt,
+            &request.conversation_history,
+            request.prompt.trim(),
             &resolved_tools.definitions,
             resolve_runtime_max_turns(active_agent.as_ref()),
         );
@@ -532,12 +528,14 @@ pub fn stream_runtime_run(
             &preparation,
             active_agent.as_ref(),
             &system_preamble,
-            &effective_prompt,
+            request.prompt.trim(),
+            request_history,
             tools_manager,
             resolved_tools.definitions,
         );
 
         let mut terminal_error = None;
+        let mut final_conversation_state = None;
 
         while let Some(item) = provider_stream.next().await {
             match item {
@@ -596,6 +594,17 @@ pub fn stream_runtime_run(
                         session_id: request.session_id,
                         event,
                     };
+                }
+                Ok(ProviderStreamDelta::FinalConversationHistory(history)) => {
+                    let mut conversation_state = SessionConversationState::default();
+                    replace_messages_from_rig_history(
+                        &mut conversation_state,
+                        &history,
+                        Some(&preparation.model_blueprint.provider_id),
+                        Some(&preparation.model_blueprint.model_id),
+                        current_unix_millis_text(),
+                    );
+                    final_conversation_state = Some(conversation_state);
                 }
                 Err(error) => {
                     terminal_error = Some(error);
@@ -662,6 +671,7 @@ pub fn stream_runtime_run(
             preparation,
             normalize_optional_stream_output(thinking_visible_output),
             normalized_output,
+            final_conversation_state,
             discovery_rows,
             discovery_errors,
             warnings,
@@ -813,36 +823,13 @@ fn read_non_empty_system_prompt_file(path: &Path) -> Option<String> {
         .filter(|content| !content.is_empty())
 }
 
-/// Builds the effective user prompt by prepending the reconstructed session context to the latest user input.
-/// 通过在最新用户输入前拼接重建后的会话上下文来构建生效用户提示词。
-fn build_runtime_user_prompt(context_history: &[ExecutionContextMessage], prompt: &str) -> String {
-    if context_history.is_empty() {
-        return prompt.to_string();
-    }
-
-    let context_block = context_history
-        .iter()
-        .map(|message| {
-            format!(
-                "[{}|{}|{}]\n{}",
-                message.role, message.record_kind, message.title, message.body
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    format!(
-        "以下是当前会话在最近一次上下文压缩锚点之后需要保留的历史上下文，请结合这些上下文继续完成本次请求。\n\n{}\n\n本轮最新用户请求如下：\n{}",
-        context_block, prompt
-    )
-}
-
 /// Builds the full Markdown preview of the effective provider request captured right before dispatch.
 /// 构建在真正分发前捕获的生效 Provider 请求完整 Markdown 预览。
 fn build_provider_request_preview_markdown(
     preparation: &ExecutionPreparation,
     system_preamble: &str,
-    effective_prompt: &str,
+    conversation_history: &[SessionConversationMessage],
+    latest_prompt: &str,
     resolved_tools: &[ResolvedToolDefinition],
     max_turns: Option<usize>,
 ) -> String {
@@ -869,6 +856,7 @@ fn build_provider_request_preview_markdown(
             .collect::<Vec<_>>()
             .join("\n\n")
     };
+    let canonical_history_markdown = render_conversation_history_markdown(conversation_history);
 
     format!(
         concat!(
@@ -886,6 +874,8 @@ fn build_provider_request_preview_markdown(
             "- 历史上下文：`{}` 条\n",
             "- 工具数量：`{}` 个\n\n",
             "## System Preamble\n",
+            "{}\n\n",
+            "## Canonical History\n",
             "{}\n\n",
             "## Effective User Prompt\n",
             "{}\n\n",
@@ -912,10 +902,99 @@ fn build_provider_request_preview_markdown(
         preparation.context_history_count,
         resolved_tools.len(),
         render_text_code_fence(system_preamble),
-        render_text_code_fence(effective_prompt),
+        canonical_history_markdown,
+        render_text_code_fence(latest_prompt),
         tool_rows,
         extra_body_markdown,
     )
+}
+
+/// Renders the canonical history into a structured Markdown snapshot that is easier to inspect than one flattened prompt string.
+/// 将规范历史渲染为结构化 Markdown 快照，使其比单条扁平 Prompt 字符串更易检查。
+fn render_conversation_history_markdown(history: &[SessionConversationMessage]) -> String {
+    if history.is_empty() {
+        return String::from("（本次请求没有历史消息）");
+    }
+
+    history
+        .iter()
+        .enumerate()
+        .map(|(index, message)| render_conversation_message_preview(index, message))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Renders one canonical conversation message into the provider-preview Markdown.
+/// 将单条规范会话消息渲染到 Provider 预览 Markdown 中。
+fn render_conversation_message_preview(
+    index: usize,
+    message: &SessionConversationMessage,
+) -> String {
+    match &message.payload {
+        SessionConversationPayload::UserText { text } => format!(
+            "### {}. user · `{}`\n{}",
+            index + 1,
+            message.id,
+            render_text_code_fence(text)
+        ),
+        SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id,
+            tool_calls,
+        } => {
+            let mut sections = vec![format!(
+                "### {}. assistant · `{}`{}",
+                index + 1,
+                message.id,
+                provider_message_id
+                    .as_deref()
+                    .map(|id| format!(" · provider_id=`{id}`"))
+                    .unwrap_or_default()
+            )];
+            if !text.trim().is_empty() {
+                sections.push(String::from("#### Text"));
+                sections.push(render_text_code_fence(text));
+            }
+            if !reasoning.trim().is_empty() {
+                sections.push(String::from("#### Reasoning"));
+                sections.push(render_text_code_fence(reasoning));
+            }
+            if !tool_calls.is_empty() {
+                sections.push(String::from("#### Tool Calls"));
+                sections.extend(tool_calls.iter().map(|tool_call| {
+                    let arguments = serde_json::to_string_pretty(&tool_call.arguments)
+                        .unwrap_or_else(|_| tool_call.arguments.to_string());
+                    format!(
+                        "- `{}` · id=`{}`{}\n```json\n{}\n```",
+                        tool_call.tool_name,
+                        tool_call.id,
+                        tool_call
+                            .tool_call_id
+                            .as_deref()
+                            .map(|call_id| format!(" · call_id=`{call_id}`"))
+                            .unwrap_or_default(),
+                        arguments
+                    )
+                }));
+            }
+            sections.join("\n\n")
+        }
+        SessionConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => format!(
+            "### {}. tool_result · `{}`{}\n{}",
+            index + 1,
+            tool_result_id,
+            tool_call_id
+                .as_deref()
+                .map(|call_id| format!(" · call_id=`{call_id}`"))
+                .unwrap_or_default(),
+            render_text_code_fence(text)
+        ),
+    }
 }
 
 /// Renders one resolved tool into a Markdown section used by the request-preview tab.
@@ -972,6 +1051,7 @@ fn execute_provider_prompt_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
+    request_history: Vec<RigMessage>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
@@ -1021,6 +1101,7 @@ fn execute_provider_prompt_stream(
             model_id,
             system_preamble,
             prompt,
+            request_history,
             temperature,
             max_turns,
             &request_headers,
@@ -1038,6 +1119,7 @@ fn execute_provider_prompt_stream(
             model_id,
             system_preamble,
             prompt,
+            request_history,
             temperature,
             max_turns,
             &request_headers,
@@ -1049,6 +1131,7 @@ fn execute_provider_prompt_stream(
             model_id,
             system_preamble,
             prompt,
+            request_history,
             temperature,
             max_turns,
             &request_headers,
@@ -1061,6 +1144,7 @@ fn execute_provider_prompt_stream(
             model_id,
             system_preamble,
             prompt,
+            request_history,
             temperature,
             max_turns,
             &request_headers,
@@ -1114,6 +1198,7 @@ fn execute_openai_compatible_stream(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
+    request_history: Vec<RigMessage>,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -1159,7 +1244,11 @@ fn execute_openai_compatible_stream(
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
-        let mut stream = agent.stream_prompt(prompt).await;
+        let mut stream = agent
+            .stream_prompt(prompt)
+            .with_history(request_history)
+            .multi_turn(max_turns)
+            .await;
 
         while let Some(item) = stream.next().await {
             let item = item.map_err(|error| format!("OpenAI 兼容流式执行失败：{}。", error));
@@ -1250,7 +1339,10 @@ fn provider_deltas_from_multi_turn_item<R>(
                 format_tool_result_runtime_detail(&tool_result),
             ))]
         }
-        MultiTurnStreamItem::FinalResponse(_) => Vec::new(),
+        MultiTurnStreamItem::FinalResponse(final_response) => final_response
+            .history()
+            .map(|history| vec![ProviderStreamDelta::FinalConversationHistory(history.to_vec())])
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -1398,6 +1490,7 @@ fn execute_openai_responses_stream(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
+    request_history: Vec<RigMessage>,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -1443,7 +1536,11 @@ fn execute_openai_responses_stream(
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
-        let mut stream = agent.stream_prompt(prompt).await;
+        let mut stream = agent
+            .stream_prompt(prompt)
+            .with_history(request_history)
+            .multi_turn(max_turns)
+            .await;
 
         while let Some(item) = stream.next().await {
             let item = item.map_err(|error| format!("OpenAI Responses 流式执行失败：{}。", error));
@@ -1470,6 +1567,7 @@ fn execute_anthropic_stream(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
+    request_history: Vec<RigMessage>,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -1515,7 +1613,11 @@ fn execute_anthropic_stream(
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
-        let mut stream = agent.stream_prompt(prompt).await;
+        let mut stream = agent
+            .stream_prompt(prompt)
+            .with_history(request_history)
+            .multi_turn(max_turns)
+            .await;
 
         while let Some(item) = stream.next().await {
             let item = item.map_err(|error| format!("Anthropic 兼容流式执行失败：{}。", error));
@@ -1541,6 +1643,7 @@ fn execute_openrouter_stream(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
+    request_history: Vec<RigMessage>,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -1582,7 +1685,11 @@ fn execute_openrouter_stream(
     let prompt = prompt.to_string();
 
     Box::pin(stream! {
-        let mut stream = agent.stream_prompt(prompt).await;
+        let mut stream = agent
+            .stream_prompt(prompt)
+            .with_history(request_history)
+            .multi_turn(max_turns)
+            .await;
 
         while let Some(item) = stream.next().await {
             let item = item.map_err(|error| format!("OpenRouter 流式执行失败：{}。", error));
@@ -1743,6 +1850,16 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
     }
 }
 
+/// Returns the current Unix timestamp in milliseconds as one text value for protocol-state refreshes inside the executor.
+/// 以文本形式返回当前 Unix 毫秒时间戳，供执行器内部刷新协议状态时使用。
+fn current_unix_millis_text() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1754,6 +1871,7 @@ mod tests {
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::conversation_protocol::{SessionConversationMessage, SessionConversationPayload};
     use crate::provider_config::ProviderRuntimeKind;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1845,10 +1963,28 @@ mod tests {
             }),
             invoke: std::sync::Arc::new(|_, _| unreachable!("test preview does not invoke tools")),
         }];
+        let conversation_history = vec![
+            SessionConversationMessage {
+                id: String::from("history-user-1"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("之前的用户问题"),
+                },
+            },
+            SessionConversationMessage {
+                id: String::from("history-assistant-1"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::from("之前的助手回答"),
+                    reasoning: String::from("之前的推理摘要"),
+                    provider_message_id: Some(String::from("resp_1")),
+                    tool_calls: Vec::new(),
+                },
+            },
+        ];
 
         let preview = build_provider_request_preview_markdown(
             &preparation,
             "system prompt body",
+            &conversation_history,
             "effective prompt body",
             &resolved_tools,
             None,
@@ -1857,6 +1993,8 @@ mod tests {
         assert!(preview.contains("# 最后一次真实 API 请求快照"));
         assert!(preview.contains("## System Preamble"));
         assert!(preview.contains("system prompt body"));
+        assert!(preview.contains("## Canonical History"));
+        assert!(preview.contains("之前的用户问题"));
         assert!(preview.contains("## Effective User Prompt"));
         assert!(preview.contains("effective prompt body"));
         assert!(preview.contains("### `read_file`"));

@@ -1,6 +1,9 @@
 //! Controller-backed persistence helpers for projects, sessions, transcript history, and hidden context nodes.
 //! 项目、会话、转录历史与隐藏上下文节点的控制器持久化辅助模块。
 
+use crate::conversation_protocol::{
+    SessionConversationState, conversation_state_to_session_messages,
+};
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
     SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
@@ -194,6 +197,9 @@ struct StoredRuntimeStateRow {
     /// Optional persisted transcript UI state payload.
     /// 可选的持久化转录界面状态载荷。
     ui_state_json: Option<String>,
+    /// Optional persisted canonical conversation-state payload.
+    /// 可选的持久化规范会话状态载荷。
+    conversation_state_json: Option<String>,
     /// Updated-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的更新时间。
     updated_at: String,
@@ -330,6 +336,11 @@ pub async fn load_workspace_snapshot(
                 .as_deref()
                 .and_then(parse_session_ui_state_from_json)
                 .unwrap_or_default(),
+            conversation_state: row
+                .conversation_state_json
+                .as_deref()
+                .and_then(parse_session_conversation_state_from_json)
+                .unwrap_or_default(),
             updated_at: row.updated_at,
         };
 
@@ -337,6 +348,23 @@ pub async fn load_workspace_snapshot(
             archived_runtime_state_map.insert(session_id, entry);
         } else {
             runtime_state_map.insert(session_id, entry);
+        }
+    }
+
+    for (session_id, runtime_state) in &runtime_state_map {
+        if !runtime_state.conversation_state.records.is_empty() {
+            transcript_map.insert(
+                *session_id,
+                conversation_state_to_session_messages(&runtime_state.conversation_state),
+            );
+        }
+    }
+    for (session_id, runtime_state) in &archived_runtime_state_map {
+        if !runtime_state.conversation_state.records.is_empty() {
+            archived_transcript_map.insert(
+                *session_id,
+                conversation_state_to_session_messages(&runtime_state.conversation_state),
+            );
         }
     }
 
@@ -816,7 +844,7 @@ async fn query_session_runtime_state_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.conversation_state_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -1329,8 +1357,9 @@ INSERT INTO session_runtime_state (
     last_compaction_id,
     context_start_message_id,
     ui_state_json,
+    conversation_state_json,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);
 "#,
             batch_params,
         )
@@ -1417,10 +1446,14 @@ fn push_session_runtime_state_batch_rows(
                 optional_sqlite_string(&entry.last_compaction_id),
                 optional_sqlite_string(&entry.context_start_message_id),
                 optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
+                optional_sqlite_string(&serialize_session_conversation_state_to_json(
+                    &entry.conversation_state,
+                )),
                 ControllerSqliteValue::String(non_empty_timestamp_text(&entry.updated_at)),
             ]);
         }
     }
+
 }
 
 /// Deletes all rows from one session-scoped table for the provided active session identifiers.
@@ -1601,10 +1634,34 @@ fn parse_session_ui_state_from_json(value: &str) -> Option<SessionTranscriptUiSt
     serde_json::from_str(value).ok()
 }
 
+/// Parses one persisted canonical conversation-state JSON payload into the typed runtime-state structure.
+/// 将一条持久化规范会话状态 JSON 载荷解析为带类型的运行时状态结构。
+fn parse_session_conversation_state_from_json(value: &str) -> Option<SessionConversationState> {
+    serde_json::from_str(value).ok()
+}
+
 /// Serializes one typed transcript UI-state structure into the persisted JSON payload when needed.
 /// 在需要时将一条带类型的转录界面状态结构序列化为持久化 JSON 载荷。
 fn serialize_session_ui_state_to_json(state: &SessionTranscriptUiState) -> Option<String> {
     if state.collapsed_message_ids.is_empty() {
+        None
+    } else {
+        serde_json::to_string(state).ok()
+    }
+}
+
+/// Serializes one typed canonical conversation state into the persisted JSON payload when needed.
+/// 在需要时将一条带类型的规范会话状态序列化为持久化 JSON 载荷。
+fn serialize_session_conversation_state_to_json(
+    state: &SessionConversationState,
+) -> Option<String> {
+    if state.messages.is_empty()
+        && state.records.is_empty()
+        && state.continuation.provider_id.is_none()
+        && state.continuation.model_id.is_none()
+        && state.continuation.last_provider_message_id.is_none()
+        && state.continuation.updated_at.is_none()
+    {
         None
     } else {
         serde_json::to_string(state).ok()

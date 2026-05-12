@@ -22,7 +22,11 @@ pub const APP_SQLITE_BINDING_TAG: &str = "app-state";
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 2;
+pub const APP_SCHEMA_VERSION: i64 = 3;
+
+/// One-shot metadata key that marks the non-compatible session reset required by the protocol refactor.
+/// 标记协议重构所需一次性不兼容会话清理已经完成的元数据键。
+const SESSION_PROTOCOL_RESET_MARKER_KEY: &str = "session-protocol-v3-reset";
 
 /// Long-lived controller handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面持有的长生命周期控制器句柄。
@@ -256,11 +260,33 @@ async fn ensure_application_schema_migrations(
     client: &ControllerClient,
     sqlite_binding_id: &str,
 ) -> Result<(), String> {
+    ensure_optional_runtime_state_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_runtime_state ADD COLUMN ui_state_json TEXT;",
+    )
+    .await?;
+    ensure_optional_runtime_state_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_runtime_state ADD COLUMN conversation_state_json TEXT;",
+    )
+    .await?;
+    ensure_protocol_reset_applied(client, sqlite_binding_id).await
+}
+
+/// Applies one idempotent runtime-state column migration and ignores duplicate-column failures.
+/// 执行一条幂等运行时状态列迁移，并忽略重复列失败。
+async fn ensure_optional_runtime_state_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
     let migration_result = client
         .execute_sqlite_batch_typed(
             APP_SPACE_ID,
             sqlite_binding_id,
-            "ALTER TABLE session_runtime_state ADD COLUMN ui_state_json TEXT;",
+            statement,
             vec![Vec::new()],
         )
         .await;
@@ -279,6 +305,76 @@ async fn ensure_application_schema_migrations(
             }
         }
     }
+}
+
+/// Applies the one-shot non-compatible session reset required by the protocol refactor while preserving projects.
+/// 在保留项目数据的前提下，执行协议重构所需的一次性不兼容会话清理。
+async fn ensure_protocol_reset_applied(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+) -> Result<(), String> {
+    if query_metadata_flag(client, sqlite_binding_id, SESSION_PROTOCOL_RESET_MARKER_KEY).await? {
+        return Ok(());
+    }
+
+    client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            format!(
+                r#"
+DELETE FROM session_runtime_state;
+DELETE FROM session_compactions;
+DELETE FROM session_messages;
+DELETE FROM sessions;
+INSERT INTO app_metadata (key, value)
+VALUES ('{marker_key}', '1')
+ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+"#,
+                marker_key = SESSION_PROTOCOL_RESET_MARKER_KEY
+            ),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("执行协议升级会话清理失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Queries one metadata-flag key and returns whether it has already been written to the app metadata table.
+/// 查询单个元数据标记键，并返回它是否已经写入应用元数据表。
+async fn query_metadata_flag(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    key: &str,
+) -> Result<bool, String> {
+    #[derive(serde::Deserialize)]
+    /// Typed metadata row used by the reset-marker lookup query.
+    /// 供重置标记查询使用的带类型元数据行。
+    struct MetadataRow {
+        /// Persisted metadata value.
+        /// 持久化元数据值。
+        value: String,
+    }
+
+    let result = client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            "SELECT value FROM app_metadata WHERE key = ?1 LIMIT 1;",
+            vec![vldb_controller_client::ControllerSqliteValue::String(
+                key.to_string(),
+            )],
+        )
+        .await
+        .map_err(|error| format!("查询协议升级元数据标记失败：{error}"))?;
+    let rows = serde_json::from_str::<Vec<MetadataRow>>(&result.json_data)
+        .map_err(|error| format!("解析协议升级元数据标记失败：{error}"))?;
+
+    Ok(rows
+        .first()
+        .map(|row| row.value.trim() == "1")
+        .unwrap_or(false))
 }
 
 /// Returns one best-effort Unix epoch timestamp in milliseconds for controller client naming.
@@ -383,6 +479,7 @@ CREATE TABLE IF NOT EXISTS session_runtime_state (
     last_compaction_id TEXT,
     context_start_message_id TEXT,
     ui_state_json TEXT,
+    conversation_state_json TEXT,
     updated_at TEXT NOT NULL
 );
 

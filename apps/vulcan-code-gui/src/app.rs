@@ -11,15 +11,21 @@ use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOIC
 use crate::agent_runtime::config::WORKSPACE_COORDINATOR_AGENT_ID;
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::{
-    self, ExecutionContextMessage, ExecutionPreparation, ExecutionPreparationRequest,
-    ExecutionRunReport, ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind,
-    stream_runtime_run,
+    self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
+    ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind, stream_runtime_run,
 };
 use crate::agent_view::{
     agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_document_raw_source,
     build_agent_view_document,
 };
 use crate::code_view;
+use crate::conversation_protocol::{
+    PROTOCOL_COMPACTION_TRIGGER_COUNT, SessionConversationMessage, SessionConversationRecord,
+    append_assistant_text_message, append_record, append_record_body_delta,
+    append_user_text_message, compact_conversation_with_summary,
+    conversation_state_to_context_records, conversation_state_to_session_messages,
+    replace_record_content,
+};
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
 use crate::luaskills_runtime::{
@@ -4757,12 +4763,14 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
 
+                let selected_session_id = self.selected_session().map(|session| session.id);
+                if let Some(session_id) = selected_session_id {
+                    self.ensure_session_conversation_state_loaded(session_id);
+                }
+
                 let request = if let Some(session) = self.selected_session() {
-                    let context_history = self
-                        .session_context_history(session.id)
-                        .into_iter()
-                        .map(session_message_into_execution_context)
-                        .collect::<Vec<_>>();
+                    let conversation_history =
+                        self.session_conversation_history(session.id);
                     let workspace_path = self
                         .workspace_path_for_session_id(session.id)
                         .unwrap_or_else(|| self.workspace_path.clone());
@@ -4771,7 +4779,7 @@ impl VulcanWorkbench {
                         session_title: session.title.clone(),
                         workspace_path,
                         prompt: current_prompt,
-                        context_history,
+                        conversation_history,
                         execution_mode: self.execution_mode.to_string(),
                         temperature: self.temperature_enabled.then_some(self.temperature),
                     }
@@ -4789,6 +4797,10 @@ impl VulcanWorkbench {
                     request.session_id,
                     SessionMessageKind::User,
                     "用户指令",
+                    request.prompt.clone(),
+                );
+                self.append_user_prompt_to_session_conversation(
+                    request.session_id,
                     request.prompt.clone(),
                 );
                 let _ = self
@@ -5091,12 +5103,28 @@ impl VulcanWorkbench {
             sessions: visible_sessions,
             archived_sessions: self.archived_sessions.clone(),
             session_messages: self
-                .session_messages
+                .session_runtime_state
                 .iter()
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
-                .map(|(session_id, messages)| (*session_id, messages.clone()))
+                .map(|(session_id, state)| {
+                    (
+                        *session_id,
+                        conversation_state_to_session_messages(&state.conversation_state),
+                    )
+                })
+                .filter(|(_, messages)| !messages.is_empty())
                 .collect(),
-            archived_session_messages: self.archived_session_messages.clone(),
+            archived_session_messages: self
+                .archived_session_runtime_state
+                .iter()
+                .map(|(session_id, state)| {
+                    (
+                        *session_id,
+                        conversation_state_to_session_messages(&state.conversation_state),
+                    )
+                })
+                .filter(|(_, messages)| !messages.is_empty())
+                .collect(),
             session_compactions: self
                 .session_compactions
                 .iter()
@@ -5733,6 +5761,7 @@ impl VulcanWorkbench {
         );
         let created_at = current_unix_millis_text();
         let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
+        self.append_session_record_to_conversation(session_id, &materialized_entry);
         self.session_message_raw_buffers.insert(
             message_id.clone(),
             text_editor::Content::with_text(&materialized_entry.body),
@@ -5743,25 +5772,107 @@ impl VulcanWorkbench {
             .insert(message_id.clone(), markdown_content);
         self.session_message_markdown_buffers
             .insert(message_id.clone(), markdown_buffer);
-        self.session_messages
-            .entry(session_id)
-            .or_default()
-            .push(materialized_entry);
+        self.sync_session_messages_from_conversation_state(session_id);
         self.refresh_session_agent_view_buffers(session_id);
         message_id
     }
 
-    /// Returns the mutable transcript message entry for one session/message pair when it still exists in the visible transcript.
-    /// 返回某个会话/消息对在可见转录中仍存在时对应的可变消息项。
-    fn session_message_entry_mut(
+    /// Returns the immutable runtime-state snapshot for one visible or archived session when it exists.
+    /// 返回某个可见或归档会话在存在时对应的只读运行时状态快照。
+    fn session_runtime_state(&self, session_id: SessionId) -> Option<&SessionRuntimeStateEntry> {
+        self.session_runtime_state
+            .get(&session_id)
+            .or_else(|| self.archived_session_runtime_state.get(&session_id))
+    }
+
+    /// Returns the immutable transcript message entry for one visible or archived session/message pair when it exists.
+    /// 返回某个可见或归档会话/消息对在存在时对应的只读转录消息条目。
+    fn session_message_entry(
+        &self,
+        session_id: SessionId,
+        message_id: &str,
+    ) -> Option<&SessionMessageEntry> {
+        self.session_messages
+            .get(&session_id)
+            .or_else(|| self.archived_session_messages.get(&session_id))?
+            .iter()
+            .find(|message| message.id == message_id)
+    }
+
+    /// Appends one canonical record to the session standard state so transcript projection never becomes the source of truth.
+    /// 向会话标准状态追加一条规范记录，确保转录投影永远不是事实源。
+    fn append_session_record_to_conversation(
+        &mut self,
+        session_id: SessionId,
+        entry: &SessionMessageEntry,
+    ) {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        append_record(
+            &mut runtime_state.conversation_state,
+            SessionConversationRecord {
+                id: entry.id.clone(),
+                kind: entry.kind,
+                record_kind: entry.record_kind,
+                visible: entry.visible,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                created_at: entry.created_at.clone(),
+            },
+        );
+        runtime_state.updated_at = entry.created_at.clone();
+    }
+
+    /// Rebuilds one session transcript projection from canonical records and stores it in the visible or archived cache bucket.
+    /// 根据规范记录重建单个会话的转录投影，并将其存入可见或归档缓存桶。
+    fn sync_session_messages_from_conversation_state(&mut self, session_id: SessionId) {
+        let projected_messages = self
+            .session_runtime_state(session_id)
+            .map(|state| conversation_state_to_session_messages(&state.conversation_state))
+            .unwrap_or_default();
+        let session_is_archived = self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id);
+
+        if session_is_archived {
+            self.session_messages.remove(&session_id);
+            if projected_messages.is_empty() {
+                self.archived_session_messages.remove(&session_id);
+            } else {
+                self.archived_session_messages
+                    .insert(session_id, projected_messages);
+            }
+        } else {
+            self.archived_session_messages.remove(&session_id);
+            if projected_messages.is_empty() {
+                self.session_messages.remove(&session_id);
+            } else {
+                self.session_messages.insert(session_id, projected_messages);
+            }
+        }
+    }
+
+    /// Refreshes the raw-text and Markdown caches for one projected transcript message after the canonical record changed.
+    /// 在规范记录发生变化后，刷新单条投影转录消息的原文与 Markdown 缓存。
+    fn refresh_session_message_projection_buffers(
         &mut self,
         session_id: SessionId,
         message_id: &str,
-    ) -> Option<&mut SessionMessageEntry> {
-        self.session_messages
-            .get_mut(&session_id)?
-            .iter_mut()
-            .find(|message| message.id == message_id)
+    ) {
+        let Some(message) = self.session_message_entry(session_id, message_id).cloned() else {
+            return;
+        };
+        self.session_message_raw_buffers.insert(
+            message_id.to_string(),
+            text_editor::Content::with_text(&message.body),
+        );
+        let (markdown_content, markdown_buffer) =
+            parse_selectable_markdown_body(&message.body, &self.app_theme);
+        self.session_message_markdown
+            .insert(message_id.to_string(), markdown_content);
+        self.session_message_markdown_buffers
+            .insert(message_id.to_string(), markdown_buffer);
     }
 
     /// Appends one streamed body delta into an existing visible transcript message and refreshes its raw/Markdown caches.
@@ -5772,10 +5883,15 @@ impl VulcanWorkbench {
         message_id: &str,
         delta: &str,
     ) {
-        let Some(message) = self.session_message_entry_mut(session_id, message_id) else {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        if append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta).is_none()
+        {
             return;
-        };
-        message.body.push_str(delta);
+        }
+        runtime_state.updated_at = current_unix_millis_text();
+        self.sync_session_messages_from_conversation_state(session_id);
+        self.refresh_session_message_projection_buffers(session_id, message_id);
         self.refresh_session_agent_view_buffers(session_id);
     }
 
@@ -5791,15 +5907,20 @@ impl VulcanWorkbench {
     ) {
         let title = title.into();
         let body = body.into();
-
-        let Some(message) = self.session_message_entry_mut(session_id, message_id) else {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        if !replace_record_content(
+            &mut runtime_state.conversation_state,
+            message_id,
+            title,
+            body.clone(),
+            record_kind,
+        ) {
             return;
-        };
+        }
+        runtime_state.updated_at = current_unix_millis_text();
 
-        message.title = title;
-        message.body = body.clone();
-        message.record_kind = record_kind;
-
+        self.sync_session_messages_from_conversation_state(session_id);
         self.session_message_raw_buffers.insert(
             message_id.to_string(),
             text_editor::Content::with_text(&body),
@@ -5881,13 +6002,111 @@ impl VulcanWorkbench {
         session_id: SessionId,
         record: SessionDerivedRecord,
     ) -> String {
-        self.push_hidden_session_message(
+        let record_kind = record.record_kind;
+        let body = record.body.clone();
+        let message_id = self.push_hidden_session_message(
             session_id,
             record.kind,
             record.record_kind,
             record.title,
             record.body,
-        )
+        );
+        self.maybe_mirror_hidden_record_to_session_conversation(
+            session_id,
+            record_kind,
+            &message_id,
+            &body,
+        );
+        message_id
+    }
+
+    /// Ensures the target session has one canonical conversation snapshot owned by the runtime-state layer.
+    /// 确保目标会话拥有一份由运行时状态层持有的规范会话快照。
+    fn ensure_session_conversation_state_loaded(&mut self, session_id: SessionId) {
+        let _ = self.ensure_session_runtime_state_mut(session_id);
+    }
+
+    /// Returns the canonical conversation history that should be forwarded into the next runtime call.
+    /// 返回应转发给下一次运行时调用的规范会话历史。
+    fn session_conversation_history(&self, session_id: SessionId) -> Vec<SessionConversationMessage> {
+        self.session_runtime_state
+            .get(&session_id)
+            .map(|state| state.conversation_state.messages.clone())
+            .unwrap_or_default()
+    }
+
+    /// Appends the latest user prompt to the canonical conversation state before the real runtime starts.
+    /// 在真实运行时启动前，将最新用户提示追加到规范会话状态。
+    fn append_user_prompt_to_session_conversation(
+        &mut self,
+        session_id: SessionId,
+        prompt: String,
+    ) {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let protocol_message_id = format!(
+            "session-{session_id}-protocol-user-{}",
+            current_unix_millis_text()
+        );
+        let updated_at = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        append_user_text_message(
+            &mut runtime_state.conversation_state,
+            protocol_message_id,
+            prompt,
+        );
+        runtime_state.updated_at = updated_at;
+    }
+
+    /// Mirrors selected hidden transcript records into the canonical conversation state so existing derived context remains effective.
+    /// 将选定的隐藏转录记录镜像到规范会话状态，从而保留既有派生上下文效果。
+    fn maybe_mirror_hidden_record_to_session_conversation(
+        &mut self,
+        session_id: SessionId,
+        record_kind: SessionMessageRecordKind,
+        message_id: &str,
+        body: &str,
+    ) {
+        let should_mirror = matches!(
+            record_kind,
+            SessionMessageRecordKind::ExploreOutput | SessionMessageRecordKind::SummaryOutput
+        );
+        if !should_mirror {
+            return;
+        }
+
+        self.ensure_session_conversation_state_loaded(session_id);
+        let updated_at = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        append_assistant_text_message(
+            &mut runtime_state.conversation_state,
+            message_id.to_string(),
+            body.to_string(),
+        );
+        runtime_state.updated_at = updated_at;
+    }
+
+    /// Rewrites the canonical conversation window after one transcript compaction summary is created.
+    /// 在生成一条转录压缩摘要后改写规范会话窗口。
+    fn compact_session_conversation_history(
+        &mut self,
+        session_id: SessionId,
+        summary_message_id: &str,
+        summary_body: &str,
+        created_at: &str,
+    ) {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        if runtime_state.conversation_state.messages.len() < PROTOCOL_COMPACTION_TRIGGER_COUNT {
+            return;
+        }
+
+        compact_conversation_with_summary(
+            &mut runtime_state.conversation_state,
+            summary_message_id.to_string(),
+            summary_body.to_string(),
+            created_at.to_string(),
+        );
+        runtime_state.updated_at = created_at.to_string();
     }
 
     /// Returns the mutable runtime-state snapshot for the target session, creating one default row on demand.
@@ -6003,6 +6222,16 @@ impl VulcanWorkbench {
             self.push_activity(ActivityLevel::Warning, "执行运行警告", warning.clone());
         }
 
+        if let Some(next_conversation_state) = report.conversation_state.clone() {
+            self.ensure_session_conversation_state_loaded(session_id);
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let preserved_records = runtime_state.conversation_state.records.clone();
+            runtime_state.conversation_state = next_conversation_state;
+            runtime_state.conversation_state.records = preserved_records;
+            runtime_state.updated_at = current_unix_millis_text();
+            self.sync_session_messages_from_conversation_state(session_id);
+        }
+
         if report.is_success() {
             let thinking_output = report
                 .thinking_output
@@ -6099,9 +6328,10 @@ impl VulcanWorkbench {
     /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
     /// 当可见历史增长到当前阈值以上时创建一条隐藏压缩摘要。
     fn maybe_compact_session_history(&mut self, session_id: SessionId) {
-        let Some(messages) = self.session_messages.get(&session_id).cloned() else {
+        let messages = self.session_context_history(session_id);
+        if messages.is_empty() {
             return;
-        };
+        }
         let runtime_state_snapshot = self
             .session_runtime_state
             .get(&session_id)
@@ -6123,38 +6353,39 @@ impl VulcanWorkbench {
         let created_at = checkpoint.created_at.clone();
         let compaction_id = checkpoint.id.clone();
         let context_start_message_id = checkpoint.context_start_message_id.clone();
+        let summary_message_id = checkpoint.summary_message_id.clone();
         self.session_compactions
             .entry(session_id)
             .or_default()
             .push(checkpoint);
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        runtime_state.last_compaction_id = Some(compaction_id);
-        runtime_state.context_start_message_id = context_start_message_id;
-        runtime_state.updated_at = created_at;
+        let runtime_state_updated_at = created_at.clone();
+        {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state.last_compaction_id = Some(compaction_id);
+            runtime_state.context_start_message_id = context_start_message_id;
+            runtime_state.updated_at = created_at;
+        }
+        if let Some(summary_message_id) = summary_message_id {
+            self.compact_session_conversation_history(
+                session_id,
+                &summary_message_id,
+                &compaction_result.summary_record.body,
+                &runtime_state_updated_at,
+            );
+        }
     }
 
     /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
     /// 从起点或最近一次压缩锚点开始为单个会话构建当前面向模型的上下文历史。
     fn session_context_history(&self, session_id: SessionId) -> Vec<SessionMessageEntry> {
-        let Some(messages) = self.session_messages.get(&session_id) else {
-            return Vec::new();
-        };
-        let start_index = self
-            .session_runtime_state
-            .get(&session_id)
-            .and_then(|runtime_state| runtime_state.context_start_message_id.as_deref())
-            .and_then(|context_start_message_id| {
-                messages
-                    .iter()
-                    .position(|message| message.id == context_start_message_id)
+        self.session_runtime_state(session_id)
+            .map(|runtime_state| {
+                conversation_state_to_context_records(
+                    &runtime_state.conversation_state,
+                    runtime_state.context_start_message_id.as_deref(),
+                )
             })
-            .unwrap_or(0);
-
-        messages[start_index..]
-            .iter()
-            .filter(|message| message.contributes_to_context())
-            .cloned()
-            .collect()
+            .unwrap_or_default()
     }
 
     /// Applies one persisted workspace snapshot to the live GUI state in a single place.
@@ -6164,8 +6395,8 @@ impl VulcanWorkbench {
         self.archived_task_projects = snapshot.archived_task_projects;
         self.sessions = snapshot.sessions;
         self.archived_sessions = snapshot.archived_sessions;
-        self.session_messages = snapshot.session_messages;
-        self.archived_session_messages = snapshot.archived_session_messages;
+        self.session_messages.clear();
+        self.archived_session_messages.clear();
         self.session_compactions = snapshot.session_compactions;
         self.archived_session_compactions = snapshot.archived_session_compactions;
         self.session_runtime_state = snapshot.session_runtime_state;
@@ -6174,6 +6405,16 @@ impl VulcanWorkbench {
         self.session_run_phases = snapshot.session_run_phases;
         self.expanded_task_projects = snapshot.expanded_task_projects;
         self.selected_session = snapshot.selected_session;
+        let session_ids = self
+            .sessions
+            .iter()
+            .map(|session| session.id)
+            .chain(self.archived_sessions.iter().map(|session| session.id))
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.ensure_session_conversation_state_loaded(session_id);
+            self.sync_session_messages_from_conversation_state(session_id);
+        }
         self.hovered_task_project = None;
         self.hovered_task_session = None;
         self.active_task_project_drop_target = None;
