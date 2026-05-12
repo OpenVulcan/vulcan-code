@@ -2,7 +2,8 @@
 //! 供各 Provider 专用传输适配器复用的共享流式适配器支持辅助模块。
 
 use crate::agent_runtime::provider_protocol_bridge::{
-    core_provider_turn_delta_to_runtime_delta, inject_previous_response_id_into_additional_params,
+    build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
+    inject_previous_response_id_into_additional_params,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::{
@@ -21,6 +22,7 @@ use vulcan_core::types::{
 };
 use vulcan_core::types::{
     CoreError as VulcanCoreError, ProviderTurnDelta as CoreProviderTurnDelta,
+    ProviderTurnResponse as CoreProviderTurnResponse,
 };
 use vulcan_tools_manager::ResolvedToolDefinition;
 
@@ -140,6 +142,49 @@ where
             provider_id: provider_id.to_string(),
             message: format!("{provider_label_prefix}流式请求启动失败：{error}"),
         })
+}
+
+/// Executes one shared OpenAI-like streaming completion turn so adapters only keep client creation and provider-specific conversion details.
+/// 执行一次共享的 OpenAI 风格流式 Completion 回合，使适配器只保留客户端构建与 Provider 专用转换细节。
+pub(crate) async fn execute_openai_like_streaming_turn<M, S, C, E, F>(
+    provider_id: &str,
+    provider_label: &str,
+    model_id: &str,
+    model: &M,
+    request: OpenAiCompatibleCoreTurnRequest,
+    rig_tool_definitions: &[RigToolDefinition],
+    live_sender: &ProviderLiveDeltaSender,
+    sink: &mut S,
+    convert_content: F,
+) -> Result<CoreProviderTurnResponse, VulcanCoreError>
+where
+    M: CompletionModel,
+    S: VulcanProviderDeltaSink,
+    E: Display,
+    F: FnMut(C) -> Vec<CoreProviderTurnDelta>,
+    StreamingCompletionResponse<M::StreamingResponse>: Stream<Item = Result<C, E>> + Unpin,
+{
+    let request_builder =
+        build_streaming_completion_request_builder(model, request, rig_tool_definitions);
+    let mut stream =
+        start_streaming_completion_request(provider_id, provider_label, request_builder).await?;
+
+    forward_streaming_provider_deltas(
+        provider_id,
+        provider_label,
+        live_sender,
+        &mut stream,
+        sink,
+        convert_content,
+    )
+    .await?;
+
+    Ok(build_openai_compatible_turn_response(
+        provider_id,
+        model_id,
+        stream.message_id.clone(),
+        &stream.choice,
+    ))
 }
 
 /// Builds one standard host-controlled single-turn request from the canonical controller snapshot and forwards the structured snapshot immediately.

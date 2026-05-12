@@ -1,13 +1,10 @@
 //! OpenRouter host-controlled provider transport adapter.
 //! OpenRouter 宿主控制 Provider 传输适配器。
 
-use crate::agent_runtime::provider_protocol_bridge::{
-    build_openai_compatible_turn_response, core_provider_turn_deltas_from_assistant_content,
-};
+use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_deltas_from_assistant_content;
 use crate::agent_runtime::provider_transport_adapter_support::{
-    build_standard_streaming_request, build_streaming_completion_request_builder,
-    forward_streaming_provider_deltas, map_provider_client_build_result,
-    start_streaming_completion_request, unsupported_streaming_execute,
+    build_standard_streaming_request, execute_openai_like_streaming_turn,
+    map_provider_client_build_result, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -119,30 +116,17 @@ impl VulcanStreamingProviderAdapter for OpenRouterCoreStreamingAdapter {
                 .build(),
         )?;
         let model = client.completion_model(self.model_id.as_str());
-        let request_builder =
-            build_streaming_completion_request_builder(&model, request, &self.rig_tool_definitions);
-        let mut stream = start_streaming_completion_request(
+        execute_openai_like_streaming_turn(
             self.provider_id.as_str(),
             "OpenRouter",
-            request_builder,
-        )
-        .await?;
-
-        forward_streaming_provider_deltas(
-            self.provider_id.as_str(),
-            "OpenRouter",
+            self.model_id.as_str(),
+            &model,
+            request,
+            &self.rig_tool_definitions,
             &self.live_sender,
-            &mut stream,
             sink,
             core_provider_turn_deltas_from_assistant_content,
         )
-        .await?;
-
-        Ok(build_openai_compatible_turn_response(
-            self.provider_id.as_str(),
-            self.model_id.as_str(),
-            stream.message_id.clone(),
-            &stream.choice,
-        ))
+        .await
     }
 }
