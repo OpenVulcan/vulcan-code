@@ -5,17 +5,10 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::execution_preparation::prepare_execution;
-use crate::agent_runtime::mcp_runtime_projection::collect_enabled_mcp_runtime_events;
-use crate::agent_runtime::provider_request_bridge::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_snapshot::{
-    build_core_controller_config, build_core_provider_request_snapshot,
     build_provider_request_preview_markdown,
 };
-use crate::agent_runtime::provider_runtime_context::{
-    build_runtime_system_preamble, resolve_runtime_max_turns,
-};
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
-use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_stream_projection::{
     is_provider_tool_boundary_runtime_event, normalize_assistant_output,
@@ -24,15 +17,14 @@ use crate::agent_runtime::provider_stream_projection::{
     take_current_thinking_phase_completed_event,
 };
 use crate::agent_runtime::runtime::RuntimeFoundation;
-use crate::conversation_protocol::conversation_messages_to_rig_history;
+use crate::agent_runtime::runtime_stream_setup::{
+    bootstrap_runtime_stream, build_runtime_context_event,
+};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
-use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
-use std::path::PathBuf;
-use vulcan_core::controller::VulcanCoreController;
 
 /// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
 /// 以增量方式流式执行一次真实 Provider 调用，并依次产出准备、思考、输出与最终报告事件。
@@ -50,7 +42,7 @@ pub fn stream_runtime_run(
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
         );
-        let mut preparation = match prepare_execution(
+        let preparation = match prepare_execution(
             &foundation,
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
@@ -73,89 +65,40 @@ pub fn stream_runtime_run(
             }
         };
 
-        let active_agent = foundation.active_agent_definition().cloned();
-        let active_agent_tool_id = active_agent
-            .as_ref()
-            .map(|agent| agent.id.clone())
-            .unwrap_or_else(|| preparation.agent_id.clone());
-        let tools_manager = build_vulcan_tools_manager(
-            foundation.native_tool_catalog().clone(),
+        let bootstrap = bootstrap_runtime_stream(
+            &foundation,
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
-            (!preparation.workspace_path.is_empty())
-                .then(|| PathBuf::from(preparation.workspace_path.clone())),
-            foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
-            foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
-            foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
-        );
-        let resolved_tools = tools_manager.resolve_for_execution_mode(&preparation.execution_mode);
-        let mut runtime_events = Vec::new();
-        let mut warnings = preparation.warnings.clone();
+            &request,
+            preparation,
+        )
+        .await;
+        let mut preparation = bootstrap.preparation;
+        let active_agent = bootstrap.active_agent;
+        let tools_manager = bootstrap.tools_manager;
+        let resolved_tool_definitions = bootstrap.resolved_tool_definitions;
+        let discovery_events = bootstrap.discovery_events;
+        let discovery_rows = bootstrap.discovery_rows;
+        let discovery_errors = bootstrap.discovery_errors;
+        let warnings = bootstrap.warnings;
+        let system_preamble = bootstrap.system_preamble;
+        let request_history = bootstrap.request_history;
+        let core_snapshot = bootstrap.core_snapshot;
+        let mut core_controller = bootstrap.core_controller;
         let mut thinking_raw_output = String::new();
         let mut thinking_visible_output = String::new();
         let mut assistant_output = String::new();
         let mut thinking_completed_emitted = false;
 
-        let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
-            collect_enabled_mcp_runtime_events(mcp_runtime.as_ref());
-        warnings.extend(discovery_warnings);
-
-        let system_preamble = build_runtime_system_preamble(&preparation);
-        let request_history = conversation_messages_to_rig_history(&request.conversation_state.messages);
-        let core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
-        let mut core_controller = VulcanCoreController::new(
-            build_core_controller_config(
-                &preparation,
-                &system_preamble,
-                resolve_runtime_max_turns(active_agent.as_ref()),
-                resolve_provider_additional_params(&preparation.model_blueprint),
-            ),
-            core_snapshot.clone(),
-        );
-        match build_core_provider_request_snapshot(
-            &preparation,
-            &request.conversation_state,
-            &system_preamble,
-            request.prompt.trim(),
-            &resolved_tools.definitions,
-            resolve_runtime_max_turns(active_agent.as_ref()),
-        )
-        .await
-        {
-            Ok(request_snapshot) => {
-                preparation.provider_request_preview_markdown =
-                    build_provider_request_preview_markdown(&preparation, &request_snapshot);
-                preparation.provider_request_snapshot_json =
-                    serde_json::to_value(&request_snapshot).ok();
-            }
-            Err(error) => {
-                preparation.provider_request_preview_markdown = format!(
-                    "# 最后一次真实 API 请求快照\n\n请求快照构建失败：{}",
-                    error
-                );
-                preparation.provider_request_snapshot_json = None;
-                warnings.push(format!("请求快照构建失败：{error}"));
-            }
-        }
-
         yield ExecutionStreamEvent::Prepared(preparation.clone());
 
-        let context_event = RuntimeEvent::new(
-            RuntimeEventKind::ToolStarted,
-            "执行上下文",
-            format!(
-                "已进入真实执行阶段，目标模型为 `{}`，工作区为 `{}`。",
-                preparation.model_blueprint.model_name, preparation.workspace_path
-            ),
-        );
-        runtime_events.push(context_event.clone());
+        let context_event = build_runtime_context_event(&preparation);
         yield ExecutionStreamEvent::RuntimeEvent {
             session_id: request.session_id,
             event: context_event,
         };
 
         for event in discovery_events {
-            runtime_events.push(event.clone());
             yield ExecutionStreamEvent::RuntimeEvent {
                 session_id: request.session_id,
                 event,
@@ -171,7 +114,7 @@ pub fn stream_runtime_run(
             request_history,
             core_snapshot,
             tools_manager,
-            resolved_tools.definitions,
+            resolved_tool_definitions,
         );
 
         let mut terminal_error = None;
@@ -238,7 +181,6 @@ pub fn stream_runtime_run(
                     if let Some(core_event) = runtime_event_to_core_event(&event) {
                         core_controller.push_event(core_event);
                     }
-                    runtime_events.push(event.clone());
                     yield ExecutionStreamEvent::RuntimeEvent {
                         session_id: request.session_id,
                         event,
@@ -274,7 +216,6 @@ pub fn stream_runtime_run(
                 "真实执行失败",
                 error.clone(),
             );
-            runtime_events.push(failed_event.clone());
             yield ExecutionStreamEvent::RuntimeEvent {
                 session_id: request.session_id,
                 event: failed_event,
@@ -316,7 +257,6 @@ pub fn stream_runtime_run(
                 normalized_output.chars().count()
             ),
         );
-        runtime_events.push(output_completed_event.clone());
         yield ExecutionStreamEvent::RuntimeEvent {
             session_id: request.session_id,
             event: output_completed_event,

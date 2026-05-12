@@ -27,6 +27,7 @@ pub mod provider_transport_request;
 pub mod provider_transport_router;
 pub mod runtime;
 pub mod runtime_stream;
+pub mod runtime_stream_setup;
 pub mod tool_runtime_bridge;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
