@@ -5563,8 +5563,19 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-agent-view",
+ "vulcan-core",
  "vulcan-mcp-runtime",
  "vulcan-tools-manager",
+]
+
+[[package]]
+name = "vulcan-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

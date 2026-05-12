@@ -5,12 +5,13 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, resolve_active_provider_blueprint};
-use crate::agent_runtime::rig_tools::{RigToolOutcomeCapture, build_vulcan_rig_tools};
+use crate::agent_runtime::rig_tools::{
+    RigToolOutcomeCapture, VulcanManagedToolRuntimeBridge, build_vulcan_rig_tools,
+};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationState,
     conversation_messages_to_rig_history, replace_messages_from_rig_history,
-    rig_history_to_conversation_messages,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
@@ -21,18 +22,38 @@ use crate::provider_config::{
 use crate::runtime_assets;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use async_stream::stream;
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use rig::agent::{AgentBuilder, MultiTurnStreamItem};
-use rig::message::{Message as RigMessage, ReasoningContent, ToolResultContent};
+use rig::completion::{CompletionModel, ToolDefinition as RigToolDefinition};
+use rig::message::{
+    AssistantContent as RigAssistantContent, Message as RigMessage, ReasoningContent,
+    ToolResultContent, UserContent as RigUserContent,
+};
 use rig::prelude::CompletionClient;
 use rig::providers::{anthropic, openai, openrouter};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt};
 use rig::tool::ToolDyn;
 use serde_json::{Map as JsonMap, Value, json};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, path::Path, path::PathBuf};
+use vulcan_core::controller::VulcanCoreController;
+use vulcan_core::provider::VulcanProviderAdapter;
+use vulcan_core::tool::VulcanToolExecutor;
+use vulcan_core::types::{
+    ControllerConfig as CoreControllerConfig, ConversationMessage as CoreConversationMessage,
+    ConversationPayload as CoreConversationPayload,
+    ConversationSnapshot as CoreConversationSnapshot,
+    ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
+    CoreEvent as CoreControllerEvent, CoreEventKind as CoreControllerEventKind,
+    ProviderContinuation as CoreProviderContinuation,
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    ProviderRequestToolSchema as CoreProviderRequestToolSchema,
+    ToolInvocationRequest as CoreToolInvocationRequest,
+};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
 };
@@ -89,9 +110,9 @@ pub struct ExecutionPreparationRequest {
     /// Current composer prompt.
     /// 当前提示词输入区内容。
     pub prompt: String,
-    /// Canonical conversation history reconstructed from the session protocol state.
-    /// 从会话协议状态重建出的规范会话历史。
-    pub conversation_history: Vec<SessionConversationMessage>,
+    /// Canonical conversation state reconstructed from the session protocol state.
+    /// 从会话协议状态重建出的规范会话状态。
+    pub conversation_state: SessionConversationState,
     /// Current execution-mode label.
     /// 当前执行模式标签。
     pub execution_mode: String,
@@ -155,6 +176,9 @@ pub struct ExecutionPreparation {
     /// Full provider-request preview captured right before the real API call starts.
     /// 在真实 API 调用开始前捕获的完整 Provider 请求预览。
     pub provider_request_preview_markdown: String,
+    /// Structured provider-request snapshot JSON captured by `vulcan-core` right before dispatch.
+    /// 由 `vulcan-core` 在分发前捕获的结构化 Provider 请求快照 JSON。
+    pub provider_request_snapshot_json: Option<Value>,
 }
 
 impl ExecutionPreparation {
@@ -282,6 +306,9 @@ pub struct ExecutionRunReport {
     /// Terminal error when the run failed.
     /// 当运行失败时的最终错误信息。
     pub error: Option<String>,
+    /// Controller-owned event trace captured while the run was executing.
+    /// 运行执行期间捕获的控制器自有事件轨迹。
+    pub controller_events: Vec<CoreControllerEvent>,
 }
 
 impl ExecutionRunReport {
@@ -296,6 +323,7 @@ impl ExecutionRunReport {
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
+        controller_events: Vec<CoreControllerEvent>,
     ) -> Self {
         Self {
             session_id,
@@ -307,6 +335,7 @@ impl ExecutionRunReport {
             mcp_discovery_errors,
             warnings,
             error: None,
+            controller_events,
         }
     }
 
@@ -318,6 +347,7 @@ impl ExecutionRunReport {
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
+        controller_events: Vec<CoreControllerEvent>,
         error: impl Into<String>,
     ) -> Self {
         Self {
@@ -330,6 +360,7 @@ impl ExecutionRunReport {
             mcp_discovery_errors,
             warnings,
             error: Some(error.into()),
+            controller_events,
         }
     }
 
@@ -395,7 +426,7 @@ pub fn prepare_execution(
         model_blueprint,
         prompt_preview: truncate_preview(request.prompt.trim(), 180),
         workspace_path,
-        context_history_count: request.conversation_history.len(),
+        context_history_count: request.conversation_state.messages.len(),
         execution_mode: request.execution_mode.clone(),
         temperature: request.temperature,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
@@ -404,12 +435,16 @@ pub fn prepare_execution(
         enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
         warnings,
         provider_request_preview_markdown: String::new(),
+        provider_request_snapshot_json: None,
     })
 }
 
 /// Lightweight provider-stream delta emitted while one real run is still in progress.
 /// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
 enum ProviderStreamDelta {
+    /// Structured request snapshot captured right before the next provider request is dispatched.
+    /// 在下一次 Provider 请求真正发出前捕获的结构化请求快照。
+    RequestSnapshot(CoreProviderRequestSnapshot),
     /// Assistant thinking delta returned by the provider stream.
     /// Provider 流返回的助手思考增量。
     Thinking(String),
@@ -455,6 +490,7 @@ pub fn stream_runtime_run(
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
+                    Vec::new(),
                     error,
                 );
                 yield ExecutionStreamEvent::Finished(report);
@@ -490,16 +526,41 @@ pub fn stream_runtime_run(
         warnings.extend(discovery_warnings);
 
         let system_preamble = build_runtime_system_preamble(&preparation);
-        let request_history = conversation_messages_to_rig_history(&request.conversation_history);
-        let preview_history = rig_history_to_conversation_messages(&request_history);
-        preparation.provider_request_preview_markdown = build_provider_request_preview_markdown(
+        let request_history = conversation_messages_to_rig_history(&request.conversation_state.messages);
+        let mut core_controller = VulcanCoreController::new(
+            build_core_controller_config(
+                &preparation,
+                &system_preamble,
+                resolve_runtime_max_turns(active_agent.as_ref()),
+                resolve_provider_additional_params(&preparation.model_blueprint),
+            ),
+            build_core_conversation_snapshot(&request.conversation_state),
+        );
+        match build_core_provider_request_snapshot(
             &preparation,
+            &request.conversation_state,
             &system_preamble,
-            &preview_history,
             request.prompt.trim(),
             &resolved_tools.definitions,
             resolve_runtime_max_turns(active_agent.as_ref()),
-        );
+        )
+        .await
+        {
+            Ok(request_snapshot) => {
+                preparation.provider_request_preview_markdown =
+                    build_provider_request_preview_markdown(&preparation, &request_snapshot);
+                preparation.provider_request_snapshot_json =
+                    serde_json::to_value(&request_snapshot).ok();
+            }
+            Err(error) => {
+                preparation.provider_request_preview_markdown = format!(
+                    "# 最后一次真实 API 请求快照\n\n请求快照构建失败：{}",
+                    error
+                );
+                preparation.provider_request_snapshot_json = None;
+                warnings.push(format!("请求快照构建失败：{error}"));
+            }
+        }
 
         yield ExecutionStreamEvent::Prepared(preparation.clone());
 
@@ -538,10 +599,15 @@ pub fn stream_runtime_run(
 
         let mut terminal_error = None;
         let mut final_conversation_state = None;
+        let mut latest_request_snapshot = None;
 
         while let Some(item) = provider_stream.next().await {
             match item {
+                Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
+                    latest_request_snapshot = Some(snapshot);
+                }
                 Ok(ProviderStreamDelta::Thinking(delta)) => {
+                    core_controller.record_thinking(delta.clone());
                     thinking_raw_output.push_str(&delta);
                     let normalized_visible_output =
                         normalize_streamed_thinking_output(&thinking_raw_output);
@@ -559,6 +625,7 @@ pub fn stream_runtime_run(
                     }
                 }
                 Ok(ProviderStreamDelta::Output(delta)) => {
+                    core_controller.record_output(delta.clone());
                     if let Some(thinking_completed_event) =
                         take_current_thinking_phase_completed_event(
                             request.session_id,
@@ -585,11 +652,14 @@ pub fn stream_runtime_run(
                         {
                             yield thinking_completed_event;
                         }
-                        reset_current_thinking_phase_tracking(
-                            &mut thinking_raw_output,
-                            &mut thinking_visible_output,
-                            &mut thinking_completed_emitted,
-                        );
+                            reset_current_thinking_phase_tracking(
+                                &mut thinking_raw_output,
+                                &mut thinking_visible_output,
+                                &mut thinking_completed_emitted,
+                            );
+                        }
+                    if let Some(core_event) = runtime_event_to_core_event(&event) {
+                        core_controller.push_event(core_event);
                     }
                     runtime_events.push(event.clone());
                     yield ExecutionStreamEvent::RuntimeEvent {
@@ -623,6 +693,13 @@ pub fn stream_runtime_run(
             ) {
                 yield thinking_completed_event;
             }
+            if let Some(request_snapshot) = latest_request_snapshot {
+                preparation.provider_request_preview_markdown =
+                    build_provider_request_preview_markdown(&preparation, &request_snapshot);
+                preparation.provider_request_snapshot_json =
+                    serde_json::to_value(&request_snapshot).ok();
+            }
+            core_controller.mark_failed(error.clone());
             let failed_event = RuntimeEvent::new(
                 RuntimeEventKind::Failed,
                 "真实执行失败",
@@ -639,6 +716,7 @@ pub fn stream_runtime_run(
                 discovery_rows,
                 discovery_errors,
                 warnings,
+                core_controller.events().to_vec(),
                 error,
             );
             yield ExecutionStreamEvent::Finished(report);
@@ -651,6 +729,13 @@ pub fn stream_runtime_run(
             &mut thinking_completed_emitted,
         ) {
             yield thinking_completed_event;
+        }
+
+        if let Some(request_snapshot) = latest_request_snapshot {
+            preparation.provider_request_preview_markdown =
+                build_provider_request_preview_markdown(&preparation, &request_snapshot);
+            preparation.provider_request_snapshot_json =
+                serde_json::to_value(&request_snapshot).ok();
         }
 
         let normalized_output = normalize_assistant_output(assistant_output);
@@ -677,6 +762,7 @@ pub fn stream_runtime_run(
             discovery_rows,
             discovery_errors,
             warnings,
+            core_controller.events().to_vec(),
         );
         yield ExecutionStreamEvent::Finished(report);
     }
@@ -744,6 +830,310 @@ fn build_runtime_system_preamble(preparation: &ExecutionPreparation) -> String {
     sections.push(format!("当前执行模式：{}", preparation.execution_mode));
 
     sections.join("\n")
+}
+
+/// Builds one `vulcan-core` request snapshot from the current execution preparation and canonical session state.
+/// 根据当前执行准备信息与规范会话状态构建一份 `vulcan-core` 请求快照。
+async fn build_core_provider_request_snapshot(
+    preparation: &ExecutionPreparation,
+    conversation_state: &SessionConversationState,
+    system_preamble: &str,
+    prompt: &str,
+    resolved_tools: &[ResolvedToolDefinition],
+    max_turns_override: Option<usize>,
+) -> Result<CoreProviderRequestSnapshot, String> {
+    let request_headers = build_provider_request_headers(&preparation.model_blueprint)?;
+    let serialized_headers = serialize_provider_request_headers(&request_headers);
+    let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
+    let tool_schemas = resolved_tools
+        .iter()
+        .map(resolved_tool_definition_to_core_tool_schema)
+        .collect::<Vec<_>>();
+    let mut controller = VulcanCoreController::new(
+        build_core_controller_config(
+            preparation,
+            system_preamble,
+            max_turns_override,
+            additional_params.clone(),
+        ),
+        build_core_conversation_snapshot(conversation_state),
+    );
+    let adapter = PreviewSnapshotProviderAdapter {
+        provider_id: preparation.model_blueprint.provider_id.clone(),
+        model_id: preparation.model_blueprint.model_id.clone(),
+        prompt: prompt.to_string(),
+        request_headers: serialized_headers,
+        tool_schemas,
+    };
+
+    controller
+        .build_request(&adapter)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Builds one `vulcan-core` controller configuration from the current execution preparation.
+/// 根据当前执行准备信息构建一份 `vulcan-core` 控制器配置。
+fn build_core_controller_config(
+    preparation: &ExecutionPreparation,
+    system_preamble: &str,
+    max_turns_override: Option<usize>,
+    additional_params: Option<Value>,
+) -> CoreControllerConfig {
+    CoreControllerConfig {
+        provider_id: preparation.model_blueprint.provider_id.clone(),
+        model_id: preparation.model_blueprint.model_id.clone(),
+        system_prompt: system_preamble.to_string(),
+        temperature: preparation.temperature.map(f64::from),
+        max_turns: max_turns_override.unwrap_or(DEFAULT_RUNTIME_MAX_TURNS_LIMIT),
+        additional_params,
+    }
+}
+
+/// Converts one session-owned canonical conversation state into the `vulcan-core` snapshot shape.
+/// 将一份会话持有的规范会话状态转换为 `vulcan-core` 快照形状。
+fn build_core_conversation_snapshot(
+    conversation_state: &SessionConversationState,
+) -> CoreConversationSnapshot {
+    CoreConversationSnapshot {
+        messages: conversation_state
+            .messages
+            .iter()
+            .map(session_message_to_core_message)
+            .collect(),
+        records: Vec::new(),
+        continuation: session_continuation_to_core_continuation(&conversation_state.continuation),
+    }
+}
+
+/// Converts one session-owned canonical conversation message into the `vulcan-core` message shape.
+/// 将一条会话持有的规范会话消息转换为 `vulcan-core` 消息形状。
+fn session_message_to_core_message(
+    message: &SessionConversationMessage,
+) -> CoreConversationMessage {
+    let payload = match &message.payload {
+        SessionConversationPayload::UserText { text } => {
+            CoreConversationPayload::UserText { text: text.clone() }
+        }
+        SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id,
+            tool_calls,
+        } => CoreConversationPayload::Assistant {
+            text: text.clone(),
+            reasoning: reasoning.clone(),
+            provider_message_id: provider_message_id.clone(),
+            tool_calls: tool_calls
+                .iter()
+                .map(session_tool_call_to_core_tool_call)
+                .collect(),
+        },
+        SessionConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => CoreConversationPayload::ToolResult {
+            tool_result_id: tool_result_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            text: text.clone(),
+        },
+    };
+
+    CoreConversationMessage {
+        id: message.id.clone(),
+        payload,
+    }
+}
+
+/// Converts one session-owned canonical tool-call entry into the `vulcan-core` tool-call shape.
+/// 将一条会话持有的规范工具调用项转换为 `vulcan-core` 工具调用形状。
+fn session_tool_call_to_core_tool_call(
+    tool_call: &crate::conversation_protocol::SessionConversationToolCall,
+) -> CoreConversationToolCall {
+    CoreConversationToolCall {
+        id: tool_call.id.clone(),
+        tool_call_id: tool_call.tool_call_id.clone(),
+        tool_name: tool_call.tool_name.clone(),
+        arguments: tool_call.arguments.clone(),
+    }
+}
+
+/// Converts one session-owned provider continuation snapshot into the `vulcan-core` continuation shape.
+/// 将一份会话持有的 Provider continuation 快照转换为 `vulcan-core` continuation 形状。
+fn session_continuation_to_core_continuation(
+    continuation: &crate::conversation_protocol::SessionProviderContinuationState,
+) -> CoreProviderContinuation {
+    CoreProviderContinuation {
+        provider_id: continuation.provider_id.clone(),
+        model_id: continuation.model_id.clone(),
+        last_provider_message_id: continuation.last_provider_message_id.clone(),
+        updated_at: continuation.updated_at.clone(),
+    }
+}
+
+/// Converts one resolved host tool definition into the `vulcan-core` request-tool schema shape.
+/// 将一条已解析宿主工具定义转换为 `vulcan-core` 请求工具 schema 形状。
+fn resolved_tool_definition_to_core_tool_schema(
+    definition: &ResolvedToolDefinition,
+) -> CoreProviderRequestToolSchema {
+    CoreProviderRequestToolSchema {
+        id: definition.descriptor.id.clone(),
+        name: definition.descriptor.name.clone(),
+        description: definition.descriptor.description.clone(),
+        source_label: tool_source_label(definition.descriptor.source).to_string(),
+        parameters_schema: definition.parameters_schema.clone(),
+    }
+}
+
+/// Converts one resolved host tool definition into the low-level rig tool-definition shape used by explicit completion requests.
+/// 将一条已解析宿主工具定义转换为显式 completion 请求使用的低层 rig 工具定义形状。
+fn resolved_tool_definition_to_rig_tool_definition(
+    definition: &ResolvedToolDefinition,
+) -> RigToolDefinition {
+    RigToolDefinition {
+        name: definition.descriptor.id.clone(),
+        description: definition.descriptor.description.clone(),
+        parameters: definition.parameters_schema.clone(),
+    }
+}
+
+/// Converts canonical core messages into the provider-visible history that will actually be sent upstream.
+/// 将规范 core 消息转换为真正会发送给上游 Provider 的可见历史。
+fn core_messages_to_provider_visible_history(
+    messages: &[CoreConversationMessage],
+) -> Vec<CoreConversationMessage> {
+    messages
+        .iter()
+        .map(|message| {
+            let payload = match &message.payload {
+                CoreConversationPayload::UserText { text } => {
+                    CoreConversationPayload::UserText { text: text.clone() }
+                }
+                CoreConversationPayload::Assistant {
+                    text,
+                    reasoning: _,
+                    provider_message_id,
+                    tool_calls,
+                } => CoreConversationPayload::Assistant {
+                    text: text.clone(),
+                    reasoning: String::new(),
+                    provider_message_id: provider_message_id.clone(),
+                    tool_calls: tool_calls.clone(),
+                },
+                CoreConversationPayload::ToolResult {
+                    tool_result_id,
+                    tool_call_id,
+                    text,
+                } => CoreConversationPayload::ToolResult {
+                    tool_result_id: tool_result_id.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                    text: text.clone(),
+                },
+            };
+
+            CoreConversationMessage {
+                id: message.id.clone(),
+                payload,
+            }
+        })
+        .collect()
+}
+
+/// Resolves one provider blueprint into the JSON payload passed through `additional_params`.
+/// 将一份 Provider 蓝图解析为通过 `additional_params` 传递的 JSON 载荷。
+fn resolve_provider_additional_params(blueprint: &ProviderRuntimeBlueprint) -> Option<Value> {
+    blueprint
+        .extra_body
+        .as_object()
+        .filter(|object| !object.is_empty())
+        .map(|object| Value::Object(object.clone()))
+}
+
+/// Serializes one request-header map into plain JSON for request-snapshot persistence and inspection.
+/// 将一份请求头映射序列化为普通 JSON，供请求快照持久化与检查使用。
+fn serialize_provider_request_headers(headers: &HeaderMap) -> Option<Value> {
+    let mut object = JsonMap::new();
+    for (name, value) in headers {
+        if let Ok(value_text) = value.to_str() {
+            object.insert(
+                name.as_str().to_string(),
+                Value::String(value_text.to_string()),
+            );
+        }
+    }
+
+    (!object.is_empty()).then_some(Value::Object(object))
+}
+
+/// Snapshot-only provider adapter used to let `vulcan-core` own request construction before real transport execution is migrated.
+/// 在真实传输执行迁移完成前，仅供快照使用的 Provider 适配器，用于让 `vulcan-core` 持有请求构造权。
+#[derive(Debug, Clone)]
+struct PreviewSnapshotProviderAdapter {
+    /// Stable provider identifier used by the snapshot adapter.
+    /// 快照适配器使用的稳定 Provider 标识。
+    provider_id: String,
+    /// Stable model identifier used by the snapshot adapter.
+    /// 快照适配器使用的稳定模型标识。
+    model_id: String,
+    /// Latest outgoing prompt body attached to the snapshot request.
+    /// 附着在快照请求中的最新出站提示词正文。
+    prompt: String,
+    /// Serialized request headers captured from the active provider blueprint.
+    /// 从当前 Provider 蓝图捕获的序列化请求头。
+    request_headers: Option<Value>,
+    /// Tool schemas exposed to the provider for the current turn.
+    /// 当前回合对 Provider 暴露的工具 schema 集合。
+    tool_schemas: Vec<CoreProviderRequestToolSchema>,
+}
+
+#[async_trait]
+impl VulcanProviderAdapter for PreviewSnapshotProviderAdapter {
+    type Request = CoreProviderRequestSnapshot;
+    type Response = ();
+
+    /// Returns the stable provider identifier used by the snapshot adapter.
+    /// 返回快照适配器使用的稳定 Provider 标识。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the stable model identifier used by the snapshot adapter.
+    /// 返回快照适配器使用的稳定模型标识。
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Builds one structured request snapshot owned by `vulcan-core`.
+    /// 构建一份由 `vulcan-core` 持有的结构化请求快照。
+    async fn build_request(
+        &self,
+        snapshot: &CoreConversationSnapshot,
+        config: &CoreControllerConfig,
+    ) -> Result<Self::Request, VulcanCoreError> {
+        Ok(CoreProviderRequestSnapshot {
+            provider_id: config.provider_id.clone(),
+            model_id: config.model_id.clone(),
+            system_prompt: config.system_prompt.clone(),
+            prompt: self.prompt.clone(),
+            history: core_messages_to_provider_visible_history(&snapshot.messages),
+            temperature: config.temperature,
+            max_turns: config.max_turns,
+            tool_schemas: self.tool_schemas.clone(),
+            additional_params: config.additional_params.clone(),
+            request_headers: self.request_headers.clone(),
+            continuation: snapshot.continuation.clone(),
+        })
+    }
+
+    /// Snapshot adapters do not perform real network execution and therefore always return a no-op response.
+    /// 快照适配器不会执行真实网络调用，因此始终返回一次空操作响应。
+    async fn execute_request(
+        &self,
+        _request: Self::Request,
+    ) -> Result<Self::Response, VulcanCoreError> {
+        Ok(())
+    }
 }
 
 /// Loads one provider-family base system prompt from the editable resource directory.
@@ -829,36 +1219,41 @@ fn read_non_empty_system_prompt_file(path: &Path) -> Option<String> {
 /// 构建在真正分发前捕获的生效 Provider 请求完整 Markdown 预览。
 fn build_provider_request_preview_markdown(
     preparation: &ExecutionPreparation,
-    system_preamble: &str,
-    conversation_history: &[SessionConversationMessage],
-    latest_prompt: &str,
-    resolved_tools: &[ResolvedToolDefinition],
-    max_turns: Option<usize>,
+    request_snapshot: &CoreProviderRequestSnapshot,
 ) -> String {
-    let temperature_label = preparation
+    let temperature_label = request_snapshot
         .temperature
         .map(|value| format!("{value:.2}"))
         .unwrap_or_else(|| String::from("使用模型默认值"));
-    let max_turns_label = max_turns
-        .map(|value| format!("`{value}`"))
-        .unwrap_or_else(|| String::from("不限制"));
-    let extra_body_markdown = preparation
-        .model_blueprint
-        .extra_body
-        .as_object()
-        .filter(|object| !object.is_empty())
-        .map(|_| render_json_code_fence(&preparation.model_blueprint.extra_body))
+    let max_turns_label = if request_snapshot.max_turns == DEFAULT_RUNTIME_MAX_TURNS_LIMIT {
+        String::from("不限制")
+    } else {
+        format!("`{}`", request_snapshot.max_turns)
+    };
+    let extra_body_markdown = request_snapshot
+        .additional_params
+        .as_ref()
+        .map(render_json_code_fence)
         .unwrap_or_else(|| String::from("（无附加 Body 参数）"));
-    let tool_rows = if resolved_tools.is_empty() {
+    let request_headers_markdown = request_snapshot
+        .request_headers
+        .as_ref()
+        .map(render_json_code_fence)
+        .unwrap_or_else(|| String::from("（无附加请求头）"));
+    let continuation_markdown =
+        render_provider_continuation_markdown(&request_snapshot.continuation);
+    let tool_rows = if request_snapshot.tool_schemas.is_empty() {
         String::from("（本次请求未直接暴露工具 schema）")
     } else {
-        resolved_tools
+        request_snapshot
+            .tool_schemas
             .iter()
-            .map(render_resolved_tool_request_section)
+            .map(render_core_tool_request_section)
             .collect::<Vec<_>>()
             .join("\n\n")
     };
-    let outgoing_history_markdown = render_conversation_history_markdown(conversation_history);
+    let outgoing_history_markdown =
+        render_core_conversation_history_markdown(&request_snapshot.history);
 
     format!(
         concat!(
@@ -877,11 +1272,15 @@ fn build_provider_request_preview_markdown(
             "- 工具数量：`{}` 个\n\n",
             "## System Preamble\n",
             "{}\n\n",
+            "## Continuation\n",
+            "{}\n\n",
             "## Outgoing History\n",
             "{}\n\n",
-            "## Effective User Prompt\n",
+            "## Effective Outgoing Prompt\n",
             "{}\n\n",
             "## Tool Schemas\n",
+            "{}\n\n",
+            "## Request Headers\n",
             "{}\n\n",
             "## Additional Body Parameters\n",
             "{}\n"
@@ -901,19 +1300,21 @@ fn build_provider_request_preview_markdown(
         preparation.execution_mode,
         temperature_label,
         max_turns_label,
-        conversation_history.len(),
-        resolved_tools.len(),
-        render_text_code_fence(system_preamble),
+        request_snapshot.history.len(),
+        request_snapshot.tool_schemas.len(),
+        render_text_code_fence(&request_snapshot.system_prompt),
+        continuation_markdown,
         outgoing_history_markdown,
-        render_text_code_fence(latest_prompt),
+        render_text_code_fence(&request_snapshot.prompt),
         tool_rows,
+        request_headers_markdown,
         extra_body_markdown,
     )
 }
 
-/// Renders the canonical history into a structured Markdown snapshot that is easier to inspect than one flattened prompt string.
-/// 将规范历史渲染为结构化 Markdown 快照，使其比单条扁平 Prompt 字符串更易检查。
-fn render_conversation_history_markdown(history: &[SessionConversationMessage]) -> String {
+/// Renders the `vulcan-core` canonical history into a structured Markdown snapshot that is easier to inspect than one flattened prompt string.
+/// 将 `vulcan-core` 规范历史渲染为结构化 Markdown 快照，使其比单条扁平 Prompt 字符串更易检查。
+fn render_core_conversation_history_markdown(history: &[CoreConversationMessage]) -> String {
     if history.is_empty() {
         return String::from("（本次请求没有历史消息）");
     }
@@ -921,25 +1322,25 @@ fn render_conversation_history_markdown(history: &[SessionConversationMessage]) 
     history
         .iter()
         .enumerate()
-        .map(|(index, message)| render_conversation_message_preview(index, message))
+        .map(|(index, message)| render_core_conversation_message_preview(index, message))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-/// Renders one canonical conversation message into the provider-preview Markdown.
-/// 将单条规范会话消息渲染到 Provider 预览 Markdown 中。
-fn render_conversation_message_preview(
+/// Renders one `vulcan-core` canonical conversation message into the provider-preview Markdown.
+/// 将单条 `vulcan-core` 规范会话消息渲染到 Provider 预览 Markdown 中。
+fn render_core_conversation_message_preview(
     index: usize,
-    message: &SessionConversationMessage,
+    message: &CoreConversationMessage,
 ) -> String {
     match &message.payload {
-        SessionConversationPayload::UserText { text } => format!(
+        CoreConversationPayload::UserText { text } => format!(
             "### {}. user · `{}`\n{}",
             index + 1,
             message.id,
             render_text_code_fence(text)
         ),
-        SessionConversationPayload::Assistant {
+        CoreConversationPayload::Assistant {
             text,
             reasoning,
             provider_message_id,
@@ -982,7 +1383,7 @@ fn render_conversation_message_preview(
             }
             sections.join("\n\n")
         }
-        SessionConversationPayload::ToolResult {
+        CoreConversationPayload::ToolResult {
             tool_result_id,
             tool_call_id,
             text,
@@ -999,9 +1400,9 @@ fn render_conversation_message_preview(
     }
 }
 
-/// Renders one resolved tool into a Markdown section used by the request-preview tab.
-/// 将单个已解析工具渲染为请求预览页签使用的 Markdown 分节。
-fn render_resolved_tool_request_section(definition: &ResolvedToolDefinition) -> String {
+/// Renders one `vulcan-core` tool schema into a Markdown section used by the request-preview tab.
+/// 将单个 `vulcan-core` 工具 schema 渲染为请求预览页签使用的 Markdown 分节。
+fn render_core_tool_request_section(definition: &CoreProviderRequestToolSchema) -> String {
     format!(
         concat!(
             "### `{}`\n",
@@ -1010,12 +1411,32 @@ fn render_resolved_tool_request_section(definition: &ResolvedToolDefinition) -> 
             "- 描述：{}\n",
             "{}"
         ),
-        definition.descriptor.id,
-        definition.descriptor.name,
-        tool_source_label(definition.descriptor.source),
-        definition.descriptor.description,
+        definition.id,
+        definition.name,
+        definition.source_label,
+        definition.description,
         render_json_code_fence(&definition.parameters_schema),
     )
+}
+
+/// Renders one provider continuation snapshot into readable Markdown for request inspection.
+/// 将一份 Provider continuation 快照渲染为便于请求检查的可读 Markdown。
+fn render_provider_continuation_markdown(continuation: &CoreProviderContinuation) -> String {
+    if continuation.provider_id.is_none()
+        && continuation.model_id.is_none()
+        && continuation.last_provider_message_id.is_none()
+        && continuation.updated_at.is_none()
+    {
+        return String::from("（本次请求没有 continuation 游标）");
+    }
+
+    let payload = json!({
+        "provider_id": continuation.provider_id,
+        "model_id": continuation.model_id,
+        "last_provider_message_id": continuation.last_provider_message_id,
+        "updated_at": continuation.updated_at,
+    });
+    render_json_code_fence(&payload)
 }
 
 /// Renders one tool-source label used by the request-preview tab.
@@ -1082,21 +1503,8 @@ fn execute_provider_prompt_stream(
         Ok(headers) => headers,
         Err(error) => return one_shot_provider_error_stream(error),
     };
-    let additional_params = preparation
-        .model_blueprint
-        .extra_body
-        .as_object()
-        .filter(|object| !object.is_empty())
-        .map(|object| Value::Object(object.clone()));
+    let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
     let tool_outcome_capture = RigToolOutcomeCapture::default();
-    let build_runtime_tools = || {
-        build_vulcan_rig_tools(
-            tools_manager.clone(),
-            preparation.session_id,
-            &resolved_tools,
-            tool_outcome_capture.clone(),
-        )
-    };
 
     match preparation.model_blueprint.runtime_kind {
         ProviderRuntimeKind::OpenAi => execute_openai_responses_stream(
@@ -1109,7 +1517,12 @@ fn execute_provider_prompt_stream(
             temperature,
             max_turns,
             &request_headers,
-            build_runtime_tools(),
+            build_vulcan_rig_tools(
+                tools_manager.clone(),
+                preparation.session_id,
+                &resolved_tools,
+                tool_outcome_capture.clone(),
+            ),
             tool_outcome_capture.clone(),
             additional_params,
         ),
@@ -1119,6 +1532,7 @@ fn execute_provider_prompt_stream(
         | ProviderRuntimeKind::Groq
         | ProviderRuntimeKind::TogetherAi
         | ProviderRuntimeKind::Perplexity => execute_openai_compatible_stream(
+            &preparation.model_blueprint.provider_id,
             &api_key,
             base_url,
             model_id,
@@ -1128,8 +1542,9 @@ fn execute_provider_prompt_stream(
             temperature,
             max_turns,
             &request_headers,
-            build_runtime_tools(),
-            tool_outcome_capture.clone(),
+            tools_manager,
+            preparation.session_id,
+            resolved_tools,
             additional_params,
         ),
         ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
@@ -1141,7 +1556,12 @@ fn execute_provider_prompt_stream(
             temperature,
             max_turns,
             &request_headers,
-            build_runtime_tools(),
+            build_vulcan_rig_tools(
+                tools_manager.clone(),
+                preparation.session_id,
+                &resolved_tools,
+                tool_outcome_capture.clone(),
+            ),
             tool_outcome_capture.clone(),
             additional_params,
         ),
@@ -1155,7 +1575,12 @@ fn execute_provider_prompt_stream(
             temperature,
             max_turns,
             &request_headers,
-            build_runtime_tools(),
+            build_vulcan_rig_tools(
+                tools_manager,
+                preparation.session_id,
+                &resolved_tools,
+                tool_outcome_capture.clone(),
+            ),
             tool_outcome_capture.clone(),
             additional_params,
         ),
@@ -1188,9 +1613,7 @@ const DEFAULT_RUNTIME_MAX_TURNS_LIMIT: usize = usize::MAX - 1;
 
 /// Resolves one effective max-turn budget for the rig agent builder.
 /// 为 rig 代理构建器解析一个生效中的最大轮次预算。
-fn resolve_runtime_default_max_turns_limit(
-    active_agent: Option<&RuntimeAgentDefinition>,
-) -> usize {
+fn resolve_runtime_default_max_turns_limit(active_agent: Option<&RuntimeAgentDefinition>) -> usize {
     active_agent
         .and_then(|agent| agent.max_turns)
         .filter(|value| *value > 0)
@@ -1201,6 +1624,7 @@ fn resolve_runtime_default_max_turns_limit(
 /// Executes one OpenAI-compatible prompt using the chat-completions compatible rig client and streams deltas.
 /// 使用兼容 Chat Completions 的 rig 客户端执行一次 OpenAI 兼容提示词调用并流式返回增量。
 fn execute_openai_compatible_stream(
+    provider_id: &str,
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
@@ -1210,8 +1634,9 @@ fn execute_openai_compatible_stream(
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
-    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
-    tool_outcome_capture: RigToolOutcomeCapture,
+    tools_manager: VulcanToolsManager,
+    session_id: SessionId,
+    resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let mut builder = openai::CompletionsClient::builder()
@@ -1232,48 +1657,307 @@ fn execute_openai_compatible_stream(
         }
     };
     let model = client.completion_model(model_id);
-    let mut agent_builder = AgentBuilder::new(model)
-        .name("Vulcan Code Worker")
-        .preamble(system_preamble);
-
-    agent_builder = agent_builder.default_max_turns(max_turns);
-
-    if let Some(temperature) = temperature {
-        agent_builder = agent_builder.temperature(temperature);
-    }
-    if let Some(additional_params) = additional_params {
-        agent_builder = agent_builder.additional_params(additional_params);
-    }
-
-    let agent = if luaskills_rig_tools.is_empty() {
-        agent_builder.build()
-    } else {
-        agent_builder.tools(luaskills_rig_tools).build()
-    };
+    let provider_id = provider_id.to_string();
+    let model_id = model_id.to_string();
     let prompt = prompt.to_string();
+    let system_preamble = system_preamble.to_string();
+    let request_headers = headers.clone();
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(tools_manager),
+        &resolved_tools,
+        session_id,
+    ));
+    let rig_tool_definitions = resolved_tools
+        .iter()
+        .map(resolved_tool_definition_to_rig_tool_definition)
+        .collect::<Vec<_>>();
 
     Box::pin(stream! {
-        let mut stream = agent
-            .stream_prompt(prompt)
-            .with_history(request_history)
-            .multi_turn(max_turns)
-            .await;
+        let mut runtime_history = request_history;
+        runtime_history.push(RigMessage::user(prompt.clone()));
+        let turn_budget_label = if max_turns == DEFAULT_RUNTIME_MAX_TURNS_LIMIT {
+            String::from("未限制")
+        } else {
+            max_turns.to_string()
+        };
+        let mut provider_turns_executed = 0usize;
 
-        while let Some(item) = stream.next().await {
-            let item = item.map_err(|error| format!("OpenAI 兼容流式执行失败：{}。", error));
-            match item {
-                Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
-                        yield Ok(delta);
-                    }
-                }
+        loop {
+            if provider_turns_executed >= max_turns {
+                yield Err(format!(
+                    "OpenAI 兼容流式执行失败：宿主工具循环已达到最大回合限制 `{}`，仍未收敛。",
+                    turn_budget_label
+                ));
+                break;
+            }
+            provider_turns_executed = provider_turns_executed.saturating_add(1);
+
+            let Some(current_prompt) = runtime_history.last().cloned() else {
+                yield Err(String::from(
+                    "OpenAI 兼容流式执行失败：宿主侧历史为空，无法构造下一轮请求。",
+                ));
+                break;
+            };
+            let current_history = runtime_history[..runtime_history.len().saturating_sub(1)].to_vec();
+            yield Ok(ProviderStreamDelta::RequestSnapshot(
+                build_openai_compatible_turn_request_snapshot(
+                    provider_id.as_str(),
+                    model_id.as_str(),
+                    system_preamble.as_str(),
+                    &current_history,
+                    &current_prompt,
+                    temperature,
+                    max_turns,
+                    &resolved_tools,
+                    &request_headers,
+                    additional_params.clone(),
+                ),
+            ));
+            let mut request_builder = model
+                .completion_request(current_prompt)
+                .preamble(system_preamble.clone())
+                .messages(current_history)
+                .temperature_opt(temperature)
+                .additional_params_opt(additional_params.clone());
+
+            if !rig_tool_definitions.is_empty() {
+                request_builder = request_builder.tools(rig_tool_definitions.clone());
+            }
+
+            let mut stream = match request_builder.stream().await {
+                Ok(stream) => stream,
                 Err(error) => {
-                    yield Err(error);
+                    yield Err(format!("OpenAI 兼容流式执行失败：{}。", error));
                     break;
                 }
+            };
+
+            let mut stream_failed = false;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(content) => {
+                        for delta in provider_deltas_from_assistant_content(content) {
+                            yield Ok(delta);
+                        }
+                    }
+                    Err(error) => {
+                        yield Err(format!("OpenAI 兼容流式执行失败：{}。", error));
+                        stream_failed = true;
+                        break;
+                    }
+                }
+            }
+
+            if stream_failed {
+                break;
+            }
+
+            let assistant_content = stream.choice.clone();
+            let pending_tool_calls = assistant_content
+                .iter()
+                .filter_map(|item| match item {
+                    RigAssistantContent::ToolCall(tool_call) => Some(tool_call.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            runtime_history.push(RigMessage::Assistant {
+                id: stream.message_id.clone(),
+                content: assistant_content,
+            });
+
+            if pending_tool_calls.is_empty() {
+                yield Ok(ProviderStreamDelta::FinalConversationHistory(runtime_history));
+                break;
+            }
+
+            for tool_call in pending_tool_calls {
+                let resolved_tool_call_id = resolve_host_visible_tool_call_id(&tool_call);
+                let tool_request = CoreToolInvocationRequest {
+                    tool_call_id: resolved_tool_call_id.clone(),
+                    tool_name: tool_call.function.name.clone(),
+                    arguments: tool_call.function.arguments.clone(),
+                };
+                let tool_result = match runtime_bridge.execute_tool(&tool_request).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        yield Err(format!(
+                            "OpenAI 兼容工具 `{}` 执行失败：{}。",
+                            tool_request.tool_name,
+                            error
+                        ));
+                        stream_failed = true;
+                        break;
+                    }
+                };
+                let tool_result_id = build_host_tool_result_id(&resolved_tool_call_id);
+                let tool_result_message = RigMessage::tool_result_with_call_id(
+                    tool_result_id.clone(),
+                    Some(resolved_tool_call_id.clone()),
+                    tool_result.model_output.clone(),
+                );
+                let event_metadata = build_tool_result_runtime_metadata(
+                    &resolved_tool_call_id,
+                    &tool_result_id,
+                    tool_result.host_result.as_ref(),
+                );
+                let event_metadata = attach_tool_name_to_runtime_metadata(
+                    event_metadata,
+                    &tool_request.tool_name,
+                );
+                yield Ok(ProviderStreamDelta::RuntimeEvent(
+                    RuntimeEvent::new(
+                        RuntimeEventKind::ToolFinished,
+                        format!("工具返回 · {}", resolved_tool_call_id),
+                        format_host_tool_result_runtime_detail(
+                            &tool_result_id,
+                            &tool_result.model_output,
+                        ),
+                    )
+                    .with_metadata(event_metadata),
+                ));
+                runtime_history.push(tool_result_message);
+            }
+
+            if stream_failed {
+                break;
             }
         }
     })
+}
+
+/// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
+/// 解析供转录卡片与工具结果关联使用的宿主可见工具调用标识。
+fn resolve_host_visible_tool_call_id(tool_call: &rig::message::ToolCall) -> String {
+    tool_call
+        .call_id
+        .clone()
+        .unwrap_or_else(|| tool_call.id.clone())
+}
+
+/// Builds one synthetic host-owned tool-result identifier that stays stable within the current execution turn.
+/// 构建一个在当前执行回合内保持稳定的宿主自有合成工具结果标识。
+fn build_host_tool_result_id(tool_call_id: &str) -> String {
+    format!("tool-result-{tool_call_id}")
+}
+
+/// Builds the exact structured request snapshot for one host-controlled OpenAI-compatible turn right before dispatch.
+/// 在真正分发前为单次宿主控制的 OpenAI 兼容回合构建精确结构化请求快照。
+fn build_openai_compatible_turn_request_snapshot(
+    provider_id: &str,
+    model_id: &str,
+    system_preamble: &str,
+    current_history: &[RigMessage],
+    current_prompt: &RigMessage,
+    temperature: Option<f64>,
+    max_turns: usize,
+    resolved_tools: &[ResolvedToolDefinition],
+    headers: &HeaderMap,
+    additional_params: Option<Value>,
+) -> CoreProviderRequestSnapshot {
+    let mut conversation_state = SessionConversationState::default();
+    replace_messages_from_rig_history(
+        &mut conversation_state,
+        current_history,
+        Some(provider_id),
+        Some(model_id),
+        current_unix_millis_text(),
+    );
+    let core_snapshot = build_core_conversation_snapshot(&conversation_state);
+
+    CoreProviderRequestSnapshot {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        system_prompt: system_preamble.to_string(),
+        prompt: render_provider_visible_prompt_message(current_prompt),
+        history: core_messages_to_provider_visible_history(&core_snapshot.messages),
+        temperature,
+        max_turns,
+        tool_schemas: resolved_tools
+            .iter()
+            .map(resolved_tool_definition_to_core_tool_schema)
+            .collect(),
+        additional_params,
+        request_headers: serialize_provider_request_headers(headers),
+        continuation: core_snapshot.continuation,
+    }
+}
+
+/// Renders one provider-visible prompt message into plain text so request snapshots can reflect the exact last outgoing message body.
+/// 将单条 Provider 可见提示消息渲染为纯文本，使请求快照能够反映精确的最后一条出站消息正文。
+fn render_provider_visible_prompt_message(message: &RigMessage) -> String {
+    match message {
+        RigMessage::System { content } => content.trim().to_string(),
+        RigMessage::User { content } => content
+            .iter()
+            .filter_map(|item| match item {
+                RigUserContent::Text(text) => Some(text.text.trim().to_string()),
+                RigUserContent::ToolResult(tool_result) => {
+                    Some(flatten_rig_tool_result_content(&tool_result.content))
+                }
+                RigUserContent::Image(_)
+                | RigUserContent::Audio(_)
+                | RigUserContent::Video(_)
+                | RigUserContent::Document(_) => None,
+            })
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n"),
+        RigMessage::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| match item {
+                RigAssistantContent::Text(text) => Some(text.text.trim().to_string()),
+                _ => None,
+            })
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n"),
+    }
+}
+
+/// Flattens rig tool-result content into plain text so request snapshots can store the exact outgoing prompt payload safely.
+/// 将 rig 工具结果内容压平成纯文本，使请求快照能够安全保存精确的出站提示词载荷。
+fn flatten_rig_tool_result_content(content: &rig::OneOrMany<ToolResultContent>) -> String {
+    content
+        .iter()
+        .map(|item| match item {
+            ToolResultContent::Text(text) => text.text.trim().to_string(),
+            ToolResultContent::Image(image) => {
+                serde_json::to_string(image).unwrap_or_else(|_| String::from("{}"))
+            }
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n")
+}
+
+/// Attaches one tool name to runtime-event metadata so display-layer fallbacks can still recover the semantic tool title.
+/// 将工具名称附着到运行时事件元数据中，以便显示层在回退路径下仍能恢复语义化工具标题。
+fn attach_tool_name_to_runtime_metadata(metadata: Option<Value>, tool_name: &str) -> Option<Value> {
+    let mut object = match metadata {
+        Some(Value::Object(object)) => object,
+        Some(other) => {
+            let mut object = JsonMap::new();
+            object.insert(String::from("host_metadata"), other);
+            object
+        }
+        None => JsonMap::new(),
+    };
+    object.insert(
+        String::from("tool_name"),
+        Value::String(tool_name.to_string()),
+    );
+    Some(Value::Object(object))
+}
+
+/// Formats one host-side tool result into the full Markdown payload shown by the inline transcript and modal.
+/// 将单次宿主侧工具结果格式化为内联转录与弹窗使用的完整 Markdown 载荷。
+fn format_host_tool_result_runtime_detail(tool_result_id: &str, model_output: &str) -> String {
+    let normalized_output = if model_output.trim().is_empty() {
+        String::from("（空结果）")
+    } else {
+        model_output.trim().to_string()
+    };
+    format!("## 返回标识\n\n`{tool_result_id}`\n\n## 工具返回\n\n{normalized_output}")
 }
 
 /// Builds one request-header map from the configured strategy and provider-defined extra headers.
@@ -1347,22 +2031,30 @@ fn provider_deltas_from_multi_turn_item<R>(
                 .call_id
                 .clone()
                 .unwrap_or_else(|| tool_result.id.clone());
-            let tool_metadata = tool_outcome_capture.take_next().and_then(|outcome| outcome.metadata);
+            let tool_metadata = tool_outcome_capture
+                .take_next()
+                .and_then(|outcome| outcome.metadata);
             let event_metadata = build_tool_result_runtime_metadata(
                 &tool_call_id,
                 &tool_result.id,
                 tool_metadata.as_ref(),
             );
-            vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
-                RuntimeEventKind::ToolFinished,
-                format!("工具返回 · {}", tool_call_id),
-                format_tool_result_runtime_detail(&tool_result),
-            )
-            .with_metadata(event_metadata))]
+            vec![ProviderStreamDelta::RuntimeEvent(
+                RuntimeEvent::new(
+                    RuntimeEventKind::ToolFinished,
+                    format!("工具返回 · {}", tool_call_id),
+                    format_tool_result_runtime_detail(&tool_result),
+                )
+                .with_metadata(event_metadata),
+            )]
         }
         MultiTurnStreamItem::FinalResponse(final_response) => final_response
             .history()
-            .map(|history| vec![ProviderStreamDelta::FinalConversationHistory(history.to_vec())])
+            .map(|history| {
+                vec![ProviderStreamDelta::FinalConversationHistory(
+                    history.to_vec(),
+                )]
+            })
             .unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -1401,19 +2093,21 @@ fn provider_deltas_from_assistant_content<R>(
                 .call_id
                 .clone()
                 .unwrap_or_else(|| tool_call.id.clone());
-            vec![ProviderStreamDelta::RuntimeEvent(RuntimeEvent::new(
-                RuntimeEventKind::ToolStarted,
-                format!("工具调用 · {} · {}", tool_call_id, tool_call.function.name),
-                format_tool_call_runtime_detail(
-                    &tool_call.function.name,
-                    &tool_call.function.arguments,
-                ),
-            )
-            .with_metadata(Some(json!({
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_call.function.name,
-                "arguments": tool_call.function.arguments,
-            }))))]
+            vec![ProviderStreamDelta::RuntimeEvent(
+                RuntimeEvent::new(
+                    RuntimeEventKind::ToolStarted,
+                    format!("工具调用 · {} · {}", tool_call_id, tool_call.function.name),
+                    format_tool_call_runtime_detail(
+                        &tool_call.function.name,
+                        &tool_call.function.arguments,
+                    ),
+                )
+                .with_metadata(Some(json!({
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                }))),
+            )]
         }
         StreamedAssistantContent::ToolCallDelta { .. } => Vec::new(),
         StreamedAssistantContent::Final(_) => Vec::new(),
@@ -1536,6 +2230,23 @@ fn build_tool_result_runtime_metadata(
     }
 
     Some(Value::Object(metadata))
+}
+
+/// Converts one runtime event into one controller-owned event for execution tracing and later audit projection.
+/// 将一条运行时事件转换为一条控制器自有事件，供执行追踪与后续审计投影使用。
+fn runtime_event_to_core_event(event: &RuntimeEvent) -> Option<CoreControllerEvent> {
+    let kind = match event.kind {
+        RuntimeEventKind::ToolStarted => CoreControllerEventKind::ToolStarted,
+        RuntimeEventKind::ToolFinished => CoreControllerEventKind::ToolFinished,
+        _ => return None,
+    };
+
+    Some(CoreControllerEvent {
+        kind,
+        title: event.title.clone(),
+        body: event.detail.clone(),
+        metadata: event.metadata.clone(),
+    })
 }
 
 /// Executes one OpenAI Responses prompt using rig's default OpenAI responses client and streams deltas.
@@ -1922,21 +2633,31 @@ fn current_unix_millis_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RUNTIME_MAX_TURNS_LIMIT, ExecutionPreparation,
-        SyntheticThinkingPreambleState, build_provider_request_preview_markdown,
-        build_runtime_system_preamble, classify_synthetic_thinking_preamble,
-        normalize_streamed_thinking_output, resolve_runtime_default_max_turns_limit,
+        DEFAULT_RUNTIME_MAX_TURNS_LIMIT, ExecutionPreparation, SyntheticThinkingPreambleState,
+        attach_tool_name_to_runtime_metadata, build_core_provider_request_snapshot,
+        build_host_tool_result_id, build_openai_compatible_turn_request_snapshot,
+        build_provider_request_preview_markdown, build_runtime_system_preamble,
+        classify_synthetic_thinking_preamble, normalize_streamed_thinking_output,
+        resolve_host_visible_tool_call_id, resolve_runtime_default_max_turns_limit,
         resolve_runtime_max_turns,
     };
     use crate::agent_runtime::config::{RuntimeAgentDefinition, RuntimeAgentKind};
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::conversation_protocol::{
-        SessionConversationMessage, SessionConversationPayload, conversation_messages_to_rig_history,
-        rig_history_to_conversation_messages,
+        SessionConversationMessage, SessionConversationPayload, SessionConversationState,
     };
     use crate::provider_config::ProviderRuntimeKind;
+    use rig::message::Message as RigMessage;
+    use rig::message::ToolCall as RigToolCall;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use vulcan_core::types::{
+        ConversationMessage as CoreConversationMessage,
+        ConversationPayload as CoreConversationPayload,
+        ProviderContinuation as CoreProviderContinuation,
+        ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+        ProviderRequestToolSchema as CoreProviderRequestToolSchema,
+    };
     use vulcan_tools_manager::{
         ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind,
     };
@@ -2008,6 +2729,148 @@ mod tests {
             enabled_mcp_servers: Vec::new(),
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+        };
+        let request_snapshot = CoreProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::from("system prompt body"),
+            prompt: String::from("effective prompt body"),
+            history: vec![
+                CoreConversationMessage {
+                    id: String::from("history-user-1"),
+                    payload: CoreConversationPayload::UserText {
+                        text: String::from("之前的用户问题"),
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("history-assistant-1"),
+                    payload: CoreConversationPayload::Assistant {
+                        text: String::from("之前的助手回答"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp_1")),
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            temperature: Some(0.2),
+            max_turns: DEFAULT_RUNTIME_MAX_TURNS_LIMIT,
+            tool_schemas: vec![CoreProviderRequestToolSchema {
+                id: String::from("read_file"),
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                source_label: String::from("原生工具"),
+                parameters_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+            additional_params: Some(json!({ "reasoning": { "effort": "high" } })),
+            request_headers: Some(json!({
+                "user-agent": "vulcancode/test",
+                "authorization": "Bearer masked"
+            })),
+            continuation: CoreProviderContinuation {
+                provider_id: Some(String::from("openai")),
+                model_id: Some(String::from("gpt-test")),
+                last_provider_message_id: Some(String::from("resp_prev")),
+                updated_at: Some(String::from("123")),
+            },
+        };
+
+        let preview = build_provider_request_preview_markdown(&preparation, &request_snapshot);
+
+        assert!(preview.contains("# 最后一次真实 API 请求快照"));
+        assert!(preview.contains("## System Preamble"));
+        assert!(preview.contains("system prompt body"));
+        assert!(preview.contains("## Continuation"));
+        assert!(preview.contains("resp_prev"));
+        assert!(preview.contains("## Outgoing History"));
+        assert!(preview.contains("之前的用户问题"));
+        assert!(preview.contains("## Effective Outgoing Prompt"));
+        assert!(preview.contains("effective prompt body"));
+        assert!(preview.contains("### `read_file`"));
+        assert!(preview.contains("\"path\""));
+        assert!(preview.contains("## Request Headers"));
+        assert!(preview.contains("vulcancode/test"));
+        assert!(preview.contains("\"effort\": \"high\""));
+        assert!(preview.contains("- 最大轮次：不限制"));
+        assert!(!preview.contains("之前的推理摘要"));
+    }
+
+    /// Verifies `vulcan-core` request snapshots preserve continuation, prompt, and tool-schema details.
+    /// 验证 `vulcan-core` 请求快照会保留 continuation、提示词与工具 schema 细节。
+    #[test]
+    fn core_request_snapshot_preserves_continuation_and_tool_details() {
+        let preparation = ExecutionPreparation {
+            session_id: uuid::Uuid::nil(),
+            session_title: String::from("测试会话"),
+            agent_id: String::from("default-agent"),
+            agent_name: String::from("默认代理"),
+            agent_kind: String::from("内置"),
+            model_blueprint: ProviderRuntimeBlueprint {
+                provider_id: String::from("openai"),
+                provider_name: String::from("OpenAI"),
+                runtime_kind: ProviderRuntimeKind::OpenAi,
+                runtime_label: String::from("OpenAI"),
+                model_id: String::from("gpt-test"),
+                model_name: String::from("GPT Test"),
+                base_url: Some(String::from("https://api.example.test/v1")),
+                supports_remote_model_refresh: true,
+                credential_source: String::from("环境变量"),
+                user_agent: Some(String::from("vulcancode/test")),
+                extra_headers: BTreeMap::from([(
+                    String::from("x-trace-id"),
+                    String::from("trace-1"),
+                )]),
+                extra_body: json!({ "reasoning": { "effort": "medium" } }),
+            },
+            prompt_preview: String::from("请分析这段代码"),
+            workspace_path: String::from("D:/workspace"),
+            context_history_count: 1,
+            execution_mode: String::from("Build"),
+            temperature: Some(0.2),
+            skill_names: vec![String::from("codekit")],
+            tool_descriptors: vec![VulcanToolDescriptor {
+                id: String::from("read_file"),
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                source: VulcanToolSourceKind::Native,
+            }],
+            delegate_agents: Vec::new(),
+            enabled_mcp_servers: Vec::new(),
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+        };
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("history-user-1"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("之前的用户问题"),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("history-assistant-1"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("之前的助手回答"),
+                        reasoning: String::from("之前的推理摘要"),
+                        provider_message_id: Some(String::from("resp_1")),
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            records: Vec::new(),
+            continuation: crate::conversation_protocol::SessionProviderContinuationState {
+                provider_id: Some(String::from("openai")),
+                model_id: Some(String::from("gpt-test")),
+                last_provider_message_id: Some(String::from("resp_prev")),
+                updated_at: Some(String::from("123")),
+            },
         };
         let resolved_tools = vec![ResolvedToolDefinition {
             descriptor: VulcanToolDescriptor {
@@ -2025,49 +2888,44 @@ mod tests {
             }),
             invoke: std::sync::Arc::new(|_, _| unreachable!("test preview does not invoke tools")),
         }];
-        let conversation_history = vec![
-            SessionConversationMessage {
-                id: String::from("history-user-1"),
-                payload: SessionConversationPayload::UserText {
-                    text: String::from("之前的用户问题"),
-                },
-            },
-            SessionConversationMessage {
-                id: String::from("history-assistant-1"),
-                payload: SessionConversationPayload::Assistant {
-                    text: String::from("之前的助手回答"),
-                    reasoning: String::from("之前的推理摘要"),
-                    provider_message_id: Some(String::from("resp_1")),
-                    tool_calls: Vec::new(),
-                },
-            },
-        ];
-        let outgoing_history =
-            rig_history_to_conversation_messages(&conversation_messages_to_rig_history(
-                &conversation_history,
-            ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
 
-        let preview = build_provider_request_preview_markdown(
-            &preparation,
-            "system prompt body",
-            &outgoing_history,
-            "effective prompt body",
-            &resolved_tools,
-            None,
+        let snapshot = runtime
+            .block_on(build_core_provider_request_snapshot(
+                &preparation,
+                &conversation_state,
+                "system prompt body",
+                "effective prompt body",
+                &resolved_tools,
+                Some(5),
+            ))
+            .expect("request snapshot should build");
+
+        assert_eq!(snapshot.prompt, "effective prompt body");
+        assert_eq!(snapshot.max_turns, 5);
+        assert_eq!(snapshot.tool_schemas.len(), 1);
+        assert_eq!(
+            snapshot.continuation.last_provider_message_id.as_deref(),
+            Some("resp_prev")
         );
-
-        assert!(preview.contains("# 最后一次真实 API 请求快照"));
-        assert!(preview.contains("## System Preamble"));
-        assert!(preview.contains("system prompt body"));
-        assert!(preview.contains("## Outgoing History"));
-        assert!(preview.contains("之前的用户问题"));
-        assert!(preview.contains("## Effective User Prompt"));
-        assert!(preview.contains("effective prompt body"));
-        assert!(preview.contains("### `read_file`"));
-        assert!(preview.contains("\"path\""));
-        assert!(preview.contains("\"effort\": \"high\""));
-        assert!(preview.contains("- 最大轮次：不限制"));
-        assert!(!preview.contains("之前的推理摘要"));
+        let Some(CoreConversationMessage {
+            payload: CoreConversationPayload::Assistant { reasoning, .. },
+            ..
+        }) = snapshot.history.get(1)
+        else {
+            panic!("assistant history item should exist");
+        };
+        assert!(reasoning.is_empty());
+        assert_eq!(
+            snapshot.request_headers,
+            Some(json!({
+                "user-agent": "vulcancode/test",
+                "x-trace-id": "trace-1"
+            }))
+        );
     }
 
     /// Verifies the runtime leaves multi-turn providers unlimited when no explicit max-turn override exists.
@@ -2144,6 +3002,7 @@ mod tests {
             enabled_mcp_servers: vec![String::from("demo-server")],
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -2154,5 +3013,87 @@ mod tests {
         assert!(!preamble.contains("可委派代理"));
         assert!(preamble.contains("当前工作区：D:/workspace"));
         assert!(preamble.contains("当前执行模式：Build"));
+    }
+
+    /// Verifies host-side tool-result correlation prefers provider call ids while still generating stable synthetic tool-result ids.
+    /// 验证宿主侧工具结果关联会优先使用 Provider call id，同时仍生成稳定的合成工具结果标识。
+    #[test]
+    fn host_tool_result_correlation_prefers_provider_call_id() {
+        let tool_call = RigToolCall {
+            id: String::from("provider-tool-id"),
+            call_id: Some(String::from("provider-call-id")),
+            function: rig::message::ToolFunction {
+                name: String::from("read_file"),
+                arguments: json!({ "path": "src/main.rs" }),
+            },
+            signature: None,
+            additional_params: None,
+        };
+
+        let resolved_tool_call_id = resolve_host_visible_tool_call_id(&tool_call);
+
+        assert_eq!(resolved_tool_call_id, "provider-call-id");
+        assert_eq!(
+            build_host_tool_result_id(&resolved_tool_call_id),
+            "tool-result-provider-call-id"
+        );
+    }
+
+    /// Verifies tool-finished metadata always keeps the tool name even when host metadata already carries other structured payloads.
+    /// 验证工具完成元数据即使已经携带其他结构化载荷，也会始终保留工具名称字段。
+    #[test]
+    fn tool_finished_metadata_keeps_tool_name_for_display_fallback() {
+        let metadata = attach_tool_name_to_runtime_metadata(
+            Some(json!({
+                "tool_call_id": "call-1",
+                "tool_result_id": "result-1",
+                "kind": "change_set"
+            })),
+            "write_file",
+        )
+        .expect("metadata should exist");
+
+        assert_eq!(metadata["tool_call_id"], "call-1");
+        assert_eq!(metadata["tool_result_id"], "result-1");
+        assert_eq!(metadata["kind"], "change_set");
+        assert_eq!(metadata["tool_name"], "write_file");
+    }
+
+    /// Verifies host-controlled OpenAI-compatible snapshots treat tool-result messages as the real outgoing prompt of the next turn.
+    /// 验证宿主控制的 OpenAI 兼容请求快照会把工具结果消息视作下一轮真实出站提示词。
+    #[test]
+    fn openai_compatible_turn_snapshot_uses_tool_result_as_outgoing_prompt() {
+        let headers = reqwest::header::HeaderMap::new();
+        let history = vec![RigMessage::assistant_with_id(
+            String::from("assistant-1"),
+            "请调用工具处理文件。",
+        )];
+        let prompt = RigMessage::tool_result_with_call_id(
+            String::from("result-1"),
+            Some(String::from("call-1")),
+            "文件修改完成",
+        );
+
+        let snapshot = build_openai_compatible_turn_request_snapshot(
+            "groq",
+            "llama-4",
+            "system prompt body",
+            &history,
+            &prompt,
+            Some(0.3),
+            6,
+            &[],
+            &headers,
+            None,
+        );
+
+        assert_eq!(snapshot.provider_id, "groq");
+        assert_eq!(snapshot.model_id, "llama-4");
+        assert_eq!(snapshot.prompt, "文件修改完成");
+        assert_eq!(snapshot.history.len(), 1);
+        assert_eq!(
+            snapshot.continuation.last_provider_message_id.as_deref(),
+            Some("assistant-1")
+        );
     }
 }

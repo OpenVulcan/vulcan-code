@@ -283,12 +283,7 @@ async fn ensure_optional_runtime_state_column(
     statement: &str,
 ) -> Result<(), String> {
     let migration_result = client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            statement,
-            vec![Vec::new()],
-        )
+        .execute_sqlite_batch_typed(APP_SPACE_ID, sqlite_binding_id, statement, vec![Vec::new()])
         .await;
 
     match migration_result {

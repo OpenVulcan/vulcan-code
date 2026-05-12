@@ -20,10 +20,10 @@ use crate::agent_view::{
 };
 use crate::code_view;
 use crate::conversation_protocol::{
-    PROTOCOL_COMPACTION_TRIGGER_COUNT, SessionConversationMessage, SessionConversationRecord,
-    append_assistant_text_message, append_record, append_record_body_delta,
-    append_user_text_message, compact_conversation_with_summary,
-    conversation_state_to_context_records, conversation_state_to_session_messages,
+    PROTOCOL_COMPACTION_TRIGGER_COUNT, SessionConversationRecord, append_assistant_text_message,
+    append_record, append_record_body_delta, append_user_text_message,
+    compact_conversation_with_summary, conversation_state_to_context_records,
+    conversation_state_to_session_messages,
 };
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
@@ -86,6 +86,7 @@ use vulcan_agent_view::{
     thinking_modal_progress, thinking_overlay_scrollable_id, view_thinking_modal_surface,
     view_thinking_overlay_surface,
 };
+use vulcan_core::types::CoreEventKind as VulcanCoreEventKind;
 
 /// Bundled SVG mark bytes used in the header.
 /// 头部区域使用的内置 SVG 标识字节。
@@ -586,8 +587,7 @@ fn merge_tool_result_into_display_entry(
     existing.body = merge_tool_display_body(&existing.body, &tool_result_message.body);
     existing.metadata =
         merge_tool_display_metadata(existing.metadata.take(), tool_result_message.metadata);
-    existing.metadata =
-        attach_tool_display_state_metadata(existing.metadata.take(), "completed");
+    existing.metadata = attach_tool_display_state_metadata(existing.metadata.take(), "completed");
 }
 
 /// Combines one tool-call body and one tool-result body into the single Markdown payload shown inside the merged display card.
@@ -4909,8 +4909,7 @@ impl VulcanWorkbench {
                 }
 
                 let request = if let Some(session) = self.selected_session() {
-                    let conversation_history =
-                        self.session_conversation_history(session.id);
+                    let conversation_state = self.session_conversation_state(session.id);
                     let workspace_path = self
                         .workspace_path_for_session_id(session.id)
                         .unwrap_or_else(|| self.workspace_path.clone());
@@ -4919,7 +4918,7 @@ impl VulcanWorkbench {
                         session_title: session.title.clone(),
                         workspace_path,
                         prompt: current_prompt,
-                        conversation_history,
+                        conversation_state,
                         execution_mode: self.execution_mode.to_string(),
                         temperature: self.temperature_enabled.then_some(self.temperature),
                     }
@@ -6050,7 +6049,8 @@ impl VulcanWorkbench {
     ) {
         self.ensure_session_conversation_state_loaded(session_id);
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        if append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta).is_none()
+        if append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta)
+            .is_none()
         {
             return;
         }
@@ -6152,12 +6152,15 @@ impl VulcanWorkbench {
         let _ = self.ensure_session_runtime_state_mut(session_id);
     }
 
-    /// Returns the canonical conversation history that should be forwarded into the next runtime call.
-    /// 返回应转发给下一次运行时调用的规范会话历史。
-    fn session_conversation_history(&self, session_id: SessionId) -> Vec<SessionConversationMessage> {
+    /// Returns the full canonical conversation state that should be forwarded into the next runtime call.
+    /// 返回应转发给下一次运行时调用的完整规范会话状态。
+    fn session_conversation_state(
+        &self,
+        session_id: SessionId,
+    ) -> crate::conversation_protocol::SessionConversationState {
         self.session_runtime_state
             .get(&session_id)
-            .map(|state| state.conversation_state.messages.clone())
+            .map(|state| state.conversation_state.clone())
             .unwrap_or_default()
     }
 
@@ -6341,6 +6344,21 @@ impl VulcanWorkbench {
 
             for warning in &preparation.warnings {
                 self.push_activity(ActivityLevel::Warning, "执行准备警告", warning.clone());
+            }
+        }
+
+        if report.error.is_some() {
+            if let Some(controller_error) = report
+                .controller_events
+                .iter()
+                .rev()
+                .find(|event| matches!(event.kind, VulcanCoreEventKind::Error))
+            {
+                self.push_activity(
+                    ActivityLevel::Warning,
+                    "控制器轨迹错误",
+                    format!("{}：{}", controller_error.title, controller_error.body),
+                );
             }
         }
 
@@ -7157,15 +7175,15 @@ impl VulcanWorkbench {
             .map(|messages| {
                 merge_tool_display_messages(
                     messages
-                    .iter()
-                    .filter(|message| {
-                        message.is_visible_to_user()
-                            && floating_thinking_message_id
-                                .as_deref()
-                                .is_none_or(|active_id| message.id != active_id)
-                    })
-                    .cloned()
-                    .collect(),
+                        .iter()
+                        .filter(|message| {
+                            message.is_visible_to_user()
+                                && floating_thinking_message_id
+                                    .as_deref()
+                                    .is_none_or(|active_id| message.id != active_id)
+                        })
+                        .cloned()
+                        .collect(),
                 )
             })
             .unwrap_or_default()
@@ -7256,10 +7274,9 @@ impl VulcanWorkbench {
             .insert(String::from("ui-block-id"), block_id.to_string());
 
         if directive.kind == vulcan_agent_view::AgentViewDirectiveKind::Thinking {
-            directive.attributes.insert(
-                String::from("ui-inline-collapsed"),
-                String::from("false"),
-            );
+            directive
+                .attributes
+                .insert(String::from("ui-inline-collapsed"), String::from("false"));
             directive.attributes.insert(
                 String::from("ui-render-thinking-header"),
                 String::from("true"),
@@ -7851,7 +7868,10 @@ mod tests {
         let merged = merge_tool_display_messages(messages);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].id, "tool-call-1");
-        assert_eq!(merged[0].record_kind, SessionMessageRecordKind::ToolCallOutput);
+        assert_eq!(
+            merged[0].record_kind,
+            SessionMessageRecordKind::ToolCallOutput
+        );
         assert_eq!(merged[0].title, "调用 read_file 工具");
         assert!(merged[0].body.contains("## 调用参数"));
         assert!(merged[0].body.contains("## 工具返回"));
@@ -7893,7 +7913,10 @@ mod tests {
 
         let merged = merge_tool_display_messages(messages);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].record_kind, SessionMessageRecordKind::ToolCallOutput);
+        assert_eq!(
+            merged[0].record_kind,
+            SessionMessageRecordKind::ToolCallOutput
+        );
         assert_eq!(merged[0].title, "调用 read_file 工具");
         assert_eq!(
             merged[0]

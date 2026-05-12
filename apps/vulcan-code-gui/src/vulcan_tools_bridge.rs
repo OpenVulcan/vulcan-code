@@ -113,16 +113,15 @@ pub fn build_vulcan_tools_manager(
                         &result,
                         workspace_root.as_deref(),
                     ));
-                    let invocation_result =
-                        if let Some(host_result) = result.host_result.as_ref() {
-                            VulcanToolInvocationResult::from_model_output(model_output)
-                                .with_host_result(VulcanToolHostResult {
-                                    kind: host_result.kind.clone(),
-                                    payload: host_result.payload.clone(),
-                                })
-                        } else {
-                            VulcanToolInvocationResult::from_model_output(model_output)
-                        };
+                    let invocation_result = if let Some(host_result) = result.host_result.as_ref() {
+                        VulcanToolInvocationResult::from_model_output(model_output)
+                            .with_host_result(VulcanToolHostResult {
+                                kind: host_result.kind.clone(),
+                                payload: host_result.payload.clone(),
+                            })
+                    } else {
+                        VulcanToolInvocationResult::from_model_output(model_output)
+                    };
                     Ok(invocation_result)
                 })
             }),

@@ -11,8 +11,7 @@ use super::markdown_source::{
 };
 use super::scene::{
     PlainParagraphStyle, PlainTextRenderKind, RenderContext, RenderedCollapsibleDirectiveNode,
-    RenderedPanelAccentRule, RenderedParagraphBackground,
-    RenderedParagraphHorizontalPlacement,
+    RenderedPanelAccentRule, RenderedParagraphBackground, RenderedParagraphHorizontalPlacement,
     RenderedTranscriptLinkAction, RenderedTranscriptNode,
 };
 use super::text_routing::build_agent_view_plain_text_spans;
@@ -637,12 +636,7 @@ fn render_inline_thinking_note(
         .get("ui-thinking-title")
         .cloned()
         .unwrap_or_else(|| String::from("思考过程"));
-    let title_color = app_theme
-        .palette()
-        .background
-        .base
-        .text
-        .scale_alpha(0.88);
+    let title_color = app_theme.palette().background.base.text.scale_alpha(0.88);
 
     if render_header {
         builder.push_rich_paragraph(
@@ -661,7 +655,11 @@ fn render_inline_thinking_note(
             text::Wrapping::Word,
             content_indent_left,
             0.0,
-            if block.body.trim().is_empty() { 0.0 } else { 4.0 },
+            if block.body.trim().is_empty() {
+                0.0
+            } else {
+                4.0
+            },
             Padding::ZERO,
             None,
             0,

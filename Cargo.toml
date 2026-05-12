@@ -5,6 +5,7 @@ members = [
     "apps/vulcan-agent-view",
     "apps/vulcan-iced-widget",
     "apps/vulcan-tools-manager",
+    "crates/vulcan-core",
 ]
 exclude = [
     "third_party/iced",
@@ -28,6 +29,7 @@ vulcan-mcp-runtime = { path = "apps/vulcan-mcp-runtime" }
 vulcan-agent-view = { path = "apps/vulcan-agent-view" }
 vulcan-iced-widget = { path = "apps/vulcan-iced-widget" }
 vulcan-tools-manager = { path = "apps/vulcan-tools-manager" }
+vulcan-core = { path = "crates/vulcan-core" }
 vldb-controller-client = "0.2.1"
 luaskills = "=0.4.2"
 async-trait = "0.1.89"

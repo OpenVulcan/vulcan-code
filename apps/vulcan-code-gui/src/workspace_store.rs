@@ -1468,7 +1468,6 @@ fn push_session_runtime_state_batch_rows(
             ]);
         }
     }
-
 }
 
 /// Deletes all rows from one session-scoped table for the provided active session identifiers.

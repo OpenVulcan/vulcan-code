@@ -344,7 +344,10 @@ mod tests {
         let mut attributes = AgentViewAttributes::new();
         attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
         attributes.insert(String::from("ui-inline-collapsed"), String::from("true"));
-        attributes.insert(String::from("ui-thinking-title"), String::from("思考过程 · 1.2秒"));
+        attributes.insert(
+            String::from("ui-thinking-title"),
+            String::from("思考过程 · 1.2秒"),
+        );
         let block = AgentViewDirectiveBlock::new(
             AgentViewDirectiveKind::Thinking,
             attributes,
@@ -393,7 +396,10 @@ mod tests {
         let mut attributes = AgentViewAttributes::new();
         attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
         attributes.insert(String::from("ui-inline-collapsed"), String::from("false"));
-        attributes.insert(String::from("ui-thinking-title"), String::from("思考过程 · 2.0秒"));
+        attributes.insert(
+            String::from("ui-thinking-title"),
+            String::from("思考过程 · 2.0秒"),
+        );
         let block = AgentViewDirectiveBlock::new(
             AgentViewDirectiveKind::Thinking,
             attributes,

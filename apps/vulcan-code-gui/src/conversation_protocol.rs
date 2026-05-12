@@ -2,11 +2,11 @@
 //! 供图形界面、持久化层与运行时桥接共享的规范会话协议模型。
 
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+use rig::OneOrMany;
 use rig::message::{
     AssistantContent, Message as RigMessage, ReasoningContent, ToolResult, ToolResultContent,
     UserContent,
 };
-use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -187,10 +187,7 @@ pub fn append_assistant_text_message(
 
 /// Appends one canonical session record that later drives the visible transcript projection.
 /// 追加一条后续将驱动可见转录投影的规范会话记录。
-pub fn append_record(
-    state: &mut SessionConversationState,
-    record: SessionConversationRecord,
-) {
+pub fn append_record(state: &mut SessionConversationState, record: SessionConversationRecord) {
     state.records.push(record);
 }
 
@@ -201,7 +198,10 @@ pub fn append_record_body_delta(
     record_id: &str,
     delta: &str,
 ) -> Option<String> {
-    let record = state.records.iter_mut().find(|record| record.id == record_id)?;
+    let record = state
+        .records
+        .iter_mut()
+        .find(|record| record.id == record_id)?;
     record.body.push_str(delta);
     Some(record.body.clone())
 }
@@ -215,9 +215,7 @@ pub fn compact_conversation_with_summary(
     updated_at: impl Into<String>,
 ) {
     let retained_tail = if state.messages.len() > PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT {
-        state.messages
-            [state.messages.len() - PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT..]
-            .to_vec()
+        state.messages[state.messages.len() - PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT..].to_vec()
     } else {
         state.messages.clone()
     };
@@ -261,17 +259,18 @@ pub fn refresh_continuation_state(
     let updated_at = updated_at.into();
     state.continuation.provider_id = provider_id.map(ToOwned::to_owned);
     state.continuation.model_id = model_id.map(ToOwned::to_owned);
-    state.continuation.last_provider_message_id = state
-        .messages
-        .iter()
-        .rev()
-        .find_map(|message| match &message.payload {
-            SessionConversationPayload::Assistant {
-                provider_message_id,
-                ..
-            } => provider_message_id.clone(),
-            _ => None,
-        });
+    state.continuation.last_provider_message_id =
+        state
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| match &message.payload {
+                SessionConversationPayload::Assistant {
+                    provider_message_id,
+                    ..
+                } => provider_message_id.clone(),
+                _ => None,
+            });
     state.continuation.updated_at = Some(updated_at);
 }
 
@@ -306,7 +305,12 @@ pub fn conversation_state_to_context_records(
     context_start_message_id: Option<&str>,
 ) -> Vec<SessionMessageEntry> {
     let start_index = context_start_message_id
-        .and_then(|message_id| state.records.iter().position(|record| record.id == message_id))
+        .and_then(|message_id| {
+            state
+                .records
+                .iter()
+                .position(|record| record.id == message_id)
+        })
         .unwrap_or(0);
 
     state.records[start_index..]
@@ -319,7 +323,9 @@ pub fn conversation_state_to_context_records(
 
 /// Converts one rig history snapshot into canonical conversation messages.
 /// 将一份 rig 历史快照转换为规范会话消息集合。
-pub fn rig_history_to_conversation_messages(history: &[RigMessage]) -> Vec<SessionConversationMessage> {
+pub fn rig_history_to_conversation_messages(
+    history: &[RigMessage],
+) -> Vec<SessionConversationMessage> {
     let mut messages = Vec::new();
     let mut assistant_index = 0usize;
     let mut user_index = 0usize;
@@ -385,12 +391,14 @@ pub fn rig_history_to_conversation_messages(history: &[RigMessage]) -> Vec<Sessi
                 let tool_calls = content
                     .iter()
                     .filter_map(|item| match item {
-                        AssistantContent::ToolCall(tool_call) => Some(SessionConversationToolCall {
-                            id: tool_call.id.clone(),
-                            tool_call_id: tool_call.call_id.clone(),
-                            tool_name: tool_call.function.name.clone(),
-                            arguments: tool_call.function.arguments.clone(),
-                        }),
+                        AssistantContent::ToolCall(tool_call) => {
+                            Some(SessionConversationToolCall {
+                                id: tool_call.id.clone(),
+                                tool_call_id: tool_call.call_id.clone(),
+                                tool_name: tool_call.function.name.clone(),
+                                arguments: tool_call.function.arguments.clone(),
+                            })
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -421,13 +429,9 @@ pub fn rig_history_to_conversation_messages(history: &[RigMessage]) -> Vec<Sessi
 
 /// Converts one canonical conversation message back into a rig-compatible history item.
 /// 将单条规范会话消息重新转换为兼容 rig 的历史项。
-fn conversation_message_to_rig_message(
-    message: &SessionConversationMessage,
-) -> Option<RigMessage> {
+fn conversation_message_to_rig_message(message: &SessionConversationMessage) -> Option<RigMessage> {
     match &message.payload {
-        SessionConversationPayload::UserText { text } => {
-            Some(RigMessage::from(text.as_str()))
-        }
+        SessionConversationPayload::UserText { text } => Some(RigMessage::from(text.as_str())),
         SessionConversationPayload::Assistant {
             text,
             reasoning: _,
@@ -467,13 +471,11 @@ fn conversation_message_to_rig_message(
         } => {
             let content = OneOrMany::one(ToolResultContent::text(text.clone()));
             let user_content = match tool_call_id {
-                Some(tool_call_id) => {
-                    UserContent::tool_result_with_call_id(
-                        tool_result_id.clone(),
-                        tool_call_id.clone(),
-                        content,
-                    )
-                }
+                Some(tool_call_id) => UserContent::tool_result_with_call_id(
+                    tool_result_id.clone(),
+                    tool_call_id.clone(),
+                    content,
+                ),
                 None => UserContent::ToolResult(ToolResult {
                     id: tool_result_id.clone(),
                     call_id: None,
@@ -510,8 +512,7 @@ fn flatten_reasoning_content(content: &[ReasoningContent]) -> String {
         .filter_map(|part| match part {
             ReasoningContent::Text { text, .. } => Some(text.trim().to_string()),
             ReasoningContent::Summary(summary) => Some(summary.trim().to_string()),
-            ReasoningContent::Encrypted(_)
-            | ReasoningContent::Redacted { .. } => None,
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => None,
             _ => None,
         })
         .filter(|part| !part.is_empty())
@@ -526,8 +527,9 @@ fn flatten_tool_result_content(content: &OneOrMany<ToolResultContent>) -> String
         .iter()
         .map(|item| match item {
             ToolResultContent::Text(text) => text.text.trim().to_string(),
-            ToolResultContent::Image(image) => serde_json::to_string(image)
-                .unwrap_or_else(|_| String::from("{}")),
+            ToolResultContent::Image(image) => {
+                serde_json::to_string(image).unwrap_or_else(|_| String::from("{}"))
+            }
         })
         .filter(|segment| !segment.trim().is_empty())
         .collect::<Vec<_>>();
@@ -563,9 +565,11 @@ mod tests {
             panic!("expected one assistant history item");
         };
 
-        assert!(content
-            .iter()
-            .all(|item| !matches!(item, AssistantContent::Reasoning(_))));
+        assert!(
+            content
+                .iter()
+                .all(|item| !matches!(item, AssistantContent::Reasoning(_)))
+        );
     }
 
     /// Verifies that transcript projection preserves record metadata for tool-result rich UI surfaces.
