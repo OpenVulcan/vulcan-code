@@ -11,6 +11,7 @@ pub mod provider;
 pub mod provider_prompt_loader;
 pub mod provider_protocol_bridge;
 pub mod provider_request_bridge;
+pub mod provider_request_bridge_records;
 pub mod provider_request_bridge_snapshot;
 pub mod provider_request_preview;
 pub mod provider_request_snapshot;
