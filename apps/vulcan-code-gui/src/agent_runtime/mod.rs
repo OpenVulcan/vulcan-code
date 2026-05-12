@@ -30,6 +30,7 @@ pub mod provider_transport_openrouter_adapter;
 pub mod provider_transport_request;
 pub mod provider_transport_router;
 pub mod provider_transport_stream_executor;
+pub mod provider_transport_stream_runtime;
 pub mod runtime;
 pub mod runtime_stream;
 pub mod runtime_stream_bootstrap;
