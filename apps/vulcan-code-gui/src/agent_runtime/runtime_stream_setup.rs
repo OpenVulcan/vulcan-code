@@ -2,7 +2,7 @@
 //! 面向准备阶段、工具解析与请求快照播种的运行时流式启动辅助模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::mcp_runtime_projection::collect_enabled_mcp_runtime_events;
 use crate::agent_runtime::provider_request_bridge::build_core_conversation_snapshot;
@@ -18,6 +18,7 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::conversation_protocol::conversation_messages_to_rig_history;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
+use crate::model::SessionId;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use rig::message::Message as RigMessage;
 use std::path::PathBuf;
@@ -161,4 +162,25 @@ pub(crate) fn build_runtime_context_event(preparation: &ExecutionPreparation) ->
             preparation.model_blueprint.model_name, preparation.workspace_path
         ),
     )
+}
+
+/// Builds the initial execution event batch emitted immediately after bootstrap succeeds.
+/// 构建在启动阶段成功后立即发出的初始执行事件批次。
+pub(crate) fn build_runtime_start_events(
+    session_id: SessionId,
+    preparation: &ExecutionPreparation,
+    discovery_events: Vec<RuntimeEvent>,
+) -> Vec<ExecutionStreamEvent> {
+    let mut events = Vec::with_capacity(discovery_events.len() + 2);
+    events.push(ExecutionStreamEvent::Prepared(preparation.clone()));
+    events.push(ExecutionStreamEvent::RuntimeEvent {
+        session_id,
+        event: build_runtime_context_event(preparation),
+    });
+    events.extend(
+        discovery_events
+            .into_iter()
+            .map(|event| ExecutionStreamEvent::RuntimeEvent { session_id, event }),
+    );
+    events
 }

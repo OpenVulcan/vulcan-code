@@ -6,19 +6,15 @@ use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::execution_preparation::prepare_execution;
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
-use crate::agent_runtime::provider_stream_projection::{
-    normalize_assistant_output, normalize_optional_stream_output,
-};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_delta::{
     RuntimeStreamDeltaState, process_provider_stream_delta,
 };
 use crate::agent_runtime::runtime_stream_finalize::{
-    apply_latest_request_snapshot, build_failed_runtime_event, build_failure_execution_report,
-    build_output_completed_event, build_success_execution_report,
+    build_failure_terminal_events, build_success_terminal_events,
 };
 use crate::agent_runtime::runtime_stream_setup::{
-    bootstrap_runtime_stream, build_runtime_context_event,
+    bootstrap_runtime_stream, build_runtime_start_events,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeHandle;
@@ -73,7 +69,7 @@ pub fn stream_runtime_run(
             preparation,
         )
         .await;
-        let mut preparation = bootstrap.preparation;
+        let preparation = bootstrap.preparation;
         let active_agent = bootstrap.active_agent;
         let tools_manager = bootstrap.tools_manager;
         let resolved_tool_definitions = bootstrap.resolved_tool_definitions;
@@ -86,19 +82,12 @@ pub fn stream_runtime_run(
         let core_snapshot = bootstrap.core_snapshot;
         let mut stream_state = RuntimeStreamDeltaState::new(bootstrap.core_controller);
 
-        yield ExecutionStreamEvent::Prepared(preparation.clone());
-
-        let context_event = build_runtime_context_event(&preparation);
-        yield ExecutionStreamEvent::RuntimeEvent {
-            session_id: request.session_id,
-            event: context_event,
-        };
-
-        for event in discovery_events {
-            yield ExecutionStreamEvent::RuntimeEvent {
-                session_id: request.session_id,
-                event,
-            };
+        for event in build_runtime_start_events(
+            request.session_id,
+            &preparation,
+            discovery_events,
+        ) {
+            yield event;
         }
 
         let mut provider_stream = execute_provider_prompt_stream(
@@ -123,62 +112,29 @@ pub fn stream_runtime_run(
         }
 
         if let Some(error) = stream_state.take_terminal_error() {
-            if let Some(thinking_completed_event) =
-                stream_state.complete_pending_thinking(request.session_id)
-            {
-                yield thinking_completed_event;
-            }
-            apply_latest_request_snapshot(
-                &mut preparation,
-                stream_state.latest_request_snapshot(),
-            );
-            stream_state.controller_mut().mark_failed(error.clone());
-            let failed_event = build_failed_runtime_event(&error);
-            yield ExecutionStreamEvent::RuntimeEvent {
-                session_id: request.session_id,
-                event: failed_event,
-            };
-            let report = build_failure_execution_report(
+            for event in build_failure_terminal_events(
                 request.session_id,
                 preparation,
                 discovery_rows,
                 discovery_errors,
                 warnings,
-                stream_state.controller().events().to_vec(),
+                &mut stream_state,
                 error,
-            );
-            yield ExecutionStreamEvent::Finished(report);
+            ) {
+                yield event;
+            }
             return;
         }
 
-        if let Some(thinking_completed_event) =
-            stream_state.complete_pending_thinking(request.session_id)
-        {
-            yield thinking_completed_event;
-        }
-
-        apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
-
-        let normalized_output = normalize_assistant_output(stream_state.take_assistant_output());
-        let output_completed_event = build_output_completed_event(&normalized_output);
-        yield ExecutionStreamEvent::RuntimeEvent {
-            session_id: request.session_id,
-            event: output_completed_event,
-        };
-
-        let report = build_success_execution_report(
+        for event in build_success_terminal_events(
             request.session_id,
             preparation,
-            normalize_optional_stream_output(
-                stream_state.thinking_visible_output().to_string(),
-            ),
-            normalized_output,
-            stream_state.take_final_conversation_state(),
             discovery_rows,
             discovery_errors,
             warnings,
-            stream_state.controller().events().to_vec(),
-        );
-        yield ExecutionStreamEvent::Finished(report);
+            &mut stream_state,
+        ) {
+            yield event;
+        }
     }
 }
