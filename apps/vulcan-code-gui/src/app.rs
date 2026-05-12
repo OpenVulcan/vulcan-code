@@ -694,6 +694,9 @@ pub struct VulcanWorkbench {
     /// Unified raw-source transcript buffers keyed by visible session id.
     /// 以可见会话标识为键保存的统一原始源码转录缓冲区。
     session_agent_view_raw_buffers: BTreeMap<SessionId, text_editor::Content>,
+    /// Last provider-request preview buffers keyed by visible session id.
+    /// 以可见会话标识为键保存的最后一次 Provider 请求预览缓冲区。
+    session_last_api_request_buffers: BTreeMap<SessionId, text_editor::Content>,
     /// Unified selectable transcript projections keyed by visible session id.
     /// 以可见会话标识为键保存的统一可选转录投影对象。
     session_agent_view_selectable_documents:
@@ -890,6 +893,9 @@ enum AgentTranscriptSurfaceMode {
     /// Selectable raw-source projection backed by the unified agent-view document.
     /// 由统一 agent-view 文档支撑的可选原始源码投影。
     RawSource,
+    /// Read-only preview of the last full provider request captured before one real API call starts.
+    /// 在一次真实 API 调用开始前捕获的最后一次完整 Provider 请求只读预览。
+    ApiRequest,
 }
 
 /// Hover state describing the active visual line in one diff hunk.
@@ -1970,6 +1976,9 @@ enum Message {
     /// Switches the unified transcript panel into the raw-source selectable-document mode.
     /// 将统一转录面板切换到原始源码可选文档模式。
     ShowSelectedSessionDocumentRawSource,
+    /// Switches the unified transcript panel into the last-API-request preview mode.
+    /// 将统一转录面板切换到最后一次 API 请求预览模式。
+    ShowSelectedSessionDocumentApiRequest,
     /// Switches the transcript panel into the segmented rendered-preview mode.
     /// 将转录面板切换到分段渲染预览模式。
     ShowSelectedSessionDocumentDetailCards,
@@ -1991,6 +2000,9 @@ enum Message {
     /// Applies one read-only action to the unified raw-source transcript buffer of the selected session.
     /// 向当前选中会话的统一原始源码转录缓冲区应用一次只读动作。
     SelectedSessionDocumentRawSourceAction(text_editor::Action),
+    /// Applies one read-only action to the last-API-request preview buffer of the selected session.
+    /// 向当前选中会话的最后一次 API 请求预览缓冲区应用一次只读动作。
+    SelectedSessionDocumentApiRequestAction(text_editor::Action),
     /// Records the current scroll viewport of the selected-session transcript panel.
     /// 记录当前选中会话转录面板的滚动视口状态。
     SelectedSessionTranscriptScrolled {
@@ -2390,6 +2402,7 @@ impl VulcanWorkbench {
             runtime_event_markdown_buffers: BTreeMap::new(),
             session_agent_view_buffers: BTreeMap::new(),
             session_agent_view_raw_buffers: BTreeMap::new(),
+            session_last_api_request_buffers: BTreeMap::new(),
             session_agent_view_selectable_documents: BTreeMap::new(),
             session_agent_view_documents: BTreeMap::new(),
             session_agent_view_block_collapsed: BTreeMap::new(),
@@ -2518,6 +2531,7 @@ impl VulcanWorkbench {
                 self.runtime_event_markdown_buffers.clear();
                 self.session_agent_view_buffers.clear();
                 self.session_agent_view_raw_buffers.clear();
+                self.session_last_api_request_buffers.clear();
                 self.session_agent_view_selectable_documents.clear();
                 self.session_agent_view_documents.clear();
                 self.session_agent_view_block_collapsed.clear();
@@ -3770,6 +3784,20 @@ impl VulcanWorkbench {
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
                 ])
             }
+            Message::ShowSelectedSessionDocumentApiRequest => {
+                self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::ApiRequest;
+                self.clear_transcript_drag_auto_scrolls();
+                self.active_thinking_modal = None;
+                self.active_tool_modal = None;
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                self.refresh_session_agent_view_buffers(session_id);
+                Task::batch([
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                ])
+            }
             Message::ShowSelectedSessionDocumentDetailCards => {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.clear_transcript_drag_auto_scrolls();
@@ -3835,6 +3863,21 @@ impl VulcanWorkbench {
                 };
 
                 if let Some(content) = self.session_agent_view_raw_buffers.get_mut(&session_id) {
+                    content.perform(action);
+                }
+
+                Task::none()
+            }
+            Message::SelectedSessionDocumentApiRequestAction(action) => {
+                if action.is_edit() {
+                    return Task::none();
+                }
+
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+
+                if let Some(content) = self.session_last_api_request_buffers.get_mut(&session_id) {
                     content.perform(action);
                 }
 
@@ -4454,6 +4497,10 @@ impl VulcanWorkbench {
                 match event {
                     ExecutionStreamEvent::Prepared(preparation) => {
                         let detail = preparation.summary_rows().join(" | ");
+                        self.replace_session_last_api_request_preview(
+                            preparation.session_id,
+                            preparation.provider_request_preview_markdown.clone(),
+                        );
                         self.last_execution_preparation = Some(preparation.clone());
                         self.context_usage = (self.context_usage + 8.0).min(100.0);
                         self.update_session_runtime_identity_from_preparation(
@@ -5589,6 +5636,10 @@ impl VulcanWorkbench {
 
         if let Some(preparation) = report.preparation.clone() {
             self.context_usage = (self.context_usage + 8.0).min(100.0);
+            self.replace_session_last_api_request_preview(
+                session_id,
+                preparation.provider_request_preview_markdown.clone(),
+            );
             self.last_execution_preparation = Some(preparation.clone());
             self.update_session_runtime_identity_from_preparation(session_id, &preparation);
 
@@ -5884,6 +5935,19 @@ impl VulcanWorkbench {
             .remove(&session_id);
     }
 
+    /// Stores one session-scoped last-provider-request preview buffer for the dedicated request tab.
+    /// 为专用请求页签保存一份按会话归属的最后一次 Provider 请求预览缓冲区。
+    fn replace_session_last_api_request_preview(
+        &mut self,
+        session_id: SessionId,
+        preview_markdown: String,
+    ) {
+        self.session_last_api_request_buffers.insert(
+            session_id,
+            text_editor::Content::with_text(&preview_markdown),
+        );
+    }
+
     /// Rebuilds the structural agent-view document cache for one session without forcing every text projection to refresh.
     /// 为单个会话重建结构化 agent-view 文档缓存，而不强制刷新全部文本投影。
     fn refresh_session_agent_view_document_cache(&mut self, session_id: SessionId) {
@@ -6078,6 +6142,7 @@ impl VulcanWorkbench {
         self.remove_runtime_event_raw_buffers(session_id);
         self.session_agent_view_buffers.remove(&session_id);
         self.session_agent_view_raw_buffers.remove(&session_id);
+        self.session_last_api_request_buffers.remove(&session_id);
         self.session_agent_view_documents.remove(&session_id);
         self.session_agent_view_block_collapsed.remove(&session_id);
         self.session_agent_view_follow_tail.remove(&session_id);

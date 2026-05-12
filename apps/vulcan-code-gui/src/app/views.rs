@@ -1779,6 +1779,8 @@ impl VulcanWorkbench {
             self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::DetailCards;
         let is_raw_mode =
             self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::RawSource;
+        let is_request_mode =
+            self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::ApiRequest;
         let detail_mode_button = {
             let button =
                 button(text("渲染").size(12))
@@ -1807,8 +1809,26 @@ impl VulcanWorkbench {
                 button
             }
         };
+        let request_mode_button = {
+            let button =
+                button(text("请求").size(12))
+                    .padding([6, 10])
+                    .style(move |theme, status| {
+                        style::workbench_transcript_mode_button_style(
+                            theme,
+                            status,
+                            is_request_mode,
+                        )
+                    });
 
-        row![detail_mode_button, raw_mode_button]
+            if has_selected_session && !is_request_mode {
+                button.on_press(Message::ShowSelectedSessionDocumentApiRequest)
+            } else {
+                button
+            }
+        };
+
+        row![detail_mode_button, raw_mode_button, request_mode_button]
             .spacing(8)
             .align_y(Center)
             .into()
@@ -2250,14 +2270,16 @@ impl VulcanWorkbench {
                     .map(|document| agent_view_document_raw_source(&document))
                     .unwrap_or_default(),
             ),
+            AgentTranscriptSurfaceMode::ApiRequest => (
+                self.session_last_api_request_buffers.get(&session_id),
+                Message::SelectedSessionDocumentApiRequestAction
+                    as fn(text_editor::Action) -> Message,
+                String::from("当前还没有真实 API 请求快照。"),
+            ),
         };
 
-        let body = self.view_workbench_code_preview_body(
-            buffer,
-            fallback_text,
-            "markdown",
-            on_action,
-        );
+        let body =
+            self.view_workbench_code_preview_body(buffer, fallback_text, "markdown", on_action);
         let body_flow = column![
             body,
             space::vertical().height(self.transcript_bottom_spacer_height()),

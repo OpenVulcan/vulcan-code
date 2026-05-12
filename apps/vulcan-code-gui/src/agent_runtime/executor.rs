@@ -164,6 +164,9 @@ pub struct ExecutionPreparation {
     /// Non-fatal preparation warnings.
     /// 非致命的准备阶段警告集合。
     pub warnings: Vec<String>,
+    /// Full provider-request preview captured right before the real API call starts.
+    /// 在真实 API 调用开始前捕获的完整 Provider 请求预览。
+    pub provider_request_preview_markdown: String,
 }
 
 impl ExecutionPreparation {
@@ -406,6 +409,7 @@ pub fn prepare_execution(
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
         warnings,
+        provider_request_preview_markdown: String::new(),
     })
 }
 
@@ -439,7 +443,7 @@ pub fn stream_runtime_run(
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
         );
-        let preparation = match prepare_execution(
+        let mut preparation = match prepare_execution(
             &foundation,
             luaskills_runtime.clone(),
             mcp_runtime.clone(),
@@ -460,8 +464,6 @@ pub fn stream_runtime_run(
                 return;
             }
         };
-
-        yield ExecutionStreamEvent::Prepared(preparation.clone());
 
         let active_agent = foundation.active_agent_definition().cloned();
         let active_agent_tool_id = active_agent
@@ -486,6 +488,23 @@ pub fn stream_runtime_run(
         let mut assistant_output = String::new();
         let mut thinking_completed_emitted = false;
 
+        let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
+            collect_enabled_mcp_runtime_events(mcp_runtime.as_ref());
+        warnings.extend(discovery_warnings);
+
+        let system_preamble = build_runtime_system_preamble(&preparation);
+        let effective_prompt =
+            build_runtime_user_prompt(&request.context_history, request.prompt.trim());
+        preparation.provider_request_preview_markdown = build_provider_request_preview_markdown(
+            &preparation,
+            &system_preamble,
+            &effective_prompt,
+            &resolved_tools.definitions,
+            resolve_runtime_max_turns(active_agent.as_ref()),
+        );
+
+        yield ExecutionStreamEvent::Prepared(preparation.clone());
+
         let context_event = RuntimeEvent::new(
             RuntimeEventKind::ToolStarted,
             "执行上下文",
@@ -495,14 +514,10 @@ pub fn stream_runtime_run(
             ),
         );
         runtime_events.push(context_event.clone());
-                    yield ExecutionStreamEvent::RuntimeEvent {
-                        session_id: request.session_id,
-                        event: context_event,
-                    };
-
-        let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
-            collect_enabled_mcp_runtime_events(mcp_runtime.as_ref());
-        warnings.extend(discovery_warnings);
+        yield ExecutionStreamEvent::RuntimeEvent {
+            session_id: request.session_id,
+            event: context_event,
+        };
 
         for event in discovery_events {
             runtime_events.push(event.clone());
@@ -511,11 +526,6 @@ pub fn stream_runtime_run(
                 event,
             };
         }
-
-        let system_preamble =
-            build_runtime_system_preamble(&preparation, active_agent.as_ref(), &discovery_rows);
-        let effective_prompt =
-            build_runtime_user_prompt(&request.context_history, request.prompt.trim());
 
         let mut provider_stream = execute_provider_prompt_stream(
             &config,
@@ -712,70 +722,14 @@ fn collect_enabled_mcp_runtime_events(
 
 /// Builds the effective runtime system prompt sent to the real provider agent.
 /// 构建发送给真实 Provider 代理的生效运行时系统提示词。
-fn build_runtime_system_preamble(
-    preparation: &ExecutionPreparation,
-    active_agent: Option<&RuntimeAgentDefinition>,
-    discovery_rows: &[String],
-) -> String {
-    let agent_prompt = active_agent
-        .map(|agent| agent.system_prompt.trim())
-        .filter(|prompt| !prompt.is_empty())
-        .map(str::to_string);
-    let agent_description = active_agent
-        .map(|agent| agent.description.trim())
-        .filter(|description| !description.is_empty())
-        .unwrap_or("负责根据当前工作区与会话上下文完成桌面 AI 编码任务。");
-
+fn build_runtime_system_preamble(preparation: &ExecutionPreparation) -> String {
     let mut sections = Vec::new();
     sections.push(
-        agent_prompt
-            .or_else(|| load_provider_base_system_prompt(&preparation.model_blueprint))
+        load_provider_base_system_prompt(&preparation.model_blueprint)
             .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent.")),
     );
-    sections.push(format!("代理说明：{agent_description}"));
     sections.push(format!("当前工作区：{}", preparation.workspace_path));
     sections.push(format!("当前执行模式：{}", preparation.execution_mode));
-
-    if !preparation.skill_names.is_empty() {
-        sections.push(format!("绑定技能：{}", preparation.skill_names.join("、")));
-    }
-
-    let native_tool_names =
-        tool_names_for_source(&preparation.tool_descriptors, VulcanToolSourceKind::Native);
-    if !native_tool_names.is_empty() {
-        sections.push(format!(
-            "原生工具已真实注册到本次模型调用：{}。调用时以工具 schema 为准，不要在文本中猜测参数或返回格式。",
-            native_tool_names.join("、")
-        ));
-    }
-
-    if let Some(luaskills_section) =
-        render_luaskills_tool_prompt_section(&preparation.tool_descriptors)
-    {
-        sections.push(luaskills_section);
-    }
-
-    let mcp_tool_names =
-        tool_names_for_source(&preparation.tool_descriptors, VulcanToolSourceKind::Mcp);
-    if !mcp_tool_names.is_empty() {
-        sections.push(format!(
-            "MCP 工具已真实注册到本次模型调用：{}。调用时以工具 schema 为准，不要在文本中猜测参数或返回格式。",
-            mcp_tool_names.join("、")
-        ));
-    }
-
-    if !preparation.delegate_agents.is_empty() {
-        sections.push(format!(
-            "可委派代理：{}。当前阶段仅注入协作上下文，不会自动触发真实子代理调度。",
-            preparation.delegate_agents.join("、")
-        ));
-    }
-
-    if !mcp_tool_names.is_empty() && !discovery_rows.is_empty() {
-        sections.push(String::from(
-            "当前已连接的 MCP 服务器所暴露工具也已直接注册；若服务器断开，其工具会自动撤销。",
-        ));
-    }
 
     sections.join("\n")
 }
@@ -859,42 +813,6 @@ fn read_non_empty_system_prompt_file(path: &Path) -> Option<String> {
         .filter(|content| !content.is_empty())
 }
 
-/// Render the LuaSkills runtime tool table in the host prompt format expected by the active AI agent.
-/// 按当前 AI 代理预期的宿主提示词格式渲染 LuaSkills 运行时工具表。
-fn render_luaskills_tool_prompt_section(descriptors: &[VulcanToolDescriptor]) -> Option<String> {
-    let luaskills_descriptors = descriptors
-        .iter()
-        .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
-        .collect::<Vec<_>>();
-    if luaskills_descriptors.is_empty() {
-        return None;
-    }
-
-    let rows = luaskills_descriptors
-        .iter()
-        .map(|descriptor| format!("- `{}`：{}", descriptor.name, descriptor.description))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    Some(format!(
-        "LuaSkills 工具目录（以下工具已真实注册到本次模型调用，调用时以工具 schema 为准，参数与返回结构不要依赖文本猜测）：\n{}",
-        rows
-    ))
-}
-
-/// Collects all tool display names belonging to one unified tool source.
-/// 收集属于单个统一工具来源的全部工具展示名称。
-fn tool_names_for_source(
-    descriptors: &[VulcanToolDescriptor],
-    source: VulcanToolSourceKind,
-) -> Vec<String> {
-    descriptors
-        .iter()
-        .filter(|descriptor| descriptor.source == source)
-        .map(|descriptor| descriptor.name.clone())
-        .collect()
-}
-
 /// Builds the effective user prompt by prepending the reconstructed session context to the latest user input.
 /// 通过在最新用户输入前拼接重建后的会话上下文来构建生效用户提示词。
 fn build_runtime_user_prompt(context_history: &[ExecutionContextMessage], prompt: &str) -> String {
@@ -917,6 +835,126 @@ fn build_runtime_user_prompt(context_history: &[ExecutionContextMessage], prompt
         "以下是当前会话在最近一次上下文压缩锚点之后需要保留的历史上下文，请结合这些上下文继续完成本次请求。\n\n{}\n\n本轮最新用户请求如下：\n{}",
         context_block, prompt
     )
+}
+
+/// Builds the full Markdown preview of the effective provider request captured right before dispatch.
+/// 构建在真正分发前捕获的生效 Provider 请求完整 Markdown 预览。
+fn build_provider_request_preview_markdown(
+    preparation: &ExecutionPreparation,
+    system_preamble: &str,
+    effective_prompt: &str,
+    resolved_tools: &[ResolvedToolDefinition],
+    max_turns: usize,
+) -> String {
+    let temperature_label = preparation
+        .temperature
+        .map(|value| format!("{value:.2}"))
+        .unwrap_or_else(|| String::from("使用模型默认值"));
+    let extra_body_markdown = preparation
+        .model_blueprint
+        .extra_body
+        .as_object()
+        .filter(|object| !object.is_empty())
+        .map(|_| render_json_code_fence(&preparation.model_blueprint.extra_body))
+        .unwrap_or_else(|| String::from("（无附加 Body 参数）"));
+    let tool_rows = if resolved_tools.is_empty() {
+        String::from("（本次请求未直接暴露工具 schema）")
+    } else {
+        resolved_tools
+            .iter()
+            .map(render_resolved_tool_request_section)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+
+    format!(
+        concat!(
+            "# 最后一次真实 API 请求快照\n\n",
+            "## 路由摘要\n",
+            "- 会话：`#{}` · {}\n",
+            "- 代理：`{}` · {} · id=`{}`\n",
+            "- Provider：`{}` · `{}`\n",
+            "- 模型：`{}` · `{}`\n",
+            "- 运行时：`{}` · kind=`{}`\n",
+            "- 接口：`{}`\n",
+            "- 执行模式：`{}`\n",
+            "- 温度：{}\n",
+            "- 最大轮次：`{}`\n",
+            "- 历史上下文：`{}` 条\n",
+            "- 工具数量：`{}` 个\n\n",
+            "## System Preamble\n",
+            "{}\n\n",
+            "## Effective User Prompt\n",
+            "{}\n\n",
+            "## Tool Schemas\n",
+            "{}\n\n",
+            "## Additional Body Parameters\n",
+            "{}\n"
+        ),
+        preparation.session_id,
+        preparation.session_title,
+        preparation.agent_name,
+        preparation.agent_kind,
+        preparation.agent_id,
+        preparation.model_blueprint.provider_name,
+        preparation.model_blueprint.provider_id,
+        preparation.model_blueprint.model_name,
+        preparation.model_blueprint.model_id,
+        preparation.model_blueprint.runtime_label,
+        preparation.model_blueprint.runtime_kind_key(),
+        preparation.model_blueprint.endpoint_summary(),
+        preparation.execution_mode,
+        temperature_label,
+        max_turns,
+        preparation.context_history_count,
+        resolved_tools.len(),
+        render_text_code_fence(system_preamble),
+        render_text_code_fence(effective_prompt),
+        tool_rows,
+        extra_body_markdown,
+    )
+}
+
+/// Renders one resolved tool into a Markdown section used by the request-preview tab.
+/// 将单个已解析工具渲染为请求预览页签使用的 Markdown 分节。
+fn render_resolved_tool_request_section(definition: &ResolvedToolDefinition) -> String {
+    format!(
+        concat!(
+            "### `{}`\n",
+            "- 显示名：{}\n",
+            "- 来源：{}\n",
+            "- 描述：{}\n",
+            "{}"
+        ),
+        definition.descriptor.id,
+        definition.descriptor.name,
+        tool_source_label(definition.descriptor.source),
+        definition.descriptor.description,
+        render_json_code_fence(&definition.parameters_schema),
+    )
+}
+
+/// Renders one tool-source label used by the request-preview tab.
+/// 渲染请求预览页签使用的单个工具来源标签。
+fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
+    match source {
+        VulcanToolSourceKind::Native => "原生工具",
+        VulcanToolSourceKind::LuaSkills => "LuaSkills",
+        VulcanToolSourceKind::Mcp => "MCP",
+    }
+}
+
+/// Wraps arbitrary text inside a safe fenced code block for request previews.
+/// 将任意文本包装进请求预览使用的安全围栏代码块中。
+fn render_text_code_fence(content: &str) -> String {
+    format!("````text\n{}\n````", content)
+}
+
+/// Wraps one JSON value inside a pretty-printed fenced code block for request previews.
+/// 将单个 JSON 值包装进请求预览使用的格式化围栏代码块中。
+fn render_json_code_fence(value: &Value) -> String {
+    let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    format!("````json\n{}\n````", pretty)
 }
 
 /// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.
@@ -1686,8 +1724,16 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SyntheticThinkingPreambleState, classify_synthetic_thinking_preamble,
-        normalize_streamed_thinking_output,
+        ExecutionPreparation, SyntheticThinkingPreambleState,
+        build_provider_request_preview_markdown, build_runtime_system_preamble,
+        classify_synthetic_thinking_preamble, normalize_streamed_thinking_output,
+    };
+    use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::provider_config::ProviderRuntimeKind;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use vulcan_tools_manager::{
+        ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind,
     };
 
     /// Verifies synthetic reasoning preamble text is removed before streamed thinking content enters transcript storage.
@@ -1715,5 +1761,133 @@ mod tests {
             SyntheticThinkingPreambleState::Rejected
         ));
         assert_eq!(normalize_streamed_thinking_output(raw_output), raw_output);
+    }
+
+    /// Verifies the last-request preview contains the full system prompt, user prompt, and tool schema sections.
+    /// 验证最后一次请求预览会包含完整系统提示词、用户提示词与工具 schema 分节。
+    #[test]
+    fn provider_request_preview_contains_core_sections() {
+        let preparation = ExecutionPreparation {
+            session_id: uuid::Uuid::nil(),
+            session_title: String::from("测试会话"),
+            agent_id: String::from("default-agent"),
+            agent_name: String::from("默认代理"),
+            agent_kind: String::from("内置"),
+            model_blueprint: ProviderRuntimeBlueprint {
+                provider_id: String::from("openai"),
+                provider_name: String::from("OpenAI"),
+                runtime_kind: ProviderRuntimeKind::OpenAi,
+                runtime_label: String::from("OpenAI"),
+                model_id: String::from("gpt-test"),
+                model_name: String::from("GPT Test"),
+                base_url: Some(String::from("https://api.example.test/v1")),
+                supports_remote_model_refresh: true,
+                credential_source: String::from("环境变量"),
+                user_agent: None,
+                extra_headers: BTreeMap::new(),
+                extra_body: json!({ "reasoning": { "effort": "high" } }),
+            },
+            prompt_preview: String::from("请分析这段代码"),
+            workspace_path: String::from("D:/workspace"),
+            context_history_count: 2,
+            execution_mode: String::from("Build"),
+            temperature: Some(0.2),
+            skill_names: vec![String::from("codekit")],
+            tool_descriptors: vec![VulcanToolDescriptor {
+                id: String::from("read_file"),
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                source: VulcanToolSourceKind::Native,
+            }],
+            delegate_agents: Vec::new(),
+            enabled_mcp_servers: Vec::new(),
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+        };
+        let resolved_tools = vec![ResolvedToolDefinition {
+            descriptor: VulcanToolDescriptor {
+                id: String::from("read_file"),
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                source: VulcanToolSourceKind::Native,
+            },
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }),
+            invoke: std::sync::Arc::new(|_, _| unreachable!("test preview does not invoke tools")),
+        }];
+
+        let preview = build_provider_request_preview_markdown(
+            &preparation,
+            "system prompt body",
+            "effective prompt body",
+            &resolved_tools,
+            12,
+        );
+
+        assert!(preview.contains("# 最后一次真实 API 请求快照"));
+        assert!(preview.contains("## System Preamble"));
+        assert!(preview.contains("system prompt body"));
+        assert!(preview.contains("## Effective User Prompt"));
+        assert!(preview.contains("effective prompt body"));
+        assert!(preview.contains("### `read_file`"));
+        assert!(preview.contains("\"path\""));
+        assert!(preview.contains("\"effort\": \"high\""));
+    }
+
+    /// Verifies runtime system preamble no longer embeds agent-authored prompt text or duplicated tool catalogs.
+    /// 验证运行时系统提示词不再嵌入代理自定义提示词文本与重复工具目录。
+    #[test]
+    fn runtime_system_preamble_uses_base_prompt_without_tool_catalog_text() {
+        let preparation = ExecutionPreparation {
+            session_id: uuid::Uuid::nil(),
+            session_title: String::from("测试会话"),
+            agent_id: String::from("default-agent"),
+            agent_name: String::from("默认代理"),
+            agent_kind: String::from("内置"),
+            model_blueprint: ProviderRuntimeBlueprint {
+                provider_id: String::from("openai"),
+                provider_name: String::from("OpenAI"),
+                runtime_kind: ProviderRuntimeKind::OpenAi,
+                runtime_label: String::from("OpenAI"),
+                model_id: String::from("gpt-test"),
+                model_name: String::from("GPT Test"),
+                base_url: Some(String::from("https://api.example.test/v1")),
+                supports_remote_model_refresh: true,
+                credential_source: String::from("环境变量"),
+                user_agent: None,
+                extra_headers: BTreeMap::new(),
+                extra_body: json!({}),
+            },
+            prompt_preview: String::from("请分析这段代码"),
+            workspace_path: String::from("D:/workspace"),
+            context_history_count: 2,
+            execution_mode: String::from("Build"),
+            temperature: Some(0.2),
+            skill_names: vec![String::from("codekit")],
+            tool_descriptors: vec![VulcanToolDescriptor {
+                id: String::from("read_file"),
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                source: VulcanToolSourceKind::Native,
+            }],
+            delegate_agents: vec![String::from("delegate-a")],
+            enabled_mcp_servers: vec![String::from("demo-server")],
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+        };
+        let preamble = build_runtime_system_preamble(&preparation);
+
+        assert!(!preamble.contains("AGENT OVERRIDE PROMPT"));
+        assert!(!preamble.contains("原生工具已真实注册"));
+        assert!(!preamble.contains("LuaSkills 工具目录"));
+        assert!(!preamble.contains("MCP 工具已真实注册"));
+        assert!(!preamble.contains("可委派代理"));
+        assert!(preamble.contains("当前工作区：D:/workspace"));
+        assert!(preamble.contains("当前执行模式：Build"));
     }
 }
