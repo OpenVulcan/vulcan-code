@@ -5,7 +5,7 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport_entry_inputs::{
     normalize_optional_base_url, prepare_provider_transport_runtime_inputs,
 };
-use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream;
+use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use rig::message::Message as RigMessage;
@@ -46,26 +46,23 @@ pub(crate) fn execute_openai_responses_stream(
         &resolved_tools,
         session_id,
     );
-    let provider_id = prepared_runtime_inputs.entry_inputs.provider_id.clone();
     let base_url = normalize_optional_base_url(base_url);
 
-    execute_host_controlled_stream(
-        prepared_runtime_inputs.entry_inputs.controller_config,
+    execute_host_controlled_stream_with_prepared_inputs(
+        prepared_runtime_inputs,
         core_snapshot,
-        prepared_runtime_inputs.entry_inputs.prompt,
-        move |live_sender| {
+        move |live_sender, adapter_inputs| {
             crate::agent_runtime::provider_transport_openai_responses_adapter::OpenAiResponsesCoreStreamingAdapter {
-            provider_id: provider_id.clone(),
+            provider_id: adapter_inputs.provider_id,
             api_key,
             base_url,
-            model_id: prepared_runtime_inputs.entry_inputs.model_id,
-            request_headers: prepared_runtime_inputs.entry_inputs.request_headers,
+            model_id: adapter_inputs.model_id,
+            request_headers: adapter_inputs.request_headers,
             resolved_tools,
-            rig_tool_definitions: prepared_runtime_inputs.tool_context.rig_tool_definitions,
+            rig_tool_definitions: adapter_inputs.rig_tool_definitions,
             live_sender,
         }
         },
-        prepared_runtime_inputs.tool_context.runtime_bridge,
         "OpenAI Responses",
     )
 }
