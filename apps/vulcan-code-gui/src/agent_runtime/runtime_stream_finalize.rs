@@ -170,3 +170,200 @@ pub(crate) fn build_success_terminal_events(
     ));
     events
 }
+
+#[cfg(test)]
+mod tests {
+    //! Terminal-batch tests for runtime stream success and failure projection.
+    //! 面向运行时流式成功与失败投影的终态批次测试。
+
+    use super::*;
+    use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+    use crate::agent_runtime::runtime_stream_delta::{
+        RuntimeStreamDeltaState, process_provider_stream_delta,
+    };
+    use crate::provider_config::ProviderRuntimeKind;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use uuid::Uuid;
+    use vulcan_core::controller::VulcanCoreController;
+    use vulcan_core::types::{
+        ControllerConfig, ConversationSnapshot, ProviderContinuation as CoreProviderContinuation,
+        ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    };
+
+    /// Builds one minimal execution preparation used by terminal-batch tests.
+    /// 构建一份供终态批次测试使用的最小执行准备对象。
+    fn build_test_preparation() -> ExecutionPreparation {
+        ExecutionPreparation {
+            session_id: Uuid::nil(),
+            session_title: String::from("测试会话"),
+            agent_id: String::from("default-agent"),
+            agent_name: String::from("默认代理"),
+            agent_kind: String::from("内置"),
+            model_blueprint: ProviderRuntimeBlueprint {
+                provider_id: String::from("openai"),
+                provider_name: String::from("OpenAI"),
+                runtime_kind: ProviderRuntimeKind::OpenAi,
+                runtime_label: String::from("OpenAI"),
+                model_id: String::from("gpt-test"),
+                model_name: String::from("GPT Test"),
+                base_url: Some(String::from("https://api.example.test/v1")),
+                supports_remote_model_refresh: true,
+                credential_source: String::from("环境变量"),
+                user_agent: None,
+                extra_headers: BTreeMap::new(),
+                extra_body: json!({}),
+            },
+            prompt_preview: String::from("请分析代码"),
+            workspace_path: String::from("D:/workspace"),
+            context_history_count: 2,
+            execution_mode: String::from("Build"),
+            temperature: Some(0.2),
+            skill_names: Vec::new(),
+            tool_descriptors: Vec::new(),
+            delegate_agents: Vec::new(),
+            enabled_mcp_servers: Vec::new(),
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+        }
+    }
+
+    /// Builds one minimal runtime-stream delta state used by terminal-batch tests.
+    /// 构建一份供终态批次测试使用的最小运行时流式增量状态。
+    fn build_stream_state() -> RuntimeStreamDeltaState {
+        RuntimeStreamDeltaState::new(VulcanCoreController::new(
+            ControllerConfig {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-test"),
+                system_prompt: String::from("system"),
+                temperature: Some(0.2),
+                max_turns: 4,
+                additional_params: None,
+            },
+            ConversationSnapshot::default(),
+        ))
+    }
+
+    /// Builds one minimal structured request snapshot used to verify final preview backfill.
+    /// 构建一份最小结构化请求快照，用于验证最终预览回填行为。
+    fn build_request_snapshot() -> CoreProviderRequestSnapshot {
+        CoreProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::from("system prompt"),
+            prompt: String::from("effective prompt"),
+            history: Vec::new(),
+            temperature: Some(0.2),
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: CoreProviderContinuation {
+                provider_id: Some(String::from("openai")),
+                model_id: Some(String::from("gpt-test")),
+                last_provider_message_id: Some(String::from("resp-prev")),
+                updated_at: Some(String::from("100")),
+            },
+        }
+    }
+
+    /// Emits success terminal events in the expected order and preserves the final report payload.
+    /// 按预期顺序发出成功终态事件，并保留最终报告载荷。
+    #[test]
+    fn success_terminal_events_emit_output_completed_and_finished_report() {
+        let session_id = Uuid::nil();
+        let mut stream_state = build_stream_state();
+
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::Thinking(String::from("先整理上下文"))),
+        );
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::Output(String::from("最终答案"))),
+        );
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::FinalConversationState(
+                SessionConversationState::default(),
+            )),
+        );
+
+        let events = build_success_terminal_events(
+            session_id,
+            build_test_preparation(),
+            vec![String::from("mcp-row")],
+            Vec::new(),
+            vec![String::from("warning")],
+            &mut stream_state,
+        );
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ExecutionStreamEvent::RuntimeEvent { event, .. },
+                ExecutionStreamEvent::Finished(report),
+            ] if event.title == "模型输出完成"
+                && report.is_success()
+                && report.assistant_output.as_deref() == Some("最终答案")
+                && report.conversation_state.is_some()
+                && report.mcp_discovery_rows == vec![String::from("mcp-row")]
+                && report.warnings == vec![String::from("warning")]
+        ));
+    }
+
+    /// Emits failure terminal events in the expected order and captures the terminal error inside the final report.
+    /// 按预期顺序发出失败终态事件，并在最终报告中捕获终态错误。
+    #[test]
+    fn failure_terminal_events_emit_failed_runtime_event_and_finished_report() {
+        let session_id = Uuid::nil();
+        let mut stream_state = build_stream_state();
+
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::Thinking(String::from("先尝试执行"))),
+        );
+
+        let events = build_failure_terminal_events(
+            session_id,
+            build_test_preparation(),
+            Vec::new(),
+            vec![String::from("mcp-error")],
+            vec![String::from("warning")],
+            &mut stream_state,
+            String::from("provider failed"),
+        );
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ExecutionStreamEvent::ThinkingCompleted { .. },
+                ExecutionStreamEvent::RuntimeEvent { event, .. },
+                ExecutionStreamEvent::Finished(report),
+            ] if event.kind == RuntimeEventKind::Failed
+                && report.error.as_deref() == Some("provider failed")
+                && report.mcp_discovery_errors == vec![String::from("mcp-error")]
+                && report.warnings == vec![String::from("warning")]
+        ));
+    }
+}
