@@ -2,15 +2,14 @@
 //! OpenRouter 宿主控制 Provider 传输入口模块。
 
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
+use crate::agent_runtime::provider_transport_entry_inputs::prepare_provider_transport_entry_inputs;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream;
 use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use rig::message::Message as RigMessage;
 use serde_json::Value;
-use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
-};
+use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Executes one host-controlled OpenRouter prompt through `vulcan-core` and streams normalized deltas.
@@ -31,32 +30,31 @@ pub(crate) fn execute_openrouter_stream(
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
-    let provider_id = provider_id.to_string();
     let api_key = api_key.to_string();
-    let model_id = model_id.to_string();
-    let prompt = prompt.to_string();
-    let system_preamble = system_preamble.to_string();
-    let request_headers = headers.clone();
+    let prepared_entry_inputs = prepare_provider_transport_entry_inputs(
+        provider_id,
+        model_id,
+        system_preamble,
+        prompt,
+        temperature,
+        max_turns,
+        headers,
+        additional_params,
+    );
+    let provider_id = prepared_entry_inputs.provider_id.clone();
     let prepared_tool_context =
         prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
 
     execute_host_controlled_stream(
-        CoreControllerConfig {
-            provider_id: provider_id.clone(),
-            model_id: model_id.clone(),
-            system_prompt: system_preamble,
-            temperature,
-            max_turns,
-            additional_params: additional_params.clone(),
-        },
+        prepared_entry_inputs.controller_config,
         core_snapshot,
-        prompt,
+        prepared_entry_inputs.prompt,
         move |live_sender| {
             crate::agent_runtime::provider_transport_openrouter_adapter::OpenRouterCoreStreamingAdapter {
             provider_id: provider_id.clone(),
             api_key,
-            model_id,
-            request_headers,
+            model_id: prepared_entry_inputs.model_id,
+            request_headers: prepared_entry_inputs.request_headers,
             resolved_tools,
             rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
             live_sender,
