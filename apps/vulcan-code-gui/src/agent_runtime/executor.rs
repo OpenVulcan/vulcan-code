@@ -1856,22 +1856,20 @@ fn execute_provider_prompt_stream(
             additional_params,
         ),
         ProviderRuntimeKind::Anthropic => execute_anthropic_stream(
+            &preparation.model_blueprint.provider_id,
             &api_key,
             base_url,
             model_id,
             system_preamble,
             prompt,
             request_history,
+            core_snapshot,
             temperature,
             max_turns,
             &request_headers,
-            build_vulcan_rig_tools(
-                tools_manager,
-                preparation.session_id,
-                &resolved_tools,
-                tool_outcome_capture.clone(),
-            ),
-            tool_outcome_capture.clone(),
+            tools_manager,
+            preparation.session_id,
+            resolved_tools,
             additional_params,
         ),
         ProviderRuntimeKind::AzureOpenAi
@@ -2385,6 +2383,183 @@ impl VulcanStreamingProviderAdapter for OpenRouterCoreStreamingAdapter {
             let content = item.map_err(|error| VulcanCoreError::ProviderFailure {
                 provider_id: self.provider_id.clone(),
                 message: format!("OpenRouter 流式执行失败：{error}"),
+            })?;
+            for delta in core_provider_turn_deltas_from_assistant_content(content) {
+                sink.push_delta(delta.clone());
+                let _ = self
+                    .live_sender
+                    .send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
+            }
+        }
+
+        Ok(build_openai_compatible_turn_response(
+            self.provider_id.as_str(),
+            self.model_id.as_str(),
+            stream.message_id.clone(),
+            &stream.choice,
+        ))
+    }
+}
+
+/// Streaming Anthropic provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
+/// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 Anthropic Provider 适配器。
+#[derive(Clone)]
+struct AnthropicCoreStreamingAdapter {
+    /// Stable provider identifier attached to every request and continuation snapshot.
+    /// 附着到每次请求与 continuation 快照上的稳定 Provider 标识。
+    provider_id: String,
+    /// Resolved API key used by the low-level Anthropic transport.
+    /// 被低层 Anthropic 传输层使用的已解析 API Key。
+    api_key: String,
+    /// Optional base URL override used by the low-level Anthropic transport.
+    /// 被低层 Anthropic 传输层使用的可选基础地址覆盖值。
+    base_url: Option<String>,
+    /// Stable model identifier used by the low-level transport.
+    /// 被低层传输层使用的稳定模型标识。
+    model_id: String,
+    /// Fully resolved request headers attached to the transport request.
+    /// 附着到传输请求上的完整已解析请求头。
+    request_headers: HeaderMap,
+    /// Resolved host tool definitions exposed to the provider for the current turn.
+    /// 当前回合对 Provider 暴露的已解析宿主工具定义集合。
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    /// Low-level rig tool definitions mirrored from the resolved host tool definitions.
+    /// 从已解析宿主工具定义镜像而来的低层 rig 工具定义集合。
+    rig_tool_definitions: Vec<RigToolDefinition>,
+    /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
+    /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
+    live_sender: ProviderLiveDeltaSender,
+}
+
+#[async_trait]
+impl VulcanProviderAdapter for AnthropicCoreStreamingAdapter {
+    type Request = OpenAiCompatibleCoreTurnRequest;
+    type Response = CoreProviderTurnResponse;
+
+    /// Returns the stable provider identifier used by the Anthropic streaming adapter.
+    /// 返回 Anthropic 流式适配器使用的稳定 Provider 标识。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the stable model identifier used by the Anthropic streaming adapter.
+    /// 返回 Anthropic 流式适配器使用的稳定模型标识。
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Builds one exact single-turn request from the canonical controller snapshot and forwards the structured snapshot immediately.
+    /// 根据规范控制器快照构建一份精确单回合请求，并立即转发结构化快照。
+    async fn build_request(
+        &self,
+        snapshot: &CoreConversationSnapshot,
+        config: &CoreControllerConfig,
+    ) -> Result<Self::Request, VulcanCoreError> {
+        let Some((current_prompt_message, current_history_messages)) =
+            snapshot.messages.split_last()
+        else {
+            return Err(VulcanCoreError::InvalidState {
+                message: String::from(
+                    "Anthropic 单回合请求构建失败：规范消息窗口为空，无法解析最后一条出站提示消息。",
+                ),
+            });
+        };
+        let current_history = core_messages_to_rig_history(current_history_messages);
+        let current_prompt = core_message_to_rig_message(current_prompt_message);
+        let request_snapshot = build_openai_compatible_turn_request_snapshot(
+            self.provider_id.as_str(),
+            self.model_id.as_str(),
+            config.system_prompt.as_str(),
+            &current_history,
+            &current_prompt,
+            config.temperature,
+            config.max_turns,
+            &self.resolved_tools,
+            &self.request_headers,
+            config.additional_params.clone(),
+        );
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RequestSnapshot(
+                request_snapshot.clone(),
+            )));
+
+        Ok(OpenAiCompatibleCoreTurnRequest {
+            snapshot: request_snapshot,
+            current_history,
+            current_prompt,
+        })
+    }
+
+    /// One-shot request execution is intentionally unsupported because the Anthropic host path is owned by the streaming adapter.
+    /// 单次非流式请求执行被刻意禁用，因为 Anthropic 宿主链路完全由流式适配器持有。
+    async fn execute_request(
+        &self,
+        _request: Self::Request,
+    ) -> Result<Self::Response, VulcanCoreError> {
+        Err(VulcanCoreError::InvalidState {
+            message: String::from(
+                "Anthropic 流式适配器不支持非流式 execute_request 调用，请改用 execute_request_streaming。",
+            ),
+        })
+    }
+}
+
+#[async_trait]
+impl VulcanStreamingProviderAdapter for AnthropicCoreStreamingAdapter {
+    /// Executes one exact Anthropic transport turn, forwards normalized stream deltas live, and returns the normalized final turn response.
+    /// 执行一次精确的 Anthropic 传输回合，实时转发规范化流式增量，并返回规范化后的最终回合响应。
+    async fn execute_request_streaming<S>(
+        &self,
+        request: OpenAiCompatibleCoreTurnRequest,
+        sink: &mut S,
+    ) -> Result<Self::Response, VulcanCoreError>
+    where
+        S: VulcanProviderDeltaSink,
+    {
+        let mut builder = anthropic::Client::builder()
+            .api_key(self.api_key.as_str())
+            .http_headers(self.request_headers.clone());
+
+        if let Some(base_url) = self
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            builder = builder.base_url(base_url);
+        }
+
+        let client = builder
+            .build()
+            .map_err(|error| VulcanCoreError::ProviderFailure {
+                provider_id: self.provider_id.clone(),
+                message: format!("创建 Anthropic 兼容客户端失败：{error}"),
+            })?;
+        let model = client.completion_model(self.model_id.as_str());
+        let mut request_builder = model
+            .completion_request(request.current_prompt)
+            .preamble(request.snapshot.system_prompt.clone())
+            .messages(request.current_history)
+            .temperature_opt(request.snapshot.temperature)
+            .additional_params_opt(request.snapshot.additional_params.clone());
+
+        if !self.rig_tool_definitions.is_empty() {
+            request_builder = request_builder.tools(self.rig_tool_definitions.clone());
+        }
+
+        let mut stream =
+            request_builder
+                .stream()
+                .await
+                .map_err(|error| VulcanCoreError::ProviderFailure {
+                    provider_id: self.provider_id.clone(),
+                    message: format!("Anthropic 兼容流式请求启动失败：{error}"),
+                })?;
+
+        while let Some(item) = stream.next().await {
+            let content = item.map_err(|error| VulcanCoreError::ProviderFailure {
+                provider_id: self.provider_id.clone(),
+                message: format!("Anthropic 兼容流式执行失败：{error}"),
             })?;
             for delta in core_provider_turn_deltas_from_assistant_content(content) {
                 sink.push_delta(delta.clone());
@@ -3060,82 +3235,68 @@ fn execute_openai_responses_stream(
     })
 }
 
-/// Executes one Anthropic-compatible prompt using rig's native Anthropic client and streams deltas.
-/// 使用 rig 原生 Anthropic 客户端执行一次 Anthropic 兼容提示词调用并流式返回增量。
+/// Executes one host-controlled Anthropic prompt through `vulcan-core` and streams normalized deltas.
+/// 通过 `vulcan-core` 执行一次宿主控制的 Anthropic 提示词调用，并流式返回规范化增量。
 fn execute_anthropic_stream(
+    provider_id: &str,
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<RigMessage>,
+    _request_history: Vec<RigMessage>,
+    core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
-    luaskills_rig_tools: Vec<Box<dyn ToolDyn>>,
-    tool_outcome_capture: RigToolOutcomeCapture,
+    tools_manager: VulcanToolsManager,
+    session_id: SessionId,
+    resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
-    let mut builder = anthropic::Client::builder()
-        .api_key(api_key)
-        .http_headers(headers.clone());
-
-    if let Some(base_url) = base_url.filter(|value| !value.trim().is_empty()) {
-        builder = builder.base_url(base_url);
-    }
-
-    let client = match builder.build() {
-        Ok(client) => client,
-        Err(error) => {
-            return one_shot_provider_error_stream(format!(
-                "创建 Anthropic 兼容客户端失败：{}。",
-                error
-            ));
-        }
-    };
-    let model = client.completion_model(model_id);
-    let mut agent_builder = AgentBuilder::new(model)
-        .name("Vulcan Code Anthropic Worker")
-        .preamble(system_preamble);
-
-    agent_builder = agent_builder.default_max_turns(max_turns);
-
-    if let Some(temperature) = temperature {
-        agent_builder = agent_builder.temperature(temperature);
-    }
-    if let Some(additional_params) = additional_params {
-        agent_builder = agent_builder.additional_params(additional_params);
-    }
-
-    let agent = if luaskills_rig_tools.is_empty() {
-        agent_builder.build()
-    } else {
-        agent_builder.tools(luaskills_rig_tools).build()
-    };
+    let provider_id = provider_id.to_string();
+    let api_key = api_key.to_string();
+    let base_url = base_url
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string);
+    let model_id = model_id.to_string();
     let prompt = prompt.to_string();
+    let system_preamble = system_preamble.to_string();
+    let request_headers = headers.clone();
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(tools_manager),
+        &resolved_tools,
+        session_id,
+    ));
+    let rig_tool_definitions = resolved_tools
+        .iter()
+        .map(resolved_tool_definition_to_rig_tool_definition)
+        .collect::<Vec<_>>();
 
-    Box::pin(stream! {
-        let mut stream = agent
-            .stream_prompt(prompt)
-            .with_history(request_history)
-            .multi_turn(max_turns)
-            .await;
-
-        while let Some(item) = stream.next().await {
-            let item = item.map_err(|error| format!("Anthropic 兼容流式执行失败：{}。", error));
-            match item {
-                Ok(item) => {
-                    for delta in provider_deltas_from_multi_turn_item(item, &tool_outcome_capture) {
-                        yield Ok(delta);
-                    }
-                }
-                Err(error) => {
-                    yield Err(error);
-                    break;
-                }
-            }
-        }
-    })
+    execute_host_controlled_stream(
+        CoreControllerConfig {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            system_prompt: system_preamble,
+            temperature,
+            max_turns,
+            additional_params: additional_params.clone(),
+        },
+        core_snapshot,
+        prompt,
+        move |live_sender| AnthropicCoreStreamingAdapter {
+            provider_id: provider_id.clone(),
+            api_key,
+            base_url,
+            model_id,
+            request_headers,
+            resolved_tools,
+            rig_tool_definitions,
+            live_sender,
+        },
+        runtime_bridge,
+        "Anthropic 兼容",
+    )
 }
 
 /// Executes one host-controlled OpenRouter prompt through `vulcan-core` and streams normalized deltas.
