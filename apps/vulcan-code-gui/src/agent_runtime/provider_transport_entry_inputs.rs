@@ -1,9 +1,14 @@
 //! Shared provider transport entry-input preparation helpers reused by provider-specific stream entrypoints.
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
+use crate::agent_runtime::provider_transport_tool_context::{
+    PreparedHostToolRuntimeContext, prepare_host_tool_runtime_context,
+};
+use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use vulcan_core::types::ControllerConfig as CoreControllerConfig;
+use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Prepared host-controlled stream inputs shared by provider-specific entrypoints before they build the concrete adapter.
 /// 在各 Provider 专用入口构建具体适配器之前复用的宿主控制流输入对象。
@@ -23,6 +28,17 @@ pub(crate) struct PreparedProviderTransportEntryInputs {
     /// Prebuilt controller configuration handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的预构建控制器配置。
     pub(crate) controller_config: CoreControllerConfig,
+}
+
+/// Prepared host-controlled runtime inputs shared by provider-specific entrypoints after both controller config assembly and tool-runtime preparation complete.
+/// 在控制器配置装配与工具运行时准备都完成后，供各 Provider 专用入口复用的宿主控制运行时输入对象。
+pub(crate) struct PreparedProviderTransportRuntimeInputs {
+    /// Shared provider transport entry inputs reused by concrete adapter constructors.
+    /// 被具体适配器构造过程复用的共享 Provider 传输入口输入对象。
+    pub(crate) entry_inputs: PreparedProviderTransportEntryInputs,
+    /// Shared host-managed tool runtime context reused by concrete adapter constructors.
+    /// 被具体适配器构造过程复用的共享宿主管理工具运行时上下文。
+    pub(crate) tool_context: PreparedHostToolRuntimeContext,
 }
 
 /// Prepares the shared provider transport entry inputs from lightweight borrowed arguments.
@@ -53,6 +69,36 @@ pub(crate) fn prepare_provider_transport_entry_inputs(
             max_turns,
             additional_params,
         },
+    }
+}
+
+/// Prepares the full shared runtime inputs for one host-controlled provider stream, including controller config plus host tool runtime state.
+/// 为一次宿主控制 Provider 流准备完整共享运行时输入，包括控制器配置与宿主工具运行时状态。
+pub(crate) fn prepare_provider_transport_runtime_inputs(
+    provider_id: &str,
+    model_id: &str,
+    system_preamble: &str,
+    prompt: &str,
+    temperature: Option<f64>,
+    max_turns: usize,
+    headers: &HeaderMap,
+    additional_params: Option<Value>,
+    tools_manager: VulcanToolsManager,
+    resolved_tools: &[ResolvedToolDefinition],
+    session_id: SessionId,
+) -> PreparedProviderTransportRuntimeInputs {
+    PreparedProviderTransportRuntimeInputs {
+        entry_inputs: prepare_provider_transport_entry_inputs(
+            provider_id,
+            model_id,
+            system_preamble,
+            prompt,
+            temperature,
+            max_turns,
+            headers,
+            additional_params,
+        ),
+        tool_context: prepare_host_tool_runtime_context(tools_manager, resolved_tools, session_id),
     }
 }
 

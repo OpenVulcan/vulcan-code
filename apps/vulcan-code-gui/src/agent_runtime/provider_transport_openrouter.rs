@@ -2,9 +2,8 @@
 //! OpenRouter 宿主控制 Provider 传输入口模块。
 
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
-use crate::agent_runtime::provider_transport_entry_inputs::prepare_provider_transport_entry_inputs;
+use crate::agent_runtime::provider_transport_entry_inputs::prepare_provider_transport_runtime_inputs;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream;
-use crate::agent_runtime::provider_transport_tool_context::prepare_host_tool_runtime_context;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use rig::message::Message as RigMessage;
@@ -31,7 +30,7 @@ pub(crate) fn execute_openrouter_stream(
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
-    let prepared_entry_inputs = prepare_provider_transport_entry_inputs(
+    let prepared_runtime_inputs = prepare_provider_transport_runtime_inputs(
         provider_id,
         model_id,
         system_preamble,
@@ -40,27 +39,28 @@ pub(crate) fn execute_openrouter_stream(
         max_turns,
         headers,
         additional_params,
+        tools_manager,
+        &resolved_tools,
+        session_id,
     );
-    let provider_id = prepared_entry_inputs.provider_id.clone();
-    let prepared_tool_context =
-        prepare_host_tool_runtime_context(tools_manager, &resolved_tools, session_id);
+    let provider_id = prepared_runtime_inputs.entry_inputs.provider_id.clone();
 
     execute_host_controlled_stream(
-        prepared_entry_inputs.controller_config,
+        prepared_runtime_inputs.entry_inputs.controller_config,
         core_snapshot,
-        prepared_entry_inputs.prompt,
+        prepared_runtime_inputs.entry_inputs.prompt,
         move |live_sender| {
             crate::agent_runtime::provider_transport_openrouter_adapter::OpenRouterCoreStreamingAdapter {
             provider_id: provider_id.clone(),
             api_key,
-            model_id: prepared_entry_inputs.model_id,
-            request_headers: prepared_entry_inputs.request_headers,
+            model_id: prepared_runtime_inputs.entry_inputs.model_id,
+            request_headers: prepared_runtime_inputs.entry_inputs.request_headers,
             resolved_tools,
-            rig_tool_definitions: prepared_tool_context.rig_tool_definitions,
+            rig_tool_definitions: prepared_runtime_inputs.tool_context.rig_tool_definitions,
             live_sender,
         }
         },
-        prepared_tool_context.runtime_bridge,
+        prepared_runtime_inputs.tool_context.runtime_bridge,
         "OpenRouter",
     )
 }
