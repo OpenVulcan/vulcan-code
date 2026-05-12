@@ -2,11 +2,10 @@
 //! 持有 Provider 家族分发逻辑并把具体工作委派给各 Provider 专用适配器的传输门面模块。
 
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
-use crate::agent_runtime::provider_transport_anthropic_openrouter::{
-    execute_anthropic_stream, execute_openrouter_stream,
-};
+use crate::agent_runtime::provider_transport_anthropic::execute_anthropic_stream;
 use crate::agent_runtime::provider_transport_openai::execute_openai_compatible_stream;
 use crate::agent_runtime::provider_transport_openai_responses::execute_openai_responses_stream;
+use crate::agent_runtime::provider_transport_openrouter::execute_openrouter_stream;
 use crate::model::SessionId;
 use crate::provider_config::ProviderRuntimeKind;
 use async_stream::stream;
