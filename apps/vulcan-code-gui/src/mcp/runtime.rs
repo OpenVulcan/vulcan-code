@@ -9,7 +9,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
-use vulcan_mcp_runtime::{McpTransport, McpTransportEvent};
+use vulcan_mcp_runtime::{
+    GetPromptResult, McpAuthChallenge, McpAuthStatus, McpOAuthSession, McpTransport,
+    McpTransportEvent, Prompt, PromptArgument, ReadResourceResult, Resource,
+};
 
 /// Stable MCP tool schema exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
@@ -170,6 +173,174 @@ pub(crate) struct McpRuntimeToolBinding {
     runtime: McpRuntimeHandle,
 }
 
+/// Stable MCP runtime prompt descriptor exposed to the host runtime and execution planner.
+/// 暴露给宿主运行时与执行规划器的稳定 MCP runtime prompt 描述。
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+struct McpRuntimePromptDescriptor {
+    /// Stable server identifier that currently owns the prompt.
+    /// 当前拥有该 prompt 的稳定服务器标识。
+    server_id: String,
+    /// Prompt schema discovered from the remote MCP endpoint.
+    /// 从远端 MCP 端点发现得到的 prompt schema。
+    schema: Prompt,
+}
+
+#[allow(dead_code)]
+impl McpRuntimePromptDescriptor {
+    /// Builds one stable MCP runtime prompt descriptor from the raw remote prompt schema.
+    /// 根据原始远端 prompt schema 构建单个稳定 MCP runtime prompt 描述。
+    fn new(server_id: impl Into<String>, schema: Prompt) -> Self {
+        Self {
+            server_id: server_id.into(),
+            schema,
+        }
+    }
+
+    /// Returns the stable server identifier that currently owns the prompt.
+    /// 返回当前拥有该 prompt 的稳定服务器标识。
+    fn server_id(&self) -> &str {
+        &self.server_id
+    }
+
+    /// Returns the stable prompt name.
+    /// 返回稳定 prompt 名称。
+    fn prompt_name(&self) -> &str {
+        &self.schema.name
+    }
+
+    /// Returns the human-readable prompt description.
+    /// 返回人类可读的 prompt 描述。
+    fn prompt_description(&self) -> &str {
+        self.schema.description.as_deref().unwrap_or_default()
+    }
+
+    /// Returns the prompt argument schema list.
+    /// 返回 prompt 参数 schema 列表。
+    fn prompt_arguments(&self) -> &[PromptArgument] {
+        self.schema.arguments.as_deref().unwrap_or(&[])
+    }
+
+    /// Returns the host-facing qualified prompt name composed from server and prompt identifiers.
+    /// 返回由服务器与 prompt 标识组合而成的宿主侧限定 prompt 名。
+    fn qualified_name(&self) -> String {
+        format!("{}/{}", self.server_id(), self.prompt_name())
+    }
+
+    /// Returns whether the descriptor matches one optional server/tool allowlist pair.
+    /// 返回该描述是否匹配一组选填的服务器与工具白名单。
+    fn matches_allowed_sets(
+        &self,
+        allowed_server_ids: Option<&BTreeSet<String>>,
+        allowed_tool_names: Option<&BTreeSet<String>>,
+    ) -> bool {
+        let server_allowed =
+            allowed_server_ids.is_none_or(|allowed| allowed.contains(self.server_id()));
+        let prompt_allowed = allowed_tool_names.is_none_or(|allowed| {
+            allowed.contains(self.prompt_name()) || allowed.contains(&self.qualified_name())
+        });
+        server_allowed && prompt_allowed
+    }
+}
+
+/// Stable MCP runtime prompt binding that couples one prompt descriptor with its live resolution capability.
+/// 将单个 prompt 描述与其实时解析能力耦合在一起的稳定 MCP runtime prompt 绑定。
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct McpRuntimePromptBinding {
+    /// Stable prompt descriptor retained for read-only host access.
+    /// 为宿主只读访问保留的稳定 prompt 描述。
+    descriptor: McpRuntimePromptDescriptor,
+    /// Live runtime handle used to resolve the owning transport at invocation time.
+    /// 在调用时用于解析所属传输的实时运行时句柄。
+    runtime: McpRuntimeHandle,
+}
+
+/// Stable MCP runtime resource descriptor exposed to the host runtime and execution planner.
+/// 暴露给宿主运行时与执行规划器的稳定 MCP runtime 资源描述。
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+struct McpRuntimeResourceDescriptor {
+    /// Stable server identifier that currently owns the resource.
+    /// 当前拥有该资源的稳定服务器标识。
+    server_id: String,
+    /// Resource schema discovered from the remote MCP endpoint.
+    /// 从远端 MCP 端点发现得到的资源 schema。
+    schema: Resource,
+}
+
+#[allow(dead_code)]
+impl McpRuntimeResourceDescriptor {
+    /// Builds one stable MCP runtime resource descriptor from the raw remote resource schema.
+    /// 根据原始远端资源 schema 构建单个稳定 MCP runtime 资源描述。
+    fn new(server_id: impl Into<String>, schema: Resource) -> Self {
+        Self {
+            server_id: server_id.into(),
+            schema,
+        }
+    }
+
+    /// Returns the stable server identifier that currently owns the resource.
+    /// 返回当前拥有该资源的稳定服务器标识。
+    fn server_id(&self) -> &str {
+        &self.server_id
+    }
+
+    /// Returns the stable resource URI.
+    /// 返回稳定资源 URI。
+    fn resource_uri(&self) -> &str {
+        &self.schema.uri
+    }
+
+    /// Returns the human-readable resource name.
+    /// 返回人类可读资源名称。
+    fn resource_name(&self) -> &str {
+        &self.schema.name
+    }
+
+    /// Returns the human-readable resource description.
+    /// 返回人类可读资源描述。
+    fn resource_description(&self) -> &str {
+        self.schema.description.as_deref().unwrap_or_default()
+    }
+
+    /// Returns the host-facing qualified resource name composed from server and resource identifiers.
+    /// 返回由服务器与资源标识组合而成的宿主侧限定资源名。
+    fn qualified_name(&self) -> String {
+        format!("{}/{}", self.server_id(), self.resource_uri())
+    }
+
+    /// Returns whether the descriptor matches one optional server/tool allowlist pair.
+    /// 返回该描述是否匹配一组选填的服务器与工具白名单。
+    fn matches_allowed_sets(
+        &self,
+        allowed_server_ids: Option<&BTreeSet<String>>,
+        allowed_tool_names: Option<&BTreeSet<String>>,
+    ) -> bool {
+        let server_allowed =
+            allowed_server_ids.is_none_or(|allowed| allowed.contains(self.server_id()));
+        let resource_allowed = allowed_tool_names.is_none_or(|allowed| {
+            allowed.contains(self.resource_name())
+                || allowed.contains(self.resource_uri())
+                || allowed.contains(&self.qualified_name())
+        });
+        server_allowed && resource_allowed
+    }
+}
+
+/// Stable MCP runtime resource binding that couples one resource descriptor with its live read capability.
+/// 将单个资源描述与其实时读取能力耦合在一起的稳定 MCP runtime 资源绑定。
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct McpRuntimeResourceBinding {
+    /// Stable resource descriptor retained for read-only host access.
+    /// 为宿主只读访问保留的稳定资源描述。
+    descriptor: McpRuntimeResourceDescriptor,
+    /// Live runtime handle used to resolve the owning transport at read time.
+    /// 在读取时用于解析所属传输的实时运行时句柄。
+    runtime: McpRuntimeHandle,
+}
+
 /// Stable MCP runtime access surface that resolves live-versus-configured reads inside the MCP domain.
 /// 在 MCP 域内部解析实时与配置读取来源的稳定 MCP 运行时访问面。
 #[derive(Debug, Clone)]
@@ -182,6 +353,7 @@ pub(crate) struct McpRuntimeAccess {
     live_runtime: Option<McpRuntimeHandle>,
 }
 
+#[allow(dead_code)]
 impl McpRuntimeAccess {
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
@@ -214,6 +386,91 @@ impl McpRuntimeAccess {
             .as_ref()
             .map(|runtime| runtime.available_tool_bindings_filtered(allowlist))
             .unwrap_or_default()
+    }
+
+    /// Returns currently available MCP prompt bindings filtered by one allowlist when live runtime state is available.
+    /// 当实时运行时状态可用时，返回按单份白名单过滤后的当前可用 MCP prompt 绑定集合。
+    pub(crate) fn available_prompt_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimePromptBinding> {
+        self.live_runtime
+            .as_ref()
+            .map(|runtime| runtime.available_prompt_bindings_filtered(allowlist))
+            .unwrap_or_default()
+    }
+
+    /// Returns currently available MCP resource bindings filtered by one allowlist when live runtime state is available.
+    /// 当实时运行时状态可用时，返回按单份白名单过滤后的当前可用 MCP 资源绑定集合。
+    pub(crate) fn available_resource_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimeResourceBinding> {
+        self.live_runtime
+            .as_ref()
+            .map(|runtime| runtime.available_resource_bindings_filtered(allowlist))
+            .unwrap_or_default()
+    }
+
+    /// Returns whether one connected MCP server supports a host-driven OAuth lifecycle.
+    /// 返回单个已连接 MCP 服务器是否支持宿主驱动的 OAuth 生命周期。
+    pub(crate) async fn supports_oauth(&self, server_id: &str) -> Result<bool, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from("MCP 运行时尚未就绪。"));
+        };
+        Ok(runtime.supports_oauth(server_id).await)
+    }
+
+    /// Returns whether one connected MCP server currently retains stored OAuth tokens.
+    /// 返回单个已连接 MCP 服务器当前是否保留了已存储 OAuth 令牌。
+    pub(crate) async fn has_stored_tokens(&self, server_id: &str) -> Result<bool, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from("MCP 运行时尚未就绪。"));
+        };
+        runtime.has_stored_tokens(server_id).await
+    }
+
+    /// Returns the current host-side OAuth status for one connected MCP server.
+    /// 返回单个已连接 MCP 服务器当前的宿主侧 OAuth 状态。
+    pub(crate) async fn auth_status(&self, server_id: &str) -> Result<McpAuthStatus, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from("MCP 运行时尚未就绪。"));
+        };
+        runtime.auth_status(server_id).await
+    }
+
+    /// Starts one host-driven OAuth authorization flow for the selected connected MCP server.
+    /// 为选中的已连接 MCP 服务器启动一条宿主驱动的 OAuth 授权流程。
+    pub(crate) async fn start_auth(&self, server_id: &str) -> Result<McpAuthChallenge, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from("MCP 运行时尚未就绪。"));
+        };
+        runtime.start_auth(server_id).await
+    }
+
+    /// Finishes one host-driven OAuth authorization flow for the selected connected MCP server.
+    /// 为选中的已连接 MCP 服务器完成一条宿主驱动的 OAuth 授权流程。
+    pub(crate) async fn finish_auth(
+        &self,
+        server_id: &str,
+        authorization_code: &str,
+        oauth_state: &str,
+    ) -> Result<McpAuthStatus, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from("MCP 运行时尚未就绪。"));
+        };
+        runtime
+            .finish_auth(server_id, authorization_code, oauth_state)
+            .await
+    }
+
+    /// Removes every stored OAuth credential retained by one connected MCP server.
+    /// 移除单个已连接 MCP 服务器保留的全部 OAuth 凭据。
+    pub(crate) async fn remove_auth(&self, server_id: &str) -> Result<(), String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from("MCP 运行时尚未就绪。"));
+        };
+        runtime.remove_auth(server_id).await
     }
 
     /// Requests the live MCP runtime to stop when one real runtime handle is currently available.
@@ -271,6 +528,100 @@ impl McpRuntimeToolBinding {
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         self.runtime.call_tool_by_id(self.id(), args).await
+    }
+}
+
+#[allow(dead_code)]
+impl McpRuntimePromptBinding {
+    /// Builds one MCP runtime prompt binding from one prompt descriptor and one live runtime handle.
+    /// 根据一份 prompt 描述与一份实时运行时句柄构建单个 MCP runtime prompt 绑定。
+    fn new(descriptor: McpRuntimePromptDescriptor, runtime: McpRuntimeHandle) -> Self {
+        Self { descriptor, runtime }
+    }
+
+    /// Returns the stable host-facing prompt identifier.
+    /// 返回稳定的宿主侧 prompt 标识。
+    pub(crate) fn id(&self) -> String {
+        self.descriptor.qualified_name()
+    }
+
+    /// Returns the stable owning server identifier.
+    /// 返回稳定的所属服务器标识。
+    pub(crate) fn server_id(&self) -> &str {
+        self.descriptor.server_id()
+    }
+
+    /// Returns the human-readable prompt name.
+    /// 返回人类可读 prompt 名称。
+    pub(crate) fn name(&self) -> &str {
+        self.descriptor.prompt_name()
+    }
+
+    /// Returns the human-readable prompt description.
+    /// 返回人类可读 prompt 描述。
+    pub(crate) fn description(&self) -> &str {
+        self.descriptor.prompt_description()
+    }
+
+    /// Returns the prompt argument schema list.
+    /// 返回 prompt 参数 schema 列表。
+    pub(crate) fn arguments(&self) -> &[PromptArgument] {
+        self.descriptor.prompt_arguments()
+    }
+
+    /// Resolves the bound MCP prompt through its stable owning server and prompt identifiers.
+    /// 通过稳定的所属服务器与 prompt 标识解析当前绑定的 MCP prompt。
+    pub(crate) async fn invoke(&self, args: serde_json::Value) -> Result<GetPromptResult, String> {
+        self.runtime
+            .get_prompt_by_id(self.server_id(), self.name(), args)
+            .await
+    }
+}
+
+#[allow(dead_code)]
+impl McpRuntimeResourceBinding {
+    /// Builds one MCP runtime resource binding from one resource descriptor and one live runtime handle.
+    /// 根据一份资源描述与一份实时运行时句柄构建单个 MCP runtime 资源绑定。
+    fn new(descriptor: McpRuntimeResourceDescriptor, runtime: McpRuntimeHandle) -> Self {
+        Self { descriptor, runtime }
+    }
+
+    /// Returns the stable host-facing resource identifier.
+    /// 返回稳定的宿主侧资源标识。
+    pub(crate) fn id(&self) -> String {
+        self.descriptor.qualified_name()
+    }
+
+    /// Returns the stable owning server identifier.
+    /// 返回稳定的所属服务器标识。
+    pub(crate) fn server_id(&self) -> &str {
+        self.descriptor.server_id()
+    }
+
+    /// Returns the stable resource URI.
+    /// 返回稳定资源 URI。
+    pub(crate) fn uri(&self) -> &str {
+        self.descriptor.resource_uri()
+    }
+
+    /// Returns the human-readable resource name.
+    /// 返回人类可读资源名称。
+    pub(crate) fn name(&self) -> &str {
+        self.descriptor.resource_name()
+    }
+
+    /// Returns the human-readable resource description.
+    /// 返回人类可读资源描述。
+    pub(crate) fn description(&self) -> &str {
+        self.descriptor.resource_description()
+    }
+
+    /// Reads the bound MCP resource through its stable owning server and resource URI.
+    /// 通过稳定的所属服务器与资源 URI 读取当前绑定的 MCP 资源。
+    pub(crate) async fn read(&self) -> Result<ReadResourceResult, String> {
+        self.runtime
+            .read_resource_by_uri(self.server_id(), self.uri())
+            .await
     }
 }
 
@@ -368,6 +719,12 @@ struct McpRuntimeServerSnapshot {
     /// Currently registered tool descriptors for this server.
     /// 当前为该服务器注册的工具描述集合。
     tools: Vec<McpRuntimeToolDescriptor>,
+    /// Currently discovered prompt descriptors for this server.
+    /// 当前为该服务器发现的 prompt 描述集合。
+    prompts: Vec<McpRuntimePromptDescriptor>,
+    /// Currently discovered resource descriptors for this server.
+    /// 当前为该服务器发现的资源描述集合。
+    resources: Vec<McpRuntimeResourceDescriptor>,
 }
 
 /// Lightweight runtime-facing diagnostic view for one enabled MCP server.
@@ -383,6 +740,12 @@ pub(crate) struct McpRuntimeServerDiagnostic {
     /// Number of currently registered tools.
     /// 当前已注册工具数量。
     tool_count: usize,
+    /// Number of currently discovered prompts.
+    /// 当前已发现 prompt 数量。
+    prompt_count: usize,
+    /// Number of currently discovered resources.
+    /// 当前已发现资源数量。
+    resource_count: usize,
     /// Latest connection or refresh warning, if any.
     /// 最近一次连接或刷新警告（如果存在）。
     last_error: Option<String>,
@@ -411,10 +774,12 @@ impl McpRuntimeServerDiagnostic {
     /// 返回单条人类可读的运行时摘要语句。
     pub(crate) fn summary_text(&self) -> String {
         format!(
-            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具。",
+            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具、{} 个 prompt 与 {} 个资源。",
             self.server_name(),
             self.status().label(),
-            self.tool_count()
+            self.tool_count(),
+            self.prompt_count,
+            self.resource_count
         )
     }
 
@@ -613,6 +978,7 @@ struct McpRuntimeSnapshot {
     servers: BTreeMap<String, McpRuntimeServerSnapshot>,
 }
 
+#[allow(dead_code)]
 impl McpRuntimeSnapshot {
     /// Returns lightweight server summary rows for UI surfaces.
     /// 返回供界面表面使用的轻量服务器摘要行。
@@ -672,6 +1038,26 @@ impl McpRuntimeSnapshot {
             .collect()
     }
 
+    /// Returns one flat prompt-descriptor list for all currently connected servers.
+    /// 返回当前所有已连接服务器的扁平 prompt 描述列表。
+    fn prompt_descriptors(&self) -> Vec<McpRuntimePromptDescriptor> {
+        self.servers
+            .values()
+            .filter(|server| server.status == McpRuntimeServerStatus::Connected)
+            .flat_map(|server| server.prompts.clone())
+            .collect()
+    }
+
+    /// Returns one flat resource-descriptor list for all currently connected servers.
+    /// 返回当前所有已连接服务器的扁平资源描述列表。
+    fn resource_descriptors(&self) -> Vec<McpRuntimeResourceDescriptor> {
+        self.servers
+            .values()
+            .filter(|server| server.status == McpRuntimeServerStatus::Connected)
+            .flat_map(|server| server.resources.clone())
+            .collect()
+    }
+
     /// Returns host-facing tool views filtered by one allowlist.
     /// 返回按单份白名单过滤后的宿主侧工具视图集合。
     fn filtered_tool_views(&self, allowlist: &McpRuntimeToolAllowlist) -> Vec<McpRuntimeToolView> {
@@ -687,6 +1073,40 @@ impl McpRuntimeSnapshot {
             .collect()
     }
 
+    /// Returns host-facing prompt descriptors filtered by one allowlist.
+    /// 返回按单份白名单过滤后的宿主侧 prompt 描述集合。
+    fn filtered_prompt_descriptors(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimePromptDescriptor> {
+        self.prompt_descriptors()
+            .into_iter()
+            .filter(|prompt| {
+                prompt.matches_allowed_sets(
+                    allowlist.allowed_server_ids(),
+                    allowlist.allowed_tool_names(),
+                )
+            })
+            .collect()
+    }
+
+    /// Returns host-facing resource descriptors filtered by one allowlist.
+    /// 返回按单份白名单过滤后的宿主侧资源描述集合。
+    fn filtered_resource_descriptors(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimeResourceDescriptor> {
+        self.resource_descriptors()
+            .into_iter()
+            .filter(|resource| {
+                resource.matches_allowed_sets(
+                    allowlist.allowed_server_ids(),
+                    allowlist.allowed_tool_names(),
+                )
+            })
+            .collect()
+    }
+
     /// Returns lightweight diagnostics for enabled MCP servers only.
     /// 仅返回已启用 MCP 服务器的轻量诊断信息。
     fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
@@ -697,6 +1117,8 @@ impl McpRuntimeSnapshot {
                 name: server.name.clone(),
                 status: server.status,
                 tool_count: server.tools.len(),
+                prompt_count: server.prompts.len(),
+                resource_count: server.resources.len(),
                 last_error: server.last_error.clone(),
             })
             .collect()
@@ -772,6 +1194,7 @@ struct McpRuntimeInner {
     shutdown_tx: watch::Sender<bool>,
 }
 
+#[allow(dead_code)]
 impl McpRuntimeHandle {
     /// Returns the latest immutable runtime snapshot.
     /// 返回最新的不可变运行时快照。
@@ -821,6 +1244,32 @@ impl McpRuntimeHandle {
             .collect()
     }
 
+    /// Returns currently available MCP prompt bindings filtered by one allowlist.
+    /// 返回按单份白名单过滤后的当前可用 MCP prompt 绑定集合。
+    fn available_prompt_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimePromptBinding> {
+        self.snapshot()
+            .filtered_prompt_descriptors(allowlist)
+            .into_iter()
+            .map(|descriptor| McpRuntimePromptBinding::new(descriptor, self.clone()))
+            .collect()
+    }
+
+    /// Returns currently available MCP resource bindings filtered by one allowlist.
+    /// 返回按单份白名单过滤后的当前可用 MCP 资源绑定集合。
+    fn available_resource_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimeResourceBinding> {
+        self.snapshot()
+            .filtered_resource_descriptors(allowlist)
+            .into_iter()
+            .map(|descriptor| McpRuntimeResourceBinding::new(descriptor, self.clone()))
+            .collect()
+    }
+
     /// Calls one MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用单个 MCP 工具。
     pub async fn call_tool_by_id(
@@ -853,6 +1302,148 @@ impl McpRuntimeHandle {
                     error
                 )
             })
+    }
+
+    /// Calls one MCP prompt through its stable host-facing prompt identifier.
+    /// 通过稳定宿主侧 prompt 标识调用单个 MCP prompt。
+    pub async fn get_prompt_by_id(
+        &self,
+        server_id: &str,
+        prompt_name: &str,
+        args: serde_json::Value,
+    ) -> Result<GetPromptResult, String> {
+        let Some(descriptor) = self
+            .snapshot()
+            .prompt_descriptors()
+            .into_iter()
+            .find(|prompt| prompt.server_id() == server_id && prompt.prompt_name() == prompt_name)
+        else {
+            return Err(format!("未找到 MCP prompt `{server_id}/{prompt_name}`。"));
+        };
+        let Some(transport) = self.transport_for_server(descriptor.server_id()) else {
+            return Err(format!(
+                "MCP 服务器 `{}` 当前未连接，无法调用 prompt `{}`。",
+                descriptor.server_id(),
+                descriptor.prompt_name()
+            ));
+        };
+        transport
+            .get_prompt(descriptor.prompt_name(), args)
+            .await
+            .map_err(|error| {
+                format!(
+                    "MCP prompt `{}` 调用失败：{}。",
+                    descriptor.prompt_name(),
+                    error
+                )
+            })
+    }
+
+    /// Reads one MCP resource through its stable host-facing resource identifier.
+    /// 通过稳定宿主侧资源标识读取单个 MCP 资源。
+    pub async fn read_resource_by_uri(
+        &self,
+        server_id: &str,
+        resource_uri: &str,
+    ) -> Result<ReadResourceResult, String> {
+        let Some(descriptor) = self
+            .snapshot()
+            .resource_descriptors()
+            .into_iter()
+            .find(|resource| {
+                resource.server_id() == server_id && resource.resource_uri() == resource_uri
+            })
+        else {
+            return Err(format!("未找到 MCP 资源 `{server_id}/{resource_uri}`。"));
+        };
+        let Some(transport) = self.transport_for_server(descriptor.server_id()) else {
+            return Err(format!(
+                "MCP 服务器 `{}` 当前未连接，无法读取资源 `{}`。",
+                descriptor.server_id(),
+                descriptor.resource_uri()
+            ));
+        };
+        transport
+            .read_resource(descriptor.resource_uri())
+            .await
+            .map_err(|error| {
+                format!(
+                    "MCP 资源 `{}` 读取失败：{}。",
+                    descriptor.resource_uri(),
+                    error
+                )
+            })
+    }
+
+    /// Returns whether one connected MCP server supports a host-driven OAuth lifecycle.
+    /// 返回单个已连接 MCP 服务器是否支持宿主驱动的 OAuth 生命周期。
+    pub async fn supports_oauth(&self, server_id: &str) -> bool {
+        match self.transport_for_server(server_id) {
+            Some(transport) => transport.supports_oauth().await,
+            None => false,
+        }
+    }
+
+    /// Returns whether one connected MCP server currently retains stored OAuth tokens.
+    /// 返回单个已连接 MCP 服务器当前是否保留了已存储 OAuth 令牌。
+    pub async fn has_stored_tokens(&self, server_id: &str) -> Result<bool, String> {
+        let Some(transport) = self.transport_for_server(server_id) else {
+            return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
+        };
+        transport.has_stored_tokens().await.map_err(|error| error.to_string())
+    }
+
+    /// Returns the current host-side OAuth status for one connected MCP server.
+    /// 返回单个已连接 MCP 服务器当前的宿主侧 OAuth 状态。
+    pub async fn auth_status(&self, server_id: &str) -> Result<McpAuthStatus, String> {
+        let Some(transport) = self.transport_for_server(server_id) else {
+            return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
+        };
+        transport.auth_status().await.map_err(|error| error.to_string())
+    }
+
+    /// Starts one host-driven OAuth authorization flow for the selected connected MCP server.
+    /// 为选中的已连接 MCP 服务器启动一条宿主驱动的 OAuth 授权流程。
+    pub async fn start_auth(&self, server_id: &str) -> Result<McpAuthChallenge, String> {
+        let Some(transport) = self.transport_for_server(server_id) else {
+            return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
+        };
+        let server_name = self
+            .snapshot()
+            .servers
+            .get(server_id)
+            .map(|server| server.name.clone())
+            .unwrap_or_else(|| server_id.to_string());
+        transport
+            .start_auth(&server_name)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Finishes one host-driven OAuth authorization flow for the selected connected MCP server.
+    /// 为选中的已连接 MCP 服务器完成一条宿主驱动的 OAuth 授权流程。
+    pub async fn finish_auth(
+        &self,
+        server_id: &str,
+        authorization_code: &str,
+        oauth_state: &str,
+    ) -> Result<McpAuthStatus, String> {
+        let Some(transport) = self.transport_for_server(server_id) else {
+            return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
+        };
+        transport
+            .finish_auth(authorization_code, oauth_state)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Removes every stored OAuth credential retained by one connected MCP server.
+    /// 移除单个已连接 MCP 服务器保留的全部 OAuth 凭据。
+    pub async fn remove_auth(&self, server_id: &str) -> Result<(), String> {
+        let Some(transport) = self.transport_for_server(server_id) else {
+            return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
+        };
+        transport.remove_auth().await.map_err(|error| error.to_string())
     }
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
@@ -902,11 +1493,39 @@ pub(crate) async fn bootstrap_mcp_runtime_access(
     ))
 }
 
+/// Builds one reusable host-owned OAuth session for a configured remote MCP server when the server exposes OAuth metadata.
+/// 当服务器暴露 OAuth 元数据时，为已配置的远端 MCP 服务器构建一个可复用的宿主自有 OAuth 会话。
+async fn build_server_auth_session(
+    server: &McpServerConfig,
+) -> Result<Option<Arc<McpOAuthSession>>, String> {
+    let Some(oauth) = server.oauth.clone() else {
+        return Ok(None);
+    };
+    let Some(uri) = server.url.clone() else {
+        return Err(format!(
+            "MCP 服务器 `{}` 配置了 OAuth，但缺少远端 URL。",
+            server.name
+        ));
+    };
+
+    let session = McpOAuthSession::new(uri, oauth.into())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(Arc::new(session)))
+}
+
 /// Spawns one background lifecycle task for a single enabled MCP server.
 /// 为单个已启用 MCP 服务器启动一个后台生命周期任务。
 fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfig) {
     tokio::spawn(async move {
         let mut shutdown_rx = inner.shutdown_tx.subscribe();
+        let auth_session = match build_server_auth_session(&server).await {
+            Ok(session) => session,
+            Err(error) => {
+                clear_server_runtime_state(&inner, &server.id, Some(error));
+                return;
+            }
+        };
 
         loop {
             if *shutdown_rx.borrow() {
@@ -927,7 +1546,7 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                     clear_server_runtime_state(&inner, &server.id, None);
                     break;
                 }
-                result = inner.registry.spawn_transport(&server.id) => result,
+                result = inner.registry.spawn_transport(&server.id, auth_session.clone()) => result,
             };
 
             let transport = match transport_result {
@@ -951,6 +1570,9 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 continue;
             }
 
+            let _ = refresh_server_prompts(&inner, &server, transport.clone()).await;
+            let _ = refresh_server_resources(&inner, &server, transport.clone()).await;
+
             let mut event_rx = transport.event_receiver();
             loop {
                 let event = tokio::select! {
@@ -969,6 +1591,12 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                             clear_server_runtime_state(&inner, &server.id, Some(error));
                             break;
                         }
+                    }
+                    Ok(McpTransportEvent::PromptsChanged) => {
+                        let _ = refresh_server_prompts(&inner, &server, transport.clone()).await;
+                    }
+                    Ok(McpTransportEvent::ResourcesChanged) => {
+                        let _ = refresh_server_resources(&inner, &server, transport.clone()).await;
                     }
                     Ok(McpTransportEvent::Disconnected { reason }) => {
                         clear_server_runtime_state(&inner, &server.id, Some(reason));
@@ -1043,6 +1671,44 @@ async fn refresh_server_tools(
     Ok(())
 }
 
+/// Refreshes one server prompt snapshot after the connection is established or a prompt-list change arrives.
+/// 在连接建立后或收到 prompt 列表变化通知时刷新单个服务器的 prompt 快照。
+async fn refresh_server_prompts(
+    inner: &Arc<McpRuntimeInner>,
+    server: &McpServerConfig,
+    transport: Arc<dyn McpTransport>,
+) -> Result<(), String> {
+    let prompts = match transport.list_prompts().await {
+        Ok(prompts) => prompts
+            .into_iter()
+            .map(|schema| McpRuntimePromptDescriptor::new(server.id.clone(), schema))
+            .collect::<Vec<_>>(),
+        Err(_) => return Ok(()),
+    };
+
+    update_server_prompts(inner, &server.id, prompts);
+    Ok(())
+}
+
+/// Refreshes one server resource snapshot after the connection is established or a resource-list change arrives.
+/// 在连接建立后或收到资源列表变化通知时刷新单个服务器的资源快照。
+async fn refresh_server_resources(
+    inner: &Arc<McpRuntimeInner>,
+    server: &McpServerConfig,
+    transport: Arc<dyn McpTransport>,
+) -> Result<(), String> {
+    let resources = match transport.list_resources().await {
+        Ok(resources) => resources
+            .into_iter()
+            .map(|schema| McpRuntimeResourceDescriptor::new(server.id.clone(), schema))
+            .collect::<Vec<_>>(),
+        Err(_) => return Ok(()),
+    };
+
+    update_server_resources(inner, &server.id, resources);
+    Ok(())
+}
+
 /// Clears one server transport registration and marks it as disconnected in the shared runtime snapshot.
 /// 清除单个服务器的传输注册，并在共享运行时快照中将其标记为断开状态。
 fn clear_server_runtime_state(
@@ -1062,6 +1728,8 @@ fn clear_server_runtime_state(
         error,
         Vec::new(),
     );
+    update_server_prompts(inner, server_id, Vec::new());
+    update_server_resources(inner, server_id, Vec::new());
 }
 
 /// Updates one server snapshot in-place with the latest runtime status, warning, and tool set.
@@ -1086,6 +1754,42 @@ fn update_server_status(
     }
 }
 
+/// Updates one server snapshot in-place with the latest prompt set.
+/// 使用最新 prompt 集合原地更新单个服务器快照。
+fn update_server_prompts(
+    inner: &Arc<McpRuntimeInner>,
+    server_id: &str,
+    prompts: Vec<McpRuntimePromptDescriptor>,
+) {
+    if let Some(server) = inner
+        .snapshot
+        .write()
+        .expect("mcp runtime snapshot poisoned")
+        .servers
+        .get_mut(server_id)
+    {
+        server.prompts = prompts;
+    }
+}
+
+/// Updates one server snapshot in-place with the latest resource set.
+/// 使用最新资源集合原地更新单个服务器快照。
+fn update_server_resources(
+    inner: &Arc<McpRuntimeInner>,
+    server_id: &str,
+    resources: Vec<McpRuntimeResourceDescriptor>,
+) {
+    if let Some(server) = inner
+        .snapshot
+        .write()
+        .expect("mcp runtime snapshot poisoned")
+        .servers
+        .get_mut(server_id)
+    {
+        server.resources = resources;
+    }
+}
+
 /// Builds the initial snapshot for one configured MCP server before any connection attempt begins.
 /// 在任何连接尝试开始之前，为单个已配置 MCP 服务器构建初始快照。
 fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot {
@@ -1101,6 +1805,8 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
         },
         last_error: None,
         tools: Vec::new(),
+        prompts: Vec::new(),
+        resources: Vec::new(),
     }
 }
 

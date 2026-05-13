@@ -6,6 +6,7 @@ use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeSkillKind,
     RuntimeToolPolicyDefinition,
 };
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
     McpRuntimeAccess, McpRuntimeOverview, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
@@ -15,6 +16,7 @@ use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// High-level runtime summary exposed to UI placeholder surfaces.
 /// 暴露给 UI 占位面板的高层运行时摘要。
@@ -76,6 +78,9 @@ pub struct RuntimeFoundation {
     /// Build warnings collected while materialising the foundation.
     /// 在组装基础架构时收集到的构建警告。
     warnings: Vec<String>,
+    /// Shared resumable task runtime reused across turns and child task chains.
+    /// 在多轮执行与子任务链之间复用的共享可恢复任务运行时。
+    task_runtime: Arc<TaskRuntime>,
 }
 
 impl RuntimeFoundation {
@@ -123,6 +128,7 @@ impl RuntimeFoundation {
             luaskills_tools,
             mcp_runtime_access,
             warnings,
+            task_runtime: Arc::new(TaskRuntime::new()),
         }
     }
 
@@ -217,6 +223,12 @@ impl RuntimeFoundation {
     /// 返回当前运行时基础架构使用的共享原生工具目录。
     pub fn native_tool_catalog(&self) -> &NativeToolCatalog {
         &self.native_tools
+    }
+
+    /// Returns the shared resumable task runtime used by the current foundation.
+    /// 返回当前基础架构使用的共享可恢复任务运行时。
+    pub fn task_runtime(&self) -> Arc<TaskRuntime> {
+        Arc::clone(&self.task_runtime)
     }
 
     /// Returns lightweight tool-policy rows for UI placeholder surfaces.

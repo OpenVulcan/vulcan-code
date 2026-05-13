@@ -11,7 +11,9 @@ use crate::agent_runtime::runtime_stream_bootstrap_core::{
 use crate::agent_runtime::runtime_stream_bootstrap_resources::{
     RuntimeBootstrapResources, resolve_runtime_bootstrap_resources,
 };
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
+use std::sync::Arc;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
@@ -28,6 +30,9 @@ pub(crate) struct RuntimeStreamBootstrap {
     /// Active agent definition resolved from the runtime foundation for this turn.
     /// 为当前回合从运行时基础架构解析得到的激活代理定义。
     pub active_agent: Option<RuntimeAgentDefinition>,
+    /// Shared resumable task runtime reused by the current execution turn.
+    /// 被当前执行回合复用的共享可恢复任务运行时。
+    pub task_runtime: Arc<TaskRuntime>,
     /// Host-owned unified tool manager used by the transport layer.
     /// 供传输层使用的宿主自有统一工具管理器。
     pub tools_manager: VulcanToolsManager,
@@ -70,6 +75,7 @@ pub(crate) async fn bootstrap_runtime_stream(
 ) -> RuntimeStreamBootstrap {
     let RuntimeBootstrapResources {
         active_agent,
+        task_runtime,
         tools_manager,
         resolved_tool_definitions,
         discovery_events,
@@ -98,6 +104,7 @@ pub(crate) async fn bootstrap_runtime_stream(
     RuntimeStreamBootstrap {
         preparation,
         active_agent,
+        task_runtime,
         tools_manager,
         resolved_tool_definitions,
         discovery_events,

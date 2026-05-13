@@ -11,7 +11,9 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::provider_config::ProviderConfigurationFile;
+use std::sync::Arc;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
@@ -44,6 +46,7 @@ pub(crate) fn execute_provider_prompt_stream(
     prompt: &str,
     request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
+    task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
@@ -88,6 +91,7 @@ pub(crate) fn execute_provider_prompt_stream(
         temperature,
         max_turns,
         request_headers,
+        task_runtime,
         tools_manager,
         preparation.session_id,
         resolved_tools,

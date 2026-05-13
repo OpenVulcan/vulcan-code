@@ -23,6 +23,7 @@ use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Background, Border, Color, Font, Padding, Pixels, Theme};
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Static format description used by the user-prompt meta row timestamp projection.
 /// 用户提示词元信息行时间戳投影使用的静态格式描述。
@@ -92,6 +93,99 @@ fn resolve_tool_directive_visuals(
             "工具返回",
         )),
         _ => None,
+    }
+}
+
+/// Builds the tool-summary spans used by tool-call and tool-result rows, switching to the shiny running-state treatment only while a tool call is still in flight.
+/// 构建工具调用与工具返回行使用的工具摘要片段，仅在工具调用尚未结束时切换为闪亮的进行中样式。
+fn build_tool_summary_spans(
+    block: &AgentViewDirectiveBlock,
+    summary_text: &str,
+    summary_color: Color,
+    app_theme: &Theme,
+) -> Vec<Span<'static, markdown::Uri, Font>> {
+    let display_state = block
+        .attributes
+        .get("tool-display-state")
+        .map(String::as_str)
+        .unwrap_or("running");
+    if block.kind == AgentViewDirectiveKind::ToolCall && display_state != "completed" {
+        return build_shiny_tool_summary_spans(summary_text, app_theme);
+    }
+
+    build_agent_view_plain_text_spans(
+        summary_text,
+        theme::ui_font(),
+        PlainTextRenderKind::Flow,
+        Some(summary_color),
+        app_theme,
+    )
+}
+
+/// Builds one shiny gradient text treatment for a running tool summary so the in-flight call reads as active without changing the message protocol.
+/// 为进行中的工具摘要构建一层闪亮渐变文本样式，使调用中的状态更醒目，同时不改变消息协议。
+fn build_shiny_tool_summary_spans(
+    summary_text: &str,
+    app_theme: &Theme,
+) -> Vec<Span<'static, markdown::Uri, Font>> {
+    let requested_font = Font {
+        weight: font::Weight::Semibold,
+        ..theme::ui_font()
+    };
+    let routed_spans = build_agent_view_plain_text_spans(
+        summary_text,
+        requested_font,
+        PlainTextRenderKind::Flow,
+        None,
+        app_theme,
+    );
+    let total_graphemes = routed_spans
+        .iter()
+        .map(|span| UnicodeSegmentation::graphemes(span.text.as_ref(), true).count())
+        .sum::<usize>()
+        .max(1);
+    let mut output = Vec::with_capacity(total_graphemes);
+    let mut grapheme_index = 0usize;
+
+    for routed_span in routed_spans {
+        for grapheme in UnicodeSegmentation::graphemes(routed_span.text.as_ref(), true) {
+            let position = if total_graphemes <= 1 {
+                0.5
+            } else {
+                grapheme_index as f32 / (total_graphemes - 1) as f32
+            };
+            let mut grapheme_span = routed_span.clone();
+            grapheme_span.text = grapheme.to_owned().into();
+            grapheme_span.color = Some(tool_shine_color(app_theme, position));
+            output.push(grapheme_span);
+            grapheme_index += 1;
+        }
+    }
+
+    output
+}
+
+/// Computes the bright gradient color used by the running tool-summary shine effect at one normalized text position.
+/// 根据归一化文本位置计算进行中工具摘要闪亮效果使用的高亮渐变色。
+fn tool_shine_color(app_theme: &Theme, position: f32) -> Color {
+    let palette = app_theme.palette();
+    let left = mix_color(
+        palette.primary.strong.color.scale_alpha(0.92),
+        palette.secondary.strong.color.scale_alpha(0.90),
+        0.24,
+    );
+    let center = palette.background.base.text.scale_alpha(0.99);
+    let right = mix_color(
+        palette.primary.strong.color.scale_alpha(0.92),
+        palette.success.strong.color.scale_alpha(0.90),
+        0.30,
+    );
+    let clamped_position = position.clamp(0.0, 1.0);
+
+    if clamped_position <= 0.5 {
+        mix_color(left, center, clamped_position * 2.0)
+    } else {
+        mix_color(center, right, (clamped_position - 0.5) * 2.0)
     }
 }
 
@@ -294,13 +388,7 @@ fn render_compact_tool_modal_directive_block(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| fallback_title.to_string());
     let summary_text = format!("{icon} {title}");
-    let summary_spans = build_agent_view_plain_text_spans(
-        &summary_text,
-        theme::ui_font(),
-        PlainTextRenderKind::Flow,
-        Some(summary_color),
-        app_theme,
-    );
+    let summary_spans = build_tool_summary_spans(block, &summary_text, summary_color, app_theme);
     let mut summary_node = builder.build_rich_paragraph_node_with_layout(
         summary_spans,
         markdown_settings.text_size,
@@ -404,13 +492,7 @@ fn render_compact_collapsible_directive_block(
         "v"
     };
     let summary_text = format!("{icon} {title_suffix} {toggle_glyph}");
-    let summary_spans = build_agent_view_plain_text_spans(
-        &summary_text,
-        theme::ui_font(),
-        PlainTextRenderKind::Flow,
-        Some(summary_color),
-        app_theme,
-    );
+    let summary_spans = build_tool_summary_spans(block, &summary_text, summary_color, app_theme);
     let mut summary_node = builder.build_rich_paragraph_node_with_layout(
         summary_spans,
         markdown_settings.text_size,
@@ -1013,5 +1095,63 @@ pub(super) fn classify_diff_line_kind(line: &str) -> DiffLineKind {
         DiffLineKind::Note
     } else {
         DiffLineKind::Context
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Targeted rendering tests for tool-summary visual states.
+    //! 面向工具摘要视觉状态的定向渲染测试。
+
+    use super::build_tool_summary_spans;
+    use crate::{AgentViewAttributes, AgentViewDirectiveBlock};
+    use iced::{Theme, color};
+
+    /// Verifies that one running tool call renders its summary with multiple gradient colors so the in-flight state looks visually active.
+    /// 验证进行中的工具调用会以多段渐变色渲染摘要，从而让执行中的状态具备明显的活动感。
+    #[test]
+    fn running_tool_call_uses_multicolor_summary_spans() {
+        let mut attributes = AgentViewAttributes::new();
+        attributes.insert(String::from("title"), String::from("调用 read_file 工具"));
+        attributes.insert(String::from("tool-display-state"), String::from("running"));
+        let block = AgentViewDirectiveBlock::tool_call("{}", true, attributes);
+        let spans = build_tool_summary_spans(
+            &block,
+            "🛠 调用 read_file 工具",
+            color!(0xCDE7FF),
+            &Theme::Dark,
+        );
+
+        assert!(spans.len() > 1);
+        assert!(
+            spans
+                .windows(2)
+                .any(|pair| pair[0].color.is_some() && pair[0].color != pair[1].color)
+        );
+    }
+
+    /// Verifies that one completed tool call falls back to a flat summary color so the shiny running treatment is removed after the result arrives.
+    /// 验证已完成工具调用会回退到单一摘要颜色，从而在结果返回后移除闪亮的进行中样式。
+    #[test]
+    fn completed_tool_call_uses_flat_summary_color() {
+        let mut attributes = AgentViewAttributes::new();
+        attributes.insert(String::from("title"), String::from("调用 read_file 工具"));
+        attributes.insert(
+            String::from("tool-display-state"),
+            String::from("completed"),
+        );
+        let block = AgentViewDirectiveBlock::tool_call("{}", true, attributes);
+        let spans = build_tool_summary_spans(
+            &block,
+            "🛠 调用 read_file 工具",
+            color!(0xD7F6E6),
+            &Theme::Dark,
+        );
+
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.color == Some(color!(0xD7F6E6)))
+        );
     }
 }

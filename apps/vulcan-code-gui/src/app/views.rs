@@ -1498,20 +1498,6 @@ impl VulcanWorkbench {
             .into()
     }
 
-    /// Returns whether one real AI call is currently in flight.
-    /// 返回当前是否存在一个正在进行中的真实 AI 调用。
-    pub(super) fn has_active_run(&self) -> bool {
-        self.active_run_id.is_some()
-    }
-
-    /// Clears the tracked active-run state after one AI call stops or finishes.
-    /// 在一次 AI 调用停止或结束后清理已跟踪的活动运行状态。
-    pub(super) fn clear_active_run_tracking(&mut self) {
-        self.active_run_id = None;
-        self.active_run_session_id = None;
-        self.active_run_handle = None;
-    }
-
     /// Returns whether the current composer buffer contains any submittable user instruction text.
     /// 返回当前提示词缓冲区是否包含任何可提交的用户指令文本。
     pub(super) fn composer_has_submittable_content(&self) -> bool {
@@ -2059,7 +2045,6 @@ impl VulcanWorkbench {
     /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     pub(super) fn view_main_canvas(&self) -> Element<'_, Message> {
-        let run_phase = self.selected_session_run_phase();
         let session_title = self
             .selected_session()
             .map(|session| session.title.as_str())
@@ -2110,16 +2095,7 @@ impl VulcanWorkbench {
             row![
                 text(session_title).size(26),
                 space::horizontal(),
-                row![
-                    transcript_surface_mode_switcher,
-                    container(text(run_phase.label()).size(12))
-                        .padding([4, 10])
-                        .style(move |theme| style::workbench_run_phase_chip_style(
-                            theme, run_phase
-                        )),
-                ]
-                .spacing(10)
-                .align_y(Center),
+                transcript_surface_mode_switcher,
             ]
             .align_y(Center),
             container(space())
@@ -3798,12 +3774,12 @@ impl VulcanWorkbench {
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
                 .map(|(window_id, size)| Message::WindowResized(window_id, size)),
-                iced::event::listen_with(Self::map_main_panel_shortcut_event),
-                iced::event::listen_with(Self::map_window_pointer_event),
-                transcript_drag_auto_scroll_subscription,
-                thinking_overlay_drag_auto_scroll_subscription,
-                thinking_modal_animation_subscription,
-            ])
+            iced::event::listen_with(Self::map_main_panel_shortcut_event),
+            iced::event::listen_with(Self::map_window_pointer_event),
+            transcript_drag_auto_scroll_subscription,
+            thinking_overlay_drag_auto_scroll_subscription,
+            thinking_modal_animation_subscription,
+        ])
     }
 
     /// Maps one raw runtime event into a top-level panel switch shortcut when the key combination matches.

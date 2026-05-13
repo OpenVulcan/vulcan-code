@@ -9,7 +9,8 @@ use crate::agent_runtime::provider_protocol_content::{
 use crate::agent_runtime::provider_protocol_gemini::{
     GeminiCandidate, GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig,
     GeminiFunctionDeclaration, GeminiFunctionResponse, GeminiPart, GeminiStreamingChunk,
-    GeminiTool, GeminiToolConfig, build_gemini_provider_message_state, parse_gemini_provider_message_state,
+    GeminiTool, GeminiToolConfig, build_gemini_provider_message_state,
+    parse_gemini_provider_message_state,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_http_support::{
@@ -27,8 +28,8 @@ use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
-    ProviderContinuation as CoreProviderContinuation,
-    ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderContinuation as CoreProviderContinuation, ProviderTurnDelta as CoreProviderTurnDelta,
+    ProviderTurnResponse as CoreProviderTurnResponse,
 };
 
 /// Default Google Gemini REST base URL used by the host-owned direct transport.
@@ -108,13 +109,12 @@ where
             continue;
         }
 
-        let chunk =
-            serde_json::from_str::<GeminiStreamingChunk>(&event.data).map_err(|error| {
-                VulcanCoreError::ProviderFailure {
-                    provider_id: provider_id.to_string(),
-                    message: format!("Google Gemini 流式事件解析失败：{error}"),
-                }
-            })?;
+        let chunk = serde_json::from_str::<GeminiStreamingChunk>(&event.data).map_err(|error| {
+            VulcanCoreError::ProviderFailure {
+                provider_id: provider_id.to_string(),
+                message: format!("Google Gemini 流式事件解析失败：{error}"),
+            }
+        })?;
 
         if let Some(model_version) = chunk.model_version {
             response_model = Some(model_version);
@@ -167,9 +167,8 @@ where
             .map(ProviderAssistantContent::ToolCall),
     );
 
-    let provider_message_state = (!finalized_parts.is_empty()).then(|| {
-        build_gemini_provider_message_state(&GeminiContent::model(finalized_parts))
-    });
+    let provider_message_state = (!finalized_parts.is_empty())
+        .then(|| build_gemini_provider_message_state(&GeminiContent::model(finalized_parts)));
 
     Ok(CoreProviderTurnResponse {
         assistant_text: assistant_content
@@ -434,7 +433,9 @@ fn resolved_core_tool_call_key(tool_call: &CoreConversationToolCall) -> &str {
 
 /// Converts one canonical core tool call into one Gemini-native function-call payload while preserving the provider-visible call identifier when available.
 /// 将一条规范 core 工具调用转换为一条 Gemini 原生函数调用载荷，并在可用时保留 Provider 可见调用标识。
-fn core_tool_call_to_gemini_function_call(tool_call: CoreConversationToolCall) -> GeminiFunctionCall {
+fn core_tool_call_to_gemini_function_call(
+    tool_call: CoreConversationToolCall,
+) -> GeminiFunctionCall {
     GeminiFunctionCall {
         id: tool_call
             .tool_call_id
@@ -500,7 +501,9 @@ where
                 forward_google_gemini_delta(
                     live_sender,
                     sink,
-                    CoreProviderTurnDelta::Thinking { delta: text.clone() },
+                    CoreProviderTurnDelta::Thinking {
+                        delta: text.clone(),
+                    },
                 );
             }
 
@@ -653,19 +656,22 @@ fn current_unix_millis_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_google_gemini_request_payload, core_message_to_gemini_content, parse_gemini_provider_message_state,
+        build_google_gemini_request_payload, core_message_to_gemini_content,
+        parse_gemini_provider_message_state,
     };
     use crate::agent_runtime::provider_protocol_gemini::{
         GeminiContent, GeminiFunctionCall, GeminiPart, build_gemini_provider_message_state,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+    use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use serde_json::json;
     use vulcan_core::types::{
-        ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
-        ConversationToolCall as CoreConversationToolCall, ProviderContinuation as CoreProviderContinuation,
+        ConversationMessage as CoreConversationMessage,
+        ConversationPayload as CoreConversationPayload,
+        ConversationToolCall as CoreConversationToolCall,
+        ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
-    use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 
     /// Verifies one stored Gemini provider-message-state round-trips the native content payload without losing thought signatures.
     /// 验证一份已存储 Gemini provider_message_state 可以在不丢失 thought signature 的前提下往返恢复原生内容载荷。
@@ -677,8 +683,8 @@ mod tests {
         )]);
         let state = build_gemini_provider_message_state(&content);
 
-        let restored =
-            parse_gemini_provider_message_state(&state).expect("gemini provider state should parse");
+        let restored = parse_gemini_provider_message_state(&state)
+            .expect("gemini provider state should parse");
 
         assert_eq!(restored, content);
     }
@@ -760,10 +766,7 @@ mod tests {
         let contents = payload["contents"]
             .as_array()
             .expect("contents should be one array");
-        assert_eq!(
-            contents[0]["parts"][0]["thoughtSignature"],
-            json!("sig-1")
-        );
+        assert_eq!(contents[0]["parts"][0]["thoughtSignature"], json!("sig-1"));
         assert_eq!(
             contents[1]["parts"][0]["functionResponse"]["name"],
             json!("read_file")

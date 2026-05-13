@@ -1,6 +1,7 @@
 //! GUI-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
 //! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的 GUI 侧桥接层。
 
+use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_tool_candidate};
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
     build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
@@ -11,6 +12,7 @@ use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -20,6 +22,7 @@ use vulcan_tools_manager::{
 /// Builds one standalone host-owned tools manager from the current GUI runtime surfaces.
 /// 根据当前 GUI 运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
+    task_runtime: Arc<TaskRuntime>,
     native_catalog: NativeToolCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
@@ -28,6 +31,8 @@ pub fn build_vulcan_tools_manager(
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
+
+    candidates.push(build_task_tool_candidate(task_runtime));
 
     for tool_id in candidate_native_tool_ids {
         let Some(definition) = native_catalog.definition(&tool_id) else {

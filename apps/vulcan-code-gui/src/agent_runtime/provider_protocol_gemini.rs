@@ -88,10 +88,7 @@ impl GeminiPart {
     /// Builds one Gemini reasoning/thought part that may optionally carry a replay signature.
     /// 构建一条可选携带回放签名的 Gemini 思考 Part。
     #[cfg(test)]
-    pub(crate) fn reasoning(
-        text: impl Into<String>,
-        thought_signature: Option<String>,
-    ) -> Self {
+    pub(crate) fn reasoning(text: impl Into<String>, thought_signature: Option<String>) -> Self {
         Self {
             text: Some(text.into()),
             thought: Some(true),

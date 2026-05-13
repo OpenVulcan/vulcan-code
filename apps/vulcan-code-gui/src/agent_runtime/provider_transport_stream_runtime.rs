@@ -10,7 +10,9 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRuntimeContext;
+use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
+use crate::model::SessionId;
 use async_stream::stream;
 use reqwest::header::HeaderMap;
 use std::sync::Arc;
@@ -22,6 +24,7 @@ use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     ProviderTurnResponse as CoreProviderTurnResponse,
 };
+use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Prepared adapter launch inputs handed to one concrete Provider adapter constructor after the shared runtime wrapper consumes controller-only fields.
 /// 在共享运行时包装器消费控制器专用字段后，交给具体 Provider 适配器构造过程的已准备输入对象。
@@ -43,6 +46,10 @@ pub(crate) struct PreparedProviderTransportAdapterInputs {
 /// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the GUI layer.
 /// 通过 `vulcan-core` 执行一次宿主控制的 Provider 流，转发实时增量，并把最终规范状态返回给图形界面层。
 pub(crate) fn execute_host_controlled_stream<A, F>(
+    session_id: SessionId,
+    task_runtime: Arc<TaskRuntime>,
+    tools_manager: Arc<VulcanToolsManager>,
+    resolved_tool_definitions: Vec<ResolvedToolDefinition>,
     controller_config: CoreControllerConfig,
     core_snapshot: CoreConversationSnapshot,
     prompt: String,
@@ -51,7 +58,11 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     provider_label: String,
 ) -> ProviderDeltaStream
 where
-    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Send + Sync + 'static,
+    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     F: FnOnce(ProviderLiveDeltaSender) -> A + Send + 'static,
 {
     Box::pin(stream! {
@@ -60,12 +71,25 @@ where
         let (live_sender, mut live_receiver) =
             unbounded_channel::<Result<ProviderStreamDelta, String>>();
         let task_sender = live_sender.clone();
-        let mut controller = VulcanCoreController::new(controller_config, core_snapshot);
+        let mut controller = VulcanCoreController::new(controller_config.clone(), core_snapshot);
         let provider_adapter = provider_factory(live_sender.clone());
         let tool_executor =
             StreamingRuntimeToolExecutor::new(runtime_bridge, live_sender.clone());
+        let task_backend_guard = task_runtime.install_backend(
+            session_id,
+            build_task_execution_handler(
+                Arc::clone(&task_runtime),
+                provider_adapter.clone(),
+                controller_config,
+                tools_manager,
+                resolved_tool_definitions,
+                live_sender.clone(),
+                provider_label.clone(),
+            ),
+        );
         let controller_prompt = prompt.clone();
         let controller_task = tokio::spawn(async move {
+            let _task_backend_guard = task_backend_guard;
             let tool_policy = AllowAllToolPolicy;
             match controller
                 .run_user_turn_streaming(
@@ -115,7 +139,11 @@ pub(crate) fn execute_host_controlled_stream_with_prepared_inputs<A, F>(
     provider_label: impl Into<String>,
 ) -> ProviderDeltaStream
 where
-    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Send + Sync + 'static,
+    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     F: FnOnce(ProviderLiveDeltaSender, PreparedProviderTransportAdapterInputs) -> A
         + Send
         + 'static,
@@ -132,12 +160,20 @@ where
             },
         tool_context:
             PreparedHostToolRuntimeContext {
+                session_id,
+                tools_manager,
                 runtime_bridge,
+                task_runtime,
+                resolved_tool_definitions,
                 provider_tool_definitions,
             },
     } = prepared_runtime_inputs;
 
     execute_host_controlled_stream(
+        session_id,
+        task_runtime,
+        tools_manager,
+        resolved_tool_definitions,
         controller_config,
         core_snapshot,
         prompt,

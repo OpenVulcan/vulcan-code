@@ -219,7 +219,9 @@ fn resolve_runtime_default_reasoning_patch(
             resolve_openai_family_reasoning_patch(requested_effort)
         }
         ProviderRuntimeKind::Anthropic => resolve_anthropic_reasoning_patch(requested_effort),
-        ProviderRuntimeKind::GoogleGemini => resolve_google_gemini_reasoning_patch(model_id, requested_effort),
+        ProviderRuntimeKind::GoogleGemini => {
+            resolve_google_gemini_reasoning_patch(model_id, requested_effort)
+        }
         ProviderRuntimeKind::Cohere => resolve_cohere_reasoning_patch(requested_effort),
     }
 }
@@ -318,9 +320,7 @@ fn resolve_gemini_two_five_pro_reasoning_patch(
 
 /// Resolves the Gemini 3-family native reasoning patch.
 /// 解析 Gemini 3 家族的原生推理 Patch。
-fn resolve_gemini_three_reasoning_patch(
-    requested_effort: ReasoningEffortLevel,
-) -> Option<Value> {
+fn resolve_gemini_three_reasoning_patch(requested_effort: ReasoningEffortLevel) -> Option<Value> {
     let thinking_level = match requested_effort {
         ReasoningEffortLevel::Off | ReasoningEffortLevel::Low | ReasoningEffortLevel::Medium => {
             "low"
@@ -357,10 +357,7 @@ fn resolve_generic_google_reasoning_patch(requested_effort: ReasoningEffortLevel
 
 /// Builds one Gemini native `thinkingConfig` patch from a budget value and an include-thoughts switch.
 /// 根据预算值与是否回传思考片段的开关构建一份 Gemini 原生 `thinkingConfig` Patch。
-fn build_google_gemini_budget_patch(
-    thinking_budget: i64,
-    include_thoughts: bool,
-) -> Value {
+fn build_google_gemini_budget_patch(thinking_budget: i64, include_thoughts: bool) -> Value {
     json!({
         "generationConfig": {
             "thinkingConfig": {

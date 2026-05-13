@@ -203,8 +203,8 @@ fn build_workspace_describe_tool(
         id: String::from("workspace.describe"),
         name: String::from("工作区概览"),
         description: String::from("返回当前工作目录、激活模型以及基础运行时统计。"),
-        ai_visible: false,
-        available_in_plan: false,
+        ai_visible: true,
+        available_in_plan: true,
     };
 
     build_native_tool_definition(
@@ -316,8 +316,8 @@ fn build_skill_list_tool(
         id: String::from("registry.list_skills"),
         name: String::from("列出技能"),
         description: String::from("返回当前已声明的技能清单。"),
-        ai_visible: false,
-        available_in_plan: false,
+        ai_visible: true,
+        available_in_plan: true,
     };
 
     build_native_tool_definition(
@@ -345,8 +345,8 @@ fn build_mcp_server_list_tool(
         id: String::from("mcp.list_servers"),
         name: String::from("列出 MCP 服务器"),
         description: String::from("返回当前 MCP 服务器配置及启用情况。"),
-        ai_visible: false,
-        available_in_plan: false,
+        ai_visible: true,
+        available_in_plan: true,
     };
 
     build_native_tool_definition(

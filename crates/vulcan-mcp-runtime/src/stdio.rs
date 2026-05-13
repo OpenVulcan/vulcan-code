@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
 use rmcp::service::{Peer, RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
@@ -14,7 +15,8 @@ use tokio::sync::broadcast;
 
 use crate::error::McpRuntimeError;
 use crate::rmcp_support::{
-    EventingClientHandler, call_rmcp_tool, list_rmcp_tools, spawn_rmcp_disconnect_watch,
+    EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
+    list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
@@ -105,6 +107,26 @@ impl McpTransport for StdioTransport {
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
         list_rmcp_tools(&self.peer, "stdio").await
+    }
+
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, McpRuntimeError> {
+        list_rmcp_prompts(&self.peer, "stdio").await
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<GetPromptResult, McpRuntimeError> {
+        get_rmcp_prompt(&self.peer, "stdio", name, args).await
+    }
+
+    async fn list_resources(&self) -> Result<Vec<Resource>, McpRuntimeError> {
+        list_rmcp_resources(&self.peer, "stdio").await
+    }
+
+    async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, McpRuntimeError> {
+        read_rmcp_resource(&self.peer, "stdio", uri).await
     }
 
     async fn call_tool(&self, name: &str, args: Value) -> Result<Value, McpRuntimeError> {

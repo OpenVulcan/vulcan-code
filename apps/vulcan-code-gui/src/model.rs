@@ -701,16 +701,3 @@ pub enum SessionRunPhase {
     Stopped,
 }
 
-impl SessionRunPhase {
-    /// Returns a compact label for the transcript status bar.
-    /// 返回转录区状态条使用的精简标签。
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "空闲",
-            Self::Preparing => "执行中",
-            Self::Ready => "已完成",
-            Self::Failed => "失败",
-            Self::Stopped => "已停止",
-        }
-    }
-}

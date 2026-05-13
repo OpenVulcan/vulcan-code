@@ -15,6 +15,7 @@
     )
 )]
 
+pub mod auth;
 pub mod error;
 pub mod http;
 mod http_support;
@@ -24,9 +25,11 @@ pub mod sse;
 pub mod stdio;
 pub mod transport;
 
+pub use auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession, McpTransportOAuthSpec};
 pub use error::McpRuntimeError;
 pub use http::HttpTransport;
 pub use launch::McpTransportLaunchSpec;
+pub use rmcp::model::{GetPromptResult, Prompt, PromptArgument, ReadResourceResult, Resource};
 pub use sse::SseTransport;
 pub use stdio::StdioTransport;
 pub use transport::{McpToolSchema, McpTransport, McpTransportEvent};

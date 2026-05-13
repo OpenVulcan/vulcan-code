@@ -4,9 +4,11 @@
 use crate::agent_runtime::provider_transport_tool_context::{
     PreparedHostToolRuntimeContext, prepare_host_tool_runtime_context,
 };
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
+use std::sync::Arc;
 use vulcan_core::types::ControllerConfig as CoreControllerConfig;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -86,6 +88,7 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
     tools_manager: VulcanToolsManager,
     resolved_tools: &[ResolvedToolDefinition],
     session_id: SessionId,
+    task_runtime: Arc<TaskRuntime>,
 ) -> PreparedProviderTransportRuntimeInputs {
     PreparedProviderTransportRuntimeInputs {
         entry_inputs: prepare_provider_transport_entry_inputs(
@@ -98,7 +101,12 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
             headers,
             additional_params,
         ),
-        tool_context: prepare_host_tool_runtime_context(tools_manager, resolved_tools, session_id),
+        tool_context: prepare_host_tool_runtime_context(
+            tools_manager,
+            resolved_tools,
+            session_id,
+            task_runtime,
+        ),
     }
 }
 

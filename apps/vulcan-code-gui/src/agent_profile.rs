@@ -1,6 +1,10 @@
 //! User-visible agent profile loading, persistence, and legacy migration helpers.
 //! 面向用户的 Agent 配置加载、持久化与旧配置迁移辅助模块。
 
+use crate::agent_runtime::config::{
+    DEFAULT_WORKER_AGENT_ID, EXPLORE_AGENT_ID, LUA_SPECIALIST_AGENT_ID, MEMORY_SPECIALIST_AGENT_ID,
+    PLAN_AGENT_ID, WORKSPACE_COORDINATOR_AGENT_ID,
+};
 use crate::provider_config::{PersistedAgentEntry, ProviderConfigurationFile};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -140,6 +144,21 @@ pub fn load_agent_profile_catalog() -> Result<AgentProfileCatalog, String> {
     Ok(AgentProfileCatalog { state, agents })
 }
 
+/// Returns whether one agent identifier is reserved by the built-in runtime or the synthetic system-default slot.
+/// 返回某个 Agent 标识是否被内置运行时或系统默认合成槽位保留。
+pub fn is_reserved_agent_identifier(agent_id: &str) -> bool {
+    matches!(
+        agent_id.trim(),
+        SYSTEM_DEFAULT_AGENT_CHOICE_ID
+            | DEFAULT_WORKER_AGENT_ID
+            | LUA_SPECIALIST_AGENT_ID
+            | MEMORY_SPECIALIST_AGENT_ID
+            | WORKSPACE_COORDINATOR_AGENT_ID
+            | PLAN_AGENT_ID
+            | EXPLORE_AGENT_ID
+    )
+}
+
 /// Loads the persisted agent selection state from disk.
 /// 从磁盘加载持久化的 Agent 选择状态。
 pub fn load_agent_profile_state() -> Result<AgentProfileState, String> {
@@ -185,6 +204,11 @@ pub fn save_user_agent_profile(
 ) -> Result<(), String> {
     if profile.id.trim().is_empty() {
         return Err(String::from("Agent 标识不能为空。"));
+    }
+    if is_reserved_agent_identifier(&profile.id) {
+        return Err(String::from(
+            "该 Agent 标识已被系统内置 Agent 保留，请更换为其它标识。",
+        ));
     }
 
     fs::create_dir_all(agent_profiles_directory())
@@ -235,7 +259,7 @@ pub fn migrate_legacy_provider_agents(
     let mut changed = false;
 
     for (agent_id, entry) in &config.legacy_agents {
-        if is_legacy_builtin_agent_id(agent_id) {
+        if is_reserved_agent_identifier(agent_id) || is_legacy_builtin_agent_id(agent_id) {
             continue;
         }
 
@@ -282,6 +306,9 @@ fn load_user_agent_profiles() -> Result<BTreeMap<String, UserAgentProfile>, Stri
 
     for path in files {
         let profile = load_user_agent_profile(&path)?;
+        if is_reserved_agent_identifier(&profile.id) {
+            continue;
+        }
         profiles.insert(profile.id.clone(), profile);
     }
 
@@ -485,4 +512,19 @@ fn slugify_identifier(raw: &str) -> String {
     }
 
     identifier.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_reserved_agent_identifier;
+
+    /// Verifies that the reserved-agent guard includes the built-in analysis entries.
+    /// 验证保留 Agent 保护逻辑已包含内置分析类条目。
+    #[test]
+    fn reserved_agent_identifiers_cover_built_in_analysis_entries() {
+        assert!(is_reserved_agent_identifier("plan"));
+        assert!(is_reserved_agent_identifier("explore"));
+        assert!(is_reserved_agent_identifier("__system_default__"));
+        assert!(!is_reserved_agent_identifier("custom-agent"));
+    }
 }

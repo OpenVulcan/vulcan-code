@@ -6,7 +6,9 @@ use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
+use std::sync::Arc;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
@@ -28,6 +30,9 @@ pub(crate) struct RuntimeStreamLaunch {
     /// Active agent definition resolved from the runtime foundation for this turn.
     /// 为当前回合从运行时基础架构解析得到的激活代理定义。
     pub active_agent: Option<RuntimeAgentDefinition>,
+    /// Shared resumable task runtime reused by the current execution turn.
+    /// 被当前执行回合复用的共享可恢复任务运行时。
+    pub task_runtime: Arc<TaskRuntime>,
     /// Host-owned unified tool manager used by the transport layer.
     /// 供传输层使用的宿主自有统一工具管理器。
     pub tools_manager: VulcanToolsManager,
@@ -71,6 +76,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         effective_prompt: request.prompt.trim().to_string(),
         preparation: bootstrap.preparation,
         active_agent: bootstrap.active_agent,
+        task_runtime: bootstrap.task_runtime,
         tools_manager: bootstrap.tools_manager,
         resolved_tool_definitions: bootstrap.resolved_tool_definitions,
         discovery_events: bootstrap.discovery_events,
@@ -95,6 +101,7 @@ mod tests {
     use crate::provider_config::ProviderRuntimeKind;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
     use uuid::Uuid;
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::types::{
@@ -189,6 +196,7 @@ mod tests {
         RuntimeStreamBootstrap {
             preparation: build_test_preparation(),
             active_agent: None,
+            task_runtime: Arc::new(TaskRuntime::new()),
             tools_manager: VulcanToolsManager::default(),
             resolved_tool_definitions: Vec::new(),
             discovery_events: Vec::new(),

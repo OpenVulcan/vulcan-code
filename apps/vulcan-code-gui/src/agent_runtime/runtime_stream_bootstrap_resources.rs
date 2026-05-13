@@ -5,9 +5,11 @@ use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use std::path::PathBuf;
+use std::sync::Arc;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Resolved runtime bootstrap resources collected before provider-facing core state is derived.
@@ -16,6 +18,9 @@ pub(crate) struct RuntimeBootstrapResources {
     /// Active agent definition resolved from the runtime foundation for this turn.
     /// 为当前回合从运行时基础架构解析得到的激活代理定义。
     pub active_agent: Option<RuntimeAgentDefinition>,
+    /// Shared resumable task runtime reused by the current execution turn.
+    /// 被当前执行回合复用的共享可恢复任务运行时。
+    pub task_runtime: Arc<TaskRuntime>,
     /// Host-owned unified tool manager used by the transport layer.
     /// 供传输层使用的宿主自有统一工具管理器。
     pub tools_manager: VulcanToolsManager,
@@ -48,7 +53,9 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         .as_ref()
         .map(|agent| agent.id.clone())
         .unwrap_or_else(|| preparation.agent_id.clone());
+    let task_runtime = foundation.task_runtime();
     let tools_manager = build_vulcan_tools_manager(
+        Arc::clone(&task_runtime),
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
         (!preparation.workspace_path.is_empty())
@@ -69,6 +76,7 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
 
     RuntimeBootstrapResources {
         active_agent,
+        task_runtime,
         tools_manager,
         resolved_tool_definitions,
         discovery_events,

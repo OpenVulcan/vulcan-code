@@ -18,10 +18,14 @@ use reqwest::{
 };
 use rmcp::model::{
     CallToolRequest, ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest,
-    Implementation, InitializeRequest, InitializeRequestParams, InitializedNotification,
-    JsonRpcMessage, ListToolsRequest, ListToolsResult, NumberOrString, RequestId,
-    ServerJsonRpcMessage, ServerNotification, ServerResult,
+    GetPromptRequest, GetPromptRequestParams, GetPromptResult, Implementation, InitializeRequest,
+    InitializeRequestParams, InitializedNotification, JsonRpcMessage, ListPromptsRequest,
+    ListPromptsResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
+    ListToolsResult, NumberOrString, Prompt, ReadResourceRequest, ReadResourceRequestParams,
+    ReadResourceResult, RequestId, Resource, ServerJsonRpcMessage, ServerNotification,
+    ServerResult,
 };
+use serde_json::Value;
 use sse_stream::{Sse, SseStream};
 use tokio::{
     sync::{Mutex, broadcast, oneshot, watch},
@@ -29,6 +33,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
 use crate::error::McpRuntimeError;
 use crate::http_support::parse_http_headers_to_header_map;
 use crate::rmcp_support::{
@@ -71,6 +76,9 @@ pub struct SseTransport {
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
+    /// Optional shared host-owned OAuth session reused across reconnects.
+    /// 在重连之间复用的可选共享宿主自有 OAuth 会话。
+    auth_session: Option<Arc<McpOAuthSession>>,
 }
 
 impl SseTransport {
@@ -81,6 +89,7 @@ impl SseTransport {
         sse_url: impl Into<String>,
         bearer_token: Option<String>,
         custom_headers: HashMap<String, String>,
+        auth_session: Option<Arc<McpOAuthSession>>,
     ) -> Result<Self, McpRuntimeError> {
         let sse_url = Url::parse(&sse_url.into()).map_err(|error| {
             McpRuntimeError::invalid_argument(format!("invalid legacy SSE MCP url: {error}"))
@@ -103,6 +112,7 @@ impl SseTransport {
             pending_responses.clone(),
             shutdown_token.clone(),
             event_sender.clone(),
+            auth_session.clone(),
         );
 
         let transport = Self {
@@ -115,6 +125,7 @@ impl SseTransport {
             next_request_id: AtomicU64::new(1),
             shutdown_token,
             event_sender,
+            auth_session,
         };
 
         transport.initialize().await?;
@@ -167,6 +178,7 @@ impl SseTransport {
             &self.bearer_token,
             &self.custom_headers,
             &message,
+            self.auth_session.as_ref(),
         )
         .await?;
         consume_post_response(response).await.map(|_| ())
@@ -193,6 +205,7 @@ impl SseTransport {
             &self.bearer_token,
             &self.custom_headers,
             &message,
+            self.auth_session.as_ref(),
         )
         .await;
 
@@ -307,6 +320,150 @@ impl McpTransport for SseTransport {
         Ok(tools.into_iter().map(rmcp_tool_to_schema).collect())
     }
 
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, McpRuntimeError> {
+        let request_id = self.next_request_id();
+        let request = ListPromptsRequest {
+            method: Default::default(),
+            params: None,
+            extensions: Default::default(),
+        };
+        let response = self
+            .send_request_and_wait(
+                request_id.clone(),
+                ClientJsonRpcMessage::request(
+                    ClientRequest::ListPromptsRequest(request),
+                    request_id,
+                ),
+            )
+            .await?;
+        let ServerResult::ListPromptsResult(ListPromptsResult { prompts, .. }) =
+            extract_server_result(response)?
+        else {
+            return Err(McpRuntimeError::transport(
+                "legacy SSE prompts/list did not return a listPrompts result".to_string(),
+            ));
+        };
+        Ok(prompts)
+    }
+
+    async fn get_prompt(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<GetPromptResult, McpRuntimeError> {
+        let request_id = self.next_request_id();
+        let request = GetPromptRequest::new(build_legacy_prompt_request_params(name, args)?);
+        let response = self
+            .send_request_and_wait(
+                request_id.clone(),
+                ClientJsonRpcMessage::request(ClientRequest::GetPromptRequest(request), request_id),
+            )
+            .await?;
+        let ServerResult::GetPromptResult(result) = extract_server_result(response)? else {
+            return Err(McpRuntimeError::transport(
+                "legacy SSE prompts/get did not return a getPrompt result".to_string(),
+            ));
+        };
+        Ok(result)
+    }
+
+    async fn list_resources(&self) -> Result<Vec<Resource>, McpRuntimeError> {
+        let request_id = self.next_request_id();
+        let request = ListResourcesRequest {
+            method: Default::default(),
+            params: None,
+            extensions: Default::default(),
+        };
+        let response = self
+            .send_request_and_wait(
+                request_id.clone(),
+                ClientJsonRpcMessage::request(
+                    ClientRequest::ListResourcesRequest(request),
+                    request_id,
+                ),
+            )
+            .await?;
+        let ServerResult::ListResourcesResult(ListResourcesResult { resources, .. }) =
+            extract_server_result(response)?
+        else {
+            return Err(McpRuntimeError::transport(
+                "legacy SSE resources/list did not return a listResources result".to_string(),
+            ));
+        };
+        Ok(resources)
+    }
+
+    async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, McpRuntimeError> {
+        let request_id = self.next_request_id();
+        let request = ReadResourceRequest::new(ReadResourceRequestParams::new(uri.to_string()));
+        let response = self
+            .send_request_and_wait(
+                request_id.clone(),
+                ClientJsonRpcMessage::request(
+                    ClientRequest::ReadResourceRequest(request),
+                    request_id,
+                ),
+            )
+            .await?;
+        let ServerResult::ReadResourceResult(result) = extract_server_result(response)? else {
+            return Err(McpRuntimeError::transport(
+                "legacy SSE resources/read did not return a readResource result".to_string(),
+            ));
+        };
+        Ok(result)
+    }
+
+    async fn supports_oauth(&self) -> bool {
+        self.auth_session.is_some()
+    }
+
+    async fn has_stored_tokens(&self) -> Result<bool, McpRuntimeError> {
+        Ok(match self.auth_session.as_ref() {
+            Some(auth_session) => auth_session.has_stored_tokens().await,
+            None => false,
+        })
+    }
+
+    async fn auth_status(&self) -> Result<McpAuthStatus, McpRuntimeError> {
+        Ok(match self.auth_session.as_ref() {
+            Some(auth_session) => auth_session.auth_status().await,
+            None => McpAuthStatus::NotConfigured,
+        })
+    }
+
+    async fn start_auth(&self, client_name: &str) -> Result<McpAuthChallenge, McpRuntimeError> {
+        let Some(auth_session) = self.auth_session.as_ref() else {
+            return Err(McpRuntimeError::transport(format!(
+                "MCP SSE 传输 `{}` 未配置 OAuth。",
+                self.endpoint
+            )));
+        };
+        auth_session.start_authorization(client_name).await
+    }
+
+    async fn finish_auth(
+        &self,
+        authorization_code: &str,
+        oauth_state: &str,
+    ) -> Result<McpAuthStatus, McpRuntimeError> {
+        let Some(auth_session) = self.auth_session.as_ref() else {
+            return Err(McpRuntimeError::transport(format!(
+                "MCP SSE 传输 `{}` 未配置 OAuth。",
+                self.endpoint
+            )));
+        };
+        auth_session
+            .finish_authorization(authorization_code, oauth_state)
+            .await
+    }
+
+    async fn remove_auth(&self) -> Result<(), McpRuntimeError> {
+        if let Some(auth_session) = self.auth_session.as_ref() {
+            auth_session.remove_authorization().await;
+        }
+        Ok(())
+    }
+
     async fn call_tool(
         &self,
         name: &str,
@@ -341,6 +498,7 @@ fn spawn_sse_listener(
     pending_responses: PendingResponseMap,
     shutdown_token: CancellationToken,
     event_sender: broadcast::Sender<McpTransportEvent>,
+    auth_session: Option<Arc<McpOAuthSession>>,
 ) {
     tokio::spawn(async move {
         let mut observed_connection = false;
@@ -349,24 +507,27 @@ fn spawn_sse_listener(
                 break;
             }
 
-            let response =
-                match open_sse_stream(&http_client, &sse_url, &bearer_token, &custom_headers).await
-                {
-                    Ok(response) => response,
-                    Err(_) => {
-                        if observed_connection {
-                            let _ = event_sender.send(McpTransportEvent::Disconnected {
-                                reason: format!(
-                                    "MCP SSE 传输 `{}` 已断开，正在等待重连。",
-                                    sse_url
-                                ),
-                            });
-                            observed_connection = false;
-                        }
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                        continue;
+            let response = match open_sse_stream(
+                &http_client,
+                &sse_url,
+                &bearer_token,
+                &custom_headers,
+                auth_session.as_ref(),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(_) => {
+                    if observed_connection {
+                        let _ = event_sender.send(McpTransportEvent::Disconnected {
+                            reason: format!("MCP SSE 传输 `{}` 已断开，正在等待重连。", sse_url),
+                        });
+                        observed_connection = false;
                     }
-                };
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
 
             observed_connection = true;
             let mut stream = SseStream::from_byte_stream(response.bytes_stream());
@@ -412,16 +573,13 @@ async fn open_sse_stream(
     sse_url: &Url,
     bearer_token: &Option<String>,
     custom_headers: &HeaderMap,
+    auth_session: Option<&Arc<McpOAuthSession>>,
 ) -> Result<Response, McpRuntimeError> {
     let mut request = http_client
         .get(sse_url.clone())
         .header(ACCEPT, "text/event-stream");
 
-    if let Some(token) = bearer_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(token) = resolve_effective_bearer_token(bearer_token, auth_session).await? {
         request = request.bearer_auth(token);
     }
 
@@ -474,6 +632,16 @@ async fn handle_sse_event(
             ServerNotification::ToolListChangedNotification(_)
         ) {
             let _ = event_sender.send(McpTransportEvent::ToolsChanged);
+        } else if matches!(
+            notification.notification,
+            ServerNotification::PromptListChangedNotification(_)
+        ) {
+            let _ = event_sender.send(McpTransportEvent::PromptsChanged);
+        } else if matches!(
+            notification.notification,
+            ServerNotification::ResourceListChangedNotification(_)
+        ) {
+            let _ = event_sender.send(McpTransportEvent::ResourcesChanged);
         }
     }
 
@@ -507,14 +675,11 @@ async fn post_client_message(
     bearer_token: &Option<String>,
     custom_headers: &HeaderMap,
     message: &ClientJsonRpcMessage,
+    auth_session: Option<&Arc<McpOAuthSession>>,
 ) -> Result<Response, McpRuntimeError> {
     let mut request = http_client.post(message_endpoint.clone());
 
-    if let Some(token) = bearer_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(token) = resolve_effective_bearer_token(bearer_token, auth_session).await? {
         request = request.bearer_auth(token);
     }
 
@@ -596,4 +761,42 @@ fn request_id_key(request_id: &RequestId) -> String {
         NumberOrString::Number(value) => value.to_string(),
         NumberOrString::String(value) => value.to_string(),
     }
+}
+
+/// Builds one legacy SSE prompt request parameter payload from a host-owned JSON argument contract.
+/// 根据宿主自有 JSON 参数契约构建一份旧式 SSE prompt 请求参数载荷。
+fn build_legacy_prompt_request_params(
+    name: &str,
+    args: Value,
+) -> Result<GetPromptRequestParams, McpRuntimeError> {
+    let mut params = GetPromptRequestParams::new(name.to_string());
+    params.arguments = match args {
+        Value::Null => None,
+        Value::Object(map) => Some(map),
+        other => {
+            return Err(McpRuntimeError::invalid_argument(format!(
+                "prompts/get requires an object or null arguments, got {other}"
+            )));
+        }
+    };
+    Ok(params)
+}
+
+/// Resolves the effective bearer token by preferring the live OAuth session token and falling back to the configured static token.
+/// 通过优先使用实时 OAuth 会话令牌并回退到已配置的静态令牌，解析生效 bearer token。
+async fn resolve_effective_bearer_token(
+    bearer_token: &Option<String>,
+    auth_session: Option<&Arc<McpOAuthSession>>,
+) -> Result<Option<String>, McpRuntimeError> {
+    if let Some(auth_session) = auth_session {
+        if let Some(token) = auth_session.access_token().await? {
+            return Ok(Some(token));
+        }
+    }
+
+    Ok(bearer_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned))
 }

@@ -2,11 +2,12 @@
 //! 桌面运行时基础架构共享的 MCP 配置映射层。
 
 use crate::provider_config::{
-    PersistedMcpServerEntry, PersistedMcpTransportKind, ProviderConfigurationFile,
+    PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
+    ProviderConfigurationFile,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use vulcan_mcp_runtime::McpTransportLaunchSpec;
+use vulcan_mcp_runtime::{McpTransportLaunchSpec, McpTransportOAuthSpec};
 
 /// Runtime-facing MCP transport family.
 /// 面向运行时的 MCP 传输类型。
@@ -49,6 +50,50 @@ impl From<PersistedMcpTransportKind> for McpTransportKind {
 
 /// Runtime-facing MCP server configuration entry.
 /// 面向运行时的 MCP 服务器配置条目。
+#[derive(Debug, Clone, Default)]
+pub struct McpServerOAuthConfig {
+    /// Optional pre-registered OAuth client identifier.
+    /// 可选的预注册 OAuth 客户端标识。
+    pub client_id: Option<String>,
+    /// Optional pre-registered OAuth client secret.
+    /// 可选的预注册 OAuth 客户端密钥。
+    pub client_secret: Option<String>,
+    /// Optional OAuth scopes requested during authorization.
+    /// 授权过程中请求的可选 OAuth scopes 集合。
+    pub scopes: Vec<String>,
+    /// Optional redirect URI used by the OAuth authorization-code flow.
+    /// OAuth 授权码流程使用的可选回调 URI。
+    pub redirect_uri: Option<String>,
+}
+
+impl From<PersistedMcpOAuthConfig> for McpServerOAuthConfig {
+    /// Converts one persisted OAuth configuration block into the runtime-facing representation.
+    /// 将单个持久化 OAuth 配置块转换为面向运行时的表示。
+    fn from(value: PersistedMcpOAuthConfig) -> Self {
+        Self {
+            client_id: value.client_id,
+            client_secret: value.client_secret,
+            scopes: value.scopes,
+            redirect_uri: value.redirect_uri,
+        }
+    }
+}
+
+impl From<McpServerOAuthConfig> for McpTransportOAuthSpec {
+    /// Converts one runtime-facing OAuth configuration block into the transport launch specification.
+    /// 将单个面向运行时的 OAuth 配置块转换为传输启动规格。
+    fn from(value: McpServerOAuthConfig) -> Self {
+        Self {
+            client_id: value.client_id,
+            client_secret: value.client_secret,
+            scopes: value.scopes,
+            redirect_uri: value.redirect_uri,
+        }
+    }
+}
+
+/// Runtime-facing MCP server configuration entry.
+/// 面向运行时的 MCP 服务器配置条目。
 #[derive(Debug, Clone)]
 pub struct McpServerConfig {
     /// Stable server identifier.
@@ -78,6 +123,9 @@ pub struct McpServerConfig {
     /// Additional HTTP headers used by HTTP transports.
     /// HTTP 传输使用的附加 HTTP 请求头。
     pub headers: BTreeMap<String, String>,
+    /// Optional OAuth configuration used by host-driven remote authorization flows.
+    /// 宿主驱动远端授权流程使用的可选 OAuth 配置。
+    pub oauth: Option<McpServerOAuthConfig>,
     /// Optional working directory.
     /// 可选工作目录。
     pub cwd: Option<String>,
@@ -125,6 +173,7 @@ impl McpServerConfig {
                     .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 HTTP URL。", self.name))?,
                 bearer_token: self.bearer_token.clone(),
                 headers: self.headers.clone(),
+                oauth: self.oauth.clone().map(Into::into),
             }),
             McpTransportKind::Sse => Ok(McpTransportLaunchSpec::Sse {
                 endpoint,
@@ -134,6 +183,7 @@ impl McpServerConfig {
                     .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 SSE URL。", self.name))?,
                 bearer_token: self.bearer_token.clone(),
                 headers: self.headers.clone(),
+                oauth: self.oauth.clone().map(Into::into),
             }),
         }
     }
@@ -179,6 +229,7 @@ fn runtime_mcp_server_from_persisted(id: &str, entry: &PersistedMcpServerEntry) 
         url: entry.url.clone(),
         bearer_token: entry.bearer_token.clone(),
         headers: entry.headers.clone(),
+        oauth: entry.oauth.clone().map(Into::into),
         cwd: entry.cwd.clone(),
         env: entry.env.clone(),
     }
@@ -202,6 +253,12 @@ mod tests {
             url: Some(String::from("https://example.test/mcp")),
             bearer_token: Some(String::from("token-123")),
             headers: BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
+            oauth: Some(McpServerOAuthConfig {
+                client_id: Some(String::from("demo-client")),
+                client_secret: Some(String::from("demo-secret")),
+                scopes: vec![String::from("read"), String::from("offline_access")],
+                redirect_uri: Some(String::from("http://localhost:8787/callback")),
+            }),
             cwd: Some(String::from("D:/mock/mcp")),
             env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
         }
@@ -235,6 +292,27 @@ mod tests {
         assert_eq!(
             error,
             String::from("MCP 服务器 `Sample Server` 缺少 HTTP URL。")
+        );
+    }
+
+    #[test]
+    fn http_launch_spec_preserves_oauth_configuration() {
+        let server = sample_server(McpTransportKind::Http);
+
+        assert_eq!(
+            server.launch_spec().expect("http server should build"),
+            McpTransportLaunchSpec::Http {
+                endpoint: String::from("https://example.test/mcp"),
+                uri: String::from("https://example.test/mcp"),
+                bearer_token: Some(String::from("token-123")),
+                headers: BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
+                oauth: Some(McpTransportOAuthSpec {
+                    client_id: Some(String::from("demo-client")),
+                    client_secret: Some(String::from("demo-secret")),
+                    scopes: vec![String::from("read"), String::from("offline_access")],
+                    redirect_uri: Some(String::from("http://localhost:8787/callback")),
+                }),
+            }
         );
     }
 }

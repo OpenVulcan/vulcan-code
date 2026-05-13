@@ -23,6 +23,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let effective_prompt = launch.effective_prompt;
         let preparation = launch.preparation;
         let active_agent = launch.active_agent;
+        let task_runtime = launch.task_runtime;
         let tools_manager = launch.tools_manager;
         let resolved_tool_definitions = launch.resolved_tool_definitions;
         let discovery_rows = launch.discovery_rows;
@@ -41,6 +42,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             &effective_prompt,
             request_history,
             core_snapshot,
+            task_runtime,
             tools_manager,
             resolved_tool_definitions,
         );

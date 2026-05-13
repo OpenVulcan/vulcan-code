@@ -2,7 +2,6 @@
 //! GUI 工作台共享的视觉样式定义。
 
 use crate::diff::DiffLineKind;
-use crate::model::SessionRunPhase;
 use crate::theme::ThemePaletteExt;
 use iced::overlay::menu;
 use iced::widget::{button, container, pick_list, text_editor};
@@ -1107,44 +1106,6 @@ pub fn window_close_button_style(theme: &Theme, status: button::Status) -> butto
             text_color: palette.background.base.text.scale_alpha(0.36),
             ..base
         },
-    }
-}
-
-/// Returns the status-chip style used by the workbench transcript header.
-/// 返回工作台转录区头部状态标签使用的样式。
-pub fn workbench_run_phase_chip_style(theme: &Theme, phase: SessionRunPhase) -> container::Style {
-    let palette = theme.extended_palette();
-    let (background, border) = match phase {
-        SessionRunPhase::Idle => (
-            palette.background.weak.color.scale_alpha(0.85),
-            palette.background.strong.color.scale_alpha(0.16),
-        ),
-        SessionRunPhase::Preparing => (
-            palette.primary.weak.color.scale_alpha(0.92),
-            palette.primary.strong.color.scale_alpha(0.2),
-        ),
-        SessionRunPhase::Ready => (
-            iced::color!(0xF0FFF4),
-            iced::color!(0x2DA44E).scale_alpha(0.18),
-        ),
-        SessionRunPhase::Failed => (
-            iced::color!(0xFFF1F0),
-            iced::color!(0xD73A49).scale_alpha(0.24),
-        ),
-        SessionRunPhase::Stopped => (
-            iced::color!(0xFFF8E6),
-            iced::color!(0x9A6700).scale_alpha(0.2),
-        ),
-    };
-
-    container::Style {
-        background: Some(Background::Color(background)),
-        border: Border {
-            radius: 2.0.into(),
-            width: 1.0,
-            color: border,
-        },
-        ..Default::default()
     }
 }
 

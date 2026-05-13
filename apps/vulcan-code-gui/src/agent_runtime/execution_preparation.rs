@@ -33,6 +33,7 @@ pub(crate) fn prepare_execution(
     let mut warnings = Vec::new();
     let workspace_path = request.workspace_path.trim().to_string();
     let tools_manager = build_vulcan_tools_manager(
+        foundation.task_runtime(),
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),

@@ -5,7 +5,7 @@ use crate::mcp::config::{McpServerConfig, runtime_mcp_server_configs};
 use crate::mcp::runtime::{McpRuntimeDiscoveryReport, McpRuntimeOverview};
 use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
-use vulcan_mcp_runtime::McpTransport;
+use vulcan_mcp_runtime::{McpOAuthSession, McpTransport};
 
 /// Runtime registry of configured MCP servers.
 /// 已配置 MCP 服务器的运行时注册表。
@@ -90,6 +90,7 @@ impl McpServerRegistry {
     pub(crate) async fn spawn_transport(
         &self,
         server_id: &str,
+        auth_session: Option<Arc<McpOAuthSession>>,
     ) -> Result<Arc<dyn McpTransport>, String> {
         let server = self
             .servers
@@ -103,7 +104,7 @@ impl McpServerRegistry {
 
         let launch_spec = server.launch_spec()?;
         launch_spec
-            .launch()
+            .launch(auth_session)
             .await
             .map_err(|error| server.launch_error_text(error))
     }
@@ -141,6 +142,7 @@ mod tests {
                     url: None,
                     bearer_token: None,
                     headers: BTreeMap::new(),
+                    oauth: None,
                     cwd: None,
                     env: BTreeMap::new(),
                 },
@@ -154,6 +156,7 @@ mod tests {
                     url: Some(String::from("https://disabled.test/mcp")),
                     bearer_token: None,
                     headers: BTreeMap::new(),
+                    oauth: None,
                     cwd: None,
                     env: BTreeMap::new(),
                 },
@@ -182,6 +185,7 @@ mod tests {
                     url: None,
                     bearer_token: None,
                     headers: BTreeMap::new(),
+                    oauth: None,
                     cwd: None,
                     env: BTreeMap::new(),
                 },
@@ -195,6 +199,7 @@ mod tests {
                     url: Some(String::from("https://disabled.test/mcp")),
                     bearer_token: None,
                     headers: BTreeMap::new(),
+                    oauth: None,
                     cwd: None,
                     env: BTreeMap::new(),
                 },
@@ -228,6 +233,7 @@ mod tests {
                         url: None,
                         bearer_token: None,
                         headers: BTreeMap::new(),
+                        oauth: None,
                         cwd: None,
                         env: BTreeMap::new(),
                     },

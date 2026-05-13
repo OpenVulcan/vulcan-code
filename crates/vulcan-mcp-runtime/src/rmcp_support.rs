@@ -4,7 +4,10 @@
 use std::time::Duration;
 
 use rmcp::ClientHandler;
-use rmcp::model::{CallToolRequestParams, CallToolResult, Tool as RmcpTool};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, JsonObject,
+    Prompt, ReadResourceRequestParams, ReadResourceResult, Resource, Tool as RmcpTool,
+};
 use rmcp::service::{NotificationContext, Peer, RoleClient};
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -34,6 +37,18 @@ impl ClientHandler for EventingClientHandler {
     /// 将 `tools/list_changed` 通知转发到宿主运行时事件流。
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
         let _ = self.event_sender.send(McpTransportEvent::ToolsChanged);
+    }
+
+    /// Forward `prompts/list_changed` notifications into the host runtime event stream.
+    /// 将 `prompts/list_changed` 通知转发到宿主运行时事件流。
+    async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        let _ = self.event_sender.send(McpTransportEvent::PromptsChanged);
+    }
+
+    /// Forward `resources/list_changed` notifications into the host runtime event stream.
+    /// 将 `resources/list_changed` 通知转发到宿主运行时事件流。
+    async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        let _ = self.event_sender.send(McpTransportEvent::ResourcesChanged);
     }
 }
 
@@ -139,6 +154,69 @@ pub(crate) async fn list_rmcp_tools(
         McpRuntimeError::transport(format!("tools/list({error_context}): {error}"))
     })?;
     Ok(tools.into_iter().map(rmcp_tool_to_schema).collect())
+}
+
+/// Convert one host-owned JSON prompt-argument payload into the rmcp prompt request contract.
+/// 将一份宿主自有 JSON prompt 参数载荷转换为 rmcp prompt 请求契约。
+fn build_rmcp_prompt_arguments(args: Value) -> Result<Option<JsonObject>, McpRuntimeError> {
+    match args {
+        Value::Null => Ok(None),
+        Value::Object(map) => Ok(Some(map)),
+        other => Err(McpRuntimeError::invalid_argument(format!(
+            "prompts/get requires an object or null arguments, got {other}"
+        ))),
+    }
+}
+
+/// List prompts from one rmcp client peer.
+/// 从单个 rmcp 客户端 peer 拉取 prompt 列表。
+pub(crate) async fn list_rmcp_prompts(
+    peer: &Peer<RoleClient>,
+    error_context: &str,
+) -> Result<Vec<Prompt>, McpRuntimeError> {
+    peer.list_all_prompts().await.map_err(|error| {
+        McpRuntimeError::transport(format!("prompts/list({error_context}): {error}"))
+    })
+}
+
+/// Resolve one rmcp prompt and return the typed prompt result.
+/// 解析单个 rmcp prompt 并返回类型化 prompt 结果。
+pub(crate) async fn get_rmcp_prompt(
+    peer: &Peer<RoleClient>,
+    error_context: &str,
+    name: &str,
+    args: Value,
+) -> Result<GetPromptResult, McpRuntimeError> {
+    let mut params = GetPromptRequestParams::new(name.to_string());
+    params.arguments = build_rmcp_prompt_arguments(args)?;
+    peer.get_prompt(params).await.map_err(|error| {
+        McpRuntimeError::transport(format!("prompts/get({error_context}): {error}"))
+    })
+}
+
+/// List resources from one rmcp client peer.
+/// 从单个 rmcp 客户端 peer 拉取资源列表。
+pub(crate) async fn list_rmcp_resources(
+    peer: &Peer<RoleClient>,
+    error_context: &str,
+) -> Result<Vec<Resource>, McpRuntimeError> {
+    peer.list_all_resources().await.map_err(|error| {
+        McpRuntimeError::transport(format!("resources/list({error_context}): {error}"))
+    })
+}
+
+/// Read one rmcp resource by URI and return the typed resource result.
+/// 通过 URI 读取单个 rmcp 资源并返回类型化资源结果。
+pub(crate) async fn read_rmcp_resource(
+    peer: &Peer<RoleClient>,
+    error_context: &str,
+    uri: &str,
+) -> Result<ReadResourceResult, McpRuntimeError> {
+    peer.read_resource(ReadResourceRequestParams::new(uri.to_string()))
+        .await
+        .map_err(|error| {
+            McpRuntimeError::transport(format!("resources/read({error_context}): {error}"))
+        })
 }
 
 /// Call one rmcp tool through the provided peer and convert the result into the host-owned JSON value contract.

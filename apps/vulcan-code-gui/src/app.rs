@@ -8,7 +8,9 @@ mod views;
 use self::helpers::*;
 
 use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
-use crate::agent_runtime::config::WORKSPACE_COORDINATOR_AGENT_ID;
+use crate::agent_runtime::config::{
+    EXPLORE_AGENT_ID, PLAN_AGENT_ID, WORKSPACE_COORDINATOR_AGENT_ID,
+};
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::{
     self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
@@ -971,18 +973,12 @@ pub struct VulcanWorkbench {
     /// Session-scoped execution phases reflected by the workbench status bar.
     /// 反映在工作台状态条中的按会话归属执行阶段集合。
     session_run_phases: BTreeMap<SessionId, SessionRunPhase>,
+    /// Per-session active real-AI run state keyed by session identifier.
+    /// 以会话标识为键保存的按会话划分活动真实 AI 运行状态。
+    active_runs: BTreeMap<SessionId, ActiveSessionRunState>,
     /// Monotonic identifier seed used to distinguish restarted or stopped execution streams.
     /// 用于区分重启后或已停止执行流的单调递增标识种子。
     next_run_id: u64,
-    /// Active execution stream identifier tracked while one real AI call is still in flight.
-    /// 当真实 AI 调用仍在进行中时跟踪的活动执行流标识。
-    active_run_id: Option<u64>,
-    /// Session identifier that currently owns the active real AI call.
-    /// 当前拥有活动真实 AI 调用的会话标识。
-    active_run_session_id: Option<SessionId>,
-    /// Abort handle used to stop the active real AI call at the iced task layer.
-    /// 用于在 iced 任务层停止当前真实 AI 调用的中止句柄。
-    active_run_handle: Option<task::Handle>,
     /// Current startup lifecycle shown by the full-screen loading overlay.
     /// 由全屏载入遮罩展示的当前启动生命周期状态。
     startup_lifecycle: StartupLifecycle,
@@ -1288,6 +1284,18 @@ struct ActiveTranscriptDragAutoScroll {
     /// Latest overshoot request reported by the selectable transcript widget.
     /// 可选择转录组件最近一次回传的越界滚动请求。
     request: SelectableTranscriptDragAutoScroll,
+}
+
+/// Active real-AI run state tracked independently for one session.
+/// 为单个会话独立跟踪的活动真实 AI 运行状态。
+#[derive(Debug)]
+struct ActiveSessionRunState {
+    /// Monotonic run identifier used to reject stale stream events for this session.
+    /// 用于拒绝该会话过期流事件的单调递增运行标识。
+    run_id: u64,
+    /// Abort handle used to stop the session-specific in-flight AI call.
+    /// 用于停止该会话专属进行中 AI 调用的中止句柄。
+    handle: task::Handle,
 }
 
 /// Stable archived-item deletion target retained while the user is going through the destructive second confirmation.
@@ -1701,6 +1709,7 @@ impl McpServerFormState {
                     url: None,
                     bearer_token: None,
                     headers: BTreeMap::new(),
+                    oauth: None,
                     cwd: trim_to_option(&self.cwd),
                     env: parse_mcp_server_env(&self.env_text)?,
                 })
@@ -1725,6 +1734,7 @@ impl McpServerFormState {
                     url: Some(url.to_string()),
                     bearer_token: trim_to_option(&self.bearer_token),
                     headers: parse_mcp_server_headers(&self.headers_text)?,
+                    oauth: None,
                     cwd: None,
                     env: BTreeMap::new(),
                 })
@@ -2573,6 +2583,14 @@ impl VulcanWorkbench {
         );
 
         let startup_controller_configuration = controller_configuration.clone();
+        let initial_execution_mode = if matches!(
+            agent_profile_catalog.state.selected_agent_id.as_deref(),
+            Some(agent_id) if agent_id == PLAN_AGENT_ID || agent_id == EXPLORE_AGENT_ID
+        ) {
+            ExecutionMode::Plan
+        } else {
+            ExecutionMode::Build
+        };
 
         let mut application = Self {
             main_window_id: Some(main_window_id),
@@ -2662,10 +2680,8 @@ impl VulcanWorkbench {
             active_thinking_overlay_drag_auto_scroll: None,
             agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
             session_run_phases: BTreeMap::new(),
+            active_runs: BTreeMap::new(),
             next_run_id: 1,
-            active_run_id: None,
-            active_run_session_id: None,
-            active_run_handle: None,
             startup_lifecycle: StartupLifecycle::Bootstrapping {
                 message: String::from("正在初始化 vldb 数据平面，请稍候。"),
             },
@@ -2702,7 +2718,7 @@ impl VulcanWorkbench {
             last_execution_preparation: None,
             last_mcp_discovery_rows: Vec::new(),
             last_mcp_discovery_errors: Vec::new(),
-            execution_mode: ExecutionMode::Build,
+            execution_mode: initial_execution_mode,
             workbench_reasoning_effort_preference: initial_workbench_reasoning_effort,
             workbench_reasoning_effort: initial_workbench_reasoning_effort,
             workbench_model_picker_open: false,
@@ -3962,11 +3978,16 @@ impl VulcanWorkbench {
             Message::ActiveAgentSelected(choice) => {
                 let selected_agent_id = if choice.id == SYSTEM_DEFAULT_AGENT_CHOICE_ID {
                     None
+                } else if choice.id == PLAN_AGENT_ID || choice.id == EXPLORE_AGENT_ID {
+                    self.execution_mode = ExecutionMode::Plan;
+                    Some(choice.id.clone())
                 } else if self.agent_profile_catalog.agents.contains_key(&choice.id) {
                     Some(choice.id.clone())
                 } else {
-                    self.status_message =
-                        format!("未找到用户代理 `{}`，无法切换当前激活代理。", choice.label);
+                    self.status_message = format!(
+                        "未找到可切换的代理 `{}`，无法切换当前激活代理。",
+                        choice.label
+                    );
                     return Task::none();
                 };
                 self.agent_profile_catalog.state.selected_agent_id = selected_agent_id;
@@ -3980,7 +4001,15 @@ impl VulcanWorkbench {
                 }
 
                 self.refresh_runtime_foundation();
-                self.status_message = format!("当前激活代理已切换为 `{}`。", choice.label);
+                self.status_message = if choice.id == PLAN_AGENT_ID || choice.id == EXPLORE_AGENT_ID
+                {
+                    format!(
+                        "当前激活代理已切换为 `{}`，执行模式已固定为 Plan。",
+                        choice.label
+                    )
+                } else {
+                    format!("当前激活代理已切换为 `{}`。", choice.label)
+                };
                 Task::none()
             }
             Message::UserAgentProfileSelected(agent_id) => {
@@ -4161,8 +4190,14 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ExecutionModeSelected(mode) => {
-                self.execution_mode = mode;
-                self.status_message = format!("执行模式已切换为 {mode}。");
+                if self.selected_agent_requires_plan_mode() {
+                    self.execution_mode = ExecutionMode::Plan;
+                    self.status_message =
+                        String::from("当前选中的是分析代理，执行模式已固定为 Plan。");
+                } else {
+                    self.execution_mode = mode;
+                    self.status_message = format!("执行模式已切换为 {mode}。");
+                }
                 Task::none()
             }
             Message::WorkbenchReasoningEffortSelected(option) => {
@@ -4183,11 +4218,17 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::CycleExecutionMode => {
-                self.execution_mode = match self.execution_mode {
-                    ExecutionMode::Build => ExecutionMode::Plan,
-                    ExecutionMode::Plan => ExecutionMode::Build,
-                };
-                self.status_message = format!("执行模式已切换为 {}。", self.execution_mode);
+                if self.selected_agent_requires_plan_mode() {
+                    self.execution_mode = ExecutionMode::Plan;
+                    self.status_message =
+                        String::from("当前选中的是分析代理，执行模式已固定为 Plan。");
+                } else {
+                    self.execution_mode = match self.execution_mode {
+                        ExecutionMode::Build => ExecutionMode::Plan,
+                        ExecutionMode::Plan => ExecutionMode::Build,
+                    };
+                    self.status_message = format!("执行模式已切换为 {}。", self.execution_mode);
+                }
                 Task::none()
             }
             Message::TemperatureChanged(value) => {
@@ -4874,7 +4915,15 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::StartRun => {
-                if self.has_active_run() {
+                let Some((selected_session_id, selected_session_title)) = self
+                    .selected_session()
+                    .map(|session| (session.id, session.title.clone()))
+                else {
+                    self.status_message = String::from("当前没有可执行的会话。");
+                    return Task::none();
+                };
+
+                if self.session_has_active_run(selected_session_id) {
                     self.status_message = String::from(
                         "当前已有 AI 调用正在执行，可点击停止按钮中止后再发起新的请求。",
                     );
@@ -4888,29 +4937,26 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
 
-                let selected_session_id = self.selected_session().map(|session| session.id);
-                if let Some(session_id) = selected_session_id {
-                    self.ensure_session_conversation_state_loaded(session_id);
-                }
+                self.ensure_session_conversation_state_loaded(selected_session_id);
 
-                let request = if let Some(session) = self.selected_session() {
-                    let conversation_state = self.session_conversation_state(session.id);
-                    let workspace_path = self
-                        .workspace_path_for_session_id(session.id)
-                        .unwrap_or_else(|| self.workspace_path.clone());
-                    ExecutionPreparationRequest {
-                        session_id: session.id,
-                        session_title: session.title.clone(),
-                        workspace_path,
-                        prompt: current_prompt,
-                        conversation_state,
-                        execution_mode: self.execution_mode.to_string(),
-                        temperature: self.temperature_enabled.then_some(self.temperature),
-                        reasoning_effort: self.workbench_reasoning_effort,
-                    }
+                let execution_mode = if self.selected_agent_requires_plan_mode() {
+                    ExecutionMode::Plan
                 } else {
-                    self.status_message = String::from("当前没有可执行的会话。");
-                    return Task::none();
+                    self.execution_mode
+                };
+                self.execution_mode = execution_mode;
+
+                let request = ExecutionPreparationRequest {
+                    session_id: selected_session_id,
+                    session_title: selected_session_title,
+                    workspace_path: self
+                        .workspace_path_for_session_id(selected_session_id)
+                        .unwrap_or_else(|| self.workspace_path.clone()),
+                    prompt: current_prompt,
+                    conversation_state: self.session_conversation_state(selected_session_id),
+                    execution_mode: execution_mode.to_string(),
+                    temperature: self.temperature_enabled.then_some(self.temperature),
+                    reasoning_effort: self.workbench_reasoning_effort,
                 };
 
                 if !composer_text_has_submittable_content(&request.prompt) {
@@ -4967,9 +5013,13 @@ impl VulcanWorkbench {
                     move |event| Message::RunExecutionStreamEvent { run_id, event },
                 )
                 .abortable();
-                self.active_run_id = Some(run_id);
-                self.active_run_session_id = Some(request.session_id);
-                self.active_run_handle = Some(run_handle);
+                self.active_runs.insert(
+                    request.session_id,
+                    ActiveSessionRunState {
+                        run_id,
+                        handle: run_handle,
+                    },
+                );
 
                 Task::batch([
                     self.persist_workspace_snapshot_task(),
@@ -4978,9 +5028,9 @@ impl VulcanWorkbench {
                 ])
             }
             Message::RunExecutionStreamEvent { run_id, event } => {
-                if self.active_run_id != Some(run_id) {
+                let Some(session_id) = self.active_run_session_id_for_run_id(run_id) else {
                     return Task::none();
-                }
+                };
 
                 match event {
                     ExecutionStreamEvent::Prepared(preparation) => {
@@ -5020,23 +5070,23 @@ impl VulcanWorkbench {
                         self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::Finished(report) => {
-                        self.clear_active_run_tracking();
+                        self.clear_active_run_tracking(session_id);
                         self.apply_execution_run_report(report)
                     }
                 }
             }
             Message::StopRun => {
-                let Some(session_id) = self.active_run_session_id else {
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     self.status_message = String::from("当前没有正在执行的 AI 调用。");
                     return Task::none();
                 };
 
-                let run_handle = self.active_run_handle.take();
-                self.clear_active_run_tracking();
+                let Some(active_run) = self.take_active_run_state(session_id) else {
+                    self.status_message = String::from("当前没有正在执行的 AI 调用。");
+                    return Task::none();
+                };
 
-                if let Some(handle) = run_handle {
-                    handle.abort();
-                }
+                active_run.handle.abort();
 
                 // Mark the stopped session as blocked so the interruption is visible in the UI.
                 // 将被停止的会话标记为阻塞状态，以便在界面中显式展示中断结果。
@@ -5390,6 +5440,15 @@ impl VulcanWorkbench {
         Ok(())
     }
 
+    /// Returns whether the currently selected runtime agent must always execute in Plan mode.
+    /// 返回当前选中的运行时代理是否必须始终以 Plan 模式执行。
+    fn selected_agent_requires_plan_mode(&self) -> bool {
+        matches!(
+            self.agent_profile_catalog.state.selected_agent_id.as_deref(),
+            Some(agent_id) if agent_id == PLAN_AGENT_ID || agent_id == EXPLORE_AGENT_ID
+        )
+    }
+
     /// Builds one persisted user-agent profile from the editable Agent management form.
     /// 根据可编辑 Agent 管理表单构建一条可持久化的用户 Agent 配置。
     fn build_user_agent_profile_from_form(
@@ -5415,6 +5474,11 @@ impl VulcanWorkbench {
             .ok_or_else(|| {
                 String::from("无法根据当前名称生成稳定标识，请显式填写一个英文或 slug 风格的标识。")
             })?;
+        if agent_profile::is_reserved_agent_identifier(&normalized_id) {
+            return Err(String::from(
+                "该 Agent 标识已被系统内置 Agent 保留，请显式填写一个不同的英文或 slug 标识。",
+            ));
+        }
 
         let temperature = match trim_to_option(&self.agent_profile_form.temperature_text) {
             Some(value) => Some(
@@ -7114,13 +7178,53 @@ impl VulcanWorkbench {
         self.session_run_phases.insert(session_id, phase);
     }
 
+    /// Returns whether one specific session currently owns an active real-AI run.
+    /// 返回某个指定会话当前是否拥有活动的真实 AI 运行。
+    fn session_has_active_run(&self, session_id: SessionId) -> bool {
+        self.active_runs.contains_key(&session_id)
+    }
+
+    /// Returns whether the currently selected session owns an active real-AI run.
+    /// 返回当前选中会话是否拥有活动的真实 AI 运行。
+    pub(super) fn has_active_run(&self) -> bool {
+        self.selected_session()
+            .map(|session| self.session_has_active_run(session.id))
+            .unwrap_or(false)
+    }
+
+    /// Clears the active run state tracked for one session after its stream finishes or is stopped.
+    /// 在某个会话的流结束或被停止后清理其活动运行状态。
+    fn clear_active_run_tracking(&mut self, session_id: SessionId) {
+        self.active_runs.remove(&session_id);
+    }
+
+    /// Removes and returns the active run state tracked for one session.
+    /// 移除并返回某个会话当前跟踪的活动运行状态。
+    fn take_active_run_state(&mut self, session_id: SessionId) -> Option<ActiveSessionRunState> {
+        self.active_runs.remove(&session_id)
+    }
+
+    /// Returns the session identifier that owns the provided run identifier, if it is still active.
+    /// 返回持有指定运行标识的会话标识（如果该运行仍然处于活动状态）。
+    fn active_run_session_id_for_run_id(&self, run_id: u64) -> Option<SessionId> {
+        self.active_runs
+            .iter()
+            .find_map(|(session_id, active_run)| {
+                if active_run.run_id == run_id {
+                    Some(*session_id)
+                } else {
+                    None
+                }
+            })
+    }
+
     /// Returns the visible session messages that should participate in the unified agent-view document for one session.
     /// 返回某个会话中应参与统一 agent-view 文档构建的可见消息集合。
     fn visible_session_messages_for_agent_view(
         &self,
         session_id: SessionId,
     ) -> Vec<SessionMessageEntry> {
-        let floating_thinking_message_id = if self.active_run_session_id == Some(session_id)
+        let floating_thinking_message_id = if self.session_has_active_run(session_id)
             && self
                 .floating_streaming_thinking_sessions
                 .contains(&session_id)
@@ -7154,7 +7258,7 @@ impl VulcanWorkbench {
     /// Returns the currently streaming thinking message for one session when it is still actively floating above the transcript.
     /// 返回某个会话当前仍以浮层方式展示的流式思考消息。
     fn streaming_thinking_message(&self, session_id: SessionId) -> Option<&SessionMessageEntry> {
-        if self.active_run_session_id != Some(session_id) {
+        if !self.session_has_active_run(session_id) {
             return None;
         }
         if !self
@@ -7293,7 +7397,7 @@ impl VulcanWorkbench {
             })
             .and_then(|message| parse_unix_millis_text(&message.created_at))
             .or_else(|| {
-                if self.active_run_session_id == Some(session_id)
+                if self.session_has_active_run(session_id)
                     && self
                         .streaming_thinking_message_ids
                         .get(&session_id)
@@ -7319,14 +7423,6 @@ impl VulcanWorkbench {
         let session_id = self.selected_session().map(|session| session.id)?;
         self.session_agent_view_selectable_documents
             .get(&session_id)
-    }
-
-    /// Returns the execution phase bound to the currently selected session transcript.
-    /// 返回绑定到当前选中会话转录区的执行阶段。
-    fn selected_session_run_phase(&self) -> SessionRunPhase {
-        self.selected_session()
-            .and_then(|session| self.session_run_phases.get(&session.id).copied())
-            .unwrap_or(SessionRunPhase::Idle)
     }
 
     /// Returns whether one session transcript should keep auto-following the latest tail output.

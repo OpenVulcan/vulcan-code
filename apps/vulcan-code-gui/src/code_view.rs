@@ -154,7 +154,10 @@ fn truncate_diff_preview_line(line: &str) -> (String, bool) {
         return (line.to_owned(), false);
     }
 
-    let head = line.chars().take(DIFF_PREVIEW_HEAD_CHARS).collect::<String>();
+    let head = line
+        .chars()
+        .take(DIFF_PREVIEW_HEAD_CHARS)
+        .collect::<String>();
     let tail = line
         .chars()
         .rev()
@@ -163,8 +166,8 @@ fn truncate_diff_preview_line(line: &str) -> (String, bool) {
         .into_iter()
         .rev()
         .collect::<String>();
-    let omitted_count = char_count
-        .saturating_sub(DIFF_PREVIEW_HEAD_CHARS + DIFF_PREVIEW_TAIL_CHARS);
+    let omitted_count =
+        char_count.saturating_sub(DIFF_PREVIEW_HEAD_CHARS + DIFF_PREVIEW_TAIL_CHARS);
 
     (
         format!("{head} … [truncated {omitted_count} chars] … {tail}"),
@@ -207,12 +210,8 @@ mod tests {
     #[test]
     fn wrapped_diff_hunk_tracks_truncated_line_count() {
         let mut hunk = DiffHunk::new();
-        hunk.lines.push(DiffLine::new(
-            DiffLineKind::Context,
-            Some(1),
-            Some(1),
-            "ok",
-        ));
+        hunk.lines
+            .push(DiffLine::new(DiffLineKind::Context, Some(1), Some(1), "ok"));
         hunk.lines.push(DiffLine::new(
             DiffLineKind::Added,
             None,

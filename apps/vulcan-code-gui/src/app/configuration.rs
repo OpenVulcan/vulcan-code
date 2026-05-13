@@ -48,14 +48,26 @@ impl VulcanWorkbench {
     /// Builds the configured agent choices rendered in the runtime settings card.
     /// 构建渲染在运行时设置卡片中的已配置代理选择项。
     pub(super) fn configured_agent_choices(&self) -> Vec<AgentChoice> {
-        std::iter::once(AgentChoice {
-            id: String::from(SYSTEM_DEFAULT_AGENT_CHOICE_ID),
-            label: String::from("系统默认（按模型）"),
-        })
+        vec![
+            AgentChoice {
+                id: String::from(SYSTEM_DEFAULT_AGENT_CHOICE_ID),
+                label: String::from("系统默认（按模型）"),
+            },
+            AgentChoice {
+                id: String::from(PLAN_AGENT_ID),
+                label: String::from("方案代理"),
+            },
+            AgentChoice {
+                id: String::from(EXPLORE_AGENT_ID),
+                label: String::from("探索代理"),
+            },
+        ]
+        .into_iter()
         .chain(
             self.agent_profile_catalog
                 .agents
                 .values()
+                .filter(|profile| !agent_profile::is_reserved_agent_identifier(&profile.id))
                 .map(|profile| AgentChoice {
                     id: profile.id.clone(),
                     label: profile.name.clone(),
@@ -73,10 +85,13 @@ impl VulcanWorkbench {
             .selected_agent_id
             .as_deref()
             .unwrap_or(SYSTEM_DEFAULT_AGENT_CHOICE_ID);
+        let choices = self.configured_agent_choices();
 
-        self.configured_agent_choices()
-            .into_iter()
+        choices
+            .iter()
             .find(|choice| choice.id == active_agent_id)
+            .cloned()
+            .or_else(|| choices.first().cloned())
     }
 
     /// Builds the configured MCP server choices rendered in the MCP settings card.

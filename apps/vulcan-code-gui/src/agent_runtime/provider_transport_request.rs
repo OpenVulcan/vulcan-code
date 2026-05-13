@@ -1,10 +1,12 @@
 //! Owned provider transport request models shared by the host-controlled transport router and executor.
 //! 供宿主控制传输路由层与执行器共享的自有 Provider 传输请求模型。
 
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use crate::provider_config::ProviderRuntimeKind;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
+use std::sync::Arc;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
@@ -59,6 +61,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Stable session identifier propagated into tool runtime events.
     /// 传播到工具运行时事件中的稳定会话标识。
     pub(crate) session_id: SessionId,
+    /// Shared resumable task runtime reused by the provider execution path.
+    /// 被 Provider 执行路径复用的共享可恢复任务运行时。
+    pub(crate) task_runtime: Arc<TaskRuntime>,
     /// Resolved tool definitions exposed to the provider for the current turn.
     /// 当前回合向 Provider 暴露的已解析工具定义集合。
     pub(crate) resolved_tools: Vec<ResolvedToolDefinition>,
@@ -83,6 +88,7 @@ pub(crate) fn build_provider_transport_execution_request(
     temperature: Option<f64>,
     max_turns: usize,
     headers: HeaderMap,
+    task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
@@ -102,6 +108,7 @@ pub(crate) fn build_provider_transport_execution_request(
         temperature,
         max_turns,
         headers,
+        task_runtime,
         tools_manager,
         session_id,
         resolved_tools,

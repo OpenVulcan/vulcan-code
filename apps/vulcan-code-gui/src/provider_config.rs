@@ -1211,6 +1211,29 @@ impl fmt::Display for PersistedMcpTransportKind {
 
 /// One persisted MCP server entry stored in the shared configuration file.
 /// 存储在共享配置文件中的单个持久化 MCP 服务器条目。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedMcpOAuthConfig {
+    /// Optional pre-registered OAuth client identifier.
+    /// 可选的预注册 OAuth 客户端标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Optional pre-registered OAuth client secret.
+    /// 可选的预注册 OAuth 客户端密钥。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    /// Optional OAuth scopes requested during authorization.
+    /// 授权过程中请求的可选 OAuth scopes 集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
+    /// Optional redirect URI used by the OAuth authorization-code flow.
+    /// OAuth 授权码流程使用的可选回调 URI。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redirect_uri: Option<String>,
+}
+
+/// One persisted MCP server entry stored in the shared configuration file.
+/// 存储在共享配置文件中的单个持久化 MCP 服务器条目。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedMcpServerEntry {
@@ -1244,6 +1267,10 @@ pub struct PersistedMcpServerEntry {
     /// 注入到远端 MCP 请求中的可选 HTTP 请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// Optional OAuth configuration used by host-driven remote authorization flows.
+    /// 宿主驱动远端授权流程使用的可选 OAuth 配置。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<PersistedMcpOAuthConfig>,
     /// Optional working directory used for the server process.
     /// 服务器进程使用的可选工作目录。
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -9,8 +9,8 @@ use crate::agent_runtime::provider_protocol_cohere::{
     CohereAssistantContent, CohereChatMessage, CohereFunctionDefinition,
     CohereMessageEndDeltaEnvelope, CohereStreamingContentDelta, CohereStreamingEvent,
     CohereStreamingToolCallDelta, CohereStreamingToolCallFunctionDelta, CohereToolCall,
-    CohereToolCallFunction, CohereToolCallKind, CohereToolDefinition,
-    CohereToolResultContent, CohereUsage, CohereUserContent,
+    CohereToolCallFunction, CohereToolCallKind, CohereToolDefinition, CohereToolResultContent,
+    CohereUsage, CohereUserContent,
 };
 use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
@@ -185,9 +185,9 @@ where
                 if matches!(active_content_kind, Some(ActiveCohereContentKind::Thinking))
                     && !active_thinking_text.is_empty()
                 {
-                    assistant_reasoning.push(ProviderReasoningPart::Text(
-                        std::mem::take(&mut active_thinking_text),
-                    ));
+                    assistant_reasoning.push(ProviderReasoningPart::Text(std::mem::take(
+                        &mut active_thinking_text,
+                    )));
                 }
                 active_content_kind = None;
             }
@@ -218,7 +218,8 @@ where
             CohereStreamingEvent::ToolCallDelta { delta, .. } => {
                 if let (Some(pending), Some(arguments_delta)) = (
                     pending_tool_call.as_mut(),
-                    delta.and_then(|payload| payload.message)
+                    delta
+                        .and_then(|payload| payload.message)
                         .and_then(|message| message.tool_calls)
                         .and_then(extract_cohere_tool_call_arguments_delta),
                 ) {
@@ -329,19 +330,23 @@ fn build_cohere_request_payload(
 
     let mut messages = Vec::new();
     if !snapshot.system_prompt.trim().is_empty() {
-        messages.push(serde_json::to_value(CohereChatMessage::System {
-            content: snapshot.system_prompt,
-        })
-        .map_err(|error| VulcanCoreError::InvalidState {
-            message: format!("Cohere 系统消息序列化失败：{error}"),
-        })?);
+        messages.push(
+            serde_json::to_value(CohereChatMessage::System {
+                content: snapshot.system_prompt,
+            })
+            .map_err(|error| VulcanCoreError::InvalidState {
+                message: format!("Cohere 系统消息序列化失败：{error}"),
+            })?,
+        );
     }
 
     messages.extend(
         current_history
             .iter()
             .map(core_message_to_cohere_message)
-            .chain(std::iter::once(core_message_to_cohere_message(&current_prompt)))
+            .chain(std::iter::once(core_message_to_cohere_message(
+                &current_prompt,
+            )))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .map(|message| {
@@ -361,9 +366,7 @@ fn build_cohere_request_payload(
                 provider_tool_definitions
                     .iter()
                     .map(provider_tool_definition_to_cohere_tool_definition)
-                    .map(|tool| {
-                        serde_json::to_value(tool).unwrap_or_else(|_| Value::Null)
-                    })
+                    .map(|tool| serde_json::to_value(tool).unwrap_or_else(|_| Value::Null))
                     .collect(),
             ),
         );
@@ -480,28 +483,17 @@ fn handle_cohere_content_start<S>(
 
     match kind {
         ActiveCohereContentKind::Thinking => {
-            let delta = content
-                .thinking
-                .or(content.text)
-                .unwrap_or_default();
+            let delta = content.thinking.or(content.text).unwrap_or_default();
             if !delta.is_empty() {
                 active_thinking_text.push_str(&delta);
-                forward_cohere_delta(
-                    live_sender,
-                    sink,
-                    CoreProviderTurnDelta::Thinking { delta },
-                );
+                forward_cohere_delta(live_sender, sink, CoreProviderTurnDelta::Thinking { delta });
             }
         }
         ActiveCohereContentKind::Text => {
             let delta = content.text.unwrap_or_default();
             if !delta.is_empty() {
                 assistant_text.push_str(&delta);
-                forward_cohere_delta(
-                    live_sender,
-                    sink,
-                    CoreProviderTurnDelta::Output { delta },
-                );
+                forward_cohere_delta(live_sender, sink, CoreProviderTurnDelta::Output { delta });
             }
         }
         ActiveCohereContentKind::Other => {}
@@ -529,22 +521,14 @@ fn handle_cohere_content_delta<S>(
             let delta = content.thinking.or(content.text).unwrap_or_default();
             if !delta.is_empty() {
                 active_thinking_text.push_str(&delta);
-                forward_cohere_delta(
-                    live_sender,
-                    sink,
-                    CoreProviderTurnDelta::Thinking { delta },
-                );
+                forward_cohere_delta(live_sender, sink, CoreProviderTurnDelta::Thinking { delta });
             }
         }
         ActiveCohereContentKind::Text => {
             let delta = content.text.unwrap_or_default();
             if !delta.is_empty() {
                 assistant_text.push_str(&delta);
-                forward_cohere_delta(
-                    live_sender,
-                    sink,
-                    CoreProviderTurnDelta::Output { delta },
-                );
+                forward_cohere_delta(live_sender, sink, CoreProviderTurnDelta::Output { delta });
             }
         }
         ActiveCohereContentKind::Other => {}
@@ -553,11 +537,15 @@ fn handle_cohere_content_delta<S>(
 
 /// Starts one pending Cohere tool call from the current tool-call-start payload.
 /// 根据当前工具调用开始载荷启动一条待定 Cohere 工具调用。
-fn start_pending_cohere_tool_call(tool_call_delta: CohereStreamingToolCallDelta) -> PendingCohereToolCall {
-    let function = tool_call_delta.function.unwrap_or(CohereStreamingToolCallFunctionDelta {
-        name: None,
-        arguments: None,
-    });
+fn start_pending_cohere_tool_call(
+    tool_call_delta: CohereStreamingToolCallDelta,
+) -> PendingCohereToolCall {
+    let function = tool_call_delta
+        .function
+        .unwrap_or(CohereStreamingToolCallFunctionDelta {
+            name: None,
+            arguments: None,
+        });
     PendingCohereToolCall {
         id: tool_call_delta.id.unwrap_or_default(),
         name: function.name.unwrap_or_default(),
@@ -570,7 +558,9 @@ fn start_pending_cohere_tool_call(tool_call_delta: CohereStreamingToolCallDelta)
 fn extract_cohere_tool_call_arguments_delta(
     tool_call_delta: CohereStreamingToolCallDelta,
 ) -> Option<String> {
-    tool_call_delta.function.and_then(|function| function.arguments)
+    tool_call_delta
+        .function
+        .and_then(|function| function.arguments)
 }
 
 /// Finalizes one pending Cohere tool call into the canonical core tool-call shape.

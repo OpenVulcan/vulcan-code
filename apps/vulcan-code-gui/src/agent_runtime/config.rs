@@ -1,7 +1,7 @@
 //! Runtime configuration mapping shared by the compose execution foundation.
 //! compose 执行基础架构共享的运行时配置映射层。
 
-use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile};
+use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile, is_reserved_agent_identifier};
 use crate::provider_config::{
     PersistedSkillEntry, PersistedSkillKind, PersistedToolPolicyEntry, ProviderConfigurationFile,
 };
@@ -26,6 +26,14 @@ pub const MEMORY_SPECIALIST_AGENT_ID: &str = "memory-specialist";
 /// 注入到新配置中的默认协调代理稳定标识。
 pub const WORKSPACE_COORDINATOR_AGENT_ID: &str = "workspace-coordinator";
 
+/// Stable identifier of the first-class planning agent seeded into fresh configurations.
+/// 注入到新配置中的一等规划代理稳定标识。
+pub const PLAN_AGENT_ID: &str = "plan";
+
+/// Stable identifier of the first-class repository exploration agent seeded into fresh configurations.
+/// 注入到新配置中的一等仓库探索代理稳定标识。
+pub const EXPLORE_AGENT_ID: &str = "explore";
+
 /// Stable identifier of the default safe tool policy.
 /// 默认安全工具策略的稳定标识。
 pub const DEFAULT_SAFE_TOOL_POLICY_ID: &str = "default-safe";
@@ -33,6 +41,10 @@ pub const DEFAULT_SAFE_TOOL_POLICY_ID: &str = "default-safe";
 /// Stable identifier of the Lua-oriented tool policy.
 /// Lua 定向工具策略的稳定标识。
 pub const LUA_SAFE_TOOL_POLICY_ID: &str = "lua-safe";
+
+/// Stable identifier of the analysis-oriented read-only tool policy.
+/// 分析定向只读工具策略的稳定标识。
+pub const ANALYSIS_SAFE_TOOL_POLICY_ID: &str = "analysis-safe";
 
 /// Relative resource directory name that stores default agent system prompts.
 /// 存放默认代理系统提示词的相对资源目录名称。
@@ -50,6 +62,14 @@ const LUA_SPECIALIST_PROMPT_FILE_NAME: &str = "lua-specialist.txt";
 /// 默认记忆专家代理提示词资源文件名。
 const MEMORY_SPECIALIST_PROMPT_FILE_NAME: &str = "memory-specialist.txt";
 
+/// Default plan agent prompt resource file name.
+/// 默认规划代理提示词资源文件名。
+const PLAN_PROMPT_FILE_NAME: &str = "plan.txt";
+
+/// Default explore agent prompt resource file name.
+/// 默认探索代理提示词资源文件名。
+const EXPLORE_PROMPT_FILE_NAME: &str = "explore.txt";
+
 /// Legacy inline worker prompt kept as one compatibility fallback.
 /// 保留为兼容回退的一条旧版内联工作代理提示词。
 const LEGACY_DEFAULT_WORKER_PROMPT: &str = "你是 Vulcan Code 的默认工作代理。";
@@ -62,6 +82,14 @@ const LEGACY_LUA_SPECIALIST_PROMPT: &str = "你是 LuaSkills 方向的专家代�
 /// 保留为兼容回退的一条旧版内联记忆代理提示词。
 const LEGACY_MEMORY_SPECIALIST_PROMPT: &str = "你是 VulcanMemoryMesh 方向的专家代理。";
 
+/// Legacy inline plan prompt kept as one compatibility fallback.
+/// 保留为兼容回退的一条旧版内联规划代理提示词。
+const LEGACY_PLAN_PROMPT: &str = "你是 Vulcan Code 的方案代理。";
+
+/// Legacy inline explore prompt kept as one compatibility fallback.
+/// 保留为兼容回退的一条旧版内联探索代理提示词。
+const LEGACY_EXPLORE_PROMPT: &str = "你是 Vulcan Code 的探索代理。";
+
 /// Runtime-facing agent family used by the compose foundation.
 /// compose 基础架构使用的运行时代理类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +97,12 @@ pub enum RuntimeAgentKind {
     /// General worker agent.
     /// 常规工作代理。
     Worker,
+    /// First-class planning agent.
+    /// 一等规划代理。
+    Planner,
+    /// First-class exploration agent.
+    /// 一等探索代理。
+    Explorer,
     /// Specialist agent.
     /// 专家代理。
     Specialist,
@@ -83,6 +117,8 @@ impl RuntimeAgentKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Worker => "工作代理",
+            Self::Planner => "规划代理",
+            Self::Explorer => "探索代理",
             Self::Specialist => "专家代理",
             Self::Coordinator => "协调代理",
         }
@@ -286,6 +322,8 @@ impl AgentRuntimeConfig {
     ) -> Self {
         let mut agents = vec![
             default_worker_agent(),
+            default_plan_agent(),
+            default_explore_agent(),
             default_lua_agent(),
             default_memory_agent(),
             default_coordinator_agent(),
@@ -294,6 +332,7 @@ impl AgentRuntimeConfig {
             agent_profile_catalog
                 .agents
                 .values()
+                .filter(|profile| !is_reserved_agent_identifier(&profile.id))
                 .map(runtime_agent_from_user_profile),
         );
 
@@ -333,7 +372,12 @@ impl AgentRuntimeConfig {
                 .state
                 .selected_agent_id
                 .clone()
-                .filter(|agent_id| *agent_id != WORKSPACE_COORDINATOR_AGENT_ID)
+                .filter(|agent_id| {
+                    *agent_id == PLAN_AGENT_ID
+                        || *agent_id == EXPLORE_AGENT_ID
+                        || (!is_reserved_agent_identifier(agent_id)
+                            && agents.iter().any(|definition| definition.id == *agent_id))
+                })
                 .filter(|agent_id| agents.iter().any(|definition| definition.id == *agent_id))
                 .unwrap_or_else(|| DEFAULT_WORKER_AGENT_ID.to_string()),
             agents,
@@ -363,6 +407,11 @@ pub fn ensure_runtime_defaults(config: &mut ProviderConfigurationFile) -> bool {
         config,
         DEFAULT_SAFE_TOOL_POLICY_ID,
         default_safe_tool_policy(),
+    );
+    changed |= ensure_default_tool_policy(
+        config,
+        ANALYSIS_SAFE_TOOL_POLICY_ID,
+        default_analysis_tool_policy(),
     );
     changed |=
         ensure_default_tool_policy(config, LUA_SAFE_TOOL_POLICY_ID, default_lua_tool_policy());
@@ -486,6 +535,22 @@ fn default_safe_tool_policy() -> PersistedToolPolicyEntry {
     }
 }
 
+/// Builds the default analysis-oriented read-only tool policy.
+/// 构建默认的分析定向只读工具策略。
+fn default_analysis_tool_policy() -> PersistedToolPolicyEntry {
+    PersistedToolPolicyEntry {
+        name: Some(String::from("分析只读策略")),
+        allow_all_native: false,
+        native_tools: vec![
+            String::from("workspace.describe"),
+            String::from("registry.list_skills"),
+            String::from("mcp.list_servers"),
+        ],
+        mcp_servers: Vec::new(),
+        mcp_tools: Vec::new(),
+    }
+}
+
 /// Builds the default Lua-oriented tool policy.
 /// 构建默认的 Lua 定向工具策略。
 fn default_lua_tool_policy() -> PersistedToolPolicyEntry {
@@ -525,6 +590,50 @@ fn default_worker_agent() -> RuntimeAgentDefinition {
         fallback_delegate: None,
         model: None,
         temperature: Some(0.2),
+        max_turns: None,
+    }
+}
+
+/// Builds the default plan agent runtime definition.
+/// 构建默认规划代理运行时定义。
+fn default_plan_agent() -> RuntimeAgentDefinition {
+    RuntimeAgentDefinition {
+        id: String::from(PLAN_AGENT_ID),
+        name: String::from("方案代理"),
+        kind: RuntimeAgentKind::Planner,
+        description: String::from("负责在编码前完成目标拆解、风险识别与执行路径规划。"),
+        system_prompt: load_default_agent_prompt(PLAN_PROMPT_FILE_NAME, LEGACY_PLAN_PROMPT),
+        skill_ids: Vec::new(),
+        native_tools: Vec::new(),
+        mcp_tools: Vec::new(),
+        delegates: Vec::new(),
+        tool_policy: Some(String::from(ANALYSIS_SAFE_TOOL_POLICY_ID)),
+        routes: Vec::new(),
+        fallback_delegate: None,
+        model: None,
+        temperature: Some(0.1),
+        max_turns: None,
+    }
+}
+
+/// Builds the default explore agent runtime definition.
+/// 构建默认探索代理运行时定义。
+fn default_explore_agent() -> RuntimeAgentDefinition {
+    RuntimeAgentDefinition {
+        id: String::from(EXPLORE_AGENT_ID),
+        name: String::from("探索代理"),
+        kind: RuntimeAgentKind::Explorer,
+        description: String::from("负责工作区定位、代码脉络梳理与证据化上下文收集。"),
+        system_prompt: load_default_agent_prompt(EXPLORE_PROMPT_FILE_NAME, LEGACY_EXPLORE_PROMPT),
+        skill_ids: Vec::new(),
+        native_tools: Vec::new(),
+        mcp_tools: Vec::new(),
+        delegates: Vec::new(),
+        tool_policy: Some(String::from(ANALYSIS_SAFE_TOOL_POLICY_ID)),
+        routes: Vec::new(),
+        fallback_delegate: None,
+        model: None,
+        temperature: Some(0.1),
         max_turns: None,
     }
 }
@@ -661,4 +770,47 @@ fn read_non_empty_prompt_file(path: &Path) -> Option<String> {
         .ok()
         .map(|content| content.trim().to_string())
         .filter(|content| !content.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentRuntimeConfig, EXPLORE_AGENT_ID, PLAN_AGENT_ID};
+    use crate::agent_profile::AgentProfileCatalog;
+    use crate::provider_config::ProviderConfigurationFile;
+
+    /// Verifies that the runtime seed always exposes the first-class plan and explore agents.
+    /// 验证运行时种子始终会暴露一等的 plan 与 explore 代理。
+    #[test]
+    fn runtime_config_seeds_first_class_analysis_agents() {
+        let runtime_config = AgentRuntimeConfig::from_sources(
+            &ProviderConfigurationFile::default(),
+            &AgentProfileCatalog::default(),
+        );
+
+        assert!(
+            runtime_config
+                .agents
+                .iter()
+                .any(|agent| agent.id == PLAN_AGENT_ID)
+        );
+        assert!(
+            runtime_config
+                .agents
+                .iter()
+                .any(|agent| agent.id == EXPLORE_AGENT_ID)
+        );
+    }
+
+    /// Verifies that a persisted plan-agent selection survives runtime projection.
+    /// 验证持久化的规划代理选择会在运行时投影中保持生效。
+    #[test]
+    fn runtime_config_preserves_selected_plan_agent() {
+        let mut catalog = AgentProfileCatalog::default();
+        catalog.state.selected_agent_id = Some(String::from(PLAN_AGENT_ID));
+
+        let runtime_config =
+            AgentRuntimeConfig::from_sources(&ProviderConfigurationFile::default(), &catalog);
+
+        assert_eq!(runtime_config.active_agent_id, PLAN_AGENT_ID);
+    }
 }

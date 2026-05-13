@@ -2,6 +2,7 @@
 //! Google Gemini 原生宿主控制 Provider 传输入口模块。
 
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::provider_transport_entry_inputs::{
     normalize_optional_base_url, prepare_provider_transport_runtime_inputs,
 };
@@ -9,6 +10,7 @@ use crate::agent_runtime::provider_transport_stream_runtime::execute_host_contro
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
+use std::sync::Arc;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
@@ -29,6 +31,7 @@ pub(crate) fn execute_google_gemini_stream(
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
+    task_runtime: Arc<TaskRuntime>,
     tools_manager: VulcanToolsManager,
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
@@ -48,6 +51,7 @@ pub(crate) fn execute_google_gemini_stream(
         tools_manager,
         &resolved_tools,
         session_id,
+        task_runtime,
     );
 
     execute_host_controlled_stream_with_prepared_inputs(
