@@ -55,7 +55,7 @@ impl CompatibleToolCallChunk {
 /// One normalized choice payload extracted from the first compatible provider choice.
 /// 从首个兼容 Provider choice 提取出的规范化 choice 载荷。
 #[derive(Debug, Clone)]
-pub(crate) struct CompatibleChoice<D> {
+pub(crate) struct CompatibleChoice {
     /// Stream finish reason normalized to the compatibility layer.
     /// 已规范化到兼容层的流式结束原因。
     pub(crate) finish_reason: CompatibleFinishReason,
@@ -68,16 +68,12 @@ pub(crate) struct CompatibleChoice<D> {
     /// Streamed tool-call fragments emitted by the provider.
     /// Provider 发出的工具调用碎片集合。
     pub(crate) tool_calls: Vec<CompatibleToolCallChunk>,
-    /// Provider-specific additional detail fragments that higher layers may consume later.
-    /// 上层后续可能消费的 Provider 专有附加细节碎片。
-    #[allow(dead_code)]
-    pub(crate) details: Vec<D>,
 }
 
 /// One intermediate choice representation used before tool-call chunks are converted into the canonical compatible shape.
 /// 在工具调用碎片转换成标准兼容形态之前使用的中间 choice 表示。
 #[derive(Debug, Clone)]
-pub(crate) struct CompatibleChoiceData<T, D> {
+pub(crate) struct CompatibleChoiceData<T> {
     /// Stream finish reason normalized to the compatibility layer.
     /// 已规范化到兼容层的流式结束原因。
     pub(crate) finish_reason: CompatibleFinishReason,
@@ -90,29 +86,18 @@ pub(crate) struct CompatibleChoiceData<T, D> {
     /// Provider-specific tool-call fragments that can be converted into the canonical compatible tool-call chunk.
     /// 可转换为标准兼容工具调用碎片的 Provider 专有工具调用片段。
     pub(crate) tool_calls: Vec<T>,
-    /// Provider-specific additional detail fragments that higher layers may consume later.
-    /// 上层后续可能消费的 Provider 专有附加细节碎片。
-    pub(crate) details: Vec<D>,
 }
 
 /// One normalized stream chunk extracted from a provider event.
 /// 从一条 Provider 事件中提取出的规范化流式块。
 #[derive(Debug, Clone)]
-pub(crate) struct CompatibleChunk<U, D> {
+pub(crate) struct CompatibleChunk {
     /// Optional upstream response identifier carried by the current event.
     /// 当前事件携带的可选上游响应标识。
     pub(crate) response_id: Option<String>,
-    /// Optional upstream model identifier carried by the current event.
-    /// 当前事件携带的可选上游模型标识。
-    #[allow(dead_code)]
-    pub(crate) response_model: Option<String>,
     /// Optional first normalized choice extracted from the current event.
     /// 从当前事件提取出的可选首个规范化 choice。
-    pub(crate) choice: Option<CompatibleChoice<D>>,
-    /// Optional usage snapshot carried by the current event.
-    /// 当前事件携带的可选用量快照。
-    #[allow(dead_code)]
-    pub(crate) usage: Option<U>,
+    pub(crate) choice: Option<CompatibleChoice>,
 }
 
 /// One accumulated tool call assembled from multiple streamed delta fragments.
@@ -142,43 +127,38 @@ impl CompatibleAccumulatedToolCall {
     }
 }
 
-impl<T, D> From<CompatibleChoiceData<T, D>> for CompatibleChoice<D>
+impl<T> From<CompatibleChoiceData<T>> for CompatibleChoice
 where
     T: Into<CompatibleToolCallChunk>,
 {
     /// Converts one provider-specific intermediate choice into the canonical compatible choice shape.
     /// 将一份 Provider 专用中间 choice 转换为标准兼容 choice 形状。
-    fn from(value: CompatibleChoiceData<T, D>) -> Self {
+    fn from(value: CompatibleChoiceData<T>) -> Self {
         Self {
             finish_reason: value.finish_reason,
             text: value.text,
             reasoning: value.reasoning,
             tool_calls: value.tool_calls.into_iter().map(Into::into).collect(),
-            details: value.details,
         }
     }
 }
 
 /// Normalizes the first provider choice into the shared compatible chunk shape while preserving response metadata and usage.
 /// 在保留响应元数据与用量的同时，将首个 Provider choice 规范化为共享兼容块形状。
-pub(crate) fn normalize_first_choice_chunk<U, D, Choice, ToolCall, F>(
+pub(crate) fn normalize_first_choice_chunk<Choice, ToolCall, F>(
     response_id: Option<String>,
-    response_model: Option<String>,
-    usage: Option<U>,
     choices: &[Choice],
     map_choice: F,
-) -> CompatibleChunk<U, D>
+) -> CompatibleChunk
 where
     ToolCall: Into<CompatibleToolCallChunk>,
-    F: FnOnce(&Choice) -> CompatibleChoiceData<ToolCall, D>,
+    F: FnOnce(&Choice) -> CompatibleChoiceData<ToolCall>,
 {
     let choice = choices.first().map(|choice| map_choice(choice).into());
 
     CompatibleChunk {
         response_id,
-        response_model,
         choice,
-        usage,
     }
 }
 

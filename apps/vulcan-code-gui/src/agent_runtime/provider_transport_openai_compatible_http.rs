@@ -9,7 +9,7 @@ use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
 use crate::agent_runtime::provider_protocol_openai_compatible::{
-    CompatibleAccumulatedToolCall, CompatibleChoiceData, CompatibleChunk, CompatibleFinishReason,
+    CompatibleAccumulatedToolCall, CompatibleChoiceData, CompatibleFinishReason,
     CompatibleToolCallChunk, append_tool_call_arguments, finalize_completed_streaming_tool_call,
     finalize_pending_tool_call, normalize_first_choice_chunk,
     should_evict_distinct_named_tool_call, tool_call_chunks,
@@ -126,27 +126,6 @@ struct OpenAiCompatibleStreamingChoice {
     finish_reason: Option<OpenAiCompatibleFinishReason>,
 }
 
-/// Minimal OpenAI-compatible token-usage payload preserved for final accounting compatibility.
-/// 为保持最终计量兼容性而保留的最小 OpenAI 兼容用量载荷。
-#[derive(Debug, Clone, Default, Deserialize)]
-struct OpenAiCompatibleUsage {
-    /// Prompt token count.
-    /// 提示词 token 数量。
-    #[serde(default)]
-    #[allow(dead_code)]
-    prompt_tokens: u64,
-    /// Completion token count.
-    /// 输出 token 数量。
-    #[serde(default)]
-    #[allow(dead_code)]
-    completion_tokens: u64,
-    /// Total token count.
-    /// 总 token 数量。
-    #[serde(default)]
-    #[allow(dead_code)]
-    total_tokens: u64,
-}
-
 /// Minimal OpenAI-compatible streaming chunk decoded from one SSE `data:` payload.
 /// 从单条 SSE `data:` 载荷解码出的最小 OpenAI 兼容流式块。
 #[derive(Debug, Clone, Deserialize)]
@@ -154,16 +133,10 @@ struct OpenAiCompatibleStreamingChunk {
     /// Optional upstream response identifier.
     /// 可选的上游响应标识。
     id: Option<String>,
-    /// Optional upstream model identifier.
-    /// 可选的上游模型标识。
-    model: Option<String>,
     /// Streamed choice list.
     /// 流式 choice 列表。
     #[serde(default)]
     choices: Vec<OpenAiCompatibleStreamingChoice>,
-    /// Optional usage payload, often emitted in the final trailing chunk only.
-    /// 可选的用量载荷，通常只在最终尾块中出现。
-    usage: Option<OpenAiCompatibleUsage>,
 }
 
 /// Executes one direct OpenAI-compatible streaming turn without going through any third-party completion-model abstraction.
@@ -365,10 +338,6 @@ fn build_openai_compatible_request_payload(
     payload.insert(String::from("model"), Value::String(model_id.to_string()));
     payload.insert(String::from("messages"), Value::Array(messages));
     payload.insert(String::from("stream"), Value::Bool(true));
-    payload.insert(
-        String::from("stream_options"),
-        json!({ "include_usage": true }),
-    );
 
     if let Some(temperature) = snapshot.temperature {
         payload.insert(String::from("temperature"), json!(temperature));
@@ -488,7 +457,10 @@ fn normalize_openai_compatible_chunk(
     provider_id: &str,
     provider_label: &str,
     data: &str,
-) -> Result<CompatibleChunk<OpenAiCompatibleUsage, ()>, VulcanCoreError> {
+) -> Result<
+    crate::agent_runtime::provider_protocol_openai_compatible::CompatibleChunk,
+    VulcanCoreError,
+> {
     let chunk = serde_json::from_str::<OpenAiCompatibleStreamingChunk>(data).map_err(|error| {
         VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
@@ -498,8 +470,6 @@ fn normalize_openai_compatible_chunk(
 
     Ok(normalize_first_choice_chunk(
         chunk.id,
-        chunk.model,
-        chunk.usage,
         &chunk.choices,
         |choice| CompatibleChoiceData {
             finish_reason: if choice.finish_reason == Some(OpenAiCompatibleFinishReason::ToolCalls)
@@ -511,7 +481,6 @@ fn normalize_openai_compatible_chunk(
             text: choice.delta.content.clone(),
             reasoning: choice.delta.reasoning_content.clone(),
             tool_calls: tool_call_chunks(&choice.delta.tool_calls),
-            details: Vec::new(),
         },
     ))
 }
@@ -697,7 +666,6 @@ mod tests {
         assert_eq!(messages[2]["tool_call_id"], "call-1");
         assert_eq!(messages[2]["content"], "tool result body");
         assert_eq!(payload["stream"], true);
-        assert_eq!(payload["stream_options"]["include_usage"], true);
         assert_eq!(payload["reasoning"]["effort"], "high");
         assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
     }
