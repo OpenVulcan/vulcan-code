@@ -187,7 +187,7 @@ pub struct McpRuntimeAccess {
 impl McpRuntimeAccess {
     /// Builds one stable MCP runtime access surface directly from provider configuration and one optional live runtime handle.
     /// 直接根据供应商配置与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
-    pub fn from_configuration(
+    pub(crate) fn from_configuration(
         config: &ProviderConfigurationFile,
         live_runtime: Option<McpRuntimeHandle>,
     ) -> Self {
@@ -196,10 +196,7 @@ impl McpRuntimeAccess {
 
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
-    pub fn new(
-        configured_summary: McpRegistrySummary,
-        live_runtime: Option<McpRuntimeHandle>,
-    ) -> Self {
+    fn new(configured_summary: McpRegistrySummary, live_runtime: Option<McpRuntimeHandle>) -> Self {
         Self {
             configured_summary,
             live_runtime,
@@ -208,19 +205,19 @@ impl McpRuntimeAccess {
 
     /// Returns the number of configured MCP servers.
     /// 返回已配置 MCP 服务器数量。
-    pub fn configured_count(&self) -> usize {
+    pub(crate) fn configured_count(&self) -> usize {
         self.configured_summary.configured_count()
     }
 
     /// Returns the number of enabled MCP servers.
     /// 返回已启用 MCP 服务器数量。
-    pub fn enabled_count(&self) -> usize {
+    pub(crate) fn enabled_count(&self) -> usize {
         self.configured_summary.enabled_count()
     }
 
     /// Returns one stable MCP runtime overview backed by live runtime state when available, or configured fallback data otherwise.
     /// 返回一份在实时运行时可用时优先使用实时状态、否则回退到配置摘要数据的稳定 MCP 运行时概览。
-    pub fn overview(&self) -> McpRuntimeOverview {
+    pub(crate) fn overview(&self) -> McpRuntimeOverview {
         self.live_runtime
             .as_ref()
             .map(McpRuntimeHandle::overview)
@@ -229,7 +226,7 @@ impl McpRuntimeAccess {
 
     /// Returns currently available MCP tool bindings filtered by one allowlist when live runtime state is available.
     /// 当实时运行时状态可用时，返回按单份白名单过滤后的当前可用 MCP 工具绑定集合。
-    pub fn available_tool_bindings_filtered(
+    pub(crate) fn available_tool_bindings_filtered(
         &self,
         allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolBinding> {
@@ -241,7 +238,7 @@ impl McpRuntimeAccess {
 
     /// Requests the live MCP runtime to stop when one real runtime handle is currently available.
     /// 当当前存在真实运行时句柄时，请求实时 MCP 运行时停止。
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         if let Some(runtime) = self.live_runtime.as_ref() {
             runtime.shutdown();
         }
@@ -797,7 +794,7 @@ impl McpRuntimeHandle {
 
     /// Returns one stable MCP runtime overview for upper runtime surfaces.
     /// 返回供上层运行时表面消费的单份稳定 MCP 运行时概览。
-    pub fn overview(&self) -> McpRuntimeOverview {
+    fn overview(&self) -> McpRuntimeOverview {
         self.snapshot().overview()
     }
 
@@ -823,7 +820,7 @@ impl McpRuntimeHandle {
 
     /// Returns currently available MCP tool bindings filtered by one allowlist.
     /// 返回按单份白名单过滤后的当前可用 MCP 工具绑定集合。
-    pub fn available_tool_bindings_filtered(
+    fn available_tool_bindings_filtered(
         &self,
         allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolBinding> {
@@ -869,14 +866,14 @@ impl McpRuntimeHandle {
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
     /// 请求所有后台 MCP 运行时任务停止并拆除各自传输。
-    pub fn shutdown(&self) {
+    fn shutdown(&self) {
         let _ = self.inner.shutdown_tx.send(true);
     }
 }
 
 /// Boots one long-lived MCP runtime handle from the persisted provider configuration.
 /// 根据持久化供应商配置引导一个长期 MCP 运行时句柄。
-pub async fn bootstrap_mcp_runtime(
+async fn bootstrap_mcp_runtime(
     config: ProviderConfigurationFile,
 ) -> Result<McpRuntimeHandle, String> {
     let registry = McpServerRegistry::from_provider_configuration(&config);
@@ -904,7 +901,7 @@ pub async fn bootstrap_mcp_runtime(
 
 /// Boots one stable MCP runtime access surface from the persisted provider configuration.
 /// 根据持久化供应商配置引导一个稳定 MCP 运行时访问面。
-pub async fn bootstrap_mcp_runtime_access(
+pub(crate) async fn bootstrap_mcp_runtime_access(
     config: ProviderConfigurationFile,
 ) -> Result<McpRuntimeAccess, String> {
     let live_runtime = bootstrap_mcp_runtime(config.clone()).await?;
