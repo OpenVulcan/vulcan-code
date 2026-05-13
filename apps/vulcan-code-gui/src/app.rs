@@ -32,8 +32,7 @@ use crate::luaskills_runtime::{
     LuaSkillsInstallSourceChoice, LuaSkillsManagementAction, LuaSkillsManagementReport,
     LuaSkillsRuntimeHandle,
 };
-use crate::mcp::McpRuntimeAccess;
-use crate::mcp::runtime::bootstrap_mcp_runtime_access;
+use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry, SessionId,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,

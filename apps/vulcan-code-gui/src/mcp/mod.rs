@@ -5,7 +5,7 @@ pub mod config;
 pub mod registry;
 pub mod runtime;
 
-pub use runtime::{
+pub(crate) use runtime::{
     McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeToolAllowlist,
-    McpRuntimeToolBinding,
+    McpRuntimeToolBinding, bootstrap_mcp_runtime_access,
 };
