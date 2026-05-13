@@ -143,6 +143,7 @@ impl RuntimeFoundation {
             .iter()
             .filter(|definition| definition.kind == RuntimeAgentKind::Coordinator)
             .count();
+        let mcp_overview = self.mcp_runtime_access.overview();
 
         RuntimeFoundationSummary {
             active_agent_id: self.config.active_agent_id.clone(),
@@ -163,8 +164,8 @@ impl RuntimeFoundation {
                 .iter()
                 .map(|definition| definition.delegates.len())
                 .sum(),
-            configured_mcp_server_count: self.mcp_runtime_access.configured_count(),
-            enabled_mcp_server_count: self.mcp_runtime_access.enabled_count(),
+            configured_mcp_server_count: mcp_overview.summary_rows().len(),
+            enabled_mcp_server_count: mcp_overview.active_summary_rows().len(),
             warnings: self.warnings.clone(),
         }
     }

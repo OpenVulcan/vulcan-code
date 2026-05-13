@@ -194,18 +194,6 @@ impl McpRuntimeAccess {
         }
     }
 
-    /// Returns the number of configured MCP servers.
-    /// 返回已配置 MCP 服务器数量。
-    pub(crate) fn configured_count(&self) -> usize {
-        self.configured_summary.configured_count()
-    }
-
-    /// Returns the number of enabled MCP servers.
-    /// 返回已启用 MCP 服务器数量。
-    pub(crate) fn enabled_count(&self) -> usize {
-        self.configured_summary.enabled_count()
-    }
-
     /// Returns one stable MCP runtime overview backed by live runtime state when available, or configured fallback data otherwise.
     /// 返回一份在实时运行时可用时优先使用实时状态、否则回退到配置摘要数据的稳定 MCP 运行时概览。
     pub(crate) fn overview(&self) -> McpRuntimeOverview {

@@ -20,30 +20,12 @@ pub struct McpServerRegistry {
 /// 仅供需要计数与回退概览数据的 GUI 表面保留的轻量已配置 MCP 摘要。
 #[derive(Debug, Clone, Default)]
 pub struct McpRegistrySummary {
-    /// Number of configured MCP servers.
-    /// 已配置 MCP 服务器数量。
-    configured_count: usize,
-    /// Number of enabled MCP servers.
-    /// 已启用 MCP 服务器数量。
-    enabled_count: usize,
     /// Stable fallback overview built from configured servers only.
     /// 仅基于已配置服务器构建得到的稳定回退概览。
     overview: McpRuntimeOverview,
 }
 
 impl McpRegistrySummary {
-    /// Returns the number of configured MCP servers.
-    /// 返回已配置 MCP 服务器数量。
-    pub fn configured_count(&self) -> usize {
-        self.configured_count
-    }
-
-    /// Returns the number of enabled MCP servers.
-    /// 返回已启用 MCP 服务器数量。
-    pub fn enabled_count(&self) -> usize {
-        self.enabled_count
-    }
-
     /// Returns the stable fallback overview built from configured servers only.
     /// 返回仅基于已配置服务器构建得到的稳定回退概览。
     pub fn overview(&self) -> &McpRuntimeOverview {
@@ -64,18 +46,6 @@ impl McpServerRegistry {
     /// 返回全部已配置的 MCP 服务器条目。
     pub fn servers(&self) -> &[McpServerConfig] {
         &self.servers
-    }
-
-    /// Returns the number of configured MCP servers.
-    /// 返回已配置的 MCP 服务器数量。
-    pub fn configured_count(&self) -> usize {
-        self.servers.len()
-    }
-
-    /// Returns the number of enabled MCP servers.
-    /// 返回已启用的 MCP 服务器数量。
-    pub fn enabled_count(&self) -> usize {
-        self.servers.iter().filter(|server| server.enabled).count()
     }
 
     /// Returns the enabled MCP server entries.
@@ -128,8 +98,6 @@ impl McpServerRegistry {
         let summary_rows = self.summary_rows();
         let enabled_summary_rows = self.enabled_summary_rows();
         McpRegistrySummary {
-            configured_count: self.configured_count(),
-            enabled_count: self.enabled_count(),
             overview: McpRuntimeOverview::new(
                 summary_rows,
                 enabled_summary_rows,
@@ -251,8 +219,6 @@ mod tests {
 
         let summary: McpRegistrySummary = registry.summary();
 
-        assert_eq!(summary.configured_count(), 2);
-        assert_eq!(summary.enabled_count(), 1);
         assert_eq!(summary.overview().summary_rows().len(), 2);
         assert_eq!(
             summary.overview().active_summary_rows(),
@@ -288,8 +254,6 @@ mod tests {
 
         let summary = configured_mcp_registry_summary(&config);
 
-        assert_eq!(summary.configured_count(), 1);
-        assert_eq!(summary.enabled_count(), 1);
         assert_eq!(
             summary.overview().summary_rows(),
             &[String::from(
