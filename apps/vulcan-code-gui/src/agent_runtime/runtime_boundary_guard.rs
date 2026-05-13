@@ -75,3 +75,43 @@ fn agent_runtime_sources_do_not_reference_rig_runtime_symbols() {
         offending_files
     );
 }
+
+/// Verifies module-level dead-code suppressions remain limited to explicitly approved reserve decoder modules.
+/// 验证模块级 dead_code 抑制仅保留在显式批准的储备解码器模块中。
+#[test]
+fn agent_runtime_module_level_dead_code_suppressions_stay_narrow() {
+    let runtime_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("agent_runtime");
+    let rust_files = collect_rust_source_files(&runtime_root);
+    let approved_suffixes = [Path::new("provider_protocol_anthropic_decoders\\jsonl.rs")];
+
+    let offending_files = rust_files
+        .into_iter()
+        .filter_map(|path| {
+            if path.file_name().and_then(|value| value.to_str())
+                == Some("runtime_boundary_guard.rs")
+            {
+                return None;
+            }
+            let source = fs::read_to_string(&path).ok()?;
+            let has_module_level_suppression = source.contains("#![allow(dead_code)]");
+            if !has_module_level_suppression {
+                return None;
+            }
+
+            let relative_path = path.strip_prefix(&runtime_root).ok()?;
+            let approved = approved_suffixes
+                .iter()
+                .any(|approved_suffix| relative_path == *approved_suffix);
+
+            (!approved).then_some(path)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        offending_files.is_empty(),
+        "agent_runtime must not grow new module-level dead_code suppressions: {:?}",
+        offending_files
+    );
+}
