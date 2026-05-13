@@ -7,7 +7,8 @@ use crate::agent_runtime::config::{
     RuntimeToolPolicyDefinition,
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
-use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor, McpServerRegistry};
+use crate::mcp::registry::{McpRegistrySummary, McpServerRegistry};
+use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor};
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
@@ -67,9 +68,9 @@ pub struct RuntimeFoundation {
     /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
     /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    /// MCP server registry.
-    /// MCP 服务器注册表。
-    mcp_registry: McpServerRegistry,
+    /// Lightweight configured MCP summary retained for counts and fallback rows.
+    /// 为计数与回退展示行保留的轻量 MCP 配置摘要。
+    mcp_registry_summary: McpRegistrySummary,
     /// Live MCP runtime handle that tracks current transport state and available tools.
     /// 跟踪当前传输状态与可用工具的实时 MCP 运行时句柄。
     mcp_runtime: Option<McpRuntimeHandle>,
@@ -89,7 +90,7 @@ impl RuntimeFoundation {
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let native_tools = build_native_tool_catalog(&runtime_config);
-        let mcp_registry = McpServerRegistry::from_provider_configuration(config);
+        let mcp_registry_summary = McpServerRegistry::from_provider_configuration(config).summary();
         let mut warnings = Vec::new();
         let luaskills_tools = match luaskills_runtime.as_ref() {
             Some(handle) => match list_luaskills_tool_entries(handle) {
@@ -106,7 +107,7 @@ impl RuntimeFoundation {
             config: runtime_config,
             native_tools,
             luaskills_tools,
-            mcp_registry,
+            mcp_registry_summary,
             mcp_runtime,
             warnings,
         }
@@ -149,8 +150,8 @@ impl RuntimeFoundation {
                 .iter()
                 .map(|definition| definition.delegates.len())
                 .sum(),
-            configured_mcp_server_count: self.mcp_registry.configured_count(),
-            enabled_mcp_server_count: self.mcp_registry.enabled_count(),
+            configured_mcp_server_count: self.mcp_registry_summary.configured_count(),
+            enabled_mcp_server_count: self.mcp_registry_summary.enabled_count(),
             warnings: self.warnings.clone(),
         }
     }
@@ -211,7 +212,7 @@ impl RuntimeFoundation {
             .as_ref()
             .map(McpRuntimeHandle::snapshot)
             .map(|snapshot| snapshot.summary_rows())
-            .unwrap_or_else(|| self.mcp_registry.summary_rows())
+            .unwrap_or_else(|| self.mcp_registry_summary.summary_rows())
     }
 
     /// Returns lightweight tool-policy rows for UI placeholder surfaces.
@@ -392,7 +393,7 @@ impl RuntimeFoundation {
             .as_ref()
             .map(McpRuntimeHandle::snapshot)
             .map(|snapshot| snapshot.active_summary_rows())
-            .unwrap_or_else(|| self.mcp_registry.enabled_summary_rows())
+            .unwrap_or_else(|| self.mcp_registry_summary.enabled_summary_rows())
     }
 }
 

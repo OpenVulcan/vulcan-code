@@ -15,6 +15,50 @@ pub struct McpServerRegistry {
     servers: Vec<McpServerConfig>,
 }
 
+/// Lightweight configured MCP summary retained by GUI surfaces that only need counts and fallback rows.
+/// 仅供需要计数与回退展示行的 GUI 表面保留的轻量已配置 MCP 摘要。
+#[derive(Debug, Clone, Default)]
+pub struct McpRegistrySummary {
+    /// Number of configured MCP servers.
+    /// 已配置 MCP 服务器数量。
+    configured_count: usize,
+    /// Number of enabled MCP servers.
+    /// 已启用 MCP 服务器数量。
+    enabled_count: usize,
+    /// Human-readable summary rows for all configured servers.
+    /// 面向全部已配置服务器的人类可读摘要行。
+    summary_rows: Vec<String>,
+    /// Human-readable summary rows for enabled configured servers only.
+    /// 仅面向已启用已配置服务器的人类可读摘要行。
+    enabled_summary_rows: Vec<String>,
+}
+
+impl McpRegistrySummary {
+    /// Returns the number of configured MCP servers.
+    /// 返回已配置 MCP 服务器数量。
+    pub fn configured_count(&self) -> usize {
+        self.configured_count
+    }
+
+    /// Returns the number of enabled MCP servers.
+    /// 返回已启用 MCP 服务器数量。
+    pub fn enabled_count(&self) -> usize {
+        self.enabled_count
+    }
+
+    /// Returns lightweight summary rows for all configured servers.
+    /// 返回全部已配置服务器的轻量摘要行。
+    pub fn summary_rows(&self) -> Vec<String> {
+        self.summary_rows.clone()
+    }
+
+    /// Returns lightweight summary rows for enabled configured servers only.
+    /// 返回仅已启用已配置服务器的轻量摘要行。
+    pub fn enabled_summary_rows(&self) -> Vec<String> {
+        self.enabled_summary_rows.clone()
+    }
+}
+
 impl McpServerRegistry {
     /// Builds the runtime registry from the shared provider configuration file.
     /// 根据共享供应商配置文件构建运行时注册表。
@@ -86,6 +130,17 @@ impl McpServerRegistry {
             .collect()
     }
 
+    /// Builds one lightweight summary snapshot for GUI layers that do not need transport-spawning capabilities.
+    /// 为不需要传输启动能力的 GUI 层构建一个轻量摘要快照。
+    pub fn summary(&self) -> McpRegistrySummary {
+        McpRegistrySummary {
+            configured_count: self.configured_count(),
+            enabled_count: self.enabled_count(),
+            summary_rows: self.summary_rows(),
+            enabled_summary_rows: self.enabled_summary_rows(),
+        }
+    }
+
     /// Spawns one MCP transport from the stored server entry.
     /// 根据存储的服务器条目启动一个 MCP 传输实例。
     pub async fn spawn_transport(&self, server_id: &str) -> Result<Arc<dyn McpTransport>, String> {
@@ -109,7 +164,7 @@ impl McpServerRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::McpServerRegistry;
+    use super::{McpRegistrySummary, McpServerRegistry};
     use crate::mcp::config::{McpServerConfig, McpTransportKind};
     use std::collections::BTreeMap;
 
@@ -148,6 +203,52 @@ mod tests {
 
         assert_eq!(
             registry.enabled_summary_rows(),
+            vec![String::from(
+                "启用 · Enabled Server · stdio · enabled-mcp --stdio"
+            )]
+        );
+    }
+
+    #[test]
+    fn registry_summary_preserves_counts_and_rows() {
+        let registry = McpServerRegistry {
+            servers: vec![
+                McpServerConfig {
+                    id: String::from("enabled"),
+                    name: String::from("Enabled Server"),
+                    enabled: true,
+                    transport: McpTransportKind::Stdio,
+                    command: String::from("enabled-mcp"),
+                    args: vec![String::from("--stdio")],
+                    url: None,
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+                McpServerConfig {
+                    id: String::from("disabled"),
+                    name: String::from("Disabled Server"),
+                    enabled: false,
+                    transport: McpTransportKind::Http,
+                    command: String::new(),
+                    args: Vec::new(),
+                    url: Some(String::from("https://disabled.test/mcp")),
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+            ],
+        };
+
+        let summary: McpRegistrySummary = registry.summary();
+
+        assert_eq!(summary.configured_count(), 2);
+        assert_eq!(summary.enabled_count(), 1);
+        assert_eq!(summary.summary_rows().len(), 2);
+        assert_eq!(
+            summary.enabled_summary_rows(),
             vec![String::from(
                 "启用 · Enabled Server · stdio · enabled-mcp --stdio"
             )]
