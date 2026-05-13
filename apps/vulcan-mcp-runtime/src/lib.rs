@@ -17,7 +17,9 @@
 
 pub mod error;
 pub mod http;
+mod http_support;
 pub mod launch;
+mod rmcp_support;
 pub mod sse;
 pub mod stdio;
 pub mod transport;

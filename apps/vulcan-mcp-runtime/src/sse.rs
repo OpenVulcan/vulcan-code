@@ -14,14 +14,13 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::{
     Client, Response, Url,
-    header::{ACCEPT, HeaderMap, HeaderName, HeaderValue},
+    header::{ACCEPT, HeaderMap},
 };
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities,
-    ClientJsonRpcMessage, ClientNotification, ClientRequest, Implementation, InitializeRequest,
-    InitializeRequestParams, InitializedNotification, JsonRpcMessage, ListToolsRequest,
-    ListToolsResult, NumberOrString, RequestId, ServerJsonRpcMessage, ServerNotification,
-    ServerResult,
+    CallToolRequest, ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest,
+    Implementation, InitializeRequest, InitializeRequestParams, InitializedNotification,
+    JsonRpcMessage, ListToolsRequest, ListToolsResult, NumberOrString, RequestId,
+    ServerJsonRpcMessage, ServerNotification, ServerResult,
 };
 use sse_stream::{Sse, SseStream};
 use tokio::{
@@ -31,6 +30,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::error::McpRuntimeError;
+use crate::http_support::parse_http_headers_to_header_map;
+use crate::rmcp_support::{
+    build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value, rmcp_tool_to_schema,
+};
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Background response channel sender keyed by JSON-RPC request id.
@@ -85,7 +88,7 @@ impl SseTransport {
         let http_client = Client::builder()
             .build()
             .map_err(|error| McpRuntimeError::transport(format!("build SSE client: {error}")))?;
-        let custom_headers = parse_http_headers(custom_headers)?;
+        let custom_headers = parse_http_headers_to_header_map(custom_headers)?;
         let pending_responses = Arc::new(Mutex::new(HashMap::new()));
         let (message_endpoint_tx, message_endpoint_rx) = watch::channel(None);
         let shutdown_token = CancellationToken::new();
@@ -309,18 +312,8 @@ impl McpTransport for SseTransport {
         name: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, McpRuntimeError> {
-        let arguments = match args {
-            serde_json::Value::Object(map) => Some(map),
-            serde_json::Value::Null => None,
-            other => {
-                return Err(McpRuntimeError::invalid_argument(format!(
-                    "tools/call requires an object or null arguments, got {other}"
-                )));
-            }
-        };
+        let params = build_rmcp_call_tool_request_params(name, args)?;
         let request_id = self.next_request_id();
-        let mut params = CallToolRequestParams::new(name.to_string());
-        params.arguments = arguments;
         let request = CallToolRequest::new(params);
         let response = self
             .send_request_and_wait(
@@ -333,7 +326,7 @@ impl McpTransport for SseTransport {
                 "legacy SSE tools/call did not return a callTool result".to_string(),
             ));
         };
-        call_tool_result_to_value(result)
+        rmcp_call_tool_result_to_value(result)
     }
 }
 
@@ -596,53 +589,6 @@ fn extract_server_result(message: ServerJsonRpcMessage) -> Result<ServerResult, 
     }
 }
 
-/// Convert one `CallToolResult` into the host-owned JSON value contract.
-/// 将单个 `CallToolResult` 转换为宿主自有 JSON 值契约。
-fn call_tool_result_to_value(result: CallToolResult) -> Result<serde_json::Value, McpRuntimeError> {
-    if result.is_error.unwrap_or(false) {
-        let message = result
-            .content
-            .iter()
-            .find_map(|content| content.as_text().map(|text| text.text.clone()))
-            .unwrap_or_else(|| "tool returned error".to_string());
-        return Err(McpRuntimeError::transport(message));
-    }
-
-    if let Some(value) = result.structured_content {
-        return Ok(value);
-    }
-
-    if let Some(text) = result
-        .content
-        .iter()
-        .find_map(|content| content.as_text().map(|text| text.text.clone()))
-    {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-            return Ok(parsed);
-        }
-        return Ok(serde_json::Value::String(text));
-    }
-
-    Ok(serde_json::Value::Null)
-}
-
-/// Convert one rmcp tool schema into the host-owned MCP tool schema.
-/// 将单个 rmcp 工具 schema 转换为宿主自有 MCP 工具 schema。
-fn rmcp_tool_to_schema(tool: rmcp::model::Tool) -> McpToolSchema {
-    McpToolSchema {
-        name: tool.name.to_string(),
-        description: tool
-            .description
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        args_schema: serde_json::Value::Object((*tool.input_schema).clone()),
-        result_schema: tool
-            .output_schema
-            .map(|schema| serde_json::Value::Object((*schema).clone()))
-            .unwrap_or(serde_json::Value::Null),
-    }
-}
-
 /// Convert one request id into a stable map key.
 /// 将单个请求标识转换为稳定映射键。
 fn request_id_key(request_id: &RequestId) -> String {
@@ -650,30 +596,4 @@ fn request_id_key(request_id: &RequestId) -> String {
         NumberOrString::Number(value) => value.to_string(),
         NumberOrString::String(value) => value.to_string(),
     }
-}
-
-/// Convert custom string headers into typed HTTP headers.
-/// 将自定义字符串请求头转换为类型化 HTTP 请求头。
-fn parse_http_headers(
-    custom_headers: HashMap<String, String>,
-) -> Result<HeaderMap, McpRuntimeError> {
-    let mut parsed = HeaderMap::with_capacity(custom_headers.len());
-
-    for (raw_name, raw_value) in custom_headers {
-        let header_name = HeaderName::from_bytes(raw_name.trim().as_bytes()).map_err(|error| {
-            McpRuntimeError::invalid_argument(format!(
-                "invalid MCP HTTP header name `{}`: {}",
-                raw_name, error
-            ))
-        })?;
-        let header_value = HeaderValue::from_str(raw_value.trim()).map_err(|error| {
-            McpRuntimeError::invalid_argument(format!(
-                "invalid MCP HTTP header value for `{}`: {}",
-                raw_name, error
-            ))
-        })?;
-        parsed.append(header_name, header_value);
-    }
-
-    Ok(parsed)
 }

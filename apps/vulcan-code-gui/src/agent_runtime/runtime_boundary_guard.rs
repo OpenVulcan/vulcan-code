@@ -150,7 +150,9 @@ fn mcp_runtime_sources_do_not_reintroduce_dead_code_suppressions() {
 /// 验证 GUI 侧 MCP 胶水层继续将具体传输启动接线集中保留在 `mcp/config.rs` 中。
 #[test]
 fn gui_mcp_sources_keep_launch_spec_mapping_centralized() {
-    let gui_mcp_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("mcp");
+    let gui_mcp_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("mcp");
     let rust_files = collect_rust_source_files(&gui_mcp_root);
     let approved_launch_spec_file = gui_mcp_root.join("config.rs");
 
