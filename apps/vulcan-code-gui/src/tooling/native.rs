@@ -240,8 +240,27 @@ fn build_agent_list_tool(
                 "id": agent.id,
                 "name": agent.name,
                 "kind": agent.kind.label(),
+                "description": agent.description,
+                "systemPrompt": agent.system_prompt,
                 "skills": agent.skill_ids,
+                "nativeTools": agent.native_tools,
+                "mcpTools": agent.mcp_tools,
+                "delegates": agent.delegates,
                 "toolPolicy": agent.tool_policy,
+                "fallbackDelegate": agent.fallback_delegate,
+                "model": agent.model,
+                "temperature": agent.temperature,
+                "maxTurns": agent.max_turns,
+                "routes": agent
+                    .routes
+                    .iter()
+                    .map(|route| {
+                        json!({
+                            "signal": route.signal,
+                            "delegate": route.delegate,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
@@ -284,8 +303,11 @@ fn build_skill_list_tool(
                 "id": skill.id,
                 "name": skill.name,
                 "kind": skill.kind.label(),
+                "description": skill.description,
                 "enabled": skill.enabled,
                 "triggerSignals": skill.trigger_signals,
+                "emittedSignal": skill.emitted_signal,
+                "confidenceDelta": skill.confidence_delta,
             })
         })
         .collect::<Vec<_>>();
@@ -340,4 +362,128 @@ fn build_mcp_server_list_tool(
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_agent_list_tool, build_skill_list_tool};
+    use crate::agent_runtime::config::{
+        AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
+        RuntimeSkillDefinition, RuntimeSkillKind,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    /// Verifies that the agent registry tool exposes extended runtime fields for diagnostics and future delegate orchestration.
+    /// 验证代理注册表工具会暴露扩展运行时字段，用于诊断与后续委派编排。
+    #[tokio::test]
+    async fn agent_registry_tool_exposes_extended_runtime_fields() {
+        let snapshot = Arc::new(super::NativeToolRuntimeSnapshot {
+            workspace_directory: String::from("D:/workspace"),
+            active_model: Some(String::from("openai/gpt-5")),
+            agent_count: 1,
+            skill_count: 1,
+            configured_mcp_server_ids: vec![String::from("server-a")],
+            enabled_mcp_server_ids: vec![String::from("server-a")],
+        });
+        let config = AgentRuntimeConfig {
+            active_model: Some(String::from("openai/gpt-5")),
+            active_agent_id: String::from("agent-a"),
+            agents: vec![RuntimeAgentDefinition {
+                id: String::from("agent-a"),
+                name: String::from("Agent A"),
+                kind: RuntimeAgentKind::Coordinator,
+                description: String::from("Coordinator agent"),
+                system_prompt: String::from("system prompt"),
+                skill_ids: vec![String::from("skill-a")],
+                native_tools: vec![String::from("native-a")],
+                mcp_tools: vec![String::from("mcp-tool-a")],
+                delegates: vec![String::from("agent-b")],
+                tool_policy: Some(String::from("policy-a")),
+                routes: vec![RuntimeAgentRoute {
+                    signal: String::from("needs-lua"),
+                    delegate: String::from("lua-agent"),
+                }],
+                fallback_delegate: Some(String::from("agent-b")),
+                model: Some(String::from("anthropic/claude")),
+                temperature: Some(0.2),
+                max_turns: Some(9),
+            }],
+            skills: vec![RuntimeSkillDefinition {
+                id: String::from("skill-a"),
+                name: String::from("Skill A"),
+                kind: RuntimeSkillKind::Regular,
+                description: String::from("Skill description"),
+                enabled: true,
+                trigger_signals: vec![String::from("signal-a")],
+                emitted_signal: Some(String::from("signal-b")),
+                confidence_delta: 0.5,
+            }],
+            tool_policies: BTreeMap::new(),
+            configured_mcp_server_ids: vec![String::from("server-a")],
+            enabled_mcp_server_ids: vec![String::from("server-a")],
+        };
+
+        let tool = build_agent_list_tool(snapshot, &config);
+        let payload = tool
+            .invoke(serde_json::Value::Object(Default::default()))
+            .await
+            .expect("agent registry tool should execute");
+
+        let agent = &payload["agents"][0];
+        assert_eq!(agent["description"], "Coordinator agent");
+        assert_eq!(agent["systemPrompt"], "system prompt");
+        assert_eq!(agent["fallbackDelegate"], "agent-b");
+        assert_eq!(agent["model"], "anthropic/claude");
+        let temperature = agent["temperature"]
+            .as_f64()
+            .expect("temperature should serialize as f64");
+        assert!((temperature - 0.2).abs() < 1e-6);
+        assert_eq!(agent["maxTurns"], 9);
+        assert_eq!(agent["routes"][0]["signal"], "needs-lua");
+        assert_eq!(agent["routes"][0]["delegate"], "lua-agent");
+    }
+
+    /// Verifies that the skill registry tool exposes skill metadata that used to stay hidden behind dead-code suppressions.
+    /// 验证技能注册表工具会暴露此前被 dead-code 抑制隐藏的技能元数据。
+    #[tokio::test]
+    async fn skill_registry_tool_exposes_extended_runtime_fields() {
+        let snapshot = Arc::new(super::NativeToolRuntimeSnapshot {
+            workspace_directory: String::from("D:/workspace"),
+            active_model: Some(String::from("openai/gpt-5")),
+            agent_count: 1,
+            skill_count: 1,
+            configured_mcp_server_ids: vec![],
+            enabled_mcp_server_ids: vec![],
+        });
+        let config = AgentRuntimeConfig {
+            active_model: Some(String::from("openai/gpt-5")),
+            active_agent_id: String::from("agent-a"),
+            agents: vec![],
+            skills: vec![RuntimeSkillDefinition {
+                id: String::from("skill-a"),
+                name: String::from("Skill A"),
+                kind: RuntimeSkillKind::Automation,
+                description: String::from("Skill description"),
+                enabled: true,
+                trigger_signals: vec![String::from("signal-a")],
+                emitted_signal: Some(String::from("signal-b")),
+                confidence_delta: 0.5,
+            }],
+            tool_policies: BTreeMap::new(),
+            configured_mcp_server_ids: vec![],
+            enabled_mcp_server_ids: vec![],
+        };
+
+        let tool = build_skill_list_tool(snapshot, &config);
+        let payload = tool
+            .invoke(serde_json::Value::Object(Default::default()))
+            .await
+            .expect("skill registry tool should execute");
+
+        let skill = &payload["skills"][0];
+        assert_eq!(skill["description"], "Skill description");
+        assert_eq!(skill["emittedSignal"], "signal-b");
+        assert_eq!(skill["confidenceDelta"], 0.5);
+    }
 }
