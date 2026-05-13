@@ -500,7 +500,7 @@ impl VulcanWorkbench {
     /// Rebuilds the compose runtime foundation from the current shared configuration state.
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     pub(super) fn refresh_runtime_foundation(&mut self) {
-        self.runtime_foundation = RuntimeFoundation::build_from_runtime_handles(
+        self.runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access(
             &self.provider_configuration,
             &self.agent_profile_catalog,
             self.luaskills_runtime.clone(),
@@ -514,12 +514,12 @@ impl VulcanWorkbench {
     /// Restarts the long-lived MCP runtime after configuration changes and rebuilds the runtime foundation immediately.
     /// 在配置变更后重启长期 MCP 运行时，并立即重建运行时基础架构。
     pub(super) fn restart_mcp_runtime_task(&mut self) -> Task<Message> {
-        if let Some(handle) = self.mcp_runtime.take() {
-            handle.shutdown();
+        if let Some(runtime_access) = self.mcp_runtime.take() {
+            runtime_access.shutdown();
         }
         self.refresh_runtime_foundation();
         Task::perform(
-            bootstrap_mcp_runtime(self.provider_configuration.clone()),
+            bootstrap_mcp_runtime_access(self.provider_configuration.clone()),
             Message::McpRuntimeBootstrapped,
         )
     }

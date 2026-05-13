@@ -32,7 +32,7 @@ use crate::luaskills_runtime::{
     LuaSkillsInstallSourceChoice, LuaSkillsManagementAction, LuaSkillsManagementReport,
     LuaSkillsRuntimeHandle,
 };
-use crate::mcp::{McpRuntimeHandle, bootstrap_mcp_runtime};
+use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry, SessionId,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
@@ -1000,9 +1000,9 @@ pub struct VulcanWorkbench {
     /// Optional LuaSkills runtime handle retained after the secondary startup phase completes.
     /// 在二级启动阶段完成后保留的可选 LuaSkills 运行时句柄。
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    /// Optional long-lived MCP runtime handle retained after the background MCP bootstrap completes.
-    /// 在后台 MCP 引导完成后保留的可选长期 MCP 运行时句柄。
-    mcp_runtime: Option<McpRuntimeHandle>,
+    /// Optional stable MCP runtime access surface retained after the background MCP bootstrap completes.
+    /// 在后台 MCP 引导完成后保留的可选稳定 MCP 运行时访问面。
+    mcp_runtime: Option<McpRuntimeAccess>,
     /// Latest LuaSkills skill catalog loaded from the embedded host runtime.
     /// 从嵌入式宿主运行时载入的最新 LuaSkills 技能清单。
     luaskills_catalog: Option<LuaSkillsCatalog>,
@@ -1944,7 +1944,7 @@ enum Message {
     LuaSkillsBootstrapFinished(Result<LuaSkillsBootstrapReport, String>),
     /// Applies the completed MCP runtime bootstrap result.
     /// 应用已完成的 MCP 运行时引导结果。
-    McpRuntimeBootstrapped(Result<McpRuntimeHandle, String>),
+    McpRuntimeBootstrapped(Result<McpRuntimeAccess, String>),
     /// Applies the completed workspace-state load result after the shared runtimes become ready.
     /// 应用共享运行时就绪后已完成的工作台状态加载结果。
     WorkspaceStateLoaded(Result<WorkspaceSnapshot, String>),
@@ -2592,7 +2592,7 @@ impl VulcanWorkbench {
             .and_then(|agent_id| agent_profile_catalog.agents.get(agent_id))
             .map(AgentProfileFormState::from_profile)
             .unwrap_or_default();
-        let runtime_foundation = RuntimeFoundation::build_from_runtime_handles(
+        let runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access(
             &provider_configuration,
             &agent_profile_catalog,
             None,
@@ -2955,8 +2955,8 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在初始化 vldb 数据平面。");
                 self.controller_runtime = None;
                 self.luaskills_runtime = None;
-                if let Some(handle) = self.mcp_runtime.take() {
-                    handle.shutdown();
+                if let Some(runtime_access) = self.mcp_runtime.take() {
+                    runtime_access.shutdown();
                 }
                 self.luaskills_catalog = None;
                 self.luaskills_notice = String::from("LuaSkills 面板尚未加载技能目录。");
@@ -3084,7 +3084,9 @@ impl VulcanWorkbench {
                                     Message::WorkspaceStateLoaded,
                                 ),
                                 Task::perform(
-                                    bootstrap_mcp_runtime(self.provider_configuration.clone()),
+                                    bootstrap_mcp_runtime_access(
+                                        self.provider_configuration.clone(),
+                                    ),
                                     Message::McpRuntimeBootstrapped,
                                 ),
                                 Task::perform(
@@ -3191,8 +3193,8 @@ impl VulcanWorkbench {
             }
             Message::McpRuntimeBootstrapped(result) => {
                 match result {
-                    Ok(handle) => {
-                        self.mcp_runtime = Some(handle);
+                    Ok(runtime_access) => {
+                        self.mcp_runtime = Some(runtime_access);
                         self.refresh_runtime_foundation();
                         self.mcp_notice =
                             String::from("MCP 运行时已就绪，后续执行将直接注册实时可用工具。");

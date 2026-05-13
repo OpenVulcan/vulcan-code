@@ -8,8 +8,7 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRuntimeAccess, McpRuntimeHandle, McpRuntimeOverview, McpRuntimeToolAllowlist,
-    McpRuntimeToolBinding,
+    McpRuntimeAccess, McpRuntimeOverview, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
 };
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -79,19 +78,20 @@ pub struct RuntimeFoundation {
 }
 
 impl RuntimeFoundation {
-    /// Builds the host runtime foundation directly from shared configuration plus optional runtime handles.
-    /// 直接根据共享配置与可选运行时句柄构建宿主运行时基础架构。
-    pub fn build_from_runtime_handles(
+    /// Builds the host runtime foundation directly from shared configuration plus one optional stable MCP access surface.
+    /// 直接根据共享配置与一个可选稳定 MCP 访问面构建宿主运行时基础架构。
+    pub fn build_from_optional_mcp_access(
         config: &ProviderConfigurationFile,
         agent_profile_catalog: &AgentProfileCatalog,
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-        mcp_runtime: Option<McpRuntimeHandle>,
+        mcp_runtime_access: Option<McpRuntimeAccess>,
     ) -> Self {
         Self::build(
             config,
             agent_profile_catalog,
             luaskills_runtime,
-            McpRuntimeAccess::from_configuration(config, mcp_runtime),
+            mcp_runtime_access
+                .unwrap_or_else(|| McpRuntimeAccess::from_configuration(config, None)),
         )
     }
 

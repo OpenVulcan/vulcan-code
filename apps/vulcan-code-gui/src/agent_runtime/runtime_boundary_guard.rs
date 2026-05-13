@@ -249,8 +249,8 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
     );
 }
 
-/// Verifies raw MCP runtime handles only remain at the outer runtime-stream entrypoint instead of leaking through inner launch-preparation layers.
-/// 验证原始 MCP 运行时句柄只保留在最外层 runtime-stream 入口，而不会重新泄漏到内部启动准备链路。
+/// Verifies runtime-stream execution stays on the stable MCP access surface instead of reintroducing raw runtime handles.
+/// 验证 runtime-stream 执行链继续停留在稳定 MCP 访问面之上，而不会重新引回原始运行时句柄。
 #[test]
 fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
     let runtime_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -271,8 +271,13 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
         .expect("runtime_stream_preparation_resources.rs should remain readable");
 
     assert!(
-        outer_entry_source.contains("McpRuntimeHandle"),
-        "runtime_stream.rs should remain the outermost raw McpRuntimeHandle boundary: {}",
+        outer_entry_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
+        "runtime_stream.rs should accept the stable McpRuntimeAccess surface at the outer entrypoint: {}",
+        outer_entry_path.display()
+    );
+    assert!(
+        !outer_entry_source.contains("McpRuntimeHandle"),
+        "runtime_stream.rs must not reintroduce raw McpRuntimeHandle usage anymore: {}",
         outer_entry_path.display()
     );
     assert!(
@@ -320,8 +325,23 @@ fn app_level_workbench_paths_do_not_manually_construct_mcp_runtime_access() {
         .expect("app/configuration.rs should remain readable");
 
     assert!(
-        app_source.contains("RuntimeFoundation::build_from_runtime_handles"),
-        "app.rs should build runtime foundations through the runtime-handle helper: {}",
+        app_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
+        "app.rs should retain MCP runtime state through the stable McpRuntimeAccess field: {}",
+        app_path.display()
+    );
+    assert!(
+        !app_source.contains("mcp_runtime: Option<McpRuntimeHandle>"),
+        "app.rs must not keep the old raw McpRuntimeHandle field anymore: {}",
+        app_path.display()
+    );
+    assert!(
+        !app_source.contains("McpRuntimeHandle"),
+        "app.rs must not reintroduce raw McpRuntimeHandle knowledge at the workbench layer: {}",
+        app_path.display()
+    );
+    assert!(
+        app_source.contains("RuntimeFoundation::build_from_optional_mcp_access"),
+        "app.rs should build runtime foundations through the MCP access helper: {}",
         app_path.display()
     );
     assert!(
@@ -330,8 +350,8 @@ fn app_level_workbench_paths_do_not_manually_construct_mcp_runtime_access() {
         app_path.display()
     );
     assert!(
-        app_configuration_source.contains("RuntimeFoundation::build_from_runtime_handles"),
-        "app/configuration.rs should rebuild runtime foundations through the runtime-handle helper: {}",
+        app_configuration_source.contains("RuntimeFoundation::build_from_optional_mcp_access"),
+        "app/configuration.rs should rebuild runtime foundations through the MCP access helper: {}",
         app_configuration_path.display()
     );
     assert!(

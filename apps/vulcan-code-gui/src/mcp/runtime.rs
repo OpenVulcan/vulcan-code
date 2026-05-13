@@ -238,6 +238,14 @@ impl McpRuntimeAccess {
             .map(|runtime| runtime.available_tool_bindings_filtered(allowlist))
             .unwrap_or_default()
     }
+
+    /// Requests the live MCP runtime to stop when one real runtime handle is currently available.
+    /// 当当前存在真实运行时句柄时，请求实时 MCP 运行时停止。
+    pub fn shutdown(&self) {
+        if let Some(runtime) = self.live_runtime.as_ref() {
+            runtime.shutdown();
+        }
+    }
 }
 
 impl McpRuntimeToolBinding {
@@ -892,6 +900,18 @@ pub async fn bootstrap_mcp_runtime(
     }
 
     Ok(McpRuntimeHandle { inner })
+}
+
+/// Boots one stable MCP runtime access surface from the persisted provider configuration.
+/// 根据持久化供应商配置引导一个稳定 MCP 运行时访问面。
+pub async fn bootstrap_mcp_runtime_access(
+    config: ProviderConfigurationFile,
+) -> Result<McpRuntimeAccess, String> {
+    let live_runtime = bootstrap_mcp_runtime(config.clone()).await?;
+    Ok(McpRuntimeAccess::from_configuration(
+        &config,
+        Some(live_runtime),
+    ))
 }
 
 /// Spawns one background lifecycle task for a single enabled MCP server.
