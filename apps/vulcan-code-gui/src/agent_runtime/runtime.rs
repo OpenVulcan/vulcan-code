@@ -343,34 +343,7 @@ impl RuntimeFoundation {
             .tool_policy
             .as_ref()
             .and_then(|policy_id| self.config.tool_policies.get(policy_id));
-        let allowed_server_ids = if let Some(policy) = policy {
-            if policy.mcp_servers.is_empty() {
-                None
-            } else {
-                Some(policy.mcp_servers.iter().cloned().collect::<BTreeSet<_>>())
-            }
-        } else {
-            None
-        };
-        let allowed_tool_names = if !definition.mcp_tools.is_empty() {
-            Some(
-                definition
-                    .mcp_tools
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>(),
-            )
-        } else if let Some(policy) = policy {
-            if policy.mcp_tools.is_empty() {
-                None
-            } else {
-                Some(policy.mcp_tools.iter().cloned().collect::<BTreeSet<_>>())
-            }
-        } else {
-            None
-        };
-
-        let tool_allowlist = McpRuntimeToolAllowlist::new(allowed_server_ids, allowed_tool_names);
+        let tool_allowlist = resolve_agent_mcp_tool_allowlist(definition, policy);
 
         mcp_runtime.available_tool_views_filtered(&tool_allowlist)
     }
@@ -424,4 +397,31 @@ fn resolve_agent_native_tools(
         is_available
     });
     names
+}
+
+/// Resolves the MCP runtime tool allowlist visible to one agent definition.
+/// 解析对单个代理定义可见的 MCP 运行时工具白名单。
+fn resolve_agent_mcp_tool_allowlist(
+    definition: &RuntimeAgentDefinition,
+    policy: Option<&RuntimeToolPolicyDefinition>,
+) -> McpRuntimeToolAllowlist {
+    let allowed_server_ids =
+        policy.and_then(|policy| optional_non_empty_string_set(&policy.mcp_servers));
+    let allowed_tool_names = if definition.mcp_tools.is_empty() {
+        policy.and_then(|policy| optional_non_empty_string_set(&policy.mcp_tools))
+    } else {
+        optional_non_empty_string_set(&definition.mcp_tools)
+    };
+
+    McpRuntimeToolAllowlist::new(allowed_server_ids, allowed_tool_names)
+}
+
+/// Converts one string slice into an optional non-empty set.
+/// 将一组字符串切片转换为可选的非空集合。
+fn optional_non_empty_string_set(values: &[String]) -> Option<BTreeSet<String>> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().cloned().collect())
+    }
 }

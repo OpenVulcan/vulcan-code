@@ -105,8 +105,8 @@ impl McpRuntimeToolDescriptor {
         allowed_server_ids: Option<&BTreeSet<String>>,
         allowed_tool_names: Option<&BTreeSet<String>>,
     ) -> bool {
-        let server_allowed = allowed_server_ids
-            .is_none_or(|allowed| allowed.contains(self.server_id()));
+        let server_allowed =
+            allowed_server_ids.is_none_or(|allowed| allowed.contains(self.server_id()));
         let tool_allowed = allowed_tool_names.is_none_or(|allowed| {
             allowed.contains(self.tool_name()) || allowed.contains(&self.qualified_name())
         });
@@ -389,12 +389,9 @@ impl McpRuntimeSnapshot {
             .collect()
     }
 
-    /// Returns tool descriptors filtered by optional server and tool allowlists.
-    /// 返回按可选服务器与工具白名单过滤后的工具描述集合。
-    fn filtered_tool_descriptors(
-        &self,
-        allowlist: &McpRuntimeToolAllowlist,
-    ) -> Vec<McpRuntimeToolDescriptor> {
+    /// Returns host-facing tool views filtered by one allowlist.
+    /// 返回按单份白名单过滤后的宿主侧工具视图集合。
+    fn filtered_tool_views(&self, allowlist: &McpRuntimeToolAllowlist) -> Vec<McpRuntimeToolView> {
         self.tool_descriptors()
             .into_iter()
             .filter(|tool| {
@@ -403,24 +400,8 @@ impl McpRuntimeSnapshot {
                     allowlist.allowed_tool_names(),
                 )
             })
-            .collect()
-    }
-
-    /// Returns host-facing tool views filtered by one allowlist.
-    /// 返回按单份白名单过滤后的宿主侧工具视图集合。
-    fn filtered_tool_views(&self, allowlist: &McpRuntimeToolAllowlist) -> Vec<McpRuntimeToolView> {
-        self.filtered_tool_descriptors(allowlist)
-            .into_iter()
             .map(|tool| tool.host_tool_view())
             .collect()
-    }
-
-    /// Finds one tool descriptor by its stable host-facing tool identifier.
-    /// 根据稳定宿主侧工具标识查找单个工具描述。
-    fn find_tool_descriptor_by_id(&self, tool_id: &str) -> Option<McpRuntimeToolDescriptor> {
-        self.tool_descriptors()
-            .into_iter()
-            .find(|tool| tool.host_tool_view().id() == tool_id)
     }
 
     /// Returns lightweight diagnostics for enabled MCP servers only.
@@ -514,29 +495,6 @@ impl McpRuntimeHandle {
         self.snapshot().filtered_tool_views(allowlist)
     }
 
-    /// Calls one MCP tool descriptor through its owning live transport.
-    /// 通过工具描述所属的实时传输调用单个 MCP 工具。
-    async fn call_tool_descriptor(
-        &self,
-        descriptor: &McpRuntimeToolDescriptor,
-        args: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let Some(transport) = self.transport_for_server(descriptor.server_id()) else {
-            return Err(format!(
-                "MCP 服务器 `{}` 当前未连接，无法调用工具 `{}`。",
-                descriptor.server_id(),
-                descriptor.tool_name()
-            ));
-        };
-        transport.call_tool(descriptor.tool_name(), args).await.map_err(|error| {
-            format!(
-                "MCP 工具 `{}` 调用失败：{}。",
-                descriptor.tool_name(),
-                error
-            )
-        })
-    }
-
     /// Calls one MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用单个 MCP 工具。
     pub async fn call_tool_by_id(
@@ -544,10 +502,31 @@ impl McpRuntimeHandle {
         tool_id: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let Some(descriptor) = self.snapshot().find_tool_descriptor_by_id(tool_id) else {
+        let Some(descriptor) = self
+            .snapshot()
+            .tool_descriptors()
+            .into_iter()
+            .find(|tool| tool.qualified_name() == tool_id)
+        else {
             return Err(format!("未找到 MCP 工具 `{tool_id}`。"));
         };
-        self.call_tool_descriptor(&descriptor, args).await
+        let Some(transport) = self.transport_for_server(descriptor.server_id()) else {
+            return Err(format!(
+                "MCP 服务器 `{}` 当前未连接，无法调用工具 `{}`。",
+                descriptor.server_id(),
+                descriptor.tool_name()
+            ));
+        };
+        transport
+            .call_tool(descriptor.tool_name(), args)
+            .await
+            .map_err(|error| {
+                format!(
+                    "MCP 工具 `{}` 调用失败：{}。",
+                    descriptor.tool_name(),
+                    error
+                )
+            })
     }
 
     /// Returns lightweight diagnostics for enabled MCP servers only.
@@ -954,7 +933,7 @@ mod tests {
     }
 
     #[test]
-    fn filtered_tool_descriptors_apply_server_and_tool_allowlists() {
+    fn filtered_tool_views_apply_server_and_tool_allowlists() {
         let tool_a = McpRuntimeToolDescriptor::new(
             String::from("server-a"),
             String::from("read_file"),
@@ -997,26 +976,22 @@ mod tests {
         };
 
         assert_eq!(
-            snapshot.filtered_tool_descriptors(&McpRuntimeToolAllowlist::default()),
-            vec![tool_a.clone(), tool_b.clone()]
+            snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::default()),
+            vec![tool_a.host_tool_view(), tool_b.host_tool_view()]
         );
         assert_eq!(
-            snapshot.filtered_tool_descriptors(
-                &McpRuntimeToolAllowlist::new(
-                    Some(BTreeSet::from([String::from("server-b")])),
-                    None,
-                )
-            ),
-            vec![tool_b.clone()]
+            snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::new(
+                Some(BTreeSet::from([String::from("server-b")])),
+                None,
+            )),
+            vec![tool_b.host_tool_view()]
         );
         assert_eq!(
-            snapshot.filtered_tool_descriptors(
-                &McpRuntimeToolAllowlist::new(
-                    None,
-                    Some(BTreeSet::from([String::from("server-a/read_file")])),
-                )
-            ),
-            vec![tool_a]
+            snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::new(
+                None,
+                Some(BTreeSet::from([String::from("server-a/read_file")])),
+            )),
+            vec![tool_a.host_tool_view()]
         );
     }
 }

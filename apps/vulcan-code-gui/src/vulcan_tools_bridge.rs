@@ -134,10 +134,8 @@ pub fn build_vulcan_tools_manager(
         let runtime = mcp_runtime.clone();
         let tool_id = tool.id().to_string();
         let tool_name = tool.name().to_string();
-        let runtime_unavailable_text = format!(
-            "MCP 运行时当前不可用，无法调用工具 `{}`。",
-            tool_name
-        );
+        let runtime_unavailable_text =
+            format!("MCP 运行时当前不可用，无法调用工具 `{}`。", tool_name);
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
