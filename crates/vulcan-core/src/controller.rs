@@ -564,6 +564,7 @@ impl VulcanCoreController {
                 text: response.assistant_text.clone(),
                 reasoning: response.assistant_reasoning.clone(),
                 provider_message_id: response.provider_message_id.clone(),
+                provider_message_state: response.provider_message_state.clone(),
                 tool_calls: response.tool_calls.clone(),
             },
         });
@@ -1098,6 +1099,7 @@ mod tests {
                     assistant_text: String::new(),
                     assistant_reasoning: String::from("先读取文件，再整理结论。"),
                     provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
                     tool_calls: vec![ConversationToolCall {
                         id: String::from("tool-item-1"),
                         tool_call_id: Some(String::from("call-1")),
@@ -1115,6 +1117,7 @@ mod tests {
                     assistant_text: String::from("文件检查完成，已经拿到关键上下文。"),
                     assistant_reasoning: String::new(),
                     provider_message_id: Some(String::from("resp-2")),
+                    provider_message_state: None,
                     tool_calls: Vec::new(),
                     continuation: Some(ProviderContinuation {
                         provider_id: Some(String::from("mock-openai")),
@@ -1212,6 +1215,7 @@ mod tests {
                     assistant_text: String::from("已完成分析。"),
                     assistant_reasoning: String::from("先读取文件。"),
                     provider_message_id: Some(String::from("resp-stream-1")),
+                    provider_message_state: None,
                     tool_calls: Vec::new(),
                     continuation: Some(ProviderContinuation {
                         provider_id: Some(String::from("mock-openai-streaming")),
@@ -1259,6 +1263,7 @@ mod tests {
                     text,
                     reasoning,
                     provider_message_id,
+                    provider_message_state: _,
                     tool_calls,
                 } if text == "已完成分析。"
                     && reasoning == "先读取文件。"
@@ -1279,6 +1284,7 @@ mod tests {
                     assistant_text: String::new(),
                     assistant_reasoning: String::new(),
                     provider_message_id: Some(String::from("resp-skip-1")),
+                    provider_message_state: None,
                     tool_calls: vec![ConversationToolCall {
                         id: String::from("tool-item-skip-1"),
                         tool_call_id: Some(String::from("call-skip-1")),
@@ -1291,6 +1297,7 @@ mod tests {
                     assistant_text: String::from("已收到宿主返回的跳过结果。"),
                     assistant_reasoning: String::new(),
                     provider_message_id: Some(String::from("resp-skip-2")),
+                    provider_message_state: None,
                     tool_calls: Vec::new(),
                     continuation: None,
                 },
@@ -1329,6 +1336,7 @@ mod tests {
                 assistant_text: String::new(),
                 assistant_reasoning: String::new(),
                 provider_message_id: Some(String::from("resp-limit-1")),
+                provider_message_state: None,
                 tool_calls: vec![ConversationToolCall {
                     id: String::from("tool-item-limit-1"),
                     tool_call_id: Some(String::from("call-limit-1")),

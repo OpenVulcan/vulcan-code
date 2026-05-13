@@ -42,7 +42,7 @@ use crate::project_temp_maintenance;
 use crate::provider_config::{
     self, ModelChoice, PersistedControllerConfiguration, PersistedMcpServerEntry,
     PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
-    ProviderConfigurationFile, ProviderFieldKey,
+    ProviderConfigurationFile, ProviderFieldKey, ReasoningEffortLevel, ReasoningSelectionOption,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
@@ -1080,6 +1080,11 @@ pub struct VulcanWorkbench {
     execution_mode: ExecutionMode,
     /// Selected compact reasoning-effort preset shown beside the send button in the workbench composer.
     /// 显示在工作台提示词发送按钮旁边的已选紧凑推理级别预设。
+    /// Remembered workbench reasoning preference chosen by the user before model-capability reconciliation is applied.
+    /// 在应用模型能力回退前由用户选定并记忆的工作台思考偏好。
+    workbench_reasoning_effort_preference: WorkbenchReasoningEffort,
+    /// Effective workbench reasoning effort currently supported by the active model and sent to execution requests.
+    /// 当前被激活模型真实支持并会写入执行请求的工作台生效思考档位。
     workbench_reasoning_effort: WorkbenchReasoningEffort,
     /// Whether the in-app workbench model-picker modal is currently visible.
     /// 工作台内嵌模型选择弹窗当前是否可见。
@@ -1537,48 +1542,9 @@ impl std::fmt::Display for WorkbenchModelChoice {
     }
 }
 
-/// Compact reasoning-effort choice shown in the workbench composer control row.
-/// 显示在工作台提示词控制行中的紧凑推理级别选项。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WorkbenchReasoningEffort {
-    /// Disables any explicit extra reasoning level override.
-    /// 关闭任何显式附加推理级别覆盖。
-    Off,
-    /// Uses a light reasoning profile for faster responses.
-    /// 使用较轻的推理配置以获得更快响应。
-    Low,
-    /// Uses a balanced reasoning profile.
-    /// 使用平衡的推理配置。
-    Medium,
-    /// Uses a deep reasoning profile.
-    /// 使用较深的推理配置。
-    High,
-    /// Uses the strongest reasoning profile offered by the workbench picker.
-    /// 使用工作台选择器提供的最高推理配置。
-    XHigh,
-}
-
-impl WorkbenchReasoningEffort {
-    /// Shared static list of all reasoning-effort choices exposed by the workbench composer.
-    /// 工作台提示词区域暴露的全部推理级别选项静态列表。
-    const ALL: [Self; 5] = [Self::Off, Self::Low, Self::Medium, Self::High, Self::XHigh];
-}
-
-impl std::fmt::Display for WorkbenchReasoningEffort {
-    /// Renders the user-facing compact reasoning-effort label.
-    /// 渲染面向用户的紧凑推理级别标签。
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let label = match self {
-            Self::Off => "关闭",
-            Self::Low => "低",
-            Self::Medium => "中",
-            Self::High => "高",
-            Self::XHigh => "超高",
-        };
-
-        formatter.write_str(label)
-    }
-}
+/// Shared workbench reasoning-effort alias reused by the application state and compact picker surfaces.
+/// 供应用状态与紧凑选择器界面复用的共享工作台推理档位别名。
+type WorkbenchReasoningEffort = ReasoningEffortLevel;
 
 /// Editable user-agent form state mirrored into the dedicated user-agent markdown directory.
 /// 映射回独立用户 Agent Markdown 目录的可编辑用户 Agent 表单状态。
@@ -2226,7 +2192,7 @@ enum Message {
     ExecutionModeSelected(ExecutionMode),
     /// Compact reasoning-effort selection changed inside the workbench composer footer row.
     /// 工作台提示词底部控制行中的紧凑推理级别选择发生变化。
-    WorkbenchReasoningEffortSelected(WorkbenchReasoningEffort),
+    WorkbenchReasoningEffortSelected(ReasoningSelectionOption),
     /// Cycles the current execution mode from the main-input shortcut.
     /// 通过主输入区快捷键循环切换当前执行模式。
     CycleExecutionMode,
@@ -2592,6 +2558,8 @@ impl VulcanWorkbench {
             .and_then(|agent_id| agent_profile_catalog.agents.get(agent_id))
             .map(AgentProfileFormState::from_profile)
             .unwrap_or_default();
+        let initial_workbench_reasoning_effort =
+            Self::resolve_initial_workbench_reasoning_effort(&provider_configuration);
         let runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access(
             &provider_configuration,
             &agent_profile_catalog,
@@ -2614,7 +2582,7 @@ impl VulcanWorkbench {
 
         let startup_controller_configuration = controller_configuration.clone();
 
-        let application = Self {
+        let mut application = Self {
             main_window_id: Some(main_window_id),
             diff_window_id: None,
             main_window_size: main_window_settings().size,
@@ -2743,7 +2711,8 @@ impl VulcanWorkbench {
             last_mcp_discovery_rows: Vec::new(),
             last_mcp_discovery_errors: Vec::new(),
             execution_mode: ExecutionMode::Build,
-            workbench_reasoning_effort: WorkbenchReasoningEffort::Off,
+            workbench_reasoning_effort_preference: initial_workbench_reasoning_effort,
+            workbench_reasoning_effort: initial_workbench_reasoning_effort,
             workbench_model_picker_open: false,
             workbench_model_picker_filter: String::new(),
             workbench_model_picker_highlighted_index: None,
@@ -2757,6 +2726,8 @@ impl VulcanWorkbench {
             auto_approve: false,
             status_message: String::from("正在初始化 vldb 数据平面。"),
         };
+
+        let _ = application.reconcile_workbench_reasoning_effort_for_active_model();
 
         (
             application,
@@ -3911,9 +3882,13 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
                 self.refresh_runtime_foundation();
+                let reasoning_note = self.reconcile_workbench_reasoning_effort_for_active_model();
 
                 self.provider_notice = format!("已将 `{}` 设为当前激活模型。", model);
-                self.status_message = format!("当前激活模型已切换为 `{}`。", model);
+                self.status_message = reasoning_note.map_or_else(
+                    || format!("当前激活模型已切换为 `{}`。", model),
+                    |note| format!("当前激活模型已切换为 `{}`。{}", model, note),
+                );
                 Task::none()
             }
             Message::WorkbenchModelSelected(choice) => self.apply_workbench_model_choice(choice),
@@ -4198,10 +4173,21 @@ impl VulcanWorkbench {
                 self.status_message = format!("执行模式已切换为 {mode}。");
                 Task::none()
             }
-            Message::WorkbenchReasoningEffortSelected(effort) => {
-                self.workbench_reasoning_effort = effort;
-                self.status_message =
-                    format!("推理级别已切换为 {}。", self.workbench_reasoning_effort);
+            Message::WorkbenchReasoningEffortSelected(option) => {
+                self.workbench_reasoning_effort_preference = option.effort;
+                self.workbench_reasoning_effort = option.effort;
+                match self.persist_workbench_reasoning_effort_preference() {
+                    Ok(()) => {
+                        self.status_message = format!("思考模式已切换为 {}。", option.label);
+                    }
+                    Err(error) => {
+                        self.provider_notice = error.clone();
+                        self.status_message = format!(
+                            "思考模式已切换为 {}，但保存到配置文件失败：{}",
+                            option.label, error
+                        );
+                    }
+                }
                 Task::none()
             }
             Message::CycleExecutionMode => {
@@ -4928,6 +4914,7 @@ impl VulcanWorkbench {
                         conversation_state,
                         execution_mode: self.execution_mode.to_string(),
                         temperature: self.temperature_enabled.then_some(self.temperature),
+                        reasoning_effort: self.workbench_reasoning_effort,
                     }
                 } else {
                     self.status_message = String::from("当前没有可执行的会话。");

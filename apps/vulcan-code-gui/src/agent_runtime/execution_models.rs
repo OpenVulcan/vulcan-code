@@ -4,6 +4,7 @@
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
+use crate::provider_config::ReasoningEffortLevel;
 use serde_json::Value;
 use vulcan_core::types::CoreEvent as CoreControllerEvent;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
@@ -33,6 +34,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional sampling temperature override from the run-time controls.
     /// 来自运行参数控制区的可选采样温度覆盖值。
     pub temperature: Option<f32>,
+    /// Shared reasoning-effort preset selected by the current workbench run controls.
+    /// 当前工作台运行控制区选择的共享推理档位预设。
+    pub reasoning_effort: ReasoningEffortLevel,
 }
 
 /// Prepared execution plan rendered by the GUI before real LLM execution begins.
@@ -134,6 +138,7 @@ impl ExecutionPreparation {
                     .map(|value| format!("{value:.2}"))
                     .unwrap_or_else(|| String::from("使用模型默认值"))
             ),
+            self.model_blueprint.reasoning.summary_label(),
             format!("工作区：{}", self.workspace_path),
             format!("上下文：{} 条历史消息", self.context_history_count),
         ];

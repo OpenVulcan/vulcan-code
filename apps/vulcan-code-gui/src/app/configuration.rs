@@ -5,6 +5,16 @@ use super::helpers::*;
 use super::*;
 
 impl VulcanWorkbench {
+    /// Resolves the remembered initial workbench reasoning preference from persisted configuration and falls back to the shared medium preset when no prior selection exists.
+    /// 从持久化配置解析已记忆的初始工作台思考偏好；当不存在历史选择时回退到共享的中等预设。
+    pub(super) fn resolve_initial_workbench_reasoning_effort(
+        config: &ProviderConfigurationFile,
+    ) -> WorkbenchReasoningEffort {
+        config
+            .workbench_reasoning_effort
+            .unwrap_or(WorkbenchReasoningEffort::Medium)
+    }
+
     /// Resolves the initial provider picker choice using the persisted configuration and supported catalog order.
     /// 使用持久化配置与受支持目录顺序解析初始供应商选择项。
     pub(super) fn resolve_initial_provider_choice(
@@ -202,6 +212,48 @@ impl VulcanWorkbench {
             })
     }
 
+    /// Resolves the dynamic reasoning selector view for the currently active workbench model and the remembered user preference.
+    /// 根据当前激活的工作台模型与已记忆用户偏好解析动态思考选择器视图。
+    pub(super) fn active_workbench_reasoning_view(
+        &self,
+    ) -> Option<provider_config::ReasoningSelectionView> {
+        let active_choice = self.active_workbench_model_choice()?;
+        let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
+        let active_model = provider_config::effective_model_choices(
+            &active_choice.provider_id,
+            &self.provider_configuration,
+        )
+        .into_iter()
+        .find(|model| model.id == active_choice.model_id);
+
+        Some(definition.reasoning_selection_view(
+            active_model.as_ref(),
+            self.workbench_reasoning_effort_preference,
+        ))
+    }
+
+    /// Reconciles the remembered workbench reasoning preference against the active model capability set and updates the effective effort.
+    /// 将已记忆的工作台思考偏好与当前激活模型能力集合对齐，并更新生效档位。
+    pub(super) fn reconcile_workbench_reasoning_effort_for_active_model(
+        &mut self,
+    ) -> Option<String> {
+        let Some(view) = self.active_workbench_reasoning_view() else {
+            self.workbench_reasoning_effort = self.workbench_reasoning_effort_preference;
+            return None;
+        };
+
+        self.workbench_reasoning_effort = view.selected_effort;
+        view.note
+    }
+
+    /// Persists the remembered workbench reasoning preference back into the shared provider configuration file.
+    /// 将已记忆的工作台思考偏好持久化回共享供应商配置文件。
+    pub(super) fn persist_workbench_reasoning_effort_preference(&mut self) -> Result<(), String> {
+        self.provider_configuration.workbench_reasoning_effort =
+            Some(self.workbench_reasoning_effort_preference);
+        provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
     /// Returns the currently visible workbench model choices after applying the in-modal filter text.
     /// 返回应用弹窗内过滤文本后当前可见的工作台模型选项集合。
     pub(super) fn filtered_workbench_model_choices(&self) -> Vec<WorkbenchModelChoice> {
@@ -299,12 +351,23 @@ impl VulcanWorkbench {
         }
 
         self.refresh_runtime_foundation();
+        let reasoning_note = self.reconcile_workbench_reasoning_effort_for_active_model();
         self.workbench_model_picker_open = false;
         self.workbench_model_picker_filter.clear();
         self.workbench_model_picker_highlighted_index = None;
-        self.status_message = format!(
-            "当前模型已切换为 `{}`（{}）。",
-            choice.model_name, choice.provider_label
+        self.status_message = reasoning_note.map_or_else(
+            || {
+                format!(
+                    "当前模型已切换为 `{}`（{}）。",
+                    choice.model_name, choice.provider_label
+                )
+            },
+            |note| {
+                format!(
+                    "当前模型已切换为 `{}`（{}）。{}",
+                    choice.model_name, choice.provider_label, note
+                )
+            },
         );
         Task::none()
     }

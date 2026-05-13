@@ -135,6 +135,7 @@ pub(crate) fn build_openai_compatible_turn_response(
         assistant_text,
         assistant_reasoning,
         provider_message_id: provider_message_id.clone(),
+        provider_message_state: None,
         tool_calls,
         continuation: Some(CoreProviderContinuation {
             provider_id: Some(provider_id.to_string()),

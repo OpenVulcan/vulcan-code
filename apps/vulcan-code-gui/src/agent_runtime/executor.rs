@@ -106,6 +106,7 @@ mod tests {
                 user_agent: None,
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({ "reasoning": { "effort": "high" } }),
+                reasoning: Default::default(),
             },
             prompt_preview: String::from("请分析这段代码"),
             workspace_path: String::from("D:/workspace"),
@@ -143,6 +144,7 @@ mod tests {
                         text: String::from("之前的助手回答"),
                         reasoning: String::new(),
                         provider_message_id: Some(String::from("resp_1")),
+                        provider_message_state: None,
                         tool_calls: Vec::new(),
                     },
                 },
@@ -221,6 +223,7 @@ mod tests {
                     String::from("trace-1"),
                 )]),
                 extra_body: json!({ "reasoning": { "effort": "medium" } }),
+                reasoning: Default::default(),
             },
             prompt_preview: String::from("请分析这段代码"),
             workspace_path: String::from("D:/workspace"),
@@ -254,6 +257,7 @@ mod tests {
                         text: String::from("之前的助手回答"),
                         reasoning: String::from("之前的推理摘要"),
                         provider_message_id: Some(String::from("resp_1")),
+                        provider_message_state: None,
                         tool_calls: Vec::new(),
                     },
                 },
@@ -340,6 +344,7 @@ mod tests {
                         text: String::from("我先读取配置文件。"),
                         reasoning: String::from("先定位入口再读取配置。"),
                         provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
                         tool_calls: vec![SessionConversationToolCall {
                             id: String::from("tool-1"),
                             tool_call_id: Some(String::from("call-1")),
@@ -432,6 +437,7 @@ mod tests {
                 text: String::from("我先读取文件。"),
                 reasoning: String::from("这段思考不应回放。"),
                 provider_message_id: Some(String::from("resp-1")),
+                provider_message_state: None,
                 tool_calls: vec![vulcan_core::types::ConversationToolCall {
                     id: String::from("tool-1"),
                     tool_call_id: Some(String::from("call-1")),
@@ -449,6 +455,7 @@ mod tests {
             text,
             reasoning,
             provider_message_id,
+            provider_message_state: _,
             tool_calls,
         } = &message.payload
         else {
@@ -522,6 +529,7 @@ mod tests {
                 user_agent: None,
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({}),
+                reasoning: Default::default(),
             },
             prompt_preview: String::from("请分析这段代码"),
             workspace_path: String::from("D:/workspace"),
@@ -636,6 +644,7 @@ mod tests {
                 text: String::from("请调用工具处理文件。"),
                 reasoning: String::new(),
                 provider_message_id: Some(String::from("assistant-1")),
+                provider_message_state: None,
                 tool_calls: Vec::new(),
             },
         }];

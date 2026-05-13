@@ -8,8 +8,23 @@
   "fields": [
     "apiKey"
   ],
+  "reasoningProfile": {
+    "kind": "binary",
+    "off": {
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "low": {
+      "thinking": {
+        "type": "enabled",
+        "token_budget": 8192
+      }
+    }
+  },
   "baseUrl": {
-    "kind": "native",
+    "kind": "fixed",
+    "value": "https:\/\/api.cohere.com",
     "allowOverride": false
   },
   "modelDiscovery": {

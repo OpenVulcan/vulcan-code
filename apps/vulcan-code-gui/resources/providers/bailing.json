@@ -8,6 +8,15 @@
   "fields": [
     "apiKey"
   ],
+  "reasoningProfile": {
+    "kind": "binary",
+    "off": {
+      "enable_thinking": false
+    },
+    "low": {
+      "enable_thinking": true
+    }
+  },
   "baseUrl": {
     "kind": "fixed",
     "value": "https:\/\/api.tbox.cn\/api\/llm\/v1\/chat\/completions",

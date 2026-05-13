@@ -29,7 +29,7 @@ pub(crate) fn prepare_execution(
         ));
     }
 
-    let model_blueprint = resolve_active_provider_blueprint(config)?;
+    let model_blueprint = resolve_active_provider_blueprint(config, request.reasoning_effort)?;
     let mut warnings = Vec::new();
     let workspace_path = request.workspace_path.trim().to_string();
     let tools_manager = build_vulcan_tools_manager(
@@ -52,6 +52,10 @@ pub(crate) fn prepare_execution(
         warnings.push(String::from(
             "当前提示词为空，本次准备计划仅验证运行时链路。",
         ));
+    }
+
+    if let Some(reasoning_note) = model_blueprint.reasoning.note.as_ref() {
+        warnings.push(reasoning_note.clone());
     }
 
     let mcp_overview = foundation.mcp_overview();

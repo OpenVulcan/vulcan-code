@@ -19,6 +19,7 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// 通过 `vulcan-core` 执行一次宿主控制的 OpenAI 兼容提示词调用，并流式返回规范化增量。
 pub(crate) fn execute_openai_compatible_stream(
     provider_id: &str,
+    provider_label: &str,
     api_key: &str,
     base_url: Option<&str>,
     model_id: &str,
@@ -35,6 +36,8 @@ pub(crate) fn execute_openai_compatible_stream(
     additional_params: Option<Value>,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
+    let provider_label = provider_label.to_string();
+    let runtime_label = provider_label.clone();
     let prepared_runtime_inputs = prepare_provider_transport_runtime_inputs(
         provider_id,
         model_id,
@@ -56,11 +59,12 @@ pub(crate) fn execute_openai_compatible_stream(
         move |live_sender, adapter_inputs| {
             crate::agent_runtime::provider_transport_openai_adapter::OpenAiCompatibleCoreStreamingAdapter::new(
                 adapter_inputs,
+                provider_label.clone(),
                 api_key,
                 base_url,
                 live_sender,
             )
         },
-        "OpenAI 兼容",
+        runtime_label,
     )
 }

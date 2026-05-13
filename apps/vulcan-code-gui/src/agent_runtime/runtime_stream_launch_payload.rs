@@ -124,6 +124,7 @@ mod tests {
                 user_agent: None,
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({}),
+                reasoning: Default::default(),
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from("D:/workspace"),
@@ -151,6 +152,7 @@ mod tests {
             conversation_state: SessionConversationState::default(),
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
+            reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
         }
     }
 

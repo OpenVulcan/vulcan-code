@@ -310,6 +310,7 @@ mod tests {
                 assistant_text: String::new(),
                 assistant_reasoning: String::from("先调用工具获取文件状态。"),
                 provider_message_id: Some(String::from("provider-1")),
+                provider_message_state: None,
                 tool_calls: vec![ConversationToolCall {
                     id: String::from("tool-item-1"),
                     tool_call_id: Some(String::from("tool-call-1")),
@@ -322,6 +323,7 @@ mod tests {
                 assistant_text: String::from("工具执行完成，已经拿到宿主结果。"),
                 assistant_reasoning: String::new(),
                 provider_message_id: Some(String::from("provider-2")),
+                provider_message_state: None,
                 tool_calls: Vec::new(),
                 continuation: None,
             },

@@ -197,6 +197,9 @@ pub enum ConversationPayload {
         /// Optional provider-native assistant message identifier.
         /// 可选的 Provider 原生助手消息标识。
         provider_message_id: Option<String>,
+        /// Optional provider-native assistant state that must survive future history replays.
+        /// 必须在后续历史回放中保留下来的可选 Provider 原生助手状态。
+        provider_message_state: Option<Value>,
         /// Structured tool-call list emitted by the assistant turn.
         /// 由该助手回合发出的结构化工具调用列表。
         tool_calls: Vec<ConversationToolCall>,
@@ -313,6 +316,9 @@ pub struct ProviderTurnResponse {
     /// Optional provider-native assistant message identifier.
     /// 可选的 Provider 原生助手消息标识。
     pub provider_message_id: Option<String>,
+    /// Optional provider-native assistant state that must survive canonical history replay.
+    /// 必须在规范历史回放中保留下来的可选 Provider 原生助手状态。
+    pub provider_message_state: Option<Value>,
     /// Structured tool calls returned by the provider for the current turn.
     /// Provider 在当前回合返回的结构化工具调用集合。
     #[serde(default)]

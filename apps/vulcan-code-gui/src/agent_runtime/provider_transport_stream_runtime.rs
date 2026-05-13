@@ -48,13 +48,15 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     prompt: String,
     provider_factory: F,
     runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    provider_label: &'static str,
+    provider_label: String,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Send + Sync + 'static,
     F: FnOnce(ProviderLiveDeltaSender) -> A + Send + 'static,
 {
     Box::pin(stream! {
+        let provider_label_for_task = provider_label.clone();
+        let provider_label_for_join = provider_label.clone();
         let (live_sender, mut live_receiver) =
             unbounded_channel::<Result<ProviderStreamDelta, String>>();
         let task_sender = live_sender.clone();
@@ -82,7 +84,7 @@ where
                 Err(error) => {
                     let _ = task_sender.send(Err(format!(
                         "{}流式执行失败：{}。",
-                        provider_label,
+                        provider_label_for_task,
                         error
                     )));
                 }
@@ -97,7 +99,7 @@ where
         if let Err(error) = controller_task.await {
             yield Err(format!(
                 "{}控制器后台任务失败：{}。",
-                provider_label,
+                provider_label_for_join,
                 error
             ));
         }
@@ -110,7 +112,7 @@ pub(crate) fn execute_host_controlled_stream_with_prepared_inputs<A, F>(
     prepared_runtime_inputs: PreparedProviderTransportRuntimeInputs,
     core_snapshot: CoreConversationSnapshot,
     provider_factory: F,
-    provider_label: &'static str,
+    provider_label: impl Into<String>,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse> + Send + Sync + 'static,
@@ -118,6 +120,7 @@ where
         + Send
         + 'static,
 {
+    let provider_label = provider_label.into();
     let PreparedProviderTransportRuntimeInputs {
         entry_inputs:
             PreparedProviderTransportEntryInputs {

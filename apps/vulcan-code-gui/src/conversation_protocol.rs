@@ -112,6 +112,9 @@ pub enum SessionConversationPayload {
         /// Optional provider-native assistant message identifier.
         /// 可选的 Provider 原生助手消息标识。
         provider_message_id: Option<String>,
+        /// Optional provider-native assistant state preserved for future provider-specific history replays.
+        /// 为未来 Provider 专属历史回放保留的可选 Provider 原生助手状态。
+        provider_message_state: Option<Value>,
         /// Structured tool-call list emitted by the assistant turn.
         /// 由该助手回合发出的结构化工具调用列表。
         tool_calls: Vec<SessionConversationToolCall>,
@@ -175,6 +178,7 @@ pub fn append_assistant_text_message(
             text: text.into(),
             reasoning: String::new(),
             provider_message_id: None,
+            provider_message_state: None,
             tool_calls: Vec::new(),
         },
     });
@@ -221,6 +225,7 @@ pub fn compact_conversation_with_summary(
             text: summary_body.into(),
             reasoning: String::new(),
             provider_message_id: None,
+            provider_message_state: None,
             tool_calls: Vec::new(),
         },
     });
@@ -302,6 +307,7 @@ mod tests {
                 text: String::from("继续处理。"),
                 reasoning: String::from("先检查工具结果，再决定下一步。"),
                 provider_message_id: Some(String::from("resp-1")),
+                provider_message_state: None,
                 tool_calls: Vec::new(),
             },
         }];
@@ -318,6 +324,7 @@ mod tests {
             text,
             reasoning,
             provider_message_id,
+            provider_message_state: _,
             tool_calls,
         } = &message.payload
         else {

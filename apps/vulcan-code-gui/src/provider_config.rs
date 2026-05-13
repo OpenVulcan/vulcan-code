@@ -4,6 +4,7 @@
 use crate::runtime_assets;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -151,6 +152,227 @@ impl ProviderRuntimeKind {
     }
 }
 
+/// Unified reasoning-effort preset shared by the workbench, provider configuration, and request adaptation pipeline.
+/// 由工作台、供应商配置与请求适配链路共享的统一推理档位预设。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningEffortLevel {
+    /// Requests the closest available no-thinking mode supported by the target provider or model.
+    /// 请求目标供应商或模型支持的最接近“关闭思考”的模式。
+    Off,
+    /// Requests a lightweight reasoning profile focused on faster responses.
+    /// 请求偏向更快响应的轻量推理配置。
+    Low,
+    /// Requests a balanced reasoning profile.
+    /// 请求平衡型推理配置。
+    Medium,
+    /// Requests a deeper reasoning profile.
+    /// 请求更深层的推理配置。
+    High,
+    /// Requests the strongest reasoning profile exposed by the current workbench controls.
+    /// 请求当前工作台控件暴露的最强推理配置。
+    XHigh,
+}
+
+impl ReasoningEffortLevel {
+    /// Shared static list of all reasoning-effort presets exposed by the workbench.
+    /// 工作台暴露的全部推理档位预设静态列表。
+    pub const ALL: [Self; 5] = [Self::Off, Self::Low, Self::Medium, Self::High, Self::XHigh];
+
+    /// Returns whether the current preset explicitly requests more than the provider default behavior.
+    /// 返回当前预设是否明确请求了高于供应商默认行为的思考模式。
+    pub const fn requests_explicit_reasoning(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// Returns the stable ranking used by capability fallback selection and nearest-level matching.
+    /// 返回供能力回退选择与最近档位匹配使用的稳定排序值。
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::Low => 1,
+            Self::Medium => 2,
+            Self::High => 3,
+            Self::XHigh => 4,
+        }
+    }
+
+    /// Returns the default compact Chinese label used by tiered reasoning selectors and diagnostics.
+    /// 返回供分档思考选择器与诊断使用的默认紧凑中文标签。
+    pub const fn compact_label(self) -> &'static str {
+        match self {
+            Self::Off => "关闭",
+            Self::Low => "低",
+            Self::Medium => "中",
+            Self::High => "高",
+            Self::XHigh => "超高",
+        }
+    }
+}
+
+impl fmt::Display for ReasoningEffortLevel {
+    /// Renders the compact user-facing Chinese label for the current reasoning-effort preset.
+    /// 渲染当前推理档位预设面向用户的紧凑中文标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.compact_label())
+    }
+}
+
+/// One reasoning selector option rendered in the workbench according to the active model capability set.
+/// 根据当前激活模型能力集合渲染在工作台中的单个思考选择项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningSelectionOption {
+    /// Stable shared reasoning-effort value used by the runtime selection pipeline.
+    /// 供运行时选择链路使用的稳定共享推理档位值。
+    pub effort: ReasoningEffortLevel,
+    /// Human-readable label shown in the compact selector UI.
+    /// 展示在紧凑选择器界面中的人类可读标签。
+    pub label: String,
+}
+
+impl fmt::Display for ReasoningSelectionOption {
+    /// Renders the compact user-facing label for one reasoning selector option.
+    /// 渲染单个思考选择器选项的紧凑面向用户标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+/// Resolved reasoning selector view derived from one provider/model capability set and one remembered preferred effort.
+/// 根据某个供应商/模型能力集合与一份已记忆偏好档位解析出的思考选择器视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningSelectionView {
+    /// Dynamic selector options that should be visible for the active model.
+    /// 当前激活模型应当可见的动态选择项集合。
+    pub options: Vec<ReasoningSelectionOption>,
+    /// Effective effort that should be shown as selected and sent to the runtime.
+    /// 应当显示为已选中并发送给运行时的生效档位。
+    pub selected_effort: ReasoningEffortLevel,
+    /// Optional warning or downgrade note that explains why the preferred effort had to change.
+    /// 用于解释偏好档位为何必须变化的可选警告或降级说明。
+    pub note: Option<String>,
+}
+
+/// Structured capability family describing how one provider or model expects reasoning controls to be expressed.
+/// 描述单个供应商或模型如何表达推理控制参数的结构化能力类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningCapabilityKind {
+    /// Native multi-level reasoning controls.
+    /// 原生多档位推理控制。
+    Tiered,
+    /// Binary on/off reasoning controls.
+    /// 二值开关式推理控制。
+    Binary,
+    /// Binary reasoning controls that may also expose token-budget style tuning.
+    /// 可能同时暴露 Token 预算调节的二值推理控制。
+    BinaryWithBudget,
+    /// Proxy-level tiered controls whose downstream effect may collapse into fewer effective levels.
+    /// 代理层支持分档但下游实际效果可能塌缩的推理控制。
+    ProxyTiered,
+}
+
+/// Structured JSON patch set that maps the shared reasoning-effort presets onto one provider- or model-specific request payload.
+/// 将共享推理档位预设映射到某个供应商或模型专属请求载荷的结构化 JSON Patch 集合。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningProfileConfig {
+    /// Optional capability-family descriptor used for diagnostics and future UI hints.
+    /// 用于诊断和未来界面提示的可选能力类型描述。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ReasoningCapabilityKind>,
+    /// Optional provider-specific payload used when the workbench explicitly requests reasoning-off behavior.
+    /// 当工作台显式请求关闭思考时使用的可选供应商专属载荷。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub off: Option<Value>,
+    /// Optional provider-specific payload used for the low reasoning preset.
+    /// 用于低档推理预设的可选供应商专属载荷。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low: Option<Value>,
+    /// Optional provider-specific payload used for the medium reasoning preset.
+    /// 用于中档推理预设的可选供应商专属载荷。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medium: Option<Value>,
+    /// Optional provider-specific payload used for the high reasoning preset.
+    /// 用于高档推理预设的可选供应商专属载荷。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<Value>,
+    /// Optional provider-specific payload used for the strongest reasoning preset.
+    /// 用于最高档推理预设的可选供应商专属载荷。
+    #[serde(rename = "xHigh", skip_serializing_if = "Option::is_none")]
+    pub x_high: Option<Value>,
+}
+
+impl ReasoningProfileConfig {
+    /// Returns the provider- or model-specific JSON patch for one shared reasoning-effort preset.
+    /// 返回某个共享推理档位预设对应的供应商或模型专属 JSON Patch。
+    pub fn patch_for_effort(&self, effort: ReasoningEffortLevel) -> Option<Value> {
+        if matches!(
+            self.kind,
+            Some(ReasoningCapabilityKind::Binary | ReasoningCapabilityKind::BinaryWithBudget)
+        ) {
+            return match effort {
+                ReasoningEffortLevel::Off => self.off.clone(),
+                _ => self.first_enabled_patch(),
+            };
+        }
+
+        match effort {
+            ReasoningEffortLevel::Off => self.off.clone(),
+            ReasoningEffortLevel::Low => self.low.clone(),
+            ReasoningEffortLevel::Medium => self.medium.clone(),
+            ReasoningEffortLevel::High => self.high.clone(),
+            ReasoningEffortLevel::XHigh => self.x_high.clone(),
+        }
+    }
+
+    /// Returns the ordered visible effort list declared by this profile after taking binary collapsing rules into account.
+    /// 在考虑二值折叠规则后，返回当前配置声明的有序可见档位列表。
+    pub fn available_efforts(&self) -> Vec<ReasoningEffortLevel> {
+        if matches!(
+            self.kind,
+            Some(ReasoningCapabilityKind::Binary | ReasoningCapabilityKind::BinaryWithBudget)
+        ) {
+            let mut efforts = Vec::new();
+            if self.off.is_some() {
+                efforts.push(ReasoningEffortLevel::Off);
+            }
+            if let Some(enabled_effort) = self.first_enabled_effort() {
+                efforts.push(enabled_effort);
+            }
+            return efforts;
+        }
+
+        ReasoningEffortLevel::ALL
+            .into_iter()
+            .filter(|effort| self.patch_for_effort(*effort).is_some())
+            .collect()
+    }
+
+    /// Returns the first available non-off patch used by binary-style profiles.
+    /// 返回二值风格配置使用的第一条可用非关闭 Patch。
+    fn first_enabled_patch(&self) -> Option<Value> {
+        self.low
+            .clone()
+            .or_else(|| self.medium.clone())
+            .or_else(|| self.high.clone())
+            .or_else(|| self.x_high.clone())
+    }
+
+    /// Returns the first available non-off effort used by binary-style profiles.
+    /// 返回二值风格配置使用的第一条可用非关闭档位。
+    fn first_enabled_effort(&self) -> Option<ReasoningEffortLevel> {
+        [
+            (ReasoningEffortLevel::Low, self.low.as_ref()),
+            (ReasoningEffortLevel::Medium, self.medium.as_ref()),
+            (ReasoningEffortLevel::High, self.high.as_ref()),
+            (ReasoningEffortLevel::XHigh, self.x_high.as_ref()),
+        ]
+        .into_iter()
+        .find_map(|(effort, patch)| patch.is_some().then_some(effort))
+    }
+}
+
 /// Base URL strategy used by one provider definition.
 /// 单个供应商定义使用的基址策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,6 +501,10 @@ pub struct ModelChoice {
     /// 可选的交错推理描述。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interleaved: Option<ModelInterleavedCapability>,
+    /// Optional model-scoped reasoning-profile overrides that can replace provider defaults for this exact model.
+    /// 可选的模型级推理档位覆盖配置，可为当前精确模型替换供应商默认策略。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile: Option<ReasoningProfileConfig>,
     /// Optional input modality list.
     /// 可选的输入模态列表。
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -353,6 +579,10 @@ pub struct SupportedProviderDefinition {
     /// 由兼容运行时合并进供应商请求体中的附加 JSON Body 参数。
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra_body: serde_json::Map<String, serde_json::Value>,
+    /// Optional provider-scoped reasoning profile used when the current runtime family needs non-standard or provider-tuned controls.
+    /// 当当前运行时家族需要非标准或供应商特调控制时使用的可选供应商级推理档位配置。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile: Option<ReasoningProfileConfig>,
     /// Ordered field list exposed by the provider form.
     /// 供应商表单暴露的有序字段列表。
     #[serde(default)]
@@ -442,6 +672,220 @@ impl SupportedProviderDefinition {
             }
         }
     }
+
+    /// Resolves the dynamic reasoning selector view for the current provider/model pair and one remembered preferred effort.
+    /// 为当前供应商/模型组合与一份已记忆偏好档位解析动态思考选择器视图。
+    pub fn reasoning_selection_view(
+        &self,
+        model: Option<&ModelChoice>,
+        preferred_effort: ReasoningEffortLevel,
+    ) -> ReasoningSelectionView {
+        let supported_efforts = self.supported_reasoning_efforts(model);
+        let selected_effort = reconcile_reasoning_effort(preferred_effort, &supported_efforts);
+        let options = build_reasoning_selection_options(&supported_efforts);
+        let note =
+            build_reasoning_selection_note(model, preferred_effort, selected_effort, &options);
+
+        ReasoningSelectionView {
+            options,
+            selected_effort,
+            note,
+        }
+    }
+
+    /// Resolves the ordered reasoning-effort list supported by the current provider/model pair.
+    /// 解析当前供应商/模型组合所支持的有序思考档位列表。
+    pub fn supported_reasoning_efforts(
+        &self,
+        model: Option<&ModelChoice>,
+    ) -> Vec<ReasoningEffortLevel> {
+        let model_supports_reasoning = model.and_then(|item| item.reasoning).unwrap_or(false);
+        if !model_supports_reasoning {
+            return vec![ReasoningEffortLevel::Off];
+        }
+
+        if let Some(profile) = model
+            .and_then(|item| item.reasoning_profile.as_ref())
+            .or(self.reasoning_profile.as_ref())
+        {
+            let profile_efforts = profile.available_efforts();
+            if !profile_efforts.is_empty() {
+                return profile_efforts;
+            }
+        }
+
+        infer_runtime_reasoning_efforts(self.runtime, self.id.as_str(), model)
+    }
+}
+
+/// Infers one runtime-family default reasoning-effort list when no explicit provider or model profile is present.
+/// 在不存在显式供应商或模型配置时推导一份运行时家族默认思考档位列表。
+fn infer_runtime_reasoning_efforts(
+    runtime: ProviderRuntimeKind,
+    provider_id: &str,
+    model: Option<&ModelChoice>,
+) -> Vec<ReasoningEffortLevel> {
+    let Some(model) = model else {
+        return ReasoningEffortLevel::ALL.into_iter().collect();
+    };
+
+    let model_id = model.id.to_ascii_lowercase();
+
+    match runtime {
+        ProviderRuntimeKind::GoogleGemini => infer_google_gemini_reasoning_efforts(&model_id),
+        ProviderRuntimeKind::Cohere => vec![ReasoningEffortLevel::Off, ReasoningEffortLevel::Low],
+        ProviderRuntimeKind::OpenAiCompatible if matches!(provider_id, "alibaba" | "bailing") => {
+            vec![ReasoningEffortLevel::Off, ReasoningEffortLevel::Low]
+        }
+        ProviderRuntimeKind::OpenAiCompatible
+        | ProviderRuntimeKind::OpenAi
+        | ProviderRuntimeKind::Anthropic
+        | ProviderRuntimeKind::AzureOpenAi
+        | ProviderRuntimeKind::XAi
+        | ProviderRuntimeKind::Mistral
+        | ProviderRuntimeKind::Groq
+        | ProviderRuntimeKind::TogetherAi
+        | ProviderRuntimeKind::Perplexity
+        | ProviderRuntimeKind::OpenRouter => ReasoningEffortLevel::ALL.into_iter().collect(),
+    }
+}
+
+/// Infers one Gemini-model-specific reasoning-effort list from the model identifier family when no explicit model profile is present.
+/// 在不存在显式模型配置时，根据模型标识家族推导一份 Gemini 专属思考档位列表。
+fn infer_google_gemini_reasoning_efforts(model_id: &str) -> Vec<ReasoningEffortLevel> {
+    if model_id.starts_with("gemini-3") {
+        return vec![ReasoningEffortLevel::Low, ReasoningEffortLevel::High];
+    }
+
+    if model_id.starts_with("gemini-2.5-pro") {
+        return vec![
+            ReasoningEffortLevel::Low,
+            ReasoningEffortLevel::Medium,
+            ReasoningEffortLevel::High,
+        ];
+    }
+
+    if model_id.starts_with("gemini-2.5-") {
+        return vec![
+            ReasoningEffortLevel::Off,
+            ReasoningEffortLevel::Low,
+            ReasoningEffortLevel::Medium,
+            ReasoningEffortLevel::High,
+        ];
+    }
+
+    vec![
+        ReasoningEffortLevel::Off,
+        ReasoningEffortLevel::Low,
+        ReasoningEffortLevel::Medium,
+        ReasoningEffortLevel::High,
+    ]
+}
+
+/// Builds the visible reasoning selector options from the ordered supported effort list.
+/// 根据有序支持档位列表构建可见的思考选择器选项。
+fn build_reasoning_selection_options(
+    supported_efforts: &[ReasoningEffortLevel],
+) -> Vec<ReasoningSelectionOption> {
+    let uses_binary_labels = supported_efforts
+        .iter()
+        .filter(|effort| effort.requests_explicit_reasoning())
+        .count()
+        <= 1;
+
+    supported_efforts
+        .iter()
+        .copied()
+        .map(|effort| ReasoningSelectionOption {
+            effort,
+            label: if uses_binary_labels && effort.requests_explicit_reasoning() {
+                String::from("开启")
+            } else {
+                effort.compact_label().to_string()
+            },
+        })
+        .collect()
+}
+
+/// Reconciles one remembered preferred effort into the closest supported effort for the current model capability set.
+/// 将一份已记忆偏好档位回退为当前模型能力集合中最近可用的生效档位。
+fn reconcile_reasoning_effort(
+    preferred_effort: ReasoningEffortLevel,
+    supported_efforts: &[ReasoningEffortLevel],
+) -> ReasoningEffortLevel {
+    if supported_efforts.contains(&preferred_effort) {
+        return preferred_effort;
+    }
+
+    let supported_non_off = supported_efforts
+        .iter()
+        .copied()
+        .filter(|effort| effort.requests_explicit_reasoning())
+        .collect::<Vec<_>>();
+
+    if preferred_effort == ReasoningEffortLevel::Off {
+        return supported_non_off
+            .first()
+            .copied()
+            .or_else(|| supported_efforts.first().copied())
+            .unwrap_or(ReasoningEffortLevel::Off);
+    }
+
+    if !supported_non_off.is_empty() {
+        let preferred_rank = preferred_effort.rank();
+
+        return supported_non_off
+            .into_iter()
+            .min_by_key(|effort| {
+                (
+                    effort.rank().abs_diff(preferred_rank),
+                    effort.rank() > preferred_rank,
+                    effort.rank(),
+                )
+            })
+            .unwrap_or(ReasoningEffortLevel::Off);
+    }
+
+    supported_efforts
+        .first()
+        .copied()
+        .unwrap_or(ReasoningEffortLevel::Off)
+}
+
+/// Builds one downgrade note when the remembered preferred effort is not supported by the newly selected model.
+/// 当已记忆偏好档位不被新选模型支持时，构建一条降级提示说明。
+fn build_reasoning_selection_note(
+    model: Option<&ModelChoice>,
+    preferred_effort: ReasoningEffortLevel,
+    selected_effort: ReasoningEffortLevel,
+    options: &[ReasoningSelectionOption],
+) -> Option<String> {
+    if preferred_effort == selected_effort {
+        return None;
+    }
+
+    let model_label = model.map(|item| item.name.as_str()).unwrap_or("当前模型");
+    let selected_label = options
+        .iter()
+        .find(|option| option.effort == selected_effort)
+        .map(|option| option.label.as_str())
+        .unwrap_or_else(|| selected_effort.compact_label());
+
+    if preferred_effort == ReasoningEffortLevel::Off {
+        return Some(format!(
+            "当前模型 `{model_label}` 不支持关闭思考，最低可用档位为 `{selected_label}`，已自动切换。"
+        ));
+    }
+
+    if !selected_effort.requests_explicit_reasoning() {
+        return Some(format!(
+            "当前模型 `{model_label}` 不支持思考能力，已自动切换到关闭思考。"
+        ));
+    }
+
+    Some(format!(
+        "当前模型 `{model_label}` 不支持 `{preferred_effort}` 思考档位，已自动切换到 `{selected_label}`。"
+    ))
 }
 
 /// Provider selection option rendered in the provider pick list.
@@ -930,6 +1374,13 @@ pub struct ProviderConfigurationFile {
     /// 当前以 `provider/model` 形式保存的全局激活模型。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Remembered workbench reasoning preference selected by the user before any model-specific capability downgrade is applied.
+    /// 在应用任意模型级能力回退前，由用户选定并记忆的工作台思考偏好。
+    #[serde(
+        rename = "workbenchReasoningEffort",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workbench_reasoning_effort: Option<ReasoningEffortLevel>,
     /// Persisted provider map keyed by provider identifier.
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1079,6 +1530,7 @@ pub fn effective_model_choices(
                     temperature: None,
                     attachment: None,
                     interleaved: None,
+                    reasoning_profile: None,
                     input_modalities: Vec::new(),
                     output_modalities: Vec::new(),
                 })
@@ -1413,6 +1865,7 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                     temperature: None,
                     attachment: None,
                     interleaved: None,
+                    reasoning_profile: None,
                     input_modalities: Vec::new(),
                     output_modalities: Vec::new(),
                 });
@@ -1440,6 +1893,7 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                 temperature: None,
                 attachment: None,
                 interleaved: None,
+                reasoning_profile: None,
                 input_modalities: Vec::new(),
                 output_modalities: Vec::new(),
             })
@@ -1479,9 +1933,161 @@ fn merge_embedded_model_metadata(
                 temperature: embedded.temperature,
                 attachment: embedded.attachment,
                 interleaved: embedded.interleaved.clone(),
+                reasoning_profile: embedded.reasoning_profile.clone(),
                 input_modalities: embedded.input_modalities.clone(),
                 output_modalities: embedded.output_modalities.clone(),
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ModelChoice, ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
+        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
+        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        SupportedProviderDefinition,
+    };
+    use serde_json::{Map as JsonMap, json};
+
+    /// Builds one minimal supported-provider definition used by the reasoning-selection tests.
+    /// 构建供思考选择测试复用的最小受支持 Provider 定义。
+    fn test_provider_definition(
+        runtime: ProviderRuntimeKind,
+        provider_id: &str,
+        reasoning_profile: Option<ReasoningProfileConfig>,
+    ) -> SupportedProviderDefinition {
+        SupportedProviderDefinition {
+            id: provider_id.to_string(),
+            name: provider_id.to_string(),
+            runtime,
+            user_agent: None,
+            credential_env_keys: Vec::new(),
+            extra_headers: Default::default(),
+            extra_body: JsonMap::new(),
+            reasoning_profile,
+            fields: Vec::new(),
+            base_url: ProviderBaseUrlConfig {
+                kind: ProviderBaseUrlKind::Native,
+                value: None,
+                template: None,
+                parameter: None,
+                allow_override: false,
+            },
+            model_discovery: ProviderModelDiscoveryConfig {
+                kind: ProviderModelDiscoveryKind::None,
+            },
+            models: Vec::new(),
+        }
+    }
+
+    /// Builds one minimal model choice used by the reasoning-selection tests.
+    /// 构建供思考选择测试复用的最小模型选项。
+    fn test_model_choice(
+        model_id: &str,
+        supports_reasoning: bool,
+        reasoning_profile: Option<ReasoningProfileConfig>,
+    ) -> ModelChoice {
+        ModelChoice {
+            id: model_id.to_string(),
+            name: model_id.to_string(),
+            status: None,
+            family: None,
+            release_date: None,
+            context_limit: None,
+            input_limit: None,
+            output_limit: None,
+            reasoning: Some(supports_reasoning),
+            tool_call: Some(true),
+            temperature: Some(true),
+            attachment: None,
+            interleaved: None,
+            reasoning_profile,
+            input_modalities: Vec::new(),
+            output_modalities: Vec::new(),
+        }
+    }
+
+    /// Verifies binary reasoning profiles collapse the selector into the expected on/off pair and remap higher remembered tiers to “开启”.
+    /// 验证二值思考配置会把选择器收缩为预期的开关二项，并将更高的已记忆档位回退为“开启”。
+    #[test]
+    fn binary_reasoning_profile_builds_on_off_selector_and_downgrades_high_to_enabled() {
+        let provider = test_provider_definition(
+            ProviderRuntimeKind::OpenAiCompatible,
+            "bailing",
+            Some(ReasoningProfileConfig {
+                kind: Some(ReasoningCapabilityKind::Binary),
+                off: Some(json!({ "enable_thinking": false })),
+                low: Some(json!({ "enable_thinking": true })),
+                medium: Some(json!({ "enable_thinking": true })),
+                ..ReasoningProfileConfig::default()
+            }),
+        );
+        let model = test_model_choice("qwen-coder", true, None);
+
+        let view = provider.reasoning_selection_view(Some(&model), ReasoningEffortLevel::High);
+
+        assert_eq!(view.options.len(), 2);
+        assert_eq!(view.options[0].label, "关闭");
+        assert_eq!(view.options[1].label, "开启");
+        assert_eq!(view.selected_effort, ReasoningEffortLevel::Low);
+        assert_eq!(
+            view.note.as_deref(),
+            Some("当前模型 `qwen-coder` 不支持 `高` 思考档位，已自动切换到 `开启`。")
+        );
+    }
+
+    /// Verifies a model that does not support reasoning forces the selector into a disabled off-only state and reports the downgrade.
+    /// 验证不支持思考的模型会强制将选择器收缩为仅关闭状态，并报告回退说明。
+    #[test]
+    fn non_reasoning_model_forces_selector_to_off_only() {
+        let provider = test_provider_definition(ProviderRuntimeKind::OpenAi, "openai", None);
+        let model = test_model_choice("gpt-lite", false, None);
+
+        let view = provider.reasoning_selection_view(Some(&model), ReasoningEffortLevel::Medium);
+
+        assert_eq!(view.options.len(), 1);
+        assert_eq!(view.options[0].label, "关闭");
+        assert_eq!(view.selected_effort, ReasoningEffortLevel::Off);
+        assert_eq!(
+            view.note.as_deref(),
+            Some("当前模型 `gpt-lite` 不支持思考能力，已自动切换到关闭思考。")
+        );
+    }
+
+    /// Verifies Gemini 3 model families expose only the runtime-supported low/high compatibility tiers by default.
+    /// 验证 Gemini 3 模型家族默认仅暴露运行时真正支持的低/高兼容档位。
+    #[test]
+    fn gemini_three_defaults_only_expose_low_and_high() {
+        let provider = test_provider_definition(ProviderRuntimeKind::GoogleGemini, "google", None);
+        let model = test_model_choice("gemini-3-pro", true, None);
+
+        let supported = provider.supported_reasoning_efforts(Some(&model));
+
+        assert_eq!(
+            supported,
+            vec![ReasoningEffortLevel::Low, ReasoningEffortLevel::High]
+        );
+    }
+
+    /// Verifies the remembered workbench reasoning preference keeps the stable camelCase field name and round-trips through the shared provider configuration file.
+    /// 验证已记忆的工作台思考偏好会保持稳定的 camelCase 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
+    #[test]
+    fn provider_configuration_round_trips_workbench_reasoning_effort() {
+        let config = ProviderConfigurationFile {
+            workbench_reasoning_effort: Some(ReasoningEffortLevel::High),
+            ..ProviderConfigurationFile::default()
+        };
+
+        let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+        assert_eq!(value.get("workbenchReasoningEffort"), Some(&json!("high")));
+
+        let restored: ProviderConfigurationFile =
+            serde_json::from_value(value).expect("provider configuration must deserialize");
+        assert_eq!(
+            restored.workbench_reasoning_effort,
+            Some(ReasoningEffortLevel::High)
+        );
+    }
 }

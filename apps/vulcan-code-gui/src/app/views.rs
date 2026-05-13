@@ -1618,9 +1618,49 @@ impl VulcanWorkbench {
     /// Builds the compact reasoning-effort selector shown before the trailing send button.
     /// 构建显示在尾部发送按钮之前的紧凑推理级别选择器。
     pub(super) fn view_workbench_reasoning_effort_selector(&self) -> Element<'_, Message> {
+        let reasoning_view = self.active_workbench_reasoning_view();
+        let reasoning_options = reasoning_view
+            .as_ref()
+            .map(|view| view.options.clone())
+            .unwrap_or_else(|| {
+                vec![provider_config::ReasoningSelectionOption {
+                    effort: self.workbench_reasoning_effort,
+                    label: self.workbench_reasoning_effort.compact_label().to_string(),
+                }]
+            });
+        let selected_option = reasoning_view
+            .as_ref()
+            .and_then(|view| {
+                view.options
+                    .iter()
+                    .find(|option| option.effort == view.selected_effort)
+                    .cloned()
+            })
+            .or_else(|| reasoning_options.first().cloned());
+
+        if reasoning_options.len() <= 1 {
+            let disabled_label = selected_option
+                .as_ref()
+                .map(|option| option.label.as_str())
+                .unwrap_or("关闭")
+                .to_string();
+
+            return button(
+                container(text(disabled_label).size(13))
+                    .width(Fill)
+                    .height(Fill)
+                    .center_y(Fill),
+            )
+            .width(WORKBENCH_REASONING_SELECTOR_WIDTH)
+            .height(COMPOSER_CONTROL_ROW_HEIGHT)
+            .padding([0, 10])
+            .style(style::workbench_model_trigger_button_style)
+            .into();
+        }
+
         pick_list(
-            WorkbenchReasoningEffort::ALL,
-            Some(self.workbench_reasoning_effort),
+            reasoning_options,
+            selected_option,
             Message::WorkbenchReasoningEffortSelected,
         )
         .width(WORKBENCH_REASONING_SELECTOR_WIDTH)

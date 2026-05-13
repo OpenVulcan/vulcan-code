@@ -22,11 +22,13 @@ pub(crate) fn session_message_to_core_message(
             text,
             reasoning,
             provider_message_id,
+            provider_message_state,
             tool_calls,
         } => CoreConversationPayload::Assistant {
             text: text.clone(),
             reasoning: reasoning.clone(),
             provider_message_id: provider_message_id.clone(),
+            provider_message_state: provider_message_state.clone(),
             tool_calls: tool_calls
                 .iter()
                 .map(session_tool_call_to_core_tool_call)
@@ -62,11 +64,13 @@ pub(crate) fn core_message_to_session_message(
             text,
             reasoning,
             provider_message_id,
+            provider_message_state,
             tool_calls,
         } => SessionConversationPayload::Assistant {
             text: text.clone(),
             reasoning: reasoning.clone(),
             provider_message_id: provider_message_id.clone(),
+            provider_message_state: provider_message_state.clone(),
             tool_calls: tool_calls
                 .iter()
                 .map(core_tool_call_to_session_tool_call)
@@ -105,11 +109,13 @@ pub(crate) fn core_messages_to_provider_visible_history(
                     text,
                     reasoning: _,
                     provider_message_id,
+                    provider_message_state,
                     tool_calls,
                 } => CoreConversationPayload::Assistant {
                     text: text.clone(),
                     reasoning: String::new(),
                     provider_message_id: provider_message_id.clone(),
+                    provider_message_state: provider_message_state.clone(),
                     tool_calls: tool_calls.clone(),
                 },
                 CoreConversationPayload::ToolResult {

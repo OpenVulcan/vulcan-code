@@ -10,7 +10,8 @@
     "apiKey"
   ],
   "baseUrl": {
-    "kind": "native",
+    "kind": "fixed",
+    "value": "https:\/\/generativelanguage.googleapis.com",
     "allowOverride": false
   },
   "modelDiscovery": {

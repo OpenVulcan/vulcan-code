@@ -141,6 +141,7 @@ fn render_core_conversation_message_preview(
             reasoning,
             provider_message_id,
             tool_calls,
+            ..
         } => {
             let mut sections = vec![format!(
                 "### {}. assistant · `{}`{}",

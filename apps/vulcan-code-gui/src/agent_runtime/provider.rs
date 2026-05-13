@@ -1,9 +1,12 @@
 //! Provider/model runtime blueprint resolution used by the compose execution layer.
 //! compose 执行层使用的 Provider/Model 运行时蓝图解析逻辑。
 
+use crate::agent_runtime::provider_reasoning::{
+    ProviderRuntimeReasoningResolution, resolve_provider_runtime_reasoning,
+};
 use crate::provider_config::{
     self, PersistedProviderOptions, ProviderConfigurationFile, ProviderFieldKey,
-    ProviderRuntimeKind,
+    ProviderRuntimeKind, ReasoningEffortLevel,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -48,6 +51,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Additional JSON body parameters configured by the provider definition.
     /// 供应商定义配置的附加 JSON Body 参数集合。
     pub extra_body: Value,
+    /// Shared reasoning-resolution result derived from model overrides, provider overrides, and runtime defaults.
+    /// 由模型覆盖、供应商覆盖与运行时默认值共同解析出的共享推理控制结果。
+    pub reasoning: ProviderRuntimeReasoningResolution,
 }
 
 impl ProviderRuntimeBlueprint {
@@ -83,6 +89,7 @@ impl ProviderRuntimeBlueprint {
 /// 将当前激活的 Provider/Model 对解析为一份通过校验的运行时蓝图。
 pub fn resolve_active_provider_blueprint(
     config: &ProviderConfigurationFile,
+    requested_reasoning_effort: ReasoningEffortLevel,
 ) -> Result<ProviderRuntimeBlueprint, String> {
     let active_model = config
         .model
@@ -106,12 +113,31 @@ pub fn resolve_active_provider_blueprint(
         definition.name.as_str(),
     )?;
 
-    let model_name = provider_config::effective_model_choices(provider_id, config)
+    let selected_model = provider_config::effective_model_choices(provider_id, config)
         .into_iter()
-        .find(|model| model.id == model_id)
-        .map(|model| model.name)
+        .find(|model| model.id == model_id);
+    let model_name = selected_model
+        .as_ref()
+        .map(|model| model.name.clone())
         .unwrap_or_else(|| model_id.to_string());
+    let model_supports_reasoning = selected_model
+        .as_ref()
+        .and_then(|model| model.reasoning)
+        .unwrap_or(false);
+    let model_reasoning_profile = selected_model
+        .as_ref()
+        .and_then(|model| model.reasoning_profile.clone());
     let credential_source = credential_source_summary(options);
+    let provider_reasoning_profile = definition.reasoning_profile.clone();
+    let reasoning = resolve_provider_runtime_reasoning(
+        definition.runtime,
+        provider_id,
+        model_id,
+        model_supports_reasoning,
+        requested_reasoning_effort,
+        provider_reasoning_profile.as_ref(),
+        model_reasoning_profile.as_ref(),
+    );
 
     Ok(ProviderRuntimeBlueprint {
         provider_id: provider_id.to_string(),
@@ -126,6 +152,7 @@ pub fn resolve_active_provider_blueprint(
         user_agent: definition.user_agent.clone(),
         extra_headers: definition.extra_headers.clone(),
         extra_body: Value::Object(definition.extra_body.clone()),
+        reasoning,
     })
 }
 

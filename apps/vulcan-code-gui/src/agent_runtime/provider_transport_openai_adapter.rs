@@ -23,6 +23,9 @@ use vulcan_core::types::{
 /// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 OpenAI 兼容 Provider 适配器。
 #[derive(Clone)]
 pub(crate) struct OpenAiCompatibleCoreStreamingAdapter {
+    /// Human-readable provider label used by transport diagnostics and request previews.
+    /// 用于传输诊断与请求预览的人类可读 Provider 标签。
+    pub(crate) provider_label: String,
     /// Stable provider identifier attached to every request and continuation snapshot.
     /// 附着到每次请求与 continuation 快照上的稳定 Provider 标识。
     pub(crate) provider_id: String,
@@ -51,6 +54,7 @@ impl OpenAiCompatibleCoreStreamingAdapter {
     /// 使用共享的已准备适配器输入与 Provider 专用启动字段创建一个 OpenAI 兼容流式适配器。
     pub(crate) fn new(
         adapter_inputs: PreparedProviderTransportAdapterInputs,
+        provider_label: String,
         api_key: String,
         base_url: Option<String>,
         live_sender: ProviderLiveDeltaSender,
@@ -63,6 +67,7 @@ impl OpenAiCompatibleCoreStreamingAdapter {
         } = adapter_inputs;
 
         Self {
+            provider_label,
             provider_id,
             api_key,
             base_url,
@@ -101,7 +106,7 @@ impl VulcanProviderAdapter for OpenAiCompatibleCoreStreamingAdapter {
         build_standard_streaming_request(
             self.provider_id.as_str(),
             self.model_id.as_str(),
-            "OpenAI 兼容",
+            self.provider_label.as_str(),
             snapshot,
             config,
             &self.provider_tool_definitions,
@@ -116,7 +121,7 @@ impl VulcanProviderAdapter for OpenAiCompatibleCoreStreamingAdapter {
         &self,
         _request: Self::Request,
     ) -> Result<Self::Response, VulcanCoreError> {
-        unsupported_streaming_execute("OpenAI 兼容")
+        unsupported_streaming_execute(self.provider_label.as_str())
     }
 }
 
@@ -134,7 +139,7 @@ impl VulcanStreamingProviderAdapter for OpenAiCompatibleCoreStreamingAdapter {
     {
         execute_openai_compatible_http_streaming_turn(
             self.provider_id.as_str(),
-            "OpenAI 兼容",
+            self.provider_label.as_str(),
             self.api_key.as_str(),
             self.base_url.as_deref(),
             self.model_id.as_str(),

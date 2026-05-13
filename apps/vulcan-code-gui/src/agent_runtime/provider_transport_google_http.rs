@@ -1,0 +1,821 @@
+//! Direct Google Gemini HTTP and SSE transport owned by the host runtime.
+//! 宿主运行时自有的 Google Gemini HTTP 与 SSE 直连传输模块。
+
+use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
+use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_delta_to_runtime_delta;
+use crate::agent_runtime::provider_protocol_content::{
+    ProviderAssistantContent, ProviderReasoningPart,
+};
+use crate::agent_runtime::provider_protocol_gemini::{
+    GeminiCandidate, GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig,
+    GeminiFunctionDeclaration, GeminiFunctionResponse, GeminiPart, GeminiStreamingChunk,
+    GeminiTool, GeminiToolConfig, build_gemini_provider_message_state, parse_gemini_provider_message_state,
+};
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_transport_http_support::{
+    build_json_http_client, build_rest_endpoint, ensure_json_content_type, ensure_string_header,
+    extract_standard_error_message,
+};
+use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use futures_util::StreamExt;
+use reqwest::header::HeaderMap;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+use vulcan_core::provider::VulcanProviderDeltaSink;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
+    ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
+    ProviderContinuation as CoreProviderContinuation,
+    ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
+};
+
+/// Default Google Gemini REST base URL used by the host-owned direct transport.
+/// 宿主自有直连传输使用的默认 Google Gemini REST 基础地址。
+const GOOGLE_GEMINI_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+
+/// Executes one direct Google Gemini streaming turn without going through any compatibility transport layer.
+/// 在不经过任何兼容传输层的前提下执行一次直连 Google Gemini 流式回合。
+pub(crate) async fn execute_google_gemini_http_streaming_turn<S>(
+    provider_id: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+    model_id: &str,
+    request_headers: HeaderMap,
+    request: OpenAiCompatibleCoreTurnRequest,
+    provider_tool_definitions: &[ProviderToolDefinition],
+    live_sender: &ProviderLiveDeltaSender,
+    sink: &mut S,
+) -> Result<CoreProviderTurnResponse, VulcanCoreError>
+where
+    S: VulcanProviderDeltaSink,
+{
+    let client = build_google_gemini_http_client(provider_id, api_key, request_headers)?;
+    let endpoint = build_google_gemini_streaming_endpoint(base_url, model_id);
+    let payload = build_google_gemini_request_payload(request, provider_tool_definitions)?;
+
+    let mut response = client
+        .post(endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|error| VulcanCoreError::ProviderFailure {
+            provider_id: provider_id.to_string(),
+            message: format!("Google Gemini 请求发送失败：{error}"),
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let message = extract_standard_error_message(&body)
+            .unwrap_or_else(|| format!("HTTP {status}: {}", body.trim()));
+        return Err(VulcanCoreError::ProviderFailure {
+            provider_id: provider_id.to_string(),
+            message: format!("Google Gemini 请求失败：{message}"),
+        });
+    }
+
+    let byte_stream = Box::pin(async_stream::stream! {
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => yield Ok::<Vec<u8>, std::io::Error>(chunk.to_vec()),
+                Ok(None) => break,
+                Err(error) => {
+                    yield Err(std::io::Error::other(error.to_string()));
+                    break;
+                }
+            }
+        }
+    });
+
+    let events = iter_sse_messages(byte_stream);
+    futures_util::pin_mut!(events);
+
+    let mut response_model = None::<String>;
+    let mut assistant_text = String::new();
+    let mut finalized_parts = Vec::<GeminiPart>::new();
+    let mut pending_reasoning_index = None::<usize>;
+    let mut function_part_indices = HashMap::<String, usize>::new();
+
+    while let Some(event_result) = events.next().await {
+        let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
+            provider_id: provider_id.to_string(),
+            message: format!("Google Gemini SSE 解码失败：{error}"),
+        })?;
+
+        if event.data.trim().is_empty() {
+            continue;
+        }
+
+        let chunk =
+            serde_json::from_str::<GeminiStreamingChunk>(&event.data).map_err(|error| {
+                VulcanCoreError::ProviderFailure {
+                    provider_id: provider_id.to_string(),
+                    message: format!("Google Gemini 流式事件解析失败：{error}"),
+                }
+            })?;
+
+        if let Some(model_version) = chunk.model_version {
+            response_model = Some(model_version);
+        }
+        let Some(candidate) = chunk.candidates.into_iter().next() else {
+            continue;
+        };
+
+        process_gemini_candidate(
+            provider_id,
+            candidate,
+            live_sender,
+            sink,
+            &mut assistant_text,
+            &mut finalized_parts,
+            &mut pending_reasoning_index,
+            &mut function_part_indices,
+        )?;
+    }
+
+    let assistant_reasoning = finalized_parts
+        .iter()
+        .filter_map(|part| {
+            part.is_reasoning()
+                .then(|| part.text.clone().unwrap_or_default())
+                .filter(|text| !text.is_empty())
+                .map(ProviderReasoningPart::Text)
+        })
+        .collect::<Vec<_>>();
+    let tool_calls = finalized_parts
+        .iter()
+        .filter_map(|part| {
+            part.function_call
+                .as_ref()
+                .map(gemini_function_call_to_core_tool_call)
+        })
+        .collect::<Vec<_>>();
+
+    let mut assistant_content = Vec::new();
+    if !assistant_text.is_empty() {
+        assistant_content.push(ProviderAssistantContent::Text(assistant_text));
+    }
+    if !assistant_reasoning.is_empty() {
+        assistant_content.push(ProviderAssistantContent::Reasoning(assistant_reasoning));
+    }
+    assistant_content.extend(
+        tool_calls
+            .iter()
+            .cloned()
+            .map(ProviderAssistantContent::ToolCall),
+    );
+
+    let provider_message_state = (!finalized_parts.is_empty()).then(|| {
+        build_gemini_provider_message_state(&GeminiContent::model(finalized_parts))
+    });
+
+    Ok(CoreProviderTurnResponse {
+        assistant_text: assistant_content
+            .iter()
+            .filter_map(|item| match item {
+                ProviderAssistantContent::Text(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        assistant_reasoning: assistant_content
+            .iter()
+            .filter_map(|item| match item {
+                ProviderAssistantContent::Reasoning(reasoning) => Some(
+                    reasoning
+                        .iter()
+                        .filter_map(|part| match part {
+                            ProviderReasoningPart::Text(text)
+                            | ProviderReasoningPart::Summary(text) => Some(text.clone()),
+                            ProviderReasoningPart::Opaque => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        provider_message_id: None,
+        provider_message_state,
+        tool_calls,
+        continuation: Some(CoreProviderContinuation {
+            provider_id: Some(provider_id.to_string()),
+            model_id: Some(response_model.unwrap_or_else(|| model_id.to_string())),
+            last_provider_message_id: None,
+            updated_at: Some(current_unix_millis_text()),
+        }),
+    })
+}
+
+/// Builds one direct Google Gemini HTTP client with merged API key and caller-supplied request headers.
+/// 构建一个直连 Google Gemini HTTP 客户端，并合并 API Key 与调用方提供的请求头。
+fn build_google_gemini_http_client(
+    provider_id: &str,
+    api_key: &str,
+    mut request_headers: HeaderMap,
+) -> Result<reqwest::Client, VulcanCoreError> {
+    ensure_string_header(
+        provider_id,
+        "Google Gemini",
+        &mut request_headers,
+        "x-goog-api-key",
+        api_key,
+        "API Key ",
+    )?;
+    ensure_json_content_type(&mut request_headers);
+    build_json_http_client(provider_id, "Google Gemini", request_headers)
+}
+
+/// Builds the Google Gemini native streaming endpoint from one optional base URL and one concrete model identifier.
+/// 根据可选基础地址与具体模型标识构建 Google Gemini 原生流式端点。
+fn build_google_gemini_streaming_endpoint(base_url: Option<&str>, model_id: &str) -> String {
+    build_rest_endpoint(
+        base_url,
+        GOOGLE_GEMINI_DEFAULT_BASE_URL,
+        format!("v1beta/models/{model_id}:streamGenerateContent?alt=sse").as_str(),
+    )
+}
+
+/// Builds one Google Gemini native request payload from the canonical host-owned turn request and mirrored tool definitions.
+/// 根据规范宿主单回合请求与镜像工具定义构建一份 Google Gemini 原生请求载荷。
+fn build_google_gemini_request_payload(
+    request: OpenAiCompatibleCoreTurnRequest,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> Result<Value, VulcanCoreError> {
+    let OpenAiCompatibleCoreTurnRequest {
+        snapshot,
+        current_history,
+        current_prompt,
+    } = request;
+
+    let mut payload = match snapshot.additional_params {
+        Some(Value::Object(object)) => Value::Object(object),
+        Some(other) => json!({ "hostAdditionalParams": other }),
+        None => json!({}),
+    };
+
+    let mut all_messages = current_history;
+    all_messages.push(current_prompt);
+
+    let mut contents = Vec::new();
+    for index in 0..all_messages.len() {
+        let content = core_message_to_gemini_content(&all_messages[index], &all_messages[..index])?;
+        if !content.parts.is_empty() {
+            contents.push(serde_json::to_value(content).map_err(|error| {
+                VulcanCoreError::InvalidState {
+                    message: format!("Google Gemini 历史消息序列化失败：{error}"),
+                }
+            })?);
+        }
+    }
+
+    payload = merge_json_values(payload, json!({ "contents": contents }));
+
+    if !snapshot.system_prompt.trim().is_empty() {
+        payload = merge_json_values(
+            payload,
+            json!({
+                "systemInstruction": {
+                    "parts": [
+                        {
+                            "text": snapshot.system_prompt
+                        }
+                    ]
+                }
+            }),
+        );
+    }
+
+    if let Some(temperature) = snapshot.temperature {
+        payload = merge_json_values(
+            payload,
+            json!({
+                "generationConfig": {
+                    "temperature": temperature
+                }
+            }),
+        );
+    }
+
+    if !provider_tool_definitions.is_empty() {
+        payload = merge_json_values(
+            payload,
+            json!({
+                "tools": vec![GeminiTool {
+                    function_declarations: provider_tool_definitions
+                        .iter()
+                        .map(provider_tool_definition_to_gemini_function_declaration)
+                        .collect::<Vec<_>>()
+                }],
+                "toolConfig": GeminiToolConfig {
+                    function_calling_config: GeminiFunctionCallingConfig {
+                        mode: String::from("AUTO"),
+                    }
+                }
+            }),
+        );
+    }
+
+    Ok(payload)
+}
+
+/// Converts one canonical core message into one Gemini-native content item, preserving stored provider state whenever native replay fidelity is required.
+/// 将一条规范 core 消息转换为一条 Gemini 原生内容项，并在需要原生回放精度时优先保留已存储的 Provider 状态。
+fn core_message_to_gemini_content(
+    message: &CoreConversationMessage,
+    previous_messages: &[CoreConversationMessage],
+) -> Result<GeminiContent, VulcanCoreError> {
+    match &message.payload {
+        CoreConversationPayload::UserText { text } => {
+            Ok(GeminiContent::user(vec![GeminiPart::text(text.clone())]))
+        }
+        CoreConversationPayload::Assistant {
+            text,
+            provider_message_state,
+            tool_calls,
+            ..
+        } => {
+            if let Some(content) = provider_message_state
+                .as_ref()
+                .and_then(parse_gemini_provider_message_state)
+            {
+                return Ok(if content.role.is_some() {
+                    content
+                } else {
+                    GeminiContent::model(content.parts)
+                });
+            }
+
+            let mut parts = Vec::new();
+            if !text.trim().is_empty() {
+                parts.push(GeminiPart::text(text.clone()));
+            }
+            parts.extend(
+                tool_calls
+                    .iter()
+                    .cloned()
+                    .map(core_tool_call_to_gemini_function_call)
+                    .map(GeminiPart::function_call),
+            );
+            Ok(GeminiContent::model(parts))
+        }
+        CoreConversationPayload::ToolResult {
+            tool_call_id, text, ..
+        } => {
+            let Some(request_key) = tool_call_id
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Err(VulcanCoreError::InvalidState {
+                    message: String::from(
+                        "Google Gemini 工具结果消息缺少 tool_call_id，无法构造原生 provider 请求。",
+                    ),
+                });
+            };
+            let Some((tool_name, provider_visible_call_id)) =
+                find_matching_gemini_tool_call(previous_messages, request_key.as_str())
+            else {
+                return Err(VulcanCoreError::InvalidState {
+                    message: format!(
+                        "Google Gemini 工具结果无法在历史中找到对应调用 `{request_key}`。"
+                    ),
+                });
+            };
+
+            Ok(GeminiContent::user(vec![GeminiPart::function_response(
+                GeminiFunctionResponse {
+                    id: provider_visible_call_id,
+                    name: tool_name,
+                    response: Some(parse_tool_result_text_as_json(text)),
+                },
+            )]))
+        }
+    }
+}
+
+/// Resolves the matching Gemini tool call for one tool-result message by scanning the already-emitted history in reverse order.
+/// 通过逆序扫描已发出的历史，为一条工具结果消息解析对应的 Gemini 工具调用。
+fn find_matching_gemini_tool_call(
+    previous_messages: &[CoreConversationMessage],
+    request_key: &str,
+) -> Option<(String, Option<String>)> {
+    previous_messages.iter().rev().find_map(|message| {
+        let CoreConversationPayload::Assistant { tool_calls, .. } = &message.payload else {
+            return None;
+        };
+
+        tool_calls.iter().rev().find_map(|tool_call| {
+            (resolved_core_tool_call_key(tool_call) == request_key).then(|| {
+                (
+                    tool_call.tool_name.clone(),
+                    tool_call
+                        .tool_call_id
+                        .clone()
+                        .filter(|value| !value.trim().is_empty()),
+                )
+            })
+        })
+    })
+}
+
+/// Returns the stable lookup key for one canonical core tool call, preferring provider-visible identifiers and falling back to the local item identifier.
+/// 返回一条规范 core 工具调用的稳定查找键，优先使用 Provider 可见标识，并在缺失时回退到本地项标识。
+fn resolved_core_tool_call_key(tool_call: &CoreConversationToolCall) -> &str {
+    tool_call
+        .tool_call_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(tool_call.id.as_str())
+}
+
+/// Converts one canonical core tool call into one Gemini-native function-call payload while preserving the provider-visible call identifier when available.
+/// 将一条规范 core 工具调用转换为一条 Gemini 原生函数调用载荷，并在可用时保留 Provider 可见调用标识。
+fn core_tool_call_to_gemini_function_call(tool_call: CoreConversationToolCall) -> GeminiFunctionCall {
+    GeminiFunctionCall {
+        id: tool_call
+            .tool_call_id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        name: tool_call.tool_name,
+        args: tool_call.arguments,
+    }
+}
+
+/// Converts one host-owned provider tool definition into one Gemini-native function declaration.
+/// 将一条宿主自有 Provider 工具定义转换为一条 Gemini 原生函数声明。
+fn provider_tool_definition_to_gemini_function_declaration(
+    definition: &ProviderToolDefinition,
+) -> GeminiFunctionDeclaration {
+    GeminiFunctionDeclaration {
+        name: definition.name.clone(),
+        description: definition.description.clone(),
+        parameters: Some(definition.parameters.clone()),
+    }
+}
+
+/// Parses one flattened tool-result text payload into the most structured JSON value available for native Gemini function responses.
+/// 将一条已扁平化工具结果文本解析为尽可能结构化的 JSON 值，以供 Gemini 原生函数结果使用。
+fn parse_tool_result_text_as_json(text: &str) -> Value {
+    serde_json::from_str::<Value>(text).unwrap_or_else(|_| json!({ "result": text }))
+}
+
+/// Processes one Gemini candidate payload, forwards live deltas, and mutates the accumulated native part list used for the final provider-state replay.
+/// 处理单个 Gemini 候选载荷，转发实时增量，并更新用于最终 Provider 状态回放的原生 Part 累积列表。
+fn process_gemini_candidate<S>(
+    provider_id: &str,
+    candidate: GeminiCandidate,
+    live_sender: &ProviderLiveDeltaSender,
+    sink: &mut S,
+    assistant_text: &mut String,
+    finalized_parts: &mut Vec<GeminiPart>,
+    pending_reasoning_index: &mut Option<usize>,
+    function_part_indices: &mut HashMap<String, usize>,
+) -> Result<(), VulcanCoreError>
+where
+    S: VulcanProviderDeltaSink,
+{
+    let Some(content) = candidate.content else {
+        return Ok(());
+    };
+
+    for part in content.parts {
+        if let Some(function_call) = part.function_call.clone() {
+            let key = gemini_function_call_key(&function_call);
+            if let Some(index) = function_part_indices.get(&key).copied() {
+                finalized_parts[index] = part;
+            } else {
+                function_part_indices.insert(key, finalized_parts.len());
+                finalized_parts.push(part);
+            }
+            continue;
+        }
+
+        if part.is_reasoning() {
+            let text = part.text.clone().unwrap_or_default();
+            if !text.is_empty() {
+                forward_google_gemini_delta(
+                    live_sender,
+                    sink,
+                    CoreProviderTurnDelta::Thinking { delta: text.clone() },
+                );
+            }
+
+            match *pending_reasoning_index {
+                Some(index) => {
+                    let existing_text = finalized_parts[index].text.clone().unwrap_or_default();
+                    finalized_parts[index].text =
+                        Some(reconcile_reasoning_text(&existing_text, &text));
+                    if part.thought_signature.is_some() {
+                        finalized_parts[index].thought_signature = part.thought_signature.clone();
+                        *pending_reasoning_index = None;
+                    }
+                }
+                None => {
+                    let index = finalized_parts.len();
+                    finalized_parts.push(part.clone());
+                    if part.thought_signature.is_none() {
+                        *pending_reasoning_index = Some(index);
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let Some(text) = part.text.clone().filter(|value| !value.is_empty()) {
+            assistant_text.push_str(&text);
+            forward_google_gemini_delta(
+                live_sender,
+                sink,
+                CoreProviderTurnDelta::Output { delta: text },
+            );
+            finalized_parts.push(part);
+            continue;
+        }
+
+        finalized_parts.push(part);
+    }
+
+    if let Some(finish_reason) = candidate.finish_reason
+        && finish_reason.eq_ignore_ascii_case("malformed_function_call")
+    {
+        return Err(VulcanCoreError::ProviderFailure {
+            provider_id: provider_id.to_string(),
+            message: String::from("Google Gemini 返回了无效函数调用，无法继续当前回合。"),
+        });
+    }
+
+    Ok(())
+}
+
+/// Reconciles one finalized Gemini reasoning text with the latest streamed chunk while avoiding duplicated prefixes when the provider replays the full block on the signature chunk.
+/// 在避免 Provider 在签名块中重放完整文本时产生重复前缀的前提下，协调一段 Gemini 最终思考文本与最新流式块。
+fn reconcile_reasoning_text(existing_text: &str, latest_text: &str) -> String {
+    if latest_text.is_empty() {
+        return existing_text.to_string();
+    }
+    if existing_text.is_empty() {
+        return latest_text.to_string();
+    }
+    if latest_text.starts_with(existing_text) {
+        return latest_text.to_string();
+    }
+    if existing_text.starts_with(latest_text) {
+        return existing_text.to_string();
+    }
+    format!("{existing_text}{latest_text}")
+}
+
+/// Builds the stable deduplication key for one Gemini function call, preferring the native call identifier when available.
+/// 为一条 Gemini 函数调用构建稳定去重键，优先使用原生调用标识。
+fn gemini_function_call_key(function_call: &GeminiFunctionCall) -> String {
+    function_call
+        .id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "{}:{}",
+                function_call.name,
+                serde_json::to_string(&function_call.args)
+                    .unwrap_or_else(|_| function_call.args.to_string())
+            )
+        })
+}
+
+/// Converts one Gemini-native function call into one canonical core tool call.
+/// 将一条 Gemini 原生函数调用转换为一条规范 core 工具调用。
+fn gemini_function_call_to_core_tool_call(
+    function_call: &GeminiFunctionCall,
+) -> CoreConversationToolCall {
+    let local_id = function_call
+        .id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| gemini_function_call_key(function_call));
+
+    CoreConversationToolCall {
+        id: local_id,
+        tool_call_id: function_call
+            .id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        tool_name: function_call.name.clone(),
+        arguments: function_call.args.clone(),
+    }
+}
+
+/// Forwards one normalized Gemini delta to both the GUI live-delta channel and the `vulcan-core` streaming sink.
+/// 将一条规范化 Gemini 增量同时转发给 GUI 实时增量通道与 `vulcan-core` 流式接收器。
+fn forward_google_gemini_delta<S>(
+    live_sender: &ProviderLiveDeltaSender,
+    sink: &mut S,
+    delta: CoreProviderTurnDelta,
+) where
+    S: VulcanProviderDeltaSink,
+{
+    let runtime_delta = core_provider_turn_delta_to_runtime_delta(delta.clone());
+    let _ = live_sender.send(Ok(runtime_delta));
+    sink.push_delta(delta);
+}
+
+/// Deep-merges two JSON values while allowing overlay branches to replace non-object leaves.
+/// 深度合并两个 JSON 值，并允许覆盖分支替换非对象叶子节点。
+fn merge_json_values(base: Value, overlay: Value) -> Value {
+    match (base, overlay) {
+        (Value::Object(mut base_object), Value::Object(overlay_object)) => {
+            for (key, overlay_value) in overlay_object {
+                let merged_value = match base_object.remove(&key) {
+                    Some(base_value) => merge_json_values(base_value, overlay_value),
+                    None => overlay_value,
+                };
+                base_object.insert(key, merged_value);
+            }
+            Value::Object(base_object)
+        }
+        (_, overlay) => overlay,
+    }
+}
+
+/// Returns the current Unix timestamp in milliseconds as one text value for Gemini continuation refreshes.
+/// 以文本形式返回当前 Unix 毫秒时间戳，供 Gemini continuation 刷新使用。
+fn current_unix_millis_text() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_google_gemini_request_payload, core_message_to_gemini_content, parse_gemini_provider_message_state,
+    };
+    use crate::agent_runtime::provider_protocol_gemini::{
+        GeminiContent, GeminiFunctionCall, GeminiPart, build_gemini_provider_message_state,
+    };
+    use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+    use serde_json::json;
+    use vulcan_core::types::{
+        ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
+        ConversationToolCall as CoreConversationToolCall, ProviderContinuation as CoreProviderContinuation,
+        ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    };
+    use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+
+    /// Verifies one stored Gemini provider-message-state round-trips the native content payload without losing thought signatures.
+    /// 验证一份已存储 Gemini provider_message_state 可以在不丢失 thought signature 的前提下往返恢复原生内容载荷。
+    #[test]
+    fn gemini_provider_message_state_round_trips_native_content() {
+        let content = GeminiContent::model(vec![GeminiPart::reasoning(
+            "reasoning text",
+            Some(String::from("sig-1")),
+        )]);
+        let state = build_gemini_provider_message_state(&content);
+
+        let restored =
+            parse_gemini_provider_message_state(&state).expect("gemini provider state should parse");
+
+        assert_eq!(restored, content);
+    }
+
+    /// Verifies Gemini request building replays stored native assistant parts and maps tool results into native function responses with the matching function name.
+    /// 验证 Gemini 请求构建会回放已存储的原生助手 Part，并把工具结果映射成带匹配函数名称的原生 function response。
+    #[test]
+    fn gemini_request_payload_replays_native_parts_and_function_response() {
+        let assistant_state = build_gemini_provider_message_state(&GeminiContent::model(vec![
+            GeminiPart::reasoning("thinking text", Some(String::from("sig-1"))),
+            GeminiPart::function_call(GeminiFunctionCall {
+                id: Some(String::from("provider-call-1")),
+                name: String::from("read_file"),
+                args: json!({"path":"src/main.rs"}),
+            }),
+        ]));
+        let assistant_message = CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::from("thinking text"),
+                provider_message_id: None,
+                provider_message_state: Some(assistant_state),
+                tool_calls: vec![CoreConversationToolCall {
+                    id: String::from("tool-item-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    tool_name: String::from("read_file"),
+                    arguments: json!({"path":"src/main.rs"}),
+                }],
+            },
+        };
+        let tool_result_message = CoreConversationMessage {
+            id: String::from("tool-result-1"),
+            payload: CoreConversationPayload::ToolResult {
+                tool_result_id: String::from("result-1"),
+                tool_call_id: Some(String::from("provider-call-1")),
+                text: String::from("{\"summary\":\"done\"}"),
+            },
+        };
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-2.5-flash"),
+                system_prompt: String::from("You are helpful."),
+                prompt: String::from("继续"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "generationConfig": {
+                        "thinkingConfig": {
+                            "thinkingBudget": 2048
+                        }
+                    }
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![assistant_message, tool_result_message],
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("继续"),
+                },
+            },
+        };
+
+        let payload = build_google_gemini_request_payload(
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read file"),
+                parameters: json!({"type":"object"}),
+            }],
+        )
+        .expect("gemini request payload should build");
+
+        let contents = payload["contents"]
+            .as_array()
+            .expect("contents should be one array");
+        assert_eq!(
+            contents[0]["parts"][0]["thoughtSignature"],
+            json!("sig-1")
+        );
+        assert_eq!(
+            contents[1]["parts"][0]["functionResponse"]["name"],
+            json!("read_file")
+        );
+        assert_eq!(
+            contents[1]["parts"][0]["functionResponse"]["id"],
+            json!("provider-call-1")
+        );
+        assert_eq!(
+            payload["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            json!(2048)
+        );
+    }
+
+    /// Verifies Gemini tool-result conversion omits the native response `id` when the originating function call only had a local controller identifier.
+    /// 验证当原始函数调用只有本地控制器标识时，Gemini 工具结果转换不会附带原生响应 `id`。
+    #[test]
+    fn gemini_tool_result_omits_provider_visible_id_when_unavailable() {
+        let assistant_message = CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::new(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                tool_calls: vec![CoreConversationToolCall {
+                    id: String::from("local-tool-id"),
+                    tool_call_id: None,
+                    tool_name: String::from("read_file"),
+                    arguments: json!({"path":"src/main.rs"}),
+                }],
+            },
+        };
+        let tool_result_message = CoreConversationMessage {
+            id: String::from("tool-result-1"),
+            payload: CoreConversationPayload::ToolResult {
+                tool_result_id: String::from("result-1"),
+                tool_call_id: Some(String::from("local-tool-id")),
+                text: String::from("done"),
+            },
+        };
+
+        let content = core_message_to_gemini_content(&tool_result_message, &[assistant_message])
+            .expect("tool result should convert into gemini content");
+
+        assert!(content.parts[0].function_response.is_some());
+        assert_eq!(
+            content.parts[0]
+                .function_response
+                .as_ref()
+                .and_then(|response| response.id.clone()),
+            None
+        );
+    }
+}

@@ -17,7 +17,7 @@ use crate::agent_runtime::provider_protocol_openai_compatible::{
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
-    ensure_json_content_type, extract_standard_error_message,
+    ensure_json_content_type, ensure_string_header, extract_standard_error_message,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -139,6 +139,43 @@ struct OpenAiCompatibleStreamingChunk {
     choices: Vec<OpenAiCompatibleStreamingChoice>,
 }
 
+/// Authorization strategy used by OpenAI-compatible wire protocols whose payload semantics are shared but whose auth headers may differ.
+/// 供 OpenAI 兼容线协议复用、但可能具有不同鉴权头形式的鉴权策略。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum OpenAiCompatibleAuthorizationStrategy {
+    /// Standard bearer-token authorization.
+    /// 标准 Bearer Token 鉴权。
+    Bearer,
+    /// Static string header that carries the raw API key value.
+    /// 直接承载原始 API Key 值的静态字符串请求头。
+    StaticApiKeyHeader {
+        /// Target header name.
+        /// 目标请求头名称。
+        header_name: &'static str,
+        /// Human-readable header label used in diagnostics.
+        /// 用于诊断文案的人类可读请求头标签。
+        header_label: &'static str,
+    },
+}
+
+/// Launch options used by one OpenAI-compatible wire-protocol turn whose transport details differ from the default OpenAI REST endpoint.
+/// 供单次 OpenAI 兼容线协议回合使用、但其传输细节不同于默认 OpenAI REST 端点的启动配置。
+#[derive(Debug, Clone)]
+pub(crate) struct OpenAiCompatibleHttpStreamingOptions {
+    /// Human-readable provider label used in diagnostics.
+    /// 用于诊断文案的人类可读 Provider 标签。
+    pub(crate) provider_label: String,
+    /// Final REST endpoint used for the current request.
+    /// 当前请求使用的最终 REST 端点。
+    pub(crate) endpoint: String,
+    /// Whether the request payload should keep the top-level `model` field.
+    /// 请求载荷是否应保留顶层 `model` 字段。
+    pub(crate) include_model_field: bool,
+    /// Authorization strategy used by the concrete provider variant.
+    /// 具体 Provider 变体使用的鉴权策略。
+    pub(crate) authorization_strategy: OpenAiCompatibleAuthorizationStrategy,
+}
+
 /// Executes one direct OpenAI-compatible streaming turn without going through any third-party completion-model abstraction.
 /// 在不经过任何第三方 completion model 抽象的前提下执行一次直连 OpenAI 兼容流式回合。
 pub(crate) async fn execute_openai_compatible_http_streaming_turn<S>(
@@ -156,11 +193,60 @@ pub(crate) async fn execute_openai_compatible_http_streaming_turn<S>(
 where
     S: VulcanProviderDeltaSink,
 {
-    let client =
-        build_openai_compatible_http_client(provider_id, provider_label, api_key, request_headers)?;
-    let endpoint = build_openai_compatible_chat_completions_endpoint(base_url);
-    let payload =
-        build_openai_compatible_request_payload(model_id, request, provider_tool_definitions)?;
+    execute_openai_compatible_http_streaming_turn_with_options(
+        provider_id,
+        api_key,
+        model_id,
+        request_headers,
+        request,
+        provider_tool_definitions,
+        live_sender,
+        sink,
+        OpenAiCompatibleHttpStreamingOptions {
+            provider_label: provider_label.to_string(),
+            endpoint: build_openai_compatible_chat_completions_endpoint(base_url),
+            include_model_field: true,
+            authorization_strategy: OpenAiCompatibleAuthorizationStrategy::Bearer,
+        },
+    )
+    .await
+}
+
+/// Executes one direct OpenAI-compatible wire-protocol turn using caller-supplied transport options such as auth strategy and final endpoint.
+/// 使用调用方提供的鉴权策略与最终端点等传输配置执行一次直连 OpenAI 兼容线协议回合。
+pub(crate) async fn execute_openai_compatible_http_streaming_turn_with_options<S>(
+    provider_id: &str,
+    api_key: &str,
+    model_id: &str,
+    request_headers: HeaderMap,
+    request: OpenAiCompatibleCoreTurnRequest,
+    provider_tool_definitions: &[ProviderToolDefinition],
+    live_sender: &ProviderLiveDeltaSender,
+    sink: &mut S,
+    options: OpenAiCompatibleHttpStreamingOptions,
+) -> Result<CoreProviderTurnResponse, VulcanCoreError>
+where
+    S: VulcanProviderDeltaSink,
+{
+    let OpenAiCompatibleHttpStreamingOptions {
+        provider_label,
+        endpoint,
+        include_model_field,
+        authorization_strategy,
+    } = options;
+    let client = build_openai_compatible_http_client(
+        provider_id,
+        provider_label.as_str(),
+        api_key,
+        request_headers,
+        authorization_strategy,
+    )?;
+    let payload = build_openai_compatible_request_payload(
+        model_id,
+        request,
+        provider_tool_definitions,
+        include_model_field,
+    )?;
     let mut response = client
         .post(endpoint)
         .json(&payload)
@@ -214,7 +300,8 @@ where
             continue;
         }
 
-        let chunk = normalize_openai_compatible_chunk(provider_id, provider_label, &event.data)?;
+        let chunk =
+            normalize_openai_compatible_chunk(provider_id, provider_label.as_str(), &event.data)?;
         response_id = chunk.response_id.or(response_id);
         let Some(choice) = chunk.choice else {
             continue;
@@ -285,8 +372,27 @@ fn build_openai_compatible_http_client(
     provider_label: &str,
     api_key: &str,
     mut request_headers: HeaderMap,
+    authorization_strategy: OpenAiCompatibleAuthorizationStrategy,
 ) -> Result<reqwest::Client, VulcanCoreError> {
-    ensure_bearer_authorization_header(provider_id, provider_label, api_key, &mut request_headers)?;
+    match authorization_strategy {
+        OpenAiCompatibleAuthorizationStrategy::Bearer => ensure_bearer_authorization_header(
+            provider_id,
+            provider_label,
+            api_key,
+            &mut request_headers,
+        )?,
+        OpenAiCompatibleAuthorizationStrategy::StaticApiKeyHeader {
+            header_name,
+            header_label,
+        } => ensure_string_header(
+            provider_id,
+            provider_label,
+            &mut request_headers,
+            header_name,
+            api_key,
+            header_label,
+        )?,
+    }
     ensure_json_content_type(&mut request_headers);
     build_json_http_client(provider_id, provider_label, request_headers)
 }
@@ -294,6 +400,15 @@ fn build_openai_compatible_http_client(
 /// Builds the final OpenAI-compatible `/chat/completions` endpoint from one optional base URL override.
 /// 根据可选基础地址覆盖值构建最终 OpenAI 兼容 `/chat/completions` 端点。
 fn build_openai_compatible_chat_completions_endpoint(base_url: Option<&str>) -> String {
+    if let Some(base_url) = base_url
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().trim_end_matches('/'))
+    {
+        if base_url.ends_with("/chat/completions") {
+            return base_url.to_string();
+        }
+    }
+
     build_rest_endpoint(base_url, "https://api.openai.com/v1", "chat/completions")
 }
 
@@ -303,6 +418,7 @@ fn build_openai_compatible_request_payload(
     model_id: &str,
     request: OpenAiCompatibleCoreTurnRequest,
     provider_tool_definitions: &[ProviderToolDefinition],
+    include_model_field: bool,
 ) -> Result<Value, VulcanCoreError> {
     let OpenAiCompatibleCoreTurnRequest {
         snapshot,
@@ -335,7 +451,9 @@ fn build_openai_compatible_request_payload(
     );
     messages.push(core_message_to_openai_compatible_message(&current_prompt)?);
 
-    payload.insert(String::from("model"), Value::String(model_id.to_string()));
+    if include_model_field {
+        payload.insert(String::from("model"), Value::String(model_id.to_string()));
+    }
     payload.insert(String::from("messages"), Value::Array(messages));
     payload.insert(String::from("stream"), Value::Bool(true));
 
@@ -612,6 +730,7 @@ mod tests {
                     text: String::from("我先读取文件。"),
                     reasoning: String::from("这段思考不应回放。"),
                     provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
                     tool_calls: vec![CoreConversationToolCall {
                         id: String::from("tool-1"),
                         tool_call_id: Some(String::from("call-1")),
@@ -644,6 +763,7 @@ mod tests {
                     "required": ["path"]
                 }),
             }],
+            true,
         )
         .expect("payload should build");
 

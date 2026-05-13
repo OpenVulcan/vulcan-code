@@ -781,6 +781,7 @@ mod tests {
                     text: String::from("我先读取文件。"),
                     reasoning: String::from("这段思考不应回放。"),
                     provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
                     tool_calls: vec![CoreConversationToolCall {
                         id: String::from("fc_1"),
                         tool_call_id: Some(String::from("call-1")),

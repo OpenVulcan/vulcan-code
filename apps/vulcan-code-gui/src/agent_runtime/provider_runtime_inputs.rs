@@ -2,6 +2,7 @@
 //! 供请求预览构建与真实传输分发共享的 Provider 运行时输入辅助逻辑。
 
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+use crate::agent_runtime::provider_reasoning::merge_additional_params;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::provider_config::{PersistedProviderOptions, ProviderConfigurationFile};
 use async_stream::stream;
@@ -13,11 +14,15 @@ use serde_json::Value;
 pub(crate) fn resolve_provider_additional_params(
     blueprint: &ProviderRuntimeBlueprint,
 ) -> Option<Value> {
-    blueprint
+    let provider_defaults = blueprint
         .extra_body
         .as_object()
         .filter(|object| !object.is_empty())
-        .map(|object| Value::Object(object.clone()))
+        .map(|object| Value::Object(object.clone()));
+    merge_additional_params(
+        provider_defaults,
+        blueprint.reasoning.additional_params.clone(),
+    )
 }
 
 /// Builds one request-header map from the configured strategy and provider-defined extra headers.
