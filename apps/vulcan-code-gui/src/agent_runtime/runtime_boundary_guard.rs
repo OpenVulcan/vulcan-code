@@ -145,3 +145,57 @@ fn mcp_runtime_sources_do_not_reintroduce_dead_code_suppressions() {
         offending_files
     );
 }
+
+/// Verifies GUI-side MCP glue keeps concrete transport launch wiring centralized in `mcp/config.rs`.
+/// 验证 GUI 侧 MCP 胶水层继续将具体传输启动接线集中保留在 `mcp/config.rs` 中。
+#[test]
+fn gui_mcp_sources_keep_launch_spec_mapping_centralized() {
+    let gui_mcp_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("mcp");
+    let rust_files = collect_rust_source_files(&gui_mcp_root);
+    let approved_launch_spec_file = gui_mcp_root.join("config.rs");
+
+    let offending_launch_spec_files = rust_files
+        .iter()
+        .filter_map(|path| {
+            let source = fs::read_to_string(path).ok()?;
+            let references_launch_spec = source.contains("McpTransportLaunchSpec");
+            (references_launch_spec && *path != approved_launch_spec_file).then_some(path.clone())
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        offending_launch_spec_files.is_empty(),
+        "GUI MCP sources must keep launch-spec mapping centralized in config.rs: {:?}",
+        offending_launch_spec_files
+    );
+}
+
+/// Verifies GUI sources do not directly import concrete MCP transport implementations after the runtime boundary split.
+/// 验证在 MCP 运行时边界拆分后，GUI 源码不再直接导入具体 MCP 传输实现类型。
+#[test]
+fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
+    let gui_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let rust_files = collect_rust_source_files(&gui_src_root);
+
+    let offending_files = rust_files
+        .into_iter()
+        .filter_map(|path| {
+            if path.file_name().and_then(|value| value.to_str())
+                == Some("runtime_boundary_guard.rs")
+            {
+                return None;
+            }
+            let source = fs::read_to_string(&path).ok()?;
+            let references_concrete_transport = source.contains("StdioTransport")
+                || source.contains("HttpTransport")
+                || source.contains("SseTransport");
+            references_concrete_transport.then_some(path)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        offending_files.is_empty(),
+        "GUI sources must not directly import concrete MCP transports again: {:?}",
+        offending_files
+    );
+}
