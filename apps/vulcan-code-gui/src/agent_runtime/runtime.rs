@@ -8,8 +8,8 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRegistrySummary, McpRuntimeDiscoveryReport, McpRuntimeHandle, McpRuntimeToolAllowlist,
-    McpRuntimeToolBinding, configured_mcp_registry_summary,
+    McpRegistrySummary, McpRuntimeDiscoveryReport, McpRuntimeHandle, McpRuntimeOverview,
+    McpRuntimeToolAllowlist, McpRuntimeToolBinding, configured_mcp_registry_summary,
 };
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -207,15 +207,6 @@ impl RuntimeFoundation {
         &self.native_tools
     }
 
-    /// Returns lightweight MCP server rows for UI placeholder surfaces.
-    /// 返回供 UI 占位面板使用的轻量 MCP 服务器行文本。
-    pub fn mcp_rows(&self) -> Vec<String> {
-        self.mcp_runtime
-            .as_ref()
-            .map(McpRuntimeHandle::summary_rows)
-            .unwrap_or_else(|| self.mcp_registry_summary.summary_rows())
-    }
-
     /// Returns lightweight tool-policy rows for UI placeholder surfaces.
     /// 返回供 UI 占位面板使用的轻量工具策略行文本。
     pub fn tool_policy_rows(&self) -> Vec<String> {
@@ -348,22 +339,19 @@ impl RuntimeFoundation {
         mcp_runtime.available_tool_bindings_filtered(&tool_allowlist)
     }
 
-    /// Returns enabled MCP server summary rows for execution diagnostics.
-    /// 返回供执行诊断使用的已启用 MCP 服务器摘要行集合。
-    pub fn enabled_mcp_server_rows(&self) -> Vec<String> {
-        self.mcp_runtime
-            .as_ref()
-            .map(McpRuntimeHandle::active_summary_rows)
-            .unwrap_or_else(|| self.mcp_registry_summary.enabled_summary_rows())
-    }
-
-    /// Returns one stable MCP discovery report built from the live runtime when available.
-    /// 返回一份在实时运行时可用时构建得到的稳定 MCP 发现报告。
-    pub fn enabled_mcp_discovery_report(&self) -> McpRuntimeDiscoveryReport {
-        self.mcp_runtime
-            .as_ref()
-            .map(McpRuntimeHandle::enabled_server_discovery_report)
-            .unwrap_or_default()
+    /// Returns one stable MCP runtime overview that narrows summary and discovery reads to one access surface.
+    /// 返回一份将摘要与发现读取收敛到单一访问面的稳定 MCP 运行时概览。
+    pub fn mcp_overview(&self) -> McpRuntimeOverview {
+        self.mcp_runtime.as_ref().map_or_else(
+            || {
+                McpRuntimeOverview::new(
+                    self.mcp_registry_summary.summary_rows(),
+                    self.mcp_registry_summary.enabled_summary_rows(),
+                    McpRuntimeDiscoveryReport::default(),
+                )
+            },
+            McpRuntimeHandle::overview,
+        )
     }
 }
 

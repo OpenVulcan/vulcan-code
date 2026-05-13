@@ -6,7 +6,6 @@ use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeDiscoveryReport;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use std::path::PathBuf;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
@@ -61,9 +60,10 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
     let resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)
         .definitions;
-    let discovery_report = foundation.enabled_mcp_discovery_report();
+    let mcp_overview = foundation.mcp_overview();
+    let discovery_report = mcp_overview.discovery_report();
     let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
-        project_mcp_discovery_report_to_runtime_events(&discovery_report);
+        project_mcp_discovery_report_to_runtime_events(discovery_report);
     let mut warnings = preparation.warnings.clone();
     warnings.extend(discovery_warnings);
 
@@ -81,7 +81,7 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
 /// Projects one stable MCP discovery report into runtime events, discovery rows, discovery errors, and discovery warnings.
 /// 将一份稳定 MCP 发现报告投影为运行时事件、发现摘要行、发现错误和发现告警集合。
 fn project_mcp_discovery_report_to_runtime_events(
-    report: &McpRuntimeDiscoveryReport,
+    report: &crate::mcp::McpRuntimeDiscoveryReport,
 ) -> (Vec<RuntimeEvent>, Vec<String>, Vec<String>, Vec<String>) {
     let mut runtime_events = Vec::new();
     let mut rows = Vec::new();

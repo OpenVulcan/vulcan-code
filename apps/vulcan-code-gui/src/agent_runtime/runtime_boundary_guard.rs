@@ -276,3 +276,36 @@ fn agent_runtime_mod_does_not_reintroduce_mcp_runtime_projection_module() {
         projection_path.display()
     );
 }
+
+/// Verifies the runtime foundation continues exposing MCP summary and discovery reads through the unified overview surface.
+/// 验证运行时基础架构继续通过统一 overview 视图暴露 MCP 摘要与发现读取能力。
+#[test]
+fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("agent_runtime")
+        .join("runtime.rs");
+    let runtime_source =
+        fs::read_to_string(&runtime_path).expect("agent_runtime/runtime.rs should remain readable");
+
+    assert!(
+        runtime_source.contains("pub fn mcp_overview(&self) -> McpRuntimeOverview"),
+        "RuntimeFoundation should keep exposing the unified MCP overview surface: {}",
+        runtime_path.display()
+    );
+    assert!(
+        !runtime_source.contains("pub fn mcp_rows(&self)"),
+        "RuntimeFoundation must not reintroduce the legacy mcp_rows surface: {}",
+        runtime_path.display()
+    );
+    assert!(
+        !runtime_source.contains("pub fn enabled_mcp_server_rows(&self)"),
+        "RuntimeFoundation must not reintroduce the legacy enabled_mcp_server_rows surface: {}",
+        runtime_path.display()
+    );
+    assert!(
+        !runtime_source.contains("pub fn enabled_mcp_discovery_report(&self)"),
+        "RuntimeFoundation must not reintroduce the legacy enabled_mcp_discovery_report surface: {}",
+        runtime_path.display()
+    );
+}

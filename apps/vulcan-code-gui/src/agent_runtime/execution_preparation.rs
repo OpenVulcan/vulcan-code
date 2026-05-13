@@ -54,6 +54,8 @@ pub(crate) fn prepare_execution(
         ));
     }
 
+    let mcp_overview = foundation.mcp_overview();
+
     Ok(ExecutionPreparation {
         session_id: request.session_id,
         session_title: request.session_title.clone(),
@@ -69,7 +71,7 @@ pub(crate) fn prepare_execution(
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors: resolved_tools.descriptors,
         delegate_agents: active_agent.delegates.clone(),
-        enabled_mcp_servers: foundation.enabled_mcp_server_rows(),
+        enabled_mcp_servers: mcp_overview.active_summary_rows().to_vec(),
         warnings,
         provider_request_preview_markdown: String::new(),
         provider_request_snapshot_json: None,

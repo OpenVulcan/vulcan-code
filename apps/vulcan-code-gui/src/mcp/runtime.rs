@@ -471,6 +471,55 @@ impl McpRuntimeDiscoveryReport {
     }
 }
 
+/// Stable MCP runtime overview exported to upper runtime layers.
+/// 导出给上层运行时的稳定 MCP 运行时概览。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpRuntimeOverview {
+    /// Human-readable summary rows covering all configured runtime-visible servers.
+    /// 覆盖全部已配置运行时可见服务器的人类可读摘要行集合。
+    summary_rows: Vec<String>,
+    /// Human-readable summary rows covering only active runtime-visible servers.
+    /// 仅覆盖活动运行时可见服务器的人类可读摘要行集合。
+    active_summary_rows: Vec<String>,
+    /// Stable discovery report exported to upper bootstrap and diagnostics flows.
+    /// 导出给上层 bootstrap 与诊断流程的稳定发现报告。
+    discovery_report: McpRuntimeDiscoveryReport,
+}
+
+impl McpRuntimeOverview {
+    /// Builds one stable MCP runtime overview from summary rows and one discovery report.
+    /// 根据摘要行与单份发现报告构建单个稳定 MCP 运行时概览。
+    pub fn new(
+        summary_rows: Vec<String>,
+        active_summary_rows: Vec<String>,
+        discovery_report: McpRuntimeDiscoveryReport,
+    ) -> Self {
+        Self {
+            summary_rows,
+            active_summary_rows,
+            discovery_report,
+        }
+    }
+
+    /// Returns the human-readable summary rows covering all configured runtime-visible servers.
+    /// 返回覆盖全部已配置运行时可见服务器的人类可读摘要行集合。
+    pub fn summary_rows(&self) -> &[String] {
+        &self.summary_rows
+    }
+
+    /// Returns the human-readable summary rows covering only active runtime-visible servers.
+    /// 返回仅覆盖活动运行时可见服务器的人类可读摘要行集合。
+    pub fn active_summary_rows(&self) -> &[String] {
+        &self.active_summary_rows
+    }
+
+    /// Returns the stable discovery report exported to upper bootstrap and diagnostics flows.
+    /// 返回导出给上层 bootstrap 与诊断流程的稳定发现报告。
+    pub fn discovery_report(&self) -> &McpRuntimeDiscoveryReport {
+        &self.discovery_report
+    }
+}
+
 impl McpRuntimeServerDiagnostic {
     /// Converts the current server diagnostic into one stable runtime event projection.
     /// 将当前服务器诊断转换为单条稳定的运行时事件投影视图。
@@ -613,6 +662,16 @@ impl McpRuntimeSnapshot {
             discovery_warnings,
         }
     }
+
+    /// Builds one stable runtime overview that groups summary rows and the enabled-server discovery report.
+    /// 构建一份聚合摘要行与已启用服务器发现报告的稳定运行时概览。
+    fn overview(&self) -> McpRuntimeOverview {
+        McpRuntimeOverview::new(
+            self.summary_rows(),
+            self.active_summary_rows(),
+            self.enabled_server_discovery_report(),
+        )
+    }
 }
 
 /// Shared host-side handle used to inspect active MCP tools and resolve live transports at call time.
@@ -658,16 +717,10 @@ impl McpRuntimeHandle {
             .clone()
     }
 
-    /// Returns lightweight server summary rows for UI-facing runtime surfaces.
-    /// 返回供界面运行时表面使用的轻量服务器摘要行。
-    pub fn summary_rows(&self) -> Vec<String> {
-        self.snapshot().summary_rows()
-    }
-
-    /// Returns lightweight summary rows for currently active runtime-visible servers.
-    /// 返回当前运行时可见活动服务器的轻量摘要行集合。
-    pub fn active_summary_rows(&self) -> Vec<String> {
-        self.snapshot().active_summary_rows()
+    /// Returns one stable MCP runtime overview for upper runtime surfaces.
+    /// 返回供上层运行时表面消费的单份稳定 MCP 运行时概览。
+    pub fn overview(&self) -> McpRuntimeOverview {
+        self.snapshot().overview()
     }
 
     /// Resolves the currently active transport for one connected server.
@@ -734,12 +787,6 @@ impl McpRuntimeHandle {
                     error
                 )
             })
-    }
-
-    /// Returns one stable discovery report for enabled MCP servers only.
-    /// 返回一份仅覆盖已启用 MCP 服务器的稳定发现报告。
-    pub fn enabled_server_discovery_report(&self) -> McpRuntimeDiscoveryReport {
-        self.snapshot().enabled_server_discovery_report()
     }
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
@@ -1177,6 +1224,60 @@ mod tests {
                     ),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn overview_groups_summary_rows_active_rows_and_discovery_report() {
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([
+                (
+                    String::from("healthy"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Healthy Server"),
+                        enabled: true,
+                        transport_label: String::from("http"),
+                        endpoint_summary: String::from("https://healthy.test/mcp"),
+                        status: McpRuntimeServerStatus::Connected,
+                        last_error: None,
+                        tools: vec![],
+                    },
+                ),
+                (
+                    String::from("offline"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Offline Server"),
+                        enabled: true,
+                        transport_label: String::from("stdio"),
+                        endpoint_summary: String::from("offline-mcp"),
+                        status: McpRuntimeServerStatus::Disconnected,
+                        last_error: Some(String::from("dial tcp timeout")),
+                        tools: vec![],
+                    },
+                ),
+            ]),
+        };
+
+        let overview = snapshot.overview();
+
+        assert_eq!(
+            overview.summary_rows(),
+            &[
+                String::from("在线 · Healthy Server · http · https://healthy.test/mcp"),
+                String::from("离线 · Offline Server · stdio · offline-mcp · dial tcp timeout"),
+            ]
+        );
+        assert_eq!(
+            overview.active_summary_rows(),
+            &[String::from(
+                "在线 · Healthy Server · http · https://healthy.test/mcp"
+            )]
+        );
+        assert_eq!(
+            overview.discovery_report().discovery_errors(),
+            &[String::from(
+                "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具。 最近一次错误：dial tcp timeout"
+            )]
         );
     }
 

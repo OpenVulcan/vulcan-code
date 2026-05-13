@@ -2663,7 +2663,13 @@ impl VulcanWorkbench {
             MainDisplayPanel::Agents => self.runtime_foundation.agent_rows(),
             MainDisplayPanel::Plugins => {
                 let mut rows = self.runtime_foundation.native_tool_rows();
-                rows.extend(self.runtime_foundation.mcp_rows());
+                rows.extend(
+                    self.runtime_foundation
+                        .mcp_overview()
+                        .summary_rows()
+                        .iter()
+                        .cloned(),
+                );
                 rows
             }
             MainDisplayPanel::VulcanMemoryMesh => {
@@ -4940,7 +4946,8 @@ impl VulcanWorkbench {
         let server_choices = self.configured_mcp_server_choices();
         let selected_server = self.selected_mcp_server_choice();
         let transport_choices = mcp_transport_choices();
-        let server_summary_rows = self.runtime_foundation.mcp_rows();
+        let mcp_overview = self.runtime_foundation.mcp_overview();
+        let server_summary_rows = mcp_overview.summary_rows().to_vec();
         let server_summary_list: Element<'_, Message> = if server_summary_rows.is_empty() {
             text("尚未配置 MCP 服务器。").size(12).into()
         } else {
