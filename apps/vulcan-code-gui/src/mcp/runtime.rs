@@ -29,7 +29,7 @@ struct McpRuntimeToolSchema {
 /// Stable MCP tool descriptor exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpRuntimeToolDescriptor {
+struct McpRuntimeToolDescriptor {
     /// Stable server identifier that currently owns the tool.
     /// 当前拥有该工具的稳定服务器标识。
     server_id: String,
@@ -72,12 +72,6 @@ impl McpRuntimeToolDescriptor {
             description: self.tool_description().to_string(),
             args_schema: self.args_schema().clone(),
         }
-    }
-
-    /// Returns the host-visible runtime-unavailable error text for the tool.
-    /// 返回该工具在运行时不可用时的宿主可见错误文本。
-    pub fn runtime_unavailable_error_text(&self) -> String {
-        format!("MCP 运行时当前不可用，无法调用工具 `{}`。", self.tool_name())
     }
 
     /// Returns the stable MCP tool name.
@@ -412,6 +406,23 @@ impl McpRuntimeSnapshot {
             .collect()
     }
 
+    /// Returns host-facing tool views filtered by one allowlist.
+    /// 返回按单份白名单过滤后的宿主侧工具视图集合。
+    fn filtered_tool_views(&self, allowlist: &McpRuntimeToolAllowlist) -> Vec<McpRuntimeToolView> {
+        self.filtered_tool_descriptors(allowlist)
+            .into_iter()
+            .map(|tool| tool.host_tool_view())
+            .collect()
+    }
+
+    /// Finds one tool descriptor by its stable host-facing tool identifier.
+    /// 根据稳定宿主侧工具标识查找单个工具描述。
+    fn find_tool_descriptor_by_id(&self, tool_id: &str) -> Option<McpRuntimeToolDescriptor> {
+        self.tool_descriptors()
+            .into_iter()
+            .find(|tool| tool.host_tool_view().id() == tool_id)
+    }
+
     /// Returns lightweight diagnostics for enabled MCP servers only.
     /// 仅返回已启用 MCP 服务器的轻量诊断信息。
     fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
@@ -494,18 +505,18 @@ impl McpRuntimeHandle {
             .cloned()
     }
 
-    /// Returns currently available MCP tool descriptors filtered by optional allowlists.
-    /// 返回按可选白名单过滤后的当前可用 MCP 工具描述集合。
-    pub fn available_tool_descriptors_filtered(
+    /// Returns currently available MCP tool views filtered by one allowlist.
+    /// 返回按单份白名单过滤后的当前可用 MCP 工具视图集合。
+    pub fn available_tool_views_filtered(
         &self,
         allowlist: &McpRuntimeToolAllowlist,
-    ) -> Vec<McpRuntimeToolDescriptor> {
-        self.snapshot().filtered_tool_descriptors(allowlist)
+    ) -> Vec<McpRuntimeToolView> {
+        self.snapshot().filtered_tool_views(allowlist)
     }
 
     /// Calls one MCP tool descriptor through its owning live transport.
     /// 通过工具描述所属的实时传输调用单个 MCP 工具。
-    pub async fn call_tool_descriptor(
+    async fn call_tool_descriptor(
         &self,
         descriptor: &McpRuntimeToolDescriptor,
         args: serde_json::Value,
@@ -524,6 +535,19 @@ impl McpRuntimeHandle {
                 error
             )
         })
+    }
+
+    /// Calls one MCP tool through its stable host-facing tool identifier.
+    /// 通过稳定宿主侧工具标识调用单个 MCP 工具。
+    pub async fn call_tool_by_id(
+        &self,
+        tool_id: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let Some(descriptor) = self.snapshot().find_tool_descriptor_by_id(tool_id) else {
+            return Err(format!("未找到 MCP 工具 `{tool_id}`。"));
+        };
+        self.call_tool_descriptor(&descriptor, args).await
     }
 
     /// Returns lightweight diagnostics for enabled MCP servers only.
@@ -927,10 +951,6 @@ mod tests {
         assert_eq!(view.name(), "read_file");
         assert_eq!(view.description(), "Read one file");
         assert_eq!(view.args_schema(), &serde_json::json!({"type":"object"}));
-        assert_eq!(
-            descriptor.runtime_unavailable_error_text(),
-            String::from("MCP 运行时当前不可用，无法调用工具 `read_file`。")
-        );
     }
 
     #[test]

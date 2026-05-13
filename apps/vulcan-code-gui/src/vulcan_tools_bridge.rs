@@ -6,7 +6,7 @@ use crate::luaskills_runtime::{
     build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
-use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor, McpRuntimeToolView};
+use crate::mcp::{McpRuntimeHandle, McpRuntimeToolView};
 use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
@@ -26,7 +26,7 @@ pub fn build_vulcan_tools_manager(
     workspace_root: Option<PathBuf>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    candidate_mcp_tools: Vec<McpRuntimeToolDescriptor>,
+    candidate_mcp_tools: Vec<McpRuntimeToolView>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
 
@@ -129,13 +129,15 @@ pub fn build_vulcan_tools_manager(
     }
 
     for tool in candidate_mcp_tools {
-        let tool_view = tool.host_tool_view();
-        let descriptor = mcp_tool_view_to_vulcan(&tool_view);
-        let parameters_schema = tool_view.args_schema().clone();
+        let descriptor = mcp_tool_view_to_vulcan(&tool);
+        let parameters_schema = tool.args_schema().clone();
         let runtime = mcp_runtime.clone();
-        let tool_descriptor = tool.clone();
-        let tool_name = tool_view.name().to_string();
-        let runtime_unavailable_text = tool.runtime_unavailable_error_text();
+        let tool_id = tool.id().to_string();
+        let tool_name = tool.name().to_string();
+        let runtime_unavailable_text = format!(
+            "MCP 运行时当前不可用，无法调用工具 `{}`。",
+            tool_name
+        );
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
@@ -143,14 +145,14 @@ pub fn build_vulcan_tools_manager(
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             invoke: std::sync::Arc::new(move |args, _session_id| {
                 let runtime = runtime.clone();
-                let tool_descriptor = tool_descriptor.clone();
+                let tool_id = tool_id.clone();
                 let runtime_unavailable_text = runtime_unavailable_text.clone();
                 Box::pin(async move {
                     let Some(runtime) = runtime.as_ref() else {
                         return Err(runtime_unavailable_text);
                     };
                     runtime
-                        .call_tool_descriptor(&tool_descriptor, args)
+                        .call_tool_by_id(&tool_id, args)
                         .await
                         .map(VulcanToolInvocationResult::from_model_output)
                 })
