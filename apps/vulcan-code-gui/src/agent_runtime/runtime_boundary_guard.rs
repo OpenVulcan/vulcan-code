@@ -115,3 +115,33 @@ fn agent_runtime_module_level_dead_code_suppressions_stay_narrow() {
         offending_files
     );
 }
+
+/// Verifies the MCP runtime layers no longer rely on generic dead-code suppressions after stdio transport options became first-class runtime inputs.
+/// 验证在 stdio 传输选项成为一等运行时输入后，MCP 运行时层不再依赖通用 dead_code 抑制。
+#[test]
+fn mcp_runtime_sources_do_not_reintroduce_dead_code_suppressions() {
+    let gui_manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_mcp_root = gui_manifest_dir.join("src").join("mcp");
+    let mcp_runtime_root = gui_manifest_dir
+        .parent()
+        .expect("gui crate should remain nested under apps/")
+        .join("vulcan-mcp-runtime")
+        .join("src");
+
+    let offending_files = [gui_mcp_root, mcp_runtime_root]
+        .into_iter()
+        .flat_map(|root| collect_rust_source_files(&root))
+        .filter_map(|path| {
+            let source = fs::read_to_string(&path).ok()?;
+            let has_dead_code_suppression =
+                source.contains("#![allow(dead_code)]") || source.contains("#[allow(dead_code)]");
+            has_dead_code_suppression.then_some(path)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        offending_files.is_empty(),
+        "mcp runtime sources must not reintroduce dead_code suppressions: {:?}",
+        offending_files
+    );
+}
