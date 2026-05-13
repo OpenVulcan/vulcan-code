@@ -2,6 +2,7 @@
 //! OpenAI Responses 宿主控制 Provider 传输适配器。
 
 use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_deltas_from_assistant_content;
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
     build_openai_responses_streaming_request, execute_openai_like_streaming_turn,
     map_provider_client_build_result, unsupported_streaming_execute,
@@ -12,7 +13,6 @@ use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreT
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use rig::client::CompletionClient;
-use rig::completion::ToolDefinition as RigToolDefinition;
 use rig::providers::openai;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -21,7 +21,6 @@ use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     CoreError as VulcanCoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
-use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Streaming OpenAI Responses provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
 /// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 OpenAI Responses Provider 适配器。
@@ -42,12 +41,9 @@ pub(crate) struct OpenAiResponsesCoreStreamingAdapter {
     /// Fully resolved request headers attached to the transport request.
     /// 附着到传输请求上的完整已解析请求头。
     pub(crate) request_headers: HeaderMap,
-    /// Resolved host tool definitions exposed to the provider for the current turn.
-    /// 当前回合对 Provider 暴露的已解析宿主工具定义集合。
-    pub(crate) resolved_tools: Vec<ResolvedToolDefinition>,
     /// Low-level rig tool definitions mirrored from the resolved host tool definitions.
     /// 从已解析宿主工具定义镜像而来的低层 rig 工具定义集合。
-    pub(crate) rig_tool_definitions: Vec<RigToolDefinition>,
+    pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
     /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
     /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
     pub(crate) live_sender: ProviderLiveDeltaSender,
@@ -60,14 +56,13 @@ impl OpenAiResponsesCoreStreamingAdapter {
         adapter_inputs: PreparedProviderTransportAdapterInputs,
         api_key: String,
         base_url: Option<String>,
-        resolved_tools: Vec<ResolvedToolDefinition>,
         live_sender: ProviderLiveDeltaSender,
     ) -> Self {
         let PreparedProviderTransportAdapterInputs {
             provider_id,
             model_id,
             request_headers,
-            rig_tool_definitions,
+            provider_tool_definitions,
         } = adapter_inputs;
 
         Self {
@@ -76,8 +71,7 @@ impl OpenAiResponsesCoreStreamingAdapter {
             base_url,
             model_id,
             request_headers,
-            resolved_tools,
-            rig_tool_definitions,
+            provider_tool_definitions,
             live_sender,
         }
     }
@@ -112,7 +106,7 @@ impl VulcanProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
             self.model_id.as_str(),
             snapshot,
             config,
-            &self.resolved_tools,
+            &self.provider_tool_definitions,
             &self.request_headers,
             &self.live_sender,
         )
@@ -164,7 +158,7 @@ impl VulcanStreamingProviderAdapter for OpenAiResponsesCoreStreamingAdapter {
             self.model_id.as_str(),
             &model,
             request,
-            &self.rig_tool_definitions,
+            &self.provider_tool_definitions,
             &self.live_sender,
             sink,
             core_provider_turn_deltas_from_assistant_content,

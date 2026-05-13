@@ -1,6 +1,7 @@
 //! Host-controlled single-turn request assembly helpers reused by provider-specific streaming adapters.
 //! 供各 Provider 专用流式适配器复用的宿主控制单回合请求装配辅助逻辑。
 
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_rig::{
     core_message_to_rig_message, core_messages_to_rig_history,
 };
@@ -14,7 +15,6 @@ use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     CoreError as VulcanCoreError, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
 };
-use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Serializable OpenAI-compatible single-turn request owned by `vulcan-core` while preserving transport-only rig messages outside persistence.
 /// 由 `vulcan-core` 持有的可序列化 OpenAI 兼容单回合请求，同时在持久化之外保留仅供传输使用的 rig 消息。
@@ -42,7 +42,7 @@ pub(crate) fn build_host_controlled_turn_request(
     request_label: &str,
     snapshot: &CoreConversationSnapshot,
     config: &CoreControllerConfig,
-    resolved_tools: &[ResolvedToolDefinition],
+    provider_tool_definitions: &[ProviderToolDefinition],
     request_headers: &HeaderMap,
     live_sender: &ProviderLiveDeltaSender,
     additional_params: Option<Value>,
@@ -65,7 +65,7 @@ pub(crate) fn build_host_controlled_turn_request(
         &current_prompt,
         config.temperature,
         config.max_turns,
-        resolved_tools,
+        provider_tool_definitions,
         request_headers,
         additional_params,
     );

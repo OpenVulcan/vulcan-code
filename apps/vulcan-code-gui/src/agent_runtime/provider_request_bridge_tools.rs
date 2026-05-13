@@ -1,8 +1,8 @@
 //! Tool-definition bridge helpers reused by provider request snapshots and low-level transport dispatch.
 //! 供 Provider 请求快照与低层传输分发复用的工具定义桥接辅助逻辑。
 
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_snapshot_support::tool_source_label;
-use rig::completion::ToolDefinition as RigToolDefinition;
 use vulcan_core::types::ProviderRequestToolSchema as CoreProviderRequestToolSchema;
 use vulcan_tools_manager::ResolvedToolDefinition;
 
@@ -20,14 +20,16 @@ pub(crate) fn resolved_tool_definition_to_core_tool_schema(
     }
 }
 
-/// Converts one resolved host tool definition into the low-level rig tool-definition shape used by explicit completion requests.
-/// 将一条已解析宿主工具定义转换为显式 completion 请求使用的低层 rig 工具定义形状。
-pub(crate) fn resolved_tool_definition_to_rig_tool_definition(
-    definition: &ResolvedToolDefinition,
-) -> RigToolDefinition {
-    RigToolDefinition {
-        name: definition.descriptor.id.clone(),
-        description: definition.descriptor.description.clone(),
-        parameters: definition.parameters_schema.clone(),
+/// Converts one host-owned provider tool definition into the `vulcan-core` request-tool schema shape.
+/// 将一条宿主自有 Provider 工具定义转换为 `vulcan-core` 请求工具 schema 形状。
+pub(crate) fn provider_tool_definition_to_core_tool_schema(
+    definition: &ProviderToolDefinition,
+) -> CoreProviderRequestToolSchema {
+    CoreProviderRequestToolSchema {
+        id: definition.name.clone(),
+        name: definition.name.clone(),
+        description: definition.description.clone(),
+        source_label: String::from("host"),
+        parameters_schema: definition.parameters.clone(),
     }
 }

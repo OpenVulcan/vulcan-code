@@ -15,6 +15,7 @@ pub mod provider_protocol_bridge;
 pub mod provider_protocol_openai_client;
 pub mod provider_protocol_openai_compatible;
 pub mod provider_protocol_openrouter_client;
+pub mod provider_protocol_tool_definition;
 pub mod provider_request_bridge_conversation;
 pub mod provider_request_bridge_messages;
 pub mod provider_request_bridge_records;

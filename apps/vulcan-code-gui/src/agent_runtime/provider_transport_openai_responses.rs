@@ -56,7 +56,6 @@ pub(crate) fn execute_openai_responses_stream(
                 adapter_inputs,
                 api_key,
                 base_url,
-                resolved_tools,
                 live_sender,
             )
         },

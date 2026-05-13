@@ -51,7 +51,6 @@ pub(crate) fn execute_openrouter_stream(
             crate::agent_runtime::provider_transport_openrouter_adapter::OpenRouterCoreStreamingAdapter::new(
                 adapter_inputs,
                 api_key,
-                resolved_tools,
                 live_sender,
             )
         },

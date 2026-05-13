@@ -1,6 +1,7 @@
 //! Host-controlled provider streaming runtime wrapper for shared controller execution.
 //! 面向共享控制器执行的宿主控制 Provider 流式运行时包装模块。
 
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
 use crate::agent_runtime::provider_transport_entry_inputs::{
@@ -12,7 +13,6 @@ use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRunti
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use async_stream::stream;
 use reqwest::header::HeaderMap;
-use rig::completion::ToolDefinition as RigToolDefinition;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use vulcan_core::controller::VulcanCoreController;
@@ -35,9 +35,9 @@ pub(crate) struct PreparedProviderTransportAdapterInputs {
     /// Fully prepared request headers reused by the concrete Provider adapter.
     /// 被具体 Provider 适配器复用的完整已准备请求头。
     pub(crate) request_headers: HeaderMap,
-    /// Mirrored low-level rig tool definitions reused by the concrete Provider adapter.
-    /// 被具体 Provider 适配器复用的镜像低层 rig 工具定义集合。
-    pub(crate) rig_tool_definitions: Vec<RigToolDefinition>,
+    /// Mirrored provider-visible tool definitions reused by the concrete Provider adapter.
+    /// 被具体 Provider 适配器复用的镜像 Provider 可见工具定义集合。
+    pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
 }
 
 /// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the GUI layer.
@@ -130,7 +130,7 @@ where
         tool_context:
             PreparedHostToolRuntimeContext {
                 runtime_bridge,
-                rig_tool_definitions,
+                provider_tool_definitions,
             },
     } = prepared_runtime_inputs;
 
@@ -145,7 +145,7 @@ where
                     provider_id,
                     model_id,
                     request_headers,
-                    rig_tool_definitions,
+                    provider_tool_definitions,
                 },
             )
         },

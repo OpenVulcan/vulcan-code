@@ -1,9 +1,10 @@
 //! Host-controlled single-turn request snapshot helpers used by transport dispatch and regression tests.
 //! 供传输分发与回归测试使用的宿主控制单回合请求快照辅助逻辑。
 
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
-use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
+use crate::agent_runtime::provider_request_bridge_tools::provider_tool_definition_to_core_tool_schema;
 use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
 use crate::conversation_protocol::{SessionConversationState, replace_messages_from_rig_history};
 use reqwest::header::HeaderMap;
@@ -15,7 +16,6 @@ use rig::message::{
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_core::types::ProviderRequestSnapshot as CoreProviderRequestSnapshot;
-use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Builds the exact structured request snapshot for one host-controlled OpenAI-compatible turn right before dispatch.
 /// 在真正分发前为单次宿主控制的 OpenAI 兼容回合构建精确结构化请求快照。
@@ -27,7 +27,7 @@ pub(crate) fn build_openai_compatible_turn_request_snapshot(
     current_prompt: &RigMessage,
     temperature: Option<f64>,
     max_turns: usize,
-    resolved_tools: &[ResolvedToolDefinition],
+    provider_tool_definitions: &[ProviderToolDefinition],
     headers: &HeaderMap,
     additional_params: Option<Value>,
 ) -> CoreProviderRequestSnapshot {
@@ -49,9 +49,9 @@ pub(crate) fn build_openai_compatible_turn_request_snapshot(
         history: core_messages_to_provider_visible_history(&core_snapshot.messages),
         temperature,
         max_turns,
-        tool_schemas: resolved_tools
+        tool_schemas: provider_tool_definitions
             .iter()
-            .map(resolved_tool_definition_to_core_tool_schema)
+            .map(provider_tool_definition_to_core_tool_schema)
             .collect(),
         additional_params,
         request_headers: serialize_provider_request_headers(headers),

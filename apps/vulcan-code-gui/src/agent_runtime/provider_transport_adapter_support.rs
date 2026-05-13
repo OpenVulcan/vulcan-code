@@ -5,15 +5,16 @@ use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
     inject_previous_response_id_into_additional_params,
 };
+use crate::agent_runtime::provider_protocol_tool_definition::{
+    ProviderToolDefinition, provider_tool_definition_to_rig_tool_definition,
+};
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::{
     OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
 };
 use futures_util::{Stream, StreamExt};
 use reqwest::header::HeaderMap;
-use rig::completion::{
-    CompletionModel, CompletionRequestBuilder, ToolDefinition as RigToolDefinition,
-};
+use rig::completion::{CompletionModel, CompletionRequestBuilder};
 use rig::streaming::StreamingCompletionResponse;
 use std::fmt::Display;
 use vulcan_core::provider::VulcanProviderDeltaSink;
@@ -24,7 +25,6 @@ use vulcan_core::types::{
     CoreError as VulcanCoreError, ProviderTurnDelta as CoreProviderTurnDelta,
     ProviderTurnResponse as CoreProviderTurnResponse,
 };
-use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Formats one provider label prefix so mixed English/Chinese runtime messages keep natural spacing automatically.
 /// 格式化单个 Provider 标签前缀，使中英混排运行时文案能够自动保持自然空格。
@@ -105,7 +105,7 @@ where
 pub(crate) fn build_streaming_completion_request_builder<M>(
     model: &M,
     request: OpenAiCompatibleCoreTurnRequest,
-    rig_tool_definitions: &[RigToolDefinition],
+    provider_tool_definitions: &[ProviderToolDefinition],
 ) -> CompletionRequestBuilder<M>
 where
     M: CompletionModel,
@@ -117,8 +117,12 @@ where
         .temperature_opt(request.snapshot.temperature)
         .additional_params_opt(request.snapshot.additional_params.clone());
 
-    if !rig_tool_definitions.is_empty() {
-        request_builder = request_builder.tools(rig_tool_definitions.to_vec());
+    if !provider_tool_definitions.is_empty() {
+        let rig_tool_definitions = provider_tool_definitions
+            .iter()
+            .map(provider_tool_definition_to_rig_tool_definition)
+            .collect::<Vec<_>>();
+        request_builder = request_builder.tools(rig_tool_definitions);
     }
 
     request_builder
@@ -152,7 +156,7 @@ pub(crate) async fn execute_openai_like_streaming_turn<M, S, C, E, F>(
     model_id: &str,
     model: &M,
     request: OpenAiCompatibleCoreTurnRequest,
-    rig_tool_definitions: &[RigToolDefinition],
+    provider_tool_definitions: &[ProviderToolDefinition],
     live_sender: &ProviderLiveDeltaSender,
     sink: &mut S,
     convert_content: F,
@@ -165,7 +169,7 @@ where
     StreamingCompletionResponse<M::StreamingResponse>: Stream<Item = Result<C, E>> + Unpin,
 {
     let request_builder =
-        build_streaming_completion_request_builder(model, request, rig_tool_definitions);
+        build_streaming_completion_request_builder(model, request, provider_tool_definitions);
     let mut stream =
         start_streaming_completion_request(provider_id, provider_label, request_builder).await?;
 
@@ -195,7 +199,7 @@ pub(crate) fn build_standard_streaming_request(
     request_label: &str,
     snapshot: &CoreConversationSnapshot,
     config: &CoreControllerConfig,
-    resolved_tools: &[ResolvedToolDefinition],
+    provider_tool_definitions: &[ProviderToolDefinition],
     request_headers: &HeaderMap,
     live_sender: &ProviderLiveDeltaSender,
 ) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
@@ -205,7 +209,7 @@ pub(crate) fn build_standard_streaming_request(
         request_label,
         snapshot,
         config,
-        resolved_tools,
+        provider_tool_definitions,
         request_headers,
         live_sender,
         config.additional_params.clone(),
@@ -219,7 +223,7 @@ pub(crate) fn build_openai_responses_streaming_request(
     model_id: &str,
     snapshot: &CoreConversationSnapshot,
     config: &CoreControllerConfig,
-    resolved_tools: &[ResolvedToolDefinition],
+    provider_tool_definitions: &[ProviderToolDefinition],
     request_headers: &HeaderMap,
     live_sender: &ProviderLiveDeltaSender,
 ) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
@@ -233,7 +237,7 @@ pub(crate) fn build_openai_responses_streaming_request(
         "OpenAI Responses",
         snapshot,
         config,
-        resolved_tools,
+        provider_tool_definitions,
         request_headers,
         live_sender,
         effective_additional_params,
