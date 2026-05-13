@@ -211,8 +211,7 @@ impl RuntimeFoundation {
     pub fn mcp_rows(&self) -> Vec<String> {
         self.mcp_runtime
             .as_ref()
-            .map(McpRuntimeHandle::snapshot)
-            .map(|snapshot| snapshot.summary_rows())
+            .map(McpRuntimeHandle::summary_rows)
             .unwrap_or_else(|| self.mcp_registry_summary.summary_rows())
     }
 
@@ -382,8 +381,7 @@ impl RuntimeFoundation {
     pub fn enabled_mcp_server_rows(&self) -> Vec<String> {
         self.mcp_runtime
             .as_ref()
-            .map(McpRuntimeHandle::snapshot)
-            .map(|snapshot| snapshot.active_summary_rows())
+            .map(McpRuntimeHandle::active_summary_rows)
             .unwrap_or_else(|| self.mcp_registry_summary.enabled_summary_rows())
     }
 }

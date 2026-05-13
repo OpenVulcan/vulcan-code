@@ -173,7 +173,7 @@ pub struct McpRuntimeSnapshot {
 impl McpRuntimeSnapshot {
     /// Returns lightweight server summary rows for UI surfaces.
     /// 返回供界面表面使用的轻量服务器摘要行。
-    pub fn summary_rows(&self) -> Vec<String> {
+    fn summary_rows(&self) -> Vec<String> {
         self.servers
             .values()
             .map(|server| {
@@ -194,7 +194,7 @@ impl McpRuntimeSnapshot {
 
     /// Returns lightweight summary rows for runtime-visible servers that are actively connecting or already connected.
     /// 返回处于连接中或已连接状态的运行时可见服务器轻量摘要行集合。
-    pub fn active_summary_rows(&self) -> Vec<String> {
+    fn active_summary_rows(&self) -> Vec<String> {
         self.servers
             .values()
             .filter(|server| {
@@ -221,7 +221,7 @@ impl McpRuntimeSnapshot {
 
     /// Returns one flat tool-descriptor list for all currently connected servers.
     /// 返回当前所有已连接服务器的扁平工具描述列表。
-    pub fn tool_descriptors(&self) -> Vec<McpRuntimeToolDescriptor> {
+    fn tool_descriptors(&self) -> Vec<McpRuntimeToolDescriptor> {
         self.servers
             .values()
             .filter(|server| server.status == McpRuntimeServerStatus::Connected)
@@ -231,7 +231,7 @@ impl McpRuntimeSnapshot {
 
     /// Returns tool descriptors filtered by optional server and tool allowlists.
     /// 返回按可选服务器与工具白名单过滤后的工具描述集合。
-    pub fn filtered_tool_descriptors(
+    fn filtered_tool_descriptors(
         &self,
         allowed_server_ids: Option<&BTreeSet<String>>,
         allowed_tool_names: Option<&BTreeSet<String>>,
@@ -244,7 +244,7 @@ impl McpRuntimeSnapshot {
 
     /// Returns lightweight diagnostics for enabled MCP servers only.
     /// 仅返回已启用 MCP 服务器的轻量诊断信息。
-    pub fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
+    fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
         self.servers
             .values()
             .filter(|server| server.enabled)
@@ -293,12 +293,24 @@ struct McpRuntimeInner {
 impl McpRuntimeHandle {
     /// Returns the latest immutable runtime snapshot.
     /// 返回最新的不可变运行时快照。
-    pub fn snapshot(&self) -> McpRuntimeSnapshot {
+    fn snapshot(&self) -> McpRuntimeSnapshot {
         self.inner
             .snapshot
             .read()
             .expect("mcp runtime snapshot poisoned")
             .clone()
+    }
+
+    /// Returns lightweight server summary rows for UI-facing runtime surfaces.
+    /// 返回供界面运行时表面使用的轻量服务器摘要行。
+    pub fn summary_rows(&self) -> Vec<String> {
+        self.snapshot().summary_rows()
+    }
+
+    /// Returns lightweight summary rows for currently active runtime-visible servers.
+    /// 返回当前运行时可见活动服务器的轻量摘要行集合。
+    pub fn active_summary_rows(&self) -> Vec<String> {
+        self.snapshot().active_summary_rows()
     }
 
     /// Resolves the currently active transport for one connected server.
