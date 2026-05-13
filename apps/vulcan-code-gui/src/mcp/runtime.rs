@@ -126,6 +126,33 @@ impl McpRuntimeSnapshot {
             .collect()
     }
 
+    /// Returns lightweight summary rows for runtime-visible servers that are actively connecting or already connected.
+    /// 返回处于连接中或已连接状态的运行时可见服务器轻量摘要行集合。
+    pub fn active_summary_rows(&self) -> Vec<String> {
+        self.servers
+            .values()
+            .filter(|server| {
+                matches!(
+                    server.status,
+                    McpRuntimeServerStatus::Connecting | McpRuntimeServerStatus::Connected
+                )
+            })
+            .map(|server| {
+                let base = format!(
+                    "{} · {} · {} · {}",
+                    server.status.label(),
+                    server.name,
+                    server.transport_label,
+                    server.endpoint_summary
+                );
+                match &server.last_error {
+                    Some(error) => format!("{base} · {error}"),
+                    None => base,
+                }
+            })
+            .collect()
+    }
+
     /// Returns one flat tool-descriptor list for all currently connected servers.
     /// 返回当前所有已连接服务器的扁平工具描述列表。
     pub fn tool_descriptors(&self) -> Vec<McpRuntimeToolDescriptor> {
@@ -431,5 +458,63 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
         },
         last_error: None,
         tools: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{McpRuntimeServerSnapshot, McpRuntimeServerStatus, McpRuntimeSnapshot};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn active_summary_rows_only_keep_connecting_and_connected_servers() {
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([
+                (
+                    String::from("connected"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Connected Server"),
+                        enabled: true,
+                        transport_label: String::from("http"),
+                        endpoint_summary: String::from("https://connected.test/mcp"),
+                        status: McpRuntimeServerStatus::Connected,
+                        last_error: None,
+                        tools: Vec::new(),
+                    },
+                ),
+                (
+                    String::from("connecting"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Connecting Server"),
+                        enabled: true,
+                        transport_label: String::from("stdio"),
+                        endpoint_summary: String::from("connecting-mcp"),
+                        status: McpRuntimeServerStatus::Connecting,
+                        last_error: None,
+                        tools: Vec::new(),
+                    },
+                ),
+                (
+                    String::from("disconnected"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Disconnected Server"),
+                        enabled: true,
+                        transport_label: String::from("sse"),
+                        endpoint_summary: String::from("https://disconnected.test/sse"),
+                        status: McpRuntimeServerStatus::Disconnected,
+                        last_error: Some(String::from("offline")),
+                        tools: Vec::new(),
+                    },
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            snapshot.active_summary_rows(),
+            vec![
+                String::from("在线 · Connected Server · http · https://connected.test/mcp"),
+                String::from("连接中 · Connecting Server · stdio · connecting-mcp"),
+            ]
+        );
     }
 }

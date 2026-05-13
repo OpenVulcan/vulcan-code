@@ -388,16 +388,11 @@ impl RuntimeFoundation {
     /// Returns enabled MCP server summary rows for execution diagnostics.
     /// 返回供执行诊断使用的已启用 MCP 服务器摘要行集合。
     pub fn enabled_mcp_server_rows(&self) -> Vec<String> {
-        let rows = self
-            .mcp_runtime
+        self.mcp_runtime
             .as_ref()
             .map(McpRuntimeHandle::snapshot)
-            .map(|snapshot| snapshot.summary_rows())
-            .unwrap_or_else(|| self.mcp_registry.summary_rows());
-
-        rows.into_iter()
-            .filter(|row| row.starts_with("在线") || row.starts_with("连接中"))
-            .collect()
+            .map(|snapshot| snapshot.active_summary_rows())
+            .unwrap_or_else(|| self.mcp_registry.enabled_summary_rows())
     }
 }
 

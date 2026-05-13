@@ -68,6 +68,24 @@ impl McpServerRegistry {
             .collect()
     }
 
+    /// Returns lightweight summary rows for enabled MCP servers only.
+    /// 仅返回已启用 MCP 服务器的轻量摘要行集合。
+    pub fn enabled_summary_rows(&self) -> Vec<String> {
+        self.servers
+            .iter()
+            .filter(|server| server.enabled)
+            .map(|server| {
+                format!(
+                    "{} · {} · {} · {}",
+                    "启用",
+                    server.name,
+                    server.transport.label(),
+                    server.command_summary()
+                )
+            })
+            .collect()
+    }
+
     /// Spawns one MCP transport from the stored server entry.
     /// 根据存储的服务器条目启动一个 MCP 传输实例。
     pub async fn spawn_transport(&self, server_id: &str) -> Result<Arc<dyn McpTransport>, String> {
@@ -86,5 +104,53 @@ impl McpServerRegistry {
             .launch()
             .await
             .map_err(|error| server.launch_error_text(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::McpServerRegistry;
+    use crate::mcp::config::{McpServerConfig, McpTransportKind};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn enabled_summary_rows_skip_disabled_servers() {
+        let registry = McpServerRegistry {
+            servers: vec![
+                McpServerConfig {
+                    id: String::from("enabled"),
+                    name: String::from("Enabled Server"),
+                    enabled: true,
+                    transport: McpTransportKind::Stdio,
+                    command: String::from("enabled-mcp"),
+                    args: vec![String::from("--stdio")],
+                    url: None,
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+                McpServerConfig {
+                    id: String::from("disabled"),
+                    name: String::from("Disabled Server"),
+                    enabled: false,
+                    transport: McpTransportKind::Http,
+                    command: String::new(),
+                    args: Vec::new(),
+                    url: Some(String::from("https://disabled.test/mcp")),
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            registry.enabled_summary_rows(),
+            vec![String::from(
+                "启用 · Enabled Server · stdio · enabled-mcp --stdio"
+            )]
+        );
     }
 }
