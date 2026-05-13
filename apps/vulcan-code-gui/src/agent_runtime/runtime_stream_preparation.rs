@@ -71,7 +71,6 @@ pub(crate) fn prepare_runtime_launch_input(
     let preparation = match prepare_execution(
         &resources.foundation,
         resources.luaskills_runtime.clone(),
-        resources.mcp_runtime.clone(),
         config,
         &resources.request,
     ) {

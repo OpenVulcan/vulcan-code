@@ -65,7 +65,7 @@ impl McpRuntimeToolDescriptor {
 
     /// Returns one host-facing read-only tool view derived from the runtime descriptor.
     /// 返回一份从运行时描述派生出的宿主侧只读工具视图。
-    pub fn host_tool_view(&self) -> McpRuntimeToolView {
+    fn host_tool_view(&self) -> McpRuntimeToolView {
         McpRuntimeToolView {
             id: self.qualified_name(),
             name: self.tool_name().to_string(),
@@ -117,7 +117,7 @@ impl McpRuntimeToolDescriptor {
 /// Host-facing read-only MCP tool view used by upper runtime projections and bridge layers.
 /// 供上层运行时投影与桥接层使用的宿主侧只读 MCP 工具视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpRuntimeToolView {
+struct McpRuntimeToolView {
     /// Stable host-facing tool identifier.
     /// 稳定的宿主侧工具标识。
     id: String,
@@ -135,26 +135,76 @@ pub struct McpRuntimeToolView {
 impl McpRuntimeToolView {
     /// Returns the stable host-facing tool identifier.
     /// 返回稳定的宿主侧工具标识。
-    pub fn id(&self) -> &str {
+    fn id(&self) -> &str {
         &self.id
     }
 
     /// Returns the human-readable tool name.
     /// 返回人类可读工具名称。
-    pub fn name(&self) -> &str {
+    fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the human-readable tool description.
     /// 返回人类可读工具描述。
-    pub fn description(&self) -> &str {
+    fn description(&self) -> &str {
         &self.description
     }
 
     /// Returns the JSON Schema describing the tool arguments.
     /// 返回描述工具参数的 JSON Schema。
-    pub fn args_schema(&self) -> &serde_json::Value {
+    fn args_schema(&self) -> &serde_json::Value {
         &self.args_schema
+    }
+}
+
+/// Stable MCP runtime tool binding that couples one host-facing tool view with its live invocation capability.
+/// 将宿主侧工具视图与实时调用能力耦合在一起的稳定 MCP 运行时工具绑定。
+#[derive(Debug, Clone)]
+pub struct McpRuntimeToolBinding {
+    /// Host-facing read-only tool view.
+    /// 宿主侧只读工具视图。
+    view: McpRuntimeToolView,
+    /// Live runtime handle used to resolve the owning transport at invocation time.
+    /// 在调用时用于解析所属传输的实时运行时句柄。
+    runtime: McpRuntimeHandle,
+}
+
+impl McpRuntimeToolBinding {
+    /// Builds one MCP runtime tool binding from one host-facing tool view and one live runtime handle.
+    /// 根据一份宿主侧工具视图与一份实时运行时句柄构建单个 MCP 运行时工具绑定。
+    fn new(view: McpRuntimeToolView, runtime: McpRuntimeHandle) -> Self {
+        Self { view, runtime }
+    }
+
+    /// Returns the stable host-facing tool identifier.
+    /// 返回稳定的宿主侧工具标识。
+    pub fn id(&self) -> &str {
+        self.view.id()
+    }
+
+    /// Returns the human-readable tool name.
+    /// 返回人类可读工具名称。
+    pub fn name(&self) -> &str {
+        self.view.name()
+    }
+
+    /// Returns the human-readable tool description.
+    /// 返回人类可读工具描述。
+    pub fn description(&self) -> &str {
+        self.view.description()
+    }
+
+    /// Returns the JSON Schema describing the tool arguments.
+    /// 返回描述工具参数的 JSON Schema。
+    pub fn args_schema(&self) -> &serde_json::Value {
+        self.view.args_schema()
+    }
+
+    /// Invokes the bound MCP tool through its stable host-facing tool identifier.
+    /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
+    pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.runtime.call_tool_by_id(self.id(), args).await
     }
 }
 
@@ -488,11 +538,23 @@ impl McpRuntimeHandle {
 
     /// Returns currently available MCP tool views filtered by one allowlist.
     /// 返回按单份白名单过滤后的当前可用 MCP 工具视图集合。
-    pub fn available_tool_views_filtered(
+    fn available_tool_views_filtered(
         &self,
         allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolView> {
         self.snapshot().filtered_tool_views(allowlist)
+    }
+
+    /// Returns currently available MCP tool bindings filtered by one allowlist.
+    /// 返回按单份白名单过滤后的当前可用 MCP 工具绑定集合。
+    pub fn available_tool_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimeToolBinding> {
+        self.available_tool_views_filtered(allowlist)
+            .into_iter()
+            .map(|view| McpRuntimeToolBinding::new(view, self.clone()))
+            .collect()
     }
 
     /// Calls one MCP tool through its stable host-facing tool identifier.

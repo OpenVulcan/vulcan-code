@@ -54,7 +54,6 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
     let tools_manager = build_vulcan_tools_manager(
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
-        mcp_runtime.clone(),
         (!preparation.workspace_path.is_empty())
             .then(|| PathBuf::from(preparation.workspace_path.clone())),
         foundation.resolved_native_tools_for_agent(&active_agent_tool_id),

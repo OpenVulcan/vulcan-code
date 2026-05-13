@@ -6,7 +6,7 @@ use crate::luaskills_runtime::{
     build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
-use crate::mcp::{McpRuntimeHandle, McpRuntimeToolView};
+use crate::mcp::McpRuntimeToolBinding;
 use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
@@ -22,11 +22,10 @@ use vulcan_tools_manager::{
 pub fn build_vulcan_tools_manager(
     native_catalog: NativeToolCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    candidate_mcp_tools: Vec<McpRuntimeToolView>,
+    candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
 
@@ -129,28 +128,18 @@ pub fn build_vulcan_tools_manager(
     }
 
     for tool in candidate_mcp_tools {
-        let descriptor = mcp_tool_view_to_vulcan(&tool);
+        let descriptor = mcp_tool_binding_to_vulcan(&tool);
         let parameters_schema = tool.args_schema().clone();
-        let runtime = mcp_runtime.clone();
-        let tool_id = tool.id().to_string();
         let tool_name = tool.name().to_string();
-        let runtime_unavailable_text =
-            format!("MCP 运行时当前不可用，无法调用工具 `{}`。", tool_name);
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
             ai_visible: true,
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             invoke: std::sync::Arc::new(move |args, _session_id| {
-                let runtime = runtime.clone();
-                let tool_id = tool_id.clone();
-                let runtime_unavailable_text = runtime_unavailable_text.clone();
+                let tool = tool.clone();
                 Box::pin(async move {
-                    let Some(runtime) = runtime.as_ref() else {
-                        return Err(runtime_unavailable_text);
-                    };
-                    runtime
-                        .call_tool_by_id(&tool_id, args)
+                    tool.invoke(args)
                         .await
                         .map(VulcanToolInvocationResult::from_model_output)
                 })
@@ -183,9 +172,9 @@ fn luaskills_descriptor_to_vulcan(entry: &RuntimeEntryDescriptor) -> VulcanToolD
     }
 }
 
-/// Converts one MCP runtime descriptor into the unified host-facing tool descriptor.
-/// 将单条 MCP 运行时描述转换为统一宿主侧工具描述。
-fn mcp_tool_view_to_vulcan(tool: &McpRuntimeToolView) -> VulcanToolDescriptor {
+/// Converts one MCP runtime binding into the unified host-facing tool descriptor.
+/// 将单条 MCP 运行时工具绑定转换为统一宿主侧工具描述。
+fn mcp_tool_binding_to_vulcan(tool: &McpRuntimeToolBinding) -> VulcanToolDescriptor {
     VulcanToolDescriptor {
         id: tool.id().to_string(),
         name: tool.name().to_string(),

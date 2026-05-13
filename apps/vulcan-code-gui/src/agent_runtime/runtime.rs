@@ -8,7 +8,7 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRegistrySummary, McpRuntimeHandle, McpRuntimeToolAllowlist, McpRuntimeToolView,
+    McpRegistrySummary, McpRuntimeHandle, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
     configured_mcp_registry_summary,
 };
 use crate::provider_config::ProviderConfigurationFile;
@@ -326,7 +326,7 @@ impl RuntimeFoundation {
 
     /// Resolves the MCP runtime tools currently visible to one agent.
     /// 解析当前对某个代理可见的 MCP 运行时工具集合。
-    pub fn resolved_mcp_tools_for_agent(&self, agent_id: &str) -> Vec<McpRuntimeToolView> {
+    pub fn resolved_mcp_tools_for_agent(&self, agent_id: &str) -> Vec<McpRuntimeToolBinding> {
         let Some(mcp_runtime) = self.mcp_runtime.as_ref() else {
             return Vec::new();
         };
@@ -345,7 +345,7 @@ impl RuntimeFoundation {
             .and_then(|policy_id| self.config.tool_policies.get(policy_id));
         let tool_allowlist = resolve_agent_mcp_tool_allowlist(definition, policy);
 
-        mcp_runtime.available_tool_views_filtered(&tool_allowlist)
+        mcp_runtime.available_tool_bindings_filtered(&tool_allowlist)
     }
 
     /// Returns enabled MCP server summary rows for execution diagnostics.

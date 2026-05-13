@@ -6,7 +6,6 @@ use crate::agent_runtime::provider::resolve_active_provider_blueprint;
 use crate::agent_runtime::provider_stream_projection::truncate_preview;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use std::path::PathBuf;
@@ -16,7 +15,6 @@ use std::path::PathBuf;
 pub(crate) fn prepare_execution(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
     config: &ProviderConfigurationFile,
     request: &ExecutionPreparationRequest,
 ) -> Result<ExecutionPreparation, String> {
@@ -37,7 +35,6 @@ pub(crate) fn prepare_execution(
     let tools_manager = build_vulcan_tools_manager(
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
-        mcp_runtime,
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
         foundation.resolved_native_tools_for_agent(&active_agent.id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
