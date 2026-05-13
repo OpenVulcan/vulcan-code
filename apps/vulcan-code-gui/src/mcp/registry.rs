@@ -1,10 +1,10 @@
 //! MCP registry glue used by the desktop runtime foundation.
 //! 桌面运行时基础架构使用的 MCP 注册表胶水层。
 
-use crate::mcp::config::{McpServerConfig, McpTransportKind, runtime_mcp_server_configs};
+use crate::mcp::config::{McpServerConfig, runtime_mcp_server_configs};
 use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
-use vulcan_mcp_runtime::{HttpTransport, McpTransport, SseTransport, StdioTransport};
+use vulcan_mcp_runtime::McpTransport;
 
 /// Runtime registry of configured MCP servers.
 /// 已配置 MCP 服务器的运行时注册表。
@@ -81,56 +81,10 @@ impl McpServerRegistry {
             return Err(format!("MCP 服务器 `{}` 当前未启用。", server.name));
         }
 
-        match server.transport {
-            McpTransportKind::Stdio => {
-                let args = server.args.clone();
-                let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                let cwd = server.cwd.as_deref().map(std::path::Path::new);
-                let transport = StdioTransport::spawn(
-                    server.command_summary(),
-                    &server.command,
-                    &arg_refs,
-                    cwd,
-                    &server.env,
-                )
-                .await
-                .map_err(|error| format!("启动 MCP 服务器 `{}` 失败：{}。", server.name, error))?;
-                Ok(Arc::new(transport))
-            }
-            McpTransportKind::Http => {
-                let url = server
-                    .url
-                    .clone()
-                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 HTTP URL。", server.name))?;
-                let transport = HttpTransport::connect(
-                    server.command_summary(),
-                    url,
-                    server.bearer_token.clone(),
-                    server.headers.clone().into_iter().collect(),
-                )
-                .await
-                .map_err(|error| {
-                    format!("连接 MCP HTTP 服务器 `{}` 失败：{}。", server.name, error)
-                })?;
-                Ok(Arc::new(transport))
-            }
-            McpTransportKind::Sse => {
-                let url = server
-                    .url
-                    .clone()
-                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 SSE URL。", server.name))?;
-                let transport = SseTransport::connect(
-                    server.command_summary(),
-                    url,
-                    server.bearer_token.clone(),
-                    server.headers.clone().into_iter().collect(),
-                )
-                .await
-                .map_err(|error| {
-                    format!("连接 MCP SSE 服务器 `{}` 失败：{}。", server.name, error)
-                })?;
-                Ok(Arc::new(transport))
-            }
-        }
+        let launch_spec = server.launch_spec()?;
+        launch_spec
+            .launch()
+            .await
+            .map_err(|error| server.launch_error_text(error))
     }
 }

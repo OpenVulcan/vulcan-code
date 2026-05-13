@@ -5,6 +5,8 @@ use crate::provider_config::{
     PersistedMcpServerEntry, PersistedMcpTransportKind, ProviderConfigurationFile,
 };
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use vulcan_mcp_runtime::McpTransportLaunchSpec;
 
 /// Runtime-facing MCP transport family.
 /// 面向运行时的 MCP 传输类型。
@@ -102,6 +104,55 @@ impl McpServerConfig {
                 .unwrap_or_else(|| String::from("(missing url)")),
         }
     }
+
+    /// Converts the runtime-facing server configuration into a host-owned transport launch specification.
+    /// 将面向运行时的服务器配置转换为宿主自有传输启动规格。
+    pub fn launch_spec(&self) -> Result<McpTransportLaunchSpec, String> {
+        let endpoint = self.command_summary();
+        match self.transport {
+            McpTransportKind::Stdio => Ok(McpTransportLaunchSpec::Stdio {
+                endpoint,
+                program: self.command.clone(),
+                args: self.args.clone(),
+                cwd: self.cwd.clone().map(PathBuf::from),
+                env: self.env.clone(),
+            }),
+            McpTransportKind::Http => Ok(McpTransportLaunchSpec::Http {
+                endpoint,
+                uri: self
+                    .url
+                    .clone()
+                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 HTTP URL。", self.name))?,
+                bearer_token: self.bearer_token.clone(),
+                headers: self.headers.clone(),
+            }),
+            McpTransportKind::Sse => Ok(McpTransportLaunchSpec::Sse {
+                endpoint,
+                uri: self
+                    .url
+                    .clone()
+                    .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 SSE URL。", self.name))?,
+                bearer_token: self.bearer_token.clone(),
+                headers: self.headers.clone(),
+            }),
+        }
+    }
+
+    /// Converts one low-level launch error into user-facing transport diagnostics.
+    /// 将底层启动错误转换为面向用户的传输诊断文本。
+    pub fn launch_error_text(&self, error: impl std::fmt::Display) -> String {
+        match self.transport {
+            McpTransportKind::Stdio => {
+                format!("启动 MCP 服务器 `{}` 失败：{}。", self.name, error)
+            }
+            McpTransportKind::Http => {
+                format!("连接 MCP HTTP 服务器 `{}` 失败：{}。", self.name, error)
+            }
+            McpTransportKind::Sse => {
+                format!("连接 MCP SSE 服务器 `{}` 失败：{}。", self.name, error)
+            }
+        }
+    }
 }
 
 /// Converts the persisted MCP server map into runtime-facing server entries.
@@ -130,5 +181,60 @@ fn runtime_mcp_server_from_persisted(id: &str, entry: &PersistedMcpServerEntry) 
         headers: entry.headers.clone(),
         cwd: entry.cwd.clone(),
         env: entry.env.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{McpServerConfig, McpTransportKind};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use vulcan_mcp_runtime::McpTransportLaunchSpec;
+
+    fn sample_server(transport: McpTransportKind) -> McpServerConfig {
+        McpServerConfig {
+            id: String::from("server-1"),
+            name: String::from("Sample Server"),
+            enabled: true,
+            transport,
+            command: String::from("sample-mcp"),
+            args: vec![String::from("--stdio"), String::from("--verbose")],
+            url: Some(String::from("https://example.test/mcp")),
+            bearer_token: Some(String::from("token-123")),
+            headers: BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
+            cwd: Some(String::from("D:/mock/mcp")),
+            env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
+        }
+    }
+
+    #[test]
+    fn stdio_launch_spec_preserves_cwd_and_env() {
+        let server = sample_server(McpTransportKind::Stdio);
+
+        assert_eq!(
+            server.launch_spec().expect("stdio server should build"),
+            McpTransportLaunchSpec::Stdio {
+                endpoint: String::from("sample-mcp --stdio --verbose"),
+                program: String::from("sample-mcp"),
+                args: vec![String::from("--stdio"), String::from("--verbose")],
+                cwd: Some(PathBuf::from("D:/mock/mcp")),
+                env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
+            }
+        );
+    }
+
+    #[test]
+    fn http_launch_spec_requires_remote_url() {
+        let mut server = sample_server(McpTransportKind::Http);
+        server.url = None;
+
+        let error = server
+            .launch_spec()
+            .expect_err("http server must require URL");
+
+        assert_eq!(
+            error,
+            String::from("MCP 服务器 `Sample Server` 缺少 HTTP URL。")
+        );
     }
 }

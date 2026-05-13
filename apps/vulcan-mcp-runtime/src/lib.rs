@@ -17,12 +17,14 @@
 
 pub mod error;
 pub mod http;
+pub mod launch;
 pub mod sse;
 pub mod stdio;
 pub mod transport;
 
 pub use error::McpRuntimeError;
 pub use http::HttpTransport;
+pub use launch::McpTransportLaunchSpec;
 pub use sse::SseTransport;
 pub use stdio::StdioTransport;
 pub use transport::{McpToolSchema, McpTransport, McpTransportEvent};
