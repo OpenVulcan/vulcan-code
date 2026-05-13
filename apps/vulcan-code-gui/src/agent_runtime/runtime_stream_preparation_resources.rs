@@ -5,7 +5,7 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
+use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
 
 /// Resource bundle captured before execution preparation begins.
@@ -28,14 +28,14 @@ pub(crate) fn build_runtime_preparation_resources(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
+    mcp_runtime_access: McpRuntimeAccess,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
     let foundation = RuntimeFoundation::build(
         config,
         agent_profile_catalog,
         luaskills_runtime.clone(),
-        mcp_runtime.clone(),
+        mcp_runtime_access,
     );
 
     RuntimePreparationResources {

@@ -12,7 +12,7 @@ use crate::agent_runtime::runtime_stream_preparation_resources::{
     RuntimePreparationResources, build_runtime_preparation_resources,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
+use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
 
 /// Prepared runtime-launch input captured after foundation construction and execution-preparation validation have both succeeded.
@@ -54,14 +54,14 @@ pub(crate) fn prepare_runtime_launch_input(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
+    mcp_runtime_access: McpRuntimeAccess,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
     let resources = build_runtime_preparation_resources(
         config,
         agent_profile_catalog,
         luaskills_runtime,
-        mcp_runtime,
+        mcp_runtime_access,
         request,
     );
     let preparation = match prepare_execution(

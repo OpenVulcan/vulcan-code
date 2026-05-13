@@ -7,7 +7,7 @@ use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
+use crate::mcp::{McpRuntimeAccess, McpRuntimeHandle};
 use crate::provider_config::ProviderConfigurationFile;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
@@ -22,11 +22,12 @@ pub fn stream_runtime_run(
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
+        let mcp_runtime_access = McpRuntimeAccess::from_configuration(&config, mcp_runtime.clone());
         let launch = match prepare_runtime_stream_launch(
             &config,
             &agent_profile_catalog,
             luaskills_runtime.clone(),
-            mcp_runtime.clone(),
+            mcp_runtime_access,
             request,
         ).await {
             Ok(launch) => launch,

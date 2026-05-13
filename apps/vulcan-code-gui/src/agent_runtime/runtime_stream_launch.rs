@@ -11,7 +11,7 @@ use crate::agent_runtime::runtime_stream_preparation::{
     RuntimePreparedLaunchInput, prepare_runtime_launch_input,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
+use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
 
 /// Builds one fully prepared runtime-stream launch payload or one terminal preparation-failure report.
@@ -20,14 +20,14 @@ pub(crate) async fn prepare_runtime_stream_launch(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
+    mcp_runtime_access: McpRuntimeAccess,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     let prepared_launch_input = prepare_runtime_launch_input(
         config,
         agent_profile_catalog,
         luaskills_runtime,
-        mcp_runtime,
+        mcp_runtime_access,
         request,
     )?;
     build_runtime_stream_launch_from_prepared_input(prepared_launch_input).await

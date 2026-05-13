@@ -249,6 +249,64 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
     );
 }
 
+/// Verifies raw MCP runtime handles only remain at the outer runtime-stream entrypoint instead of leaking through inner launch-preparation layers.
+/// 验证原始 MCP 运行时句柄只保留在最外层 runtime-stream 入口，而不会重新泄漏到内部启动准备链路。
+#[test]
+fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
+    let runtime_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("agent_runtime");
+    let outer_entry_path = runtime_root.join("runtime_stream.rs");
+    let launch_path = runtime_root.join("runtime_stream_launch.rs");
+    let preparation_path = runtime_root.join("runtime_stream_preparation.rs");
+    let preparation_resources_path = runtime_root.join("runtime_stream_preparation_resources.rs");
+
+    let outer_entry_source =
+        fs::read_to_string(&outer_entry_path).expect("runtime_stream.rs should remain readable");
+    let launch_source =
+        fs::read_to_string(&launch_path).expect("runtime_stream_launch.rs should remain readable");
+    let preparation_source = fs::read_to_string(&preparation_path)
+        .expect("runtime_stream_preparation.rs should remain readable");
+    let preparation_resources_source = fs::read_to_string(&preparation_resources_path)
+        .expect("runtime_stream_preparation_resources.rs should remain readable");
+
+    assert!(
+        outer_entry_source.contains("McpRuntimeHandle"),
+        "runtime_stream.rs should remain the outermost raw McpRuntimeHandle boundary: {}",
+        outer_entry_path.display()
+    );
+    assert!(
+        launch_source.contains("McpRuntimeAccess"),
+        "runtime_stream_launch.rs should consume McpRuntimeAccess instead of raw handles: {}",
+        launch_path.display()
+    );
+    assert!(
+        !launch_source.contains("McpRuntimeHandle"),
+        "runtime_stream_launch.rs must not reintroduce raw McpRuntimeHandle usage: {}",
+        launch_path.display()
+    );
+    assert!(
+        preparation_source.contains("McpRuntimeAccess"),
+        "runtime_stream_preparation.rs should consume McpRuntimeAccess instead of raw handles: {}",
+        preparation_path.display()
+    );
+    assert!(
+        !preparation_source.contains("McpRuntimeHandle"),
+        "runtime_stream_preparation.rs must not reintroduce raw McpRuntimeHandle usage: {}",
+        preparation_path.display()
+    );
+    assert!(
+        preparation_resources_source.contains("McpRuntimeAccess"),
+        "runtime_stream_preparation_resources.rs should consume McpRuntimeAccess instead of raw handles: {}",
+        preparation_resources_path.display()
+    );
+    assert!(
+        !preparation_resources_source.contains("McpRuntimeHandle"),
+        "runtime_stream_preparation_resources.rs must not reintroduce raw McpRuntimeHandle usage: {}",
+        preparation_resources_path.display()
+    );
+}
+
 /// Verifies the removed MCP runtime projection shim does not reappear in the agent runtime module tree.
 /// 验证已经移除的 MCP 运行时投影中间层不会重新出现在 agent runtime 模块树中。
 #[test]
