@@ -13,7 +13,7 @@ mod tests {
     use crate::agent_runtime::provider_request_bridge_conversation::{
         build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
     };
-    use crate::agent_runtime::provider_request_bridge_rig::core_messages_to_rig_history;
+    use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
     use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
     use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
     use crate::agent_runtime::provider_request_turn_snapshot::build_openai_compatible_turn_request_snapshot;
@@ -33,13 +33,12 @@ mod tests {
     };
     use crate::model::{SessionMessageKind, SessionMessageRecordKind};
     use crate::provider_config::ProviderRuntimeKind;
-    use rig::message::Message as RigMessage;
-    use rig::message::ToolCall as RigToolCall;
     use serde_json::json;
     use std::collections::BTreeMap;
     use vulcan_core::types::{
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
+        ConversationToolCall as CoreConversationToolCall,
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
         ProviderRequestToolSchema as CoreProviderRequestToolSchema,
@@ -50,9 +49,9 @@ mod tests {
 
     /// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
     /// 解析供转录卡片与工具结果关联使用的宿主可见工具调用标识。
-    fn resolve_host_visible_tool_call_id(tool_call: &rig::message::ToolCall) -> String {
+    fn resolve_host_visible_tool_call_id(tool_call: &CoreConversationToolCall) -> String {
         tool_call
-            .call_id
+            .tool_call_id
             .clone()
             .unwrap_or_else(|| tool_call.id.clone())
     }
@@ -423,10 +422,10 @@ mod tests {
         );
     }
 
-    /// Verifies `vulcan-core` messages projected back into rig history preserve tool calls while still excluding reasoning replay.
-    /// 验证 `vulcan-core` 消息投影回 rig 历史时会保留工具调用，同时仍然排除思考回放。
+    /// Verifies provider-visible history preserves tool calls while still excluding reasoning replay from assistant turns.
+    /// 验证 Provider 可见历史会保留工具调用，同时仍然排除助手回合中的思考回放。
     #[test]
-    fn core_messages_to_rig_history_preserve_tool_calls_without_reasoning_replay() {
+    fn provider_visible_history_preserves_tool_calls_without_reasoning_replay() {
         let messages = vec![CoreConversationMessage {
             id: String::from("assistant-1"),
             payload: CoreConversationPayload::Assistant {
@@ -442,28 +441,28 @@ mod tests {
             },
         }];
 
-        let history = core_messages_to_rig_history(&messages);
-        let [RigMessage::Assistant { id, content }] = history.as_slice() else {
+        let history = core_messages_to_provider_visible_history(&messages);
+        let [message] = history.as_slice() else {
             panic!("history should contain one assistant message");
         };
+        let CoreConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id,
+            tool_calls,
+        } = &message.payload
+        else {
+            panic!("history should contain one assistant payload");
+        };
 
-        assert_eq!(id.as_deref(), Some("resp-1"));
-        assert!(content.iter().any(|item| matches!(
-            item,
-            rig::message::AssistantContent::Text(text) if text.text == "我先读取文件。"
-        )));
-        assert!(content.iter().any(|item| matches!(
-            item,
-            rig::message::AssistantContent::ToolCall(tool_call)
-                if tool_call.id == "tool-1"
-                && tool_call.call_id.as_deref() == Some("call-1")
-                && tool_call.function.name == "read_file"
-        )));
-        assert!(
-            !content
-                .iter()
-                .any(|item| matches!(item, rig::message::AssistantContent::Reasoning(_)))
-        );
+        assert_eq!(provider_message_id.as_deref(), Some("resp-1"));
+        assert_eq!(text, "我先读取文件。");
+        assert!(reasoning.is_empty());
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "tool-1");
+        assert_eq!(tool_calls[0].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(tool_calls[0].tool_name, "read_file");
+        assert_eq!(tool_calls[0].arguments, json!({ "path": "src/main.rs" }));
     }
 
     /// Verifies the runtime leaves multi-turn providers unlimited when no explicit max-turn override exists.
@@ -557,15 +556,11 @@ mod tests {
     /// 验证宿主侧工具结果关联会优先使用 Provider call id，同时仍生成稳定的合成工具结果标识。
     #[test]
     fn host_tool_result_correlation_prefers_provider_call_id() {
-        let tool_call = RigToolCall {
+        let tool_call = CoreConversationToolCall {
             id: String::from("provider-tool-id"),
-            call_id: Some(String::from("provider-call-id")),
-            function: rig::message::ToolFunction {
-                name: String::from("read_file"),
-                arguments: json!({ "path": "src/main.rs" }),
-            },
-            signature: None,
-            additional_params: None,
+            tool_call_id: Some(String::from("provider-call-id")),
+            tool_name: String::from("read_file"),
+            arguments: json!({ "path": "src/main.rs" }),
         };
 
         let resolved_tool_call_id = resolve_host_visible_tool_call_id(&tool_call);

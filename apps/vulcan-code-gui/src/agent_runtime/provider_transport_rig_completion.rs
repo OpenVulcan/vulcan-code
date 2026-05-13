@@ -2,13 +2,13 @@
 //! 仅在传输边界保留第三方请求构建器与流式响应类型的 rig 专用 Completion 执行辅助模块。
 
 use crate::agent_runtime::provider_protocol_rig_content::build_openai_compatible_turn_response_from_rig;
-use crate::agent_runtime::provider_protocol_rig_tool_definition::provider_tool_definition_to_rig_tool_definition;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
-use crate::agent_runtime::provider_request_bridge_rig::{
-    core_message_to_rig_message, core_messages_to_rig_history,
-};
 use crate::agent_runtime::provider_transport_adapter_support::forward_streaming_provider_deltas;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_rig_messages::{
+    core_message_to_rig_message, core_messages_to_rig_history,
+};
+use crate::agent_runtime::provider_transport_rig_tool_definition::provider_tool_definition_to_rig_tool_definition;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use futures_util::Stream;
 use rig::completion::{CompletionModel, CompletionRequestBuilder};

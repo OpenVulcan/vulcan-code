@@ -1,5 +1,5 @@
-//! Rig-specific tool-definition conversion helpers that keep third-party request schema types at the final transport edge only.
-//! 仅在最终传输边界保留第三方请求 schema 类型的 rig 专用工具定义转换辅助模块。
+//! Rig-specific tool-definition conversion helpers kept at the final provider transport edge only.
+//! 仅在最终 Provider 传输边界保留的 rig 专用工具定义转换辅助模块。
 
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 

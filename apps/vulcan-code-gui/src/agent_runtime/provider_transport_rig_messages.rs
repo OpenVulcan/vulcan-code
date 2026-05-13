@@ -1,5 +1,5 @@
-//! Low-level rig projection helpers reused by host-controlled provider transport and regression tests.
-//! 供宿主控制 Provider 传输与回归测试复用的低层 rig 投影辅助逻辑。
+//! Rig-specific request-message projection helpers kept at the final provider transport edge only.
+//! 仅在最终 Provider 传输边界保留的 rig 专用请求消息投影辅助模块。
 
 use rig::OneOrMany;
 use rig::message::{AssistantContent as RigAssistantContent, Message as RigMessage};

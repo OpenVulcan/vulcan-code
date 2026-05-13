@@ -286,15 +286,16 @@ fn conversation_record_to_session_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_runtime::provider_request_bridge_messages::session_message_to_core_message;
-    use crate::agent_runtime::provider_request_bridge_rig::core_messages_to_rig_history;
-    use rig::message::{AssistantContent, Message as RigMessage};
+    use crate::agent_runtime::provider_request_bridge_messages::{
+        core_messages_to_provider_visible_history, session_message_to_core_message,
+    };
     use serde_json::json;
+    use vulcan_core::types::ConversationPayload as CoreConversationPayload;
 
-    /// Verifies that stored assistant reasoning remains local-only and is not replayed into outgoing rig history.
-    /// 验证已存储的助手思考内容保持为本地数据，不会被回放到发出的 rig 历史中。
+    /// Verifies that stored assistant reasoning remains local-only and is not replayed into provider-visible history.
+    /// 验证已存储的助手思考内容保持为本地数据，不会被回放到 Provider 可见历史中。
     #[test]
-    fn assistant_reasoning_is_not_replayed_into_rig_history() {
+    fn assistant_reasoning_is_not_replayed_into_provider_visible_history() {
         let messages = vec![SessionConversationMessage {
             id: String::from("assistant-1"),
             payload: SessionConversationPayload::Assistant {
@@ -309,16 +310,24 @@ mod tests {
             .iter()
             .map(session_message_to_core_message)
             .collect::<Vec<_>>();
-        let history = core_messages_to_rig_history(&core_messages);
-        let Some(RigMessage::Assistant { content, .. }) = history.first() else {
+        let history = core_messages_to_provider_visible_history(&core_messages);
+        let Some(message) = history.first() else {
+            panic!("expected one assistant history item");
+        };
+        let CoreConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id,
+            tool_calls,
+        } = &message.payload
+        else {
             panic!("expected one assistant history item");
         };
 
-        assert!(
-            content
-                .iter()
-                .all(|item| !matches!(item, AssistantContent::Reasoning(_)))
-        );
+        assert_eq!(text, "继续处理。");
+        assert!(reasoning.is_empty());
+        assert_eq!(provider_message_id.as_deref(), Some("resp-1"));
+        assert!(tool_calls.is_empty());
     }
 
     /// Verifies that transcript projection preserves record metadata for tool-result rich UI surfaces.
