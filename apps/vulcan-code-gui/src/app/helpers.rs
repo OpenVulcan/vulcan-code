@@ -2,7 +2,6 @@
 //! 从主应用模块中抽取的共享辅助函数。
 
 use super::*;
-
 /// Builds the initial pane-grid configuration for the three-column workbench.
 /// 构建三栏工作台的初始分栏网格配置。
 pub(super) fn pane_layout() -> Configuration<PaneKind> {
@@ -1033,11 +1032,10 @@ pub(super) fn combine_diff_sections(
     }
 }
 
-/// Rebuilds wrapped diff-hunk payloads for the current wrap-column estimate.
-/// 根据当前折行列数估算结果重建 Diff hunk 折行载荷。
+/// Rebuilds cached diff-hunk payloads for the current review panel.
+/// 根据当前审查面板重建 Diff hunk 缓存载荷。
 pub(super) fn rebuild_wrapped_diff_hunks(
     panel: &WorkspaceDiffPanel,
-    wrap_columns: usize,
 ) -> BTreeMap<String, code_view::WrappedDiffHunk> {
     let mut wrapped_hunks = BTreeMap::new();
 
@@ -1047,7 +1045,7 @@ pub(super) fn rebuild_wrapped_diff_hunks(
         for (hunk_index, hunk) in file.hunks.iter().enumerate() {
             wrapped_hunks.insert(
                 diff_hunk_buffer_key(&file_key, hunk_index),
-                code_view::wrap_diff_hunk(hunk, wrap_columns),
+                code_view::wrap_diff_hunk(hunk, 0),
             );
         }
     }

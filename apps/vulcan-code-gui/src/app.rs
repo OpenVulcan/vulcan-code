@@ -307,25 +307,17 @@ const DIFF_GUTTER_ARROW_WIDTH: f32 = 12.0;
 /// Diff 代码编辑器容器内部使用的共享水平内边距。
 const DIFF_CODE_EDITOR_HORIZONTAL_PADDING: u16 = 8;
 
-/// Shared glyph-width ratio used to estimate wrapped code columns for monospace diff rendering.
-/// 用于估算等宽 Diff 渲染折行列数的共享字宽比例。
-const DIFF_WRAP_GLYPH_WIDTH_RATIO: f32 = 0.56;
+/// Shared glyph-width ratio used to estimate the intrinsic width of one monospace diff editor line.
+/// 用于估算等宽 Diff 编辑器单行固有宽度的共享字宽比例。
+const DIFF_CODE_GLYPH_WIDTH_RATIO: f32 = 0.56;
 
-/// Shared minimal wrapped column count used to avoid over-fragmenting narrow diff panes.
-/// 用于避免窄 Diff 面板过度碎裂的共享最小折行列数。
-const DIFF_MIN_WRAP_COLUMNS: usize = 24;
+/// Shared minimal intrinsic width reserved for one diff hunk editor when the current longest line is very short.
+/// 当当前最长行很短时为单个 Diff hunk 编辑器预留的共享最小固有宽度。
+const DIFF_CODE_EDITOR_MIN_CONTENT_WIDTH: f32 = 160.0;
 
-/// Shared horizontal frame padding reserved by top-level windows before pane content begins.
-/// 顶层窗口在面板内容开始前预留的共享水平框架内边距。
-const WINDOW_FRAME_HORIZONTAL_PADDING: f32 = 32.0;
-
-/// Shared horizontal padding consumed by the diff file code container before hunk blocks begin.
-/// Diff 文件代码容器在 hunk 区块开始前消耗的共享水平内边距。
-const DIFF_FILE_CODE_HORIZONTAL_PADDING: f32 = 20.0;
-
-/// Shared extra width budget reserved for borders and scrollbars when estimating diff editor columns.
-/// 估算 Diff 编辑器列数时为边框和滚动条预留的共享额外宽度预算。
-const DIFF_WRAP_RESERVED_WIDTH: f32 = 28.0;
+/// Shared maximal intrinsic width reserved for one diff hunk editor to avoid pathological layout explosions.
+/// 为避免病态布局膨胀而给单个 Diff hunk 编辑器设置的共享最大固有宽度。
+const DIFF_CODE_EDITOR_MAX_CONTENT_WIDTH: f32 = 12_000.0;
 
 /// Shared fixed height used by omission cards inserted between separated diff hunks.
 /// 插入在分离 diff hunk 之间的省略卡片使用的共享固定高度。
@@ -807,8 +799,8 @@ pub struct VulcanWorkbench {
     /// Read-only text editor buffers used by diff file editors.
     /// Diff 文件编辑器使用的只读文本编辑器缓冲区。
     diff_code_buffers: BTreeMap<String, text_editor::Content>,
-    /// Cached wrapped hunk payloads reused by virtualized diff rendering.
-    /// 供虚拟化 Diff 渲染复用的已缓存折行 hunk 载荷。
+    /// Cached hunk payloads reused by virtualized diff rendering.
+    /// 供虚拟化 Diff 渲染复用的已缓存 hunk 载荷。
     diff_wrapped_hunks: BTreeMap<String, code_view::WrappedDiffHunk>,
     /// Visible visual-line slices currently materialized into read-only editor buffers.
     /// 当前已物化为只读编辑器缓冲区的可视行切片范围。
@@ -3368,7 +3360,7 @@ impl VulcanWorkbench {
             }
             Message::DiffWindowOpened(window_id) => {
                 self.diff_window_id = Some(window_id);
-                self.rebuild_diff_code_buffers_for_current_wrap();
+                self.refresh_visible_diff_buffers();
                 self.status_message = String::from("Diff 预览窗口已打开，可独立调整面板结构。");
                 window::is_maximized(window_id).map(move |maximized| {
                     Message::WindowMaximizedStateChanged(window_id, maximized)
@@ -3539,7 +3531,7 @@ impl VulcanWorkbench {
                 }
 
                 if self.main_window_id.is_some() {
-                    self.rebuild_diff_code_buffers_for_current_wrap();
+                    self.refresh_visible_diff_buffers();
                 }
 
                 if self.main_window_id.is_none() && self.diff_window_id.is_none() {
@@ -3559,7 +3551,7 @@ impl VulcanWorkbench {
 
                 if self.main_window_id == Some(window_id) || self.diff_window_id == Some(window_id)
                 {
-                    self.rebuild_diff_code_buffers_for_current_wrap();
+                    self.refresh_visible_diff_buffers();
                 }
 
                 window::is_maximized(window_id).map(move |maximized| {
@@ -4807,7 +4799,7 @@ impl VulcanWorkbench {
                     .collect::<BTreeSet<_>>();
                 self.collapsed_diff_files
                     .retain(|key| available_diff_file_keys.contains(key));
-                self.rebuild_diff_code_buffers_for_current_wrap();
+                self.rebuild_diff_code_buffers();
                 self.status_message = diff_preview.status_message.clone();
 
                 // Reflect the detected change count into the selected session card so the left queue stays informative.
@@ -5083,7 +5075,7 @@ impl VulcanWorkbench {
             }
             Message::PaneResized(event) => {
                 self.panes.resize(event.split, event.ratio);
-                self.rebuild_diff_code_buffers_for_current_wrap();
+                self.refresh_visible_diff_buffers();
                 Task::none()
             }
         }
@@ -5283,11 +5275,10 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Rebuilds all wrapped hunk caches under the current column estimate and refreshes visible buffers.
-    /// 在当前列宽估算下重建全部 hunk 折行缓存，并刷新可见缓冲区。
-    fn rebuild_diff_code_buffers_for_current_wrap(&mut self) {
-        self.diff_wrapped_hunks =
-            rebuild_wrapped_diff_hunks(&self.diff_panel, self.current_diff_wrap_columns());
+    /// Rebuilds the cached diff hunk payloads and refreshes visible buffers.
+    /// 重建缓存 Diff hunk 载荷，并刷新可见缓冲区。
+    fn rebuild_diff_code_buffers(&mut self) {
+        self.diff_wrapped_hunks = rebuild_wrapped_diff_hunks(&self.diff_panel);
         self.refresh_visible_diff_buffers();
     }
 
@@ -5342,27 +5333,6 @@ impl VulcanWorkbench {
 
         self.diff_code_buffers = next_buffers;
         self.diff_buffer_slices = next_slices;
-    }
-
-    /// Estimates the wrapped code column budget used by diff hunk editors in the current layout.
-    /// 估算当前布局下 diff hunk 编辑器使用的代码折行列预算。
-    fn current_diff_wrap_columns(&self) -> usize {
-        let pane_width = if self.diff_window_id.is_some() {
-            self.diff_window_size.width - WINDOW_FRAME_HORIZONTAL_PADDING
-        } else {
-            let workbench_ratio = (1.0 - 0.22) * 0.68;
-            (self.main_window_size.width - WINDOW_FRAME_HORIZONTAL_PADDING) * workbench_ratio
-        }
-        .max(320.0);
-
-        let available_code_width = pane_width
-            - DIFF_FILE_CODE_HORIZONTAL_PADDING
-            - diff_gutter_block_width()
-            - (DIFF_CODE_EDITOR_HORIZONTAL_PADDING as f32 * 2.0)
-            - DIFF_WRAP_RESERVED_WIDTH;
-        let estimated_glyph_width = (CODE_EDITOR_TEXT_SIZE * DIFF_WRAP_GLYPH_WIDTH_RATIO).max(1.0);
-
-        ((available_code_width / estimated_glyph_width).floor() as usize).max(DIFF_MIN_WRAP_COLUMNS)
     }
 
     /// Returns the current diff viewport height, preferring the real scroll viewport and falling back to layout estimates.
@@ -5771,9 +5741,7 @@ impl VulcanWorkbench {
             .get(&diff_hunk_buffer_key(file_key, hunk_index))
             .map(|wrapped_hunk| wrapped_hunk.visual_lines.len() as f32 * CODE_EDITOR_LINE_HEIGHT)
             .unwrap_or_else(|| {
-                code_view::wrap_diff_hunk(hunk, self.current_diff_wrap_columns())
-                    .visual_lines
-                    .len() as f32
+                code_view::wrap_diff_hunk(hunk, 0).visual_lines.len() as f32
                     * CODE_EDITOR_LINE_HEIGHT
             })
     }

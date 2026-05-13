@@ -3764,12 +3764,12 @@ impl VulcanWorkbench {
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
                 .map(|(window_id, size)| Message::WindowResized(window_id, size)),
-            iced::event::listen_with(Self::map_main_panel_shortcut_event),
-            iced::event::listen_with(Self::map_window_pointer_event),
-            transcript_drag_auto_scroll_subscription,
-            thinking_overlay_drag_auto_scroll_subscription,
-            thinking_modal_animation_subscription,
-        ])
+                iced::event::listen_with(Self::map_main_panel_shortcut_event),
+                iced::event::listen_with(Self::map_window_pointer_event),
+                transcript_drag_auto_scroll_subscription,
+                thinking_overlay_drag_auto_scroll_subscription,
+                thinking_modal_animation_subscription,
+            ])
     }
 
     /// Maps one raw runtime event into a top-level panel switch shortcut when the key combination matches.
@@ -4430,6 +4430,20 @@ impl VulcanWorkbench {
         let editor_font = theme::code_font();
         let visible_height = line_count as f32 * CODE_EDITOR_LINE_HEIGHT;
         let gutter_block_width = diff_gutter_block_width();
+        let slice_contains_truncated_lines = wrapped_hunk.truncated_line_count > 0
+            && wrapped_hunk
+                .visual_lines
+                .iter()
+                .skip(visible_slice.range.start)
+                .take(line_count)
+                .any(|line| line.is_truncated);
+        let estimated_editor_width = ((wrapped_hunk.max_line_columns.max(1) as f32)
+            * CODE_EDITOR_TEXT_SIZE
+            * DIFF_CODE_GLYPH_WIDTH_RATIO)
+            .clamp(
+                DIFF_CODE_EDITOR_MIN_CONTENT_WIDTH,
+                DIFF_CODE_EDITOR_MAX_CONTENT_WIDTH,
+            );
         let mut line_bars = column![].spacing(0);
         let mut line_arrow_column = column![].spacing(0);
         let mut line_number_backgrounds = column![].spacing(0);
@@ -4556,28 +4570,48 @@ impl VulcanWorkbench {
             );
         }
 
-        let file_editor = WheelPassthrough::new(
-            text_editor(content)
-                .size(CODE_EDITOR_TEXT_SIZE)
-                .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
-                .wrapping(iced::advanced::text::Wrapping::None)
-                .min_height(visible_height)
-                .max_height(visible_height)
-                .height(visible_height)
-                .padding(0)
-                .font(editor_font)
-                .style(style::diff_code_editor_style)
-                .highlight_with::<iced::highlighter::Highlighter>(
-                    iced::highlighter::Settings {
-                        theme: theme::code_theme(&self.app_theme),
-                        token: syntax_token.clone(),
-                    },
-                    theme::code_highlight_format,
-                )
-                .on_action(move |action| {
-                    Message::DiffCodeAction(action_buffer_key.clone(), action)
-                }),
-        );
+        let file_editor = if slice_contains_truncated_lines {
+            WheelPassthrough::new(
+                text_editor(content)
+                    .size(CODE_EDITOR_TEXT_SIZE)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .wrapping(iced::advanced::text::Wrapping::None)
+                    .width(Pixels(estimated_editor_width))
+                    .min_height(visible_height)
+                    .max_height(visible_height)
+                    .height(visible_height)
+                    .padding(0)
+                    .font(editor_font)
+                    .style(style::diff_code_editor_style)
+                    .on_action(move |action| {
+                        Message::DiffCodeAction(action_buffer_key.clone(), action)
+                    }),
+            )
+        } else {
+            WheelPassthrough::new(
+                text_editor(content)
+                    .size(CODE_EDITOR_TEXT_SIZE)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .wrapping(iced::advanced::text::Wrapping::None)
+                    .width(Pixels(estimated_editor_width))
+                    .min_height(visible_height)
+                    .max_height(visible_height)
+                    .height(visible_height)
+                    .padding(0)
+                    .font(editor_font)
+                    .style(style::diff_code_editor_style)
+                    .highlight_with::<iced::highlighter::Highlighter>(
+                        iced::highlighter::Settings {
+                            theme: theme::code_theme(&self.app_theme),
+                            token: syntax_token.clone(),
+                        },
+                        theme::code_highlight_format,
+                    )
+                    .on_action(move |action| {
+                        Message::DiffCodeAction(action_buffer_key.clone(), action)
+                    }),
+            )
+        };
 
         let gutter_layer = container(stack([
             container(line_number_backgrounds)
@@ -4604,10 +4638,17 @@ impl VulcanWorkbench {
         let visible_row = mouse_area(
             row![
                 gutter_layer,
-                container(file_editor)
-                    .padding([0, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
-                    .height(visible_height)
-                    .width(Fill),
+                scrollable(
+                    container(file_editor)
+                        .padding([0, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
+                        .height(visible_height)
+                        .width(Shrink)
+                )
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::default(),
+                ))
+                .height(visible_height)
+                .width(Fill),
             ]
             .spacing(0)
             .height(visible_height)
