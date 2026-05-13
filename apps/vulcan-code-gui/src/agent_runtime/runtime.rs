@@ -7,8 +7,9 @@ use crate::agent_runtime::config::{
     RuntimeToolPolicyDefinition,
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
-use crate::mcp::registry::{McpRegistrySummary, McpServerRegistry};
-use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor};
+use crate::mcp::{
+    McpRegistrySummary, McpRuntimeHandle, McpRuntimeToolDescriptor, configured_mcp_registry_summary,
+};
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
@@ -90,7 +91,7 @@ impl RuntimeFoundation {
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let native_tools = build_native_tool_catalog(&runtime_config);
-        let mcp_registry_summary = McpServerRegistry::from_provider_configuration(config).summary();
+        let mcp_registry_summary = configured_mcp_registry_summary(config);
         let mut warnings = Vec::new();
         let luaskills_tools = match luaskills_runtime.as_ref() {
             Some(handle) => match list_luaskills_tool_entries(handle) {

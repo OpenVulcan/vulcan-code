@@ -162,10 +162,20 @@ impl McpServerRegistry {
     }
 }
 
+/// Builds one lightweight configured MCP summary directly from the shared provider configuration file.
+/// 直接根据共享供应商配置文件构建一个轻量已配置 MCP 摘要。
+pub fn configured_mcp_registry_summary(config: &ProviderConfigurationFile) -> McpRegistrySummary {
+    McpServerRegistry::from_provider_configuration(config).summary()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{McpRegistrySummary, McpServerRegistry};
+    use super::{McpRegistrySummary, McpServerRegistry, configured_mcp_registry_summary};
     use crate::mcp::config::{McpServerConfig, McpTransportKind};
+    use crate::provider_config::{
+        PersistedMcpConfiguration, PersistedMcpServerEntry, PersistedMcpTransportKind,
+        ProviderConfigurationFile,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -251,6 +261,41 @@ mod tests {
             summary.enabled_summary_rows(),
             vec![String::from(
                 "启用 · Enabled Server · stdio · enabled-mcp --stdio"
+            )]
+        );
+    }
+
+    #[test]
+    fn configured_registry_summary_builds_from_provider_configuration() {
+        let config = ProviderConfigurationFile {
+            mcp: PersistedMcpConfiguration {
+                servers: BTreeMap::from([(
+                    String::from("server-1"),
+                    PersistedMcpServerEntry {
+                        name: String::from("Configured Server"),
+                        enabled: true,
+                        transport: PersistedMcpTransportKind::Stdio,
+                        command: String::from("configured-mcp"),
+                        args: vec![String::from("--stdio")],
+                        url: None,
+                        bearer_token: None,
+                        headers: BTreeMap::new(),
+                        cwd: None,
+                        env: BTreeMap::new(),
+                    },
+                )]),
+            },
+            ..ProviderConfigurationFile::default()
+        };
+
+        let summary = configured_mcp_registry_summary(&config);
+
+        assert_eq!(summary.configured_count(), 1);
+        assert_eq!(summary.enabled_count(), 1);
+        assert_eq!(
+            summary.summary_rows(),
+            vec![String::from(
+                "启用 · Configured Server · stdio · configured-mcp --stdio"
             )]
         );
     }
