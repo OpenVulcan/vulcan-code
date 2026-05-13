@@ -1,7 +1,6 @@
 //! OpenAI-compatible host-controlled provider transport adapter.
 //! OpenAI 兼容宿主控制 Provider 传输适配器。
 
-use crate::agent_runtime::provider_protocol_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
     build_standard_streaming_request, unsupported_streaming_execute,
@@ -9,6 +8,7 @@ use crate::agent_runtime::provider_transport_adapter_support::{
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_rig_clients::build_rig_openai_compatible_completion_model;
 use crate::agent_runtime::provider_transport_rig_completion::execute_rig_openai_like_streaming_turn;
+use crate::agent_runtime::provider_transport_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;

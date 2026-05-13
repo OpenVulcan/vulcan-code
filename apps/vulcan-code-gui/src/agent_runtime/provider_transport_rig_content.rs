@@ -1,5 +1,5 @@
-//! Rig-specific provider content conversion helpers that keep third-party message enums at the transport edge only.
-//! 仅在传输边界保留第三方消息枚举的 rig 专用 Provider 内容转换辅助模块。
+//! Rig-specific provider content conversion helpers kept at the final provider transport edge only.
+//! 仅在最终 Provider 传输边界保留的 rig 专用 Provider 内容转换辅助模块。
 
 use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_deltas_from_assistant_content,
