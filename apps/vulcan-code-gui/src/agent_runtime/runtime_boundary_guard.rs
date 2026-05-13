@@ -276,8 +276,8 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
         outer_entry_path.display()
     );
     assert!(
-        outer_entry_source.contains("McpRuntimeAccess::configured"),
-        "runtime_stream.rs should build its configured fallback through McpRuntimeAccess::configured: {}",
+        outer_entry_source.contains("configured_mcp_runtime_access"),
+        "runtime_stream.rs should build its configured fallback through configured_mcp_runtime_access: {}",
         outer_entry_path.display()
     );
     assert!(
@@ -436,8 +436,8 @@ fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
         runtime_path.display()
     );
     assert!(
-        runtime_source.contains("McpRuntimeAccess::configured"),
-        "RuntimeFoundation should build its configured fallback through McpRuntimeAccess::configured: {}",
+        runtime_source.contains("configured_mcp_runtime_access"),
+        "RuntimeFoundation should build its configured fallback through configured_mcp_runtime_access: {}",
         runtime_path.display()
     );
     assert!(

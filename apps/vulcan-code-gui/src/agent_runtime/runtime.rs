@@ -9,6 +9,7 @@ use crate::agent_runtime::config::{
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
     McpRuntimeAccess, McpRuntimeOverview, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
+    configured_mcp_runtime_access,
 };
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -90,7 +91,7 @@ impl RuntimeFoundation {
             config,
             agent_profile_catalog,
             luaskills_runtime,
-            mcp_runtime_access.unwrap_or_else(|| McpRuntimeAccess::configured(config)),
+            mcp_runtime_access.unwrap_or_else(|| configured_mcp_runtime_access(config)),
         )
     }
 

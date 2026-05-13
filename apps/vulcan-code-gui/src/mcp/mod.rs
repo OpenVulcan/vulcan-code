@@ -7,5 +7,5 @@ pub mod runtime;
 
 pub(crate) use runtime::{
     McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeToolAllowlist,
-    McpRuntimeToolBinding, bootstrap_mcp_runtime_access,
+    McpRuntimeToolBinding, bootstrap_mcp_runtime_access, configured_mcp_runtime_access,
 };

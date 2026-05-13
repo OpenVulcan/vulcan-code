@@ -185,12 +185,6 @@ pub(crate) struct McpRuntimeAccess {
 }
 
 impl McpRuntimeAccess {
-    /// Builds one stable MCP runtime access surface from provider configuration without a live runtime handle.
-    /// 根据供应商配置构建一个不包含实时运行时句柄的稳定 MCP 运行时访问面。
-    pub(crate) fn configured(config: &ProviderConfigurationFile) -> Self {
-        Self::new(configured_mcp_registry_summary(config), None)
-    }
-
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
     fn new(configured_summary: McpRegistrySummary, live_runtime: Option<McpRuntimeHandle>) -> Self {
@@ -240,6 +234,14 @@ impl McpRuntimeAccess {
             runtime.shutdown();
         }
     }
+}
+
+/// Builds one stable MCP runtime access surface from provider configuration without a live runtime handle.
+/// 根据供应商配置构建一个不包含实时运行时句柄的稳定 MCP 运行时访问面。
+pub(crate) fn configured_mcp_runtime_access(
+    config: &ProviderConfigurationFile,
+) -> McpRuntimeAccess {
+    McpRuntimeAccess::new(configured_mcp_registry_summary(config), None)
 }
 
 impl McpRuntimeToolBinding {
@@ -749,7 +751,7 @@ impl McpRuntimeSnapshot {
 /// Shared host-side handle used to inspect active MCP tools and resolve live transports at call time.
 /// 用于检查活动 MCP 工具并在调用时解析实时传输的共享宿主句柄。
 #[derive(Clone)]
-pub(crate) struct McpRuntimeHandle {
+struct McpRuntimeHandle {
     /// Shared mutable inner state.
     /// 共享可变内部状态。
     inner: Arc<McpRuntimeInner>,
