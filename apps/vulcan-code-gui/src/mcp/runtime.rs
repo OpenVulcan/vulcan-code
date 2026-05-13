@@ -5,6 +5,7 @@ use crate::mcp::config::McpServerConfig;
 use crate::mcp::registry::McpServerRegistry;
 use crate::provider_config::ProviderConfigurationFile;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -12,7 +13,7 @@ use vulcan_mcp_runtime::{McpTransport, McpTransportEvent};
 
 /// Stable MCP tool schema exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpRuntimeToolSchema {
     /// Stable MCP tool name.
     /// 稳定 MCP 工具名称。
@@ -27,7 +28,7 @@ pub struct McpRuntimeToolSchema {
 
 /// Stable MCP tool descriptor exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具描述。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpRuntimeToolDescriptor {
     /// Stable server identifier that currently owns the tool.
     /// 当前拥有该工具的稳定服务器标识。
@@ -35,6 +36,53 @@ pub struct McpRuntimeToolDescriptor {
     /// Tool schema discovered from the remote MCP endpoint.
     /// 从远端 MCP 端点发现得到的工具 schema。
     pub schema: McpRuntimeToolSchema,
+}
+
+impl McpRuntimeToolDescriptor {
+    /// Returns the stable server identifier that currently owns the tool.
+    /// 返回当前拥有该工具的稳定服务器标识。
+    pub fn server_id(&self) -> &str {
+        &self.server_id
+    }
+
+    /// Returns the stable MCP tool name.
+    /// 返回稳定 MCP 工具名称。
+    pub fn tool_name(&self) -> &str {
+        &self.schema.name
+    }
+
+    /// Returns the human-readable MCP tool description.
+    /// 返回人类可读的 MCP 工具描述。
+    pub fn tool_description(&self) -> &str {
+        &self.schema.description
+    }
+
+    /// Returns the JSON Schema describing the tool arguments.
+    /// 返回描述工具参数的 JSON Schema。
+    pub fn args_schema(&self) -> &serde_json::Value {
+        &self.schema.args_schema
+    }
+
+    /// Returns the host-facing qualified tool name composed from server and tool identifiers.
+    /// 返回由服务器与工具标识组合而成的宿主侧限定工具名。
+    pub fn qualified_name(&self) -> String {
+        format!("{}/{}", self.server_id(), self.tool_name())
+    }
+
+    /// Returns whether the descriptor matches one optional server/tool allowlist pair.
+    /// 返回该描述是否匹配一组选填的服务器与工具白名单。
+    pub fn matches_allowed_sets(
+        &self,
+        allowed_server_ids: Option<&BTreeSet<String>>,
+        allowed_tool_names: Option<&BTreeSet<String>>,
+    ) -> bool {
+        let server_allowed = allowed_server_ids
+            .is_none_or(|allowed| allowed.contains(self.server_id()));
+        let tool_allowed = allowed_tool_names.is_none_or(|allowed| {
+            allowed.contains(self.tool_name()) || allowed.contains(&self.qualified_name())
+        });
+        server_allowed && tool_allowed
+    }
 }
 
 /// Runtime connectivity state of one configured MCP server.
@@ -181,6 +229,19 @@ impl McpRuntimeSnapshot {
             .collect()
     }
 
+    /// Returns tool descriptors filtered by optional server and tool allowlists.
+    /// 返回按可选服务器与工具白名单过滤后的工具描述集合。
+    pub fn filtered_tool_descriptors(
+        &self,
+        allowed_server_ids: Option<&BTreeSet<String>>,
+        allowed_tool_names: Option<&BTreeSet<String>>,
+    ) -> Vec<McpRuntimeToolDescriptor> {
+        self.tool_descriptors()
+            .into_iter()
+            .filter(|tool| tool.matches_allowed_sets(allowed_server_ids, allowed_tool_names))
+            .collect()
+    }
+
     /// Returns lightweight diagnostics for enabled MCP servers only.
     /// 仅返回已启用 MCP 服务器的轻量诊断信息。
     pub fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
@@ -251,10 +312,38 @@ impl McpRuntimeHandle {
             .cloned()
     }
 
-    /// Returns the currently available MCP tool descriptors across all connected servers.
-    /// 返回当前所有已连接服务器的可用 MCP 工具描述集合。
-    pub fn available_tool_descriptors(&self) -> Vec<McpRuntimeToolDescriptor> {
-        self.snapshot().tool_descriptors()
+    /// Returns currently available MCP tool descriptors filtered by optional allowlists.
+    /// 返回按可选白名单过滤后的当前可用 MCP 工具描述集合。
+    pub fn available_tool_descriptors_filtered(
+        &self,
+        allowed_server_ids: Option<&BTreeSet<String>>,
+        allowed_tool_names: Option<&BTreeSet<String>>,
+    ) -> Vec<McpRuntimeToolDescriptor> {
+        self.snapshot()
+            .filtered_tool_descriptors(allowed_server_ids, allowed_tool_names)
+    }
+
+    /// Calls one MCP tool descriptor through its owning live transport.
+    /// 通过工具描述所属的实时传输调用单个 MCP 工具。
+    pub async fn call_tool_descriptor(
+        &self,
+        descriptor: &McpRuntimeToolDescriptor,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let Some(transport) = self.transport_for_server(descriptor.server_id()) else {
+            return Err(format!(
+                "MCP 服务器 `{}` 当前未连接，无法调用工具 `{}`。",
+                descriptor.server_id(),
+                descriptor.tool_name()
+            ));
+        };
+        transport.call_tool(descriptor.tool_name(), args).await.map_err(|error| {
+            format!(
+                "MCP 工具 `{}` 调用失败：{}。",
+                descriptor.tool_name(),
+                error
+            )
+        })
     }
 
     /// Returns lightweight diagnostics for enabled MCP servers only.
@@ -504,9 +593,9 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
 mod tests {
     use super::{
         McpRuntimeServerDiagnostic, McpRuntimeServerSnapshot, McpRuntimeServerStatus,
-        McpRuntimeSnapshot,
+        McpRuntimeSnapshot, McpRuntimeToolDescriptor, McpRuntimeToolSchema,
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn active_summary_rows_only_keep_connecting_and_connected_servers() {
@@ -599,6 +688,73 @@ mod tests {
                 tool_count: 0,
                 last_error: None,
             }]
+        );
+    }
+
+    #[test]
+    fn filtered_tool_descriptors_apply_server_and_tool_allowlists() {
+        let tool_a = McpRuntimeToolDescriptor {
+            server_id: String::from("server-a"),
+            schema: McpRuntimeToolSchema {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                args_schema: serde_json::json!({}),
+            },
+        };
+        let tool_b = McpRuntimeToolDescriptor {
+            server_id: String::from("server-b"),
+            schema: McpRuntimeToolSchema {
+                name: String::from("edit_file"),
+                description: String::from("Edit one file"),
+                args_schema: serde_json::json!({}),
+            },
+        };
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([
+                (
+                    String::from("server-a"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Server A"),
+                        enabled: true,
+                        transport_label: String::from("stdio"),
+                        endpoint_summary: String::from("server-a"),
+                        status: McpRuntimeServerStatus::Connected,
+                        last_error: None,
+                        tools: vec![tool_a.clone()],
+                    },
+                ),
+                (
+                    String::from("server-b"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Server B"),
+                        enabled: true,
+                        transport_label: String::from("http"),
+                        endpoint_summary: String::from("server-b"),
+                        status: McpRuntimeServerStatus::Connected,
+                        last_error: None,
+                        tools: vec![tool_b.clone()],
+                    },
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            snapshot.filtered_tool_descriptors(None, None),
+            vec![tool_a.clone(), tool_b.clone()]
+        );
+        assert_eq!(
+            snapshot.filtered_tool_descriptors(
+                Some(&BTreeSet::from([String::from("server-b")])),
+                None
+            ),
+            vec![tool_b.clone()]
+        );
+        assert_eq!(
+            snapshot.filtered_tool_descriptors(
+                None,
+                Some(&BTreeSet::from([String::from("server-a/read_file")]))
+            ),
+            vec![tool_a]
         );
     }
 }

@@ -130,10 +130,10 @@ pub fn build_vulcan_tools_manager(
 
     for tool in candidate_mcp_tools {
         let descriptor = mcp_descriptor_to_vulcan(&tool);
-        let parameters_schema = tool.schema.args_schema.clone();
+        let parameters_schema = tool.args_schema().clone();
         let runtime = mcp_runtime.clone();
-        let server_id = tool.server_id.clone();
-        let tool_name = tool.schema.name.clone();
+        let tool_descriptor = tool.clone();
+        let tool_name = tool.tool_name().to_string();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
@@ -141,7 +141,7 @@ pub fn build_vulcan_tools_manager(
             plan_policy: VulcanPlanToolPolicy::HeuristicText(tool_name.clone()),
             invoke: std::sync::Arc::new(move |args, _session_id| {
                 let runtime = runtime.clone();
-                let server_id = server_id.clone();
+                let tool_descriptor = tool_descriptor.clone();
                 let tool_name = tool_name.clone();
                 Box::pin(async move {
                     let Some(runtime) = runtime.as_ref() else {
@@ -150,17 +150,10 @@ pub fn build_vulcan_tools_manager(
                             tool_name
                         ));
                     };
-                    let Some(transport) = runtime.transport_for_server(&server_id) else {
-                        return Err(format!(
-                            "MCP 服务器 `{}` 当前未连接，无法调用工具 `{}`。",
-                            server_id, tool_name
-                        ));
-                    };
-                    transport
-                        .call_tool(&tool_name, args)
+                    runtime
+                        .call_tool_descriptor(&tool_descriptor, args)
                         .await
                         .map(VulcanToolInvocationResult::from_model_output)
-                        .map_err(|error| format!("MCP 工具 `{}` 调用失败：{}。", tool_name, error))
                 })
             }),
         });
@@ -195,9 +188,9 @@ fn luaskills_descriptor_to_vulcan(entry: &RuntimeEntryDescriptor) -> VulcanToolD
 /// 将单条 MCP 运行时描述转换为统一宿主侧工具描述。
 fn mcp_descriptor_to_vulcan(tool: &McpRuntimeToolDescriptor) -> VulcanToolDescriptor {
     VulcanToolDescriptor {
-        id: format!("{}/{}", tool.server_id, tool.schema.name),
-        name: tool.schema.name.clone(),
-        description: tool.schema.description.clone(),
+        id: tool.qualified_name(),
+        name: tool.tool_name().to_string(),
+        description: tool.tool_description().to_string(),
         source: VulcanToolSourceKind::Mcp,
     }
 }

@@ -371,20 +371,10 @@ impl RuntimeFoundation {
         };
 
         mcp_runtime
-            .available_tool_descriptors()
-            .into_iter()
-            .filter(|tool| {
-                allowed_server_ids
-                    .as_ref()
-                    .is_none_or(|allowed| allowed.contains(&tool.server_id))
-            })
-            .filter(|tool| {
-                allowed_tool_names.as_ref().is_none_or(|allowed| {
-                    allowed.contains(&tool.schema.name)
-                        || allowed.contains(&format!("{}/{}", tool.server_id, tool.schema.name))
-                })
-            })
-            .collect()
+            .available_tool_descriptors_filtered(
+                allowed_server_ids.as_ref(),
+                allowed_tool_names.as_ref(),
+            )
     }
 
     /// Returns enabled MCP server summary rows for execution diagnostics.
