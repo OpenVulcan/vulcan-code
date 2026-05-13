@@ -7,7 +7,6 @@ use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::mcp_runtime_projection::collect_enabled_mcp_runtime_events;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use std::path::PathBuf;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
@@ -43,7 +42,6 @@ pub(crate) struct RuntimeBootstrapResources {
 pub(crate) fn resolve_runtime_bootstrap_resources(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
     preparation: &ExecutionPreparation,
 ) -> RuntimeBootstrapResources {
     let active_agent = foundation.active_agent_definition().cloned();
@@ -63,8 +61,9 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
     let resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)
         .definitions;
+    let discovery_report = foundation.enabled_mcp_discovery_report();
     let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
-        collect_enabled_mcp_runtime_events(mcp_runtime.as_ref());
+        collect_enabled_mcp_runtime_events(&discovery_report);
     let mut warnings = preparation.warnings.clone();
     warnings.extend(discovery_warnings);
 

@@ -211,11 +211,16 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
     let preparation_path = gui_src_root
         .join("agent_runtime")
         .join("execution_preparation.rs");
+    let bootstrap_resources_path = gui_src_root
+        .join("agent_runtime")
+        .join("runtime_stream_bootstrap_resources.rs");
 
     let bridge_source =
         fs::read_to_string(&bridge_path).expect("vulcan_tools_bridge.rs should remain readable");
     let preparation_source = fs::read_to_string(&preparation_path)
         .expect("execution_preparation.rs should remain readable");
+    let bootstrap_resources_source = fs::read_to_string(&bootstrap_resources_path)
+        .expect("runtime_stream_bootstrap_resources.rs should remain readable");
 
     assert!(
         !bridge_source.contains("McpRuntimeHandle"),
@@ -236,5 +241,10 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
         !preparation_source.contains("McpRuntimeHandle"),
         "execution_preparation.rs must not reintroduce direct McpRuntimeHandle usage: {}",
         preparation_path.display()
+    );
+    assert!(
+        !bootstrap_resources_source.contains("McpRuntimeHandle"),
+        "runtime_stream_bootstrap_resources.rs must not reintroduce direct McpRuntimeHandle usage: {}",
+        bootstrap_resources_path.display()
     );
 }

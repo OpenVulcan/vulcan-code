@@ -8,8 +8,8 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRegistrySummary, McpRuntimeHandle, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
-    configured_mcp_registry_summary,
+    McpRegistrySummary, McpRuntimeDiscoveryReport, McpRuntimeHandle, McpRuntimeToolAllowlist,
+    McpRuntimeToolBinding, configured_mcp_registry_summary,
 };
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -355,6 +355,15 @@ impl RuntimeFoundation {
             .as_ref()
             .map(McpRuntimeHandle::active_summary_rows)
             .unwrap_or_else(|| self.mcp_registry_summary.enabled_summary_rows())
+    }
+
+    /// Returns one stable MCP discovery report built from the live runtime when available.
+    /// 返回一份在实时运行时可用时构建得到的稳定 MCP 发现报告。
+    pub fn enabled_mcp_discovery_report(&self) -> McpRuntimeDiscoveryReport {
+        self.mcp_runtime
+            .as_ref()
+            .map(McpRuntimeHandle::enabled_server_discovery_report)
+            .unwrap_or_default()
     }
 }
 

@@ -12,7 +12,6 @@ use crate::agent_runtime::runtime_stream_bootstrap_resources::{
     RuntimeBootstrapResources, resolve_runtime_bootstrap_resources,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::mcp::McpRuntimeHandle;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
@@ -66,7 +65,6 @@ pub(crate) struct RuntimeStreamBootstrap {
 pub(crate) async fn bootstrap_runtime_stream(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeHandle>,
     request: &ExecutionPreparationRequest,
     mut preparation: ExecutionPreparation,
 ) -> RuntimeStreamBootstrap {
@@ -78,12 +76,7 @@ pub(crate) async fn bootstrap_runtime_stream(
         discovery_rows,
         discovery_errors,
         mut warnings,
-    } = resolve_runtime_bootstrap_resources(
-        foundation,
-        luaskills_runtime,
-        mcp_runtime.clone(),
-        &preparation,
-    );
+    } = resolve_runtime_bootstrap_resources(foundation, luaskills_runtime, &preparation);
     let RuntimeBootstrapCore {
         system_preamble,
         request_history,

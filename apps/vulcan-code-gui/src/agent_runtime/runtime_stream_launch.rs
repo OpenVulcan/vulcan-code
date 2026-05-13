@@ -41,18 +41,11 @@ async fn build_runtime_stream_launch_from_prepared_input(
     let RuntimePreparedLaunchInput {
         foundation,
         luaskills_runtime,
-        mcp_runtime,
         request,
         preparation,
     } = prepared_launch_input;
-    let bootstrap = bootstrap_runtime_stream(
-        &foundation,
-        luaskills_runtime,
-        mcp_runtime,
-        &request,
-        preparation,
-    )
-    .await;
+    let bootstrap =
+        bootstrap_runtime_stream(&foundation, luaskills_runtime, &request, preparation).await;
 
     Ok(build_runtime_stream_launch_payload(&request, bootstrap))
 }

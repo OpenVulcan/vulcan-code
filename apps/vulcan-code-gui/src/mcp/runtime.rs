@@ -374,7 +374,7 @@ impl McpRuntimeServerDiagnostic {
 /// Lightweight MCP runtime event severity used by upper-layer projection adapters.
 /// 供上层投影适配器使用的轻量 MCP 运行时事件严重级别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpRuntimeEventProjectionKind {
+enum McpRuntimeEventProjectionKind {
     /// Event represents a healthy informational server state.
     /// 事件表示健康的提示性服务器状态。
     Informational,
@@ -399,12 +399,6 @@ pub struct McpRuntimeEventProjection {
 }
 
 impl McpRuntimeEventProjection {
-    /// Returns the recommended event kind for UI projection.
-    /// 返回供界面投影使用的建议事件种类。
-    pub fn kind(&self) -> McpRuntimeEventProjectionKind {
-        self.kind
-    }
-
     /// Returns the recommended event title for UI projection.
     /// 返回供界面投影使用的建议事件标题。
     pub fn title(&self) -> &str {
@@ -415,6 +409,12 @@ impl McpRuntimeEventProjection {
     /// 返回供界面投影使用的建议事件正文。
     pub fn body(&self) -> &str {
         &self.body
+    }
+
+    /// Returns whether the projected event should be treated as a warning/failure path.
+    /// 返回该投影视图是否应被视为告警或失败路径。
+    pub fn is_warning(&self) -> bool {
+        self.kind == McpRuntimeEventProjectionKind::Warning
     }
 }
 
@@ -437,6 +437,15 @@ pub struct McpRuntimeDiscoveryReport {
 }
 
 impl McpRuntimeDiscoveryReport {
+    /// Returns whether the discovery report contains no event projections, summary rows, errors, or warnings.
+    /// 返回该发现报告是否不包含任何事件投影、摘要行、错误或告警。
+    pub fn is_empty(&self) -> bool {
+        self.event_projections.is_empty()
+            && self.discovery_rows.is_empty()
+            && self.discovery_errors.is_empty()
+            && self.discovery_warnings.is_empty()
+    }
+
     /// Returns the recommended runtime event projections.
     /// 返回建议的运行时事件投影视图集合。
     pub fn event_projections(&self) -> &[McpRuntimeEventProjection] {

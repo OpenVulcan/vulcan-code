@@ -24,9 +24,6 @@ pub(crate) struct RuntimePreparedLaunchInput {
     /// Optional LuaSkills runtime handle that remains available for later bootstrap steps.
     /// 供后续 bootstrap 步骤继续使用的可选 LuaSkills 运行时句柄。
     pub luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    /// Optional MCP runtime handle that remains available for later bootstrap steps.
-    /// 供后续 bootstrap 步骤继续使用的可选 MCP 运行时句柄。
-    pub mcp_runtime: Option<McpRuntimeHandle>,
     /// Original execution request owned by the current runtime launch.
     /// 归属于当前运行时启动流程的原始执行请求。
     pub request: ExecutionPreparationRequest,
@@ -45,7 +42,6 @@ impl RuntimePreparedLaunchInput {
         Self {
             foundation: resources.foundation,
             luaskills_runtime: resources.luaskills_runtime,
-            mcp_runtime: resources.mcp_runtime,
             request: resources.request,
             preparation,
         }
