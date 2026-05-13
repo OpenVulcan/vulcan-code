@@ -6,7 +6,7 @@ use crate::luaskills_runtime::{
     build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
-use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor};
+use crate::mcp::{McpRuntimeHandle, McpRuntimeToolDescriptor, McpRuntimeToolView};
 use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
@@ -129,11 +129,13 @@ pub fn build_vulcan_tools_manager(
     }
 
     for tool in candidate_mcp_tools {
-        let descriptor = mcp_descriptor_to_vulcan(&tool);
-        let parameters_schema = tool.args_schema().clone();
+        let tool_view = tool.host_tool_view();
+        let descriptor = mcp_tool_view_to_vulcan(&tool_view);
+        let parameters_schema = tool_view.args_schema().clone();
         let runtime = mcp_runtime.clone();
         let tool_descriptor = tool.clone();
-        let tool_name = tool.tool_name().to_string();
+        let tool_name = tool_view.name().to_string();
+        let runtime_unavailable_text = tool.runtime_unavailable_error_text();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema,
@@ -142,13 +144,10 @@ pub fn build_vulcan_tools_manager(
             invoke: std::sync::Arc::new(move |args, _session_id| {
                 let runtime = runtime.clone();
                 let tool_descriptor = tool_descriptor.clone();
-                let tool_name = tool_name.clone();
+                let runtime_unavailable_text = runtime_unavailable_text.clone();
                 Box::pin(async move {
                     let Some(runtime) = runtime.as_ref() else {
-                        return Err(format!(
-                            "MCP 运行时当前不可用，无法调用工具 `{}`。",
-                            tool_name
-                        ));
+                        return Err(runtime_unavailable_text);
                     };
                     runtime
                         .call_tool_descriptor(&tool_descriptor, args)
@@ -186,11 +185,11 @@ fn luaskills_descriptor_to_vulcan(entry: &RuntimeEntryDescriptor) -> VulcanToolD
 
 /// Converts one MCP runtime descriptor into the unified host-facing tool descriptor.
 /// 将单条 MCP 运行时描述转换为统一宿主侧工具描述。
-fn mcp_descriptor_to_vulcan(tool: &McpRuntimeToolDescriptor) -> VulcanToolDescriptor {
+fn mcp_tool_view_to_vulcan(tool: &McpRuntimeToolView) -> VulcanToolDescriptor {
     VulcanToolDescriptor {
-        id: tool.qualified_name(),
-        name: tool.tool_name().to_string(),
-        description: tool.tool_description().to_string(),
+        id: tool.id().to_string(),
+        name: tool.name().to_string(),
+        description: tool.description().to_string(),
         source: VulcanToolSourceKind::Mcp,
     }
 }

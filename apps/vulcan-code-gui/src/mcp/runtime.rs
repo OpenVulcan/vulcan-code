@@ -63,27 +63,44 @@ impl McpRuntimeToolDescriptor {
         &self.server_id
     }
 
+    /// Returns one host-facing read-only tool view derived from the runtime descriptor.
+    /// 返回一份从运行时描述派生出的宿主侧只读工具视图。
+    pub fn host_tool_view(&self) -> McpRuntimeToolView {
+        McpRuntimeToolView {
+            id: self.qualified_name(),
+            name: self.tool_name().to_string(),
+            description: self.tool_description().to_string(),
+            args_schema: self.args_schema().clone(),
+        }
+    }
+
+    /// Returns the host-visible runtime-unavailable error text for the tool.
+    /// 返回该工具在运行时不可用时的宿主可见错误文本。
+    pub fn runtime_unavailable_error_text(&self) -> String {
+        format!("MCP 运行时当前不可用，无法调用工具 `{}`。", self.tool_name())
+    }
+
     /// Returns the stable MCP tool name.
     /// 返回稳定 MCP 工具名称。
-    pub fn tool_name(&self) -> &str {
+    fn tool_name(&self) -> &str {
         &self.schema.name
     }
 
     /// Returns the human-readable MCP tool description.
     /// 返回人类可读的 MCP 工具描述。
-    pub fn tool_description(&self) -> &str {
+    fn tool_description(&self) -> &str {
         &self.schema.description
     }
 
     /// Returns the JSON Schema describing the tool arguments.
     /// 返回描述工具参数的 JSON Schema。
-    pub fn args_schema(&self) -> &serde_json::Value {
+    fn args_schema(&self) -> &serde_json::Value {
         &self.schema.args_schema
     }
 
     /// Returns the host-facing qualified tool name composed from server and tool identifiers.
     /// 返回由服务器与工具标识组合而成的宿主侧限定工具名。
-    pub fn qualified_name(&self) -> String {
+    fn qualified_name(&self) -> String {
         format!("{}/{}", self.server_id(), self.tool_name())
     }
 
@@ -100,6 +117,50 @@ impl McpRuntimeToolDescriptor {
             allowed.contains(self.tool_name()) || allowed.contains(&self.qualified_name())
         });
         server_allowed && tool_allowed
+    }
+}
+
+/// Host-facing read-only MCP tool view used by upper runtime projections and bridge layers.
+/// 供上层运行时投影与桥接层使用的宿主侧只读 MCP 工具视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRuntimeToolView {
+    /// Stable host-facing tool identifier.
+    /// 稳定的宿主侧工具标识。
+    id: String,
+    /// Human-readable tool name.
+    /// 人类可读工具名称。
+    name: String,
+    /// Human-readable tool description.
+    /// 人类可读工具描述。
+    description: String,
+    /// JSON Schema describing the tool arguments.
+    /// 描述工具参数的 JSON Schema。
+    args_schema: serde_json::Value,
+}
+
+impl McpRuntimeToolView {
+    /// Returns the stable host-facing tool identifier.
+    /// 返回稳定的宿主侧工具标识。
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the human-readable tool name.
+    /// 返回人类可读工具名称。
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the human-readable tool description.
+    /// 返回人类可读工具描述。
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Returns the JSON Schema describing the tool arguments.
+    /// 返回描述工具参数的 JSON Schema。
+    pub fn args_schema(&self) -> &serde_json::Value {
+        &self.args_schema
     }
 }
 
@@ -849,6 +910,26 @@ mod tests {
         assert_eq!(
             allowlist.allowed_tool_names(),
             Some(&BTreeSet::from([String::from("server-a/read_file")]))
+        );
+    }
+
+    #[test]
+    fn host_tool_view_preserves_host_visible_descriptor_fields() {
+        let descriptor = McpRuntimeToolDescriptor::new(
+            String::from("server-a"),
+            String::from("read_file"),
+            String::from("Read one file"),
+            serde_json::json!({"type":"object"}),
+        );
+        let view = descriptor.host_tool_view();
+
+        assert_eq!(view.id(), "server-a/read_file");
+        assert_eq!(view.name(), "read_file");
+        assert_eq!(view.description(), "Read one file");
+        assert_eq!(view.args_schema(), &serde_json::json!({"type":"object"}));
+        assert_eq!(
+            descriptor.runtime_unavailable_error_text(),
+            String::from("MCP 运行时当前不可用，无法调用工具 `read_file`。")
         );
     }
 
