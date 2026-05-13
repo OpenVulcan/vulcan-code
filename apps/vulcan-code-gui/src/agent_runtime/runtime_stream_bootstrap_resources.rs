@@ -2,11 +2,11 @@
 //! 面向工具、MCP 发现与告警汇总的运行时流 bootstrap 资源解析模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
-use crate::agent_runtime::events::RuntimeEvent;
+use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::ExecutionPreparation;
-use crate::agent_runtime::mcp_runtime_projection::collect_enabled_mcp_runtime_events;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
+use crate::mcp::McpRuntimeDiscoveryReport;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
 use std::path::PathBuf;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
@@ -63,7 +63,7 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         .definitions;
     let discovery_report = foundation.enabled_mcp_discovery_report();
     let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =
-        collect_enabled_mcp_runtime_events(&discovery_report);
+        project_mcp_discovery_report_to_runtime_events(&discovery_report);
     let mut warnings = preparation.warnings.clone();
     warnings.extend(discovery_warnings);
 
@@ -76,4 +76,38 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         discovery_errors,
         warnings,
     }
+}
+
+/// Projects one stable MCP discovery report into runtime events, discovery rows, discovery errors, and discovery warnings.
+/// 将一份稳定 MCP 发现报告投影为运行时事件、发现摘要行、发现错误和发现告警集合。
+fn project_mcp_discovery_report_to_runtime_events(
+    report: &McpRuntimeDiscoveryReport,
+) -> (Vec<RuntimeEvent>, Vec<String>, Vec<String>, Vec<String>) {
+    let mut runtime_events = Vec::new();
+    let mut rows = Vec::new();
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    if report.is_empty() {
+        return (runtime_events, rows, errors, warnings);
+    }
+
+    rows.extend(report.discovery_rows().iter().cloned());
+    errors.extend(report.discovery_errors().iter().cloned());
+    warnings.extend(report.discovery_warnings().iter().cloned());
+
+    for projection in report.event_projections() {
+        let event_kind = if projection.is_warning() {
+            RuntimeEventKind::Failed
+        } else {
+            RuntimeEventKind::ToolFinished
+        };
+        runtime_events.push(RuntimeEvent::new(
+            event_kind,
+            projection.title().to_string(),
+            projection.body().to_string(),
+        ));
+    }
+
+    (runtime_events, rows, errors, warnings)
 }

@@ -248,3 +248,31 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
         bootstrap_resources_path.display()
     );
 }
+
+/// Verifies the removed MCP runtime projection shim does not reappear in the agent runtime module tree.
+/// 验证已经移除的 MCP 运行时投影中间层不会重新出现在 agent runtime 模块树中。
+#[test]
+fn agent_runtime_mod_does_not_reintroduce_mcp_runtime_projection_module() {
+    let mod_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("agent_runtime")
+        .join("mod.rs");
+    let projection_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("agent_runtime")
+        .join("mcp_runtime_projection.rs");
+
+    let mod_source =
+        fs::read_to_string(&mod_path).expect("agent_runtime/mod.rs should remain readable");
+
+    assert!(
+        !mod_source.contains("pub mod mcp_runtime_projection;"),
+        "agent_runtime/mod.rs must not reintroduce mcp_runtime_projection module wiring: {}",
+        mod_path.display()
+    );
+    assert!(
+        !projection_path.exists(),
+        "agent_runtime/mcp_runtime_projection.rs must remain deleted: {}",
+        projection_path.display()
+    );
+}
