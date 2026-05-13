@@ -5,8 +5,8 @@ pub mod config;
 pub mod registry;
 pub mod runtime;
 
-pub use registry::{McpRegistrySummary, configured_mcp_registry_summary};
+pub use registry::configured_mcp_registry_summary;
 pub use runtime::{
-    McpRuntimeDiscoveryReport, McpRuntimeHandle, McpRuntimeOverview, McpRuntimeToolAllowlist,
-    McpRuntimeToolBinding, bootstrap_mcp_runtime,
+    McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeHandle, McpRuntimeOverview,
+    McpRuntimeToolAllowlist, McpRuntimeToolBinding, bootstrap_mcp_runtime,
 };

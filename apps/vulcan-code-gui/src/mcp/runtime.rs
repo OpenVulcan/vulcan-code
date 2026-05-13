@@ -2,7 +2,7 @@
 //! 用于保持服务器长连接并支撑工具注册的长期 MCP 运行时管理器。
 
 use crate::mcp::config::McpServerConfig;
-use crate::mcp::registry::McpServerRegistry;
+use crate::mcp::registry::{McpRegistrySummary, McpServerRegistry};
 use crate::provider_config::ProviderConfigurationFile;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -168,6 +168,65 @@ pub struct McpRuntimeToolBinding {
     /// Live runtime handle used to resolve the owning transport at invocation time.
     /// 在调用时用于解析所属传输的实时运行时句柄。
     runtime: McpRuntimeHandle,
+}
+
+/// Stable MCP runtime access surface that resolves live-versus-configured reads inside the MCP domain.
+/// 在 MCP 域内部解析实时与配置读取来源的稳定 MCP 运行时访问面。
+#[derive(Debug, Clone)]
+pub struct McpRuntimeAccess {
+    /// Lightweight configured MCP summary retained for counts and fallback overview reads.
+    /// 为计数与回退概览读取保留的轻量 MCP 配置摘要。
+    configured_summary: McpRegistrySummary,
+    /// Optional live MCP runtime handle used when real runtime state is available.
+    /// 在真实运行时状态可用时使用的可选实时 MCP 运行时句柄。
+    live_runtime: Option<McpRuntimeHandle>,
+}
+
+impl McpRuntimeAccess {
+    /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
+    /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
+    pub fn new(
+        configured_summary: McpRegistrySummary,
+        live_runtime: Option<McpRuntimeHandle>,
+    ) -> Self {
+        Self {
+            configured_summary,
+            live_runtime,
+        }
+    }
+
+    /// Returns the number of configured MCP servers.
+    /// 返回已配置 MCP 服务器数量。
+    pub fn configured_count(&self) -> usize {
+        self.configured_summary.configured_count()
+    }
+
+    /// Returns the number of enabled MCP servers.
+    /// 返回已启用 MCP 服务器数量。
+    pub fn enabled_count(&self) -> usize {
+        self.configured_summary.enabled_count()
+    }
+
+    /// Returns one stable MCP runtime overview backed by live runtime state when available, or configured fallback data otherwise.
+    /// 返回一份在实时运行时可用时优先使用实时状态、否则回退到配置摘要数据的稳定 MCP 运行时概览。
+    pub fn overview(&self) -> McpRuntimeOverview {
+        self.live_runtime
+            .as_ref()
+            .map(McpRuntimeHandle::overview)
+            .unwrap_or_else(|| self.configured_summary.overview().clone())
+    }
+
+    /// Returns currently available MCP tool bindings filtered by one allowlist when live runtime state is available.
+    /// 当实时运行时状态可用时，返回按单份白名单过滤后的当前可用 MCP 工具绑定集合。
+    pub fn available_tool_bindings_filtered(
+        &self,
+        allowlist: &McpRuntimeToolAllowlist,
+    ) -> Vec<McpRuntimeToolBinding> {
+        self.live_runtime
+            .as_ref()
+            .map(|runtime| runtime.available_tool_bindings_filtered(allowlist))
+            .unwrap_or_default()
+    }
 }
 
 impl McpRuntimeToolBinding {

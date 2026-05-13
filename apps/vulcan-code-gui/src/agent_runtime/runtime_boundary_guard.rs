@@ -308,4 +308,14 @@ fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
         "RuntimeFoundation must not reintroduce the legacy enabled_mcp_discovery_report surface: {}",
         runtime_path.display()
     );
+    assert!(
+        runtime_source.contains("mcp_runtime_access: McpRuntimeAccess"),
+        "RuntimeFoundation should keep MCP reads behind the unified McpRuntimeAccess field: {}",
+        runtime_path.display()
+    );
+    assert!(
+        !runtime_source.contains("mcp_registry_summary: McpRegistrySummary"),
+        "RuntimeFoundation must not reintroduce the raw McpRegistrySummary field: {}",
+        runtime_path.display()
+    );
 }

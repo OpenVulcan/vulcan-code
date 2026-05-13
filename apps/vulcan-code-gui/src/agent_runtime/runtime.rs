@@ -8,7 +8,7 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRegistrySummary, McpRuntimeHandle, McpRuntimeOverview, McpRuntimeToolAllowlist,
+    McpRuntimeAccess, McpRuntimeHandle, McpRuntimeOverview, McpRuntimeToolAllowlist,
     McpRuntimeToolBinding, configured_mcp_registry_summary,
 };
 use crate::provider_config::ProviderConfigurationFile;
@@ -70,12 +70,9 @@ pub struct RuntimeFoundation {
     /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
     /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    /// Lightweight configured MCP summary retained for counts and fallback overview reads.
-    /// 为计数与回退概览读取保留的轻量 MCP 配置摘要。
-    mcp_registry_summary: McpRegistrySummary,
-    /// Live MCP runtime handle that tracks current transport state and available tools.
-    /// 跟踪当前传输状态与可用工具的实时 MCP 运行时句柄。
-    mcp_runtime: Option<McpRuntimeHandle>,
+    /// Unified MCP runtime access surface that hides live-versus-configured source selection.
+    /// 隐藏实时与配置来源选择细节的统一 MCP 运行时访问面。
+    mcp_runtime_access: McpRuntimeAccess,
     /// Build warnings collected while materialising the foundation.
     /// 在组装基础架构时收集到的构建警告。
     warnings: Vec<String>,
@@ -109,8 +106,7 @@ impl RuntimeFoundation {
             config: runtime_config,
             native_tools,
             luaskills_tools,
-            mcp_registry_summary,
-            mcp_runtime,
+            mcp_runtime_access: McpRuntimeAccess::new(mcp_registry_summary, mcp_runtime),
             warnings,
         }
     }
@@ -152,8 +148,8 @@ impl RuntimeFoundation {
                 .iter()
                 .map(|definition| definition.delegates.len())
                 .sum(),
-            configured_mcp_server_count: self.mcp_registry_summary.configured_count(),
-            enabled_mcp_server_count: self.mcp_registry_summary.enabled_count(),
+            configured_mcp_server_count: self.mcp_runtime_access.configured_count(),
+            enabled_mcp_server_count: self.mcp_runtime_access.enabled_count(),
             warnings: self.warnings.clone(),
         }
     }
@@ -318,9 +314,6 @@ impl RuntimeFoundation {
     /// Resolves the MCP runtime tools currently visible to one agent.
     /// 解析当前对某个代理可见的 MCP 运行时工具集合。
     pub fn resolved_mcp_tools_for_agent(&self, agent_id: &str) -> Vec<McpRuntimeToolBinding> {
-        let Some(mcp_runtime) = self.mcp_runtime.as_ref() else {
-            return Vec::new();
-        };
         let Some(definition) = self
             .config
             .agents
@@ -336,16 +329,14 @@ impl RuntimeFoundation {
             .and_then(|policy_id| self.config.tool_policies.get(policy_id));
         let tool_allowlist = resolve_agent_mcp_tool_allowlist(definition, policy);
 
-        mcp_runtime.available_tool_bindings_filtered(&tool_allowlist)
+        self.mcp_runtime_access
+            .available_tool_bindings_filtered(&tool_allowlist)
     }
 
     /// Returns one stable MCP runtime overview that narrows summary and discovery reads to one access surface.
     /// 返回一份将摘要与发现读取收敛到单一访问面的稳定 MCP 运行时概览。
     pub fn mcp_overview(&self) -> McpRuntimeOverview {
-        self.mcp_runtime.as_ref().map_or_else(
-            || self.mcp_registry_summary.overview().clone(),
-            McpRuntimeHandle::overview,
-        )
+        self.mcp_runtime_access.overview()
     }
 }
 
