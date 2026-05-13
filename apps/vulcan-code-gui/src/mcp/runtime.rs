@@ -242,31 +242,34 @@ impl McpRuntimeToolBinding {
 
     /// Returns the stable host-facing tool identifier.
     /// 返回稳定的宿主侧工具标识。
-    pub fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         self.view.id()
     }
 
     /// Returns the human-readable tool name.
     /// 返回人类可读工具名称。
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         self.view.name()
     }
 
     /// Returns the human-readable tool description.
     /// 返回人类可读工具描述。
-    pub fn description(&self) -> &str {
+    pub(crate) fn description(&self) -> &str {
         self.view.description()
     }
 
     /// Returns the JSON Schema describing the tool arguments.
     /// 返回描述工具参数的 JSON Schema。
-    pub fn args_schema(&self) -> &serde_json::Value {
+    pub(crate) fn args_schema(&self) -> &serde_json::Value {
         self.view.args_schema()
     }
 
     /// Invokes the bound MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
-    pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    pub(crate) async fn invoke(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         self.runtime.call_tool_by_id(self.id(), args).await
     }
 }
