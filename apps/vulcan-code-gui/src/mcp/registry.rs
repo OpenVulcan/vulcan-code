@@ -2,6 +2,7 @@
 //! 桌面运行时基础架构使用的 MCP 注册表胶水层。
 
 use crate::mcp::config::{McpServerConfig, runtime_mcp_server_configs};
+use crate::mcp::runtime::{McpRuntimeDiscoveryReport, McpRuntimeOverview};
 use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
 use vulcan_mcp_runtime::McpTransport;
@@ -15,8 +16,8 @@ pub struct McpServerRegistry {
     servers: Vec<McpServerConfig>,
 }
 
-/// Lightweight configured MCP summary retained by GUI surfaces that only need counts and fallback rows.
-/// 仅供需要计数与回退展示行的 GUI 表面保留的轻量已配置 MCP 摘要。
+/// Lightweight configured MCP summary retained by GUI surfaces that only need counts and fallback overview data.
+/// 仅供需要计数与回退概览数据的 GUI 表面保留的轻量已配置 MCP 摘要。
 #[derive(Debug, Clone, Default)]
 pub struct McpRegistrySummary {
     /// Number of configured MCP servers.
@@ -25,12 +26,9 @@ pub struct McpRegistrySummary {
     /// Number of enabled MCP servers.
     /// 已启用 MCP 服务器数量。
     enabled_count: usize,
-    /// Human-readable summary rows for all configured servers.
-    /// 面向全部已配置服务器的人类可读摘要行。
-    summary_rows: Vec<String>,
-    /// Human-readable summary rows for enabled configured servers only.
-    /// 仅面向已启用已配置服务器的人类可读摘要行。
-    enabled_summary_rows: Vec<String>,
+    /// Stable fallback overview built from configured servers only.
+    /// 仅基于已配置服务器构建得到的稳定回退概览。
+    overview: McpRuntimeOverview,
 }
 
 impl McpRegistrySummary {
@@ -46,16 +44,10 @@ impl McpRegistrySummary {
         self.enabled_count
     }
 
-    /// Returns lightweight summary rows for all configured servers.
-    /// 返回全部已配置服务器的轻量摘要行。
-    pub fn summary_rows(&self) -> Vec<String> {
-        self.summary_rows.clone()
-    }
-
-    /// Returns lightweight summary rows for enabled configured servers only.
-    /// 返回仅已启用已配置服务器的轻量摘要行。
-    pub fn enabled_summary_rows(&self) -> Vec<String> {
-        self.enabled_summary_rows.clone()
+    /// Returns the stable fallback overview built from configured servers only.
+    /// 返回仅基于已配置服务器构建得到的稳定回退概览。
+    pub fn overview(&self) -> &McpRuntimeOverview {
+        &self.overview
     }
 }
 
@@ -133,11 +125,16 @@ impl McpServerRegistry {
     /// Builds one lightweight summary snapshot for GUI layers that do not need transport-spawning capabilities.
     /// 为不需要传输启动能力的 GUI 层构建一个轻量摘要快照。
     pub fn summary(&self) -> McpRegistrySummary {
+        let summary_rows = self.summary_rows();
+        let enabled_summary_rows = self.enabled_summary_rows();
         McpRegistrySummary {
             configured_count: self.configured_count(),
             enabled_count: self.enabled_count(),
-            summary_rows: self.summary_rows(),
-            enabled_summary_rows: self.enabled_summary_rows(),
+            overview: McpRuntimeOverview::new(
+                summary_rows,
+                enabled_summary_rows,
+                McpRuntimeDiscoveryReport::default(),
+            ),
         }
     }
 
@@ -256,13 +253,14 @@ mod tests {
 
         assert_eq!(summary.configured_count(), 2);
         assert_eq!(summary.enabled_count(), 1);
-        assert_eq!(summary.summary_rows().len(), 2);
+        assert_eq!(summary.overview().summary_rows().len(), 2);
         assert_eq!(
-            summary.enabled_summary_rows(),
-            vec![String::from(
+            summary.overview().active_summary_rows(),
+            &[String::from(
                 "启用 · Enabled Server · stdio · enabled-mcp --stdio"
             )]
         );
+        assert!(summary.overview().discovery_report().is_empty());
     }
 
     #[test]
@@ -293,10 +291,11 @@ mod tests {
         assert_eq!(summary.configured_count(), 1);
         assert_eq!(summary.enabled_count(), 1);
         assert_eq!(
-            summary.summary_rows(),
-            vec![String::from(
+            summary.overview().summary_rows(),
+            &[String::from(
                 "启用 · Configured Server · stdio · configured-mcp --stdio"
             )]
         );
+        assert!(summary.overview().discovery_report().is_empty());
     }
 }

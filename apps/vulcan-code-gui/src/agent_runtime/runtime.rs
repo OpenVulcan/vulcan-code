@@ -8,8 +8,8 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRegistrySummary, McpRuntimeDiscoveryReport, McpRuntimeHandle, McpRuntimeOverview,
-    McpRuntimeToolAllowlist, McpRuntimeToolBinding, configured_mcp_registry_summary,
+    McpRegistrySummary, McpRuntimeHandle, McpRuntimeOverview, McpRuntimeToolAllowlist,
+    McpRuntimeToolBinding, configured_mcp_registry_summary,
 };
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -70,8 +70,8 @@ pub struct RuntimeFoundation {
     /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
     /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
-    /// Lightweight configured MCP summary retained for counts and fallback rows.
-    /// 为计数与回退展示行保留的轻量 MCP 配置摘要。
+    /// Lightweight configured MCP summary retained for counts and fallback overview reads.
+    /// 为计数与回退概览读取保留的轻量 MCP 配置摘要。
     mcp_registry_summary: McpRegistrySummary,
     /// Live MCP runtime handle that tracks current transport state and available tools.
     /// 跟踪当前传输状态与可用工具的实时 MCP 运行时句柄。
@@ -343,13 +343,7 @@ impl RuntimeFoundation {
     /// 返回一份将摘要与发现读取收敛到单一访问面的稳定 MCP 运行时概览。
     pub fn mcp_overview(&self) -> McpRuntimeOverview {
         self.mcp_runtime.as_ref().map_or_else(
-            || {
-                McpRuntimeOverview::new(
-                    self.mcp_registry_summary.summary_rows(),
-                    self.mcp_registry_summary.enabled_summary_rows(),
-                    McpRuntimeDiscoveryReport::default(),
-                )
-            },
+            || self.mcp_registry_summary.overview().clone(),
             McpRuntimeHandle::overview,
         )
     }
