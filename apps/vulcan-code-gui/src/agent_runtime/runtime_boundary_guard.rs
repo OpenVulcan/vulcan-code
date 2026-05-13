@@ -407,8 +407,14 @@ fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
         .join("src")
         .join("agent_runtime")
         .join("runtime.rs");
+    let mcp_runtime_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("mcp")
+        .join("runtime.rs");
     let runtime_source =
         fs::read_to_string(&runtime_path).expect("agent_runtime/runtime.rs should remain readable");
+    let mcp_runtime_source =
+        fs::read_to_string(&mcp_runtime_path).expect("mcp/runtime.rs should remain readable");
 
     assert!(
         runtime_source.contains("pub fn mcp_overview(&self) -> McpRuntimeOverview"),
@@ -436,13 +442,13 @@ fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
         runtime_path.display()
     );
     assert!(
-        runtime_source.contains("configured_mcp_runtime_access"),
-        "RuntimeFoundation should build its configured fallback through configured_mcp_runtime_access: {}",
-        runtime_path.display()
+        mcp_runtime_source.contains("configured_overview: McpRuntimeOverview"),
+        "MCP runtime should keep the configured fallback as a direct overview field: {}",
+        mcp_runtime_path.display()
     );
     assert!(
-        !runtime_source.contains("mcp_registry_summary: McpRegistrySummary"),
-        "RuntimeFoundation must not reintroduce the raw McpRegistrySummary field: {}",
-        runtime_path.display()
+        !mcp_runtime_source.contains("McpRegistrySummary"),
+        "MCP runtime must not reintroduce the old McpRegistrySummary wrapper: {}",
+        mcp_runtime_path.display()
     );
 }

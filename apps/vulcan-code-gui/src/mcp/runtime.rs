@@ -2,9 +2,7 @@
 //! 用于保持服务器长连接并支撑工具注册的长期 MCP 运行时管理器。
 
 use crate::mcp::config::McpServerConfig;
-use crate::mcp::registry::{
-    McpRegistrySummary, McpServerRegistry, configured_mcp_registry_summary,
-};
+use crate::mcp::registry::{McpServerRegistry, configured_mcp_registry_overview};
 use crate::provider_config::ProviderConfigurationFile;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -176,9 +174,9 @@ pub(crate) struct McpRuntimeToolBinding {
 /// 在 MCP 域内部解析实时与配置读取来源的稳定 MCP 运行时访问面。
 #[derive(Debug, Clone)]
 pub(crate) struct McpRuntimeAccess {
-    /// Lightweight configured MCP summary retained for counts and fallback overview reads.
-    /// 为计数与回退概览读取保留的轻量 MCP 配置摘要。
-    configured_summary: McpRegistrySummary,
+    /// Lightweight configured MCP overview retained for fallback reads.
+    /// 为回退读取保留的轻量 MCP 配置概览。
+    configured_overview: McpRuntimeOverview,
     /// Optional live MCP runtime handle used when real runtime state is available.
     /// 在真实运行时状态可用时使用的可选实时 MCP 运行时句柄。
     live_runtime: Option<McpRuntimeHandle>,
@@ -187,9 +185,12 @@ pub(crate) struct McpRuntimeAccess {
 impl McpRuntimeAccess {
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
-    fn new(configured_summary: McpRegistrySummary, live_runtime: Option<McpRuntimeHandle>) -> Self {
+    fn new(
+        configured_overview: McpRuntimeOverview,
+        live_runtime: Option<McpRuntimeHandle>,
+    ) -> Self {
         Self {
-            configured_summary,
+            configured_overview,
             live_runtime,
         }
     }
@@ -200,7 +201,7 @@ impl McpRuntimeAccess {
         self.live_runtime
             .as_ref()
             .map(McpRuntimeHandle::overview)
-            .unwrap_or_else(|| self.configured_summary.overview().clone())
+            .unwrap_or_else(|| self.configured_overview.clone())
     }
 
     /// Returns currently available MCP tool bindings filtered by one allowlist when live runtime state is available.
@@ -229,7 +230,7 @@ impl McpRuntimeAccess {
 pub(crate) fn configured_mcp_runtime_access(
     config: &ProviderConfigurationFile,
 ) -> McpRuntimeAccess {
-    McpRuntimeAccess::new(configured_mcp_registry_summary(config), None)
+    McpRuntimeAccess::new(configured_mcp_registry_overview(config), None)
 }
 
 impl McpRuntimeToolBinding {
@@ -893,7 +894,7 @@ pub(crate) async fn bootstrap_mcp_runtime_access(
 ) -> Result<McpRuntimeAccess, String> {
     let live_runtime = bootstrap_mcp_runtime(config.clone()).await?;
     Ok(McpRuntimeAccess::new(
-        configured_mcp_registry_summary(&config),
+        configured_mcp_registry_overview(&config),
         Some(live_runtime),
     ))
 }

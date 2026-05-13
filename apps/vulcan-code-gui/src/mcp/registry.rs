@@ -16,23 +16,6 @@ pub struct McpServerRegistry {
     servers: Vec<McpServerConfig>,
 }
 
-/// Lightweight configured MCP summary retained by GUI surfaces that only need counts and fallback overview data.
-/// 仅供需要计数与回退概览数据的 GUI 表面保留的轻量已配置 MCP 摘要。
-#[derive(Debug, Clone, Default)]
-pub struct McpRegistrySummary {
-    /// Stable fallback overview built from configured servers only.
-    /// 仅基于已配置服务器构建得到的稳定回退概览。
-    overview: McpRuntimeOverview,
-}
-
-impl McpRegistrySummary {
-    /// Returns the stable fallback overview built from configured servers only.
-    /// 返回仅基于已配置服务器构建得到的稳定回退概览。
-    pub fn overview(&self) -> &McpRuntimeOverview {
-        &self.overview
-    }
-}
-
 impl McpServerRegistry {
     /// Builds the runtime registry from the shared provider configuration file.
     /// 根据共享供应商配置文件构建运行时注册表。
@@ -92,18 +75,14 @@ impl McpServerRegistry {
             .collect()
     }
 
-    /// Builds one lightweight summary snapshot for GUI layers that do not need transport-spawning capabilities.
-    /// 为不需要传输启动能力的 GUI 层构建一个轻量摘要快照。
-    pub fn summary(&self) -> McpRegistrySummary {
-        let summary_rows = self.summary_rows();
-        let enabled_summary_rows = self.enabled_summary_rows();
-        McpRegistrySummary {
-            overview: McpRuntimeOverview::new(
-                summary_rows,
-                enabled_summary_rows,
-                McpRuntimeDiscoveryReport::default(),
-            ),
-        }
+    /// Builds one lightweight overview snapshot for GUI layers that do not need transport-spawning capabilities.
+    /// 为不需要传输启动能力的 GUI 层构建一个轻量概览快照。
+    pub fn overview(&self) -> McpRuntimeOverview {
+        McpRuntimeOverview::new(
+            self.summary_rows(),
+            self.enabled_summary_rows(),
+            McpRuntimeDiscoveryReport::default(),
+        )
     }
 
     /// Spawns one MCP transport from the stored server entry.
@@ -127,15 +106,15 @@ impl McpServerRegistry {
     }
 }
 
-/// Builds one lightweight configured MCP summary directly from the shared provider configuration file.
-/// 直接根据共享供应商配置文件构建一个轻量已配置 MCP 摘要。
-pub fn configured_mcp_registry_summary(config: &ProviderConfigurationFile) -> McpRegistrySummary {
-    McpServerRegistry::from_provider_configuration(config).summary()
+/// Builds one lightweight configured MCP overview directly from the shared provider configuration file.
+/// 直接根据共享供应商配置文件构建一个轻量已配置 MCP 概览。
+pub fn configured_mcp_registry_overview(config: &ProviderConfigurationFile) -> McpRuntimeOverview {
+    McpServerRegistry::from_provider_configuration(config).overview()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{McpRegistrySummary, McpServerRegistry, configured_mcp_registry_summary};
+    use super::{McpServerRegistry, configured_mcp_registry_overview};
     use crate::mcp::config::{McpServerConfig, McpTransportKind};
     use crate::provider_config::{
         PersistedMcpConfiguration, PersistedMcpServerEntry, PersistedMcpTransportKind,
@@ -185,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_summary_preserves_counts_and_rows() {
+    fn registry_overview_preserves_rows_and_discovery_defaults() {
         let registry = McpServerRegistry {
             servers: vec![
                 McpServerConfig {
@@ -217,20 +196,20 @@ mod tests {
             ],
         };
 
-        let summary: McpRegistrySummary = registry.summary();
+        let overview = registry.overview();
 
-        assert_eq!(summary.overview().summary_rows().len(), 2);
+        assert_eq!(overview.summary_rows().len(), 2);
         assert_eq!(
-            summary.overview().active_summary_rows(),
+            overview.active_summary_rows(),
             &[String::from(
                 "启用 · Enabled Server · stdio · enabled-mcp --stdio"
             )]
         );
-        assert!(summary.overview().discovery_report().is_empty());
+        assert!(overview.discovery_report().is_empty());
     }
 
     #[test]
-    fn configured_registry_summary_builds_from_provider_configuration() {
+    fn configured_registry_overview_builds_from_provider_configuration() {
         let config = ProviderConfigurationFile {
             mcp: PersistedMcpConfiguration {
                 servers: BTreeMap::from([(
@@ -252,14 +231,14 @@ mod tests {
             ..ProviderConfigurationFile::default()
         };
 
-        let summary = configured_mcp_registry_summary(&config);
+        let overview = configured_mcp_registry_overview(&config);
 
         assert_eq!(
-            summary.overview().summary_rows(),
+            overview.summary_rows(),
             &[String::from(
                 "启用 · Configured Server · stdio · configured-mcp --stdio"
             )]
         );
-        assert!(summary.overview().discovery_report().is_empty());
+        assert!(overview.discovery_report().is_empty());
     }
 }
