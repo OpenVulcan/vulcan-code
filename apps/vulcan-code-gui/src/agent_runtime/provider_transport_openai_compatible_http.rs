@@ -128,20 +128,22 @@ struct OpenAiCompatibleStreamingChoice {
 
 /// Minimal OpenAI-compatible token-usage payload preserved for final accounting compatibility.
 /// 为保持最终计量兼容性而保留的最小 OpenAI 兼容用量载荷。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 struct OpenAiCompatibleUsage {
     /// Prompt token count.
     /// 提示词 token 数量。
     #[serde(default)]
+    #[allow(dead_code)]
     prompt_tokens: u64,
     /// Completion token count.
     /// 输出 token 数量。
     #[serde(default)]
+    #[allow(dead_code)]
     completion_tokens: u64,
     /// Total token count.
     /// 总 token 数量。
     #[serde(default)]
+    #[allow(dead_code)]
     total_tokens: u64,
 }
 

@@ -33,7 +33,6 @@ const ANTHROPIC_API_VERSION_LATEST: &str = "2023-06-01";
 
 /// Minimal Anthropic streaming event used by the host-owned direct transport.
 /// 宿主自有直连传输使用的最小 Anthropic 流式事件。
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicStreamingEvent {
@@ -43,22 +42,28 @@ enum AnthropicStreamingEvent {
     /// Content-block-start event carrying one initial content block.
     /// 携带初始内容块的内容块开始事件。
     ContentBlockStart {
+        #[allow(dead_code)]
         index: usize,
         content_block: AnthropicContentBlock,
     },
     /// Content-block-delta event carrying one streamed content fragment.
     /// 携带单条流式内容碎片的内容块增量事件。
     ContentBlockDelta {
+        #[allow(dead_code)]
         index: usize,
         delta: AnthropicContentDelta,
     },
     /// Content-block-stop event closing the current content block.
     /// 用于关闭当前内容块的内容块结束事件。
-    ContentBlockStop { index: usize },
+    ContentBlockStop {
+        #[allow(dead_code)]
+        index: usize,
+    },
     /// Message-delta event carrying incremental usage and stop reason.
     /// 携带增量用量与停止原因的消息增量事件。
     MessageDelta {
         delta: AnthropicMessageDelta,
+        #[allow(dead_code)]
         usage: AnthropicPartialUsage,
     },
     /// Message-stop event marking the natural end of the stream.
@@ -75,7 +80,6 @@ enum AnthropicStreamingEvent {
 
 /// Minimal Anthropic message-start payload.
 /// 最小 Anthropic 消息开始载荷。
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageStart {
     /// Upstream response identifier.
@@ -86,12 +90,12 @@ struct AnthropicMessageStart {
     model: String,
     /// Initial usage snapshot.
     /// 初始用量快照。
+    #[allow(dead_code)]
     usage: AnthropicUsage,
 }
 
 /// Minimal Anthropic content block used by the host-owned direct transport.
 /// 宿主自有直连传输使用的最小 Anthropic 内容块。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicContentBlock {
@@ -113,7 +117,10 @@ enum AnthropicContentBlock {
     },
     /// Redacted thinking content block.
     /// 脱敏思考内容块。
-    RedactedThinking { data: String },
+    RedactedThinking {
+        #[allow(dead_code)]
+        data: String,
+    },
 }
 
 /// Minimal Anthropic content delta used by the host-owned direct transport.
@@ -146,24 +153,25 @@ struct AnthropicMessageDelta {
 
 /// Minimal Anthropic full usage payload.
 /// 最小 Anthropic 完整用量载荷。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 struct AnthropicUsage {
     /// Input token count.
     /// 输入 token 数量。
+    #[allow(dead_code)]
     input_tokens: u64,
     /// Output token count.
     /// 输出 token 数量。
+    #[allow(dead_code)]
     output_tokens: u64,
 }
 
 /// Minimal Anthropic partial usage payload.
 /// 最小 Anthropic 增量用量载荷。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 struct AnthropicPartialUsage {
     /// Output token count accumulated so far.
     /// 当前累计的输出 token 数量。
+    #[allow(dead_code)]
     output_tokens: usize,
 }
 
