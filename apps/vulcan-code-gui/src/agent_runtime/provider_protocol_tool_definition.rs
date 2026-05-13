@@ -30,15 +30,3 @@ pub(crate) fn resolved_tool_definition_to_provider_tool_definition(
         parameters: definition.parameters_schema.clone(),
     }
 }
-
-/// Converts one host-owned provider tool definition back into the low-level rig tool definition shape at the final transport boundary.
-/// 在最终传输边界将一条宿主自有 Provider 工具定义转换回低层 rig 工具定义形状。
-pub(crate) fn provider_tool_definition_to_rig_tool_definition(
-    definition: &ProviderToolDefinition,
-) -> rig::completion::ToolDefinition {
-    rig::completion::ToolDefinition {
-        name: definition.name.clone(),
-        description: definition.description.clone(),
-        parameters: definition.parameters.clone(),
-    }
-}

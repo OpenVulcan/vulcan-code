@@ -5,10 +5,11 @@ use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropi
 use crate::agent_runtime::provider_protocol_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
-    build_standard_streaming_request, execute_openai_like_streaming_turn,
-    map_provider_client_build_result, unsupported_streaming_execute,
+    build_standard_streaming_request, map_provider_client_build_result,
+    unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_rig_completion::execute_rig_openai_like_streaming_turn;
 use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
@@ -154,7 +155,7 @@ impl VulcanStreamingProviderAdapter for AnthropicCoreStreamingAdapter {
             builder.build(),
         )?;
         let model = client.completion_model(self.model_id.as_str());
-        execute_openai_like_streaming_turn(
+        execute_rig_openai_like_streaming_turn(
             self.provider_id.as_str(),
             "Anthropic 兼容",
             self.model_id.as_str(),
