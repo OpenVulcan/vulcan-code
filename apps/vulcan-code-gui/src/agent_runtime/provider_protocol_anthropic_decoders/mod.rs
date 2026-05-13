@@ -6,7 +6,7 @@
 //! independently evolvable.
 //! 本模块改编自 Anthropic SDK 的解码器家族，但保留在项目内，方便流式解析行为保持可审查并可独立演进。
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod jsonl;
 pub mod line;
 pub mod sse;
