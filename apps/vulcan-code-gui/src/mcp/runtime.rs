@@ -163,7 +163,7 @@ impl McpRuntimeToolView {
 /// Stable MCP runtime tool binding that couples one host-facing tool view with its live invocation capability.
 /// 将宿主侧工具视图与实时调用能力耦合在一起的稳定 MCP 运行时工具绑定。
 #[derive(Debug, Clone)]
-pub struct McpRuntimeToolBinding {
+pub(crate) struct McpRuntimeToolBinding {
     /// Host-facing read-only tool view.
     /// 宿主侧只读工具视图。
     view: McpRuntimeToolView,
@@ -175,7 +175,7 @@ pub struct McpRuntimeToolBinding {
 /// Stable MCP runtime access surface that resolves live-versus-configured reads inside the MCP domain.
 /// 在 MCP 域内部解析实时与配置读取来源的稳定 MCP 运行时访问面。
 #[derive(Debug, Clone)]
-pub struct McpRuntimeAccess {
+pub(crate) struct McpRuntimeAccess {
     /// Lightweight configured MCP summary retained for counts and fallback overview reads.
     /// 为计数与回退概览读取保留的轻量 MCP 配置摘要。
     configured_summary: McpRegistrySummary,
@@ -283,7 +283,7 @@ impl McpRuntimeToolBinding {
 /// Stable MCP tool allowlist consumed by runtime filtering surfaces.
 /// 供运行时筛选表面消费的稳定 MCP 工具白名单。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct McpRuntimeToolAllowlist {
+pub(crate) struct McpRuntimeToolAllowlist {
     /// Optional server identifier allowlist.
     /// 可选的服务器标识白名单。
     allowed_server_ids: Option<BTreeSet<String>>,
@@ -493,7 +493,7 @@ impl McpRuntimeEventProjection {
 /// Stable MCP runtime discovery report exported to upper runtime bootstrap flows.
 /// 导出给上层运行时 bootstrap 流程的稳定 MCP 运行时发现报告。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct McpRuntimeDiscoveryReport {
+pub(crate) struct McpRuntimeDiscoveryReport {
     /// Recommended UI-facing runtime event projections.
     /// 建议用于界面展示的运行时事件投影视图集合。
     event_projections: Vec<McpRuntimeEventProjection>,
@@ -546,7 +546,7 @@ impl McpRuntimeDiscoveryReport {
 /// Stable MCP runtime overview exported to upper runtime layers.
 /// 导出给上层运行时的稳定 MCP 运行时概览。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct McpRuntimeOverview {
+pub(crate) struct McpRuntimeOverview {
     /// Human-readable summary rows covering all configured runtime-visible servers.
     /// 覆盖全部已配置运行时可见服务器的人类可读摘要行集合。
     summary_rows: Vec<String>,
@@ -749,7 +749,7 @@ impl McpRuntimeSnapshot {
 /// Shared host-side handle used to inspect active MCP tools and resolve live transports at call time.
 /// 用于检查活动 MCP 工具并在调用时解析实时传输的共享宿主句柄。
 #[derive(Clone)]
-pub struct McpRuntimeHandle {
+pub(crate) struct McpRuntimeHandle {
     /// Shared mutable inner state.
     /// 共享可变内部状态。
     inner: Arc<McpRuntimeInner>,
