@@ -1,21 +1,18 @@
 //! Anthropic host-controlled provider transport adapter.
 //! Anthropic 宿主控制 Provider 传输适配器。
 
-use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropic_base_url;
 use crate::agent_runtime::provider_protocol_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
-    build_standard_streaming_request, map_provider_client_build_result,
-    unsupported_streaming_execute,
+    build_standard_streaming_request, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_rig_clients::build_rig_anthropic_completion_model;
 use crate::agent_runtime::provider_transport_rig_completion::execute_rig_openai_like_streaming_turn;
 use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
-use rig::prelude::CompletionClient;
-use rig::providers::anthropic;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
 };
@@ -137,24 +134,13 @@ impl VulcanStreamingProviderAdapter for AnthropicCoreStreamingAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
-        let mut builder = anthropic::Client::builder()
-            .api_key(self.api_key.as_str())
-            .http_headers(self.request_headers.clone());
-
-        if let Some(base_url) = self
-            .base_url
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            builder = builder.base_url(normalize_anthropic_base_url(base_url));
-        }
-
-        let client = map_provider_client_build_result(
+        let model = build_rig_anthropic_completion_model(
             self.provider_id.as_str(),
-            "Anthropic 兼容",
-            builder.build(),
+            self.api_key.as_str(),
+            self.base_url.as_deref(),
+            self.model_id.as_str(),
+            self.request_headers.clone(),
         )?;
-        let model = client.completion_model(self.model_id.as_str());
         execute_rig_openai_like_streaming_turn(
             self.provider_id.as_str(),
             "Anthropic 兼容",

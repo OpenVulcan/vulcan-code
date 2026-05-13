@@ -48,6 +48,7 @@ pub mod provider_transport_openai_responses_adapter;
 pub mod provider_transport_openrouter;
 pub mod provider_transport_openrouter_adapter;
 pub mod provider_transport_request;
+pub mod provider_transport_rig_clients;
 pub mod provider_transport_rig_completion;
 pub mod provider_transport_router;
 pub mod provider_transport_stream_executor;

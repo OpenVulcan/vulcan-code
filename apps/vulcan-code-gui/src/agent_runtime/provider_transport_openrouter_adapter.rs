@@ -4,17 +4,15 @@
 use crate::agent_runtime::provider_protocol_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
-    build_standard_streaming_request, map_provider_client_build_result,
-    unsupported_streaming_execute,
+    build_standard_streaming_request, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_rig_clients::build_rig_openrouter_completion_model;
 use crate::agent_runtime::provider_transport_rig_completion::execute_rig_openai_like_streaming_turn;
 use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
-use rig::prelude::CompletionClient;
-use rig::providers::openrouter;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
 };
@@ -131,15 +129,12 @@ impl VulcanStreamingProviderAdapter for OpenRouterCoreStreamingAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
-        let client = map_provider_client_build_result(
+        let model = build_rig_openrouter_completion_model(
             self.provider_id.as_str(),
-            "OpenRouter",
-            openrouter::Client::builder()
-                .api_key(self.api_key.as_str())
-                .http_headers(self.request_headers.clone())
-                .build(),
+            self.api_key.as_str(),
+            self.model_id.as_str(),
+            self.request_headers.clone(),
         )?;
-        let model = client.completion_model(self.model_id.as_str());
         execute_rig_openai_like_streaming_turn(
             self.provider_id.as_str(),
             "OpenRouter",
