@@ -1,9 +1,16 @@
 //! Resumable task-session runtime for host-managed task_id chaining and nested subtask execution.
 //! 供宿主管理 task_id 续跑与嵌套子任务执行使用的可恢复任务会话运行时模块。
 
+use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
+use crate::agent_runtime::runtime_stream_delta::{
+    RuntimeStreamDeltaState, process_provider_stream_delta,
+};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
+use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -11,6 +18,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use tokio::sync::mpsc::unbounded_channel;
 use uuid::Uuid;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::tool::AllowAllToolPolicy;
@@ -321,23 +329,25 @@ impl TaskRuntime {
         } else {
             String::from("completed")
         };
-        let record = sessions.entry(invocation.task_id.clone()).or_insert_with(|| {
-            build_task_session_record(
-                invocation.task_id,
-                current_session_id,
-                invocation.parent_task_id,
-                invocation.depth,
-                invocation.description.clone(),
-                invocation.subagent.clone(),
-                invocation
-                    .controller_config
-                    .clone()
-                    .or_else(|| Some(outcome.controller_config.clone())),
-                invocation.snapshot.clone(),
-                invocation.prompt.clone(),
-                String::from("created"),
-            )
-        });
+        let record = sessions
+            .entry(invocation.task_id.clone())
+            .or_insert_with(|| {
+                build_task_session_record(
+                    invocation.task_id,
+                    current_session_id,
+                    invocation.parent_task_id,
+                    invocation.depth,
+                    invocation.description.clone(),
+                    invocation.subagent.clone(),
+                    invocation
+                        .controller_config
+                        .clone()
+                        .or_else(|| Some(outcome.controller_config.clone())),
+                    invocation.snapshot.clone(),
+                    invocation.prompt.clone(),
+                    String::from("created"),
+                )
+            });
         debug_assert_eq!(record.task_id, invocation.task_id);
         let _ = record.origin_session_id;
         let _ = &record.created_at;
@@ -368,20 +378,22 @@ impl TaskRuntime {
             .sessions
             .write()
             .map_err(|_| String::from("任务会话注册表已锁定，无法写入失败状态。"))?;
-        let record = sessions.entry(invocation.task_id.clone()).or_insert_with(|| {
-            build_task_session_record(
-                invocation.task_id,
-                current_session_id,
-                invocation.parent_task_id,
-                invocation.depth,
-                invocation.description.clone(),
-                invocation.subagent.clone(),
-                invocation.controller_config.clone(),
-                invocation.snapshot.clone(),
-                invocation.prompt.clone(),
-                String::from("created"),
-            )
-        });
+        let record = sessions
+            .entry(invocation.task_id.clone())
+            .or_insert_with(|| {
+                build_task_session_record(
+                    invocation.task_id,
+                    current_session_id,
+                    invocation.parent_task_id,
+                    invocation.depth,
+                    invocation.description.clone(),
+                    invocation.subagent.clone(),
+                    invocation.controller_config.clone(),
+                    invocation.snapshot.clone(),
+                    invocation.prompt.clone(),
+                    String::from("created"),
+                )
+            });
         debug_assert_eq!(record.task_id, invocation.task_id);
         let _ = record.origin_session_id;
         let _ = &record.created_at;
@@ -620,17 +632,13 @@ fn build_task_invocation_result(
     invocation: &TaskExecutionRequest,
     outcome: &TaskExecutionOutcome,
 ) -> VulcanToolInvocationResult {
-    let task_status = if invocation.is_resumed {
-        "resumed"
-    } else {
-        "created"
-    };
+    let task_status = task_invocation_status_text(invocation.is_resumed);
     let execution_status = if outcome.is_error {
         "failed"
     } else {
         "completed"
     };
-    let payload = json!({
+    let model_output = json!({
         "task_id": outcome.task_id.to_string(),
         "status": task_status,
         "execution_status": execution_status,
@@ -644,7 +652,17 @@ fn build_task_invocation_result(
         "final_assistant_message_id": outcome.final_assistant_message_id.clone(),
         "result": outcome.final_output_text.clone(),
     });
-    let model_output = payload.clone();
+    let conversation_state = core_snapshot_to_session_conversation_state(&outcome.snapshot);
+    let payload = build_task_host_payload(
+        invocation,
+        execution_status,
+        outcome.provider_turns_executed,
+        outcome.tool_calls_processed,
+        outcome.final_assistant_message_id.as_deref(),
+        outcome.final_output_text.as_str(),
+        Some(&conversation_state),
+        current_unix_millis_text(),
+    );
     VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
         VulcanToolHostResult {
             kind: String::from("task_session"),
@@ -666,11 +684,11 @@ fn current_unix_millis_text() -> String {
 /// 根据给定宿主执行上下文构建一条可执行具体任务会话的后端处理器。
 pub fn build_task_execution_handler<A>(
     task_runtime: Arc<TaskRuntime>,
-    provider_adapter: A,
+    provider_factory: Arc<impl Fn(ProviderLiveDeltaSender) -> A + Send + Sync + 'static>,
     base_controller_config: CoreControllerConfig,
     tools_manager: Arc<VulcanToolsManager>,
     resolved_tool_definitions: Vec<ResolvedToolDefinition>,
-    live_sender: ProviderLiveDeltaSender,
+    parent_live_sender: ProviderLiveDeltaSender,
     provider_label: String,
 ) -> TaskExecutionHandler
 where
@@ -684,24 +702,45 @@ where
 {
     Arc::new(move |request: TaskExecutionRequest| {
         let task_runtime = Arc::clone(&task_runtime);
-        let provider_adapter = provider_adapter.clone();
+        let provider_factory = Arc::clone(&provider_factory);
         let base_controller_config = base_controller_config.clone();
         let tools_manager = Arc::clone(&tools_manager);
         let resolved_tool_definitions = resolved_tool_definitions.clone();
-        let live_sender = live_sender.clone();
+        let parent_live_sender = parent_live_sender.clone();
         let provider_label = provider_label.clone();
         Box::pin(async move {
             let task_id = request.task_id.clone();
+            let started_payload = build_task_host_payload(
+                &request,
+                "running",
+                0,
+                0,
+                None,
+                "",
+                None,
+                current_unix_millis_text(),
+            );
+            let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+                build_task_delegate_runtime_event(
+                    RuntimeEventKind::DelegateStarted,
+                    &request,
+                    "运行中，等待子代理返回结果。",
+                    started_payload,
+                ),
+            )));
             let child_handler = build_task_execution_handler(
                 Arc::clone(&task_runtime),
-                provider_adapter.clone(),
+                Arc::clone(&provider_factory),
                 base_controller_config.clone(),
                 Arc::clone(&tools_manager),
                 resolved_tool_definitions.clone(),
-                live_sender.clone(),
+                parent_live_sender.clone(),
                 provider_label.clone(),
             );
             let _child_backend_guard = task_runtime.install_backend(task_id, child_handler);
+            let (child_live_sender, mut child_live_receiver) =
+                unbounded_channel::<Result<ProviderStreamDelta, String>>();
+            let child_provider_adapter = provider_factory(child_live_sender.clone());
 
             let task_controller_config = build_task_controller_config(
                 &base_controller_config,
@@ -709,26 +748,91 @@ where
                 &request.description,
                 &request.subagent,
             );
+            let child_stream_forward_sender = parent_live_sender.clone();
+            let child_stream_session_id = task_id;
+            let child_stream_forward_task = tokio::spawn({
+                let streaming_controller = VulcanCoreController::new(
+                    task_controller_config.clone(),
+                    request.snapshot.clone(),
+                );
+                async move {
+                    let mut child_stream_state = RuntimeStreamDeltaState::new(streaming_controller);
+                    while let Some(item) = child_live_receiver.recv().await {
+                        for event in process_provider_stream_delta(
+                            child_stream_session_id,
+                            &mut child_stream_state,
+                            item,
+                        ) {
+                            let _ = child_stream_forward_sender
+                                .send(Ok(ProviderStreamDelta::ExecutionEvent(event)));
+                        }
+                        if child_stream_state.has_terminal_error() {
+                            break;
+                        }
+                    }
+                    if let Some(event) =
+                        child_stream_state.complete_pending_thinking(child_stream_session_id)
+                    {
+                        let _ = child_stream_forward_sender
+                            .send(Ok(ProviderStreamDelta::ExecutionEvent(event)));
+                    }
+                }
+            });
             let child_runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
                 Arc::clone(&tools_manager),
                 &resolved_tool_definitions,
                 task_id,
             ));
             let child_tool_executor =
-                StreamingRuntimeToolExecutor::new(child_runtime_bridge, live_sender.clone());
+                StreamingRuntimeToolExecutor::new(child_runtime_bridge, child_live_sender.clone());
             let mut controller =
                 VulcanCoreController::new(task_controller_config.clone(), request.snapshot.clone());
             let task_policy = AllowAllToolPolicy;
             let controller_result = controller
                 .run_user_turn_streaming(
-                    &provider_adapter,
+                    &child_provider_adapter,
                     &child_tool_executor,
                     &task_policy,
                     request.prompt.clone(),
                 )
-                .await
-                .map_err(|error| format!("任务 `{}` 执行失败：{error}", task_id))?;
+                .await;
+            drop(child_tool_executor);
+            drop(child_provider_adapter);
+            drop(child_live_sender);
+            let _ = child_stream_forward_task.await;
+            let controller_result =
+                controller_result.map_err(|error| format!("任务 `{}` 执行失败：{error}", task_id));
             let snapshot = controller.snapshot().clone();
+            let child_conversation_state = core_snapshot_to_session_conversation_state(&snapshot);
+            let controller_result = match controller_result {
+                Ok(controller_result) => controller_result,
+                Err(error) => {
+                    let execution_status = if task_execution_error_is_stopped(error.as_str()) {
+                        "stopped"
+                    } else {
+                        "failed"
+                    };
+                    let finished_payload = build_task_host_payload(
+                        &request,
+                        execution_status,
+                        0,
+                        0,
+                        None,
+                        error.as_str(),
+                        Some(&child_conversation_state),
+                        current_unix_millis_text(),
+                    );
+                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+                        build_task_delegate_runtime_event(
+                            RuntimeEventKind::DelegateFinished,
+                            &request,
+                            error.as_str(),
+                            finished_payload,
+                        ),
+                    )));
+                    return Err(error);
+                }
+            };
             let final_output_text = extract_final_assistant_text(&snapshot).unwrap_or_else(|| {
                 if let Some(message_id) = controller_result.final_assistant_message_id.as_ref() {
                     format!("任务已完成，但未能直接定位最终助手消息 `{message_id}`。")
@@ -736,6 +840,24 @@ where
                     String::from("任务已完成，但未产出可复用的最终助手文本。")
                 }
             });
+            let finished_payload = build_task_host_payload(
+                &request,
+                "completed",
+                controller_result.provider_turns_executed,
+                controller_result.tool_calls_processed,
+                controller_result.final_assistant_message_id.as_deref(),
+                final_output_text.as_str(),
+                Some(&child_conversation_state),
+                current_unix_millis_text(),
+            );
+            let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+                build_task_delegate_runtime_event(
+                    RuntimeEventKind::DelegateFinished,
+                    &request,
+                    "子代理任务已完成。",
+                    finished_payload,
+                ),
+            )));
 
             Ok(TaskExecutionOutcome {
                 task_id,
@@ -749,6 +871,93 @@ where
             })
         })
     })
+}
+
+/// Returns the persisted task-invocation status text used by both runtime metadata and tool results.
+/// 返回运行时元数据与工具结果共同使用的持久化任务调用状态文本。
+fn task_invocation_status_text(is_resumed: bool) -> &'static str {
+    if is_resumed { "resumed" } else { "created" }
+}
+
+/// Returns whether one task execution error most likely came from a user-visible stop or transport cancellation rather than a real logical failure.
+/// 返回某条任务执行错误是否更可能源于用户可见的停止或传输取消，而不是真正的逻辑失败。
+fn task_execution_error_is_stopped(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("cancelled")
+        || normalized.contains("canceled")
+        || normalized.contains("aborted")
+        || normalized.contains("stopped")
+        || error.contains("已停止")
+        || error.contains("中止")
+}
+
+/// Builds one host-only payload for task-session UI metadata without leaking large child snapshots into the model-visible tool result.
+/// 构建一份仅供宿主界面使用的任务会话载荷，避免把庞大的子会话快照泄漏到模型可见工具结果中。
+fn build_task_host_payload(
+    invocation: &TaskExecutionRequest,
+    execution_status: &str,
+    provider_turns_executed: usize,
+    tool_calls_processed: usize,
+    final_assistant_message_id: Option<&str>,
+    result_text: &str,
+    conversation_state: Option<&SessionConversationState>,
+    updated_at: String,
+) -> Value {
+    let mut payload = json!({
+        "task_id": invocation.task_id.to_string(),
+        "status": task_invocation_status_text(invocation.is_resumed),
+        "execution_status": execution_status,
+        "origin_session_id": invocation.current_session_id.to_string(),
+        "parent_task_id": invocation.parent_task_id.map(|value| value.to_string()),
+        "depth": invocation.depth,
+        "prompt": invocation.prompt.clone(),
+        "description": invocation.description.clone(),
+        "subagent": invocation.subagent.clone(),
+        "provider_turns_executed": provider_turns_executed,
+        "tool_calls_processed": tool_calls_processed,
+        "final_assistant_message_id": final_assistant_message_id,
+        "result": result_text,
+        "updated_at": updated_at,
+    });
+    if let Some(conversation_state) = conversation_state {
+        payload["conversation_state"] = json!(conversation_state);
+    }
+    payload
+}
+
+/// Builds one delegate runtime event used by the parent session to track child task lifecycle without replaying child transcript output inline.
+/// 构建一条供父会话追踪子任务生命周期的委派运行时事件，同时避免把子任务正文直接回放到父会话中。
+fn build_task_delegate_runtime_event(
+    kind: RuntimeEventKind,
+    invocation: &TaskExecutionRequest,
+    detail: &str,
+    payload: Value,
+) -> RuntimeEvent {
+    let task_label = invocation
+        .subagent
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            invocation
+                .description
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or("子代理");
+    let title = match kind {
+        RuntimeEventKind::DelegateStarted => {
+            format!("子代理启动 · {} · {task_label}", invocation.task_id)
+        }
+        RuntimeEventKind::DelegateFinished => {
+            format!("子代理结束 · {} · {task_label}", invocation.task_id)
+        }
+        _ => format!("子代理事件 · {} · {task_label}", invocation.task_id),
+    };
+
+    RuntimeEvent::new(kind, title, detail).with_metadata(Some(json!({
+        "kind": "task_session",
+        "payload": payload,
+    })))
 }
 
 /// Builds one task controller configuration from the base host configuration and the task-specific metadata.
@@ -833,7 +1042,11 @@ mod tests {
         let config = build_task_controller_config(&base, None, &description, &subagent);
 
         assert!(config.system_prompt.contains("[Subagent]\nexplorer"));
-        assert!(config.system_prompt.contains("[Task]\nAnalyze the current repository."));
+        assert!(
+            config
+                .system_prompt
+                .contains("[Task]\nAnalyze the current repository.")
+        );
         assert!(config.system_prompt.contains("[Filesystem Paths]"));
         assert!(config.system_prompt.contains("D:/repo/path"));
     }

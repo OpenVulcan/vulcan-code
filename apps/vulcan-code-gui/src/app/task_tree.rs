@@ -297,6 +297,7 @@ impl VulcanWorkbench {
             .insert(session_id, SessionRunPhase::Idle);
         self.expanded_task_projects.insert(project_id.to_string());
         self.selected_session = session_id;
+        self.active_subagent_panel = None;
         self.hovered_task_project = Some(project_id.to_string());
         self.hovered_task_session = Some(session_id);
         self.suppress_task_session_hover = false;
@@ -391,6 +392,7 @@ impl VulcanWorkbench {
                 .first()
                 .map(|session| session.id)
                 .unwrap_or_default();
+            self.active_subagent_panel = None;
         }
         self.sync_workspace_path_with_selected_session();
     }
@@ -473,6 +475,7 @@ impl VulcanWorkbench {
         self.hovered_task_project = Some(restored_project_id);
         if let Some(restored_session_id) = restored_session_ids.first().copied() {
             self.selected_session = restored_session_id;
+            self.active_subagent_panel = None;
             self.hovered_task_session = Some(restored_session_id);
             self.sync_workspace_path_with_session(restored_session_id);
         }
@@ -532,6 +535,7 @@ impl VulcanWorkbench {
         self.refresh_session_agent_view_buffers(session_id);
         self.expanded_task_projects.insert(project_id);
         self.selected_session = session_id;
+        self.active_subagent_panel = None;
         self.hovered_task_session = Some(session_id);
         self.sync_workspace_path_with_session(session_id);
         self.ensure_valid_selected_session();

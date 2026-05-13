@@ -28,6 +28,7 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Prepared adapter launch inputs handed to one concrete Provider adapter constructor after the shared runtime wrapper consumes controller-only fields.
 /// 在共享运行时包装器消费控制器专用字段后，交给具体 Provider 适配器构造过程的已准备输入对象。
+#[derive(Clone)]
 pub(crate) struct PreparedProviderTransportAdapterInputs {
     /// Stable provider identifier reused by the concrete Provider adapter.
     /// 被具体 Provider 适配器复用的稳定 Provider 标识。
@@ -63,9 +64,10 @@ where
         + Send
         + Sync
         + 'static,
-    F: FnOnce(ProviderLiveDeltaSender) -> A + Send + 'static,
+    F: Fn(ProviderLiveDeltaSender) -> A + Send + Sync + 'static,
 {
     Box::pin(stream! {
+        let provider_factory = Arc::new(provider_factory);
         let provider_label_for_task = provider_label.clone();
         let provider_label_for_join = provider_label.clone();
         let (live_sender, mut live_receiver) =
@@ -79,7 +81,7 @@ where
             session_id,
             build_task_execution_handler(
                 Arc::clone(&task_runtime),
-                provider_adapter.clone(),
+                Arc::clone(&provider_factory),
                 controller_config,
                 tools_manager,
                 resolved_tool_definitions,
@@ -144,8 +146,9 @@ where
         + Send
         + Sync
         + 'static,
-    F: FnOnce(ProviderLiveDeltaSender, PreparedProviderTransportAdapterInputs) -> A
+    F: Fn(ProviderLiveDeltaSender, PreparedProviderTransportAdapterInputs) -> A
         + Send
+        + Sync
         + 'static,
 {
     let provider_label = provider_label.into();
@@ -169,6 +172,13 @@ where
             },
     } = prepared_runtime_inputs;
 
+    let adapter_inputs = PreparedProviderTransportAdapterInputs {
+        provider_id,
+        model_id,
+        request_headers,
+        provider_tool_definitions,
+    };
+
     execute_host_controlled_stream(
         session_id,
         task_runtime,
@@ -177,17 +187,7 @@ where
         controller_config,
         core_snapshot,
         prompt,
-        move |live_sender| {
-            provider_factory(
-                live_sender,
-                PreparedProviderTransportAdapterInputs {
-                    provider_id,
-                    model_id,
-                    request_headers,
-                    provider_tool_definitions,
-                },
-            )
-        },
+        move |live_sender| provider_factory(live_sender, adapter_inputs.clone()),
         runtime_bridge,
         provider_label,
     )

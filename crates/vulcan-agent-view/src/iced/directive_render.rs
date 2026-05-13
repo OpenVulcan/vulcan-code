@@ -51,7 +51,59 @@ fn resolve_tool_directive_visuals(
     &'static str,
 )> {
     let palette = app_theme.palette();
+    let tool_visual_kind = block.attributes.get("tool-visual-kind").map(String::as_str);
+    let task_execution_status = block
+        .attributes
+        .get("task-session-execution-status")
+        .map(String::as_str)
+        .unwrap_or("running");
     match block.kind {
+        AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+            if tool_visual_kind == Some("task-session") =>
+        {
+            match task_execution_status {
+                "stopped" => Some((
+                    "🤖",
+                    iced::color!(0xF3E0BA),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.background.strong.color.scale_alpha(0.22),
+                    ),
+                    palette.background.base.text,
+                    "调度代理",
+                )),
+                "failed" => Some((
+                    "🤖",
+                    iced::color!(0xFFD6D1),
+                    directive_background(
+                        palette.danger.weak.color.scale_alpha(0.10),
+                        palette.danger.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "调度代理",
+                )),
+                "completed" => Some((
+                    "🤖",
+                    iced::color!(0xD7F6E6),
+                    directive_background(
+                        palette.success.weak.color.scale_alpha(0.10),
+                        palette.success.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "调度代理",
+                )),
+                _ => Some((
+                    "🤖",
+                    iced::color!(0xFFE4B8),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.warning.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "调度代理",
+                )),
+            }
+        }
         AgentViewDirectiveKind::ToolCall => {
             let display_state = block
                 .attributes

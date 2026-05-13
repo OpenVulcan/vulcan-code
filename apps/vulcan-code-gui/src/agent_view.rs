@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::model::{SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use vulcan_agent_view::{
@@ -198,6 +199,38 @@ fn build_tool_record_block(
         attributes.insert(
             String::from("tool-display-state"),
             tool_display_state.to_string(),
+        );
+    }
+    if message.metadata.as_ref().is_some_and(|metadata| {
+        metadata.get("tool_name").and_then(Value::as_str) == Some("task")
+            || metadata.get("kind").and_then(Value::as_str) == Some("task_session")
+    }) {
+        attributes.insert(
+            String::from("tool-visual-kind"),
+            String::from("task-session"),
+        );
+    }
+    if let Some(task_session_id) = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("payload"))
+        .and_then(|payload| payload.get("task_id"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+    {
+        attributes.insert(String::from("task-session-id"), task_session_id.to_string());
+    }
+    if let Some(task_execution_status) = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("payload"))
+        .and_then(|payload| payload.get("execution_status"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+    {
+        attributes.insert(
+            String::from("task-session-execution-status"),
+            task_execution_status.to_string(),
         );
     }
     let raw_source = render_directive_source(&kind, &attributes, &message.body);
@@ -480,6 +513,50 @@ mod tests {
                     && block
                         .attributes
                         .get("tool-display-state")
+                        .is_some_and(|value| value == "completed")
+        ));
+    }
+
+    /// Verifies that one task-session tool card carries the dedicated visual and routing attributes needed by the GUI fallback behavior.
+    /// 验证一张 task-session 工具卡会携带 GUI 回退行为所需的专属视觉与路由属性。
+    #[test]
+    fn task_session_tool_card_exposes_visual_and_task_attributes() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("task-result-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("🤖 调度 审查仓库（explorer） 已完成"),
+            body: String::from("## 工具返回\n\n子代理已完成。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-task-1",
+                "tool_name": "task",
+                "tool_display_state": "completed",
+                "kind": "task_session",
+                "payload": {
+                    "task_id": "00000000-0000-0000-0000-000000000001",
+                    "execution_status": "completed",
+                },
+            })),
+            created_at: String::from("2"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::ToolCall
+                    && block
+                        .attributes
+                        .get("tool-visual-kind")
+                        .is_some_and(|value| value == "task-session")
+                    && block
+                        .attributes
+                        .get("task-session-id")
+                        .is_some_and(|value| value == "00000000-0000-0000-0000-000000000001")
+                    && block
+                        .attributes
+                        .get("task-session-execution-status")
                         .is_some_and(|value| value == "completed")
         ));
     }

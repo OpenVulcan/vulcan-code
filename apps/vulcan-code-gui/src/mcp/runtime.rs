@@ -536,7 +536,10 @@ impl McpRuntimePromptBinding {
     /// Builds one MCP runtime prompt binding from one prompt descriptor and one live runtime handle.
     /// 根据一份 prompt 描述与一份实时运行时句柄构建单个 MCP runtime prompt 绑定。
     fn new(descriptor: McpRuntimePromptDescriptor, runtime: McpRuntimeHandle) -> Self {
-        Self { descriptor, runtime }
+        Self {
+            descriptor,
+            runtime,
+        }
     }
 
     /// Returns the stable host-facing prompt identifier.
@@ -583,7 +586,10 @@ impl McpRuntimeResourceBinding {
     /// Builds one MCP runtime resource binding from one resource descriptor and one live runtime handle.
     /// 根据一份资源描述与一份实时运行时句柄构建单个 MCP runtime 资源绑定。
     fn new(descriptor: McpRuntimeResourceDescriptor, runtime: McpRuntimeHandle) -> Self {
-        Self { descriptor, runtime }
+        Self {
+            descriptor,
+            runtime,
+        }
     }
 
     /// Returns the stable host-facing resource identifier.
@@ -1346,13 +1352,13 @@ impl McpRuntimeHandle {
         server_id: &str,
         resource_uri: &str,
     ) -> Result<ReadResourceResult, String> {
-        let Some(descriptor) = self
-            .snapshot()
-            .resource_descriptors()
-            .into_iter()
-            .find(|resource| {
-                resource.server_id() == server_id && resource.resource_uri() == resource_uri
-            })
+        let Some(descriptor) =
+            self.snapshot()
+                .resource_descriptors()
+                .into_iter()
+                .find(|resource| {
+                    resource.server_id() == server_id && resource.resource_uri() == resource_uri
+                })
         else {
             return Err(format!("未找到 MCP 资源 `{server_id}/{resource_uri}`。"));
         };
@@ -1390,7 +1396,10 @@ impl McpRuntimeHandle {
         let Some(transport) = self.transport_for_server(server_id) else {
             return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
         };
-        transport.has_stored_tokens().await.map_err(|error| error.to_string())
+        transport
+            .has_stored_tokens()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// Returns the current host-side OAuth status for one connected MCP server.
@@ -1399,7 +1408,10 @@ impl McpRuntimeHandle {
         let Some(transport) = self.transport_for_server(server_id) else {
             return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
         };
-        transport.auth_status().await.map_err(|error| error.to_string())
+        transport
+            .auth_status()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// Starts one host-driven OAuth authorization flow for the selected connected MCP server.
@@ -1443,7 +1455,10 @@ impl McpRuntimeHandle {
         let Some(transport) = self.transport_for_server(server_id) else {
             return Err(format!("MCP 服务器 `{server_id}` 当前未连接。"));
         };
-        transport.remove_auth().await.map_err(|error| error.to_string())
+        transport
+            .remove_auth()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.

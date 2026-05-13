@@ -2042,13 +2042,106 @@ impl VulcanWorkbench {
             .into()
     }
 
+    /// Builds one floating edge-attached navigation button used by the transcript-level subagent overlay.
+    /// 构建一枚转录层子代理悬浮导航使用的贴边按钮。
+    pub(super) fn view_subagent_navigation_button(
+        &self,
+        label: impl Into<String>,
+        icon: impl Into<Element<'static, Message>>,
+        on_press: Message,
+        is_selected: bool,
+    ) -> Element<'static, Message> {
+        let label = label.into();
+        let icon = icon.into();
+        button(
+            container(row![icon, text(label).size(13),].spacing(8).align_y(Center))
+                .padding([9, 16]),
+        )
+        .style(move |theme, status| {
+            style::subagent_overlay_navigation_button_style(theme, status, is_selected)
+        })
+        .on_press(on_press)
+        .into()
+    }
+
+    /// Builds one floating navigation overlay pinned against the left edge of the whole session panel instead of the inner transcript frame.
+    /// 构建一个贴着整个会话面板左边缘而非内部转录框的悬浮导航覆盖层。
+    pub(super) fn view_selected_session_subagent_navigation_overlay(
+        &self,
+    ) -> Option<Element<'_, Message>> {
+        let active_subagent_panel_state = self.selected_subagent_task_panel_state();
+        let active_subagent_task_id = active_subagent_panel_state.map(|state| state.task_id);
+        let active_tasks = self.selected_session_active_subagent_tasks();
+        let has_switch_targets = active_tasks
+            .iter()
+            .any(|state| Some(state.task_id) != active_subagent_task_id);
+
+        if active_subagent_panel_state.is_none() && active_tasks.is_empty() {
+            return None;
+        }
+
+        let mut navigation_column = column![].spacing(10).align_x(iced::Alignment::Start);
+        if active_subagent_panel_state.is_some() {
+            let return_icon: Element<'static, Message> =
+                codicon::chevron_left().size(12).line_height(1.0).into();
+            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
+                "返回主会话",
+                return_icon,
+                Message::ReturnToSelectedSessionTranscript,
+                false,
+            ));
+        }
+
+        if let Some(current_state) = active_subagent_panel_state.filter(|_| has_switch_targets) {
+            let current_icon: Element<'static, Message> =
+                if current_state.run_state == SubagentTaskRunState::Running {
+                    codicon::sync().size(13).line_height(1.0).into()
+                } else {
+                    codicon::check().size(13).line_height(1.0).into()
+                };
+            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
+                current_state.subagent_label.clone(),
+                current_icon,
+                Message::OpenSelectedSessionSubagentPanel(current_state.task_id),
+                true,
+            ));
+        }
+
+        for state in active_tasks {
+            if Some(state.task_id) == active_subagent_task_id {
+                continue;
+            }
+            let running_icon: Element<'static, Message> =
+                codicon::sync().size(13).line_height(1.0).into();
+            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
+                state.subagent_label.clone(),
+                running_icon,
+                Message::OpenSelectedSessionSubagentPanel(state.task_id),
+                false,
+            ));
+        }
+
+        Some(
+            pin(container(navigation_column).width(Shrink))
+                .position(iced::Point::new(-16.0, 28.0))
+                .width(Fill)
+                .height(Fill)
+                .into(),
+        )
+    }
+
     /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     pub(super) fn view_main_canvas(&self) -> Element<'_, Message> {
+        let active_subagent_panel_state = self.selected_subagent_task_panel_state();
+        let is_subagent_panel_open = active_subagent_panel_state.is_some();
         let session_title = self
             .selected_session()
             .map(|session| session.title.as_str())
             .unwrap_or("未选择会话");
+        let title_text = active_subagent_panel_state
+            .map(|state| state.subagent_label.as_str())
+            .unwrap_or(session_title);
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
         let execution_mode_selector = pick_list(
@@ -2091,13 +2184,19 @@ impl VulcanWorkbench {
         .padding(COMPOSER_PANEL_EDGE_PADDING)
         .width(self.composer_panel_width())
         .style(style::workbench_composer_panel_style);
-        let title_section = column![
+        let title_row: Element<'_, Message> = if is_subagent_panel_open {
+            text(title_text).size(26).into()
+        } else {
             row![
-                text(session_title).size(26),
+                text(title_text).size(26),
                 space::horizontal(),
                 transcript_surface_mode_switcher,
             ]
-            .align_y(Center),
+            .align_y(Center)
+            .into()
+        };
+        let title_section = column![
+            title_row,
             container(space())
                 .width(Fill)
                 .height(1)
@@ -2113,19 +2212,21 @@ impl VulcanWorkbench {
         .height(Fill);
 
         let mut layered_surfaces = vec![main_canvas_content.into()];
-        layered_surfaces.push(
-            container(
-                column![
-                    space::vertical().height(Fill),
-                    container(composer_panel).width(Fill).center_x(Fill),
-                ]
+        if !is_subagent_panel_open {
+            layered_surfaces.push(
+                container(
+                    column![
+                        space::vertical().height(Fill),
+                        container(composer_panel).width(Fill).center_x(Fill),
+                    ]
+                    .width(Fill)
+                    .height(Fill),
+                )
                 .width(Fill)
-                .height(Fill),
-            )
-            .width(Fill)
-            .height(Fill)
-            .into(),
-        );
+                .height(Fill)
+                .into(),
+            );
+        }
 
         let layered_canvas: Element<'_, Message> = stack(layered_surfaces).into();
 
@@ -2139,6 +2240,10 @@ impl VulcanWorkbench {
     /// Builds the transcript content surface shown in the center of the main workbench canvas.
     /// 构建展示在主工作台中央画布中的会话内容表面。
     pub(super) fn view_main_canvas_transcript_stream(&self) -> Element<'_, Message> {
+        if let Some(state) = self.selected_subagent_task_panel_state() {
+            return self.view_selected_subagent_task_panel_surface(state);
+        }
+
         let Some(session_id) = self.selected_session().map(|session| session.id) else {
             return container(
                 column![
@@ -2183,6 +2288,10 @@ impl VulcanWorkbench {
 
         let mut layered_surfaces = vec![base_surface];
 
+        if let Some(overlay) = self.view_selected_session_subagent_navigation_overlay() {
+            layered_surfaces.push(overlay);
+        }
+
         if let Some(overlay) = self.view_selected_session_rendered_transcript_fade_overlay() {
             layered_surfaces.push(overlay);
         }
@@ -2204,6 +2313,126 @@ impl VulcanWorkbench {
         }
 
         stack(layered_surfaces).into()
+    }
+
+    /// Builds the dedicated subagent transcript panel or its lightweight running placeholder inside the main transcript region.
+    /// 在主转录区域内部构建独立子代理转录面板，或在运行中显示其轻量占位视图。
+    pub(super) fn view_selected_subagent_task_panel_surface(
+        &self,
+        state: &SubagentTaskPanelState,
+    ) -> Element<'_, Message> {
+        if let Some(document) = self.rendered_subagent_task_panel_document(state) {
+            let session_id = state.task_id;
+            let content_column = column![
+                view_selectable_rendered_transcript::<Message>(
+                    &document,
+                    &self.app_theme,
+                    move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
+                        session_id,
+                        request,
+                    },
+                    |interaction| match interaction {
+                        SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
+                            Message::OpenSelectedSessionThinkingModal(block_id)
+                        }
+                        SelectableTranscriptInteraction::OpenToolModal(block_id) => {
+                            Message::OpenSelectedSessionToolModal(block_id)
+                        }
+                        SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+                    },
+                ),
+                space::vertical().height(24),
+            ]
+            .width(Fill);
+
+            let base_surface: Element<'_, Message> = container(
+                scrollable(content_column)
+                    .id(transcript_scrollable_id(session_id))
+                    .height(Fill)
+                    .on_scroll(move |viewport| Message::SelectedSessionTranscriptScrolled {
+                        session_id,
+                        viewport,
+                    }),
+            )
+            .padding(14)
+            .height(Fill)
+            .into();
+
+            let mut layered_surfaces = vec![base_surface];
+            if let Some(overlay) = self.view_selected_session_subagent_navigation_overlay() {
+                layered_surfaces.push(overlay);
+            }
+            if let Some(overlay) = self.view_selected_session_jump_to_bottom_overlay(session_id) {
+                layered_surfaces.push(overlay);
+            }
+            if let Some(overlay) = self.view_selected_session_thinking_modal(session_id) {
+                layered_surfaces.push(overlay);
+            }
+            if let Some(overlay) = self.view_selected_session_tool_modal(session_id) {
+                layered_surfaces.push(overlay);
+            }
+
+            return stack(layered_surfaces).into();
+        }
+
+        let helper_text = match state.run_state {
+            SubagentTaskRunState::Running => "子代理正在执行，面板会在任务结束后展示完整转录。",
+            SubagentTaskRunState::Stopped => {
+                "子代理已停止，当前保留截至停止时的上下文、思考与输出片段。"
+            }
+            SubagentTaskRunState::Completed => "子代理已结束，但当前没有可回看的转录内容。",
+            SubagentTaskRunState::Failed => "子代理已失败，当前仅保留失败摘要。",
+        };
+        let status_label = match state.run_state {
+            SubagentTaskRunState::Running => "运行中",
+            SubagentTaskRunState::Stopped => "已停止",
+            SubagentTaskRunState::Completed => "已完成",
+            SubagentTaskRunState::Failed => "已失败",
+        };
+        let title = state.subagent_label.clone();
+        let description = state.description.clone();
+        let result_text = state.result_text.clone();
+        let status_icon: Element<'_, Message> = if state.run_state == SubagentTaskRunState::Running
+        {
+            codicon::sync().size(14).line_height(1.0).into()
+        } else {
+            space::horizontal().width(0).into()
+        };
+        let description_block: Element<'_, Message> = if let Some(description) = description {
+            text(description).size(13).into()
+        } else {
+            space::vertical().height(0).into()
+        };
+        let result_block: Element<'_, Message> = if result_text.trim().is_empty() {
+            space::vertical().height(0).into()
+        } else {
+            container(text(result_text).size(14).width(Fill))
+                .padding(12)
+                .style(style::workbench_composer_panel_style)
+                .width(Fill)
+                .into()
+        };
+
+        container(
+            container(
+                column![
+                    row![status_icon, text(status_label).size(13),]
+                        .spacing(6)
+                        .align_y(Center),
+                    text(title).size(20),
+                    description_block,
+                    text(helper_text).size(13),
+                    result_block,
+                ]
+                .spacing(12)
+                .width(Fill),
+            )
+            .max_width(860),
+        )
+        .width(Fill)
+        .height(Fill)
+        .center(Fill)
+        .into()
     }
 
     /// Builds the passive lower-half fade overlay used only by the rendered transcript mode so bottom content gradually blends into the panel background.
@@ -2436,15 +2665,22 @@ impl VulcanWorkbench {
                 self.session_agent_view_buffers.get(&session_id),
                 Message::SelectedSessionDocumentStructuredAction
                     as fn(text_editor::Action) -> Message,
-                self.selected_session_agent_view_selectable_document()
-                    .map(|document| document.buffer().to_string())
-                    .unwrap_or_default(),
+                if self.selected_session().map(|session| session.id) == Some(session_id) {
+                    self.selected_session_agent_view_selectable_document()
+                        .map(|document| document.buffer().to_string())
+                        .unwrap_or_default()
+                } else {
+                    self.session_agent_view_selectable_documents
+                        .get(&session_id)
+                        .map(|document| document.buffer().to_string())
+                        .unwrap_or_default()
+                },
             ),
             AgentTranscriptSurfaceMode::RawSource => (
                 self.session_agent_view_raw_buffers.get(&session_id),
                 Message::SelectedSessionDocumentRawSourceAction
                     as fn(text_editor::Action) -> Message,
-                self.selected_session_agent_view_document()
+                self.rendered_session_agent_view_document(session_id)
                     .map(|document| agent_view_document_raw_source(&document))
                     .unwrap_or_default(),
             ),

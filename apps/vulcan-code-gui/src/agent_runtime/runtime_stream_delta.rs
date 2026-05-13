@@ -212,6 +212,7 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             state.process_runtime_event(session_id, event)
         }
+        Ok(ProviderStreamDelta::ExecutionEvent(event)) => vec![event],
         Ok(ProviderStreamDelta::FinalConversationState(conversation_state)) => {
             state.final_conversation_state = Some(conversation_state);
             Vec::new()

@@ -357,6 +357,104 @@ pub fn subtle_panel_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
+/// Returns the edge-attached button style used by the floating subagent navigation overlay.
+/// 返回悬浮子代理导航覆盖层使用的贴边按钮样式。
+pub fn subagent_overlay_navigation_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_selected: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base_background = if is_selected {
+        palette.primary.weak.color
+    } else {
+        palette.background.base.color
+    };
+    let base_text = if is_selected {
+        palette.primary.strong.text
+    } else {
+        palette.background.base.text
+    };
+    let base_border = if is_selected {
+        palette.primary.strong.color
+    } else {
+        palette.background.strong.color
+    };
+    let base = button::Style {
+        background: Some(Background::Color(base_background)),
+        text_color: base_text,
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 0.0,
+                top_right: 16.0,
+                bottom_right: 16.0,
+                bottom_left: 0.0,
+            },
+            width: 1.0,
+            color: base_border,
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.14,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 16.0,
+        },
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(if is_selected {
+                palette.primary.base.color
+            } else {
+                palette.background.weak.color
+            })),
+            text_color: if is_selected {
+                palette.primary.strong.text
+            } else {
+                palette.background.base.text
+            },
+            border: Border {
+                color: if is_selected {
+                    palette.primary.strong.color
+                } else {
+                    palette.primary.weak.color
+                },
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(if is_selected {
+                palette.primary.strong.color
+            } else {
+                palette.background.strong.color
+            })),
+            text_color: if is_selected {
+                palette.primary.strong.text
+            } else {
+                palette.background.base.text
+            },
+            border: Border {
+                color: if is_selected {
+                    palette.primary.strong.color
+                } else {
+                    palette.background.strong.text
+                },
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.34),
+            ..base
+        },
+    }
+}
+
 /// Returns the floating circular button style used by the transcript jump-to-bottom affordance.
 /// 返回转录区回到底部浮动圆形按钮使用的样式。
 pub fn transcript_jump_to_bottom_button_style(

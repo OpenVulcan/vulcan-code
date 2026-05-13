@@ -2,11 +2,11 @@
 //! OpenAI Responses 宿主控制 Provider 传输入口模块。
 
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
-use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::provider_transport_entry_inputs::{
     normalize_optional_base_url, prepare_provider_transport_runtime_inputs,
 };
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
@@ -60,8 +60,8 @@ pub(crate) fn execute_openai_responses_stream(
         move |live_sender, adapter_inputs| {
             crate::agent_runtime::provider_transport_openai_responses_adapter::OpenAiResponsesCoreStreamingAdapter::new(
                 adapter_inputs,
-                api_key,
-                base_url,
+                api_key.clone(),
+                base_url.clone(),
                 live_sender,
             )
         },
