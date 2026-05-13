@@ -40,6 +40,7 @@ pub mod provider_transport_entry_inputs;
 pub mod provider_transport_live_delta;
 pub mod provider_transport_openai;
 pub mod provider_transport_openai_adapter;
+pub mod provider_transport_openai_compatible_http;
 pub mod provider_transport_openai_responses;
 pub mod provider_transport_openai_responses_adapter;
 pub mod provider_transport_openrouter;

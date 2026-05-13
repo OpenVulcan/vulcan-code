@@ -6,9 +6,7 @@ use crate::agent_runtime::provider_transport_adapter_support::{
     build_standard_streaming_request, unsupported_streaming_execute,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
-use crate::agent_runtime::provider_transport_rig_clients::build_rig_openrouter_completion_model;
-use crate::agent_runtime::provider_transport_rig_completion::execute_rig_openai_like_streaming_turn;
-use crate::agent_runtime::provider_transport_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
+use crate::agent_runtime::provider_transport_openai_compatible_http::execute_openai_compatible_http_streaming_turn;
 use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use async_trait::async_trait;
@@ -37,8 +35,8 @@ pub(crate) struct OpenRouterCoreStreamingAdapter {
     /// Fully resolved request headers attached to the transport request.
     /// 附着到传输请求上的完整已解析请求头。
     pub(crate) request_headers: HeaderMap,
-    /// Low-level rig tool definitions mirrored from the resolved host tool definitions.
-    /// 从已解析宿主工具定义镜像而来的低层 rig 工具定义集合。
+    /// Provider-visible tool definitions mirrored from the resolved host tool definitions.
+    /// 从已解析宿主工具定义镜像而来的 Provider 可见工具定义集合。
     pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
     /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
     /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
@@ -129,22 +127,17 @@ impl VulcanStreamingProviderAdapter for OpenRouterCoreStreamingAdapter {
     where
         S: VulcanProviderDeltaSink,
     {
-        let model = build_rig_openrouter_completion_model(
-            self.provider_id.as_str(),
-            self.api_key.as_str(),
-            self.model_id.as_str(),
-            self.request_headers.clone(),
-        )?;
-        execute_rig_openai_like_streaming_turn(
+        execute_openai_compatible_http_streaming_turn(
             self.provider_id.as_str(),
             "OpenRouter",
+            self.api_key.as_str(),
+            Some("https://openrouter.ai/api/v1"),
             self.model_id.as_str(),
-            &model,
+            self.request_headers.clone(),
             request,
             &self.provider_tool_definitions,
             &self.live_sender,
             sink,
-            core_provider_turn_deltas_from_rig_assistant_content,
         )
         .await
     }
