@@ -2,7 +2,9 @@
 //! 用于保持服务器长连接并支撑工具注册的长期 MCP 运行时管理器。
 
 use crate::mcp::config::McpServerConfig;
-use crate::mcp::registry::{McpRegistrySummary, McpServerRegistry};
+use crate::mcp::registry::{
+    McpRegistrySummary, McpServerRegistry, configured_mcp_registry_summary,
+};
 use crate::provider_config::ProviderConfigurationFile;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -183,6 +185,15 @@ pub struct McpRuntimeAccess {
 }
 
 impl McpRuntimeAccess {
+    /// Builds one stable MCP runtime access surface directly from provider configuration and one optional live runtime handle.
+    /// 直接根据供应商配置与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
+    pub fn from_configuration(
+        config: &ProviderConfigurationFile,
+        live_runtime: Option<McpRuntimeHandle>,
+    ) -> Self {
+        Self::new(configured_mcp_registry_summary(config), live_runtime)
+    }
+
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
     /// 根据配置摘要数据与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
     pub fn new(
