@@ -371,6 +371,115 @@ impl McpRuntimeServerDiagnostic {
     }
 }
 
+/// Lightweight MCP runtime event severity used by upper-layer projection adapters.
+/// 供上层投影适配器使用的轻量 MCP 运行时事件严重级别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpRuntimeEventProjectionKind {
+    /// Event represents a healthy informational server state.
+    /// 事件表示健康的提示性服务器状态。
+    Informational,
+    /// Event represents a warning or failure server state.
+    /// 事件表示告警或失败服务器状态。
+    Warning,
+}
+
+/// Stable MCP runtime event projection exported to upper runtime layers.
+/// 导出给上层运行时的稳定 MCP 运行时事件投影视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRuntimeEventProjection {
+    /// Recommended event kind derived from the current server diagnostic state.
+    /// 根据当前服务器诊断状态推导得到的建议事件种类。
+    kind: McpRuntimeEventProjectionKind,
+    /// Recommended event title for UI projection.
+    /// 供界面投影使用的建议事件标题。
+    title: String,
+    /// Recommended event body for UI projection.
+    /// 供界面投影使用的建议事件正文。
+    body: String,
+}
+
+impl McpRuntimeEventProjection {
+    /// Returns the recommended event kind for UI projection.
+    /// 返回供界面投影使用的建议事件种类。
+    pub fn kind(&self) -> McpRuntimeEventProjectionKind {
+        self.kind
+    }
+
+    /// Returns the recommended event title for UI projection.
+    /// 返回供界面投影使用的建议事件标题。
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// Returns the recommended event body for UI projection.
+    /// 返回供界面投影使用的建议事件正文。
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+}
+
+/// Stable MCP runtime discovery report exported to upper runtime bootstrap flows.
+/// 导出给上层运行时 bootstrap 流程的稳定 MCP 运行时发现报告。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpRuntimeDiscoveryReport {
+    /// Recommended UI-facing runtime event projections.
+    /// 建议用于界面展示的运行时事件投影视图集合。
+    event_projections: Vec<McpRuntimeEventProjection>,
+    /// Human-readable discovery summary rows.
+    /// 人类可读的发现摘要行集合。
+    discovery_rows: Vec<String>,
+    /// Human-readable discovery error rows.
+    /// 人类可读的发现错误行集合。
+    discovery_errors: Vec<String>,
+    /// Human-readable discovery warning rows.
+    /// 人类可读的发现告警行集合。
+    discovery_warnings: Vec<String>,
+}
+
+impl McpRuntimeDiscoveryReport {
+    /// Returns the recommended runtime event projections.
+    /// 返回建议的运行时事件投影视图集合。
+    pub fn event_projections(&self) -> &[McpRuntimeEventProjection] {
+        &self.event_projections
+    }
+
+    /// Returns the human-readable discovery summary rows.
+    /// 返回人类可读的发现摘要行集合。
+    pub fn discovery_rows(&self) -> &[String] {
+        &self.discovery_rows
+    }
+
+    /// Returns the human-readable discovery error rows.
+    /// 返回人类可读的发现错误行集合。
+    pub fn discovery_errors(&self) -> &[String] {
+        &self.discovery_errors
+    }
+
+    /// Returns the human-readable discovery warning rows.
+    /// 返回人类可读的发现告警行集合。
+    pub fn discovery_warnings(&self) -> &[String] {
+        &self.discovery_warnings
+    }
+}
+
+impl McpRuntimeServerDiagnostic {
+    /// Converts the current server diagnostic into one stable runtime event projection.
+    /// 将当前服务器诊断转换为单条稳定的运行时事件投影视图。
+    fn to_runtime_event_projection(&self) -> McpRuntimeEventProjection {
+        let body = self.warning_text().unwrap_or_else(|| self.summary_text());
+        let kind = if self.last_error.is_some() {
+            McpRuntimeEventProjectionKind::Warning
+        } else {
+            McpRuntimeEventProjectionKind::Informational
+        };
+        McpRuntimeEventProjection {
+            kind,
+            title: self.runtime_event_title(),
+            body,
+        }
+    }
+}
+
 /// Aggregated MCP runtime snapshot consumed by UI summaries and execution planning.
 /// 供界面摘要与执行规划消费的聚合 MCP 运行时快照。
 #[derive(Debug, Clone, Default)]
@@ -467,6 +576,33 @@ impl McpRuntimeSnapshot {
                 last_error: server.last_error.clone(),
             })
             .collect()
+    }
+
+    /// Builds one stable discovery report for enabled MCP servers only.
+    /// 为已启用 MCP 服务器构建一份稳定发现报告。
+    fn enabled_server_discovery_report(&self) -> McpRuntimeDiscoveryReport {
+        let diagnostics = self.enabled_server_diagnostics();
+        let mut event_projections = Vec::with_capacity(diagnostics.len());
+        let mut discovery_rows = Vec::with_capacity(diagnostics.len());
+        let mut discovery_errors = Vec::new();
+        let mut discovery_warnings = Vec::new();
+
+        for diagnostic in diagnostics {
+            let summary = diagnostic.summary_text();
+            discovery_rows.push(summary);
+            if let Some(warning) = diagnostic.warning_text() {
+                discovery_errors.push(warning.clone());
+                discovery_warnings.push(warning);
+            }
+            event_projections.push(diagnostic.to_runtime_event_projection());
+        }
+
+        McpRuntimeDiscoveryReport {
+            event_projections,
+            discovery_rows,
+            discovery_errors,
+            discovery_warnings,
+        }
     }
 }
 
@@ -591,10 +727,10 @@ impl McpRuntimeHandle {
             })
     }
 
-    /// Returns lightweight diagnostics for enabled MCP servers only.
-    /// 仅返回已启用 MCP 服务器的轻量诊断信息。
-    pub fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
-        self.snapshot().enabled_server_diagnostics()
+    /// Returns one stable discovery report for enabled MCP servers only.
+    /// 返回一份仅覆盖已启用 MCP 服务器的稳定发现报告。
+    pub fn enabled_server_discovery_report(&self) -> McpRuntimeDiscoveryReport {
+        self.snapshot().enabled_server_discovery_report()
     }
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
@@ -837,8 +973,9 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
 #[cfg(test)]
 mod tests {
     use super::{
-        McpRuntimeServerDiagnostic, McpRuntimeServerSnapshot, McpRuntimeServerStatus,
-        McpRuntimeSnapshot, McpRuntimeToolAllowlist, McpRuntimeToolDescriptor,
+        McpRuntimeEventProjection, McpRuntimeEventProjectionKind, McpRuntimeServerDiagnostic,
+        McpRuntimeServerSnapshot, McpRuntimeServerStatus, McpRuntimeSnapshot,
+        McpRuntimeToolAllowlist, McpRuntimeToolDescriptor,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -958,6 +1095,79 @@ mod tests {
         assert_eq!(
             diagnostic.runtime_event_title(),
             String::from("MCP 服务器离线 · Enabled Server")
+        );
+    }
+
+    #[test]
+    fn enabled_server_discovery_report_preserves_rows_warnings_and_event_projections() {
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([
+                (
+                    String::from("healthy"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Healthy Server"),
+                        enabled: true,
+                        transport_label: String::from("http"),
+                        endpoint_summary: String::from("https://healthy.test/mcp"),
+                        status: McpRuntimeServerStatus::Connected,
+                        last_error: None,
+                        tools: vec![],
+                    },
+                ),
+                (
+                    String::from("offline"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Offline Server"),
+                        enabled: true,
+                        transport_label: String::from("stdio"),
+                        endpoint_summary: String::from("offline-mcp"),
+                        status: McpRuntimeServerStatus::Disconnected,
+                        last_error: Some(String::from("dial tcp timeout")),
+                        tools: vec![],
+                    },
+                ),
+            ]),
+        };
+
+        let report = snapshot.enabled_server_discovery_report();
+
+        assert_eq!(
+            report.discovery_rows(),
+            &[
+                String::from("服务器 `Healthy Server` 当前状态为 `在线`，已注册 0 个工具。"),
+                String::from("服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具。"),
+            ]
+        );
+        assert_eq!(
+            report.discovery_errors(),
+            &[String::from(
+                "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具。 最近一次错误：dial tcp timeout"
+            )]
+        );
+        assert_eq!(
+            report.discovery_warnings(),
+            &[String::from(
+                "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具。 最近一次错误：dial tcp timeout"
+            )]
+        );
+        assert_eq!(
+            report.event_projections(),
+            &[
+                McpRuntimeEventProjection {
+                    kind: McpRuntimeEventProjectionKind::Informational,
+                    title: String::from("MCP 服务器在线 · Healthy Server"),
+                    body: String::from(
+                        "服务器 `Healthy Server` 当前状态为 `在线`，已注册 0 个工具。"
+                    ),
+                },
+                McpRuntimeEventProjection {
+                    kind: McpRuntimeEventProjectionKind::Warning,
+                    title: String::from("MCP 服务器离线 · Offline Server"),
+                    body: String::from(
+                        "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具。 最近一次错误：dial tcp timeout"
+                    ),
+                },
+            ]
         );
     }
 

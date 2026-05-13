@@ -7,5 +7,6 @@ pub mod runtime;
 
 pub use registry::{McpRegistrySummary, configured_mcp_registry_summary};
 pub use runtime::{
-    McpRuntimeHandle, McpRuntimeToolAllowlist, McpRuntimeToolBinding, bootstrap_mcp_runtime,
+    McpRuntimeEventProjectionKind, McpRuntimeHandle, McpRuntimeToolAllowlist,
+    McpRuntimeToolBinding, bootstrap_mcp_runtime,
 };

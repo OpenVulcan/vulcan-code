@@ -208,7 +208,9 @@ fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
 fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
     let gui_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let bridge_path = gui_src_root.join("vulcan_tools_bridge.rs");
-    let preparation_path = gui_src_root.join("agent_runtime").join("execution_preparation.rs");
+    let preparation_path = gui_src_root
+        .join("agent_runtime")
+        .join("execution_preparation.rs");
 
     let bridge_source =
         fs::read_to_string(&bridge_path).expect("vulcan_tools_bridge.rs should remain readable");
