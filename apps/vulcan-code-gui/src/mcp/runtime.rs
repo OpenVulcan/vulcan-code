@@ -14,16 +14,16 @@ use vulcan_mcp_runtime::{McpTransport, McpTransportEvent};
 /// Stable MCP tool schema exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpRuntimeToolSchema {
+struct McpRuntimeToolSchema {
     /// Stable MCP tool name.
     /// 稳定 MCP 工具名称。
-    pub name: String,
+    name: String,
     /// Human-readable MCP tool description.
     /// 人类可读的 MCP 工具描述。
-    pub description: String,
+    description: String,
     /// JSON Schema describing the tool arguments.
     /// 描述工具参数的 JSON Schema。
-    pub args_schema: serde_json::Value,
+    args_schema: serde_json::Value,
 }
 
 /// Stable MCP tool descriptor exposed to the host runtime and execution planner.
@@ -32,13 +32,31 @@ pub struct McpRuntimeToolSchema {
 pub struct McpRuntimeToolDescriptor {
     /// Stable server identifier that currently owns the tool.
     /// 当前拥有该工具的稳定服务器标识。
-    pub server_id: String,
+    server_id: String,
     /// Tool schema discovered from the remote MCP endpoint.
     /// 从远端 MCP 端点发现得到的工具 schema。
-    pub schema: McpRuntimeToolSchema,
+    schema: McpRuntimeToolSchema,
 }
 
 impl McpRuntimeToolDescriptor {
+    /// Builds one stable MCP runtime tool descriptor from raw transport schema parts.
+    /// 根据原始传输 schema 片段构建单个稳定 MCP 运行时工具描述。
+    fn new(
+        server_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        tool_description: impl Into<String>,
+        args_schema: serde_json::Value,
+    ) -> Self {
+        Self {
+            server_id: server_id.into(),
+            schema: McpRuntimeToolSchema {
+                name: tool_name.into(),
+                description: tool_description.into(),
+                args_schema,
+            },
+        }
+    }
+
     /// Returns the stable server identifier that currently owns the tool.
     /// 返回当前拥有该工具的稳定服务器标识。
     pub fn server_id(&self) -> &str {
@@ -515,13 +533,13 @@ async fn refresh_server_tools(
     })?;
     let tools = schemas
         .into_iter()
-        .map(|schema| McpRuntimeToolDescriptor {
-            server_id: server.id.clone(),
-            schema: McpRuntimeToolSchema {
-                name: schema.name,
-                description: schema.description,
-                args_schema: schema.args_schema,
-            },
+        .map(|schema| {
+            McpRuntimeToolDescriptor::new(
+                server.id.clone(),
+                schema.name,
+                schema.description,
+                schema.args_schema,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -605,7 +623,7 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
 mod tests {
     use super::{
         McpRuntimeServerDiagnostic, McpRuntimeServerSnapshot, McpRuntimeServerStatus,
-        McpRuntimeSnapshot, McpRuntimeToolDescriptor, McpRuntimeToolSchema,
+        McpRuntimeSnapshot, McpRuntimeToolDescriptor,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -705,22 +723,18 @@ mod tests {
 
     #[test]
     fn filtered_tool_descriptors_apply_server_and_tool_allowlists() {
-        let tool_a = McpRuntimeToolDescriptor {
-            server_id: String::from("server-a"),
-            schema: McpRuntimeToolSchema {
-                name: String::from("read_file"),
-                description: String::from("Read one file"),
-                args_schema: serde_json::json!({}),
-            },
-        };
-        let tool_b = McpRuntimeToolDescriptor {
-            server_id: String::from("server-b"),
-            schema: McpRuntimeToolSchema {
-                name: String::from("edit_file"),
-                description: String::from("Edit one file"),
-                args_schema: serde_json::json!({}),
-            },
-        };
+        let tool_a = McpRuntimeToolDescriptor::new(
+            String::from("server-a"),
+            String::from("read_file"),
+            String::from("Read one file"),
+            serde_json::json!({}),
+        );
+        let tool_b = McpRuntimeToolDescriptor::new(
+            String::from("server-b"),
+            String::from("edit_file"),
+            String::from("Edit one file"),
+            serde_json::json!({}),
+        );
         let snapshot = McpRuntimeSnapshot {
             servers: BTreeMap::from([
                 (
