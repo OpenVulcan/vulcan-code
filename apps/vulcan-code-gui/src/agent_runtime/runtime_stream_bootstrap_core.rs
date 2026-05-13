@@ -11,10 +11,11 @@ use crate::agent_runtime::provider_runtime_context::{
     build_runtime_system_preamble, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
-use crate::conversation_protocol::conversation_messages_to_rig_history;
-use rig::message::Message as RigMessage;
 use vulcan_core::controller::VulcanCoreController;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage,
+    ConversationSnapshot as CoreConversationSnapshot,
+};
 use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Core provider-facing runtime bootstrap state derived from canonical conversation inputs.
@@ -25,7 +26,7 @@ pub(crate) struct RuntimeBootstrapCore {
     pub system_preamble: String,
     /// Provider-visible history reconstructed from canonical conversation messages.
     /// 从规范会话消息重建得到的 Provider 可见历史记录。
-    pub request_history: Vec<RigMessage>,
+    pub request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub core_snapshot: CoreConversationSnapshot,
@@ -42,9 +43,8 @@ pub(crate) fn build_runtime_bootstrap_core(
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> RuntimeBootstrapCore {
     let system_preamble = build_runtime_system_preamble(preparation);
-    let request_history =
-        conversation_messages_to_rig_history(&request.conversation_state.messages);
     let core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
+    let request_history = core_snapshot.messages.clone();
     let core_controller = VulcanCoreController::new(
         build_core_controller_config(
             preparation,

@@ -12,8 +12,10 @@ use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
 use crate::provider_config::ProviderConfigurationFile;
-use rig::message::Message as RigMessage;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage,
+    ConversationSnapshot as CoreConversationSnapshot,
+};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Safe runtime default turn budget used when no explicit max-turn override is configured.
@@ -40,7 +42,7 @@ pub(crate) fn execute_provider_prompt_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<RigMessage>,
+    request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,

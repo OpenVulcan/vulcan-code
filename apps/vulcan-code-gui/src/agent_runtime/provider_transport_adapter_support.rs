@@ -2,11 +2,14 @@
 //! 供各 Provider 专用传输适配器复用的共享流式适配器支持辅助模块。
 
 use crate::agent_runtime::provider_protocol_bridge::{
-    build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
-    inject_previous_response_id_into_additional_params,
+    core_provider_turn_delta_to_runtime_delta, inject_previous_response_id_into_additional_params,
 };
+use crate::agent_runtime::provider_protocol_rig_content::build_openai_compatible_turn_response_from_rig;
 use crate::agent_runtime::provider_protocol_tool_definition::{
     ProviderToolDefinition, provider_tool_definition_to_rig_tool_definition,
+};
+use crate::agent_runtime::provider_request_bridge_rig::{
+    core_message_to_rig_message, core_messages_to_rig_history,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::{
@@ -111,9 +114,9 @@ where
     M: CompletionModel,
 {
     let mut request_builder = model
-        .completion_request(request.current_prompt)
+        .completion_request(core_message_to_rig_message(&request.current_prompt))
         .preamble(request.snapshot.system_prompt.clone())
-        .messages(request.current_history)
+        .messages(core_messages_to_rig_history(&request.current_history))
         .temperature_opt(request.snapshot.temperature)
         .additional_params_opt(request.snapshot.additional_params.clone());
 
@@ -183,7 +186,7 @@ where
     )
     .await?;
 
-    Ok(build_openai_compatible_turn_response(
+    Ok(build_openai_compatible_turn_response_from_rig(
         provider_id,
         model_id,
         stream.message_id.clone(),

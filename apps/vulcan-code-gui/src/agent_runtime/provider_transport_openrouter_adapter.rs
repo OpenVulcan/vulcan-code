@@ -1,7 +1,7 @@
 //! OpenRouter host-controlled provider transport adapter.
 //! OpenRouter 宿主控制 Provider 传输适配器。
 
-use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_deltas_from_assistant_content;
+use crate::agent_runtime::provider_protocol_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
     build_standard_streaming_request, execute_openai_like_streaming_turn,
@@ -148,7 +148,7 @@ impl VulcanStreamingProviderAdapter for OpenRouterCoreStreamingAdapter {
             &self.provider_tool_definitions,
             &self.live_sender,
             sink,
-            core_provider_turn_deltas_from_assistant_content,
+            core_provider_turn_deltas_from_rig_assistant_content,
         )
         .await
     }

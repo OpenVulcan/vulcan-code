@@ -4,9 +4,11 @@
 use crate::model::SessionId;
 use crate::provider_config::ProviderRuntimeKind;
 use reqwest::header::HeaderMap;
-use rig::message::Message as RigMessage;
 use serde_json::Value;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage,
+    ConversationSnapshot as CoreConversationSnapshot,
+};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Owned provider transport execution request used to route one prepared runtime turn into the correct provider-specific adapter.
@@ -38,7 +40,7 @@ pub(crate) struct ProviderTransportExecutionRequest {
     pub(crate) prompt: String,
     /// Provider-visible request history retained for debugging parity and adapter signatures.
     /// 为保持调试一致性与适配器签名而保留的 Provider 可见请求历史。
-    pub(crate) request_history: Vec<RigMessage>,
+    pub(crate) request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot consumed by the host-owned controller loop.
     /// 供宿主自有控制器循环消费的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
@@ -76,7 +78,7 @@ pub(crate) fn build_provider_transport_execution_request(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<RigMessage>,
+    request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,

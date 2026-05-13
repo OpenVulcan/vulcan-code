@@ -635,15 +635,23 @@ mod tests {
     #[test]
     fn openai_compatible_turn_snapshot_uses_tool_result_as_outgoing_prompt() {
         let headers = reqwest::header::HeaderMap::new();
-        let history = vec![RigMessage::assistant_with_id(
-            String::from("assistant-1"),
-            "请调用工具处理文件。",
-        )];
-        let prompt = RigMessage::tool_result_with_call_id(
-            String::from("result-1"),
-            Some(String::from("call-1")),
-            "文件修改完成",
-        );
+        let history = vec![CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("请调用工具处理文件。"),
+                reasoning: String::new(),
+                provider_message_id: Some(String::from("assistant-1")),
+                tool_calls: Vec::new(),
+            },
+        }];
+        let prompt = CoreConversationMessage {
+            id: String::from("result-1"),
+            payload: CoreConversationPayload::ToolResult {
+                tool_result_id: String::from("result-1"),
+                tool_call_id: Some(String::from("call-1")),
+                text: String::from("文件修改完成"),
+            },
+        };
 
         let snapshot = build_openai_compatible_turn_request_snapshot(
             "groq",

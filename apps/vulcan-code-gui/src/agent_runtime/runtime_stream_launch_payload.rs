@@ -7,8 +7,10 @@ use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPrep
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::model::SessionId;
-use rig::message::Message as RigMessage;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage,
+    ConversationSnapshot as CoreConversationSnapshot,
+};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
@@ -49,7 +51,7 @@ pub(crate) struct RuntimeStreamLaunch {
     pub system_preamble: String,
     /// Provider-visible history reconstructed from canonical conversation messages.
     /// 从规范会话消息重建得到的 Provider 可见历史记录。
-    pub request_history: Vec<RigMessage>,
+    pub request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub core_snapshot: CoreConversationSnapshot,

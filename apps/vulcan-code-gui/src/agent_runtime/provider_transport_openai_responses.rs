@@ -8,9 +8,11 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::model::SessionId;
 use reqwest::header::HeaderMap;
-use rig::message::Message as RigMessage;
 use serde_json::Value;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage,
+    ConversationSnapshot as CoreConversationSnapshot,
+};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Executes one host-controlled OpenAI Responses prompt through `vulcan-core` and streams normalized deltas.
@@ -22,7 +24,7 @@ pub(crate) fn execute_openai_responses_stream(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
-    _request_history: Vec<RigMessage>,
+    _request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,

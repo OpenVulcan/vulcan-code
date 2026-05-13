@@ -2,7 +2,7 @@
 //! Anthropic 宿主控制 Provider 传输适配器。
 
 use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropic_base_url;
-use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_deltas_from_assistant_content;
+use crate::agent_runtime::provider_protocol_rig_content::core_provider_turn_deltas_from_rig_assistant_content;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_adapter_support::{
     build_standard_streaming_request, execute_openai_like_streaming_turn,
@@ -163,7 +163,7 @@ impl VulcanStreamingProviderAdapter for AnthropicCoreStreamingAdapter {
             &self.provider_tool_definitions,
             &self.live_sender,
             sink,
-            core_provider_turn_deltas_from_assistant_content,
+            core_provider_turn_deltas_from_rig_assistant_content,
         )
         .await
     }

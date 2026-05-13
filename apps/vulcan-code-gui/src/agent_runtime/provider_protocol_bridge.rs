@@ -1,14 +1,13 @@
 //! Shared provider-response bridge helpers reused by the executor, transport adapters, and regression tests.
 //! 供执行器、传输适配器与回归测试复用的共享 Provider 响应桥接辅助逻辑。
 
+use crate::agent_runtime::provider_protocol_content::{
+    ProviderAssistantContent, ProviderReasoningPart, ProviderStreamedAssistantContent,
+};
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
-use rig::OneOrMany;
-use rig::message::{AssistantContent as RigAssistantContent, ReasoningContent};
-use rig::streaming::StreamedAssistantContent;
 use serde_json::{Map as JsonMap, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_core::types::{
-    ConversationToolCall as CoreConversationToolCall,
     ProviderContinuation as CoreProviderContinuation, ProviderTurnDelta as CoreProviderTurnDelta,
     ProviderTurnResponse as CoreProviderTurnResponse,
 };
@@ -88,35 +87,35 @@ pub(crate) fn format_host_tool_result_runtime_detail(
 
 /// Converts one assistant streaming content chunk into zero or more `vulcan-core` provider-turn deltas while intentionally ignoring tool-boundary presentation details.
 /// 将一条助手流式内容块转换为零条或多条 `vulcan-core` Provider 回合增量，并刻意忽略工具边界展示细节。
-pub(crate) fn core_provider_turn_deltas_from_assistant_content<R>(
-    content: StreamedAssistantContent<R>,
+pub(crate) fn core_provider_turn_deltas_from_assistant_content(
+    content: ProviderStreamedAssistantContent,
 ) -> Vec<CoreProviderTurnDelta> {
     match content {
-        StreamedAssistantContent::Text(text) => {
-            if text.text.is_empty() {
+        ProviderStreamedAssistantContent::Text(text) => {
+            if text.is_empty() {
                 Vec::new()
             } else {
-                vec![CoreProviderTurnDelta::Output { delta: text.text }]
+                vec![CoreProviderTurnDelta::Output { delta: text }]
             }
         }
-        StreamedAssistantContent::Reasoning(reasoning) => {
-            let flattened = flatten_reasoning_content(&reasoning.content);
+        ProviderStreamedAssistantContent::Reasoning(reasoning) => {
+            let flattened = flatten_reasoning_content(&reasoning);
             if flattened.is_empty() {
                 Vec::new()
             } else {
                 vec![CoreProviderTurnDelta::Thinking { delta: flattened }]
             }
         }
-        StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+        ProviderStreamedAssistantContent::ReasoningDelta(reasoning) => {
             if reasoning.is_empty() {
                 Vec::new()
             } else {
                 vec![CoreProviderTurnDelta::Thinking { delta: reasoning }]
             }
         }
-        StreamedAssistantContent::ToolCall { .. }
-        | StreamedAssistantContent::ToolCallDelta { .. }
-        | StreamedAssistantContent::Final(_) => Vec::new(),
+        ProviderStreamedAssistantContent::ToolCall
+        | ProviderStreamedAssistantContent::ToolCallDelta
+        | ProviderStreamedAssistantContent::Final => Vec::new(),
     }
 }
 
@@ -137,12 +136,12 @@ pub(crate) fn build_openai_compatible_turn_response(
     provider_id: &str,
     model_id: &str,
     provider_message_id: Option<String>,
-    assistant_content: &OneOrMany<RigAssistantContent>,
+    assistant_content: &[ProviderAssistantContent],
 ) -> CoreProviderTurnResponse {
     let assistant_text = assistant_content
         .iter()
         .filter_map(|item| match item {
-            RigAssistantContent::Text(text) => Some(text.text.clone()),
+            ProviderAssistantContent::Text(text) => Some(text.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -150,8 +149,8 @@ pub(crate) fn build_openai_compatible_turn_response(
     let assistant_reasoning = assistant_content
         .iter()
         .filter_map(|item| match item {
-            RigAssistantContent::Reasoning(reasoning) => {
-                let flattened = flatten_reasoning_content(&reasoning.content);
+            ProviderAssistantContent::Reasoning(reasoning) => {
+                let flattened = flatten_reasoning_content(reasoning);
                 (!flattened.is_empty()).then_some(flattened)
             }
             _ => None,
@@ -161,12 +160,7 @@ pub(crate) fn build_openai_compatible_turn_response(
     let tool_calls = assistant_content
         .iter()
         .filter_map(|item| match item {
-            RigAssistantContent::ToolCall(tool_call) => Some(CoreConversationToolCall {
-                id: tool_call.id.clone(),
-                tool_call_id: tool_call.call_id.clone(),
-                tool_name: tool_call.function.name.clone(),
-                arguments: tool_call.function.arguments.clone(),
-            }),
+            ProviderAssistantContent::ToolCall(tool_call) => Some(tool_call.clone()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -221,14 +215,13 @@ pub(crate) fn build_tool_result_runtime_metadata(
 
 /// Flattens structured reasoning content into one readable text block for the transcript thinking section.
 /// 将结构化推理内容压平成一段适合转录思考区展示的可读文本。
-fn flatten_reasoning_content(content: &[ReasoningContent]) -> String {
+fn flatten_reasoning_content(content: &[ProviderReasoningPart]) -> String {
     content
         .iter()
         .filter_map(|part| match part {
-            ReasoningContent::Text { text, .. } => Some(text.trim().to_string()),
-            ReasoningContent::Summary(summary) => Some(summary.trim().to_string()),
-            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => None,
-            _ => None,
+            ProviderReasoningPart::Text(text) => Some(text.trim().to_string()),
+            ProviderReasoningPart::Summary(summary) => Some(summary.trim().to_string()),
+            ProviderReasoningPart::Opaque => None,
         })
         .filter(|part: &String| !part.is_empty())
         .collect::<Vec<_>>()

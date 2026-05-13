@@ -2,11 +2,6 @@
 //! 供图形界面、持久化层与运行时桥接共享的规范会话协议模型。
 
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
-use rig::OneOrMany;
-use rig::message::{
-    AssistantContent, Message as RigMessage, ReasoningContent, ToolResult, ToolResultContent,
-    UserContent,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -235,56 +230,6 @@ pub fn compact_conversation_with_summary(
     state.continuation.updated_at = Some(updated_at.into());
 }
 
-/// Replaces the canonical message window using one final rig history snapshot and refreshes continuation metadata.
-/// 使用一份最终 rig 历史快照替换规范消息窗口，并刷新 continuation 元数据。
-pub fn replace_messages_from_rig_history(
-    state: &mut SessionConversationState,
-    history: &[RigMessage],
-    provider_id: Option<&str>,
-    model_id: Option<&str>,
-    updated_at: impl Into<String>,
-) {
-    state.messages = rig_history_to_conversation_messages(history);
-    refresh_continuation_state(state, provider_id, model_id, updated_at);
-}
-
-/// Refreshes the provider continuation cursor from the latest canonical assistant message.
-/// 根据最近一条规范助手消息刷新 Provider continuation 游标。
-pub fn refresh_continuation_state(
-    state: &mut SessionConversationState,
-    provider_id: Option<&str>,
-    model_id: Option<&str>,
-    updated_at: impl Into<String>,
-) {
-    let updated_at = updated_at.into();
-    state.continuation.provider_id = provider_id.map(ToOwned::to_owned);
-    state.continuation.model_id = model_id.map(ToOwned::to_owned);
-    state.continuation.last_provider_message_id =
-        state
-            .messages
-            .iter()
-            .rev()
-            .find_map(|message| match &message.payload {
-                SessionConversationPayload::Assistant {
-                    provider_message_id,
-                    ..
-                } => provider_message_id.clone(),
-                _ => None,
-            });
-    state.continuation.updated_at = Some(updated_at);
-}
-
-/// Builds one rig-compatible history vector from the canonical session protocol window.
-/// 从规范会话协议窗口构建一组兼容 rig 的历史消息。
-pub fn conversation_messages_to_rig_history(
-    messages: &[SessionConversationMessage],
-) -> Vec<RigMessage> {
-    messages
-        .iter()
-        .filter_map(conversation_message_to_rig_message)
-        .collect()
-}
-
 /// Projects canonical session records into the persisted transcript model used by the existing GUI surfaces.
 /// 将规范会话记录投影为现有图形界面表面使用的持久化转录模型。
 pub fn conversation_state_to_session_messages(
@@ -321,172 +266,6 @@ pub fn conversation_state_to_context_records(
         .collect()
 }
 
-/// Converts one rig history snapshot into canonical conversation messages.
-/// 将一份 rig 历史快照转换为规范会话消息集合。
-pub fn rig_history_to_conversation_messages(
-    history: &[RigMessage],
-) -> Vec<SessionConversationMessage> {
-    let mut messages = Vec::new();
-    let mut assistant_index = 0usize;
-    let mut user_index = 0usize;
-    let mut tool_result_index = 0usize;
-
-    for message in history {
-        match message {
-            RigMessage::System { .. } => {}
-            RigMessage::User { content } => {
-                for item in content.iter() {
-                    match item {
-                        UserContent::Text(text) => {
-                            messages.push(SessionConversationMessage {
-                                id: format!("protocol-user-{user_index}"),
-                                payload: SessionConversationPayload::UserText {
-                                    text: text.text.clone(),
-                                },
-                            });
-                            user_index = user_index.saturating_add(1);
-                        }
-                        UserContent::ToolResult(tool_result) => {
-                            messages.push(SessionConversationMessage {
-                                id: format!(
-                                    "protocol-tool-result-{}-{}",
-                                    tool_result_index, tool_result.id
-                                ),
-                                payload: SessionConversationPayload::ToolResult {
-                                    tool_result_id: tool_result.id.clone(),
-                                    tool_call_id: tool_result.call_id.clone(),
-                                    text: flatten_tool_result_content(&tool_result.content),
-                                },
-                            });
-                            tool_result_index = tool_result_index.saturating_add(1);
-                        }
-                        UserContent::Image(_)
-                        | UserContent::Audio(_)
-                        | UserContent::Video(_)
-                        | UserContent::Document(_) => {}
-                    }
-                }
-            }
-            RigMessage::Assistant { id, content } => {
-                let text = content
-                    .iter()
-                    .filter_map(|item| match item {
-                        AssistantContent::Text(text) => Some(text.text.clone()),
-                        _ => None,
-                    })
-                    .filter(|segment| !segment.trim().is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let reasoning = content
-                    .iter()
-                    .filter_map(|item| match item {
-                        AssistantContent::Reasoning(reasoning) => {
-                            let text = flatten_reasoning_content(&reasoning.content);
-                            (!text.trim().is_empty()).then_some(text)
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let tool_calls = content
-                    .iter()
-                    .filter_map(|item| match item {
-                        AssistantContent::ToolCall(tool_call) => {
-                            Some(SessionConversationToolCall {
-                                id: tool_call.id.clone(),
-                                tool_call_id: tool_call.call_id.clone(),
-                                tool_name: tool_call.function.name.clone(),
-                                arguments: tool_call.function.arguments.clone(),
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-
-                if text.trim().is_empty() && reasoning.trim().is_empty() && tool_calls.is_empty() {
-                    continue;
-                }
-
-                let stable_id = id
-                    .clone()
-                    .unwrap_or_else(|| format!("protocol-assistant-{assistant_index}"));
-                messages.push(SessionConversationMessage {
-                    id: stable_id,
-                    payload: SessionConversationPayload::Assistant {
-                        text,
-                        reasoning,
-                        provider_message_id: id.clone(),
-                        tool_calls,
-                    },
-                });
-                assistant_index = assistant_index.saturating_add(1);
-            }
-        }
-    }
-
-    messages
-}
-
-/// Converts one canonical conversation message back into a rig-compatible history item.
-/// 将单条规范会话消息重新转换为兼容 rig 的历史项。
-fn conversation_message_to_rig_message(message: &SessionConversationMessage) -> Option<RigMessage> {
-    match &message.payload {
-        SessionConversationPayload::UserText { text } => Some(RigMessage::from(text.as_str())),
-        SessionConversationPayload::Assistant {
-            text,
-            reasoning: _,
-            provider_message_id,
-            tool_calls,
-        } => {
-            let mut content_items = Vec::new();
-            if !text.trim().is_empty() {
-                content_items.push(AssistantContent::text(text.clone()));
-            }
-            for tool_call in tool_calls {
-                let assistant_content = match &tool_call.tool_call_id {
-                    Some(tool_call_id) => AssistantContent::tool_call_with_call_id(
-                        tool_call.id.clone(),
-                        tool_call_id.clone(),
-                        tool_call.tool_name.clone(),
-                        tool_call.arguments.clone(),
-                    ),
-                    None => AssistantContent::tool_call(
-                        tool_call.id.clone(),
-                        tool_call.tool_name.clone(),
-                        tool_call.arguments.clone(),
-                    ),
-                };
-                content_items.push(assistant_content);
-            }
-            let content = OneOrMany::many(content_items).ok()?;
-            Some(RigMessage::Assistant {
-                id: provider_message_id.clone(),
-                content,
-            })
-        }
-        SessionConversationPayload::ToolResult {
-            tool_result_id,
-            tool_call_id,
-            text,
-        } => {
-            let content = OneOrMany::one(ToolResultContent::text(text.clone()));
-            let user_content = match tool_call_id {
-                Some(tool_call_id) => UserContent::tool_result_with_call_id(
-                    tool_result_id.clone(),
-                    tool_call_id.clone(),
-                    content,
-                ),
-                None => UserContent::ToolResult(ToolResult {
-                    id: tool_result_id.clone(),
-                    call_id: None,
-                    content,
-                }),
-            };
-            Some(RigMessage::from(user_content))
-        }
-    }
-}
-
 /// Converts one canonical session record back into the persisted transcript entry shape expected by the current GUI layer.
 /// 将单条规范会话记录重新转换为当前图形界面层期望的持久化转录条目形状。
 fn conversation_record_to_session_message(
@@ -504,46 +283,12 @@ fn conversation_record_to_session_message(
     }
 }
 
-/// Flattens one provider-native reasoning block list into readable text.
-/// 将一组 Provider 原生 reasoning 块压平成可读文本。
-fn flatten_reasoning_content(content: &[ReasoningContent]) -> String {
-    content
-        .iter()
-        .filter_map(|part| match part {
-            ReasoningContent::Text { text, .. } => Some(text.trim().to_string()),
-            ReasoningContent::Summary(summary) => Some(summary.trim().to_string()),
-            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => None,
-            _ => None,
-        })
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Flattens one tool-result content payload into readable text that can be safely persisted in JSON state.
-/// 将一组工具结果内容压平成可安全持久化到 JSON 状态中的可读文本。
-fn flatten_tool_result_content(content: &OneOrMany<ToolResultContent>) -> String {
-    let segments = content
-        .iter()
-        .map(|item| match item {
-            ToolResultContent::Text(text) => text.text.trim().to_string(),
-            ToolResultContent::Image(image) => {
-                serde_json::to_string(image).unwrap_or_else(|_| String::from("{}"))
-            }
-        })
-        .filter(|segment| !segment.trim().is_empty())
-        .collect::<Vec<_>>();
-
-    if segments.is_empty() {
-        return String::from("（空工具结果）");
-    }
-
-    segments.join("\n\n---\n\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_runtime::provider_request_bridge_messages::session_message_to_core_message;
+    use crate::agent_runtime::provider_request_bridge_rig::core_messages_to_rig_history;
+    use rig::message::{AssistantContent, Message as RigMessage};
     use serde_json::json;
 
     /// Verifies that stored assistant reasoning remains local-only and is not replayed into outgoing rig history.
@@ -560,7 +305,11 @@ mod tests {
             },
         }];
 
-        let history = conversation_messages_to_rig_history(&messages);
+        let core_messages = messages
+            .iter()
+            .map(session_message_to_core_message)
+            .collect::<Vec<_>>();
+        let history = core_messages_to_rig_history(&core_messages);
         let Some(RigMessage::Assistant { content, .. }) = history.first() else {
             panic!("expected one assistant history item");
         };
