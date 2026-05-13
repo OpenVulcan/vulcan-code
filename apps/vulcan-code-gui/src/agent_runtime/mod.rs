@@ -36,6 +36,7 @@ pub mod provider_transport;
 pub mod provider_transport_adapter_support;
 pub mod provider_transport_anthropic;
 pub mod provider_transport_anthropic_adapter;
+pub mod provider_transport_anthropic_http;
 pub mod provider_transport_entry_inputs;
 pub mod provider_transport_live_delta;
 pub mod provider_transport_openai;
