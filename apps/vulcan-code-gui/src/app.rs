@@ -2592,11 +2592,11 @@ impl VulcanWorkbench {
             .and_then(|agent_id| agent_profile_catalog.agents.get(agent_id))
             .map(AgentProfileFormState::from_profile)
             .unwrap_or_default();
-        let runtime_foundation = RuntimeFoundation::build(
+        let runtime_foundation = RuntimeFoundation::build_from_runtime_handles(
             &provider_configuration,
             &agent_profile_catalog,
             None,
-            crate::mcp::McpRuntimeAccess::from_configuration(&provider_configuration, None),
+            None,
         );
 
         let activities = ActivityEntry::seeded();

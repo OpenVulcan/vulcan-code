@@ -307,6 +307,40 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
     );
 }
 
+/// Verifies top-level workbench construction paths do not manually assemble MCP runtime access objects outside the runtime foundation boundary.
+/// 验证顶层工作台构建路径不会在运行时基础架构边界之外手工装配 MCP 运行时访问对象。
+#[test]
+fn app_level_workbench_paths_do_not_manually_construct_mcp_runtime_access() {
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let app_path = src_root.join("app.rs");
+    let app_configuration_path = src_root.join("app").join("configuration.rs");
+
+    let app_source = fs::read_to_string(&app_path).expect("app.rs should remain readable");
+    let app_configuration_source = fs::read_to_string(&app_configuration_path)
+        .expect("app/configuration.rs should remain readable");
+
+    assert!(
+        app_source.contains("RuntimeFoundation::build_from_runtime_handles"),
+        "app.rs should build runtime foundations through the runtime-handle helper: {}",
+        app_path.display()
+    );
+    assert!(
+        !app_source.contains("McpRuntimeAccess::from_configuration"),
+        "app.rs must not manually assemble McpRuntimeAccess anymore: {}",
+        app_path.display()
+    );
+    assert!(
+        app_configuration_source.contains("RuntimeFoundation::build_from_runtime_handles"),
+        "app/configuration.rs should rebuild runtime foundations through the runtime-handle helper: {}",
+        app_configuration_path.display()
+    );
+    assert!(
+        !app_configuration_source.contains("McpRuntimeAccess::from_configuration"),
+        "app/configuration.rs must not manually assemble McpRuntimeAccess anymore: {}",
+        app_configuration_path.display()
+    );
+}
+
 /// Verifies the removed MCP runtime projection shim does not reappear in the agent runtime module tree.
 /// 验证已经移除的 MCP 运行时投影中间层不会重新出现在 agent runtime 模块树中。
 #[test]

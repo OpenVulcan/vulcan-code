@@ -21,8 +21,26 @@ pub fn stream_runtime_run(
     mcp_runtime: Option<McpRuntimeHandle>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
+    let mcp_runtime_access = McpRuntimeAccess::from_configuration(&config, mcp_runtime);
+    stream_runtime_run_with_access(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        mcp_runtime_access,
+        request,
+    )
+}
+
+/// Streams one real provider run from an already prepared MCP runtime access surface.
+/// 根据一份已经准备好的 MCP 运行时访问面流式执行一次真实 Provider 调用。
+fn stream_runtime_run_with_access(
+    config: ProviderConfigurationFile,
+    agent_profile_catalog: AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    mcp_runtime_access: McpRuntimeAccess,
+    request: ExecutionPreparationRequest,
+) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let mcp_runtime_access = McpRuntimeAccess::from_configuration(&config, mcp_runtime.clone());
         let launch = match prepare_runtime_stream_launch(
             &config,
             &agent_profile_catalog,
