@@ -754,8 +754,8 @@ pub fn render_luaskills_invocation_result_text(
     render_tool_result_text(result, skill_name, &client_budget, &render_options)
 }
 
-/// Build one default LuaSkills invocation context used by rig-backed tool calls.
-/// 构建一份供 rig 驱动工具调用使用的默认 LuaSkills 调用上下文。
+/// Build one default LuaSkills invocation context used by host-managed tool calls.
+/// 构建一份供宿主管理工具调用使用的默认 LuaSkills 调用上下文。
 pub fn build_luaskills_tool_invocation_context(
     session_id: Option<SessionId>,
     transport_name: &str,

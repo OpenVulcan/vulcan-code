@@ -54,8 +54,8 @@ pub struct SessionConversationMessage {
     /// Stable protocol message identifier owned by the local workbench.
     /// 由本地工作台持有的稳定协议消息标识。
     pub id: String,
-    /// Structured canonical payload that can be losslessly projected back into rig history.
-    /// 可以稳定投影回 rig 历史的结构化规范载荷。
+    /// Structured canonical payload that can be losslessly projected back into provider-visible request history.
+    /// 可以稳定投影回 Provider 可见请求历史的结构化规范载荷。
     pub payload: SessionConversationPayload,
 }
 
@@ -119,8 +119,8 @@ pub enum SessionConversationPayload {
     /// Tool-result payload returned to the model after one assistant tool call.
     /// 在一次助手工具调用后回传给模型的工具结果载荷。
     ToolResult {
-        /// Stable tool-result identifier emitted by rig or synthesized locally.
-        /// 由 rig 发出或在本地合成的稳定工具结果标识。
+        /// Stable tool-result identifier emitted by the provider or synthesized locally.
+        /// 由 Provider 发出或在本地合成的稳定工具结果标识。
         tool_result_id: String,
         /// Optional provider-visible tool-call identifier linked to the result.
         /// 与该结果关联的可选 Provider 可见工具调用标识。

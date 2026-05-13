@@ -161,8 +161,8 @@ struct OpenAiCompatibleStreamingChunk {
     usage: Option<OpenAiCompatibleUsage>,
 }
 
-/// Executes one direct OpenAI-compatible streaming turn without going through rig completion models.
-/// 在不经过 rig completion model 的前提下执行一次直连 OpenAI 兼容流式回合。
+/// Executes one direct OpenAI-compatible streaming turn without going through any third-party completion-model abstraction.
+/// 在不经过任何第三方 completion model 抽象的前提下执行一次直连 OpenAI 兼容流式回合。
 pub(crate) async fn execute_openai_compatible_http_streaming_turn<S>(
     provider_id: &str,
     provider_label: &str,

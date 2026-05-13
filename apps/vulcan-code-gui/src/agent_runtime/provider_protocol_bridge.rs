@@ -2,7 +2,7 @@
 //! 供执行器、传输适配器与回归测试复用的共享 Provider 响应桥接辅助逻辑。
 
 use crate::agent_runtime::provider_protocol_content::{
-    ProviderAssistantContent, ProviderReasoningPart, ProviderStreamedAssistantContent,
+    ProviderAssistantContent, ProviderReasoningPart,
 };
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use serde_json::{Map as JsonMap, Value};
@@ -85,40 +85,6 @@ pub(crate) fn format_host_tool_result_runtime_detail(
     format!("## 返回标识\n\n`{tool_result_id}`\n\n## 工具返回\n\n{normalized_output}")
 }
 
-/// Converts one assistant streaming content chunk into zero or more `vulcan-core` provider-turn deltas while intentionally ignoring tool-boundary presentation details.
-/// 将一条助手流式内容块转换为零条或多条 `vulcan-core` Provider 回合增量，并刻意忽略工具边界展示细节。
-pub(crate) fn core_provider_turn_deltas_from_assistant_content(
-    content: ProviderStreamedAssistantContent,
-) -> Vec<CoreProviderTurnDelta> {
-    match content {
-        ProviderStreamedAssistantContent::Text(text) => {
-            if text.is_empty() {
-                Vec::new()
-            } else {
-                vec![CoreProviderTurnDelta::Output { delta: text }]
-            }
-        }
-        ProviderStreamedAssistantContent::Reasoning(reasoning) => {
-            let flattened = flatten_reasoning_content(&reasoning);
-            if flattened.is_empty() {
-                Vec::new()
-            } else {
-                vec![CoreProviderTurnDelta::Thinking { delta: flattened }]
-            }
-        }
-        ProviderStreamedAssistantContent::ReasoningDelta(reasoning) => {
-            if reasoning.is_empty() {
-                Vec::new()
-            } else {
-                vec![CoreProviderTurnDelta::Thinking { delta: reasoning }]
-            }
-        }
-        ProviderStreamedAssistantContent::ToolCall
-        | ProviderStreamedAssistantContent::ToolCallDelta
-        | ProviderStreamedAssistantContent::Final => Vec::new(),
-    }
-}
-
 /// Converts one `vulcan-core` provider-turn delta into the GUI-facing runtime delta shape without changing the semantic payload.
 /// 将一条 `vulcan-core` Provider 回合增量转换为面向 GUI 的运行时增量形状，同时不改变其语义载荷。
 pub(crate) fn core_provider_turn_delta_to_runtime_delta(
@@ -130,8 +96,8 @@ pub(crate) fn core_provider_turn_delta_to_runtime_delta(
     }
 }
 
-/// Builds one normalized `vulcan-core` single-turn response from the final rig assistant choice list and provider message identifier.
-/// 根据最终 rig 助手 choice 列表与 Provider 消息标识构建一份规范化的 `vulcan-core` 单回合响应。
+/// Builds one normalized `vulcan-core` single-turn response from the final provider assistant content list and provider message identifier.
+/// 根据最终 Provider 助手内容列表与 Provider 消息标识构建一份规范化的 `vulcan-core` 单回合响应。
 pub(crate) fn build_openai_compatible_turn_response(
     provider_id: &str,
     model_id: &str,

@@ -1,23 +1,17 @@
 //! Shared streaming adapter support helpers reused by provider-specific transport adapters.
 //! 供各 Provider 专用传输适配器复用的共享流式适配器支持辅助模块。
 
-use crate::agent_runtime::provider_protocol_bridge::{
-    core_provider_turn_delta_to_runtime_delta, inject_previous_response_id_into_additional_params,
-};
+use crate::agent_runtime::provider_protocol_bridge::inject_previous_response_id_into_additional_params;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::{
     OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
 };
-use futures_util::{Stream, StreamExt};
 use reqwest::header::HeaderMap;
 use std::fmt::Display;
-use vulcan_core::provider::VulcanProviderDeltaSink;
+use vulcan_core::types::CoreError as VulcanCoreError;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
-};
-use vulcan_core::types::{
-    CoreError as VulcanCoreError, ProviderTurnDelta as CoreProviderTurnDelta,
 };
 
 /// Formats one provider label prefix so mixed English/Chinese runtime messages keep natural spacing automatically.
@@ -44,37 +38,6 @@ pub(crate) fn unsupported_streaming_execute<T>(provider_label: &str) -> Result<T
             "{provider_label_prefix}流式适配器不支持非流式 execute_request 调用，请改用 execute_request_streaming。"
         ),
     })
-}
-
-/// Forwards one streaming provider content stream into both the `vulcan-core` delta sink and the GUI live-delta sender.
-/// 将单个流式 Provider 内容流同时转发到 `vulcan-core` 增量汇聚器与 GUI 实时增量发送器。
-pub(crate) async fn forward_streaming_provider_deltas<S, St, C, E, F>(
-    provider_id: &str,
-    provider_label: &str,
-    live_sender: &ProviderLiveDeltaSender,
-    stream: &mut St,
-    sink: &mut S,
-    mut convert_content: F,
-) -> Result<(), VulcanCoreError>
-where
-    S: VulcanProviderDeltaSink,
-    St: Stream<Item = Result<C, E>> + Unpin,
-    E: Display,
-    F: FnMut(C) -> Vec<CoreProviderTurnDelta>,
-{
-    let provider_label_prefix = format_provider_label_prefix(provider_label);
-    while let Some(item) = stream.next().await {
-        let content = item.map_err(|error| VulcanCoreError::ProviderFailure {
-            provider_id: provider_id.to_string(),
-            message: format!("{provider_label_prefix}流式执行失败：{error}"),
-        })?;
-        for delta in convert_content(content) {
-            sink.push_delta(delta.clone());
-            let _ = live_sender.send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
-        }
-    }
-
-    Ok(())
 }
 
 /// Maps one low-level provider client build result into the normalized `vulcan-core` provider failure shape.

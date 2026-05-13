@@ -76,8 +76,8 @@ impl ProviderFieldKey {
     }
 }
 
-/// Provider runtime family aligned with the current project and rig-facing integration model.
-/// 与当前项目及 rig 接入模型对齐的供应商运行时族。
+/// Provider runtime family aligned with the current project and host-controlled integration model.
+/// 与当前项目及宿主控制接入模型对齐的供应商运行时族。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderRuntimeKind {
     /// OpenAI-compatible HTTP runtime.

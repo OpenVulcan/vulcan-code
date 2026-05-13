@@ -32,27 +32,3 @@ pub(crate) enum ProviderAssistantContent {
     /// 一条结构化助手工具调用。
     ToolCall(CoreConversationToolCall),
 }
-
-/// One normalized streamed assistant content delta reused by the shared provider bridge before it is translated into `vulcan-core` turn deltas.
-/// 在被翻译为 `vulcan-core` 回合增量之前，由共享 Provider 桥接层复用的一条规范化流式助手内容增量。
-#[derive(Debug, Clone)]
-pub(crate) enum ProviderStreamedAssistantContent {
-    /// One visible streamed text fragment.
-    /// 一条可见的流式文本片段。
-    Text(String),
-    /// One full reasoning block delivered by the upstream provider.
-    /// 一条由上游 Provider 交付的完整思考块。
-    Reasoning(Vec<ProviderReasoningPart>),
-    /// One incremental reasoning text fragment.
-    /// 一条增量式思考文本片段。
-    ReasoningDelta(String),
-    /// One streamed tool-call boundary that is intentionally ignored by the transcript bridge.
-    /// 一条被转录桥刻意忽略的流式工具调用边界。
-    ToolCall,
-    /// One streamed tool-call delta boundary that is intentionally ignored by the transcript bridge.
-    /// 一条被转录桥刻意忽略的流式工具调用增量边界。
-    ToolCallDelta,
-    /// One streamed final marker that is intentionally ignored by the transcript bridge.
-    /// 一条被转录桥刻意忽略的流式最终标记。
-    Final,
-}

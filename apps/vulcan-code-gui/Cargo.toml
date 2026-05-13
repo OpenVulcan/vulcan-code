@@ -19,7 +19,6 @@ dirs = "6.0.0"
 futures-util = "0.3.31"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15.4"
-rig.workspace = true
 vulcan-agent-view.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true

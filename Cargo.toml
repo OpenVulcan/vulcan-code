@@ -24,7 +24,6 @@ version = "0.1.0"
 iced = { path = "third_party/iced", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced", "lazy"] }
 iced_aw = { path = "third_party/iced_aw", default-features = false, features = ["context_menu"] }
 iced_fonts = { path = "third_party/iced_fonts", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
-rig = { package = "rig-core", version = "0.36.0", default-features = false, features = ["reqwest", "rustls", "derive"] }
 vulcan-mcp-runtime = { path = "apps/vulcan-mcp-runtime" }
 vulcan-agent-view = { path = "apps/vulcan-agent-view" }
 vulcan-iced-widget = { path = "apps/vulcan-iced-widget" }
