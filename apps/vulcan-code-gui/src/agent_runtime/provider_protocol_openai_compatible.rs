@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Host-owned OpenAI-compatible streaming protocol primitives.
 //! 宿主自有的 OpenAI 兼容流式协议基础原语。
 
@@ -42,14 +40,6 @@ impl CompatibleToolCallChunk {
         self.name.as_ref().is_some_and(|name| !name.is_empty())
     }
 
-    /// Returns whether the current chunk carries one non-empty argument fragment.
-    /// 返回当前碎片是否携带非空参数片段。
-    fn has_nonempty_arguments(&self) -> bool {
-        self.arguments
-            .as_ref()
-            .is_some_and(|arguments| !arguments.is_empty())
-    }
-
     /// Returns whether the current chunk semantically starts one new tool call.
     /// 返回当前碎片在语义上是否开启了一个新的工具调用。
     fn starts_new_tool_call(&self) -> bool {
@@ -80,6 +70,7 @@ pub(crate) struct CompatibleChoice<D> {
     pub(crate) tool_calls: Vec<CompatibleToolCallChunk>,
     /// Provider-specific additional detail fragments that higher layers may consume later.
     /// 上层后续可能消费的 Provider 专有附加细节碎片。
+    #[allow(dead_code)]
     pub(crate) details: Vec<D>,
 }
 
@@ -113,12 +104,14 @@ pub(crate) struct CompatibleChunk<U, D> {
     pub(crate) response_id: Option<String>,
     /// Optional upstream model identifier carried by the current event.
     /// 当前事件携带的可选上游模型标识。
+    #[allow(dead_code)]
     pub(crate) response_model: Option<String>,
     /// Optional first normalized choice extracted from the current event.
     /// 从当前事件提取出的可选首个规范化 choice。
     pub(crate) choice: Option<CompatibleChoice<D>>,
     /// Optional usage snapshot carried by the current event.
     /// 当前事件携带的可选用量快照。
+    #[allow(dead_code)]
     pub(crate) usage: Option<U>,
 }
 

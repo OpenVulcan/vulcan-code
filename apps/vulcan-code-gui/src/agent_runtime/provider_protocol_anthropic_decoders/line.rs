@@ -174,6 +174,7 @@ fn decode_text(bytes: &[u8]) -> String {
 
 /// Decodes multiple chunks with one optional final flush.
 /// 解码多段输入块，并可选择执行一次最终刷新。
+#[cfg(test)]
 pub fn decode_chunks(chunks: &[&[u8]], flush: bool) -> Vec<String> {
     let mut decoder = LineDecoder::new();
     let mut lines = Vec::new();

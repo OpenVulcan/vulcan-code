@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Incremental Server-Sent Event decoding utilities for Anthropic protocol streams.
 //! 面向 Anthropic 协议流的增量 Server-Sent Event 解码工具。
 

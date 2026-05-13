@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Runtime event definitions used by future agent execution surfaces.
 //! 供后续代理执行界面使用的运行时事件定义。
 
@@ -22,9 +20,11 @@ pub enum RuntimeEventKind {
     ToolFinished,
     /// Delegate or sub-agent invocation started.
     /// 委派代理或子代理调用开始事件。
+    #[allow(dead_code)]
     DelegateStarted,
     /// Delegate or sub-agent invocation finished.
     /// 委派代理或子代理调用结束事件。
+    #[allow(dead_code)]
     DelegateFinished,
     /// Execution pipeline failed.
     /// 执行链路失败事件。

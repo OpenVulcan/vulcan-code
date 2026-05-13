@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Anthropic client-side protocol helpers owned by the host runtime.
 //! 宿主管理的 Anthropic 客户端侧协议辅助逻辑。
 
