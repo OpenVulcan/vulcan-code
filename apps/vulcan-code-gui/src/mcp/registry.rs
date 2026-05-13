@@ -10,7 +10,7 @@ use vulcan_mcp_runtime::McpTransport;
 /// Runtime registry of configured MCP servers.
 /// 已配置 MCP 服务器的运行时注册表。
 #[derive(Debug, Clone, Default)]
-pub struct McpServerRegistry {
+pub(crate) struct McpServerRegistry {
     /// Runtime-facing server entries.
     /// 面向运行时的服务器条目集合。
     servers: Vec<McpServerConfig>,
@@ -111,7 +111,9 @@ impl McpServerRegistry {
 
 /// Builds one lightweight configured MCP overview directly from the shared provider configuration file.
 /// 直接根据共享供应商配置文件构建一个轻量已配置 MCP 概览。
-pub fn configured_mcp_registry_overview(config: &ProviderConfigurationFile) -> McpRuntimeOverview {
+pub(crate) fn configured_mcp_registry_overview(
+    config: &ProviderConfigurationFile,
+) -> McpRuntimeOverview {
     McpServerRegistry::from_provider_configuration(config).overview()
 }
 
