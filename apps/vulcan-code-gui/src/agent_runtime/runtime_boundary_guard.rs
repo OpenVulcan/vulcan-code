@@ -201,3 +201,38 @@ fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
         offending_files
     );
 }
+
+/// Verifies tool-manager preparation surfaces consume MCP tool bindings instead of reaching back to the raw runtime handle or legacy tool-view type.
+/// 验证工具管理器准备链路改为消费 MCP 工具绑定，而不是重新回退到原始运行时句柄或旧工具视图类型。
+#[test]
+fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
+    let gui_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let bridge_path = gui_src_root.join("vulcan_tools_bridge.rs");
+    let preparation_path = gui_src_root.join("agent_runtime").join("execution_preparation.rs");
+
+    let bridge_source =
+        fs::read_to_string(&bridge_path).expect("vulcan_tools_bridge.rs should remain readable");
+    let preparation_source = fs::read_to_string(&preparation_path)
+        .expect("execution_preparation.rs should remain readable");
+
+    assert!(
+        !bridge_source.contains("McpRuntimeHandle"),
+        "vulcan_tools_bridge.rs must not reintroduce direct McpRuntimeHandle usage: {}",
+        bridge_path.display()
+    );
+    assert!(
+        !bridge_source.contains("McpRuntimeToolView"),
+        "vulcan_tools_bridge.rs must not reintroduce legacy McpRuntimeToolView usage: {}",
+        bridge_path.display()
+    );
+    assert!(
+        bridge_source.contains("McpRuntimeToolBinding"),
+        "vulcan_tools_bridge.rs should continue consuming McpRuntimeToolBinding: {}",
+        bridge_path.display()
+    );
+    assert!(
+        !preparation_source.contains("McpRuntimeHandle"),
+        "execution_preparation.rs must not reintroduce direct McpRuntimeHandle usage: {}",
+        preparation_path.display()
+    );
+}
