@@ -136,17 +136,17 @@ impl From<PersistedSkillKind> for RuntimeSkillKind {
 /// Runtime-facing routing rule used by coordinator agents.
 /// 协调代理使用的运行时路由规则。
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RuntimeAgentRoute {
     /// Signal name that activates the route.
     /// 激活该路由的信号名称。
+    #[allow(dead_code)]
     pub signal: String,
     /// Target delegate agent identifier.
     /// 目标委派代理标识。
+    #[allow(dead_code)]
     pub delegate: String,
 }
 
-#[allow(dead_code)]
 /// Runtime-facing tool-policy definition.
 /// 面向运行时的工具策略定义。
 #[derive(Debug, Clone)]
@@ -174,7 +174,6 @@ pub struct RuntimeToolPolicyDefinition {
 /// Runtime-facing skill definition.
 /// 面向运行时的技能定义。
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RuntimeSkillDefinition {
     /// Stable skill identifier.
     /// 稳定技能标识。
@@ -187,6 +186,7 @@ pub struct RuntimeSkillDefinition {
     pub kind: RuntimeSkillKind,
     /// Optional skill description.
     /// 可选技能描述。
+    #[allow(dead_code)]
     pub description: String,
     /// Whether the skill is enabled.
     /// 当前技能是否启用。
@@ -196,13 +196,14 @@ pub struct RuntimeSkillDefinition {
     pub trigger_signals: Vec<String>,
     /// Optional emitted signal.
     /// 可选的输出信号。
+    #[allow(dead_code)]
     pub emitted_signal: Option<String>,
     /// Confidence delta contributed by the skill.
     /// 技能贡献的置信度增量。
+    #[allow(dead_code)]
     pub confidence_delta: f32,
 }
 
-#[allow(dead_code)]
 /// Runtime-facing agent definition.
 /// 面向运行时的代理定义。
 #[derive(Debug, Clone)]
@@ -218,6 +219,7 @@ pub struct RuntimeAgentDefinition {
     pub kind: RuntimeAgentKind,
     /// Optional agent description.
     /// 可选代理描述。
+    #[allow(dead_code)]
     pub description: String,
     /// Optional agent charter or system prompt.
     /// 可选代理章程或系统提示词。
@@ -239,9 +241,11 @@ pub struct RuntimeAgentDefinition {
     pub tool_policy: Option<String>,
     /// Coordinator routing rules.
     /// 协调代理路由规则集合。
+    #[allow(dead_code)]
     pub routes: Vec<RuntimeAgentRoute>,
     /// Optional fallback delegate.
     /// 可选回退委派目标。
+    #[allow(dead_code)]
     pub fallback_delegate: Option<String>,
     /// Optional model override.
     /// 可选模型覆盖。
