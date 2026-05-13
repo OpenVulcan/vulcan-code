@@ -103,6 +103,44 @@ impl McpRuntimeToolDescriptor {
     }
 }
 
+/// Stable MCP tool allowlist consumed by runtime filtering surfaces.
+/// 供运行时筛选表面消费的稳定 MCP 工具白名单。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpRuntimeToolAllowlist {
+    /// Optional server identifier allowlist.
+    /// 可选的服务器标识白名单。
+    allowed_server_ids: Option<BTreeSet<String>>,
+    /// Optional tool-name or qualified-name allowlist.
+    /// 可选的工具名或限定工具名白名单。
+    allowed_tool_names: Option<BTreeSet<String>>,
+}
+
+impl McpRuntimeToolAllowlist {
+    /// Builds one MCP runtime tool allowlist from optional server and tool allowlists.
+    /// 根据可选服务器与工具白名单构建单个 MCP 运行时工具白名单。
+    pub fn new(
+        allowed_server_ids: Option<BTreeSet<String>>,
+        allowed_tool_names: Option<BTreeSet<String>>,
+    ) -> Self {
+        Self {
+            allowed_server_ids,
+            allowed_tool_names,
+        }
+    }
+
+    /// Returns the optional server identifier allowlist.
+    /// 返回可选服务器标识白名单。
+    pub fn allowed_server_ids(&self) -> Option<&BTreeSet<String>> {
+        self.allowed_server_ids.as_ref()
+    }
+
+    /// Returns the optional tool-name or qualified-name allowlist.
+    /// 返回可选工具名或限定工具名白名单。
+    pub fn allowed_tool_names(&self) -> Option<&BTreeSet<String>> {
+        self.allowed_tool_names.as_ref()
+    }
+}
+
 /// Runtime connectivity state of one configured MCP server.
 /// 某个已配置 MCP 服务器的运行时连通状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,12 +338,16 @@ impl McpRuntimeSnapshot {
     /// 返回按可选服务器与工具白名单过滤后的工具描述集合。
     fn filtered_tool_descriptors(
         &self,
-        allowed_server_ids: Option<&BTreeSet<String>>,
-        allowed_tool_names: Option<&BTreeSet<String>>,
+        allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolDescriptor> {
         self.tool_descriptors()
             .into_iter()
-            .filter(|tool| tool.matches_allowed_sets(allowed_server_ids, allowed_tool_names))
+            .filter(|tool| {
+                tool.matches_allowed_sets(
+                    allowlist.allowed_server_ids(),
+                    allowlist.allowed_tool_names(),
+                )
+            })
             .collect()
     }
 
@@ -382,7 +424,7 @@ impl McpRuntimeHandle {
 
     /// Resolves the currently active transport for one connected server.
     /// 解析某个已连接服务器当前活动的传输实例。
-    pub fn transport_for_server(&self, server_id: &str) -> Option<Arc<dyn McpTransport>> {
+    fn transport_for_server(&self, server_id: &str) -> Option<Arc<dyn McpTransport>> {
         self.inner
             .transports
             .read()
@@ -395,11 +437,9 @@ impl McpRuntimeHandle {
     /// 返回按可选白名单过滤后的当前可用 MCP 工具描述集合。
     pub fn available_tool_descriptors_filtered(
         &self,
-        allowed_server_ids: Option<&BTreeSet<String>>,
-        allowed_tool_names: Option<&BTreeSet<String>>,
+        allowlist: &McpRuntimeToolAllowlist,
     ) -> Vec<McpRuntimeToolDescriptor> {
-        self.snapshot()
-            .filtered_tool_descriptors(allowed_server_ids, allowed_tool_names)
+        self.snapshot().filtered_tool_descriptors(allowlist)
     }
 
     /// Calls one MCP tool descriptor through its owning live transport.
@@ -672,7 +712,7 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
 mod tests {
     use super::{
         McpRuntimeServerDiagnostic, McpRuntimeServerSnapshot, McpRuntimeServerStatus,
-        McpRuntimeSnapshot, McpRuntimeToolDescriptor,
+        McpRuntimeSnapshot, McpRuntimeToolAllowlist, McpRuntimeToolDescriptor,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -796,6 +836,23 @@ mod tests {
     }
 
     #[test]
+    fn tool_allowlist_preserves_optional_server_and_tool_sets() {
+        let allowlist = McpRuntimeToolAllowlist::new(
+            Some(BTreeSet::from([String::from("server-a")])),
+            Some(BTreeSet::from([String::from("server-a/read_file")])),
+        );
+
+        assert_eq!(
+            allowlist.allowed_server_ids(),
+            Some(&BTreeSet::from([String::from("server-a")]))
+        );
+        assert_eq!(
+            allowlist.allowed_tool_names(),
+            Some(&BTreeSet::from([String::from("server-a/read_file")]))
+        );
+    }
+
+    #[test]
     fn filtered_tool_descriptors_apply_server_and_tool_allowlists() {
         let tool_a = McpRuntimeToolDescriptor::new(
             String::from("server-a"),
@@ -839,20 +896,24 @@ mod tests {
         };
 
         assert_eq!(
-            snapshot.filtered_tool_descriptors(None, None),
+            snapshot.filtered_tool_descriptors(&McpRuntimeToolAllowlist::default()),
             vec![tool_a.clone(), tool_b.clone()]
         );
         assert_eq!(
             snapshot.filtered_tool_descriptors(
-                Some(&BTreeSet::from([String::from("server-b")])),
-                None
+                &McpRuntimeToolAllowlist::new(
+                    Some(BTreeSet::from([String::from("server-b")])),
+                    None,
+                )
             ),
             vec![tool_b.clone()]
         );
         assert_eq!(
             snapshot.filtered_tool_descriptors(
-                None,
-                Some(&BTreeSet::from([String::from("server-a/read_file")]))
+                &McpRuntimeToolAllowlist::new(
+                    None,
+                    Some(BTreeSet::from([String::from("server-a/read_file")])),
+                )
             ),
             vec![tool_a]
         );

@@ -8,7 +8,8 @@ use crate::agent_runtime::config::{
 };
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
-    McpRegistrySummary, McpRuntimeHandle, McpRuntimeToolDescriptor, configured_mcp_registry_summary,
+    McpRegistrySummary, McpRuntimeHandle, McpRuntimeToolAllowlist, McpRuntimeToolDescriptor,
+    configured_mcp_registry_summary,
 };
 use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
@@ -369,11 +370,9 @@ impl RuntimeFoundation {
             None
         };
 
-        mcp_runtime
-            .available_tool_descriptors_filtered(
-                allowed_server_ids.as_ref(),
-                allowed_tool_names.as_ref(),
-            )
+        let tool_allowlist = McpRuntimeToolAllowlist::new(allowed_server_ids, allowed_tool_names);
+
+        mcp_runtime.available_tool_descriptors_filtered(&tool_allowlist)
     }
 
     /// Returns enabled MCP server summary rows for execution diagnostics.
