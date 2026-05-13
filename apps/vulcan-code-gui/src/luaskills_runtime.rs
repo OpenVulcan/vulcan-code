@@ -33,7 +33,6 @@ const ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH: &str = "config/luaskills_root_s
 pub struct LuaSkillsRuntimeHandle {
     /// Shared LuaSkills engine reused by later skill-facing panels and workflows.
     /// 供后续技能面板与工作流复用的共享 LuaSkills 引擎。
-    #[allow(dead_code)]
     pub engine: Arc<Mutex<LuaEngine>>,
     /// Stable runtime root reserved for bundled LuaSkills resources and state.
     /// 为内建 LuaSkills 资源与状态保留的稳定运行时根目录。

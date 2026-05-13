@@ -45,7 +45,6 @@ impl From<PersistedMcpTransportKind> for McpTransportKind {
     }
 }
 
-#[allow(dead_code)]
 /// Runtime-facing MCP server configuration entry.
 /// 面向运行时的 MCP 服务器配置条目。
 #[derive(Debug, Clone)]

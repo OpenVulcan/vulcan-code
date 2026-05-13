@@ -225,7 +225,7 @@ pub async fn bootstrap_mcp_runtime(
         shutdown_tx,
     });
 
-    for server in registry.servers().iter().filter(|server| server.enabled) {
+    for server in registry.enabled_servers() {
         spawn_server_runtime_task(inner.clone(), server.clone());
     }
 

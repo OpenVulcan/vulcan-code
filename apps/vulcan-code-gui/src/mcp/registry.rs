@@ -26,7 +26,6 @@ impl McpServerRegistry {
 
     /// Returns every configured MCP server entry.
     /// 返回全部已配置的 MCP 服务器条目。
-    #[allow(dead_code)]
     pub fn servers(&self) -> &[McpServerConfig] {
         &self.servers
     }
@@ -45,7 +44,6 @@ impl McpServerRegistry {
 
     /// Returns the enabled MCP server entries.
     /// 返回已启用的 MCP 服务器条目。
-    #[allow(dead_code)]
     pub fn enabled_servers(&self) -> Vec<&McpServerConfig> {
         self.servers
             .iter()
@@ -72,7 +70,6 @@ impl McpServerRegistry {
 
     /// Spawns one MCP transport from the stored server entry.
     /// 根据存储的服务器条目启动一个 MCP 传输实例。
-    #[allow(dead_code)]
     pub async fn spawn_transport(&self, server_id: &str) -> Result<Arc<dyn McpTransport>, String> {
         let server = self
             .servers
@@ -88,12 +85,16 @@ impl McpServerRegistry {
             McpTransportKind::Stdio => {
                 let args = server.args.clone();
                 let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                let transport =
-                    StdioTransport::spawn(server.command_summary(), &server.command, &arg_refs)
-                        .await
-                        .map_err(|error| {
-                            format!("启动 MCP 服务器 `{}` 失败：{}。", server.name, error)
-                        })?;
+                let cwd = server.cwd.as_deref().map(std::path::Path::new);
+                let transport = StdioTransport::spawn(
+                    server.command_summary(),
+                    &server.command,
+                    &arg_refs,
+                    cwd,
+                    &server.env,
+                )
+                .await
+                .map_err(|error| format!("启动 MCP 服务器 `{}` 失败：{}。", server.name, error))?;
                 Ok(Arc::new(transport))
             }
             McpTransportKind::Http => {

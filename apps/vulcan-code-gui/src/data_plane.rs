@@ -34,7 +34,6 @@ const SESSION_PROTOCOL_RESET_MARKER_KEY: &str = "session-protocol-v3-reset";
 pub struct ControllerRuntimeHandle {
     /// Shared controller client proxy reused by later data operations.
     /// 供后续数据操作复用的共享控制器客户端代理。
-    #[allow(dead_code)]
     pub client: ControllerClient,
     /// Normalized controller endpoint URL used by the SDK.
     /// SDK 使用的标准化控制器端点 URL。
