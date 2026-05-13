@@ -137,28 +137,28 @@ impl McpRuntimeServerStatus {
 /// Runtime snapshot of one configured MCP server.
 /// 某个已配置 MCP 服务器的运行时快照。
 #[derive(Debug, Clone)]
-pub struct McpRuntimeServerSnapshot {
+struct McpRuntimeServerSnapshot {
     /// Human-readable server name.
     /// 人类可读服务器名称。
-    pub name: String,
+    name: String,
     /// Whether the server is enabled in configuration.
     /// 该服务器在配置中是否启用。
-    pub enabled: bool,
+    enabled: bool,
     /// Transport-family label used for diagnostics.
     /// 用于诊断的传输类型标签。
-    pub transport_label: String,
+    transport_label: String,
     /// Compact endpoint or command summary shown in the workbench.
     /// 展示在工作台中的紧凑端点或命令摘要。
-    pub endpoint_summary: String,
+    endpoint_summary: String,
     /// Current runtime connectivity status.
     /// 当前运行时连通状态。
-    pub status: McpRuntimeServerStatus,
+    status: McpRuntimeServerStatus,
     /// Latest connection or refresh warning, if any.
     /// 最近一次连接或刷新警告（如果存在）。
-    pub last_error: Option<String>,
+    last_error: Option<String>,
     /// Currently registered tool descriptors for this server.
     /// 当前为该服务器注册的工具描述集合。
-    pub tools: Vec<McpRuntimeToolDescriptor>,
+    tools: Vec<McpRuntimeToolDescriptor>,
 }
 
 /// Lightweight runtime-facing diagnostic view for one enabled MCP server.
@@ -167,25 +167,74 @@ pub struct McpRuntimeServerSnapshot {
 pub struct McpRuntimeServerDiagnostic {
     /// Human-readable server name.
     /// 人类可读服务器名称。
-    pub name: String,
+    name: String,
     /// Current runtime connectivity status.
     /// 当前运行时连通状态。
-    pub status: McpRuntimeServerStatus,
+    status: McpRuntimeServerStatus,
     /// Number of currently registered tools.
     /// 当前已注册工具数量。
-    pub tool_count: usize,
+    tool_count: usize,
     /// Latest connection or refresh warning, if any.
     /// 最近一次连接或刷新警告（如果存在）。
-    pub last_error: Option<String>,
+    last_error: Option<String>,
+}
+
+impl McpRuntimeServerDiagnostic {
+    /// Returns the human-readable server name.
+    /// 返回人类可读服务器名称。
+    pub fn server_name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the current runtime connectivity status.
+    /// 返回当前运行时连通状态。
+    pub fn status(&self) -> McpRuntimeServerStatus {
+        self.status
+    }
+
+    /// Returns the number of currently registered tools.
+    /// 返回当前已注册工具数量。
+    pub fn tool_count(&self) -> usize {
+        self.tool_count
+    }
+
+    /// Returns one human-readable runtime summary sentence.
+    /// 返回单条人类可读的运行时摘要语句。
+    pub fn summary_text(&self) -> String {
+        format!(
+            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具。",
+            self.server_name(),
+            self.status().label(),
+            self.tool_count()
+        )
+    }
+
+    /// Returns the latest warning sentence when the server has a refresh or connection error.
+    /// 当服务器存在刷新或连接错误时返回最近一次警告语句。
+    pub fn warning_text(&self) -> Option<String> {
+        self.last_error
+            .as_ref()
+            .map(|error| format!("{} 最近一次错误：{error}", self.summary_text()))
+    }
+
+    /// Returns the recommended runtime event title for UI projection.
+    /// 返回供界面投影使用的建议运行时事件标题。
+    pub fn runtime_event_title(&self) -> String {
+        if self.last_error.is_some() {
+            format!("MCP 服务器离线 · {}", self.server_name())
+        } else {
+            format!("MCP 服务器在线 · {}", self.server_name())
+        }
+    }
 }
 
 /// Aggregated MCP runtime snapshot consumed by UI summaries and execution planning.
 /// 供界面摘要与执行规划消费的聚合 MCP 运行时快照。
 #[derive(Debug, Clone, Default)]
-pub struct McpRuntimeSnapshot {
+struct McpRuntimeSnapshot {
     /// Server snapshots keyed by stable server identifier.
     /// 以稳定服务器标识为键保存的服务器快照集合。
-    pub servers: BTreeMap<String, McpRuntimeServerSnapshot>,
+    servers: BTreeMap<String, McpRuntimeServerSnapshot>,
 }
 
 impl McpRuntimeSnapshot {
@@ -718,6 +767,31 @@ mod tests {
                 tool_count: 0,
                 last_error: None,
             }]
+        );
+    }
+
+    #[test]
+    fn runtime_server_diagnostic_exposes_stable_summary_and_warning_text() {
+        let diagnostic = McpRuntimeServerDiagnostic {
+            name: String::from("Enabled Server"),
+            status: McpRuntimeServerStatus::Disconnected,
+            tool_count: 2,
+            last_error: Some(String::from("offline")),
+        };
+
+        assert_eq!(
+            diagnostic.summary_text(),
+            String::from("服务器 `Enabled Server` 当前状态为 `离线`，已注册 2 个工具。")
+        );
+        assert_eq!(
+            diagnostic.warning_text(),
+            Some(String::from(
+                "服务器 `Enabled Server` 当前状态为 `离线`，已注册 2 个工具。 最近一次错误：offline"
+            ))
+        );
+        assert_eq!(
+            diagnostic.runtime_event_title(),
+            String::from("MCP 服务器离线 · Enabled Server")
         );
     }
 

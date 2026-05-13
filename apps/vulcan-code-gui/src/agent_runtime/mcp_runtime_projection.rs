@@ -22,28 +22,22 @@ pub(crate) fn collect_enabled_mcp_runtime_events(
     }
 
     for server in diagnostics {
-        let summary = format!(
-            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具。",
-            server.name,
-            server.status.label(),
-            server.tool_count
-        );
+        let summary = server.summary_text();
         rows.push(summary.clone());
-        match &server.last_error {
-            Some(error) => {
-                let combined = format!("{summary} 最近一次错误：{error}");
+        match server.warning_text() {
+            Some(combined) => {
                 warnings.push(combined.clone());
                 errors.push(combined.clone());
                 runtime_events.push(RuntimeEvent::new(
                     RuntimeEventKind::Failed,
-                    format!("MCP 服务器离线 · {}", server.name),
+                    server.runtime_event_title(),
                     combined,
                 ));
             }
             None => {
                 runtime_events.push(RuntimeEvent::new(
                     RuntimeEventKind::ToolFinished,
-                    format!("MCP 服务器在线 · {}", server.name),
+                    server.runtime_event_title(),
                     summary,
                 ));
             }
