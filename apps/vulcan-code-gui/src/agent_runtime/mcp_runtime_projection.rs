@@ -16,18 +16,17 @@ pub(crate) fn collect_enabled_mcp_runtime_events(
     let Some(runtime) = mcp_runtime else {
         return (runtime_events, rows, errors, warnings);
     };
-    let snapshot = runtime.snapshot();
-
-    if snapshot.servers.is_empty() {
+    let diagnostics = runtime.enabled_server_diagnostics();
+    if diagnostics.is_empty() {
         return (runtime_events, rows, errors, warnings);
     }
 
-    for server in snapshot.servers.values().filter(|server| server.enabled) {
+    for server in diagnostics {
         let summary = format!(
             "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具。",
             server.name,
             server.status.label(),
-            server.tools.len()
+            server.tool_count
         );
         rows.push(summary.clone());
         match &server.last_error {

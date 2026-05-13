@@ -95,6 +95,24 @@ pub struct McpRuntimeServerSnapshot {
     pub tools: Vec<McpRuntimeToolDescriptor>,
 }
 
+/// Lightweight runtime-facing diagnostic view for one enabled MCP server.
+/// 面向运行时的单个已启用 MCP 服务器轻量诊断视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRuntimeServerDiagnostic {
+    /// Human-readable server name.
+    /// 人类可读服务器名称。
+    pub name: String,
+    /// Current runtime connectivity status.
+    /// 当前运行时连通状态。
+    pub status: McpRuntimeServerStatus,
+    /// Number of currently registered tools.
+    /// 当前已注册工具数量。
+    pub tool_count: usize,
+    /// Latest connection or refresh warning, if any.
+    /// 最近一次连接或刷新警告（如果存在）。
+    pub last_error: Option<String>,
+}
+
 /// Aggregated MCP runtime snapshot consumed by UI summaries and execution planning.
 /// 供界面摘要与执行规划消费的聚合 MCP 运行时快照。
 #[derive(Debug, Clone, Default)]
@@ -162,6 +180,21 @@ impl McpRuntimeSnapshot {
             .flat_map(|server| server.tools.clone())
             .collect()
     }
+
+    /// Returns lightweight diagnostics for enabled MCP servers only.
+    /// 仅返回已启用 MCP 服务器的轻量诊断信息。
+    pub fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
+        self.servers
+            .values()
+            .filter(|server| server.enabled)
+            .map(|server| McpRuntimeServerDiagnostic {
+                name: server.name.clone(),
+                status: server.status,
+                tool_count: server.tools.len(),
+                last_error: server.last_error.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Shared host-side handle used to inspect active MCP tools and resolve live transports at call time.
@@ -222,6 +255,12 @@ impl McpRuntimeHandle {
     /// 返回当前所有已连接服务器的可用 MCP 工具描述集合。
     pub fn available_tool_descriptors(&self) -> Vec<McpRuntimeToolDescriptor> {
         self.snapshot().tool_descriptors()
+    }
+
+    /// Returns lightweight diagnostics for enabled MCP servers only.
+    /// 仅返回已启用 MCP 服务器的轻量诊断信息。
+    pub fn enabled_server_diagnostics(&self) -> Vec<McpRuntimeServerDiagnostic> {
+        self.snapshot().enabled_server_diagnostics()
     }
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
@@ -463,7 +502,10 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
 
 #[cfg(test)]
 mod tests {
-    use super::{McpRuntimeServerSnapshot, McpRuntimeServerStatus, McpRuntimeSnapshot};
+    use super::{
+        McpRuntimeServerDiagnostic, McpRuntimeServerSnapshot, McpRuntimeServerStatus,
+        McpRuntimeSnapshot,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -515,6 +557,48 @@ mod tests {
                 String::from("在线 · Connected Server · http · https://connected.test/mcp"),
                 String::from("连接中 · Connecting Server · stdio · connecting-mcp"),
             ]
+        );
+    }
+
+    #[test]
+    fn enabled_server_diagnostics_only_keep_enabled_servers() {
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([
+                (
+                    String::from("enabled"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Enabled Server"),
+                        enabled: true,
+                        transport_label: String::from("stdio"),
+                        endpoint_summary: String::from("enabled-mcp"),
+                        status: McpRuntimeServerStatus::Connected,
+                        last_error: None,
+                        tools: vec![],
+                    },
+                ),
+                (
+                    String::from("disabled"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Disabled Server"),
+                        enabled: false,
+                        transport_label: String::from("http"),
+                        endpoint_summary: String::from("https://disabled.test/mcp"),
+                        status: McpRuntimeServerStatus::Disabled,
+                        last_error: None,
+                        tools: vec![],
+                    },
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            snapshot.enabled_server_diagnostics(),
+            vec![McpRuntimeServerDiagnostic {
+                name: String::from("Enabled Server"),
+                status: McpRuntimeServerStatus::Connected,
+                tool_count: 0,
+                last_error: None,
+            }]
         );
     }
 }
