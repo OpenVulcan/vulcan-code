@@ -185,13 +185,10 @@ pub struct McpRuntimeAccess {
 }
 
 impl McpRuntimeAccess {
-    /// Builds one stable MCP runtime access surface directly from provider configuration and one optional live runtime handle.
-    /// 直接根据供应商配置与一个可选实时运行时句柄构建单个稳定 MCP 运行时访问面。
-    pub(crate) fn from_configuration(
-        config: &ProviderConfigurationFile,
-        live_runtime: Option<McpRuntimeHandle>,
-    ) -> Self {
-        Self::new(configured_mcp_registry_summary(config), live_runtime)
+    /// Builds one stable MCP runtime access surface from provider configuration without a live runtime handle.
+    /// 根据供应商配置构建一个不包含实时运行时句柄的稳定 MCP 运行时访问面。
+    pub(crate) fn configured(config: &ProviderConfigurationFile) -> Self {
+        Self::new(configured_mcp_registry_summary(config), None)
     }
 
     /// Builds one stable MCP runtime access surface from configured summary data and one optional live runtime handle.
@@ -905,8 +902,8 @@ pub(crate) async fn bootstrap_mcp_runtime_access(
     config: ProviderConfigurationFile,
 ) -> Result<McpRuntimeAccess, String> {
     let live_runtime = bootstrap_mcp_runtime(config.clone()).await?;
-    Ok(McpRuntimeAccess::from_configuration(
-        &config,
+    Ok(McpRuntimeAccess::new(
+        configured_mcp_registry_summary(&config),
         Some(live_runtime),
     ))
 }

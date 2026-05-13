@@ -21,8 +21,7 @@ pub fn stream_runtime_run(
     mcp_runtime: Option<McpRuntimeAccess>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
-    let mcp_runtime_access =
-        mcp_runtime.unwrap_or_else(|| McpRuntimeAccess::from_configuration(&config, None));
+    let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| McpRuntimeAccess::configured(&config));
     stream_runtime_run_with_access(
         config,
         agent_profile_catalog,

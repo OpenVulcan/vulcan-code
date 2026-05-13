@@ -90,8 +90,7 @@ impl RuntimeFoundation {
             config,
             agent_profile_catalog,
             luaskills_runtime,
-            mcp_runtime_access
-                .unwrap_or_else(|| McpRuntimeAccess::from_configuration(config, None)),
+            mcp_runtime_access.unwrap_or_else(|| McpRuntimeAccess::configured(config)),
         )
     }
 
