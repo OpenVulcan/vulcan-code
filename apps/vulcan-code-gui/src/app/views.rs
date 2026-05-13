@@ -106,48 +106,82 @@ impl VulcanWorkbench {
     pub(super) fn view_startup_overlay(&self) -> Option<Element<'_, Message>> {
         match &self.startup_lifecycle {
             StartupLifecycle::Ready => None,
-            StartupLifecycle::Bootstrapping { message } => Some(
-                container(
-                    container(
-                        column![
-                            text("正在载入 Vulcan Code").size(26),
-                            text("正在准备 vldb 数据平面、LuaSkills 与工作台状态。").size(14),
-                            text(message).size(13),
-                        ]
-                        .spacing(10),
-                    )
-                    .padding([22, 26])
-                    .width(420)
-                    .style(style::startup_overlay_card_style),
+            StartupLifecycle::Bootstrapping { message } => {
+                let backdrop = mouse_area(
+                    container(space())
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style),
                 )
-                .width(Fill)
-                .height(Fill)
-                .center(Fill)
-                .style(style::startup_overlay_backdrop_style)
-                .into(),
-            ),
-            StartupLifecycle::Failed { message } => Some(
-                container(
-                    container(
-                        column![
-                            text("vldb 数据平面初始化失败").size(24),
-                            text(message).size(13),
-                            button("重新初始化")
-                                .style(button::primary)
-                                .on_press(Message::BeginStartupBootstrap),
-                        ]
-                        .spacing(14),
-                    )
-                    .padding([22, 26])
-                    .width(460)
-                    .style(style::startup_overlay_card_style),
+                .on_press(Message::Noop)
+                .on_right_press(Message::Noop);
+                let loading_card = container(
+                    column![
+                        text("正在载入 Vulcan Code").size(26),
+                        text("正在准备 vldb 数据平面、LuaSkills 与工作台状态。").size(14),
+                        text(message).size(13),
+                    ]
+                    .spacing(10),
                 )
-                .width(Fill)
-                .height(Fill)
-                .center(Fill)
-                .style(style::startup_overlay_backdrop_style)
-                .into(),
-            ),
+                .padding([22, 26])
+                .width(420)
+                .style(style::startup_overlay_card_style);
+
+                Some(
+                    iced::widget::opaque(
+                        stack([
+                            backdrop.into(),
+                            container(loading_card)
+                                .width(Fill)
+                                .height(Fill)
+                                .center(Fill)
+                                .into(),
+                        ])
+                        .width(Fill)
+                        .height(Fill),
+                    )
+                    .into(),
+                )
+            }
+            StartupLifecycle::Failed { message } => {
+                let backdrop = mouse_area(
+                    container(space())
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style),
+                )
+                .on_press(Message::Noop)
+                .on_right_press(Message::Noop);
+                let failure_card = container(
+                    column![
+                        text("vldb 数据平面初始化失败").size(24),
+                        text(message).size(13),
+                        button("重新初始化")
+                            .style(button::primary)
+                            .on_press(Message::BeginStartupBootstrap),
+                    ]
+                    .spacing(14),
+                )
+                .padding([22, 26])
+                .width(460)
+                .style(style::startup_overlay_card_style);
+
+                Some(
+                    iced::widget::opaque(
+                        stack([
+                            backdrop.into(),
+                            container(failure_card)
+                                .width(Fill)
+                                .height(Fill)
+                                .center(Fill)
+                                .into(),
+                        ])
+                        .width(Fill)
+                        .height(Fill),
+                    )
+                    .into(),
+                )
+            }
         }
     }
 
