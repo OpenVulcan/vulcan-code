@@ -1,10 +1,10 @@
 [workspace]
 members = [
     "apps/vulcan-code-gui",
-    "apps/vulcan-mcp-runtime",
-    "apps/vulcan-agent-view",
-    "apps/vulcan-iced-widget",
-    "apps/vulcan-tools-manager",
+    "crates/vulcan-mcp-runtime",
+    "crates/vulcan-agent-view",
+    "crates/vulcan-iced-widget",
+    "crates/vulcan-tools-manager",
     "crates/vulcan-core",
 ]
 exclude = [
@@ -24,10 +24,10 @@ version = "0.1.0"
 iced = { path = "third_party/iced", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced", "lazy"] }
 iced_aw = { path = "third_party/iced_aw", default-features = false, features = ["context_menu"] }
 iced_fonts = { path = "third_party/iced_fonts", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
-vulcan-mcp-runtime = { path = "apps/vulcan-mcp-runtime" }
-vulcan-agent-view = { path = "apps/vulcan-agent-view" }
-vulcan-iced-widget = { path = "apps/vulcan-iced-widget" }
-vulcan-tools-manager = { path = "apps/vulcan-tools-manager" }
+vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
+vulcan-agent-view = { path = "crates/vulcan-agent-view" }
+vulcan-iced-widget = { path = "crates/vulcan-iced-widget" }
+vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
 vulcan-core = { path = "crates/vulcan-core" }
 vldb-controller-client = "0.2.1"
 luaskills = "=0.4.2"
