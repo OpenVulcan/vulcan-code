@@ -19,7 +19,7 @@ pub struct McpServerRegistry {
 impl McpServerRegistry {
     /// Builds the runtime registry from the shared provider configuration file.
     /// 根据共享供应商配置文件构建运行时注册表。
-    pub fn from_provider_configuration(config: &ProviderConfigurationFile) -> Self {
+    pub(crate) fn from_provider_configuration(config: &ProviderConfigurationFile) -> Self {
         Self {
             servers: runtime_mcp_server_configs(config),
         }
@@ -27,13 +27,13 @@ impl McpServerRegistry {
 
     /// Returns every configured MCP server entry.
     /// 返回全部已配置的 MCP 服务器条目。
-    pub fn servers(&self) -> &[McpServerConfig] {
+    pub(crate) fn servers(&self) -> &[McpServerConfig] {
         &self.servers
     }
 
     /// Returns the enabled MCP server entries.
     /// 返回已启用的 MCP 服务器条目。
-    pub fn enabled_servers(&self) -> Vec<&McpServerConfig> {
+    pub(crate) fn enabled_servers(&self) -> Vec<&McpServerConfig> {
         self.servers
             .iter()
             .filter(|server| server.enabled)
@@ -42,7 +42,7 @@ impl McpServerRegistry {
 
     /// Returns lightweight human-readable row labels for UI placeholder surfaces.
     /// 返回供 UI 占位面板使用的轻量人类可读行文本。
-    pub fn summary_rows(&self) -> Vec<String> {
+    pub(crate) fn summary_rows(&self) -> Vec<String> {
         self.servers
             .iter()
             .map(|server| {
@@ -59,7 +59,7 @@ impl McpServerRegistry {
 
     /// Returns lightweight summary rows for enabled MCP servers only.
     /// 仅返回已启用 MCP 服务器的轻量摘要行集合。
-    pub fn enabled_summary_rows(&self) -> Vec<String> {
+    pub(crate) fn enabled_summary_rows(&self) -> Vec<String> {
         self.servers
             .iter()
             .filter(|server| server.enabled)
@@ -77,7 +77,7 @@ impl McpServerRegistry {
 
     /// Builds one lightweight overview snapshot for GUI layers that do not need transport-spawning capabilities.
     /// 为不需要传输启动能力的 GUI 层构建一个轻量概览快照。
-    pub fn overview(&self) -> McpRuntimeOverview {
+    pub(crate) fn overview(&self) -> McpRuntimeOverview {
         McpRuntimeOverview::new(
             self.summary_rows(),
             self.enabled_summary_rows(),
@@ -87,7 +87,10 @@ impl McpServerRegistry {
 
     /// Spawns one MCP transport from the stored server entry.
     /// 根据存储的服务器条目启动一个 MCP 传输实例。
-    pub async fn spawn_transport(&self, server_id: &str) -> Result<Arc<dyn McpTransport>, String> {
+    pub(crate) async fn spawn_transport(
+        &self,
+        server_id: &str,
+    ) -> Result<Arc<dyn McpTransport>, String> {
         let server = self
             .servers
             .iter()
