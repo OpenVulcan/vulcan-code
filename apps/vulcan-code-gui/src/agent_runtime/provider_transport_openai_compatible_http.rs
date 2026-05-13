@@ -15,11 +15,14 @@ use crate::agent_runtime::provider_protocol_openai_compatible::{
     should_evict_distinct_named_tool_call, tool_call_chunks,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
-use crate::agent_runtime::provider_transport_adapter_support::map_provider_client_build_result;
+use crate::agent_runtime::provider_transport_http_support::{
+    build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
+    ensure_json_content_type, extract_standard_error_message,
+};
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use futures_util::StreamExt;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
 use std::collections::HashMap;
@@ -196,7 +199,7 @@ where
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let message = extract_openai_compatible_error_message(&body)
+        let message = extract_standard_error_message(&body)
             .unwrap_or_else(|| format!("HTTP {status}: {}", body.trim()));
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
@@ -308,36 +311,15 @@ fn build_openai_compatible_http_client(
     api_key: &str,
     mut request_headers: HeaderMap,
 ) -> Result<reqwest::Client, VulcanCoreError> {
-    if !request_headers.contains_key(AUTHORIZATION) {
-        let bearer = format!("Bearer {api_key}");
-        let value =
-            HeaderValue::from_str(&bearer).map_err(|error| VulcanCoreError::ProviderFailure {
-                provider_id: provider_id.to_string(),
-                message: format!("{provider_label} 鉴权头构建失败：{error}"),
-            })?;
-        request_headers.insert(AUTHORIZATION, value);
-    }
-    request_headers
-        .entry(CONTENT_TYPE)
-        .or_insert(HeaderValue::from_static("application/json"));
-
-    map_provider_client_build_result(
-        provider_id,
-        provider_label,
-        reqwest::Client::builder()
-            .default_headers(request_headers)
-            .build(),
-    )
+    ensure_bearer_authorization_header(provider_id, provider_label, api_key, &mut request_headers)?;
+    ensure_json_content_type(&mut request_headers);
+    build_json_http_client(provider_id, provider_label, request_headers)
 }
 
 /// Builds the final OpenAI-compatible `/chat/completions` endpoint from one optional base URL override.
 /// 根据可选基础地址覆盖值构建最终 OpenAI 兼容 `/chat/completions` 端点。
 fn build_openai_compatible_chat_completions_endpoint(base_url: Option<&str>) -> String {
-    let normalized_base = base_url
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("https://api.openai.com/v1")
-        .trim_end_matches('/');
-    format!("{normalized_base}/chat/completions")
+    build_rest_endpoint(base_url, "https://api.openai.com/v1", "chat/completions")
 }
 
 /// Builds the final OpenAI-compatible JSON payload from one host-controlled turn request and tool schema set.
@@ -617,23 +599,6 @@ fn forward_openai_compatible_delta<S>(
 {
     sink.push_delta(delta.clone());
     let _ = live_sender.send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
-}
-
-/// Extracts one human-readable provider error message from a failed OpenAI-compatible HTTP response body.
-/// 从失败的 OpenAI 兼容 HTTP 响应正文中提取一条人类可读的 Provider 错误消息。
-fn extract_openai_compatible_error_message(body: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<Value>(body).ok()?;
-    parsed
-        .get("error")
-        .and_then(|value| value.get("message"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| {
-            parsed
-                .get("message")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-        })
 }
 
 #[cfg(test)]

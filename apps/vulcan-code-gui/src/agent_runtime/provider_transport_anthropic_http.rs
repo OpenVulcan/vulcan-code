@@ -10,11 +10,14 @@ use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
-use crate::agent_runtime::provider_transport_adapter_support::map_provider_client_build_result;
+use crate::agent_runtime::provider_transport_http_support::{
+    build_json_http_client, ensure_json_content_type, ensure_static_header, ensure_string_header,
+    extract_standard_error_message,
+};
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use futures_util::StreamExt;
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
 use vulcan_core::provider::VulcanProviderDeltaSink;
@@ -226,7 +229,7 @@ where
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let message = extract_anthropic_error_message(&body)
+        let message = extract_standard_error_message(&body)
             .unwrap_or_else(|| format!("HTTP {status}: {}", body.trim()));
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
@@ -411,33 +414,21 @@ fn build_anthropic_http_client(
     api_key: &str,
     mut request_headers: HeaderMap,
 ) -> Result<reqwest::Client, VulcanCoreError> {
-    if !request_headers.contains_key("x-api-key") {
-        let api_key_value =
-            HeaderValue::from_str(api_key).map_err(|error| VulcanCoreError::ProviderFailure {
-                provider_id: provider_id.to_string(),
-                message: format!("{provider_label} API Key 头构建失败：{error}"),
-            })?;
-        request_headers.insert("x-api-key", api_key_value);
-    }
-
-    if !request_headers.contains_key("anthropic-version") {
-        request_headers.insert(
-            "anthropic-version",
-            HeaderValue::from_static(ANTHROPIC_API_VERSION_LATEST),
-        );
-    }
-
-    request_headers
-        .entry(CONTENT_TYPE)
-        .or_insert(HeaderValue::from_static("application/json"));
-
-    map_provider_client_build_result(
+    ensure_string_header(
         provider_id,
         provider_label,
-        reqwest::Client::builder()
-            .default_headers(request_headers)
-            .build(),
-    )
+        &mut request_headers,
+        "x-api-key",
+        api_key,
+        "API Key ",
+    )?;
+    ensure_static_header(
+        &mut request_headers,
+        "anthropic-version",
+        ANTHROPIC_API_VERSION_LATEST,
+    );
+    ensure_json_content_type(&mut request_headers);
+    build_json_http_client(provider_id, provider_label, request_headers)
 }
 
 /// Builds the final Anthropic `/v1/messages` endpoint from one optional base URL override.
@@ -668,23 +659,6 @@ fn forward_anthropic_delta<S>(
 {
     sink.push_delta(delta.clone());
     let _ = live_sender.send(Ok(core_provider_turn_delta_to_runtime_delta(delta)));
-}
-
-/// Extracts one human-readable provider error message from a failed Anthropic HTTP response body.
-/// 从失败的 Anthropic HTTP 响应正文中提取一条人类可读的 Provider 错误消息。
-fn extract_anthropic_error_message(body: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<Value>(body).ok()?;
-    parsed
-        .get("error")
-        .and_then(|value| value.get("message"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| {
-            parsed
-                .get("message")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-        })
 }
 
 #[cfg(test)]
