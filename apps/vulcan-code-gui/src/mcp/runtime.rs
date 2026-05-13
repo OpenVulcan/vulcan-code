@@ -286,7 +286,7 @@ pub(crate) struct McpRuntimeToolAllowlist {
 impl McpRuntimeToolAllowlist {
     /// Builds one MCP runtime tool allowlist from optional server and tool allowlists.
     /// 根据可选服务器与工具白名单构建单个 MCP 运行时工具白名单。
-    pub fn new(
+    pub(crate) fn new(
         allowed_server_ids: Option<BTreeSet<String>>,
         allowed_tool_names: Option<BTreeSet<String>>,
     ) -> Self {
@@ -298,13 +298,13 @@ impl McpRuntimeToolAllowlist {
 
     /// Returns the optional server identifier allowlist.
     /// 返回可选服务器标识白名单。
-    pub fn allowed_server_ids(&self) -> Option<&BTreeSet<String>> {
+    pub(crate) fn allowed_server_ids(&self) -> Option<&BTreeSet<String>> {
         self.allowed_server_ids.as_ref()
     }
 
     /// Returns the optional tool-name or qualified-name allowlist.
     /// 返回可选工具名或限定工具名白名单。
-    pub fn allowed_tool_names(&self) -> Option<&BTreeSet<String>> {
+    pub(crate) fn allowed_tool_names(&self) -> Option<&BTreeSet<String>> {
         self.allowed_tool_names.as_ref()
     }
 }
@@ -370,7 +370,7 @@ struct McpRuntimeServerSnapshot {
 /// Lightweight runtime-facing diagnostic view for one enabled MCP server.
 /// 面向运行时的单个已启用 MCP 服务器轻量诊断视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpRuntimeServerDiagnostic {
+pub(crate) struct McpRuntimeServerDiagnostic {
     /// Human-readable server name.
     /// 人类可读服务器名称。
     name: String,
@@ -388,25 +388,25 @@ pub struct McpRuntimeServerDiagnostic {
 impl McpRuntimeServerDiagnostic {
     /// Returns the human-readable server name.
     /// 返回人类可读服务器名称。
-    pub fn server_name(&self) -> &str {
+    pub(crate) fn server_name(&self) -> &str {
         &self.name
     }
 
     /// Returns the current runtime connectivity status.
     /// 返回当前运行时连通状态。
-    pub fn status(&self) -> McpRuntimeServerStatus {
+    pub(crate) fn status(&self) -> McpRuntimeServerStatus {
         self.status
     }
 
     /// Returns the number of currently registered tools.
     /// 返回当前已注册工具数量。
-    pub fn tool_count(&self) -> usize {
+    pub(crate) fn tool_count(&self) -> usize {
         self.tool_count
     }
 
     /// Returns one human-readable runtime summary sentence.
     /// 返回单条人类可读的运行时摘要语句。
-    pub fn summary_text(&self) -> String {
+    pub(crate) fn summary_text(&self) -> String {
         format!(
             "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具。",
             self.server_name(),
@@ -417,7 +417,7 @@ impl McpRuntimeServerDiagnostic {
 
     /// Returns the latest warning sentence when the server has a refresh or connection error.
     /// 当服务器存在刷新或连接错误时返回最近一次警告语句。
-    pub fn warning_text(&self) -> Option<String> {
+    pub(crate) fn warning_text(&self) -> Option<String> {
         self.last_error
             .as_ref()
             .map(|error| format!("{} 最近一次错误：{error}", self.summary_text()))
@@ -425,7 +425,7 @@ impl McpRuntimeServerDiagnostic {
 
     /// Returns the recommended runtime event title for UI projection.
     /// 返回供界面投影使用的建议运行时事件标题。
-    pub fn runtime_event_title(&self) -> String {
+    pub(crate) fn runtime_event_title(&self) -> String {
         if self.last_error.is_some() {
             format!("MCP 服务器离线 · {}", self.server_name())
         } else {
@@ -449,7 +449,7 @@ enum McpRuntimeEventProjectionKind {
 /// Stable MCP runtime event projection exported to upper runtime layers.
 /// 导出给上层运行时的稳定 MCP 运行时事件投影视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpRuntimeEventProjection {
+pub(crate) struct McpRuntimeEventProjection {
     /// Recommended event kind derived from the current server diagnostic state.
     /// 根据当前服务器诊断状态推导得到的建议事件种类。
     kind: McpRuntimeEventProjectionKind,
@@ -464,19 +464,19 @@ pub struct McpRuntimeEventProjection {
 impl McpRuntimeEventProjection {
     /// Returns the recommended event title for UI projection.
     /// 返回供界面投影使用的建议事件标题。
-    pub fn title(&self) -> &str {
+    pub(crate) fn title(&self) -> &str {
         &self.title
     }
 
     /// Returns the recommended event body for UI projection.
     /// 返回供界面投影使用的建议事件正文。
-    pub fn body(&self) -> &str {
+    pub(crate) fn body(&self) -> &str {
         &self.body
     }
 
     /// Returns whether the projected event should be treated as a warning/failure path.
     /// 返回该投影视图是否应被视为告警或失败路径。
-    pub fn is_warning(&self) -> bool {
+    pub(crate) fn is_warning(&self) -> bool {
         self.kind == McpRuntimeEventProjectionKind::Warning
     }
 }
@@ -502,7 +502,7 @@ pub(crate) struct McpRuntimeDiscoveryReport {
 impl McpRuntimeDiscoveryReport {
     /// Returns whether the discovery report contains no event projections, summary rows, errors, or warnings.
     /// 返回该发现报告是否不包含任何事件投影、摘要行、错误或告警。
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.event_projections.is_empty()
             && self.discovery_rows.is_empty()
             && self.discovery_errors.is_empty()
@@ -511,25 +511,25 @@ impl McpRuntimeDiscoveryReport {
 
     /// Returns the recommended runtime event projections.
     /// 返回建议的运行时事件投影视图集合。
-    pub fn event_projections(&self) -> &[McpRuntimeEventProjection] {
+    pub(crate) fn event_projections(&self) -> &[McpRuntimeEventProjection] {
         &self.event_projections
     }
 
     /// Returns the human-readable discovery summary rows.
     /// 返回人类可读的发现摘要行集合。
-    pub fn discovery_rows(&self) -> &[String] {
+    pub(crate) fn discovery_rows(&self) -> &[String] {
         &self.discovery_rows
     }
 
     /// Returns the human-readable discovery error rows.
     /// 返回人类可读的发现错误行集合。
-    pub fn discovery_errors(&self) -> &[String] {
+    pub(crate) fn discovery_errors(&self) -> &[String] {
         &self.discovery_errors
     }
 
     /// Returns the human-readable discovery warning rows.
     /// 返回人类可读的发现告警行集合。
-    pub fn discovery_warnings(&self) -> &[String] {
+    pub(crate) fn discovery_warnings(&self) -> &[String] {
         &self.discovery_warnings
     }
 }
@@ -552,7 +552,7 @@ pub(crate) struct McpRuntimeOverview {
 impl McpRuntimeOverview {
     /// Builds one stable MCP runtime overview from summary rows and one discovery report.
     /// 根据摘要行与单份发现报告构建单个稳定 MCP 运行时概览。
-    pub fn new(
+    pub(crate) fn new(
         summary_rows: Vec<String>,
         active_summary_rows: Vec<String>,
         discovery_report: McpRuntimeDiscoveryReport,
@@ -566,19 +566,19 @@ impl McpRuntimeOverview {
 
     /// Returns the human-readable summary rows covering all configured runtime-visible servers.
     /// 返回覆盖全部已配置运行时可见服务器的人类可读摘要行集合。
-    pub fn summary_rows(&self) -> &[String] {
+    pub(crate) fn summary_rows(&self) -> &[String] {
         &self.summary_rows
     }
 
     /// Returns the human-readable summary rows covering only active runtime-visible servers.
     /// 返回仅覆盖活动运行时可见服务器的人类可读摘要行集合。
-    pub fn active_summary_rows(&self) -> &[String] {
+    pub(crate) fn active_summary_rows(&self) -> &[String] {
         &self.active_summary_rows
     }
 
     /// Returns the stable discovery report exported to upper bootstrap and diagnostics flows.
     /// 返回导出给上层 bootstrap 与诊断流程的稳定发现报告。
-    pub fn discovery_report(&self) -> &McpRuntimeDiscoveryReport {
+    pub(crate) fn discovery_report(&self) -> &McpRuntimeDiscoveryReport {
         &self.discovery_report
     }
 }
