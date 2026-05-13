@@ -11,9 +11,11 @@ use crate::agent_runtime::runtime_stream_preparation_failure::build_preparation_
 use crate::agent_runtime::runtime_stream_preparation_resources::{
     RuntimePreparationResources, build_runtime_preparation_resources,
 };
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
+use std::sync::Arc;
 
 /// Prepared runtime-launch input captured after foundation construction and execution-preparation validation have both succeeded.
 /// 在基础运行时构建与执行准备校验都成功之后捕获到的运行时启动准备输入。
@@ -55,6 +57,7 @@ pub(crate) fn prepare_runtime_launch_input(
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
+    task_runtime: Arc<TaskRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
     let resources = build_runtime_preparation_resources(
@@ -62,6 +65,7 @@ pub(crate) fn prepare_runtime_launch_input(
         agent_profile_catalog,
         luaskills_runtime,
         mcp_runtime_access,
+        task_runtime,
         request,
     );
     let preparation = match prepare_execution(

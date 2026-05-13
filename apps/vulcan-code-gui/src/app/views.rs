@@ -2092,6 +2092,19 @@ impl VulcanWorkbench {
             ));
         }
 
+        if active_subagent_panel_state
+            .is_some_and(|state| state.run_state == SubagentTaskRunState::Running)
+        {
+            let stop_icon: Element<'static, Message> =
+                codicon::debug_stop().size(12).line_height(1.0).into();
+            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
+                "停止当前代理",
+                stop_icon,
+                Message::StopSelectedSubagentTask,
+                false,
+            ));
+        }
+
         if let Some(current_state) = active_subagent_panel_state.filter(|_| has_switch_targets) {
             let current_icon: Element<'static, Message> =
                 if current_state.run_state == SubagentTaskRunState::Running {
@@ -2490,6 +2503,14 @@ impl VulcanWorkbench {
             tooltip::Position::Top,
         )
         .style(container::rounded_box);
+        let bottom_reserved_height = if self
+            .selected_subagent_task_panel_state()
+            .is_some_and(|state| state.task_id == session_id)
+        {
+            0.0
+        } else {
+            self.floating_composer_footprint_height()
+        };
 
         Some(
             container(
@@ -2509,7 +2530,7 @@ impl VulcanWorkbench {
             .padding(iced::Padding {
                 top: 14.0,
                 right: 14.0,
-                bottom: self.floating_composer_footprint_height()
+                bottom: bottom_reserved_height
                     + f32::from(TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET),
                 left: 14.0,
             })

@@ -4,9 +4,11 @@
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
+use std::sync::Arc;
 
 /// Resource bundle captured before execution preparation begins.
 /// 在执行准备开始前捕获的资源打包对象。
@@ -29,13 +31,15 @@ pub(crate) fn build_runtime_preparation_resources(
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
+    task_runtime: Arc<TaskRuntime>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
-    let foundation = RuntimeFoundation::build(
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_task_runtime(
         config,
         agent_profile_catalog,
         luaskills_runtime.clone(),
-        mcp_runtime_access,
+        Some(mcp_runtime_access),
+        task_runtime,
     );
 
     RuntimePreparationResources {

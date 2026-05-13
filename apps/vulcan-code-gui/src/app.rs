@@ -637,14 +637,18 @@ fn task_session_modal_markdown_from_tool_metadata(metadata: &Value) -> Option<St
     }
 
     match task_session_execution_status_from_tool_metadata(metadata) {
-        Some("stopped") => Some(String::from(
-            "已按用户请求停止当前子代理调用，当前仅保留截至停止时的摘要信息。",
-        )),
+        Some("stopped") => Some(String::from(subagent_task_stopped_summary_text())),
         Some("failed") => Some(String::from(
             "子代理调用已失败，当前仅保留最后一次错误摘要。",
         )),
         _ => None,
     }
+}
+
+/// Returns the canonical user-facing stop summary reused by subagent cards, panels, and legacy tool-modal fallbacks.
+/// 返回供子代理卡片、面板与旧工具弹层回退共同复用的规范用户可见停止摘要。
+fn subagent_task_stopped_summary_text() -> &'static str {
+    "子代理已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。"
 }
 
 /// Builds one compact human-facing task-session label from the optional task description and subagent name.
@@ -2570,6 +2574,9 @@ enum Message {
     /// Opens one cached subagent task panel inside the main transcript region.
     /// 在主转录区域内部打开一个已缓存的子代理任务面板。
     OpenSelectedSessionSubagentPanel(SessionId),
+    /// Stops the currently opened running subagent task without aborting the parent session.
+    /// 停止当前已打开的运行中子代理任务，而不影响父会话。
+    StopSelectedSubagentTask,
     /// Returns from the currently opened subagent task panel back to the parent session transcript.
     /// 从当前已打开的子代理任务面板返回父会话转录视图。
     ReturnToSelectedSessionTranscript,
@@ -4703,6 +4710,44 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::StopSelectedSubagentTask => {
+                let Some(state) = self.selected_subagent_task_panel_state().cloned() else {
+                    self.status_message = String::from("当前没有可停止的子代理面板。");
+                    return Task::none();
+                };
+                if !state.run_state.is_running() {
+                    self.status_message = String::from("当前子代理已经结束，无需再次停止。");
+                    return Task::none();
+                }
+                let stop_summary = subagent_task_stopped_summary_text();
+                match self
+                    .runtime_foundation
+                    .task_runtime()
+                    .stop_task(state.task_id)
+                {
+                    Ok(true) => {
+                        self.mark_subagent_task_stopped(
+                            state.parent_session_id,
+                            state.task_id,
+                            stop_summary,
+                        );
+                        self.status_message = String::from("已停止当前子代理调用。");
+                        Task::batch([
+                            self.persist_workspace_snapshot_task(),
+                            self.maybe_follow_selected_session_transcript_tail(state.task_id),
+                        ])
+                    }
+                    Ok(false) => {
+                        self.status_message =
+                            String::from("当前子代理已不在执行中，可直接查看已有结果。");
+                        Task::none()
+                    }
+                    Err(error) => {
+                        self.status_message = format!("停止子代理失败：{error}");
+                        Task::none()
+                    }
+                }
+            }
             Message::ReturnToSelectedSessionTranscript => {
                 self.active_subagent_panel = None;
                 Task::none()
@@ -5374,6 +5419,7 @@ impl VulcanWorkbench {
                         self.agent_profile_catalog.clone(),
                         self.luaskills_runtime.clone(),
                         self.mcp_runtime.clone(),
+                        self.runtime_foundation.task_runtime(),
                         request_for_run,
                     ),
                     move |event| Message::RunExecutionStreamEvent { run_id, event },
@@ -6665,6 +6711,20 @@ impl VulcanWorkbench {
             state_snapshot = Some(state.clone());
         }
 
+        let stop_notice_exists = self.session_messages.get(&task_id).is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message.title == "执行已停止" && message.body.trim() == stop_summary.trim()
+            })
+        });
+        if !stop_notice_exists {
+            self.push_session_message(
+                task_id,
+                SessionMessageKind::Assistant,
+                "执行已停止",
+                stop_summary,
+            );
+        }
+
         let Some(message_id) = self.find_task_session_tool_message_id_for_payload(
             parent_session_id,
             &json!({ "task_id": task_id.to_string() }),
@@ -6758,8 +6818,7 @@ impl VulcanWorkbench {
             return;
         }
 
-        let stop_summary =
-            "已按用户请求停止当前子代理调用，系统保留截至停止时的上下文、思考与输出片段。";
+        let stop_summary = subagent_task_stopped_summary_text();
         for task_id in running_task_ids {
             self.mark_subagent_task_stopped(parent_session_id, task_id, stop_summary);
         }

@@ -578,12 +578,15 @@ impl VulcanWorkbench {
     /// Rebuilds the compose runtime foundation from the current shared configuration state.
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     pub(super) fn refresh_runtime_foundation(&mut self) {
-        self.runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access(
-            &self.provider_configuration,
-            &self.agent_profile_catalog,
-            self.luaskills_runtime.clone(),
-            self.mcp_runtime.clone(),
-        );
+        let task_runtime = self.runtime_foundation.task_runtime();
+        self.runtime_foundation =
+            RuntimeFoundation::build_from_optional_mcp_access_with_task_runtime(
+                &self.provider_configuration,
+                &self.agent_profile_catalog,
+                self.luaskills_runtime.clone(),
+                self.mcp_runtime.clone(),
+                task_runtime,
+            );
         self.last_execution_preparation = None;
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();

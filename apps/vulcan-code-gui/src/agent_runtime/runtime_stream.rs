@@ -6,11 +6,13 @@ use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
+use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::{McpRuntimeAccess, configured_mcp_runtime_access};
 use crate::provider_config::ProviderConfigurationFile;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
+use std::sync::Arc;
 
 /// Streams one real provider run and yields preparation, thinking, output, and final-report events incrementally.
 /// 以增量方式流式执行一次真实 Provider 调用，并依次产出准备、思考、输出与最终报告事件。
@@ -19,6 +21,7 @@ pub fn stream_runtime_run(
     agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime: Option<McpRuntimeAccess>,
+    task_runtime: Arc<TaskRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
@@ -27,6 +30,7 @@ pub fn stream_runtime_run(
         agent_profile_catalog,
         luaskills_runtime,
         mcp_runtime_access,
+        task_runtime,
         request,
     )
 }
@@ -38,6 +42,7 @@ fn stream_runtime_run_with_access(
     agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
+    task_runtime: Arc<TaskRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
@@ -46,6 +51,7 @@ fn stream_runtime_run_with_access(
             &agent_profile_catalog,
             luaskills_runtime.clone(),
             mcp_runtime_access,
+            task_runtime,
             request,
         ).await {
             Ok(launch) => launch,

@@ -19,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::task::AbortHandle;
 use uuid::Uuid;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::tool::AllowAllToolPolicy;
@@ -33,6 +34,10 @@ use vulcan_tools_manager::{
 /// Default nested-task depth limit used to prevent unbounded recursive task spawning.
 /// 用于防止无限递归任务派生的默认嵌套任务深度上限。
 const DEFAULT_TASK_NESTING_LIMIT: usize = 8;
+
+/// Fallback stop summary returned to the parent task tool when the child run is manually interrupted before producing a complete answer.
+/// 当子运行在产出完整答案前被人工中断时，返回给父级 task 工具的兜底停止摘要。
+const STOPPED_TASK_RESULT_SUMMARY: &str = "子代理已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。";
 
 /// Windows filesystem path guidance injected into child task prompts to stabilize tool calls.
 /// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
@@ -173,9 +178,32 @@ pub struct TaskExecutionOutcome {
     /// Final text surfaced to the model-visible task result.
     /// 暴露给模型可见任务结果的最终文本。
     pub final_output_text: String,
-    /// Whether the child controller ended in an error state.
-    /// 子控制器是否以错误状态结束。
-    pub is_error: bool,
+    /// Final execution status surfaced to both host persistence and the parent task-tool result.
+    /// 同时暴露给宿主持久化与父级 task 工具结果的最终执行状态。
+    pub execution_status: TaskExecutionStatus,
+}
+
+/// Stable terminal status produced by one task execution attempt.
+/// 一次任务执行尝试产出的稳定终态状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskExecutionStatus {
+    /// Child controller completed normally and produced a reusable answer.
+    /// 子控制器正常完成并产出了可复用答案。
+    Completed,
+    /// Child controller was intentionally interrupted by the user or transport abort.
+    /// 子控制器被用户或传输中止有意打断。
+    Stopped,
+}
+
+impl TaskExecutionStatus {
+    /// Returns the persisted lowercase text expected by task-session metadata and tool cards.
+    /// 返回 task 会话元数据与工具卡片所需的持久化小写文本。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 /// Guard that unregisters one backend when it goes out of scope.
@@ -197,6 +225,41 @@ impl Drop for TaskBackendGuard {
     }
 }
 
+/// Guard that unregisters one active child task abort handle when the execution scope goes away.
+/// 在执行作用域结束时自动注销一条活动子任务中止句柄的守卫对象。
+pub struct ActiveTaskRunGuard {
+    /// Shared runtime registry that owns the active child-task run map.
+    /// 持有活动子任务运行映射表的共享运行时注册表。
+    runtime: Arc<TaskRuntime>,
+    /// Child task identifier whose running entry should be removed on drop.
+    /// 在 Drop 时应移除其运行条目的子任务标识。
+    task_id: SessionId,
+}
+
+impl Drop for ActiveTaskRunGuard {
+    /// Removes the installed active child-task run entry as soon as the guard leaves scope.
+    /// 在守卫离开作用域时立即移除已安装的活动子任务运行条目。
+    fn drop(&mut self) {
+        self.runtime.remove_active_task_run(self.task_id);
+    }
+}
+
+/// Drop guard that aborts one spawned child controller task if the outer task-backend future is cancelled early.
+/// 若外层任务后端 Future 提前取消，则在 Drop 时中止对应已派生子控制器任务的守卫对象。
+struct AbortChildRunOnDrop {
+    /// Abort handle used to stop the spawned child controller task.
+    /// 用于停止已派生子控制器任务的中止句柄。
+    handle: AbortHandle,
+}
+
+impl Drop for AbortChildRunOnDrop {
+    /// Aborts the spawned child controller task when the outer owner disappears unexpectedly.
+    /// 当外层拥有者异常消失时中止已派生子控制器任务。
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
 /// Host-managed registry for resumable task sessions and per-session task execution backends.
 /// 宿主管理的可恢复任务会话与按会话划分任务执行后端的注册表。
 pub struct TaskRuntime {
@@ -206,6 +269,9 @@ pub struct TaskRuntime {
     /// Backend handlers keyed by the invoking controller session identifier.
     /// 按执行中控制器会话标识索引存储的后端处理器。
     backends: RwLock<HashMap<SessionId, TaskExecutionHandler>>,
+    /// Active child-task abort handles keyed by stable task identifier.
+    /// 按稳定任务标识索引存储的活动子任务中止句柄。
+    active_task_runs: RwLock<HashMap<SessionId, AbortHandle>>,
     /// Maximum supported nested task depth.
     /// 支持的最大嵌套任务深度。
     max_depth: usize,
@@ -226,6 +292,7 @@ impl TaskRuntime {
         Self {
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
+            active_task_runs: RwLock::new(HashMap::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
     }
@@ -292,6 +359,23 @@ impl TaskRuntime {
         Ok(build_task_invocation_result(&invocation, &outcome))
     }
 
+    /// Stops one in-flight child task by its stable task identifier when the runtime still owns a live abort handle.
+    /// 当运行时仍持有实时中止句柄时，按稳定任务标识停止一条进行中的子任务。
+    pub fn stop_task(&self, task_id: SessionId) -> Result<bool, String> {
+        let handle = self
+            .active_task_runs
+            .read()
+            .map_err(|_| String::from("活动子任务注册表已锁定，无法停止子代理。"))?
+            .get(&task_id)
+            .cloned();
+        if let Some(handle) = handle {
+            handle.abort();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Returns one backend handler for the given controller session identifier when it exists.
     /// 当给定控制器会话标识存在时，返回对应的后端处理器。
     fn backend_for_session(&self, session_id: SessionId) -> Option<TaskExecutionHandler> {
@@ -311,6 +395,32 @@ impl TaskRuntime {
             .remove(&session_id);
     }
 
+    /// Installs one active child-task abort handle and returns a guard that unregisters it on drop.
+    /// 安装一条活动子任务中止句柄，并返回一个在 Drop 时自动注销它的守卫。
+    fn install_active_task_run(
+        self: &Arc<Self>,
+        task_id: SessionId,
+        handle: AbortHandle,
+    ) -> ActiveTaskRunGuard {
+        self.active_task_runs
+            .write()
+            .expect("task active run registry lock")
+            .insert(task_id, handle);
+        ActiveTaskRunGuard {
+            runtime: Arc::clone(self),
+            task_id,
+        }
+    }
+
+    /// Removes one active child-task abort handle from the registry.
+    /// 从注册表中移除一条活动子任务中止句柄。
+    fn remove_active_task_run(&self, task_id: SessionId) {
+        self.active_task_runs
+            .write()
+            .expect("task active run registry lock")
+            .remove(&task_id);
+    }
+
     /// Stores one newly completed task outcome back into the session registry.
     /// 将一条新完成的任务结果回写到会话注册表中。
     fn store_task_outcome(
@@ -324,11 +434,7 @@ impl TaskRuntime {
             .write()
             .map_err(|_| String::from("任务会话注册表已锁定，无法写入结果。"))?;
         let now = current_unix_millis_text();
-        let status = if outcome.is_error {
-            String::from("failed")
-        } else {
-            String::from("completed")
-        };
+        let status = outcome.execution_status.as_str().to_string();
         let record = sessions
             .entry(invocation.task_id.clone())
             .or_insert_with(|| {
@@ -633,11 +739,7 @@ fn build_task_invocation_result(
     outcome: &TaskExecutionOutcome,
 ) -> VulcanToolInvocationResult {
     let task_status = task_invocation_status_text(invocation.is_resumed);
-    let execution_status = if outcome.is_error {
-        "failed"
-    } else {
-        "completed"
-    };
+    let execution_status = outcome.execution_status.as_str();
     let model_output = json!({
         "task_id": outcome.task_id.to_string(),
         "status": task_status,
@@ -740,7 +842,6 @@ where
             let _child_backend_guard = task_runtime.install_backend(task_id, child_handler);
             let (child_live_sender, mut child_live_receiver) =
                 unbounded_channel::<Result<ProviderStreamDelta, String>>();
-            let child_provider_adapter = provider_factory(child_live_sender.clone());
 
             let task_controller_config = build_task_controller_config(
                 &base_controller_config,
@@ -783,38 +884,133 @@ where
                 &resolved_tool_definitions,
                 task_id,
             ));
-            let child_tool_executor =
-                StreamingRuntimeToolExecutor::new(child_runtime_bridge, child_live_sender.clone());
-            let mut controller =
-                VulcanCoreController::new(task_controller_config.clone(), request.snapshot.clone());
-            let task_policy = AllowAllToolPolicy;
-            let controller_result = controller
-                .run_user_turn_streaming(
-                    &child_provider_adapter,
-                    &child_tool_executor,
-                    &task_policy,
-                    request.prompt.clone(),
-                )
-                .await;
-            drop(child_tool_executor);
-            drop(child_provider_adapter);
+            let child_live_sender_for_run = child_live_sender.clone();
+            let child_run_task = tokio::spawn({
+                let provider_factory = Arc::clone(&provider_factory);
+                let task_controller_config = task_controller_config.clone();
+                let request_snapshot = request.snapshot.clone();
+                let request_prompt = request.prompt.clone();
+                let child_runtime_bridge = Arc::clone(&child_runtime_bridge);
+                async move {
+                    let child_provider_adapter =
+                        provider_factory(child_live_sender_for_run.clone());
+                    let child_tool_executor = StreamingRuntimeToolExecutor::new(
+                        child_runtime_bridge,
+                        child_live_sender_for_run.clone(),
+                    );
+                    let mut controller =
+                        VulcanCoreController::new(task_controller_config.clone(), request_snapshot);
+                    let task_policy = AllowAllToolPolicy;
+                    let controller_result = controller
+                        .run_user_turn_streaming(
+                            &child_provider_adapter,
+                            &child_tool_executor,
+                            &task_policy,
+                            request_prompt,
+                        )
+                        .await
+                        .map_err(|error| format!("任务 `{}` 执行失败：{error}", task_id));
+                    (controller_result, controller.snapshot().clone())
+                }
+            });
+            let child_run_abort_handle = child_run_task.abort_handle();
+            let _child_run_abort_guard = AbortChildRunOnDrop {
+                handle: child_run_abort_handle.clone(),
+            };
+            let _active_task_run_guard =
+                task_runtime.install_active_task_run(task_id, child_run_abort_handle);
             drop(child_live_sender);
+            let (controller_result, snapshot) = match child_run_task.await {
+                Ok(result) => result,
+                Err(join_error) if join_error.is_cancelled() => {
+                    let _ = child_stream_forward_task.await;
+                    let stopped_outcome = build_stopped_task_execution_outcome(
+                        task_id,
+                        task_controller_config.clone(),
+                        request.snapshot.clone(),
+                    );
+                    let finished_payload = build_task_host_payload(
+                        &request,
+                        stopped_outcome.execution_status.as_str(),
+                        stopped_outcome.provider_turns_executed,
+                        stopped_outcome.tool_calls_processed,
+                        stopped_outcome.final_assistant_message_id.as_deref(),
+                        stopped_outcome.final_output_text.as_str(),
+                        None,
+                        current_unix_millis_text(),
+                    );
+                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+                        build_task_delegate_runtime_event(
+                            RuntimeEventKind::DelegateFinished,
+                            &request,
+                            stopped_outcome.final_output_text.as_str(),
+                            finished_payload,
+                        ),
+                    )));
+                    return Ok(stopped_outcome);
+                }
+                Err(join_error) => {
+                    let _ = child_stream_forward_task.await;
+                    let error = format!(
+                        "任务 `{}` 执行失败：{}",
+                        task_id,
+                        format_task_join_error(&join_error)
+                    );
+                    let finished_payload = build_task_host_payload(
+                        &request,
+                        "failed",
+                        0,
+                        0,
+                        None,
+                        error.as_str(),
+                        None,
+                        current_unix_millis_text(),
+                    );
+                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+                        build_task_delegate_runtime_event(
+                            RuntimeEventKind::DelegateFinished,
+                            &request,
+                            error.as_str(),
+                            finished_payload,
+                        ),
+                    )));
+                    return Err(error);
+                }
+            };
             let _ = child_stream_forward_task.await;
-            let controller_result =
-                controller_result.map_err(|error| format!("任务 `{}` 执行失败：{error}", task_id));
-            let snapshot = controller.snapshot().clone();
             let child_conversation_state = core_snapshot_to_session_conversation_state(&snapshot);
             let controller_result = match controller_result {
                 Ok(controller_result) => controller_result,
-                Err(error) => {
-                    let execution_status = if task_execution_error_is_stopped(error.as_str()) {
-                        "stopped"
-                    } else {
-                        "failed"
-                    };
+                Err(error) if task_execution_error_is_stopped(error.as_str()) => {
+                    let stopped_outcome = build_stopped_task_execution_outcome(
+                        task_id,
+                        task_controller_config.clone(),
+                        snapshot,
+                    );
                     let finished_payload = build_task_host_payload(
                         &request,
-                        execution_status,
+                        stopped_outcome.execution_status.as_str(),
+                        stopped_outcome.provider_turns_executed,
+                        stopped_outcome.tool_calls_processed,
+                        stopped_outcome.final_assistant_message_id.as_deref(),
+                        stopped_outcome.final_output_text.as_str(),
+                        Some(&child_conversation_state),
+                        current_unix_millis_text(),
+                    );
+                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+                        build_task_delegate_runtime_event(
+                            RuntimeEventKind::DelegateFinished,
+                            &request,
+                            stopped_outcome.final_output_text.as_str(),
+                            finished_payload,
+                        ),
+                    )));
+                    return Ok(stopped_outcome);
+                }
+                Err(error) => {
+                    let finished_payload = build_task_host_payload(
+                        &request,
+                        "failed",
                         0,
                         0,
                         None,
@@ -867,10 +1063,41 @@ where
                 tool_calls_processed: controller_result.tool_calls_processed,
                 final_assistant_message_id: controller_result.final_assistant_message_id,
                 final_output_text,
-                is_error: false,
+                execution_status: TaskExecutionStatus::Completed,
             })
         })
     })
+}
+
+/// Builds one synthetic stopped task outcome used when a child subagent is intentionally interrupted before it can emit a normal final answer.
+/// 当子代理在来得及产出正常最终答案之前被有意中断时，构建一条合成的停止结果。
+fn build_stopped_task_execution_outcome(
+    task_id: SessionId,
+    controller_config: CoreControllerConfig,
+    snapshot: CoreConversationSnapshot,
+) -> TaskExecutionOutcome {
+    TaskExecutionOutcome {
+        task_id,
+        controller_config,
+        snapshot,
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(STOPPED_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Stopped,
+    }
+}
+
+/// Formats one spawned child-task join error into a short user-facing diagnostic string.
+/// 将一条已派生子任务的 JoinError 格式化为简短的面向用户诊断文本。
+fn format_task_join_error(error: &tokio::task::JoinError) -> String {
+    if error.is_panic() {
+        String::from("子代理任务内部发生 panic。")
+    } else if error.is_cancelled() {
+        String::from("子代理任务已被取消。")
+    } else {
+        error.to_string()
+    }
 }
 
 /// Returns the persisted task-invocation status text used by both runtime metadata and tool results.

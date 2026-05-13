@@ -100,6 +100,24 @@ impl RuntimeFoundation {
         )
     }
 
+    /// Builds the host runtime foundation while reusing an existing shared task runtime so in-flight subagent sessions remain controllable across runtime refreshes.
+    /// 构建宿主运行时基础架构时复用一份既有共享任务运行时，确保运行中子代理会话在运行时刷新后仍可被控制。
+    pub fn build_from_optional_mcp_access_with_task_runtime(
+        config: &ProviderConfigurationFile,
+        agent_profile_catalog: &AgentProfileCatalog,
+        luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+        mcp_runtime_access: Option<McpRuntimeAccess>,
+        task_runtime: Arc<TaskRuntime>,
+    ) -> Self {
+        Self::build_with_task_runtime(
+            config,
+            agent_profile_catalog,
+            luaskills_runtime,
+            mcp_runtime_access.unwrap_or_else(|| configured_mcp_runtime_access(config)),
+            task_runtime,
+        )
+    }
+
     /// Builds the host runtime foundation from the shared provider configuration file.
     /// 根据共享供应商配置文件构建宿主运行时基础架构。
     pub fn build(
@@ -107,6 +125,24 @@ impl RuntimeFoundation {
         agent_profile_catalog: &AgentProfileCatalog,
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         mcp_runtime_access: McpRuntimeAccess,
+    ) -> Self {
+        Self::build_with_task_runtime(
+            config,
+            agent_profile_catalog,
+            luaskills_runtime,
+            mcp_runtime_access,
+            Arc::new(TaskRuntime::new()),
+        )
+    }
+
+    /// Builds the host runtime foundation with an explicitly provided shared task runtime instance.
+    /// 使用显式提供的共享任务运行时实例构建宿主运行时基础架构。
+    fn build_with_task_runtime(
+        config: &ProviderConfigurationFile,
+        agent_profile_catalog: &AgentProfileCatalog,
+        luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+        mcp_runtime_access: McpRuntimeAccess,
+        task_runtime: Arc<TaskRuntime>,
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let native_tools = build_native_tool_catalog(&runtime_config);
@@ -128,7 +164,7 @@ impl RuntimeFoundation {
             luaskills_tools,
             mcp_runtime_access,
             warnings,
-            task_runtime: Arc::new(TaskRuntime::new()),
+            task_runtime,
         }
     }
 
