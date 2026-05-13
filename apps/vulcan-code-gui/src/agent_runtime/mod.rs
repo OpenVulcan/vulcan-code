@@ -75,3 +75,6 @@ pub use events::ExecutionStreamEvent;
 pub use execution_models::{ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport};
 pub use runtime::RuntimeFoundation;
 pub use runtime_stream::stream_runtime_run;
+
+#[cfg(test)]
+mod runtime_boundary_guard;

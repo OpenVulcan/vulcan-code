@@ -92,7 +92,7 @@ pub fn build_vulcan_tools_manager(
                         .and_then(|value| Uuid::parse_str(value).ok());
                     let invocation_context = build_luaskills_tool_invocation_context(
                         parsed_session_id,
-                        "rig-tool",
+                        "host-tool",
                         &canonical_name,
                     );
                     let call_handle = handle.clone();

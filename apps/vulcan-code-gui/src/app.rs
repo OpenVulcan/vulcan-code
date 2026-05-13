@@ -2544,7 +2544,8 @@ impl VulcanWorkbench {
             match provider_config::save_configuration_file(&provider_configuration) {
                 Ok(()) => {
                     if runtime_defaults_changed {
-                        provider_notice.push_str(" 已自动补齐 rig/compose/mcp 基础架构默认配置。");
+                        provider_notice
+                            .push_str(" 已自动补齐运行时/compose/mcp 基础架构默认配置。");
                     }
                     if legacy_agent_migrated {
                         provider_notice.push_str(" 旧版 Provider Agent 字段已从主配置文件中清退。");
