@@ -641,13 +641,58 @@ pub struct SessionCompactionEntry {
     pub created_at: String,
 }
 
+/// Stable source kind attached to one pending session prompt queue entry.
+/// 附着在单条待发送会话提示词队列项上的稳定来源类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingSessionPromptSource {
+    /// User-authored follow-up that should wait for the current run to finish naturally.
+    /// 应等待当前运行自然结束后再发送的用户跟进消息。
+    UserFollowup,
+    /// User-authored follow-up that should interrupt the current run before being dispatched.
+    /// 应先打断当前运行再发送的用户跟进消息。
+    UserInterrupt,
+    /// Synthetic follow-up generated when one delegated subagent reports back asynchronously.
+    /// 某个委派子代理异步回报后生成的合成跟进消息。
+    DelegateCompletion,
+}
+
+/// One persisted pending session prompt retained for queued follow-ups and delegated-task callbacks.
+/// 为排队跟进与委派任务回调保留的一条持久化待发送会话提示词。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSessionPromptEntry {
+    /// Stable queue entry identifier used for deduplication and persistence.
+    /// 用于去重与持久化的稳定队列项标识。
+    pub id: String,
+    /// Full prompt text that should be dispatched into the next session run.
+    /// 应在下一次会话运行中发送的完整提示词文本。
+    pub prompt: String,
+    /// Compact preview text rendered inside the pending-queue strip.
+    /// 渲染在待发送队列条中的紧凑预览文本。
+    pub preview: String,
+    /// Stable source kind attached to the queued prompt.
+    /// 附着在该排队提示词上的稳定来源类型。
+    pub source: PendingSessionPromptSource,
+    /// Optional delegated task identifier associated with the queued follow-up.
+    /// 与该排队跟进关联的可选委派任务标识。
+    pub task_id: Option<String>,
+    /// Unix-millis text captured when the queue entry was created.
+    /// 捕获该队列项创建时间的 Unix 毫秒文本。
+    pub created_at: String,
+}
+
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionTranscriptUiState {
     /// Collapsed visible message identifiers persisted across restarts.
     /// 跨重启持久化保存的可见消息折叠标识集合。
+    #[serde(default)]
     pub collapsed_message_ids: BTreeSet<String>,
+    /// Pending prompt queue persisted with the session so queued follow-ups survive reloads.
+    /// 随会话一起持久化保存的待发送提示词队列，用于让排队跟进跨重载保留。
+    #[serde(default)]
+    pub pending_prompt_queue: Vec<PendingSessionPromptEntry>,
 }
 
 /// Session-scoped runtime state required for context reconstruction and agent tracing.

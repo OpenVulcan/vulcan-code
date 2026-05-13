@@ -1667,7 +1667,7 @@ fn parse_session_conversation_state_from_json(value: &str) -> Option<SessionConv
 /// Serializes one typed transcript UI-state structure into the persisted JSON payload when needed.
 /// 在需要时将一条带类型的转录界面状态结构序列化为持久化 JSON 载荷。
 fn serialize_session_ui_state_to_json(state: &SessionTranscriptUiState) -> Option<String> {
-    if state.collapsed_message_ids.is_empty() {
+    if state.collapsed_message_ids.is_empty() && state.pending_prompt_queue.is_empty() {
         None
     } else {
         serde_json::to_string(state).ok()

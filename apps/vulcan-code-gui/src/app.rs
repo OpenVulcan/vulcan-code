@@ -12,6 +12,7 @@ use crate::agent_runtime::config::{
     EXPLORE_AGENT_ID, PLAN_AGENT_ID, WORKSPACE_COORDINATOR_AGENT_ID,
 };
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::task_runtime::DetachedTaskRuntimeEvent;
 use crate::agent_runtime::{
     self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
     ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind, stream_runtime_run,
@@ -36,9 +37,10 @@ use crate::luaskills_runtime::{
 };
 use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, SessionCompactionEntry, SessionId,
-    SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
-    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingSessionPromptEntry,
+    PendingSessionPromptSource, SessionCompactionEntry, SessionId, SessionMessageEntry,
+    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
+    SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
 use crate::provider_config::{
@@ -109,6 +111,10 @@ const QUICK_GUIDE_MARKDOWN: &str = r#"
 2. 接入真实命令执行与终端流。
 3. 接入流式推理与多 Agent 编排。
 "#;
+
+/// Maximum number of queued follow-up prompts retained per session before new manual submissions are rejected.
+/// 每个会话在拒绝新的手动提交之前最多保留的排队跟进提示词数量。
+const SESSION_PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
 
 /// Seed Rust code rendered in the embedded editor component.
 /// 展示在嵌入式编辑器中的示例 Rust 代码。
@@ -390,6 +396,10 @@ const COMPOSER_PANEL_CONTROL_GAP: f32 = 10.0;
 /// 主提示词编辑器下方低矮控制行使用的共享目标高度。
 const COMPOSER_CONTROL_ROW_HEIGHT: f32 = 36.0;
 
+/// Shared target height used by the one-line pending-prompt queue strip above the main composer controls.
+/// 主提示词控制区上方单行待发送队列条使用的共享目标高度。
+const COMPOSER_PENDING_QUEUE_STRIP_HEIGHT: f32 = 34.0;
+
 /// Shared square size used by the fixed send-or-stop button beside the main prompt composer.
 /// 主提示词编辑器右侧固定发送或停止按钮使用的共享方形尺寸。
 const COMPOSER_TRIGGER_BUTTON_SIZE: f32 = COMPOSER_CONTROL_ROW_HEIGHT;
@@ -556,11 +566,47 @@ fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Value> {
     metadata.get("payload")
 }
 
+/// Returns the caller-facing task identifier stored inside one task-session payload when available.
+/// 返回 task 会话载荷中保存的调用方面向任务标识。
+fn task_session_public_id_from_payload(payload: &Value) -> Option<&str> {
+    payload
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Returns the internal child-session identifier stored inside one task-session payload, falling back to legacy payloads that only persisted `task_id`.
+/// 返回 task 会话载荷中保存的内部子会话标识；若旧版本只持久化了 `task_id`，则回退兼容解析。
+fn task_session_internal_id_from_payload(payload: &Value) -> Option<SessionId> {
+    payload
+        .get("task_session_id")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("task_id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| SessionId::parse_str(value).ok())
+}
+
 /// Returns the original `task` tool arguments attached to one tool-display metadata object when the card is still in flight.
 /// 当卡片仍处于进行中状态时，返回其工具显示元数据对象中附带的原始 `task` 工具参数。
 fn task_session_arguments_from_tool_metadata(metadata: &Value) -> Option<&Value> {
     (metadata.get("tool_name").and_then(Value::as_str) == Some("task")).then_some(())?;
     metadata.get("arguments")
+}
+
+/// Returns the best-effort caller-facing task identifier attached to one task card from either persisted payload metadata or in-flight tool arguments.
+/// 从持久化载荷元数据或进行中工具参数中返回一条最佳努力的调用方面向任务标识。
+fn task_session_declared_task_id_from_tool_metadata(metadata: &Value) -> Option<&str> {
+    task_session_payload_from_tool_metadata(metadata)
+        .and_then(task_session_public_id_from_payload)
+        .or_else(|| {
+            task_session_arguments_from_tool_metadata(metadata)
+                .and_then(|arguments| arguments.get("task_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 /// Returns the effective execution status stored in one task-session metadata object, falling back to display-only state when no payload exists yet.
@@ -712,6 +758,75 @@ fn task_session_tool_display_title(
     Some(format!("调度 {label} {status}"))
 }
 
+/// Builds one compact single-line preview used by the pending prompt queue strip.
+/// 构建待发送提示词队列条使用的一条紧凑单行预览文本。
+fn pending_prompt_preview_text(prompt: &str) -> String {
+    let normalized = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(prompt)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let preview = if normalized.is_empty() {
+        String::from("空白消息")
+    } else {
+        normalized
+    };
+    let max_chars = 48usize;
+    if preview.chars().count() <= max_chars {
+        preview
+    } else {
+        format!(
+            "{}…",
+            preview
+                .chars()
+                .take(max_chars.saturating_sub(1))
+                .collect::<String>()
+        )
+    }
+}
+
+/// Resolves the localized terminal status label injected into delegated completion follow-up prompts.
+/// 解析注入到委派完成跟进提示词中的本地化终态标签。
+fn delegate_completion_status_label(run_state: SubagentTaskRunState) -> &'static str {
+    match run_state {
+        SubagentTaskRunState::Running => "仍在进行中",
+        SubagentTaskRunState::Completed => "已完成",
+        SubagentTaskRunState::Stopped => "已停止",
+        SubagentTaskRunState::Failed => "已失败",
+    }
+}
+
+/// Builds one queue-strip preview line for a delegated subagent completion callback.
+/// 为一次委派子代理完成回调构建队列条预览文案。
+fn build_delegate_completion_followup_preview(state: &SubagentTaskPanelState) -> String {
+    format!(
+        "子代理 {} {}",
+        state.subagent_label,
+        delegate_completion_status_label(state.run_state)
+    )
+}
+
+/// Builds one synthetic follow-up prompt that tells the parent coordinator a delegated subagent has reported back.
+/// 构建一条合成跟进提示词，用于告知父协调代理某个委派子代理已经回报结果。
+fn build_delegate_completion_followup_prompt(state: &SubagentTaskPanelState) -> String {
+    let result_text = state.result_text.trim();
+    let safe_result = if result_text.is_empty() {
+        "当前没有更多结构化返回内容，请根据任务状态继续主流程。"
+    } else {
+        result_text
+    };
+    format!(
+        "<system-reminder>\n子代理“{}”已{}。\n任务标识：{}。\n\n子代理返回内容：\n{}\n\n请立即吸收这条结果，并继续推进主流程；如果还有其他子代理仍在执行，请同时维持协调与收敛。\n</system-reminder>",
+        state.subagent_label,
+        delegate_completion_status_label(state.run_state),
+        state.public_task_id,
+        safe_result
+    )
+}
+
 /// Returns whether one visible tool transcript message belongs to the dedicated host-managed `task` surface.
 /// 返回某条可见工具转录消息是否属于宿主管理的专属 `task` 表面。
 fn tool_display_message_is_task_session(message: &SessionMessageEntry) -> bool {
@@ -840,7 +955,7 @@ fn parse_subagent_task_panel_payload(
     parent_session_id: SessionId,
     payload: &Value,
 ) -> Option<SubagentTaskPanelState> {
-    let task_id = parse_session_id_text(payload.get("task_id").and_then(Value::as_str))?;
+    let task_id = task_session_internal_id_from_payload(payload)?;
     let run_state = match payload
         .get("execution_status")
         .and_then(Value::as_str)
@@ -863,9 +978,13 @@ fn parse_subagent_task_panel_payload(
         .filter(|value| !value.trim().is_empty())
         .or_else(|| description.clone())
         .unwrap_or_else(|| format!("子代理 {}", short_session_id(task_id)));
+    let public_task_id = task_session_public_id_from_payload(payload)
+        .map(str::to_string)
+        .unwrap_or_else(|| task_id.to_string());
 
     Some(SubagentTaskPanelState {
         task_id,
+        public_task_id,
         parent_session_id,
         subagent_label,
         description,
@@ -1145,6 +1264,12 @@ pub struct VulcanWorkbench {
     /// Archived session-scoped runtime-state snapshots retained for later restoration.
     /// 为后续恢复保留的按归档会话归属运行时状态快照集合。
     archived_session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Whether one workspace snapshot persistence task is currently writing to SQLite.
+    /// 当前是否已有一条工作台快照持久化任务正在写入 SQLite。
+    workspace_snapshot_persist_in_flight: bool,
+    /// Whether another workspace snapshot save should be replayed once the in-flight persistence finishes.
+    /// 当前飞行中的持久化完成后是否还需要补跑一次新的工作台快照保存。
+    workspace_snapshot_persist_pending: bool,
     /// Pending destructive archived-item deletion confirmation currently shown inline to the user.
     /// 当前以内联形式展示给用户的待确认破坏性归档项删除状态。
     pending_archived_delete_confirmation: Option<ArchivedDeleteConfirmationState>,
@@ -1190,6 +1315,9 @@ pub struct VulcanWorkbench {
     /// Currently opened subagent panel that temporarily replaces the main parent transcript surface.
     /// 当前已打开、并临时替代主父会话转录表面的子代理面板选择状态。
     active_subagent_panel: Option<SelectedSubagentTaskPanel>,
+    /// Detached subagent task identifiers that already own one live background listener task in the GUI layer.
+    /// 已经在图形界面层挂接后台实时监听任务的分离子代理任务标识集合。
+    detached_subagent_task_listeners: BTreeSet<SessionId>,
     /// Active streaming output-message identifiers keyed by session id.
     /// 以会话标识为键保存的当前流式输出消息标识集合。
     streaming_output_message_ids: BTreeMap<SessionId, String>,
@@ -1591,6 +1719,9 @@ struct SubagentTaskPanelState {
     /// Stable child task identifier used by badges, cards, and panel navigation.
     /// 被徽标、卡片与面板导航共同使用的稳定子任务标识。
     task_id: SessionId,
+    /// Caller-facing task identifier preserved for parent-agent reasoning and human-visible summaries.
+    /// 为父代理推理与人类可见摘要保留的调用方面向任务标识。
+    public_task_id: String,
     /// Parent session identifier that owns the cached subagent task panel.
     /// 拥有该缓存子代理任务面板的父会话标识。
     parent_session_id: SessionId,
@@ -2737,6 +2868,9 @@ enum Message {
     /// Primary execution action requested.
     /// 请求执行主任务动作。
     StartRun,
+    /// Interrupts the active run after enqueueing the current composer draft at the front of the pending queue.
+    /// 将当前提示词草稿插入待发送队列头部后打断活动运行。
+    InterruptComposerPrompt,
     /// Applies one incremental execution-stream event returned by the async runtime stream.
     /// 应用异步运行时流返回的一条增量执行事件。
     RunExecutionStreamEvent {
@@ -2746,6 +2880,16 @@ enum Message {
         /// Concrete incremental event emitted by the async runtime stream.
         /// 由异步运行时流发出的具体增量事件。
         event: ExecutionStreamEvent,
+    },
+    /// Applies one detached background subagent event emitted after the parent run has already resumed or finished.
+    /// 应用一条在父运行恢复或结束之后发出的分离后台子代理事件。
+    DetachedSubagentTaskEvent {
+        /// Stable detached child-task identifier that owns the listener stream.
+        /// 拥有该监听流的稳定分离子任务标识。
+        task_id: SessionId,
+        /// Concrete detached background event published by the task runtime.
+        /// 由任务运行时发布的具体分离后台事件。
+        event: DetachedTaskRuntimeEvent,
     },
     /// Stop action requested.
     /// 请求停止当前动作。
@@ -2995,6 +3139,8 @@ impl VulcanWorkbench {
             archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
+            workspace_snapshot_persist_in_flight: false,
+            workspace_snapshot_persist_pending: false,
             pending_archived_delete_confirmation: None,
             session_runtime_events: BTreeMap::new(),
             collapsed_runtime_event_ids: BTreeMap::new(),
@@ -3010,6 +3156,7 @@ impl VulcanWorkbench {
             active_tool_modal: None,
             session_subagent_tasks: BTreeMap::new(),
             active_subagent_panel: None,
+            detached_subagent_task_listeners: BTreeSet::new(),
             streaming_output_message_ids: BTreeMap::new(),
             session_tool_call_message_ids: BTreeMap::new(),
             runtime_event_raw_buffers: BTreeMap::new(),
@@ -3314,6 +3461,9 @@ impl VulcanWorkbench {
                 self.session_streaming_thinking_follow_tail.clear();
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
+                self.session_subagent_tasks.clear();
+                self.active_subagent_panel = None;
+                self.detached_subagent_task_listeners.clear();
                 self.streaming_output_message_ids.clear();
                 self.runtime_event_raw_buffers.clear();
                 self.runtime_event_markdown.clear();
@@ -3482,12 +3632,19 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WorkspaceStatePersisted(result) => {
+                self.workspace_snapshot_persist_in_flight = false;
+                let next_persist_task = if self.workspace_snapshot_persist_pending {
+                    self.workspace_snapshot_persist_pending = false;
+                    self.persist_workspace_snapshot_task()
+                } else {
+                    Task::none()
+                };
                 if let Err(error) = result {
                     self.status_message = format!("工作台状态保存失败：{error}");
                     self.push_activity(ActivityLevel::Warning, "工作台状态保存失败", error);
                 }
 
-                Task::none()
+                next_persist_task
             }
             Message::LuaSkillsCatalogLoaded(result) => {
                 self.luaskills_operation_in_flight = false;
@@ -4715,7 +4872,7 @@ impl VulcanWorkbench {
                     self.status_message = String::from("当前没有可停止的子代理面板。");
                     return Task::none();
                 };
-                if !state.run_state.is_running() {
+                if !self.subagent_task_is_actively_running(state.task_id) {
                     self.status_message = String::from("当前子代理已经结束，无需再次停止。");
                     return Task::none();
                 }
@@ -5325,120 +5482,8 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
-            Message::StartRun => {
-                let Some((selected_session_id, selected_session_title)) = self
-                    .selected_session()
-                    .map(|session| (session.id, session.title.clone()))
-                else {
-                    self.status_message = String::from("当前没有可执行的会话。");
-                    return Task::none();
-                };
-
-                if self.session_has_active_run(selected_session_id) {
-                    self.status_message = String::from(
-                        "当前已有 AI 调用正在执行，可点击停止按钮中止后再发起新的请求。",
-                    );
-                    return Task::none();
-                }
-
-                let current_prompt = self.composer_buffer.text();
-                self.composer = current_prompt.clone();
-                if !composer_text_has_submittable_content(&current_prompt) {
-                    self.status_message = String::from("请输入任务指令后再启动执行。");
-                    return Task::none();
-                }
-
-                self.ensure_session_conversation_state_loaded(selected_session_id);
-
-                let execution_mode = if self.selected_agent_requires_plan_mode() {
-                    ExecutionMode::Plan
-                } else {
-                    self.execution_mode
-                };
-                self.execution_mode = execution_mode;
-
-                let request = ExecutionPreparationRequest {
-                    session_id: selected_session_id,
-                    session_title: selected_session_title,
-                    workspace_path: self
-                        .workspace_path_for_session_id(selected_session_id)
-                        .unwrap_or_else(|| self.workspace_path.clone()),
-                    prompt: current_prompt,
-                    conversation_state: self.session_conversation_state(selected_session_id),
-                    execution_mode: execution_mode.to_string(),
-                    temperature: self.temperature_enabled.then_some(self.temperature),
-                    reasoning_effort: self.workbench_reasoning_effort,
-                };
-
-                if !composer_text_has_submittable_content(&request.prompt) {
-                    self.status_message = String::from("请输入任务指令后再启动执行。");
-                    return Task::none();
-                }
-
-                self.push_session_message(
-                    request.session_id,
-                    SessionMessageKind::User,
-                    "用户指令",
-                    request.prompt.clone(),
-                );
-                self.append_user_prompt_to_session_conversation(
-                    request.session_id,
-                    request.prompt.clone(),
-                );
-                let _ = self
-                    .maybe_generate_session_title_from_prompt(request.session_id, &request.prompt);
-                self.materialize_session_after_first_user_turn(request.session_id);
-                self.replace_session_runtime_events(request.session_id, Vec::new());
-                self.clear_streaming_message_ids(request.session_id);
-                self.session_tool_call_message_ids
-                    .remove(&request.session_id);
-                self.last_mcp_discovery_rows.clear();
-                self.last_mcp_discovery_errors.clear();
-                self.set_session_run_phase(request.session_id, SessionRunPhase::Preparing);
-                if let Some(session) = self.selected_session_mut() {
-                    session.status = SessionState::Running;
-                    session.last_updated_label = String::from("刚刚");
-                }
-                self.status_message = String::from("正在发起真实执行，请稍候。");
-                self.composer.clear();
-                self.composer_buffer = text_editor::Content::with_text("");
-                self.composer_undo_history.clear();
-                self.composer_scroll_offset = 0.0;
-                self.composer_scrollbar_pointer_y = None;
-                self.composer_scrollbar_drag_grab_offset = None;
-                self.composer_context_menu_open = false;
-                self.composer_context_clipboard_text = None;
-
-                let run_id = self.next_run_id;
-                self.next_run_id = self.next_run_id.saturating_add(1);
-                let request_for_run = request.clone();
-                let config_for_run = self.provider_configuration.clone();
-                let (run_task, run_handle) = Task::run(
-                    stream_runtime_run(
-                        config_for_run,
-                        self.agent_profile_catalog.clone(),
-                        self.luaskills_runtime.clone(),
-                        self.mcp_runtime.clone(),
-                        self.runtime_foundation.task_runtime(),
-                        request_for_run,
-                    ),
-                    move |event| Message::RunExecutionStreamEvent { run_id, event },
-                )
-                .abortable();
-                self.active_runs.insert(
-                    request.session_id,
-                    ActiveSessionRunState {
-                        run_id,
-                        handle: run_handle,
-                    },
-                );
-
-                Task::batch([
-                    self.persist_workspace_snapshot_task(),
-                    self.maybe_follow_selected_session_transcript_tail(request.session_id),
-                    run_task,
-                ])
-            }
+            Message::StartRun => self.submit_selected_session_prompt(false),
+            Message::InterruptComposerPrompt => self.submit_selected_session_prompt(true),
             Message::RunExecutionStreamEvent { run_id, event } => {
                 let Some(session_id) = self.active_run_session_id_for_run_id(run_id) else {
                     return Task::none();
@@ -5478,8 +5523,14 @@ impl VulcanWorkbench {
                         self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                        let detached_listener_task =
+                            self.maybe_start_detached_subagent_task_listener(session_id, &event);
                         self.push_session_runtime_event(session_id, event);
-                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                        Task::batch([
+                            detached_listener_task,
+                            self.maybe_follow_selected_session_transcript_tail(session_id),
+                            self.maybe_start_next_pending_prompt(session_id, false),
+                        ])
                     }
                     ExecutionStreamEvent::Finished(report) => {
                         self.clear_active_run_tracking(session_id);
@@ -5487,50 +5538,54 @@ impl VulcanWorkbench {
                     }
                 }
             }
+            Message::DetachedSubagentTaskEvent { task_id, event } => match event {
+                DetachedTaskRuntimeEvent::ChildExecution(event) => match event {
+                    ExecutionStreamEvent::Prepared(_) => Task::none(),
+                    ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                        self.append_streaming_thinking_delta(session_id, &delta);
+                        Task::batch([
+                            self.maybe_follow_selected_session_transcript_tail(session_id),
+                            self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                        ])
+                    }
+                    ExecutionStreamEvent::ThinkingCompleted { session_id } => {
+                        self.dock_streaming_thinking_message(session_id);
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                    }
+                    ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                        self.append_streaming_output_delta(session_id, &delta);
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                    }
+                    ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                        self.push_session_runtime_event(session_id, event);
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                    }
+                    ExecutionStreamEvent::Finished(report) => {
+                        self.apply_execution_run_report(report)
+                    }
+                },
+                DetachedTaskRuntimeEvent::ParentRuntime {
+                    parent_session_id,
+                    event,
+                } => {
+                    let is_finished = event.kind == RuntimeEventKind::DelegateFinished;
+                    self.push_session_runtime_event(parent_session_id, event);
+                    if is_finished {
+                        self.detached_subagent_task_listeners.remove(&task_id);
+                    }
+                    Task::batch([
+                        self.persist_workspace_snapshot_task(),
+                        self.maybe_follow_selected_session_transcript_tail(parent_session_id),
+                        self.maybe_start_next_pending_prompt(parent_session_id, false),
+                    ])
+                }
+            },
             Message::StopRun => {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     self.status_message = String::from("当前没有正在执行的 AI 调用。");
                     return Task::none();
                 };
-
-                let Some(active_run) = self.take_active_run_state(session_id) else {
-                    self.status_message = String::from("当前没有正在执行的 AI 调用。");
-                    return Task::none();
-                };
-
-                active_run.handle.abort();
-
-                // Mark the stopped session as blocked so the interruption is visible in the UI.
-                // 将被停止的会话标记为阻塞状态，以便在界面中显式展示中断结果。
-                if let Some(session) = self
-                    .sessions
-                    .iter_mut()
-                    .find(|session| session.id == session_id)
-                {
-                    session.status = SessionState::Blocked;
-                    session.last_updated_label = String::from("刚刚");
-                }
-
-                self.clear_streaming_message_ids(session_id);
-                self.session_tool_call_message_ids.remove(&session_id);
-                self.mark_running_subagent_tasks_stopped(session_id);
-                self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
-                self.status_message = String::from("已停止当前 AI 调用。");
-                self.push_session_message(
-                    session_id,
-                    SessionMessageKind::Assistant,
-                    "执行已停止",
-                    "已按用户请求停止当前 AI 调用，系统保留截至停止时的上下文、思考与输出片段。",
-                );
-                self.push_activity(
-                    ActivityLevel::Warning,
-                    "AI 调用已停止",
-                    "当前真实执行已被用户中止，可直接修改提示词后重新发起新的调用。",
-                );
-                Task::batch([
-                    self.persist_workspace_snapshot_task(),
-                    self.maybe_follow_selected_session_transcript_tail(session_id),
-                ])
+                self.stop_session_run_for_session(session_id, false)
             }
             Message::PaneFocused(pane) => {
                 self.focus = Some(pane);
@@ -5557,6 +5612,445 @@ impl VulcanWorkbench {
         self.sessions
             .iter_mut()
             .find(|session| session.id == self.selected_session)
+    }
+
+    /// Returns the current execution phase tracked for the provided session, defaulting to idle when no explicit state exists yet.
+    /// 返回给定会话当前跟踪到的执行阶段；若尚无显式状态则默认视为空闲。
+    fn session_run_phase_for(&self, session_id: SessionId) -> SessionRunPhase {
+        self.session_run_phases
+            .get(&session_id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Idle)
+    }
+
+    /// Returns the persisted pending prompt queue attached to the provided session runtime state.
+    /// 返回附着在给定会话运行时状态上的持久化待发送提示词队列。
+    fn session_pending_prompt_queue(&self, session_id: SessionId) -> &[PendingSessionPromptEntry] {
+        self.session_runtime_state(session_id)
+            .map(|state| state.ui_state.pending_prompt_queue.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Returns cloned pending prompt queue entries for the currently selected root session so the floating composer strip can render them safely.
+    /// 返回当前选中根会话的待发送提示词队列副本，供浮动提示词条安全渲染使用。
+    fn selected_session_pending_prompt_entries(&self) -> Vec<PendingSessionPromptEntry> {
+        self.selected_session()
+            .map(|session| self.session_pending_prompt_queue(session.id).to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Returns whether the selected root session should currently render the pending-prompt queue strip above the floating composer controls.
+    /// 返回当前选中的根会话是否应在浮动提示词控制区上方显示待发送队列条。
+    fn should_show_selected_session_pending_prompt_strip(&self) -> bool {
+        self.selected_session().is_some()
+            && (!self.selected_session_pending_prompt_entries().is_empty() || self.has_active_run())
+    }
+
+    /// Refreshes the lightweight queued-step counter shown on one session card from the persisted prompt queue length.
+    /// 根据持久化提示词队列长度刷新单个会话卡片上展示的轻量排队步骤计数。
+    fn refresh_session_queued_steps(&mut self, session_id: SessionId) {
+        let queued_steps = self
+            .session_pending_prompt_queue(session_id)
+            .len()
+            .min(u8::MAX as usize) as u8;
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.queued_steps = queued_steps;
+        }
+        if let Some(session) = self
+            .archived_sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.queued_steps = queued_steps;
+        }
+    }
+
+    /// Refreshes queued-step counters for every visible and archived session after one bulk runtime-state reload.
+    /// 在一次批量运行时状态重载后刷新全部可见与归档会话的排队步骤计数。
+    fn refresh_all_session_queued_steps(&mut self) {
+        let session_ids = self
+            .sessions
+            .iter()
+            .map(|session| session.id)
+            .chain(self.archived_sessions.iter().map(|session| session.id))
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.refresh_session_queued_steps(session_id);
+        }
+    }
+
+    /// Builds one persisted pending-prompt entry from the provided prompt, source, and optional delegated task identifier.
+    /// 根据给定提示词、来源与可选委派任务标识构建一条持久化待发送提示词项。
+    fn build_pending_prompt_entry(
+        &self,
+        prompt: String,
+        source: PendingSessionPromptSource,
+        task_id: Option<SessionId>,
+        preview: Option<String>,
+    ) -> PendingSessionPromptEntry {
+        let created_at = current_unix_millis_text();
+        PendingSessionPromptEntry {
+            id: format!("pending-prompt-{created_at}-{}", Uuid::new_v4()),
+            preview: preview.unwrap_or_else(|| pending_prompt_preview_text(&prompt)),
+            prompt,
+            source,
+            task_id: task_id.map(|value| value.to_string()),
+            created_at,
+        }
+    }
+
+    /// Enqueues one pending prompt into the target session, optionally inserting it at the head for interrupt-style dispatch.
+    /// 将一条待发送提示词加入目标会话队列，并可选地插入头部以支持插队式调度。
+    fn enqueue_session_pending_prompt(
+        &mut self,
+        session_id: SessionId,
+        entry: PendingSessionPromptEntry,
+        insert_front: bool,
+    ) -> Result<(), String> {
+        let queue_full_error =
+            String::from("待发送消息队列已满，最多保留 10 条，请等待前面的消息完成后再继续追加。");
+        let now = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        let queue = &mut runtime_state.ui_state.pending_prompt_queue;
+
+        if entry.source == PendingSessionPromptSource::DelegateCompletion
+            && entry.task_id.as_ref().is_some_and(|task_id| {
+                queue.iter().any(|existing| {
+                    existing.source == PendingSessionPromptSource::DelegateCompletion
+                        && existing.task_id.as_ref() == Some(task_id)
+                })
+            })
+        {
+            return Ok(());
+        }
+
+        if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
+            if entry.source == PendingSessionPromptSource::DelegateCompletion {
+                if let Some(index) = queue.iter().position(|existing| {
+                    existing.source == PendingSessionPromptSource::DelegateCompletion
+                }) {
+                    queue.remove(index);
+                } else {
+                    return Err(queue_full_error);
+                }
+            } else {
+                return Err(queue_full_error);
+            }
+        }
+
+        if insert_front {
+            queue.insert(0, entry);
+        } else {
+            queue.push(entry);
+        }
+        runtime_state.updated_at = now;
+        self.refresh_session_queued_steps(session_id);
+        Ok(())
+    }
+
+    /// Removes and returns the next pending prompt scheduled for the provided session.
+    /// 移除并返回为给定会话排到最前面的下一条待发送提示词。
+    fn dequeue_session_pending_prompt(
+        &mut self,
+        session_id: SessionId,
+    ) -> Option<PendingSessionPromptEntry> {
+        let now = current_unix_millis_text();
+        let next_entry = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            if runtime_state.ui_state.pending_prompt_queue.is_empty() {
+                None
+            } else {
+                let entry = runtime_state.ui_state.pending_prompt_queue.remove(0);
+                runtime_state.updated_at = now;
+                Some(entry)
+            }
+        };
+        self.refresh_session_queued_steps(session_id);
+        next_entry
+    }
+
+    /// Clears the floating composer input surface after one successful submit, queue, or interrupt action.
+    /// 在一次成功的发送、排队或插队动作后清空浮动提示词输入表面。
+    fn clear_composer_input(&mut self) {
+        self.composer.clear();
+        self.composer_buffer = text_editor::Content::with_text("");
+        self.composer_undo_history.clear();
+        self.composer_scroll_offset = 0.0;
+        self.composer_scrollbar_pointer_y = None;
+        self.composer_scrollbar_drag_grab_offset = None;
+        self.composer_context_menu_open = false;
+        self.composer_context_clipboard_text = None;
+    }
+
+    /// Starts one concrete runtime run from the provided prompt entry after it has already been accepted for immediate dispatch.
+    /// 在某条提示词项已经被接受为立即分发后，根据它启动一次具体运行时执行。
+    fn begin_session_run_from_prompt_entry(
+        &mut self,
+        session_id: SessionId,
+        session_title: String,
+        prompt_entry: PendingSessionPromptEntry,
+    ) -> Task<Message> {
+        if !composer_text_has_submittable_content(&prompt_entry.prompt) {
+            self.status_message = String::from("请输入任务指令后再启动执行。");
+            return Task::none();
+        }
+
+        self.ensure_session_conversation_state_loaded(session_id);
+
+        let execution_mode = if self.selected_agent_requires_plan_mode() {
+            ExecutionMode::Plan
+        } else {
+            self.execution_mode
+        };
+        self.execution_mode = execution_mode;
+
+        if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
+            self.push_session_message(
+                session_id,
+                SessionMessageKind::User,
+                "用户指令",
+                prompt_entry.prompt.clone(),
+            );
+            let _ = self
+                .maybe_generate_session_title_from_prompt(session_id, prompt_entry.prompt.as_str());
+            self.materialize_session_after_first_user_turn(session_id);
+        }
+        self.append_user_prompt_to_session_conversation(session_id, prompt_entry.prompt.clone());
+
+        let request = ExecutionPreparationRequest {
+            session_id,
+            session_title,
+            workspace_path: self
+                .workspace_path_for_session_id(session_id)
+                .unwrap_or_else(|| self.workspace_path.clone()),
+            prompt: prompt_entry.prompt,
+            conversation_state: self.session_conversation_state(session_id),
+            execution_mode: execution_mode.to_string(),
+            temperature: self.temperature_enabled.then_some(self.temperature),
+            reasoning_effort: self.workbench_reasoning_effort,
+        };
+
+        self.replace_session_runtime_events(session_id, Vec::new());
+        self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.last_mcp_discovery_rows.clear();
+        self.last_mcp_discovery_errors.clear();
+        self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Running;
+            session.last_updated_label = String::from("刚刚");
+        }
+        self.status_message = String::from("正在发起真实执行，请稍候。");
+
+        let run_id = self.next_run_id;
+        self.next_run_id = self.next_run_id.saturating_add(1);
+        let request_for_run = request.clone();
+        let config_for_run = self.provider_configuration.clone();
+        let (run_task, run_handle) = Task::run(
+            stream_runtime_run(
+                config_for_run,
+                self.agent_profile_catalog.clone(),
+                self.luaskills_runtime.clone(),
+                self.mcp_runtime.clone(),
+                self.runtime_foundation.task_runtime(),
+                request_for_run,
+            ),
+            move |event| Message::RunExecutionStreamEvent { run_id, event },
+        )
+        .abortable();
+        self.active_runs.insert(
+            request.session_id,
+            ActiveSessionRunState {
+                run_id,
+                handle: run_handle,
+            },
+        );
+
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(request.session_id),
+            run_task,
+        ])
+    }
+
+    /// Starts the next queued prompt for one session when the session is idle and auto-dispatch is currently allowed.
+    /// 当会话空闲且当前允许自动分发时，为该会话启动队列中的下一条提示词。
+    fn maybe_start_next_pending_prompt(
+        &mut self,
+        session_id: SessionId,
+        allow_from_stopped_phase: bool,
+    ) -> Task<Message> {
+        if self.session_has_active_run(session_id) {
+            return Task::none();
+        }
+        if !allow_from_stopped_phase
+            && self.session_run_phase_for(session_id) == SessionRunPhase::Stopped
+        {
+            return Task::none();
+        }
+        let Some(session_title) = self
+            .session_by_id(session_id)
+            .map(|session| session.title.clone())
+        else {
+            return Task::none();
+        };
+        let Some(prompt_entry) = self.dequeue_session_pending_prompt(session_id) else {
+            return Task::none();
+        };
+        self.status_message = match prompt_entry.source {
+            PendingSessionPromptSource::DelegateCompletion => {
+                String::from("子代理结果已回流，正在继续协调主流程。")
+            }
+            PendingSessionPromptSource::UserInterrupt => String::from("正在优先处理插队消息。"),
+            PendingSessionPromptSource::UserFollowup => String::from("正在处理排队消息。"),
+        };
+        self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
+    }
+
+    /// Stops one specific session run and optionally continues with the next queued prompt immediately afterward.
+    /// 停止某个指定会话的运行，并可选地在其后立即继续处理下一条排队提示词。
+    fn stop_session_run_for_session(
+        &mut self,
+        session_id: SessionId,
+        continue_with_next_prompt: bool,
+    ) -> Task<Message> {
+        let Some(active_run) = self.take_active_run_state(session_id) else {
+            self.status_message = String::from("当前没有正在执行的 AI 调用。");
+            return Task::none();
+        };
+
+        active_run.handle.abort();
+
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Blocked;
+            session.last_updated_label = String::from("刚刚");
+        }
+
+        self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.mark_running_subagent_tasks_stopped(session_id);
+        self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
+
+        if continue_with_next_prompt {
+            self.status_message = String::from("已中断当前执行，正在切换到插队消息。");
+            self.push_activity(
+                ActivityLevel::Warning,
+                "AI 调用已插队",
+                "当前真实执行已被最新消息打断，系统将立即切换到队列头部的新请求。",
+            );
+        } else {
+            self.status_message = String::from("已停止当前 AI 调用。");
+            self.push_session_message(
+                session_id,
+                SessionMessageKind::Assistant,
+                "执行已停止",
+                "已按用户请求停止当前 AI 调用，系统保留截至停止时的上下文、思考与输出片段。",
+            );
+            self.push_activity(
+                ActivityLevel::Warning,
+                "AI 调用已停止",
+                "当前真实执行已被用户中止，可直接修改提示词后重新发起新的调用。",
+            );
+        }
+
+        let next_prompt_task = if continue_with_next_prompt {
+            self.maybe_start_next_pending_prompt(session_id, true)
+        } else {
+            Task::none()
+        };
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+            next_prompt_task,
+        ])
+    }
+
+    /// Submits the current composer draft for the selected session, queueing it when another run is already active and optionally interrupting the in-flight run first.
+    /// 为当前选中会话提交提示词草稿；若已有活动运行则先排队，并可选地在排队前打断正在执行的运行。
+    fn submit_selected_session_prompt(&mut self, interrupt_running: bool) -> Task<Message> {
+        let Some((session_id, session_title)) = self
+            .selected_session()
+            .map(|session| (session.id, session.title.clone()))
+        else {
+            self.status_message = String::from("当前没有可执行的会话。");
+            return Task::none();
+        };
+
+        let current_prompt = self.composer_buffer.text();
+        self.composer = current_prompt.clone();
+        if !composer_text_has_submittable_content(&current_prompt) {
+            self.status_message = String::from("请输入任务指令后再启动执行。");
+            return Task::none();
+        }
+
+        let prompt_source = if interrupt_running {
+            PendingSessionPromptSource::UserInterrupt
+        } else {
+            PendingSessionPromptSource::UserFollowup
+        };
+        let prompt_entry =
+            self.build_pending_prompt_entry(current_prompt, prompt_source, None, None);
+
+        if self.session_has_active_run(session_id) {
+            if let Err(error) =
+                self.enqueue_session_pending_prompt(session_id, prompt_entry, interrupt_running)
+            {
+                self.status_message = error;
+                return Task::none();
+            }
+            self.clear_composer_input();
+            if interrupt_running {
+                return self.stop_session_run_for_session(session_id, true);
+            }
+            self.status_message =
+                String::from("已加入待发送队列，当前会在本轮执行结束后自动发送。");
+            return self.persist_workspace_snapshot_task();
+        }
+
+        self.clear_composer_input();
+        self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
+    }
+
+    /// Enqueues one delegated subagent completion follow-up so the parent coordinator can absorb the result on the next available turn.
+    /// 将一条子代理完成后的跟进消息排入队列，以便父协调代理在下一次可用回合吸收该结果。
+    fn enqueue_delegate_completion_followup_if_needed(
+        &mut self,
+        parent_session_id: SessionId,
+        state: &SubagentTaskPanelState,
+    ) {
+        if self.session_run_phase_for(parent_session_id) == SessionRunPhase::Stopped {
+            return;
+        }
+        let prompt_entry = self.build_pending_prompt_entry(
+            build_delegate_completion_followup_prompt(state),
+            PendingSessionPromptSource::DelegateCompletion,
+            Some(state.task_id),
+            Some(build_delegate_completion_followup_preview(state)),
+        );
+        if let Err(error) =
+            self.enqueue_session_pending_prompt(parent_session_id, prompt_entry, false)
+        {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "子代理回流排队失败",
+                format!(
+                    "子代理 `{}` 的结果未能加入后续处理队列：{error}",
+                    state.subagent_label
+                ),
+            );
+        }
     }
 
     /// Returns whether one session already exists inside the visible or archived project tree bindings.
@@ -5657,19 +6151,29 @@ impl VulcanWorkbench {
             .iter()
             .flat_map(|project| project.session_ids.iter().copied())
             .collect::<BTreeSet<_>>();
-        let archived_session_ids = self
-            .archived_sessions
-            .iter()
-            .map(|session| session.id)
-            .collect::<BTreeSet<_>>();
-
+        // Deduplicate active and archived session summaries by stable session id and let active sessions win whenever overlap still exists in memory.
+        // 按稳定会话标识去重活动与归档会话摘要，并在内存里仍有重叠时优先保留活动会话。
+        let mut visible_session_seen = BTreeSet::new();
         let visible_sessions = self
             .sessions
             .iter()
             .filter(|session| visible_session_ids.contains(&session.id))
+            .filter(|session| visible_session_seen.insert(session.id))
             .cloned()
             .collect::<Vec<_>>();
         let visible_session_ids = visible_sessions
+            .iter()
+            .map(|session| session.id)
+            .collect::<BTreeSet<_>>();
+        let mut archived_session_seen = BTreeSet::new();
+        let archived_sessions = self
+            .archived_sessions
+            .iter()
+            .filter(|session| !visible_session_ids.contains(&session.id))
+            .filter(|session| archived_session_seen.insert(session.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let archived_session_ids = archived_sessions
             .iter()
             .map(|session| session.id)
             .collect::<BTreeSet<_>>();
@@ -5681,7 +6185,7 @@ impl VulcanWorkbench {
             visible_sessions
                 .first()
                 .map(|session| session.id)
-                .or_else(|| self.archived_sessions.first().map(|session| session.id))
+                .or_else(|| archived_sessions.first().map(|session| session.id))
                 .unwrap_or_default()
         };
 
@@ -5689,7 +6193,7 @@ impl VulcanWorkbench {
             task_projects: self.task_projects.clone(),
             archived_task_projects: self.archived_task_projects.clone(),
             sessions: visible_sessions,
-            archived_sessions: self.archived_sessions.clone(),
+            archived_sessions: archived_sessions.clone(),
             session_messages: self
                 .session_runtime_state
                 .iter()
@@ -5705,6 +6209,7 @@ impl VulcanWorkbench {
             archived_session_messages: self
                 .archived_session_runtime_state
                 .iter()
+                .filter(|(session_id, _)| archived_session_ids.contains(session_id))
                 .map(|(session_id, state)| {
                     (
                         *session_id,
@@ -5719,14 +6224,24 @@ impl VulcanWorkbench {
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
                 .map(|(session_id, entries)| (*session_id, entries.clone()))
                 .collect(),
-            archived_session_compactions: self.archived_session_compactions.clone(),
+            archived_session_compactions: self
+                .archived_session_compactions
+                .iter()
+                .filter(|(session_id, _)| archived_session_ids.contains(session_id))
+                .map(|(session_id, entries)| (*session_id, entries.clone()))
+                .collect(),
             session_runtime_state: self
                 .session_runtime_state
                 .iter()
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
                 .map(|(session_id, state)| (*session_id, state.clone()))
                 .collect(),
-            archived_session_runtime_state: self.archived_session_runtime_state.clone(),
+            archived_session_runtime_state: self
+                .archived_session_runtime_state
+                .iter()
+                .filter(|(session_id, _)| archived_session_ids.contains(session_id))
+                .map(|(session_id, state)| (*session_id, state.clone()))
+                .collect(),
             session_run_phases: self
                 .session_run_phases
                 .iter()
@@ -6420,9 +6935,32 @@ impl VulcanWorkbench {
             })
             .unwrap_or_default();
 
+        let previous_states = self
+            .session_subagent_tasks
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let normalized_persisted_states = persisted_states
+            .into_iter()
+            .map(|state| {
+                if state.run_state.is_running() {
+                    previous_states
+                        .get(&state.task_id)
+                        .map(|existing| self.normalized_subagent_task_panel_state(existing))
+                        .filter(|existing| !existing.run_state.is_running())
+                        .unwrap_or_else(|| self.normalized_subagent_task_panel_state(&state))
+                } else {
+                    state
+                }
+            })
+            .collect::<Vec<_>>();
+        let task_runtime = self.runtime_foundation.task_runtime();
         let entry = self.session_subagent_tasks.entry(session_id).or_default();
-        entry.retain(|_, state| state.run_state.is_running());
-        for state in persisted_states {
+        entry.retain(|_, state| {
+            state.run_state.is_running()
+                && task_runtime.is_task_running(state.task_id).unwrap_or(false)
+        });
+        for state in normalized_persisted_states {
             entry.insert(state.task_id, state);
         }
         if entry.is_empty() {
@@ -6441,10 +6979,66 @@ impl VulcanWorkbench {
     /// Inserts or updates one cached subagent task panel state under its owning parent session.
     /// 将一条缓存子代理任务面板状态写入或更新到所属父会话之下。
     fn upsert_subagent_task_panel_state(&mut self, state: SubagentTaskPanelState) {
+        let state = self.normalized_subagent_task_panel_state(&state);
         self.session_subagent_tasks
             .entry(state.parent_session_id)
             .or_default()
             .insert(state.task_id, state);
+    }
+
+    /// Returns one best-effort persisted task-panel snapshot for the provided parent/task pair by scanning the latest visible task-card metadata first.
+    /// 通过优先扫描最近的可见 task 卡片元数据，为给定父会话与任务组合返回一份最佳努力的持久化任务面板快照。
+    fn persisted_subagent_task_panel_state_snapshot(
+        &self,
+        parent_session_id: SessionId,
+        task_id: SessionId,
+    ) -> Option<SubagentTaskPanelState> {
+        self.session_messages
+            .get(&parent_session_id)
+            .or_else(|| self.archived_session_messages.get(&parent_session_id))
+            .and_then(|messages| {
+                messages.iter().rev().find_map(|message| {
+                    message.metadata.as_ref().and_then(|metadata| {
+                        parse_subagent_task_panel_metadata(parent_session_id, metadata)
+                            .filter(|state| state.task_id == task_id)
+                    })
+                })
+            })
+    }
+
+    /// Returns whether one cached child task is still truly running according to the shared runtime registry rather than the possibly stale UI metadata snapshot.
+    /// 根据共享运行时注册表而非可能陈旧的界面元数据快照，返回某个缓存子任务当前是否仍在真实执行中。
+    fn subagent_task_is_actively_running(&self, task_id: SessionId) -> bool {
+        self.runtime_foundation
+            .task_runtime()
+            .is_task_running(task_id)
+            .unwrap_or(false)
+    }
+
+    /// Normalizes one cached subagent panel state against the live task runtime so stale `running` snapshots collapse into terminal states as soon as execution has really ended.
+    /// 将一条缓存子代理面板状态与实时任务运行时对齐，使陈旧的 `running` 快照在真实执行结束后立即收敛为终态。
+    fn normalized_subagent_task_panel_state(
+        &self,
+        state: &SubagentTaskPanelState,
+    ) -> SubagentTaskPanelState {
+        if !state.run_state.is_running() || self.subagent_task_is_actively_running(state.task_id) {
+            return state.clone();
+        }
+        if let Some(persisted_state) = self
+            .persisted_subagent_task_panel_state_snapshot(state.parent_session_id, state.task_id)
+            .filter(|persisted_state| !persisted_state.run_state.is_running())
+        {
+            return persisted_state;
+        }
+
+        let mut normalized_state = state.clone();
+        normalized_state.run_state =
+            if normalized_state.result_text.trim() == subagent_task_stopped_summary_text().trim() {
+                SubagentTaskRunState::Stopped
+            } else {
+                SubagentTaskRunState::Completed
+            };
+        normalized_state
     }
 
     /// Seeds one live child-session transcript with its initial task prompt so the subagent panel has the same conversation opening shape as the main panel.
@@ -6533,19 +7127,20 @@ impl VulcanWorkbench {
     /// Returns the matching score between one visible task-tool message metadata object and one delegate payload so host events can relink running cards to their live child sessions.
     /// 返回某条可见 task 工具消息元数据与某份委派 payload 的匹配分数，供宿主事件把运行中卡片重新关联到实时子会话。
     fn task_session_message_match_score(metadata: &Value, payload: &Value) -> usize {
-        let payload_task_id = payload
-            .get("task_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-        let metadata_task_id = task_session_payload_from_tool_metadata(metadata)
-            .and_then(|candidate_payload| candidate_payload.get("task_id"))
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-        if payload_task_id
-            .zip(metadata_task_id)
+        let payload_internal_task_id = task_session_internal_id_from_payload(payload);
+        let metadata_internal_task_id = task_session_payload_from_tool_metadata(metadata)
+            .and_then(task_session_internal_id_from_payload);
+        if payload_internal_task_id
+            .zip(metadata_internal_task_id)
             .is_some_and(|(left, right)| left == right)
         {
             return usize::MAX;
+        }
+        if task_session_public_id_from_payload(payload)
+            .zip(task_session_declared_task_id_from_tool_metadata(metadata))
+            .is_some_and(|(left, right)| left == right)
+        {
+            return usize::MAX.saturating_sub(1);
         }
 
         let payload_prompt = payload
@@ -6763,13 +7358,25 @@ impl VulcanWorkbench {
                     (!state.subagent_label.trim().is_empty()).then(|| state.subagent_label.clone())
                 })
             });
+        let public_task_id = message
+            .metadata
+            .as_ref()
+            .and_then(task_session_declared_task_id_from_tool_metadata)
+            .map(str::to_string)
+            .or_else(|| {
+                state_snapshot
+                    .as_ref()
+                    .map(|state| state.public_task_id.clone())
+            })
+            .unwrap_or_else(|| task_id.to_string());
         let conversation_state = state_snapshot.and_then(|state| state.conversation_state);
         let updated_metadata = attach_tool_display_state_metadata(
             Some(json!({
                 "tool_name": "task",
                 "kind": "task_session",
                 "payload": {
-                    "task_id": task_id.to_string(),
+                    "task_id": public_task_id,
+                    "task_session_id": task_id.to_string(),
                     "execution_status": "stopped",
                     "prompt": prompt,
                     "description": description,
@@ -6787,6 +7394,7 @@ impl VulcanWorkbench {
                 "kind": "task_session",
                 "payload": {
                     "task_id": task_id.to_string(),
+                    "task_session_id": task_id.to_string(),
                     "execution_status": "stopped",
                     "result": stop_summary,
                     "updated_at": current_unix_millis_text(),
@@ -6820,6 +7428,7 @@ impl VulcanWorkbench {
 
         let stop_summary = subagent_task_stopped_summary_text();
         for task_id in running_task_ids {
+            let _ = self.runtime_foundation.task_runtime().stop_task(task_id);
             self.mark_subagent_task_stopped(parent_session_id, task_id, stop_summary);
         }
     }
@@ -6848,7 +7457,7 @@ impl VulcanWorkbench {
 
     /// Returns the running subagent task entries that should be rendered as badges for the selected parent session.
     /// 返回当前选中父会话中应渲染为徽标的运行中子代理任务条目。
-    fn selected_session_active_subagent_tasks(&self) -> Vec<&SubagentTaskPanelState> {
+    fn selected_session_active_subagent_tasks(&self) -> Vec<SubagentTaskPanelState> {
         let Some(session_id) = self.selected_session().map(|session| session.id) else {
             return Vec::new();
         };
@@ -6857,6 +7466,7 @@ impl VulcanWorkbench {
             .map(|entries| {
                 entries
                     .values()
+                    .map(|state| self.normalized_subagent_task_panel_state(state))
                     .filter(|state| {
                         state.run_state.is_running()
                             && self.subagent_task_panel_has_recoverable_detail(
@@ -6867,6 +7477,34 @@ impl VulcanWorkbench {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Starts one detached child-task listener stream exactly once so background subagent output can keep flowing after the parent run has already completed.
+    /// 仅启动一次某条分离子任务监听流，使父运行结束后后台子代理输出仍可继续流入界面。
+    fn maybe_start_detached_subagent_task_listener(
+        &mut self,
+        parent_session_id: SessionId,
+        event: &RuntimeEvent,
+    ) -> Task<Message> {
+        if event.kind != RuntimeEventKind::DelegateStarted {
+            return Task::none();
+        }
+        let Some(metadata) = event.metadata.as_ref() else {
+            return Task::none();
+        };
+        let Some(state) = parse_subagent_task_panel_metadata(parent_session_id, metadata) else {
+            return Task::none();
+        };
+        if !self.detached_subagent_task_listeners.insert(state.task_id) {
+            return Task::none();
+        }
+        let task_id = state.task_id;
+        Task::run(
+            self.runtime_foundation
+                .task_runtime()
+                .subscribe_detached_task_events(task_id),
+            move |event| Message::DetachedSubagentTaskEvent { task_id, event },
+        )
     }
 
     /// Opens one cached subagent task panel inside the main transcript area when the task state is available.
@@ -7402,7 +8040,6 @@ impl VulcanWorkbench {
             {
                 session.status = SessionState::Completed;
                 session.focus = String::from("最近一次真实执行已完成，可继续追问或调整参数。");
-                session.queued_steps = session.queued_steps.saturating_add(1);
                 session.last_updated_label = String::from("刚刚");
             }
 
@@ -7439,6 +8076,7 @@ impl VulcanWorkbench {
             self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
         }
 
+        self.refresh_session_queued_steps(session_id);
         self.append_session_summary_output(session_id, &report);
         self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
@@ -7448,6 +8086,7 @@ impl VulcanWorkbench {
         Task::batch([
             self.persist_workspace_snapshot_task(),
             self.maybe_follow_selected_session_transcript_tail(session_id),
+            self.maybe_start_next_pending_prompt(session_id, false),
         ])
     }
 
@@ -7558,6 +8197,7 @@ impl VulcanWorkbench {
         self.active_tool_modal = None;
         self.session_subagent_tasks.clear();
         self.active_subagent_panel = None;
+        self.detached_subagent_task_listeners.clear();
         self.streaming_output_message_ids.clear();
         self.rebuild_session_message_raw_buffers();
         self.rebuild_session_message_markdown();
@@ -7565,6 +8205,7 @@ impl VulcanWorkbench {
         self.runtime_event_markdown.clear();
         self.runtime_event_markdown_buffers.clear();
         self.rebuild_all_session_agent_view_buffers();
+        self.refresh_all_session_queued_steps();
     }
 
     /// Rebuilds all read-only transcript source buffers from the current visible and archived session messages.
@@ -7979,11 +8620,17 @@ impl VulcanWorkbench {
 
     /// Builds one asynchronous persistence task for the current visible workspace snapshot.
     /// 为当前可见工作台快照构建一次异步持久化任务。
-    fn persist_workspace_snapshot_task(&self) -> Task<Message> {
+    fn persist_workspace_snapshot_task(&mut self) -> Task<Message> {
         let Some(controller_runtime) = self.controller_runtime.clone() else {
             return Task::none();
         };
+        if self.workspace_snapshot_persist_in_flight {
+            self.workspace_snapshot_persist_pending = true;
+            return Task::none();
+        }
 
+        self.workspace_snapshot_persist_in_flight = true;
+        self.workspace_snapshot_persist_pending = false;
         let snapshot = self.build_persistable_workspace_snapshot();
 
         Task::perform(
@@ -8168,6 +8815,10 @@ impl VulcanWorkbench {
         }
         if let Some(conversation_state) = state.conversation_state.clone() {
             self.replace_subagent_task_conversation_state(state.task_id, conversation_state);
+        }
+        if event.kind == RuntimeEventKind::DelegateFinished {
+            self.detached_subagent_task_listeners.remove(&state.task_id);
+            self.enqueue_delegate_completion_followup_if_needed(session_id, &state);
         }
         self.upsert_subagent_task_panel_state(state);
         true
@@ -8723,9 +9374,7 @@ impl VulcanWorkbench {
             && tool_display_message_is_task_session(message)
             && let Some(metadata) = message.metadata.as_ref()
             && let Some(task_id) = task_session_payload_from_tool_metadata(metadata)
-                .and_then(|payload| payload.get("task_id"))
-                .and_then(Value::as_str)
-                .and_then(|value| SessionId::parse_str(value).ok())
+                .and_then(task_session_internal_id_from_payload)
             && !self.subagent_task_panel_has_live_detail(task_id)
             && let Some(markdown_body) = task_session_modal_markdown_from_tool_metadata(metadata)
         {

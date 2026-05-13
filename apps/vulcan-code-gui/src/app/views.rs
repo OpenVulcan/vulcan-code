@@ -1510,26 +1510,19 @@ impl VulcanWorkbench {
         let is_running = self.has_active_run();
         let can_submit = self.composer_has_submittable_content();
         let tooltip_text = if is_running {
-            "停止当前 AI 调用"
+            if can_submit {
+                "将当前任务指令加入待发送队列"
+            } else {
+                "输入任务指令后可加入待发送队列"
+            }
         } else if can_submit {
             "发送当前任务指令"
         } else {
             "请输入任务指令后再发送"
         };
-        let trigger_message = if is_running {
-            Message::StopRun
-        } else {
-            Message::StartRun
-        };
-        let icon = if is_running {
-            codicon::debug_stop()
-                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
-                .line_height(1.0)
-        } else {
-            lucide::send()
-                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
-                .line_height(1.0)
-        };
+        let icon = lucide::send()
+            .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+            .line_height(1.0);
         let icon_surface: Element<'_, Message> = container(icon)
             .width(COMPOSER_TRIGGER_BUTTON_SIZE)
             .height(COMPOSER_TRIGGER_BUTTON_SIZE)
@@ -1537,10 +1530,10 @@ impl VulcanWorkbench {
             .into();
 
         let button = button(icon_surface).padding(0).style(move |theme, status| {
-            style::workbench_composer_trigger_button_style(theme, status, is_running)
+            style::workbench_composer_trigger_button_style(theme, status, false)
         });
-        let button = if is_running || can_submit {
-            button.on_press(trigger_message)
+        let button = if can_submit {
+            button.on_press(Message::StartRun)
         } else {
             button
         };
@@ -1554,6 +1547,119 @@ impl VulcanWorkbench {
         )
         .style(container::rounded_box)
         .into()
+    }
+
+    /// Builds the dedicated stop button kept beside the queue/send trigger while one root-session run is still active.
+    /// 构建在根会话运行期间保留在排队发送按钮旁边的独立停止按钮。
+    pub(super) fn view_stop_run_button(&self) -> Element<'_, Message> {
+        let is_running = self.has_active_run();
+        let icon_surface: Element<'_, Message> = container(
+            codicon::debug_stop()
+                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+                .line_height(1.0),
+        )
+        .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+        .height(COMPOSER_TRIGGER_BUTTON_SIZE)
+        .center(Fill)
+        .into();
+        let button = button(icon_surface).padding(0).style(move |theme, status| {
+            style::workbench_composer_trigger_button_style(theme, status, true)
+        });
+        let button = if is_running {
+            button.on_press(Message::StopRun)
+        } else {
+            button
+        };
+
+        tooltip(
+            button
+                .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+                .height(COMPOSER_TRIGGER_BUTTON_SIZE),
+            "停止当前 AI 调用",
+            tooltip::Position::Bottom,
+        )
+        .style(container::rounded_box)
+        .into()
+    }
+
+    /// Builds the one-line pending prompt queue strip that exposes queued follow-ups, delegate callbacks, and the explicit interrupt action.
+    /// 构建单行待发送提示词队列条，用于展示排队跟进、子代理回流以及显式插队动作。
+    pub(super) fn view_pending_prompt_queue_strip(&self) -> Element<'_, Message> {
+        let pending_entries = self.selected_session_pending_prompt_entries();
+        let is_running = self.has_active_run();
+        let can_interrupt = is_running && self.composer_has_submittable_content();
+        let hint_text = if pending_entries.is_empty() {
+            String::from("当前会话正在执行，新消息会在这里排队等待。")
+        } else {
+            format!(
+                "待发送 {} / {}",
+                pending_entries.len(),
+                SESSION_PENDING_PROMPT_QUEUE_LIMIT
+            )
+        };
+
+        let queue_body: Element<'_, Message> = if pending_entries.is_empty() {
+            container(text(hint_text).size(12))
+                .padding([6, 10])
+                .style(container::rounded_box)
+                .width(Fill)
+                .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
+                .center_y(Fill)
+                .into()
+        } else {
+            let queue_row = row(pending_entries.iter().map(|entry| {
+                let source_label = match entry.source {
+                    PendingSessionPromptSource::UserFollowup => "排队",
+                    PendingSessionPromptSource::UserInterrupt => "插队",
+                    PendingSessionPromptSource::DelegateCompletion => "回流",
+                };
+                container(text(format!("{source_label} · {}", entry.preview)).size(12))
+                    .padding([6, 10])
+                    .style(container::rounded_box)
+                    .into()
+            }))
+            .spacing(8)
+            .align_y(Center);
+
+            container(
+                row![
+                    container(text(hint_text).size(12)).padding([0, 2]),
+                    scrollable(container(queue_row).width(Shrink))
+                        .direction(scrollable::Direction::Horizontal(
+                            scrollable::Scrollbar::default(),
+                        ))
+                        .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
+                        .width(Fill),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding([4, 8])
+            .style(container::rounded_box)
+            .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
+            .width(Fill)
+            .into()
+        };
+
+        let interrupt_button = {
+            let button =
+                button(text("插队").size(12))
+                    .padding([6, 12])
+                    .style(move |theme, status| {
+                        style::workbench_transcript_mode_button_style(theme, status, false)
+                    });
+            if can_interrupt {
+                button.on_press(Message::InterruptComposerPrompt)
+            } else {
+                button
+            }
+        };
+
+        row![queue_body, interrupt_button]
+            .spacing(COMPOSER_PANEL_CONTROL_GAP)
+            .align_y(Center)
+            .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
+            .into()
     }
 
     /// Builds the clickable workbench model trigger shown below the main prompt composer.
@@ -1751,8 +1857,16 @@ impl VulcanWorkbench {
         } else {
             COMPOSER_SINGLE_LINE_HEIGHT
         };
+        let pending_queue_strip_height = if self.selected_subagent_task_panel_state().is_none()
+            && self.should_show_selected_session_pending_prompt_strip()
+        {
+            COMPOSER_PENDING_QUEUE_STRIP_HEIGHT + COMPOSER_PANEL_CONTROL_GAP
+        } else {
+            0.0
+        };
 
-        visible_editor_height
+        pending_queue_strip_height
+            + visible_editor_height
             + COMPOSER_CONTROL_ROW_HEIGHT
             + COMPOSER_PANEL_CONTROL_GAP
             + (COMPOSER_PANEL_EDGE_PADDING as f32 * 2.0)
@@ -2069,8 +2183,12 @@ impl VulcanWorkbench {
     pub(super) fn view_selected_session_subagent_navigation_overlay(
         &self,
     ) -> Option<Element<'_, Message>> {
-        let active_subagent_panel_state = self.selected_subagent_task_panel_state();
-        let active_subagent_task_id = active_subagent_panel_state.map(|state| state.task_id);
+        let active_subagent_panel_state = self
+            .selected_subagent_task_panel_state()
+            .map(|state| self.normalized_subagent_task_panel_state(state));
+        let active_subagent_task_id = active_subagent_panel_state
+            .as_ref()
+            .map(|state| state.task_id);
         let active_tasks = self.selected_session_active_subagent_tasks();
         let has_switch_targets = active_tasks
             .iter()
@@ -2093,6 +2211,7 @@ impl VulcanWorkbench {
         }
 
         if active_subagent_panel_state
+            .as_ref()
             .is_some_and(|state| state.run_state == SubagentTaskRunState::Running)
         {
             let stop_icon: Element<'static, Message> =
@@ -2105,7 +2224,10 @@ impl VulcanWorkbench {
             ));
         }
 
-        if let Some(current_state) = active_subagent_panel_state.filter(|_| has_switch_targets) {
+        if let Some(current_state) = active_subagent_panel_state
+            .as_ref()
+            .filter(|_| has_switch_targets)
+        {
             let current_icon: Element<'static, Message> =
                 if current_state.run_state == SubagentTaskRunState::Running {
                     codicon::sync().size(13).line_height(1.0).into()
@@ -2175,12 +2297,22 @@ impl VulcanWorkbench {
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)
         .align_y(Center);
-        let composer_secondary_controls = row![
-            self.view_workbench_reasoning_effort_selector(),
-            self.view_run_trigger_button(),
-        ]
-        .spacing(COMPOSER_PANEL_CONTROL_GAP)
-        .align_y(Center);
+        let composer_secondary_controls = if self.has_active_run() {
+            row![
+                self.view_workbench_reasoning_effort_selector(),
+                self.view_stop_run_button(),
+                self.view_run_trigger_button(),
+            ]
+            .spacing(COMPOSER_PANEL_CONTROL_GAP)
+            .align_y(Center)
+        } else {
+            row![
+                self.view_workbench_reasoning_effort_selector(),
+                self.view_run_trigger_button(),
+            ]
+            .spacing(COMPOSER_PANEL_CONTROL_GAP)
+            .align_y(Center)
+        };
         let composer_controls_row = row![
             composer_primary_controls,
             space::horizontal(),
@@ -2190,13 +2322,21 @@ impl VulcanWorkbench {
         .align_y(Center)
         .height(COMPOSER_CONTROL_ROW_HEIGHT)
         .width(Fill);
-        let composer_panel = container(
+        let composer_body = if self.should_show_selected_session_pending_prompt_strip() {
+            column![
+                self.view_pending_prompt_queue_strip(),
+                self.view_inline_composer_editor(),
+                composer_controls_row,
+            ]
+            .spacing(COMPOSER_PANEL_CONTROL_GAP)
+        } else {
             column![self.view_inline_composer_editor(), composer_controls_row,]
-                .spacing(COMPOSER_PANEL_CONTROL_GAP),
-        )
-        .padding(COMPOSER_PANEL_EDGE_PADDING)
-        .width(self.composer_panel_width())
-        .style(style::workbench_composer_panel_style);
+                .spacing(COMPOSER_PANEL_CONTROL_GAP)
+        };
+        let composer_panel = container(composer_body)
+            .padding(COMPOSER_PANEL_EDGE_PADDING)
+            .width(self.composer_panel_width())
+            .style(style::workbench_composer_panel_style);
         let title_row: Element<'_, Message> = if is_subagent_panel_open {
             text(title_text).size(26).into()
         } else {
@@ -2334,7 +2474,8 @@ impl VulcanWorkbench {
         &self,
         state: &SubagentTaskPanelState,
     ) -> Element<'_, Message> {
-        if let Some(document) = self.rendered_subagent_task_panel_document(state) {
+        let state = self.normalized_subagent_task_panel_state(state);
+        if let Some(document) = self.rendered_subagent_task_panel_document(&state) {
             let session_id = state.task_id;
             let content_column = column![
                 view_selectable_rendered_transcript::<Message>(

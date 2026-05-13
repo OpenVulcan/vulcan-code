@@ -214,7 +214,11 @@ fn build_tool_record_block(
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.get("payload"))
-        .and_then(|payload| payload.get("task_id"))
+        .and_then(|payload| {
+            payload
+                .get("task_session_id")
+                .or_else(|| payload.get("task_id"))
+        })
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
     {

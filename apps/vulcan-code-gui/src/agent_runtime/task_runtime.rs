@@ -1,7 +1,7 @@
 //! Resumable task-session runtime for host-managed task_id chaining and nested subtask execution.
 //! 供宿主管理 task_id 续跑与嵌套子任务执行使用的可恢复任务会话运行时模块。
 
-use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
@@ -12,13 +12,14 @@ use crate::agent_runtime::runtime_stream_delta::{
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
+use async_stream::stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 use vulcan_core::controller::VulcanCoreController;
@@ -38,6 +39,11 @@ const DEFAULT_TASK_NESTING_LIMIT: usize = 8;
 /// Fallback stop summary returned to the parent task tool when the child run is manually interrupted before producing a complete answer.
 /// 当子运行在产出完整答案前被人工中断时，返回给父级 task 工具的兜底停止摘要。
 const STOPPED_TASK_RESULT_SUMMARY: &str = "子代理已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。";
+
+/// Synthetic running summary returned to the parent task tool while the detached child run continues asynchronously in the background.
+/// 当已分离的子运行仍在后台异步继续执行时，返回给父级 task 工具的合成运行中摘要。
+const RUNNING_TASK_RESULT_SUMMARY: &str =
+    "子代理已开始后台执行，主流程可以继续推进；任务完成后系统会自动回填结果并继续协调。";
 
 /// Windows filesystem path guidance injected into child task prompts to stabilize tool calls.
 /// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
@@ -79,6 +85,9 @@ struct TaskSessionRecord {
     /// Stable task identifier that owns this record.
     /// 持有该记录的稳定任务标识。
     task_id: SessionId,
+    /// Caller-facing task identifier used to look up or resume this task from future tool invocations.
+    /// 用于从后续工具调用中查找或续跑该任务的调用方面向任务标识。
+    public_task_id: String,
     /// The top-level GUI or task session that originated this task creation.
     /// 发起该任务创建的顶层 GUI 或任务会话标识。
     origin_session_id: SessionId,
@@ -127,6 +136,9 @@ pub struct TaskExecutionRequest {
     /// Stable task identifier for the child or resumed task session.
     /// 子任务或续跑任务会话的稳定任务标识。
     pub task_id: SessionId,
+    /// Caller-facing task identifier echoed back to the parent model and host UI.
+    /// 回传给父模型与宿主界面的调用方面向任务标识。
+    pub public_task_id: String,
     /// User-visible prompt used to drive the task session.
     /// 用于驱动任务会话的用户可见提示词。
     pub prompt: String,
@@ -187,6 +199,9 @@ pub struct TaskExecutionOutcome {
 /// 一次任务执行尝试产出的稳定终态状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskExecutionStatus {
+    /// Child controller has been detached into the background and is still running.
+    /// 子控制器已被分离到后台，当前仍在执行中。
+    Running,
     /// Child controller completed normally and produced a reusable answer.
     /// 子控制器正常完成并产出了可复用答案。
     Completed,
@@ -195,15 +210,65 @@ pub enum TaskExecutionStatus {
     Stopped,
 }
 
+/// Fully resolved task-session identifiers derived from one task tool invocation.
+/// 从一次 task 工具调用中完整解析出的任务会话标识集合。
+#[derive(Debug, Clone)]
+struct ResolvedTaskSessionIdentifier {
+    /// Internal UUID-shaped child session identifier used by the runtime registry.
+    /// 被运行时注册表使用的内部 UUID 形态子会话标识。
+    task_id: SessionId,
+    /// Caller-facing task identifier preserved for model-visible results and follow-up prompts.
+    /// 为模型可见结果与后续提示词保留的调用方面向任务标识。
+    public_task_id: String,
+    /// Whether the resolved internal session already exists and should resume in place.
+    /// 解析出的内部会话是否已经存在并应原地续跑。
+    is_resumed: bool,
+}
+
+/// Detached runtime event mirrored out of one background child task after the parent controller has already resumed or finished.
+/// 父控制器已经恢复或结束之后，由某条后台子任务镜像输出的分离运行时事件。
+#[derive(Debug, Clone)]
+pub enum DetachedTaskRuntimeEvent {
+    /// Child-session execution event that should be projected into the dedicated subagent transcript surface.
+    /// 应投影到独立子代理转录界面中的子会话执行事件。
+    ChildExecution(ExecutionStreamEvent),
+    /// Parent-session runtime event that should update task cards and coordinator follow-up flow without keeping the original parent stream blocked.
+    /// 在不阻塞原始父流的前提下，用于更新 task 卡片与协调代理后续流程的父会话运行时事件。
+    ParentRuntime {
+        /// Root parent session that should absorb this detached delegate lifecycle event.
+        /// 应吸收该分离委派生命周期事件的根父会话。
+        parent_session_id: SessionId,
+        /// Concrete runtime event mirrored back from the detached child-task lifecycle.
+        /// 从分离子任务生命周期镜像回来的具体运行时事件。
+        event: RuntimeEvent,
+    },
+}
+
 impl TaskExecutionStatus {
     /// Returns the persisted lowercase text expected by task-session metadata and tool cards.
     /// 返回 task 会话元数据与工具卡片所需的持久化小写文本。
     fn as_str(self) -> &'static str {
         match self {
+            Self::Running => "running",
             Self::Completed => "completed",
             Self::Stopped => "stopped",
         }
     }
+}
+
+/// Buffered detached task-event stream state kept per child task so late subscribers can still replay early background output safely.
+/// 按子任务维度保留的分离事件流状态，用于让稍后接入的订阅者也能安全回放早期后台输出。
+#[derive(Default)]
+struct DetachedTaskEventStreamState {
+    /// Buffered detached events accumulated before any subscriber has attached successfully.
+    /// 在任意订阅者成功接入之前累计保存的分离事件缓冲区。
+    buffered_events: Vec<DetachedTaskRuntimeEvent>,
+    /// Active subscribers currently receiving detached child-task events in real time.
+    /// 当前实时接收分离子任务事件的活动订阅者集合。
+    subscribers: Vec<UnboundedSender<DetachedTaskRuntimeEvent>>,
+    /// Whether the detached stream has already reached its terminal state and will not publish any further events.
+    /// 该分离事件流是否已经到达终态、后续不会再发布任何事件。
+    closed: bool,
 }
 
 /// Guard that unregisters one backend when it goes out of scope.
@@ -272,6 +337,9 @@ pub struct TaskRuntime {
     /// Active child-task abort handles keyed by stable task identifier.
     /// 按稳定任务标识索引存储的活动子任务中止句柄。
     active_task_runs: RwLock<HashMap<SessionId, AbortHandle>>,
+    /// Detached child-task event streams keyed by stable task identifier for non-blocking GUI mirroring.
+    /// 为无阻塞图形界面镜像保留的按稳定任务标识索引的分离子任务事件流。
+    detached_task_event_streams: RwLock<HashMap<SessionId, DetachedTaskEventStreamState>>,
     /// Maximum supported nested task depth.
     /// 支持的最大嵌套任务深度。
     max_depth: usize,
@@ -293,6 +361,7 @@ impl TaskRuntime {
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
             active_task_runs: RwLock::new(HashMap::new()),
+            detached_task_event_streams: RwLock::new(HashMap::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
     }
@@ -337,14 +406,23 @@ impl TaskRuntime {
             })?;
 
         let parsed_args = parse_task_tool_arguments(args)?;
-        let (task_id, is_resumed) =
-            resolve_task_session_id(self, current_session_id, &parsed_args)?;
+        let resolved_identifier = resolve_task_session_id(self, current_session_id, &parsed_args)?;
+        if self
+            .active_task_runs
+            .read()
+            .map_err(|_| String::from("活动子任务注册表已锁定，无法检查运行状态。"))?
+            .contains_key(&resolved_identifier.task_id)
+        {
+            return Err(format!(
+                "子任务 `{}` 仍在执行中，当前不能重复启动同一任务。",
+                resolved_identifier.public_task_id
+            ));
+        }
         let invocation = prepare_task_execution_request(
             self,
             current_session_id,
-            task_id,
+            resolved_identifier,
             parsed_args,
-            is_resumed,
         )?;
         let outcome = match backend(invocation.clone()).await {
             Ok(outcome) => outcome,
@@ -373,6 +451,53 @@ impl TaskRuntime {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Returns whether one child task still owns an in-flight abort handle, which the GUI can treat as the source of truth for active-running state.
+    /// 返回某个子任务当前是否仍持有活动中的中止句柄，供图形界面将其视作真实运行态事实源。
+    pub fn is_task_running(&self, task_id: SessionId) -> Result<bool, String> {
+        Ok(self
+            .active_task_runs
+            .read()
+            .map_err(|_| String::from("活动子任务注册表已锁定，无法检查子代理运行状态。"))?
+            .contains_key(&task_id))
+    }
+
+    /// Subscribes to one detached child-task event stream, replaying any buffered early events before switching to live delivery.
+    /// 订阅某条分离子任务事件流，并在切换到实时投递之前先回放已经缓冲的早期事件。
+    pub fn subscribe_detached_task_events(
+        &self,
+        task_id: SessionId,
+    ) -> impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static {
+        let (sender, mut receiver) = unbounded_channel::<DetachedTaskRuntimeEvent>();
+        let (buffered_events, closed) = {
+            let mut streams = self
+                .detached_task_event_streams
+                .write()
+                .expect("task detached stream registry lock");
+            let state = streams.entry(task_id).or_default();
+            let buffered_events = std::mem::take(&mut state.buffered_events);
+            let closed = state.closed;
+            if !closed {
+                state.subscribers.push(sender.clone());
+            } else {
+                streams.remove(&task_id);
+            }
+            (buffered_events, closed)
+        };
+
+        for event in buffered_events {
+            let _ = sender.send(event);
+        }
+        if closed {
+            drop(sender);
+        }
+
+        stream! {
+            while let Some(event) = receiver.recv().await {
+                yield event;
+            }
         }
     }
 
@@ -421,6 +546,53 @@ impl TaskRuntime {
             .remove(&task_id);
     }
 
+    /// Publishes one detached child-task event, buffering it when no subscriber has attached yet and replaying it later on first subscription.
+    /// 发布一条分离子任务事件；若当前尚无订阅者，则先缓冲，待首个订阅建立后再回放。
+    fn publish_detached_task_event(&self, task_id: SessionId, event: DetachedTaskRuntimeEvent) {
+        let mut streams = self
+            .detached_task_event_streams
+            .write()
+            .expect("task detached stream registry lock");
+        let state = streams.entry(task_id).or_default();
+        if state.closed {
+            return;
+        }
+        if state.subscribers.is_empty() {
+            state.buffered_events.push(event);
+            return;
+        }
+
+        let mut delivered = false;
+        state.subscribers.retain(|sender| {
+            let send_result = sender.send(event.clone());
+            if send_result.is_ok() {
+                delivered = true;
+            }
+            send_result.is_ok()
+        });
+        if !delivered {
+            state.buffered_events.push(event);
+        }
+    }
+
+    /// Marks one detached child-task event stream as terminal and drops active senders so GUI listener streams can close naturally.
+    /// 将某条分离子任务事件流标记为终态，并释放活动发送端，让图形界面监听流自然关闭。
+    fn close_detached_task_event_stream(&self, task_id: SessionId) {
+        let mut streams = self
+            .detached_task_event_streams
+            .write()
+            .expect("task detached stream registry lock");
+        let should_remove = if let Some(state) = streams.get_mut(&task_id) {
+            state.closed = true;
+            !state.subscribers.is_empty() || state.buffered_events.is_empty()
+        } else {
+            false
+        };
+        if should_remove {
+            streams.remove(&task_id);
+        }
+    }
+
     /// Stores one newly completed task outcome back into the session registry.
     /// 将一条新完成的任务结果回写到会话注册表中。
     fn store_task_outcome(
@@ -440,6 +612,7 @@ impl TaskRuntime {
             .or_insert_with(|| {
                 build_task_session_record(
                     invocation.task_id,
+                    invocation.public_task_id.clone(),
                     current_session_id,
                     invocation.parent_task_id,
                     invocation.depth,
@@ -489,6 +662,7 @@ impl TaskRuntime {
             .or_insert_with(|| {
                 build_task_session_record(
                     invocation.task_id,
+                    invocation.public_task_id.clone(),
                     current_session_id,
                     invocation.parent_task_id,
                     invocation.depth,
@@ -580,16 +754,32 @@ fn resolve_task_session_id(
     task_runtime: &Arc<TaskRuntime>,
     current_session_id: SessionId,
     args: &TaskToolInvocationArgs,
-) -> Result<(SessionId, bool), String> {
+) -> Result<ResolvedTaskSessionIdentifier, String> {
     if let Some(task_id_text) = args.task_id.as_ref() {
-        let task_id = Uuid::parse_str(task_id_text)
-            .map_err(|error| format!("task_id `{task_id_text}` 解析失败：{error}"))?;
-        let resumed = task_runtime
+        let public_task_id = normalize_public_task_identifier(task_id_text)?;
+        let resumed_record = task_runtime
             .sessions
             .read()
             .map_err(|_| String::from("任务会话注册表已锁定，无法检查既有任务。"))?
-            .contains_key(&task_id);
-        return Ok((task_id, resumed));
+            .values()
+            .find(|record| {
+                record.origin_session_id == current_session_id
+                    && record.public_task_id == public_task_id
+            })
+            .cloned();
+        if let Some(record) = resumed_record {
+            return Ok(ResolvedTaskSessionIdentifier {
+                task_id: record.task_id,
+                public_task_id,
+                is_resumed: true,
+            });
+        }
+
+        return Ok(ResolvedTaskSessionIdentifier {
+            task_id: Uuid::new_v4(),
+            public_task_id,
+            is_resumed: false,
+        });
     }
 
     let current_depth = task_runtime
@@ -606,7 +796,22 @@ fn resolve_task_session_id(
         ));
     }
 
-    Ok((Uuid::new_v4(), false))
+    let generated_task_id = Uuid::new_v4();
+    Ok(ResolvedTaskSessionIdentifier {
+        task_id: generated_task_id,
+        public_task_id: generated_task_id.to_string(),
+        is_resumed: false,
+    })
+}
+
+/// Normalizes one caller-facing task identifier while preserving the original textual identity used for future resume lookups.
+/// 在保留未来续跑查找所需原始文本身份的前提下，规范化一条调用方面向任务标识。
+fn normalize_public_task_identifier(task_id_text: &str) -> Result<String, String> {
+    let normalized_task_id = task_id_text.trim();
+    if normalized_task_id.is_empty() {
+        return Err(String::from("task_id 不能为空。"));
+    }
+    Ok(normalized_task_id.to_string())
 }
 
 /// Prepares one task execution request from the current invocation and the stored registry state.
@@ -614,10 +819,14 @@ fn resolve_task_session_id(
 fn prepare_task_execution_request(
     task_runtime: &Arc<TaskRuntime>,
     current_session_id: SessionId,
-    task_id: SessionId,
+    resolved_identifier: ResolvedTaskSessionIdentifier,
     args: TaskToolInvocationArgs,
-    is_resumed: bool,
 ) -> Result<TaskExecutionRequest, String> {
+    let ResolvedTaskSessionIdentifier {
+        task_id,
+        public_task_id,
+        is_resumed,
+    } = resolved_identifier;
     let (parent_task_id, depth, snapshot, controller_config) = {
         let mut sessions = task_runtime
             .sessions
@@ -663,6 +872,7 @@ fn prepare_task_execution_request(
                 task_id,
                 TaskSessionRecord {
                     task_id,
+                    public_task_id: public_task_id.clone(),
                     origin_session_id: current_session_id,
                     parent_task_id,
                     depth,
@@ -689,6 +899,7 @@ fn prepare_task_execution_request(
     Ok(TaskExecutionRequest {
         current_session_id,
         task_id,
+        public_task_id,
         prompt: args.prompt,
         description: args.description,
         subagent: args.subagent,
@@ -704,6 +915,7 @@ fn prepare_task_execution_request(
 /// 使用给定元数据与执行状态构建一条任务会话记录。
 fn build_task_session_record(
     task_id: SessionId,
+    public_task_id: String,
     origin_session_id: SessionId,
     parent_task_id: Option<SessionId>,
     depth: usize,
@@ -717,6 +929,7 @@ fn build_task_session_record(
     let timestamp = current_unix_millis_text();
     TaskSessionRecord {
         task_id,
+        public_task_id,
         origin_session_id,
         parent_task_id,
         depth,
@@ -741,7 +954,8 @@ fn build_task_invocation_result(
     let task_status = task_invocation_status_text(invocation.is_resumed);
     let execution_status = outcome.execution_status.as_str();
     let model_output = json!({
-        "task_id": outcome.task_id.to_string(),
+        "task_id": invocation.public_task_id.clone(),
+        "task_session_id": outcome.task_id.to_string(),
         "status": task_status,
         "execution_status": execution_status,
         "origin_session_id": invocation.current_session_id.to_string(),
@@ -754,7 +968,8 @@ fn build_task_invocation_result(
         "final_assistant_message_id": outcome.final_assistant_message_id.clone(),
         "result": outcome.final_output_text.clone(),
     });
-    let conversation_state = core_snapshot_to_session_conversation_state(&outcome.snapshot);
+    let conversation_state = (outcome.execution_status != TaskExecutionStatus::Running)
+        .then(|| core_snapshot_to_session_conversation_state(&outcome.snapshot));
     let payload = build_task_host_payload(
         invocation,
         execution_status,
@@ -762,7 +977,7 @@ fn build_task_invocation_result(
         outcome.tool_calls_processed,
         outcome.final_assistant_message_id.as_deref(),
         outcome.final_output_text.as_str(),
-        Some(&conversation_state),
+        conversation_state.as_ref(),
         current_unix_millis_text(),
     );
     VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
@@ -830,243 +1045,341 @@ where
                     started_payload,
                 ),
             )));
-            let child_handler = build_task_execution_handler(
-                Arc::clone(&task_runtime),
-                Arc::clone(&provider_factory),
-                base_controller_config.clone(),
-                Arc::clone(&tools_manager),
-                resolved_tool_definitions.clone(),
-                parent_live_sender.clone(),
-                provider_label.clone(),
-            );
-            let _child_backend_guard = task_runtime.install_backend(task_id, child_handler);
-            let (child_live_sender, mut child_live_receiver) =
-                unbounded_channel::<Result<ProviderStreamDelta, String>>();
-
             let task_controller_config = build_task_controller_config(
                 &base_controller_config,
                 request.controller_config.clone(),
                 &request.description,
                 &request.subagent,
             );
-            let child_stream_forward_sender = parent_live_sender.clone();
-            let child_stream_session_id = task_id;
-            let child_stream_forward_task = tokio::spawn({
-                let streaming_controller = VulcanCoreController::new(
-                    task_controller_config.clone(),
-                    request.snapshot.clone(),
+            let background_task_runtime = Arc::clone(&task_runtime);
+            let background_provider_factory = Arc::clone(&provider_factory);
+            let background_tools_manager = Arc::clone(&tools_manager);
+            let background_resolved_tool_definitions = resolved_tool_definitions.clone();
+            let background_provider_label = provider_label.clone();
+            let background_request = request.clone();
+            let background_task_controller_config = task_controller_config.clone();
+            tokio::spawn(async move {
+                let background_task_id = background_request.task_id;
+                let (child_live_sender, mut child_live_receiver) =
+                    unbounded_channel::<Result<ProviderStreamDelta, String>>();
+                let child_handler = build_task_execution_handler(
+                    Arc::clone(&background_task_runtime),
+                    Arc::clone(&background_provider_factory),
+                    base_controller_config.clone(),
+                    Arc::clone(&background_tools_manager),
+                    background_resolved_tool_definitions.clone(),
+                    child_live_sender.clone(),
+                    background_provider_label.clone(),
                 );
-                async move {
-                    let mut child_stream_state = RuntimeStreamDeltaState::new(streaming_controller);
-                    while let Some(item) = child_live_receiver.recv().await {
-                        for event in process_provider_stream_delta(
-                            child_stream_session_id,
-                            &mut child_stream_state,
-                            item,
-                        ) {
-                            let _ = child_stream_forward_sender
-                                .send(Ok(ProviderStreamDelta::ExecutionEvent(event)));
+                let child_backend_guard =
+                    background_task_runtime.install_backend(background_task_id, child_handler);
+                let detached_stream_runtime = Arc::clone(&background_task_runtime);
+                let child_stream_forward_task = tokio::spawn({
+                    let streaming_controller = VulcanCoreController::new(
+                        background_task_controller_config.clone(),
+                        background_request.snapshot.clone(),
+                    );
+                    async move {
+                        let mut child_stream_state =
+                            RuntimeStreamDeltaState::new(streaming_controller);
+                        while let Some(item) = child_live_receiver.recv().await {
+                            for event in process_provider_stream_delta(
+                                background_task_id,
+                                &mut child_stream_state,
+                                item,
+                            ) {
+                                detached_stream_runtime.publish_detached_task_event(
+                                    background_task_id,
+                                    DetachedTaskRuntimeEvent::ChildExecution(event),
+                                );
+                            }
+                            if child_stream_state.has_terminal_error() {
+                                break;
+                            }
                         }
-                        if child_stream_state.has_terminal_error() {
-                            break;
+                        if let Some(event) =
+                            child_stream_state.complete_pending_thinking(background_task_id)
+                        {
+                            detached_stream_runtime.publish_detached_task_event(
+                                background_task_id,
+                                DetachedTaskRuntimeEvent::ChildExecution(event),
+                            );
                         }
                     }
-                    if let Some(event) =
-                        child_stream_state.complete_pending_thinking(child_stream_session_id)
-                    {
-                        let _ = child_stream_forward_sender
-                            .send(Ok(ProviderStreamDelta::ExecutionEvent(event)));
+                });
+                let child_runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+                    Arc::clone(&background_tools_manager),
+                    &background_resolved_tool_definitions,
+                    background_task_id,
+                ));
+                let child_live_sender_for_run = child_live_sender.clone();
+                let child_run_task = tokio::spawn({
+                    let provider_factory = Arc::clone(&background_provider_factory);
+                    let task_controller_config = background_task_controller_config.clone();
+                    let request_snapshot = background_request.snapshot.clone();
+                    let request_prompt = background_request.prompt.clone();
+                    let child_runtime_bridge = Arc::clone(&child_runtime_bridge);
+                    async move {
+                        let child_provider_adapter =
+                            provider_factory(child_live_sender_for_run.clone());
+                        let child_tool_executor = StreamingRuntimeToolExecutor::new(
+                            child_runtime_bridge,
+                            child_live_sender_for_run.clone(),
+                        );
+                        let mut controller = VulcanCoreController::new(
+                            task_controller_config.clone(),
+                            request_snapshot,
+                        );
+                        let task_policy = AllowAllToolPolicy;
+                        let controller_result = controller
+                            .run_user_turn_streaming(
+                                &child_provider_adapter,
+                                &child_tool_executor,
+                                &task_policy,
+                                request_prompt,
+                            )
+                            .await
+                            .map_err(|error| {
+                                format!("任务 `{}` 执行失败：{error}", background_task_id)
+                            });
+                        (controller_result, controller.snapshot().clone())
                     }
-                }
-            });
-            let child_runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
-                Arc::clone(&tools_manager),
-                &resolved_tool_definitions,
-                task_id,
-            ));
-            let child_live_sender_for_run = child_live_sender.clone();
-            let child_run_task = tokio::spawn({
-                let provider_factory = Arc::clone(&provider_factory);
-                let task_controller_config = task_controller_config.clone();
-                let request_snapshot = request.snapshot.clone();
-                let request_prompt = request.prompt.clone();
-                let child_runtime_bridge = Arc::clone(&child_runtime_bridge);
-                async move {
-                    let child_provider_adapter =
-                        provider_factory(child_live_sender_for_run.clone());
-                    let child_tool_executor = StreamingRuntimeToolExecutor::new(
-                        child_runtime_bridge,
-                        child_live_sender_for_run.clone(),
-                    );
-                    let mut controller =
-                        VulcanCoreController::new(task_controller_config.clone(), request_snapshot);
-                    let task_policy = AllowAllToolPolicy;
-                    let controller_result = controller
-                        .run_user_turn_streaming(
-                            &child_provider_adapter,
-                            &child_tool_executor,
-                            &task_policy,
-                            request_prompt,
-                        )
-                        .await
-                        .map_err(|error| format!("任务 `{}` 执行失败：{error}", task_id));
-                    (controller_result, controller.snapshot().clone())
-                }
-            });
-            let child_run_abort_handle = child_run_task.abort_handle();
-            let _child_run_abort_guard = AbortChildRunOnDrop {
-                handle: child_run_abort_handle.clone(),
-            };
-            let _active_task_run_guard =
-                task_runtime.install_active_task_run(task_id, child_run_abort_handle);
-            drop(child_live_sender);
-            let (controller_result, snapshot) = match child_run_task.await {
-                Ok(result) => result,
-                Err(join_error) if join_error.is_cancelled() => {
-                    let _ = child_stream_forward_task.await;
-                    let stopped_outcome = build_stopped_task_execution_outcome(
-                        task_id,
-                        task_controller_config.clone(),
-                        request.snapshot.clone(),
-                    );
-                    let finished_payload = build_task_host_payload(
-                        &request,
-                        stopped_outcome.execution_status.as_str(),
-                        stopped_outcome.provider_turns_executed,
-                        stopped_outcome.tool_calls_processed,
-                        stopped_outcome.final_assistant_message_id.as_deref(),
-                        stopped_outcome.final_output_text.as_str(),
-                        None,
-                        current_unix_millis_text(),
-                    );
-                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-                        build_task_delegate_runtime_event(
-                            RuntimeEventKind::DelegateFinished,
-                            &request,
-                            stopped_outcome.final_output_text.as_str(),
-                            finished_payload,
-                        ),
-                    )));
-                    return Ok(stopped_outcome);
-                }
-                Err(join_error) => {
-                    let _ = child_stream_forward_task.await;
-                    let error = format!(
-                        "任务 `{}` 执行失败：{}",
-                        task_id,
-                        format_task_join_error(&join_error)
-                    );
-                    let finished_payload = build_task_host_payload(
-                        &request,
-                        "failed",
-                        0,
-                        0,
-                        None,
-                        error.as_str(),
-                        None,
-                        current_unix_millis_text(),
-                    );
-                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-                        build_task_delegate_runtime_event(
-                            RuntimeEventKind::DelegateFinished,
-                            &request,
-                            error.as_str(),
-                            finished_payload,
-                        ),
-                    )));
-                    return Err(error);
-                }
-            };
-            let _ = child_stream_forward_task.await;
-            let child_conversation_state = core_snapshot_to_session_conversation_state(&snapshot);
-            let controller_result = match controller_result {
-                Ok(controller_result) => controller_result,
-                Err(error) if task_execution_error_is_stopped(error.as_str()) => {
-                    let stopped_outcome = build_stopped_task_execution_outcome(
-                        task_id,
-                        task_controller_config.clone(),
-                        snapshot,
-                    );
-                    let finished_payload = build_task_host_payload(
-                        &request,
-                        stopped_outcome.execution_status.as_str(),
-                        stopped_outcome.provider_turns_executed,
-                        stopped_outcome.tool_calls_processed,
-                        stopped_outcome.final_assistant_message_id.as_deref(),
-                        stopped_outcome.final_output_text.as_str(),
-                        Some(&child_conversation_state),
-                        current_unix_millis_text(),
-                    );
-                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-                        build_task_delegate_runtime_event(
-                            RuntimeEventKind::DelegateFinished,
-                            &request,
-                            stopped_outcome.final_output_text.as_str(),
-                            finished_payload,
-                        ),
-                    )));
-                    return Ok(stopped_outcome);
-                }
-                Err(error) => {
-                    let finished_payload = build_task_host_payload(
-                        &request,
-                        "failed",
-                        0,
-                        0,
-                        None,
-                        error.as_str(),
-                        Some(&child_conversation_state),
-                        current_unix_millis_text(),
-                    );
-                    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-                        build_task_delegate_runtime_event(
-                            RuntimeEventKind::DelegateFinished,
-                            &request,
-                            error.as_str(),
-                            finished_payload,
-                        ),
-                    )));
-                    return Err(error);
-                }
-            };
-            let final_output_text = extract_final_assistant_text(&snapshot).unwrap_or_else(|| {
-                if let Some(message_id) = controller_result.final_assistant_message_id.as_ref() {
-                    format!("任务已完成，但未能直接定位最终助手消息 `{message_id}`。")
-                } else {
-                    String::from("任务已完成，但未产出可复用的最终助手文本。")
-                }
-            });
-            let finished_payload = build_task_host_payload(
-                &request,
-                "completed",
-                controller_result.provider_turns_executed,
-                controller_result.tool_calls_processed,
-                controller_result.final_assistant_message_id.as_deref(),
-                final_output_text.as_str(),
-                Some(&child_conversation_state),
-                current_unix_millis_text(),
-            );
-            let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-                build_task_delegate_runtime_event(
-                    RuntimeEventKind::DelegateFinished,
-                    &request,
-                    "子代理任务已完成。",
-                    finished_payload,
-                ),
-            )));
+                });
+                let child_run_abort_handle = child_run_task.abort_handle();
+                let _child_run_abort_guard = AbortChildRunOnDrop {
+                    handle: child_run_abort_handle.clone(),
+                };
+                let _active_task_run_guard = background_task_runtime
+                    .install_active_task_run(background_task_id, child_run_abort_handle);
+                drop(child_live_sender);
 
-            Ok(TaskExecutionOutcome {
+                let child_run_result = child_run_task.await;
+                // Drop the child backend before waiting for the detached live-forwarder so backend-held sender clones can close the channel.
+                // 在等待分离实时转发任务结束前先释放子任务 backend，避免 backend 持有的 sender 克隆让通道无法关闭。
+                drop(child_backend_guard);
+                let terminal_outcome = match child_run_result {
+                    Ok((controller_result, snapshot)) => {
+                        let _ = child_stream_forward_task.await;
+                        let child_conversation_state =
+                            core_snapshot_to_session_conversation_state(&snapshot);
+                        match controller_result {
+                            Ok(controller_result) => {
+                                let final_output_text =
+                                    extract_final_assistant_text(&snapshot).unwrap_or_else(|| {
+                                        if let Some(message_id) =
+                                            controller_result.final_assistant_message_id.as_ref()
+                                        {
+                                            format!(
+                                                "任务已完成，但未能直接定位最终助手消息 `{message_id}`。"
+                                            )
+                                        } else {
+                                            String::from(
+                                                "任务已完成，但未产出可复用的最终助手文本。",
+                                            )
+                                        }
+                                    });
+                                let outcome = TaskExecutionOutcome {
+                                    task_id: background_task_id,
+                                    controller_config: background_task_controller_config.clone(),
+                                    snapshot,
+                                    provider_turns_executed: controller_result
+                                        .provider_turns_executed,
+                                    tool_calls_processed: controller_result.tool_calls_processed,
+                                    final_assistant_message_id: controller_result
+                                        .final_assistant_message_id,
+                                    final_output_text,
+                                    execution_status: TaskExecutionStatus::Completed,
+                                };
+                                let finished_payload = build_task_host_payload(
+                                    &background_request,
+                                    outcome.execution_status.as_str(),
+                                    outcome.provider_turns_executed,
+                                    outcome.tool_calls_processed,
+                                    outcome.final_assistant_message_id.as_deref(),
+                                    outcome.final_output_text.as_str(),
+                                    Some(&child_conversation_state),
+                                    current_unix_millis_text(),
+                                );
+                                background_task_runtime.publish_detached_task_event(
+                                    background_task_id,
+                                    DetachedTaskRuntimeEvent::ParentRuntime {
+                                        parent_session_id: background_request.current_session_id,
+                                        event: build_task_delegate_runtime_event(
+                                            RuntimeEventKind::DelegateFinished,
+                                            &background_request,
+                                            "子代理任务已完成。",
+                                            finished_payload,
+                                        ),
+                                    },
+                                );
+                                Ok(outcome)
+                            }
+                            Err(error) if task_execution_error_is_stopped(error.as_str()) => {
+                                let outcome = build_stopped_task_execution_outcome(
+                                    background_task_id,
+                                    background_task_controller_config.clone(),
+                                    snapshot,
+                                );
+                                let finished_payload = build_task_host_payload(
+                                    &background_request,
+                                    outcome.execution_status.as_str(),
+                                    outcome.provider_turns_executed,
+                                    outcome.tool_calls_processed,
+                                    outcome.final_assistant_message_id.as_deref(),
+                                    outcome.final_output_text.as_str(),
+                                    Some(&child_conversation_state),
+                                    current_unix_millis_text(),
+                                );
+                                background_task_runtime.publish_detached_task_event(
+                                    background_task_id,
+                                    DetachedTaskRuntimeEvent::ParentRuntime {
+                                        parent_session_id: background_request.current_session_id,
+                                        event: build_task_delegate_runtime_event(
+                                            RuntimeEventKind::DelegateFinished,
+                                            &background_request,
+                                            outcome.final_output_text.as_str(),
+                                            finished_payload,
+                                        ),
+                                    },
+                                );
+                                Ok(outcome)
+                            }
+                            Err(error) => {
+                                let finished_payload = build_task_host_payload(
+                                    &background_request,
+                                    "failed",
+                                    0,
+                                    0,
+                                    None,
+                                    error.as_str(),
+                                    Some(&child_conversation_state),
+                                    current_unix_millis_text(),
+                                );
+                                background_task_runtime.publish_detached_task_event(
+                                    background_task_id,
+                                    DetachedTaskRuntimeEvent::ParentRuntime {
+                                        parent_session_id: background_request.current_session_id,
+                                        event: build_task_delegate_runtime_event(
+                                            RuntimeEventKind::DelegateFinished,
+                                            &background_request,
+                                            error.as_str(),
+                                            finished_payload,
+                                        ),
+                                    },
+                                );
+                                Err(error)
+                            }
+                        }
+                    }
+                    Err(join_error) if join_error.is_cancelled() => {
+                        let _ = child_stream_forward_task.await;
+                        let outcome = build_stopped_task_execution_outcome(
+                            background_task_id,
+                            background_task_controller_config.clone(),
+                            background_request.snapshot.clone(),
+                        );
+                        let finished_payload = build_task_host_payload(
+                            &background_request,
+                            outcome.execution_status.as_str(),
+                            outcome.provider_turns_executed,
+                            outcome.tool_calls_processed,
+                            outcome.final_assistant_message_id.as_deref(),
+                            outcome.final_output_text.as_str(),
+                            None,
+                            current_unix_millis_text(),
+                        );
+                        background_task_runtime.publish_detached_task_event(
+                            background_task_id,
+                            DetachedTaskRuntimeEvent::ParentRuntime {
+                                parent_session_id: background_request.current_session_id,
+                                event: build_task_delegate_runtime_event(
+                                    RuntimeEventKind::DelegateFinished,
+                                    &background_request,
+                                    outcome.final_output_text.as_str(),
+                                    finished_payload,
+                                ),
+                            },
+                        );
+                        Ok(outcome)
+                    }
+                    Err(join_error) => {
+                        let _ = child_stream_forward_task.await;
+                        let error = format!(
+                            "任务 `{}` 执行失败：{}",
+                            background_task_id,
+                            format_task_join_error(&join_error)
+                        );
+                        let finished_payload = build_task_host_payload(
+                            &background_request,
+                            "failed",
+                            0,
+                            0,
+                            None,
+                            error.as_str(),
+                            None,
+                            current_unix_millis_text(),
+                        );
+                        background_task_runtime.publish_detached_task_event(
+                            background_task_id,
+                            DetachedTaskRuntimeEvent::ParentRuntime {
+                                parent_session_id: background_request.current_session_id,
+                                event: build_task_delegate_runtime_event(
+                                    RuntimeEventKind::DelegateFinished,
+                                    &background_request,
+                                    error.as_str(),
+                                    finished_payload,
+                                ),
+                            },
+                        );
+                        Err(error)
+                    }
+                };
+
+                match terminal_outcome {
+                    Ok(outcome) => {
+                        let _ = background_task_runtime.store_task_outcome(
+                            background_request.current_session_id,
+                            &background_request,
+                            &outcome,
+                        );
+                    }
+                    Err(error) => {
+                        let _ = background_task_runtime.mark_task_failure(
+                            background_request.current_session_id,
+                            &background_request,
+                            &error,
+                        );
+                    }
+                }
+                background_task_runtime.close_detached_task_event_stream(background_task_id);
+            });
+
+            Ok(build_running_task_execution_outcome(
                 task_id,
-                controller_config: task_controller_config,
-                snapshot,
-                provider_turns_executed: controller_result.provider_turns_executed,
-                tool_calls_processed: controller_result.tool_calls_processed,
-                final_assistant_message_id: controller_result.final_assistant_message_id,
-                final_output_text,
-                execution_status: TaskExecutionStatus::Completed,
-            })
+                task_controller_config,
+                request.snapshot.clone(),
+            ))
         })
     })
+}
+
+/// Builds one synthetic running task outcome returned immediately while the real child controller keeps executing in the background.
+/// 构建一条会被立即返回的合成运行中任务结果，同时真实子控制器继续在后台执行。
+fn build_running_task_execution_outcome(
+    task_id: SessionId,
+    controller_config: CoreControllerConfig,
+    snapshot: CoreConversationSnapshot,
+) -> TaskExecutionOutcome {
+    TaskExecutionOutcome {
+        task_id,
+        controller_config,
+        snapshot,
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+    }
 }
 
 /// Builds one synthetic stopped task outcome used when a child subagent is intentionally interrupted before it can emit a normal final answer.
@@ -1131,7 +1444,8 @@ fn build_task_host_payload(
     updated_at: String,
 ) -> Value {
     let mut payload = json!({
-        "task_id": invocation.task_id.to_string(),
+        "task_id": invocation.public_task_id.clone(),
+        "task_session_id": invocation.task_id.to_string(),
         "status": task_invocation_status_text(invocation.is_resumed),
         "execution_status": execution_status,
         "origin_session_id": invocation.current_session_id.to_string(),
@@ -1276,5 +1590,121 @@ mod tests {
         );
         assert!(config.system_prompt.contains("[Filesystem Paths]"));
         assert!(config.system_prompt.contains("D:/repo/path"));
+    }
+
+    /// Verifies that caller-facing task identifiers are normalized consistently before being stored or looked up.
+    /// 验证调用方面向任务标识在存储或查找前会被一致地规范化。
+    #[test]
+    fn normalize_public_task_identifier_trims_aliases_deterministically() {
+        let first = normalize_public_task_identifier("explore_files")
+            .expect("alias task id should resolve");
+        let second = normalize_public_task_identifier(" explore_files ")
+            .expect("trimmed alias task id should resolve");
+
+        assert_eq!(first, second);
+    }
+
+    /// Verifies that distinct caller-facing task identifiers allocate distinct internal task sessions on first creation.
+    /// 验证不同的调用方面向任务标识在首次创建时会分配不同的内部任务会话。
+    #[test]
+    fn resolve_task_session_id_keeps_distinct_aliases_unique() {
+        let task_runtime = Arc::new(TaskRuntime::new());
+        let parent_session_id = Uuid::new_v4();
+        let first = resolve_task_session_id(
+            &task_runtime,
+            parent_session_id,
+            &TaskToolInvocationArgs {
+                prompt: String::from("count to 10"),
+                description: None,
+                task_id: Some(String::from("count_10")),
+                subagent: None,
+            },
+        )
+        .expect("first alias task id should resolve");
+        let second = resolve_task_session_id(
+            &task_runtime,
+            parent_session_id,
+            &TaskToolInvocationArgs {
+                prompt: String::from("count to 20"),
+                description: None,
+                task_id: Some(String::from("count_20")),
+                subagent: None,
+            },
+        )
+        .expect("second alias task id should resolve");
+        let third = resolve_task_session_id(
+            &task_runtime,
+            parent_session_id,
+            &TaskToolInvocationArgs {
+                prompt: String::from("count to 30"),
+                description: None,
+                task_id: Some(String::from("count_30")),
+                subagent: None,
+            },
+        )
+        .expect("third alias task id should resolve");
+
+        assert_ne!(first.task_id, second.task_id);
+        assert_ne!(second.task_id, third.task_id);
+        assert_ne!(first.task_id, third.task_id);
+        assert!(!first.is_resumed);
+        assert!(!second.is_resumed);
+        assert!(!third.is_resumed);
+    }
+
+    /// Verifies that repeated caller-facing task identifiers resume the same internal task session after the first creation.
+    /// 验证重复的调用方面向任务标识会在首次创建后续跑同一条内部任务会话。
+    #[test]
+    fn resolve_task_session_id_reuses_existing_public_task_identifier() {
+        let task_runtime = Arc::new(TaskRuntime::new());
+        let parent_session_id = Uuid::new_v4();
+        let first = resolve_task_session_id(
+            &task_runtime,
+            parent_session_id,
+            &TaskToolInvocationArgs {
+                prompt: String::from("inspect readme"),
+                description: None,
+                task_id: Some(String::from("research_readme")),
+                subagent: None,
+            },
+        )
+        .expect("first alias task id should resolve");
+
+        task_runtime
+            .sessions
+            .write()
+            .expect("task session registry should be writable")
+            .insert(
+                first.task_id,
+                build_task_session_record(
+                    first.task_id,
+                    first.public_task_id.clone(),
+                    parent_session_id,
+                    None,
+                    1,
+                    None,
+                    None,
+                    None,
+                    CoreConversationSnapshot::default(),
+                    String::from("inspect readme"),
+                    String::from("created"),
+                ),
+            );
+
+        let resumed = resolve_task_session_id(
+            &task_runtime,
+            parent_session_id,
+            &TaskToolInvocationArgs {
+                prompt: String::from("inspect readme again"),
+                description: None,
+                task_id: Some(String::from("research_readme")),
+                subagent: None,
+            },
+        )
+        .expect("existing alias task id should resume");
+
+        assert_eq!(resumed.task_id, first.task_id);
+        assert_eq!(resumed.public_task_id, first.public_task_id);
+        assert!(resumed.is_resumed);
     }
 }

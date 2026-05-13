@@ -1,7 +1,7 @@
 //! Shared provider-stream channel types reused by the executor, transport adapters, and protocol bridge helpers.
 //! 供执行器、传输适配器与协议桥接辅助逻辑复用的共享 Provider 流式通道类型。
 
-use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent};
+use crate::agent_runtime::events::RuntimeEvent;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
 use std::pin::Pin;
@@ -22,9 +22,6 @@ pub(crate) enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
-    /// Already scoped execution event forwarded from one nested child task stream.
-    /// 从嵌套子任务流转发过来的、已带会话归属的执行事件。
-    ExecutionEvent(ExecutionStreamEvent),
     /// Final canonical conversation state captured after one host-owned controller run finishes.
     /// 在一次宿主自有控制器运行结束后捕获的最终规范会话状态。
     FinalConversationState(SessionConversationState),
