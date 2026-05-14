@@ -18,7 +18,7 @@ use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
@@ -30,6 +30,10 @@ use vulcan_core::types::{
 /// Latest Anthropic API version used by the host-owned direct transport.
 /// 宿主自有直连传输使用的最新 Anthropic API 版本。
 const ANTHROPIC_API_VERSION_LATEST: &str = "2023-06-01";
+
+/// Provider-message-state key used to persist replayable Anthropic-native assistant content.
+/// 用于持久化可回放 Anthropic 原生助手内容的 provider_message_state 键名。
+const ANTHROPIC_PROVIDER_STATE_KEY: &str = "anthropic_native";
 
 /// Minimal Anthropic streaming event used by the host-owned direct transport.
 /// 宿主自有直连传输使用的最小 Anthropic 流式事件。
@@ -96,7 +100,7 @@ struct AnthropicMessageStart {
 
 /// Minimal Anthropic content block used by the host-owned direct transport.
 /// 宿主自有直连传输使用的最小 Anthropic 内容块。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicContentBlock {
     /// Plain text content block.
@@ -265,8 +269,10 @@ where
     let mut response_model = None;
     let mut assistant_text = String::new();
     let mut assistant_reasoning_blocks = Vec::new();
+    let mut finalized_provider_content_blocks = Vec::new();
     let mut pending_tool_use = None::<PendingAnthropicToolUse>;
     let mut pending_thinking = None::<PendingAnthropicThinking>;
+    let mut pending_text = None::<String>;
     let mut finalized_tool_calls = Vec::new();
 
     while let Some(event_result) = events.next().await {
@@ -314,8 +320,13 @@ where
                         signature: signature.unwrap_or_default(),
                     });
                 }
-                AnthropicContentBlock::RedactedThinking { .. } => {}
+                AnthropicContentBlock::RedactedThinking { _data } => {
+                    assistant_reasoning_blocks.push(ProviderReasoningPart::Opaque);
+                    finalized_provider_content_blocks
+                        .push(AnthropicContentBlock::RedactedThinking { _data });
+                }
                 AnthropicContentBlock::Text { text } => {
+                    pending_text = Some(text.clone());
                     if !text.is_empty() {
                         assistant_text.push_str(&text);
                         forward_anthropic_delta(
@@ -328,6 +339,7 @@ where
             },
             AnthropicStreamingEvent::ContentBlockDelta { delta, .. } => match delta {
                 AnthropicContentDelta::TextDelta { text } => {
+                    pending_text.get_or_insert_with(String::new).push_str(&text);
                     assistant_text.push_str(&text);
                     forward_anthropic_delta(
                         live_sender,
@@ -360,19 +372,38 @@ where
                 }
             },
             AnthropicStreamingEvent::ContentBlockStop { .. } => {
+                if let Some(text) = pending_text.take()
+                    && !text.is_empty()
+                {
+                    finalized_provider_content_blocks.push(AnthropicContentBlock::Text { text });
+                }
                 if let Some(tool_use) = pending_tool_use.take() {
-                    finalized_tool_calls.push(finalize_pending_anthropic_tool_use(tool_use)?);
+                    finalized_provider_content_blocks
+                        .push(anthropic_content_block_from_pending_tool_use(&tool_use)?);
+                    finalized_tool_calls.push(finalize_pending_anthropic_tool_use(
+                        tool_use,
+                        provider_tool_definitions,
+                    )?);
                 }
                 if let Some(thinking) = pending_thinking.take()
                     && !thinking.thinking.is_empty()
                 {
+                    finalized_provider_content_blocks.push(AnthropicContentBlock::Thinking {
+                        thinking: thinking.thinking.clone(),
+                        signature: (!thinking.signature.is_empty()).then_some(thinking.signature),
+                    });
                     assistant_reasoning_blocks.push(ProviderReasoningPart::Text(thinking.thinking));
                 }
             }
             AnthropicStreamingEvent::MessageDelta { delta, .. } => {
                 if delta.stop_reason.as_deref() == Some("tool_use") {
                     if let Some(tool_use) = pending_tool_use.take() {
-                        finalized_tool_calls.push(finalize_pending_anthropic_tool_use(tool_use)?);
+                        finalized_provider_content_blocks
+                            .push(anthropic_content_block_from_pending_tool_use(&tool_use)?);
+                        finalized_tool_calls.push(finalize_pending_anthropic_tool_use(
+                            tool_use,
+                            provider_tool_definitions,
+                        )?);
                     }
                 }
             }
@@ -383,11 +414,25 @@ where
     }
 
     if let Some(tool_use) = pending_tool_use.take() {
-        finalized_tool_calls.push(finalize_pending_anthropic_tool_use(tool_use)?);
+        finalized_provider_content_blocks
+            .push(anthropic_content_block_from_pending_tool_use(&tool_use)?);
+        finalized_tool_calls.push(finalize_pending_anthropic_tool_use(
+            tool_use,
+            provider_tool_definitions,
+        )?);
+    }
+    if let Some(text) = pending_text.take()
+        && !text.is_empty()
+    {
+        finalized_provider_content_blocks.push(AnthropicContentBlock::Text { text });
     }
     if let Some(thinking) = pending_thinking.take()
         && !thinking.thinking.is_empty()
     {
+        finalized_provider_content_blocks.push(AnthropicContentBlock::Thinking {
+            thinking: thinking.thinking.clone(),
+            signature: (!thinking.signature.is_empty()).then_some(thinking.signature),
+        });
         assistant_reasoning_blocks.push(ProviderReasoningPart::Text(thinking.thinking));
     }
 
@@ -406,12 +451,15 @@ where
             .map(ProviderAssistantContent::ToolCall),
     );
 
-    Ok(build_openai_compatible_turn_response(
+    let mut response = build_openai_compatible_turn_response(
         provider_id,
         response_model.as_deref().unwrap_or(model_id),
         response_id,
         &assistant_content,
-    ))
+    );
+    response.provider_message_state = (!finalized_provider_content_blocks.is_empty())
+        .then(|| build_anthropic_provider_message_state(&finalized_provider_content_blocks));
+    Ok(response)
 }
 
 /// Builds one direct Anthropic HTTP client with merged API key, version, and caller-supplied request headers.
@@ -447,6 +495,26 @@ fn build_anthropic_messages_endpoint(base_url: Option<&str>) -> String {
         .map(normalize_anthropic_base_url)
         .unwrap_or_else(|| String::from("https://api.anthropic.com"));
     format!("{}/v1/messages", normalized_base.trim_end_matches('/'))
+}
+
+/// Wraps replayable Anthropic-native assistant content into the generic provider-message-state payload stored in canonical assistant messages.
+/// 将可回放的 Anthropic 原生助手内容包装成存入规范助手消息中的通用 provider_message_state 载荷。
+fn build_anthropic_provider_message_state(content: &[AnthropicContentBlock]) -> Value {
+    json!({
+        ANTHROPIC_PROVIDER_STATE_KEY: {
+            "content": content
+        }
+    })
+}
+
+/// Restores replayable Anthropic-native assistant content from the generic provider-message-state payload when future history replay needs provider-native fidelity.
+/// 当后续历史回放需要 Provider 原生精度时，从通用 provider_message_state 载荷中恢复可回放的 Anthropic 原生助手内容。
+fn parse_anthropic_provider_message_state(state: &Value) -> Option<Vec<AnthropicContentBlock>> {
+    state
+        .get(ANTHROPIC_PROVIDER_STATE_KEY)?
+        .get("content")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<AnthropicContentBlock>>(value).ok())
 }
 
 /// Builds the final Anthropic JSON payload from one host-controlled turn request and tool schema set.
@@ -496,9 +564,12 @@ fn build_anthropic_request_payload(
         Value::Array(
             current_history
                 .iter()
-                .map(core_message_to_anthropic_message)
+                .map(|message| {
+                    core_message_to_anthropic_message(message, provider_tool_definitions)
+                })
                 .chain(std::iter::once(core_message_to_anthropic_message(
                     &current_prompt,
+                    provider_tool_definitions,
                 )))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
@@ -543,10 +614,11 @@ fn extract_anthropic_max_tokens(model_id: &str, payload: &mut JsonMap<String, Va
     }
 }
 
-/// Converts one canonical core message into one Anthropic request message while intentionally dropping local-only reasoning replay.
-/// 将一条规范 core 消息转换为一条 Anthropic 请求消息，同时刻意丢弃仅限本地使用的思考回放。
+/// Converts one canonical core message into one Anthropic request message while preserving stored provider-native replay state for tool turns.
+/// 将一条规范 core 消息转换为一条 Anthropic 请求消息，并在工具回合中优先保留已存储的 Provider 原生回放状态。
 fn core_message_to_anthropic_message(
     message: &CoreConversationMessage,
+    provider_tool_definitions: &[ProviderToolDefinition],
 ) -> Result<Value, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text } => Ok(json!({
@@ -559,9 +631,29 @@ fn core_message_to_anthropic_message(
             ]
         })),
         CoreConversationPayload::Assistant {
-            text, tool_calls, ..
+            text,
+            reasoning,
+            provider_message_state,
+            tool_calls,
+            ..
         } => {
+            if let Some(content) = provider_message_state
+                .as_ref()
+                .and_then(parse_anthropic_provider_message_state)
+            {
+                return Ok(json!({
+                    "role": "assistant",
+                    "content": content
+                }));
+            }
+
             let mut content = Vec::new();
+            if !tool_calls.is_empty() && !reasoning.trim().is_empty() {
+                content.push(json!({
+                    "type": "thinking",
+                    "thinking": reasoning
+                }));
+            }
             if !text.is_empty() {
                 content.push(json!({
                     "type": "text",
@@ -571,7 +663,9 @@ fn core_message_to_anthropic_message(
             content.extend(
                 tool_calls
                     .iter()
-                    .map(core_tool_call_to_anthropic_tool_use)
+                    .map(|tool_call| {
+                        core_tool_call_to_anthropic_tool_use(tool_call, provider_tool_definitions)
+                    })
                     .collect::<Vec<_>>(),
             );
             Ok(json!({
@@ -611,18 +705,54 @@ fn core_message_to_anthropic_message(
     }
 }
 
+/// Parses one pending Anthropic tool-use input JSON payload into a structured value used by both transcript storage and provider-state replay.
+/// 将一条待定 Anthropic 工具使用输入 JSON 载荷解析为结构化值，供转录存储与 provider-state 回放共同使用。
+fn parse_pending_anthropic_tool_use_input_json(
+    tool_use: &PendingAnthropicToolUse,
+) -> Result<Value, VulcanCoreError> {
+    if tool_use.input_json.trim().is_empty() {
+        Ok(json!({}))
+    } else {
+        serde_json::from_str::<Value>(&tool_use.input_json).map_err(|error| {
+            VulcanCoreError::ProviderFailure {
+                provider_id: String::from("anthropic"),
+                message: format!("Anthropic 工具输入 JSON 解析失败：{error}"),
+            }
+        })
+    }
+}
+
+/// Converts one pending Anthropic tool-use assembly into one replayable Anthropic-native content block so future history replays preserve provider-visible identifiers and names.
+/// 将一条待定 Anthropic 工具使用累计结果转换为一条可回放的 Anthropic 原生内容块，以便后续历史回放保留 Provider 可见标识与名称。
+fn anthropic_content_block_from_pending_tool_use(
+    tool_use: &PendingAnthropicToolUse,
+) -> Result<AnthropicContentBlock, VulcanCoreError> {
+    Ok(AnthropicContentBlock::ToolUse {
+        id: tool_use.id.clone(),
+        name: tool_use.name.clone(),
+        input: parse_pending_anthropic_tool_use_input_json(tool_use)?,
+    })
+}
+
 /// Converts one canonical core tool call into one Anthropic `tool_use` block.
 /// 将一条规范 core 工具调用转换为一条 Anthropic `tool_use` 内容块。
-fn core_tool_call_to_anthropic_tool_use(tool_call: &CoreConversationToolCall) -> Value {
+fn core_tool_call_to_anthropic_tool_use(
+    tool_call: &CoreConversationToolCall,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> Value {
     let replayable_tool_call_id = tool_call
         .tool_call_id
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| tool_call.id.clone());
+    let provider_visible_tool_name = resolve_provider_visible_anthropic_tool_name(
+        &tool_call.tool_name,
+        provider_tool_definitions,
+    );
     json!({
         "type": "tool_use",
         "id": replayable_tool_call_id,
-        "name": tool_call.tool_name,
+        "name": provider_visible_tool_name,
         "input": tool_call.arguments
     })
 }
@@ -631,7 +761,7 @@ fn core_tool_call_to_anthropic_tool_use(tool_call: &CoreConversationToolCall) ->
 /// 将一条宿主自有 Provider 工具定义转换为一条 Anthropic 工具 schema 对象。
 fn provider_tool_definition_to_anthropic_tool(definition: &ProviderToolDefinition) -> Value {
     json!({
-        "name": definition.name,
+        "name": build_anthropic_provider_tool_name(&definition.name),
         "description": definition.description,
         "input_schema": definition.parameters
     })
@@ -641,17 +771,9 @@ fn provider_tool_definition_to_anthropic_tool(definition: &ProviderToolDefinitio
 /// 将一条待定 Anthropic 工具使用块收尾为规范 core 工具调用形状。
 fn finalize_pending_anthropic_tool_use(
     tool_use: PendingAnthropicToolUse,
+    provider_tool_definitions: &[ProviderToolDefinition],
 ) -> Result<CoreConversationToolCall, VulcanCoreError> {
-    let input_json = if tool_use.input_json.trim().is_empty() {
-        json!({})
-    } else {
-        serde_json::from_str::<Value>(&tool_use.input_json).map_err(|error| {
-            VulcanCoreError::ProviderFailure {
-                provider_id: String::from("anthropic"),
-                message: format!("Anthropic 工具输入 JSON 解析失败：{error}"),
-            }
-        })?
-    };
+    let input_json = parse_pending_anthropic_tool_use_input_json(&tool_use)?;
 
     let provider_visible_id = tool_use.id.trim().to_string();
     let provider_visible_id = (!provider_visible_id.is_empty()).then_some(provider_visible_id);
@@ -662,13 +784,99 @@ fn finalize_pending_anthropic_tool_use(
             serde_json::to_string(&input_json).unwrap_or_else(|_| input_json.to_string())
         )
     });
+    let host_tool_name =
+        resolve_host_owned_anthropic_tool_name(&tool_use.name, provider_tool_definitions);
 
     Ok(CoreConversationToolCall {
         id: local_id,
         tool_call_id: provider_visible_id,
-        tool_name: tool_use.name,
+        tool_name: host_tool_name,
         arguments: input_json,
     })
+}
+
+/// Resolves one provider-visible Anthropic tool name from the host-owned tool identifier.
+/// 根据宿主自有工具标识解析一条面向 Anthropic 的 Provider 可见工具名称。
+fn resolve_provider_visible_anthropic_tool_name(
+    host_tool_name: &str,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> String {
+    provider_tool_definitions
+        .iter()
+        .find(|definition| definition.name == host_tool_name)
+        .map(|definition| build_anthropic_provider_tool_name(&definition.name))
+        .unwrap_or_else(|| build_anthropic_provider_tool_name(host_tool_name))
+}
+
+/// Resolves one host-owned tool identifier from the provider-visible Anthropic tool name.
+/// 根据面向 Anthropic 的 Provider 可见工具名称反向解析一条宿主自有工具标识。
+fn resolve_host_owned_anthropic_tool_name(
+    provider_tool_name: &str,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> String {
+    provider_tool_definitions
+        .iter()
+        .find(|definition| {
+            build_anthropic_provider_tool_name(&definition.name) == provider_tool_name
+        })
+        .map(|definition| definition.name.clone())
+        .unwrap_or_else(|| provider_tool_name.to_string())
+}
+
+/// Builds one Anthropic-compatible provider-visible tool name that starts with an ASCII letter and uses only supported identifier characters.
+/// 构建一条兼容 Anthropic 的 Provider 可见工具名称，确保以 ASCII 字母开头且仅使用受支持的标识符字符。
+fn build_anthropic_provider_tool_name(host_tool_name: &str) -> String {
+    if anthropic_tool_name_is_valid(host_tool_name) {
+        return host_tool_name.to_string();
+    }
+
+    let mut sanitized = host_tool_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty()
+        || !sanitized.starts_with(|character: char| character.is_ascii_alphabetic())
+    {
+        sanitized = format!("tool_{sanitized}");
+    }
+
+    sanitized.push('_');
+    sanitized.push_str(&format!(
+        "{:08x}",
+        stable_anthropic_tool_name_hash(host_tool_name)
+    ));
+    sanitized
+}
+
+/// Returns whether one tool name already satisfies the Anthropic-compatible identifier rules used by strict providers such as kimi-for-coding.
+/// 返回单条工具名称是否已经满足 kimi-for-coding 等严格 Provider 使用的 Anthropic 兼容标识符规则。
+fn anthropic_tool_name_is_valid(tool_name: &str) -> bool {
+    let mut characters = tool_name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+
+    first.is_ascii_alphabetic()
+        && characters
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+/// Computes one deterministic FNV-1a hash used to disambiguate sanitized Anthropic tool names without depending on provider-side state.
+/// 计算一份确定性的 FNV-1a 哈希，用于在不依赖 Provider 侧状态的情况下区分已清洗的 Anthropic 工具名称。
+fn stable_anthropic_tool_name_hash(input: &str) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for byte in input.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
 }
 
 /// Forwards one normalized provider delta into both the controller sink and the GUI live sender.
@@ -687,7 +895,8 @@ fn forward_anthropic_delta<S>(
 #[cfg(test)]
 mod tests {
     use super::{
-        PendingAnthropicToolUse, build_anthropic_request_payload,
+        AnthropicContentBlock, PendingAnthropicToolUse, build_anthropic_provider_message_state,
+        build_anthropic_provider_tool_name, build_anthropic_request_payload,
         finalize_pending_anthropic_tool_use,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
@@ -701,10 +910,11 @@ mod tests {
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
 
-    /// Verifies the direct Anthropic request payload strips reasoning replay while preserving tool-use and tool-result message shapes.
-    /// 验证直连 Anthropic 请求载荷会剥离思考回放，同时保留 tool_use 与 tool_result 消息形状。
+    /// Verifies the direct Anthropic request payload replays legacy tool-turn reasoning blocks while preserving tool-use and tool-result message shapes.
+    /// 验证直连 Anthropic 请求载荷会为旧版工具回合回放思考块，同时保留 tool_use 与 tool_result 消息形状。
     #[test]
-    fn request_payload_strips_reasoning_replay_and_preserves_anthropic_tool_shapes() {
+    fn request_payload_replays_legacy_reasoning_for_tool_turns_and_preserves_anthropic_tool_shapes()
+    {
         let request = OpenAiCompatibleCoreTurnRequest {
             snapshot: CoreProviderRequestSnapshot {
                 provider_id: String::from("anthropic"),
@@ -766,10 +976,12 @@ mod tests {
             .expect("messages should be an array");
         assert_eq!(payload["max_tokens"], 64000);
         assert_eq!(messages[0]["role"], "assistant");
-        assert_eq!(messages[0]["content"][0]["type"], "text");
-        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
-        assert_eq!(messages[0]["content"][1]["id"], "call-1");
-        assert_eq!(messages[0]["content"][1]["name"], "read_file");
+        assert_eq!(messages[0]["content"][0]["type"], "thinking");
+        assert_eq!(messages[0]["content"][0]["thinking"], "这段思考不应回放。");
+        assert_eq!(messages[0]["content"][1]["type"], "text");
+        assert_eq!(messages[0]["content"][2]["type"], "tool_use");
+        assert_eq!(messages[0]["content"][2]["id"], "call-1");
+        assert_eq!(messages[0]["content"][2]["name"], "read_file");
         assert!(messages[0].get("reasoning").is_none());
         assert_eq!(messages[1]["role"], "user");
         assert_eq!(messages[1]["content"][0]["type"], "tool_result");
@@ -780,6 +992,93 @@ mod tests {
         );
         assert_eq!(payload["tools"][0]["name"], "read_file");
         assert_eq!(payload["tool_choice"]["type"], "auto");
+    }
+
+    /// Verifies one stored Anthropic provider-message-state round-trips native thinking signatures and provider-visible tool metadata during future history replay.
+    /// 验证一份已存储的 Anthropic provider_message_state 能在后续历史回放中保留原生 thinking 签名与 Provider 可见工具元数据。
+    #[test]
+    fn request_payload_replays_stored_anthropic_provider_message_state() {
+        let assistant_state = build_anthropic_provider_message_state(&[
+            AnthropicContentBlock::Thinking {
+                thinking: String::from("先检查目录。"),
+                signature: Some(String::from("sig-1")),
+            },
+            AnthropicContentBlock::Text {
+                text: String::from("我先读取文件。"),
+            },
+            AnthropicContentBlock::ToolUse {
+                id: String::from("call-1"),
+                name: String::from("functions_shell_command_76a68409"),
+                input: json!({ "command": "Get-ChildItem" }),
+            },
+        ]);
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("我先读取文件。"),
+                    reasoning: String::from("先检查目录。"),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: Some(assistant_state),
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("tool-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from("functions.shell_command"),
+                        arguments: json!({ "command": "Get-ChildItem" }),
+                    }],
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("functions.shell_command"),
+                description: String::from("Run one shell command"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    },
+                    "required": ["command"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[0]["content"][0]["type"], "thinking");
+        assert_eq!(messages[0]["content"][0]["thinking"], "先检查目录。");
+        assert_eq!(messages[0]["content"][0]["signature"], "sig-1");
+        assert_eq!(messages[0]["content"][2]["type"], "tool_use");
+        assert_eq!(
+            messages[0]["content"][2]["name"],
+            "functions_shell_command_76a68409"
+        );
     }
 
     /// Verifies Anthropic replay falls back to the local tool-call identifier when the upstream provider omits a stable visible id.
@@ -845,7 +1144,7 @@ mod tests {
         let messages = payload["messages"]
             .as_array()
             .expect("messages should be an array");
-        assert_eq!(messages[0]["content"][1]["id"], "local-call-1");
+        assert_eq!(messages[0]["content"][2]["id"], "local-call-1");
         assert_eq!(messages[1]["content"][0]["tool_use_id"], "local-call-1");
     }
 
@@ -853,16 +1152,117 @@ mod tests {
     /// 验证当 Provider 缺失上游 id 时，Anthropic 工具使用收尾会合成一个稳定的本地标识。
     #[test]
     fn finalize_pending_anthropic_tool_use_synthesizes_local_identifier() {
-        let tool_call = finalize_pending_anthropic_tool_use(PendingAnthropicToolUse {
-            id: String::new(),
-            name: String::from("read_file"),
-            input_json: String::from("{\"path\":\"src/main.rs\"}"),
-        })
+        let tool_call = finalize_pending_anthropic_tool_use(
+            PendingAnthropicToolUse {
+                id: String::new(),
+                name: String::from("read_file"),
+                input_json: String::from("{\"path\":\"src/main.rs\"}"),
+            },
+            &[],
+        )
         .expect("tool call should finalize");
 
         assert_eq!(tool_call.id, "read_file:{\"path\":\"src/main.rs\"}");
         assert_eq!(tool_call.tool_call_id, None);
         assert_eq!(tool_call.tool_name, "read_file");
         assert_eq!(tool_call.arguments, json!({ "path": "src/main.rs" }));
+    }
+
+    /// Verifies Anthropic request payloads sanitize invalid host tool identifiers before exposing them to strict providers.
+    /// 验证 Anthropic 请求载荷会先清洗非法宿主工具标识，再暴露给严格 Provider。
+    #[test]
+    fn request_payload_sanitizes_invalid_anthropic_tool_names() {
+        let host_tool_name = "functions.shell_command";
+        let provider_tool_name = build_anthropic_provider_tool_name(host_tool_name);
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("先执行命令。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("tool-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from(host_tool_name),
+                        arguments: json!({ "command": "pwd" }),
+                    }],
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("D:/openvulcan/vulcan-code"),
+                },
+            },
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from(host_tool_name),
+                description: String::from("Run one shell command"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    },
+                    "required": ["command"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[0]["content"][1]["name"], provider_tool_name);
+        assert_eq!(payload["tools"][0]["name"], provider_tool_name);
+    }
+
+    /// Verifies Anthropic tool-use finalization restores the original host tool identifier after the provider uses one sanitized tool name.
+    /// 验证当 Provider 使用已清洗的工具名称时，Anthropic 工具使用收尾会恢复原始宿主工具标识。
+    #[test]
+    fn finalize_pending_anthropic_tool_use_restores_host_tool_name() {
+        let host_tool_name = "functions.shell_command";
+        let tool_call = finalize_pending_anthropic_tool_use(
+            PendingAnthropicToolUse {
+                id: String::from("call-1"),
+                name: build_anthropic_provider_tool_name(host_tool_name),
+                input_json: String::from("{\"command\":\"pwd\"}"),
+            },
+            &[ProviderToolDefinition {
+                name: String::from(host_tool_name),
+                description: String::from("Run one shell command"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    }
+                }),
+            }],
+        )
+        .expect("tool call should finalize");
+
+        assert_eq!(tool_call.tool_name, host_tool_name);
+        assert_eq!(tool_call.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(tool_call.arguments, json!({ "command": "pwd" }));
     }
 }
