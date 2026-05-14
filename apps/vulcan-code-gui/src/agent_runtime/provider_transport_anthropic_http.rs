@@ -614,9 +614,14 @@ fn core_message_to_anthropic_message(
 /// Converts one canonical core tool call into one Anthropic `tool_use` block.
 /// 将一条规范 core 工具调用转换为一条 Anthropic `tool_use` 内容块。
 fn core_tool_call_to_anthropic_tool_use(tool_call: &CoreConversationToolCall) -> Value {
+    let replayable_tool_call_id = tool_call
+        .tool_call_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| tool_call.id.clone());
     json!({
         "type": "tool_use",
-        "id": tool_call.tool_call_id.clone().unwrap_or_else(|| tool_call.id.clone()),
+        "id": replayable_tool_call_id,
         "name": tool_call.tool_name,
         "input": tool_call.arguments
     })
@@ -648,9 +653,19 @@ fn finalize_pending_anthropic_tool_use(
         })?
     };
 
+    let provider_visible_id = tool_use.id.trim().to_string();
+    let provider_visible_id = (!provider_visible_id.is_empty()).then_some(provider_visible_id);
+    let local_id = provider_visible_id.clone().unwrap_or_else(|| {
+        format!(
+            "{}:{}",
+            tool_use.name,
+            serde_json::to_string(&input_json).unwrap_or_else(|_| input_json.to_string())
+        )
+    });
+
     Ok(CoreConversationToolCall {
-        id: tool_use.id.clone(),
-        tool_call_id: Some(tool_use.id),
+        id: local_id,
+        tool_call_id: provider_visible_id,
         tool_name: tool_use.name,
         arguments: input_json,
     })
@@ -671,7 +686,10 @@ fn forward_anthropic_delta<S>(
 
 #[cfg(test)]
 mod tests {
-    use super::build_anthropic_request_payload;
+    use super::{
+        PendingAnthropicToolUse, build_anthropic_request_payload,
+        finalize_pending_anthropic_tool_use,
+    };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use serde_json::json;
@@ -762,5 +780,89 @@ mod tests {
         );
         assert_eq!(payload["tools"][0]["name"], "read_file");
         assert_eq!(payload["tool_choice"]["type"], "auto");
+    }
+
+    /// Verifies Anthropic replay falls back to the local tool-call identifier when the upstream provider omits a stable visible id.
+    /// 验证当上游 Provider 缺失稳定可见 id 时，Anthropic 回放会回退到本地工具调用标识。
+    #[test]
+    fn request_payload_falls_back_to_local_tool_id_when_provider_visible_id_is_missing() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("我先读取文件。"),
+                    reasoning: String::from("这段思考不应回放。"),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("local-call-1"),
+                        tool_call_id: Some(String::from("")),
+                        tool_name: String::from("read_file"),
+                        arguments: json!({ "path": "src/main.rs" }),
+                    }],
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("local-call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[0]["content"][1]["id"], "local-call-1");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "local-call-1");
+    }
+
+    /// Verifies Anthropic tool-use finalization synthesizes one stable local identifier when the provider omits the upstream id.
+    /// 验证当 Provider 缺失上游 id 时，Anthropic 工具使用收尾会合成一个稳定的本地标识。
+    #[test]
+    fn finalize_pending_anthropic_tool_use_synthesizes_local_identifier() {
+        let tool_call = finalize_pending_anthropic_tool_use(PendingAnthropicToolUse {
+            id: String::new(),
+            name: String::from("read_file"),
+            input_json: String::from("{\"path\":\"src/main.rs\"}"),
+        })
+        .expect("tool call should finalize");
+
+        assert_eq!(tool_call.id, "read_file:{\"path\":\"src/main.rs\"}");
+        assert_eq!(tool_call.tool_call_id, None);
+        assert_eq!(tool_call.tool_name, "read_file");
+        assert_eq!(tool_call.arguments, json!({ "path": "src/main.rs" }));
     }
 }

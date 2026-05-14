@@ -53,6 +53,7 @@ mod tests {
         tool_call
             .tool_call_id
             .clone()
+            .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| tool_call.id.clone())
     }
 

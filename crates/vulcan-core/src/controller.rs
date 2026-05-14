@@ -740,6 +740,7 @@ fn resolved_tool_call_id(tool_call: &crate::types::ConversationToolCall) -> Stri
     tool_call
         .tool_call_id
         .clone()
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| tool_call.id.clone())
 }
 
@@ -1367,5 +1368,19 @@ mod tests {
             }));
             assert_eq!(controller.snapshot().messages.len(), 3);
         });
+    }
+
+    /// Verifies the controller falls back to the local tool-call identifier when the provider-visible id is empty.
+    /// 验证当 Provider 可见 id 为空时，控制器会回退到本地工具调用标识。
+    #[test]
+    fn resolved_tool_call_id_falls_back_when_provider_visible_id_is_empty() {
+        let tool_call = crate::types::ConversationToolCall {
+            id: String::from("local-call-1"),
+            tool_call_id: Some(String::from("   ")),
+            tool_name: String::from("read_file"),
+            arguments: json!({ "path": "src/main.rs" }),
+        };
+
+        assert_eq!(resolved_tool_call_id(&tool_call), "local-call-1");
     }
 }
