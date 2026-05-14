@@ -13,6 +13,14 @@ pub const PROTOCOL_COMPACTION_TRIGGER_COUNT: usize = 10;
 /// 一次压缩改写后按原样保留的最新规范消息条数。
 pub const PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT: usize = 4;
 
+/// Number of latest canonical records retained verbatim after one compaction rewrite.
+/// 一次压缩改写后按原样保留的最新规范记录条数。
+pub const PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT: usize = 50;
+
+/// Maximum body length retained for old historical records after record-level compaction.
+/// 记录级压缩后为旧历史记录保留的最大正文长度。
+const PROTOCOL_RECORD_COMPACTED_BODY_CHARS: usize = 12 * 1024;
+
 /// Session-scoped canonical conversation state persisted independently from the visible transcript.
 /// 独立于可见转录流持久化保存的按会话归属规范会话状态。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -235,6 +243,69 @@ pub fn compact_conversation_with_summary(
     state.continuation.updated_at = Some(updated_at.into());
 }
 
+/// Rebuilds a canonical state from a bounded transcript window when only lazy-loaded rows are available.
+/// 当只有懒加载转录行可用时，根据有界转录窗口重建规范会话状态。
+pub fn conversation_state_from_session_messages(
+    messages: &[SessionMessageEntry],
+) -> SessionConversationState {
+    let mut state = SessionConversationState::default();
+    for message in messages {
+        state.records.push(SessionConversationRecord {
+            id: message.id.clone(),
+            kind: message.kind,
+            record_kind: message.record_kind,
+            visible: message.visible,
+            title: message.title.clone(),
+            body: message.body.clone(),
+            metadata: message.metadata.clone(),
+            created_at: message.created_at.clone(),
+        });
+
+        if let Some(protocol_message) = session_message_to_protocol_message(message) {
+            state.messages.push(protocol_message);
+        }
+    }
+    state
+}
+
+/// Compacts canonical records after summary creation so old tool details stop inflating persistence.
+/// 在摘要创建后压缩规范记录，避免旧工具细节继续放大持久化体积。
+pub fn compact_conversation_records_after_summary(
+    state: &mut SessionConversationState,
+    summary_record_id: &str,
+) {
+    if state.records.len() <= PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT {
+        return;
+    }
+
+    let tail_start = state
+        .records
+        .len()
+        .saturating_sub(PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT);
+    let mut retained_records = Vec::new();
+    let mut retained_ids = std::collections::BTreeSet::new();
+
+    for (index, record) in state.records.iter().cloned().enumerate() {
+        let keep_recent_tail = index >= tail_start;
+        let keep_summary = record.id == summary_record_id;
+        let keep_historical_dialogue = historical_record_survives_compaction(&record);
+        if !(keep_recent_tail || keep_summary || keep_historical_dialogue) {
+            continue;
+        }
+
+        let retained_record = if keep_recent_tail || keep_summary {
+            record
+        } else {
+            compact_historical_record(record)
+        };
+        if retained_ids.insert(retained_record.id.clone()) {
+            retained_records.push(retained_record);
+        }
+    }
+
+    state.records = retained_records;
+}
+
 /// Projects canonical session records into the persisted transcript model used by the existing GUI surfaces.
 /// 将规范会话记录投影为现有图形界面表面使用的持久化转录模型。
 pub fn conversation_state_to_session_messages(
@@ -286,6 +357,85 @@ fn conversation_record_to_session_message(
         metadata: record.metadata,
         created_at: record.created_at,
     }
+}
+
+/// Converts one transcript entry into a provider-facing protocol message when it is safe to replay.
+/// 在安全可重放时将一条转录项转换为面向 Provider 的协议消息。
+fn session_message_to_protocol_message(
+    message: &SessionMessageEntry,
+) -> Option<SessionConversationMessage> {
+    match message.kind {
+        SessionMessageKind::User if message.contributes_to_context() => {
+            Some(SessionConversationMessage {
+                id: message.id.clone(),
+                payload: SessionConversationPayload::UserText {
+                    text: message.body.clone(),
+                },
+            })
+        }
+        SessionMessageKind::Assistant
+            if assistant_record_can_seed_protocol(&message.record_kind) =>
+        {
+            Some(SessionConversationMessage {
+                id: message.id.clone(),
+                payload: SessionConversationPayload::Assistant {
+                    text: message.body.clone(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                },
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether one assistant record kind is safe to replay as plain assistant context.
+/// 返回某个助手记录类型是否可以作为纯文本助手上下文安全重放。
+fn assistant_record_can_seed_protocol(record_kind: &SessionMessageRecordKind) -> bool {
+    matches!(
+        record_kind,
+        SessionMessageRecordKind::AssistantOutput
+            | SessionMessageRecordKind::SummaryOutput
+            | SessionMessageRecordKind::ExploreOutput
+            | SessionMessageRecordKind::CompactionSummary
+            | SessionMessageRecordKind::Transcript
+    )
+}
+
+/// Returns whether one older record should survive record-level compaction.
+/// 返回一条旧记录是否应在记录级压缩后保留。
+fn historical_record_survives_compaction(record: &SessionConversationRecord) -> bool {
+    matches!(record.kind, SessionMessageKind::User)
+        || matches!(
+            record.record_kind,
+            SessionMessageRecordKind::AssistantOutput
+                | SessionMessageRecordKind::SummaryOutput
+                | SessionMessageRecordKind::CompactionSummary
+        )
+}
+
+/// Reduces an old surviving dialogue record to compact text and minimal metadata.
+/// 将一条保留下来的旧对话记录降级为紧凑正文与最小元数据。
+fn compact_historical_record(mut record: SessionConversationRecord) -> SessionConversationRecord {
+    record.body = truncate_compacted_record_body(&record.body);
+    record.metadata = None;
+    record
+}
+
+/// Truncates one old record body to keep reconstructed history useful but bounded.
+/// 截断旧记录正文，使重建历史保持有用但大小有界。
+fn truncate_compacted_record_body(body: &str) -> String {
+    if body.chars().count() <= PROTOCOL_RECORD_COMPACTED_BODY_CHARS {
+        return body.to_string();
+    }
+
+    let truncated = body
+        .chars()
+        .take(PROTOCOL_RECORD_COMPACTED_BODY_CHARS.saturating_sub(1))
+        .collect::<String>();
+    format!("{truncated}…")
 }
 
 #[cfg(test)]

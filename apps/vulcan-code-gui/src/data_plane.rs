@@ -271,7 +271,78 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE session_runtime_state ADD COLUMN conversation_state_json TEXT;",
     )
     .await?;
+    ensure_optional_runtime_state_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_runtime_state ADD COLUMN continuation_json TEXT;",
+    )
+    .await?;
+    ensure_optional_session_message_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_messages ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_session_message_chunk_table(client, sqlite_binding_id).await?;
+    ensure_session_message_turn_index(client, sqlite_binding_id).await?;
     ensure_protocol_reset_applied(client, sqlite_binding_id).await
+}
+
+/// Applies one idempotent session-message column migration and ignores duplicate-column failures.
+/// 执行一条幂等会话消息列迁移，并忽略重复列失败。
+async fn ensure_optional_session_message_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
+    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+}
+
+/// Ensures the additive session-message chunk table exists for large transcript bodies.
+/// 确保用于大型转录正文的追加式会话消息分片表已经存在。
+async fn ensure_session_message_chunk_table(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+) -> Result<(), String> {
+    client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            session_message_chunk_schema_script(),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("执行会话消息分片结构迁移失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Ensures the turn-index lookup index exists for turn-level transcript pagination.
+/// 确保用于轮次级转录分页的 turn-index 查询索引已经存在。
+async fn ensure_session_message_turn_index(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+) -> Result<(), String> {
+    client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            String::from(session_message_turn_index_statement()),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("执行会话消息轮次索引迁移失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Returns the additive turn-index lookup statement run after the column is guaranteed to exist.
+/// 返回在确认列存在后执行的追加式轮次索引语句。
+fn session_message_turn_index_statement() -> &'static str {
+    r#"
+CREATE INDEX IF NOT EXISTS idx_session_messages_session_turn_ordinal
+ON session_messages(session_id, turn_index, ordinal);
+"#
 }
 
 /// Applies one idempotent runtime-state column migration and ignores duplicate-column failures.
@@ -319,6 +390,7 @@ async fn ensure_protocol_reset_applied(
                 r#"
 DELETE FROM session_runtime_state;
 DELETE FROM session_compactions;
+DELETE FROM session_message_chunks;
 DELETE FROM session_messages;
 DELETE FROM sessions;
 INSERT INTO app_metadata (key, value)
@@ -448,6 +520,7 @@ CREATE TABLE IF NOT EXISTS session_messages (
     role TEXT NOT NULL,
     kind TEXT NOT NULL,
     visible INTEGER NOT NULL DEFAULT 1,
+    turn_index INTEGER NOT NULL DEFAULT 0,
     content TEXT NOT NULL,
     meta_json TEXT,
     created_at TEXT NOT NULL
@@ -455,6 +528,8 @@ CREATE TABLE IF NOT EXISTS session_messages (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_messages_session_ordinal
 ON session_messages(session_id, ordinal);
+
+{session_message_chunk_schema}
 
 CREATE TABLE IF NOT EXISTS session_compactions (
     id TEXT PRIMARY KEY,
@@ -474,6 +549,7 @@ CREATE TABLE IF NOT EXISTS session_runtime_state (
     context_start_message_id TEXT,
     ui_state_json TEXT,
     conversation_state_json TEXT,
+    continuation_json TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -486,6 +562,50 @@ ON sessions(project_id, archived ASC, sort_order ASC, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_session_compactions_session
 ON session_compactions(session_id, created_at DESC);
 "#,
-        schema_version = APP_SCHEMA_VERSION
+        schema_version = APP_SCHEMA_VERSION,
+        session_message_chunk_schema = session_message_chunk_schema_script()
     )
+}
+
+/// Builds the additive schema objects used to split large transcript message bodies.
+/// 构建用于拆分大型转录消息正文的追加式结构对象。
+fn session_message_chunk_schema_script() -> String {
+    r#"
+CREATE TABLE IF NOT EXISTS session_message_chunks (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL REFERENCES session_messages(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    PRIMARY KEY(message_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_message_chunks_session_message
+ON session_message_chunks(session_id, message_id, chunk_index);
+"#
+    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that the base schema does not create turn-index objects before additive migrations run.
+    /// 验证基础结构不会在追加迁移执行前创建依赖 turn_index 的对象。
+    #[test]
+    fn base_schema_defers_turn_index_lookup_index_to_migration() {
+        let schema = build_application_schema_script();
+
+        assert!(schema.contains("turn_index INTEGER NOT NULL DEFAULT 0"));
+        assert!(!schema.contains("idx_session_messages_session_turn_ordinal"));
+    }
+
+    /// Verifies that the turn-index migration creates the lookup index after the column migration.
+    /// 验证轮次索引迁移会在列迁移之后创建查询索引。
+    #[test]
+    fn turn_index_migration_defines_lookup_index() {
+        let statement = session_message_turn_index_statement();
+
+        assert!(statement.contains("idx_session_messages_session_turn_ordinal"));
+        assert!(statement.contains("turn_index"));
+    }
 }

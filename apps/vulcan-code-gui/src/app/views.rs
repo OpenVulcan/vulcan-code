@@ -5,6 +5,51 @@ use super::helpers::*;
 use super::*;
 use iced::widget::{column, pin};
 
+/// Maximum characters shown for one message inside the search-result context preview.
+/// 搜索结果上下文预览中单条消息最多展示的字符数。
+const SESSION_HISTORY_CONTEXT_MESSAGE_PREVIEW_CHARS: usize = 420;
+
+/// Builds one compact body preview for the read-only search-result context panel.
+/// 为只读搜索结果上下文面板构建单条紧凑正文预览。
+fn session_history_context_message_preview(value: &str) -> String {
+    let normalized = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let normalized = if normalized.is_empty() {
+        value.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        normalized
+    };
+    if normalized.is_empty() {
+        return String::from("（该消息没有可展示正文。）");
+    }
+    if normalized.chars().count() <= SESSION_HISTORY_CONTEXT_MESSAGE_PREVIEW_CHARS {
+        return normalized;
+    }
+
+    let preview = normalized
+        .chars()
+        .take(SESSION_HISTORY_CONTEXT_MESSAGE_PREVIEW_CHARS.saturating_sub(1))
+        .collect::<String>();
+    format!("{preview}…")
+}
+
+/// Returns the active subagent dispatch list height needed for the current running task count.
+/// 返回当前运行中任务数量所需的活动子代理调度列表高度。
+fn subagent_navigation_panel_height(task_count: usize) -> f32 {
+    let row_count = task_count.max(1) as f32;
+    let gap_count = task_count.saturating_sub(1) as f32;
+    let content_height = SUBAGENT_NAVIGATION_PANEL_VERTICAL_PADDING
+        + (row_count * SUBAGENT_NAVIGATION_ROW_HEIGHT)
+        + (gap_count * SUBAGENT_NAVIGATION_ROW_GAP);
+
+    content_height.max(SUBAGENT_NAVIGATION_PANEL_HEIGHT)
+}
+
 impl VulcanWorkbench {
     /// Builds the full window view by composing header, panes, and footer.
     /// 通过组合头部、分栏和底部状态栏构建完整窗口视图。
@@ -1595,6 +1640,73 @@ impl VulcanWorkbench {
         .into()
     }
 
+    /// Builds the success-colored circular return button shown before a subagent panel title.
+    /// 构建显示在子代理面板标题左侧的成功色圆形返回按钮。
+    pub(super) fn view_subagent_panel_return_button(&self) -> Element<'_, Message> {
+        let icon_surface: Element<'_, Message> =
+            container(codicon::chevron_left().size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE))
+                .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+                .height(COMPOSER_TRIGGER_BUTTON_SIZE)
+                .center(Fill)
+                .into();
+        let button = button(icon_surface)
+            .padding(0)
+            .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+            .height(COMPOSER_TRIGGER_BUTTON_SIZE)
+            .style(style::subagent_panel_return_button_style)
+            .on_press(Message::ReturnToSelectedSessionTranscript);
+
+        tooltip(button, "返回主会话", tooltip::Position::Bottom)
+            .style(container::rounded_box)
+            .into()
+    }
+
+    /// Builds the dedicated stop button shown at the right side of a running subagent panel title.
+    /// 构建显示在运行中子代理面板标题右侧的专用停止按钮。
+    pub(super) fn view_subagent_panel_stop_button(&self) -> Element<'_, Message> {
+        let icon_surface: Element<'_, Message> = container(
+            codicon::debug_stop()
+                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+                .line_height(1.0),
+        )
+        .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+        .height(COMPOSER_TRIGGER_BUTTON_SIZE)
+        .center(Fill)
+        .into();
+        let button = button(icon_surface)
+            .padding(0)
+            .width(COMPOSER_TRIGGER_BUTTON_SIZE)
+            .height(COMPOSER_TRIGGER_BUTTON_SIZE)
+            .style(move |theme, status| {
+                style::workbench_composer_trigger_button_style(theme, status, true)
+            })
+            .on_press(Message::StopSelectedSubagentTask);
+
+        tooltip(button, "停止当前子代理", tooltip::Position::Bottom)
+            .style(container::rounded_box)
+            .into()
+    }
+
+    /// Builds the title row for the dedicated subagent conversation surface.
+    /// 构建独立子代理会话表面的标题行。
+    pub(super) fn view_subagent_panel_title_row(
+        &self,
+        state: &SubagentTaskPanelState,
+    ) -> Element<'_, Message> {
+        let mut title_row = row![
+            self.view_subagent_panel_return_button(),
+            text(state.subagent_label.clone()).size(26),
+            space::horizontal(),
+        ]
+        .spacing(10)
+        .align_y(Center);
+        if state.run_state.is_running() {
+            title_row = title_row.push(self.view_subagent_panel_stop_button());
+        }
+
+        title_row.into()
+    }
+
     /// Builds the insertion indicator shown before one pending-prompt queue row while reordering.
     /// 构建待发送队列重排期间显示在某条队列行之前的插入指示器。
     pub(super) fn view_pending_prompt_queue_drop_indicator(
@@ -2301,8 +2413,8 @@ impl VulcanWorkbench {
             .into()
     }
 
-    /// Builds the collapsed vertical handle used by the left-edge subagent dispatch navigation overlay.
-    /// 构建左侧贴边子代理调度导航覆盖层使用的折叠竖向把手。
+    /// Builds the D-shaped handle attached to the right side of the subagent dispatch panel.
+    /// 构建附着在子代理调度面板右侧的 D 形把手。
     pub(super) fn view_subagent_navigation_handle(
         &self,
         is_expanded: bool,
@@ -2314,9 +2426,10 @@ impl VulcanWorkbench {
         ]
         .spacing(1)
         .align_x(Center);
+
         container(handle_label)
             .width(SUBAGENT_NAVIGATION_COLLAPSED_WIDTH)
-            .height(118)
+            .height(SUBAGENT_NAVIGATION_PANEL_HEIGHT)
             .center(Fill)
             .style(move |theme| style::subagent_overlay_navigation_handle_style(theme, is_expanded))
             .into()
@@ -2381,27 +2494,11 @@ impl VulcanWorkbench {
     /// 构建展开状态下的子代理调度导航面板任务行。
     pub(super) fn view_expanded_subagent_navigation_panel(
         &self,
-        active_subagent_panel_state: Option<&SubagentTaskPanelState>,
         active_subagent_task_id: Option<SessionId>,
         navigation_tasks: Vec<SubagentTaskPanelState>,
+        panel_height: f32,
     ) -> Element<'_, Message> {
         let mut navigation_column = column![].spacing(SUBAGENT_NAVIGATION_ROW_GAP);
-        if active_subagent_panel_state.is_some() {
-            navigation_column = navigation_column.push(self.view_subagent_navigation_row_button(
-                String::from("返回主会话"),
-                Message::ReturnToSelectedSessionTranscript,
-                false,
-                false,
-            ));
-        }
-        if active_subagent_panel_state.is_some_and(|state| state.run_state.is_running()) {
-            navigation_column = navigation_column.push(self.view_subagent_navigation_row_button(
-                String::from("停止当前代理"),
-                Message::StopSelectedSubagentTask,
-                false,
-                true,
-            ));
-        }
         for state in navigation_tasks {
             let is_selected = Some(state.task_id) == active_subagent_task_id;
             navigation_column = navigation_column.push(self.view_subagent_navigation_row_button(
@@ -2411,8 +2508,9 @@ impl VulcanWorkbench {
                 false,
             ));
         }
-        container(navigation_column)
+        container(scrollable(navigation_column).height(Fill))
             .width(SUBAGENT_NAVIGATION_EXPANDED_WIDTH - SUBAGENT_NAVIGATION_COLLAPSED_WIDTH)
+            .height(panel_height)
             .padding([8, 8])
             .style(style::subagent_overlay_navigation_panel_style)
             .into()
@@ -2431,12 +2529,17 @@ impl VulcanWorkbench {
             .map(|state| state.task_id);
         let navigation_tasks = self.selected_session_active_subagent_tasks();
 
-        if active_subagent_panel_state.is_none() && navigation_tasks.is_empty() {
+        if navigation_tasks.is_empty() {
             return None;
         }
 
         let is_expanded = self.subagent_navigation_expanded;
         let handle = self.view_subagent_navigation_handle(is_expanded);
+        let panel_height = if is_expanded {
+            subagent_navigation_panel_height(navigation_tasks.len())
+        } else {
+            SUBAGENT_NAVIGATION_PANEL_HEIGHT
+        };
         let overlay_width = if is_expanded {
             SUBAGENT_NAVIGATION_EXPANDED_WIDTH
         } else {
@@ -2444,12 +2547,12 @@ impl VulcanWorkbench {
         };
         let overlay_content: Element<'_, Message> = if is_expanded {
             row![
-                handle,
                 self.view_expanded_subagent_navigation_panel(
-                    active_subagent_panel_state.as_ref(),
                     active_subagent_task_id,
-                    navigation_tasks
-                )
+                    navigation_tasks,
+                    panel_height
+                ),
+                handle
             ]
             .spacing(0)
             .align_y(iced::Alignment::Start)
@@ -2459,12 +2562,19 @@ impl VulcanWorkbench {
         };
 
         Some(
-            pin(mouse_area(container(overlay_content).width(overlay_width))
-                .on_enter(Message::SubagentNavigationHoverChanged(true))
-                .on_exit(Message::SubagentNavigationHoverChanged(false)))
-            .position(iced::Point::new(-1.0, 32.0))
-            .width(Fill)
-            .height(Fill)
+            pin(mouse_area(
+                container(overlay_content)
+                    .width(overlay_width)
+                    .height(panel_height),
+            )
+            .on_enter(Message::SubagentNavigationHoverChanged(true))
+            .on_exit(Message::SubagentNavigationHoverChanged(false)))
+            .position(iced::Point::new(
+                SUBAGENT_NAVIGATION_OVERLAY_LEFT_OFFSET,
+                SUBAGENT_NAVIGATION_OVERLAY_TOP_OFFSET,
+            ))
+            .width(overlay_width)
+            .height(SUBAGENT_NAVIGATION_OVERLAY_TOP_OFFSET + panel_height)
             .into(),
         )
     }
@@ -2472,15 +2582,14 @@ impl VulcanWorkbench {
     /// Builds the central canvas displayed beside the task drawer in the main workbench panel.
     /// 构建显示在主工作台任务抽屉右侧的中央画布区域。
     pub(super) fn view_main_canvas(&self) -> Element<'_, Message> {
-        let active_subagent_panel_state = self.selected_subagent_task_panel_state();
+        let active_subagent_panel_state = self
+            .selected_subagent_task_panel_state()
+            .map(|state| self.normalized_subagent_task_panel_state(state));
         let is_subagent_panel_open = active_subagent_panel_state.is_some();
         let session_title = self
             .selected_session()
             .map(|session| session.title.as_str())
             .unwrap_or("未选择会话");
-        let title_text = active_subagent_panel_state
-            .map(|state| state.subagent_label.as_str())
-            .unwrap_or(session_title);
         let transcript_stream = self.view_main_canvas_transcript_stream();
         let transcript_surface_mode_switcher = self.view_transcript_surface_mode_switcher();
         let execution_mode_selector = pick_list(
@@ -2546,17 +2655,18 @@ impl VulcanWorkbench {
             .padding(COMPOSER_PANEL_EDGE_PADDING)
             .width(self.composer_panel_width())
             .style(style::workbench_composer_panel_style);
-        let title_row: Element<'_, Message> = if is_subagent_panel_open {
-            text(title_text).size(26).into()
-        } else {
-            row![
-                text(title_text).size(26),
-                space::horizontal(),
-                transcript_surface_mode_switcher,
-            ]
-            .align_y(Center)
-            .into()
-        };
+        let title_row: Element<'_, Message> =
+            if let Some(state) = active_subagent_panel_state.as_ref() {
+                self.view_subagent_panel_title_row(state)
+            } else {
+                row![
+                    text(session_title).size(26),
+                    space::horizontal(),
+                    transcript_surface_mode_switcher,
+                ]
+                .align_y(Center)
+                .into()
+            };
         let title_section = column![
             title_row,
             container(space())
@@ -2675,6 +2785,296 @@ impl VulcanWorkbench {
         }
 
         stack(layered_surfaces).into()
+    }
+
+    /// Builds explicit controls used to search history and load one older transcript page.
+    /// 构建用于搜索历史并显式加载一页更早转录历史的控件。
+    pub(super) fn view_session_history_load_control(
+        &self,
+        session_id: SessionId,
+    ) -> Element<'_, Message> {
+        let is_selected_root_session = self.selected_session().map(|session| session.id)
+            == Some(session_id)
+            && self.active_subagent_panel.is_none();
+        if !is_selected_root_session {
+            return space::vertical().height(0).into();
+        }
+
+        let search_query = self
+            .session_history_search_inputs
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let is_searching = self
+            .loading_session_history_search_ids
+            .contains(&session_id);
+        let mut search_button = button(text(if is_searching { "搜索中" } else { "搜索" }).size(12))
+            .padding([7, 12])
+            .style(style::subtle_panel_button_style);
+        if !is_searching && !search_query.trim().is_empty() {
+            search_button =
+                search_button.on_press(Message::SessionHistorySearchSubmitted(session_id));
+        }
+        let search_row = row![
+            text_input("搜索历史：文件路径、工具名、关键词", &search_query)
+                .on_input(move |value| Message::SessionHistorySearchInputChanged(session_id, value))
+                .on_submit(Message::SessionHistorySearchSubmitted(session_id))
+                .padding([8, 10])
+                .width(Fill),
+            search_button,
+        ]
+        .spacing(8)
+        .align_y(Center);
+
+        let mut controls = column![search_row].spacing(8).width(Fill);
+        if is_searching {
+            controls = controls.push(text("正在轻量搜索当前会话历史...").size(12));
+        } else if let Some(error) = self.session_history_search_errors.get(&session_id) {
+            controls = controls.push(text(format!("搜索失败：{error}")).size(12));
+        } else if let Some(page) = self
+            .session_history_search_results
+            .get(&session_id)
+            .filter(|page| page.session_id == session_id)
+        {
+            controls = controls.push(self.view_session_history_search_results(page));
+            if self
+                .loading_session_history_context_ids
+                .contains(&session_id)
+            {
+                controls = controls.push(text("正在加载搜索命中附近上下文...").size(12));
+            } else if let Some(error) = self.session_history_context_errors.get(&session_id) {
+                controls = controls.push(text(format!("上下文加载失败：{error}")).size(12));
+            } else if let Some(context_page) = self
+                .session_history_context_pages
+                .get(&session_id)
+                .filter(|page| page.session_id == session_id)
+            {
+                controls = controls.push(self.view_session_history_context_page(context_page));
+            }
+        }
+
+        let is_history_loading = self.loading_older_session_history_ids.contains(&session_id);
+        let has_more_history = self.session_history_has_more.contains(&session_id);
+        let label = if is_history_loading {
+            "正在加载更早历史..."
+        } else {
+            "加载更早 30 轮"
+        };
+        let mut load_button = button(text(label).size(12))
+            .padding([7, 12])
+            .style(style::subtle_panel_button_style);
+        if has_more_history && !is_history_loading {
+            load_button =
+                load_button.on_press(Message::LoadOlderSessionHistoryRequested(session_id));
+        }
+        if has_more_history || is_history_loading {
+            controls = controls.push(
+                row![
+                    space::horizontal().width(Fill),
+                    load_button,
+                    space::horizontal().width(Fill)
+                ]
+                .align_y(Center),
+            );
+        }
+
+        container(controls)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 12.0,
+                left: 0.0,
+            })
+            .width(Fill)
+            .into()
+    }
+
+    /// Builds the lightweight history-search result list shown above one transcript.
+    /// 构建显示在转录上方的轻量历史搜索结果列表。
+    pub(super) fn view_session_history_search_results(
+        &self,
+        page: &SessionHistorySearchPage,
+    ) -> Element<'_, Message> {
+        if page.query.trim().is_empty() {
+            return space::vertical().height(0).into();
+        }
+        if page.hits.is_empty() {
+            return text(format!("没有找到与“{}”匹配的历史记录。", page.query))
+                .size(12)
+                .into();
+        }
+
+        let mut result_list = column![
+            text(format!(
+                "“{}” 的轻量命中：{} 条{}",
+                page.query,
+                page.hits.len(),
+                if page.limit_reached {
+                    "（已达上限）"
+                } else {
+                    ""
+                }
+            ))
+            .size(12)
+        ]
+        .spacing(6)
+        .width(Fill);
+        let context_is_loading = self
+            .loading_session_history_context_ids
+            .contains(&page.session_id);
+        for hit in &page.hits {
+            let visibility = if hit.visible { "可见" } else { "隐藏" };
+            let short_message_id = hit.message_id.chars().take(8).collect::<String>();
+            let meta = format!(
+                "轮次 {} · 序号 {} · {} · {} · {} · {}",
+                hit.turn_index,
+                hit.ordinal,
+                hit.record_kind.as_persisted_key(),
+                visibility,
+                short_message_id,
+                hit.created_at
+            );
+            let context_is_active = self
+                .session_history_context_pages
+                .get(&page.session_id)
+                .is_some_and(|context| context.anchor_message_id == hit.message_id);
+            let mut context_button = button(
+                text(if context_is_active {
+                    "已加载"
+                } else if context_is_loading {
+                    "加载中"
+                } else {
+                    "查看附近上下文"
+                })
+                .size(11),
+            )
+            .padding([5, 9])
+            .style(style::subtle_panel_button_style);
+            if !context_is_loading && !context_is_active {
+                context_button = context_button.on_press(Message::SessionHistoryContextRequested {
+                    session_id: page.session_id,
+                    message_id: hit.message_id.clone(),
+                    ordinal: hit.ordinal,
+                    turn_index: hit.turn_index,
+                });
+            }
+            let card = container(
+                column![
+                    row![
+                        text(hit.title.clone()).size(13),
+                        space::horizontal().width(Fill),
+                        text(meta).size(11),
+                        context_button,
+                    ]
+                    .spacing(8)
+                    .align_y(Center),
+                    text(hit.preview.clone()).size(12).width(Fill),
+                ]
+                .spacing(4)
+                .width(Fill),
+            )
+            .padding(8)
+            .width(Fill)
+            .style(style::workbench_composer_panel_style);
+            result_list = result_list.push(card);
+        }
+
+        result_list.into()
+    }
+
+    /// Builds the read-only context panel loaded around a search-result anchor.
+    /// 构建围绕搜索结果锚点加载出的只读上下文面板。
+    pub(super) fn view_session_history_context_page(
+        &self,
+        page: &SessionHistoryContextPage,
+    ) -> Element<'_, Message> {
+        let turn_range = match (page.first_turn_index, page.last_turn_index) {
+            (Some(first), Some(last)) if first == last => format!("轮次 {first}"),
+            (Some(first), Some(last)) => format!("轮次 {first} - {last}"),
+            _ => String::from("未加载到轮次"),
+        };
+        let anchor_status = if page.anchor_found {
+            "已包含命中消息"
+        } else {
+            "命中消息可能属于被折叠的工具明细，仅展示附近默认转录"
+        };
+        let mut panel = column![
+            row![
+                text("搜索命中附近上下文").size(13),
+                space::horizontal().width(Fill),
+                text(format!(
+                    "{} · 锚点轮次 {} · 锚点序号 {} · {} 条 · {}",
+                    turn_range,
+                    page.anchor_turn_index,
+                    page.anchor_ordinal,
+                    page.messages.len(),
+                    anchor_status
+                ))
+                .size(11),
+            ]
+            .align_y(Center)
+        ]
+        .spacing(6)
+        .width(Fill);
+
+        if page.messages.is_empty() {
+            panel = panel.push(text("没有加载到该命中附近的默认转录消息。").size(12));
+        } else {
+            for message in &page.messages {
+                panel = panel.push(self.view_session_history_context_message(page, message));
+            }
+        }
+
+        container(panel)
+            .padding(8)
+            .width(Fill)
+            .style(style::workbench_composer_panel_style)
+            .into()
+    }
+
+    /// Builds one compact message row inside the read-only search-result context panel.
+    /// 构建只读搜索结果上下文面板中的单条紧凑消息行。
+    fn view_session_history_context_message(
+        &self,
+        page: &SessionHistoryContextPage,
+        message: &SessionMessageEntry,
+    ) -> Element<'_, Message> {
+        let is_anchor = message.id == page.anchor_message_id;
+        let title = if message.title.trim().is_empty() {
+            message.kind.label().to_string()
+        } else {
+            message.title.clone()
+        };
+        let short_message_id = message.id.chars().take(8).collect::<String>();
+        let meta = format!(
+            "{} · {} · {} · {}",
+            message.kind.label(),
+            message.record_kind.as_persisted_key(),
+            short_message_id,
+            message.created_at
+        );
+        let marker = if is_anchor { "命中" } else { "附近" };
+        let preview = session_history_context_message_preview(&message.body);
+
+        container(
+            column![
+                row![
+                    text(marker).size(11),
+                    text(title).size(12),
+                    space::horizontal().width(Fill),
+                    text(meta).size(11),
+                ]
+                .spacing(8)
+                .align_y(Center),
+                text(preview).size(12).width(Fill),
+            ]
+            .spacing(4)
+            .width(Fill),
+        )
+        .padding(7)
+        .width(Fill)
+        .style(style::workbench_composer_panel_style)
+        .into()
     }
 
     /// Builds the dedicated subagent transcript panel or its lightweight running placeholder inside the main transcript region.
@@ -2898,6 +3298,7 @@ impl VulcanWorkbench {
                 .into();
         };
         let content_column = column![
+            self.view_session_history_load_control(session_id),
             view_selectable_rendered_transcript::<Message>(
                 &document,
                 &self.app_theme,
@@ -3061,6 +3462,7 @@ impl VulcanWorkbench {
         let body =
             self.view_workbench_code_preview_body(buffer, fallback_text, "markdown", on_action);
         let body_flow = column![
+            self.view_session_history_load_control(session_id),
             body,
             space::vertical().height(self.transcript_bottom_spacer_height()),
         ]

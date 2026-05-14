@@ -295,6 +295,9 @@ impl VulcanWorkbench {
         self.session_runtime_events.entry(session_id).or_default();
         self.session_run_phases
             .insert(session_id, SessionRunPhase::Idle);
+        // Fresh draft sessions are already fully materialized in memory, so the first submit
+        // should not be blocked by an extra lazy-hydration round-trip.
+        self.hydrated_session_ids.insert(session_id);
         self.expanded_task_projects.insert(project_id.to_string());
         self.selected_session = session_id;
         self.active_subagent_panel = None;
@@ -586,6 +589,11 @@ mod tests {
                 .session_by_id(workbench.selected_session)
                 .and_then(|session| session.project_id.as_deref()),
             Some("project-b")
+        );
+        assert!(
+            workbench
+                .hydrated_session_ids
+                .contains(&workbench.selected_session)
         );
     }
 }

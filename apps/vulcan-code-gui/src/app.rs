@@ -25,8 +25,9 @@ use crate::code_view;
 use crate::conversation_protocol::{
     PROTOCOL_COMPACTION_TRIGGER_COUNT, SessionConversationRecord, SessionConversationState,
     append_assistant_text_message, append_record, append_record_body_delta,
-    append_user_text_message, compact_conversation_with_summary,
-    conversation_state_to_context_records, conversation_state_to_session_messages,
+    append_user_text_message, compact_conversation_records_after_summary,
+    compact_conversation_with_summary, conversation_state_to_context_records,
+    conversation_state_to_session_messages,
 };
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
@@ -60,7 +61,12 @@ use crate::skills::{
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
 use crate::wheel_passthrough::WheelPassthrough;
-use crate::workspace_store::{self, WorkspaceSnapshot};
+use crate::workspace_store::{
+    self, SESSION_HISTORY_SEARCH_RESULT_LIMIT, SESSION_TOOL_DETAIL_PAGE_LIMIT,
+    SESSION_TRANSCRIPT_WINDOW_LIMIT, SessionHistoryContextPage, SessionHistoryPage,
+    SessionHistorySearchPage, SessionHydrationSnapshot, SessionMaintenanceReport,
+    SessionToolDetailPage, WorkspaceSnapshot,
+};
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
@@ -77,7 +83,7 @@ use iced_aw::ContextMenu;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
 use serde_json::{Value, json};
 use std::borrow::Borrow;
-use std::collections::{BTreeMap, BTreeSet, HashSet, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -248,6 +254,10 @@ const TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD: f32 = 28.0;
 /// 保留在转录表面尾部的共享底部留白，用于避免最新内容紧贴底边。
 const TRANSCRIPT_BOTTOM_SPACER_HEIGHT: f32 = 72.0;
 
+/// Maximum session messages retained in GUI memory for one hydrated transcript window.
+/// 单个已水合转录窗口允许保留在 GUI 内存中的最大会话消息数量。
+const SESSION_IN_MEMORY_MESSAGE_LIMIT: usize = 4000;
+
 /// Shared square size used by the floating transcript jump-to-bottom button.
 /// 转录区浮动回底按钮使用的共享方形尺寸。
 const TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE: f32 = 38.0;
@@ -256,17 +266,33 @@ const TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE: f32 = 38.0;
 /// 转录区浮动回底按钮覆盖层使用的共享底部内边距。
 const TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET: u16 = 26;
 
-/// Collapsed width used by the left-edge subagent dispatch navigation handle.
-/// 左侧贴边子代理调度导航把手使用的折叠宽度。
-const SUBAGENT_NAVIGATION_COLLAPSED_WIDTH: f32 = 20.0;
+/// Fixed height used by the D-shaped subagent handle and the minimum active-task list panel.
+/// D 形子代理把手以及活动任务列表面板最小高度使用的固定高度。
+const SUBAGENT_NAVIGATION_PANEL_HEIGHT: f32 = 100.0;
 
-/// Expanded width used by the left-edge subagent dispatch navigation panel.
-/// 左侧贴边子代理调度导航面板使用的展开宽度。
-const SUBAGENT_NAVIGATION_EXPANDED_WIDTH: f32 = 220.0;
+/// Vertical padding reserved by the active subagent dispatch list panel.
+/// 活动子代理调度列表面板预留的垂直内边距。
+const SUBAGENT_NAVIGATION_PANEL_VERTICAL_PADDING: f32 = 16.0;
+
+/// Top offset used by the left-edge subagent dispatch navigation overlay inside transcript surfaces.
+/// 子代理调度导航覆盖层在转录表面内使用的顶部偏移。
+const SUBAGENT_NAVIGATION_OVERLAY_TOP_OFFSET: f32 = 32.0;
+
+/// Left offset used to keep the subagent dispatch navigation list attached to the transcript edge.
+/// 用于让子代理调度导航列表贴住转录边缘的左侧偏移。
+const SUBAGENT_NAVIGATION_OVERLAY_LEFT_OFFSET: f32 = -1.0;
+
+/// Collapsed width used by the D-shaped subagent dispatch navigation handle.
+/// D 形子代理调度导航把手使用的折叠宽度。
+const SUBAGENT_NAVIGATION_COLLAPSED_WIDTH: f32 = 24.0;
+
+/// Total width used when the subagent dispatch navigation hover detail window is open.
+/// 子代理调度导航悬停详情窗口打开时使用的总宽度。
+const SUBAGENT_NAVIGATION_EXPANDED_WIDTH: f32 = 244.0;
 
 /// Fixed height used by one subagent dispatch navigation row inside the expanded panel.
 /// 展开的子代理调度导航面板内单条任务行使用的固定高度。
-const SUBAGENT_NAVIGATION_ROW_HEIGHT: f32 = 32.0;
+const SUBAGENT_NAVIGATION_ROW_HEIGHT: f32 = 30.0;
 
 /// Vertical spacing used between subagent dispatch navigation rows.
 /// 子代理调度导航任务行之间使用的垂直间距。
@@ -536,10 +562,47 @@ fn composer_text_has_submittable_content(text: &str) -> bool {
     !text.trim().is_empty()
 }
 
+/// Builds the low-priority legacy maintenance queue from visible and archived sessions.
+/// 根据可见会话与归档会话构建低优先级旧数据维护队列。
+fn build_background_legacy_maintenance_queue(
+    sessions: &[SessionSummary],
+    archived_sessions: &[SessionSummary],
+) -> VecDeque<SessionId> {
+    let mut seen = BTreeSet::new();
+    sessions
+        .iter()
+        .chain(archived_sessions.iter())
+        .filter_map(|session| {
+            if session.id.is_nil() || !seen.insert(session.id) {
+                None
+            } else {
+                Some(session.id)
+            }
+        })
+        .collect()
+}
+
 /// Returns whether the given composer selection payload contains any effective text.
 /// 返回给定提示词选区载荷是否包含任何有效文本。
 fn composer_selection_has_content(selection: Option<&str>) -> bool {
     selection.is_some_and(|text| !text.is_empty())
+}
+
+/// Prunes the oldest messages from one in-memory transcript slice and returns removed identifiers.
+/// 从一段内存转录切片中裁剪最旧消息，并返回被移除的消息标识。
+fn prune_session_messages_to_limit(
+    messages: &mut Vec<SessionMessageEntry>,
+    limit: usize,
+) -> Vec<String> {
+    if messages.len() <= limit {
+        return Vec::new();
+    }
+
+    let remove_count = messages.len().saturating_sub(limit);
+    messages
+        .drain(0..remove_count)
+        .map(|message| message.id)
+        .collect()
 }
 
 /// Merges tool-call and tool-result transcript rows into one human-facing display card while keeping the raw session records untouched.
@@ -1438,6 +1501,60 @@ pub struct VulcanWorkbench {
     /// Archived session-scoped runtime-state snapshots retained for later restoration.
     /// 为后续恢复保留的按归档会话归属运行时状态快照集合。
     archived_session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Session identifiers whose transcript and runtime payloads have been lazily hydrated.
+    /// 已经完成转录与运行时载荷懒加载的会话标识集合。
+    hydrated_session_ids: BTreeSet<SessionId>,
+    /// Session identifiers whose transcript/runtime payloads are safe to replace on the next save.
+    /// 下次保存时可以安全替换转录与运行时载荷的会话标识集合。
+    dirty_session_payload_ids: BTreeSet<SessionId>,
+    /// Session identifiers whose transcript rows changed and may be replaced on the next save.
+    /// 转录行已经发生变化、下次保存时可以替换的会话标识集合。
+    dirty_session_message_ids: BTreeSet<SessionId>,
+    /// Session identifiers currently running the first lazy hydration task.
+    /// 当前正在执行首次懒加载任务的会话标识集合。
+    loading_session_ids: BTreeSet<SessionId>,
+    /// Earliest loaded transcript ordinal for each hydrated session.
+    /// 每个已水合会话当前已加载的最早转录序号。
+    session_history_earliest_ordinals: BTreeMap<SessionId, i64>,
+    /// Session identifiers that still have older transcript rows available.
+    /// 仍然存在更早转录行可继续加载的会话标识集合。
+    session_history_has_more: BTreeSet<SessionId>,
+    /// Session identifiers currently loading one older transcript page.
+    /// 当前正在加载更早转录分页的会话标识集合。
+    loading_older_session_history_ids: BTreeSet<SessionId>,
+    /// Session-scoped lightweight history search inputs keyed by session id.
+    /// 按会话标识保存的轻量历史搜索输入。
+    session_history_search_inputs: BTreeMap<SessionId, String>,
+    /// Session-scoped lightweight history search result pages keyed by session id.
+    /// 按会话标识保存的轻量历史搜索结果页。
+    session_history_search_results: BTreeMap<SessionId, SessionHistorySearchPage>,
+    /// Session identifiers currently running a lightweight history search task.
+    /// 当前正在执行轻量历史搜索任务的会话标识集合。
+    loading_session_history_search_ids: BTreeSet<SessionId>,
+    /// Session-scoped lightweight history search errors keyed by session id.
+    /// 按会话标识保存的轻量历史搜索错误。
+    session_history_search_errors: BTreeMap<SessionId, String>,
+    /// Session-scoped read-only context pages loaded around search-result anchors.
+    /// 按会话标识保存的搜索结果附近只读上下文页。
+    session_history_context_pages: BTreeMap<SessionId, SessionHistoryContextPage>,
+    /// Session identifiers currently loading one search-result context page.
+    /// 当前正在加载搜索结果附近上下文页的会话标识集合。
+    loading_session_history_context_ids: BTreeSet<SessionId>,
+    /// Session-scoped search-result context loading errors keyed by session id.
+    /// 按会话标识保存的搜索结果上下文加载错误。
+    session_history_context_errors: BTreeMap<SessionId, String>,
+    /// Low-priority legacy maintenance queue that scans sessions without hydrating transcripts.
+    /// 不水合转录正文的低优先级旧数据维护会话队列。
+    background_legacy_maintenance_queue: VecDeque<SessionId>,
+    /// Session identifier currently being processed by the background legacy maintenance queue.
+    /// 当前正在被后台旧数据维护队列处理的会话标识。
+    background_legacy_maintenance_in_flight: Option<SessionId>,
+    /// Number of sessions completed by the current background legacy maintenance queue.
+    /// 当前后台旧数据维护队列已完成的会话数量。
+    background_legacy_maintenance_completed_count: usize,
+    /// Number of sessions that failed in the current background legacy maintenance queue.
+    /// 当前后台旧数据维护队列中维护失败的会话数量。
+    background_legacy_maintenance_failed_count: usize,
     /// Whether one workspace snapshot persistence task is currently writing to SQLite.
     /// 当前是否已有一条工作台快照持久化任务正在写入 SQLite。
     workspace_snapshot_persist_in_flight: bool,
@@ -2591,6 +2708,21 @@ enum Message {
     /// Applies the completed workspace-state load result after the shared runtimes become ready.
     /// 应用共享运行时就绪后已完成的工作台状态加载结果。
     WorkspaceStateLoaded(Result<WorkspaceSnapshot, String>),
+    /// Applies the completed lazy hydration result for one opened session.
+    /// 应用单个已打开会话的懒加载水合结果。
+    SessionHydrationLoaded(SessionId, Result<SessionHydrationSnapshot, String>),
+    /// Applies one older transcript page loaded before the current session window.
+    /// 应用在当前会话窗口之前加载的一页更早转录历史。
+    OlderSessionHistoryLoaded(SessionId, Result<SessionHistoryPage, String>),
+    /// Applies one lazily loaded tool-detail page for a hydrated session.
+    /// 应用已水合会话的一页懒加载工具明细。
+    SessionToolDetailsLoaded(SessionId, Result<SessionToolDetailPage, String>),
+    /// Applies the completed legacy-storage maintenance result for one hydrated session.
+    /// 应用单个已水合会话的旧存储维护结果。
+    SessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
+    /// Applies the completed background legacy-storage maintenance result for one session.
+    /// 应用单个会话的后台旧存储维护结果。
+    BackgroundLegacySessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
     /// Applies the completed project-scoped temp cleanup result after startup or one project-load action.
     /// 应用启动后或单次项目载入动作后已完成的项目级临时目录清理结果。
     ProjectTempMaintenanceFinished(Result<(), String>),
@@ -2949,6 +3081,37 @@ enum Message {
     /// Snaps the currently selected session transcript back to the newest bottom tail.
     /// 将当前选中会话的转录重新吸附回最新底部尾端。
     JumpSelectedSessionTranscriptToBottom,
+    /// Requests loading one older transcript page for the visible root session.
+    /// 请求为当前可见根会话加载一页更早转录历史。
+    LoadOlderSessionHistoryRequested(SessionId),
+    /// Updates the lightweight history search query for one root session.
+    /// 更新某个根会话的轻量历史搜索词。
+    SessionHistorySearchInputChanged(SessionId, String),
+    /// Requests running a lightweight history search for one root session.
+    /// 请求为某个根会话执行轻量历史搜索。
+    SessionHistorySearchSubmitted(SessionId),
+    /// Applies the completed lightweight history search result page.
+    /// 应用已完成的轻量历史搜索结果页。
+    SessionHistorySearchLoaded(SessionId, Result<SessionHistorySearchPage, String>),
+    /// Requests loading a read-only context page around one search-result anchor.
+    /// 请求围绕单个搜索结果锚点加载一页只读上下文。
+    SessionHistoryContextRequested {
+        /// Session identifier owning the clicked search hit.
+        /// 拥有所点击搜索命中的会话标识。
+        session_id: SessionId,
+        /// Stable message identifier of the clicked search hit.
+        /// 所点击搜索命中的稳定消息标识。
+        message_id: String,
+        /// Stable ordinal of the clicked search hit.
+        /// 所点击搜索命中的稳定序号。
+        ordinal: i64,
+        /// Stable turn index of the clicked search hit.
+        /// 所点击搜索命中的稳定轮次索引。
+        turn_index: i64,
+    },
+    /// Applies the completed read-only search-result context page.
+    /// 应用已完成的搜索结果只读上下文页。
+    SessionHistoryContextLoaded(SessionId, Result<SessionHistoryContextPage, String>),
     /// Updates the active drag auto-scroll request emitted by the main rendered transcript surface.
     /// 更新主渲染转录表面发出的当前拖拽自动滚动请求。
     SelectedSessionTranscriptDragAutoScrollChanged {
@@ -3367,6 +3530,24 @@ impl VulcanWorkbench {
             archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             archived_session_runtime_state: BTreeMap::new(),
+            hydrated_session_ids: BTreeSet::new(),
+            dirty_session_payload_ids: BTreeSet::new(),
+            dirty_session_message_ids: BTreeSet::new(),
+            loading_session_ids: BTreeSet::new(),
+            session_history_earliest_ordinals: BTreeMap::new(),
+            session_history_has_more: BTreeSet::new(),
+            loading_older_session_history_ids: BTreeSet::new(),
+            session_history_search_inputs: BTreeMap::new(),
+            session_history_search_results: BTreeMap::new(),
+            loading_session_history_search_ids: BTreeSet::new(),
+            session_history_search_errors: BTreeMap::new(),
+            session_history_context_pages: BTreeMap::new(),
+            loading_session_history_context_ids: BTreeSet::new(),
+            session_history_context_errors: BTreeMap::new(),
+            background_legacy_maintenance_queue: VecDeque::new(),
+            background_legacy_maintenance_in_flight: None,
+            background_legacy_maintenance_completed_count: 0,
+            background_legacy_maintenance_failed_count: 0,
             workspace_snapshot_persist_in_flight: false,
             workspace_snapshot_persist_pending: false,
             pending_archived_delete_confirmation: None,
@@ -3678,6 +3859,24 @@ impl VulcanWorkbench {
                 self.archived_session_compactions.clear();
                 self.session_runtime_state.clear();
                 self.archived_session_runtime_state.clear();
+                self.hydrated_session_ids.clear();
+                self.dirty_session_payload_ids.clear();
+                self.dirty_session_message_ids.clear();
+                self.loading_session_ids.clear();
+                self.session_history_earliest_ordinals.clear();
+                self.session_history_has_more.clear();
+                self.loading_older_session_history_ids.clear();
+                self.session_history_search_inputs.clear();
+                self.session_history_search_results.clear();
+                self.loading_session_history_search_ids.clear();
+                self.session_history_search_errors.clear();
+                self.session_history_context_pages.clear();
+                self.loading_session_history_context_ids.clear();
+                self.session_history_context_errors.clear();
+                self.background_legacy_maintenance_queue.clear();
+                self.background_legacy_maintenance_in_flight = None;
+                self.background_legacy_maintenance_completed_count = 0;
+                self.background_legacy_maintenance_failed_count = 0;
                 self.pending_archived_delete_confirmation = None;
                 self.session_runtime_events.clear();
                 self.collapsed_runtime_event_ids.clear();
@@ -3830,18 +4029,29 @@ impl VulcanWorkbench {
                     Ok(snapshot) => {
                         self.apply_workspace_snapshot(snapshot);
                         self.startup_lifecycle = StartupLifecycle::Ready;
-                        self.status_message = String::from("工作台数据已加载完成。");
+                        self.status_message =
+                            String::from("工作台列表已加载完成，当前会话正文将按需载入。");
                         self.push_activity(
                             ActivityLevel::Success,
                             "工作台数据已加载",
                             format!(
-                                "已恢复 {} 个项目、{} 个会话与 {} 个会话消息集合。",
+                                "已恢复 {} 个项目与 {} 个会话；会话正文按需加载，避免启动阶段拉取超大历史。",
                                 self.task_projects.len(),
-                                self.sessions.len(),
-                                self.session_messages.len()
+                                self.sessions.len()
                             ),
                         );
-                        return self.schedule_project_temp_cleanup_for_all_projects();
+                        let hydration_task = self
+                            .selected_session()
+                            .map(|session| session.id)
+                            .map(|session_id| self.schedule_session_hydration(session_id))
+                            .unwrap_or_else(Task::none);
+                        let legacy_maintenance_task =
+                            self.schedule_next_background_legacy_session_maintenance();
+                        return Task::batch([
+                            self.schedule_project_temp_cleanup_for_all_projects(),
+                            hydration_task,
+                            legacy_maintenance_task,
+                        ]);
                     }
                     Err(error) => {
                         self.status_message = format!("工作台数据加载失败：{error}");
@@ -3850,6 +4060,158 @@ impl VulcanWorkbench {
                 }
 
                 Task::none()
+            }
+            Message::SessionHydrationLoaded(session_id, result) => {
+                self.loading_session_ids.remove(&session_id);
+                match result {
+                    Ok(snapshot) => {
+                        let latest_turn_index = snapshot.latest_turn_index;
+                        self.apply_session_hydration_snapshot(snapshot);
+                        let maintenance_task =
+                            self.schedule_session_storage_maintenance(session_id);
+                        if self
+                            .selected_session()
+                            .is_some_and(|session| session.id == session_id)
+                        {
+                            self.status_message = String::from("当前会话正文已按需加载完成。");
+                            return Task::batch([
+                                maintenance_task,
+                                latest_turn_index
+                                    .map(|turn_index| {
+                                        self.schedule_session_tool_detail_load(
+                                            session_id, turn_index,
+                                        )
+                                    })
+                                    .unwrap_or_else(Task::none),
+                                self.maybe_follow_selected_session_transcript_tail(session_id),
+                                self.maybe_follow_selected_session_thinking_overlay_tail(
+                                    session_id,
+                                ),
+                            ]);
+                        }
+
+                        return maintenance_task;
+                    }
+                    Err(error) => {
+                        self.status_message = format!("当前会话正文加载失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "当前会话正文加载失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::OlderSessionHistoryLoaded(session_id, result) => {
+                self.loading_older_session_history_ids.remove(&session_id);
+                match result {
+                    Ok(page) => {
+                        self.apply_older_session_history_page(page);
+                        self.status_message = String::from("已加载更早一段会话历史。");
+                    }
+                    Err(error) => {
+                        self.status_message = format!("加载更早会话历史失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "加载更早会话历史失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::SessionToolDetailsLoaded(session_id, result) => {
+                match result {
+                    Ok(page) => {
+                        self.apply_session_tool_detail_page(page);
+                        let maintenance_task =
+                            self.schedule_session_storage_maintenance(session_id);
+                        let follow_task = if self
+                            .selected_session()
+                            .is_some_and(|session| session.id == session_id)
+                        {
+                            self.maybe_follow_selected_session_transcript_tail(session_id)
+                        } else {
+                            Task::none()
+                        };
+                        return Task::batch([maintenance_task, follow_task]);
+                    }
+                    Err(error) => {
+                        self.push_activity(ActivityLevel::Warning, "工具明细加载失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::SessionMaintenanceFinished(session_id, result) => {
+                match result {
+                    Ok(report) => {
+                        if report.session_id != session_id || !report.cleared_runtime_state_json {
+                            self.push_activity(
+                                ActivityLevel::Warning,
+                                "会话旧数据维护结果异常",
+                                format!(
+                                    "维护报告与请求会话不一致或旧状态清理未确认，message_count={}",
+                                    report.upserted_message_count
+                                ),
+                            );
+                        }
+                        self.record_session_legacy_chunk_migration_activity(
+                            "旧版超大消息已迁移",
+                            &report,
+                        );
+                    }
+                    Err(error) => {
+                        self.push_activity(ActivityLevel::Warning, "会话旧数据维护失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::BackgroundLegacySessionMaintenanceFinished(session_id, result) => {
+                if self.background_legacy_maintenance_in_flight == Some(session_id) {
+                    self.background_legacy_maintenance_in_flight = None;
+                }
+                match result {
+                    Ok(report) => {
+                        self.background_legacy_maintenance_completed_count = self
+                            .background_legacy_maintenance_completed_count
+                            .saturating_add(1);
+                        self.record_session_legacy_chunk_migration_activity(
+                            "后台旧版超大消息已迁移",
+                            &report,
+                        );
+                    }
+                    Err(error) => {
+                        self.background_legacy_maintenance_failed_count = self
+                            .background_legacy_maintenance_failed_count
+                            .saturating_add(1);
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "后台旧会话维护失败",
+                            format!("session_id={session_id}，{error}"),
+                        );
+                    }
+                }
+
+                let next_task = self.schedule_next_background_legacy_session_maintenance();
+                if self.background_legacy_maintenance_in_flight.is_none()
+                    && self.background_legacy_maintenance_queue.is_empty()
+                    && (self.background_legacy_maintenance_completed_count > 0
+                        || self.background_legacy_maintenance_failed_count > 0)
+                {
+                    let level = if self.background_legacy_maintenance_failed_count == 0 {
+                        ActivityLevel::Success
+                    } else {
+                        ActivityLevel::Warning
+                    };
+                    self.push_activity(
+                        level,
+                        "后台旧会话维护完成",
+                        format!(
+                            "已处理 {} 个会话，失败 {} 个。后台维护只执行轻量迁移与旧状态清理，未水合完整正文。",
+                            self.background_legacy_maintenance_completed_count,
+                            self.background_legacy_maintenance_failed_count
+                        ),
+                    );
+                }
+
+                next_task
             }
             Message::ProjectTempMaintenanceFinished(result) => {
                 if let Err(error) = result {
@@ -5058,6 +5420,7 @@ impl VulcanWorkbench {
 
                 self.status_message = format!("当前会话已切换为：{selected_title}。");
                 Task::batch([
+                    self.schedule_session_hydration(session_id),
                     self.maybe_follow_selected_session_transcript_tail(session_id),
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
                 ])
@@ -5162,6 +5525,7 @@ impl VulcanWorkbench {
                             state.task_id,
                             stop_summary,
                         );
+                        self.refresh_subagent_navigation_round_visibility(state.parent_session_id);
                         self.status_message = String::from("已停止当前子代理调用。");
                         Task::batch([
                             self.persist_workspace_snapshot_task(),
@@ -5180,7 +5544,11 @@ impl VulcanWorkbench {
                 }
             }
             Message::ReturnToSelectedSessionTranscript => {
+                let parent_session_id = self.selected_session().map(|session| session.id);
                 self.active_subagent_panel = None;
+                if let Some(parent_session_id) = parent_session_id {
+                    self.refresh_subagent_navigation_round_visibility(parent_session_id);
+                }
                 Task::none()
             }
             Message::CloseSelectedSessionThinkingModal => {
@@ -5247,6 +5615,142 @@ impl VulcanWorkbench {
 
                 self.session_agent_view_follow_tail.insert(session_id, true);
                 operation::snap_to_end(transcript_scrollable_id(session_id))
+            }
+            Message::LoadOlderSessionHistoryRequested(session_id) => {
+                if self.selected_session().map(|session| session.id) != Some(session_id) {
+                    return Task::none();
+                }
+                if self.loading_older_session_history_ids.contains(&session_id) {
+                    self.status_message = String::from("更早会话历史正在加载中。");
+                    return Task::none();
+                }
+                if !self.session_history_has_more.contains(&session_id) {
+                    self.status_message = String::from("当前会话没有更多可加载历史。");
+                    return Task::none();
+                }
+
+                self.status_message = String::from("正在加载更早一段会话历史。");
+                self.schedule_older_session_history_load(session_id)
+            }
+            Message::SessionHistorySearchInputChanged(session_id, query) => {
+                if self.selected_session().map(|session| session.id) != Some(session_id) {
+                    return Task::none();
+                }
+                if query.trim().is_empty() {
+                    self.session_history_search_inputs.remove(&session_id);
+                    self.session_history_search_results.remove(&session_id);
+                    self.session_history_search_errors.remove(&session_id);
+                    self.session_history_context_pages.remove(&session_id);
+                    self.session_history_context_errors.remove(&session_id);
+                } else {
+                    self.session_history_search_inputs.insert(session_id, query);
+                    self.session_history_search_errors.remove(&session_id);
+                    self.session_history_context_pages.remove(&session_id);
+                    self.session_history_context_errors.remove(&session_id);
+                }
+
+                Task::none()
+            }
+            Message::SessionHistorySearchSubmitted(session_id) => {
+                if self.selected_session().map(|session| session.id) != Some(session_id) {
+                    return Task::none();
+                }
+                if self
+                    .loading_session_history_search_ids
+                    .contains(&session_id)
+                {
+                    self.status_message = String::from("会话历史搜索正在进行中。");
+                    return Task::none();
+                }
+                let query = self
+                    .session_history_search_inputs
+                    .get(&session_id)
+                    .map(String::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                if query.is_empty() {
+                    self.session_history_search_results.remove(&session_id);
+                    self.session_history_search_errors.remove(&session_id);
+                    self.session_history_context_pages.remove(&session_id);
+                    self.session_history_context_errors.remove(&session_id);
+                    self.status_message = String::from("请输入要搜索的会话历史关键词。");
+                    return Task::none();
+                }
+
+                self.status_message = String::from("正在搜索当前会话历史。");
+                self.schedule_session_history_search(session_id)
+            }
+            Message::SessionHistorySearchLoaded(session_id, result) => {
+                self.loading_session_history_search_ids.remove(&session_id);
+                match result {
+                    Ok(page) => {
+                        let hit_count = page.hits.len();
+                        self.session_history_search_errors.remove(&session_id);
+                        self.session_history_context_pages.remove(&session_id);
+                        self.session_history_context_errors.remove(&session_id);
+                        self.session_history_search_results.insert(session_id, page);
+                        self.status_message =
+                            format!("会话历史搜索完成，找到 {hit_count} 条轻量命中。");
+                    }
+                    Err(error) => {
+                        self.session_history_search_results.remove(&session_id);
+                        self.session_history_context_pages.remove(&session_id);
+                        self.session_history_context_errors.remove(&session_id);
+                        self.session_history_search_errors
+                            .insert(session_id, error.clone());
+                        self.status_message = format!("会话历史搜索失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "会话历史搜索失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::SessionHistoryContextRequested {
+                session_id,
+                message_id,
+                ordinal,
+                turn_index,
+            } => {
+                if self.selected_session().map(|session| session.id) != Some(session_id) {
+                    return Task::none();
+                }
+                if self
+                    .loading_session_history_context_ids
+                    .contains(&session_id)
+                {
+                    self.status_message = String::from("搜索命中附近上下文正在加载中。");
+                    return Task::none();
+                }
+
+                self.status_message = String::from("正在加载搜索命中附近上下文。");
+                self.schedule_session_history_context_load(
+                    session_id, message_id, ordinal, turn_index,
+                )
+            }
+            Message::SessionHistoryContextLoaded(session_id, result) => {
+                self.loading_session_history_context_ids.remove(&session_id);
+                match result {
+                    Ok(page) => {
+                        let message_count = page.messages.len();
+                        self.session_history_context_errors.remove(&session_id);
+                        self.session_history_context_pages.insert(session_id, page);
+                        self.status_message =
+                            format!("已加载搜索命中附近 {message_count} 条上下文消息。");
+                    }
+                    Err(error) => {
+                        self.session_history_context_pages.remove(&session_id);
+                        self.session_history_context_errors
+                            .insert(session_id, error.clone());
+                        self.status_message = format!("搜索命中附近上下文加载失败：{error}");
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "搜索命中附近上下文加载失败",
+                            error,
+                        );
+                    }
+                }
+
+                Task::none()
             }
             Message::SelectedSessionTranscriptScrolled {
                 session_id,
@@ -5918,6 +6422,7 @@ impl VulcanWorkbench {
                     self.push_session_runtime_event(parent_session_id, event);
                     if is_finished {
                         self.detached_subagent_task_listeners.remove(&task_id);
+                        self.refresh_subagent_navigation_round_visibility(parent_session_id);
                     }
                     Task::batch([
                         self.persist_workspace_snapshot_task(),
@@ -6024,9 +6529,6 @@ impl VulcanWorkbench {
         self.session_has_active_run(session_id)
             || self.session_has_running_subagent_tasks(session_id)
             || self.session_has_pending_delegate_completion_prompt(session_id)
-            || self
-                .active_subagent_panel
-                .is_some_and(|selection| selection.parent_session_id == session_id)
     }
 
     /// Collapses and hides the subagent navigation round once the parent run, child tasks, and delegated callbacks have all settled.
@@ -6252,6 +6754,18 @@ impl VulcanWorkbench {
         self.session_pending_prompt_panel_queue(session_id)
             .iter()
             .find(|entry| entry.id == entry_id)
+            .cloned()
+    }
+
+    /// Returns the first visible prompt-panel entry that is still waiting for passive auto-dispatch.
+    /// 返回当前仍在等待被动自动分发的第一条可见提示词面板项。
+    fn first_ready_pending_prompt_panel_entry(
+        &self,
+        session_id: SessionId,
+    ) -> Option<PendingPromptPanelEntry> {
+        self.session_pending_prompt_panel_queue(session_id)
+            .iter()
+            .find(|entry| entry.state == PendingPromptPanelEntryState::Ready)
             .cloned()
     }
 
@@ -6646,7 +7160,19 @@ impl VulcanWorkbench {
         else {
             return Task::none();
         };
-        let Some(prompt_entry) = self.dequeue_session_pending_prompt(session_id) else {
+        let prompt_entry = if let Some(prompt_entry) =
+            self.dequeue_session_pending_prompt(session_id)
+        {
+            prompt_entry
+        } else if let Some(panel_entry) = self.first_ready_pending_prompt_panel_entry(session_id) {
+            self.build_pending_prompt_entry(
+                panel_entry.prompt,
+                PendingSessionPromptSource::UserFollowup,
+                None,
+                Some(panel_entry.preview),
+                Some(panel_entry.id),
+            )
+        } else {
             return Task::none();
         };
         self.status_message = match prompt_entry.source {
@@ -6654,7 +7180,13 @@ impl VulcanWorkbench {
                 String::from("子代理结果已回流，正在继续协调主流程。")
             }
             PendingSessionPromptSource::UserInterrupt => String::from("正在优先处理插队消息。"),
-            PendingSessionPromptSource::UserFollowup => String::from("正在处理排队消息。"),
+            PendingSessionPromptSource::UserFollowup => {
+                if prompt_entry.panel_entry_id.is_some() {
+                    String::from("当前轮次已结束，正在自动处理发送队列中的下一条消息。")
+                } else {
+                    String::from("正在处理排队消息。")
+                }
+            }
         };
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }
@@ -6787,6 +7319,11 @@ impl VulcanWorkbench {
             return Task::none();
         }
 
+        if !self.hydrated_session_ids.contains(&session_id) {
+            self.status_message = String::from("正在加载当前会话上下文，加载完成后请再次发送。");
+            return self.schedule_session_hydration(session_id);
+        }
+
         if self.session_has_blocking_system_prompt_work(session_id) {
             let panel_entry = self.build_pending_prompt_panel_entry(current_prompt);
             if let Err(error) =
@@ -6796,8 +7333,9 @@ impl VulcanWorkbench {
                 return Task::none();
             }
             self.clear_composer_input();
-            self.status_message =
-                String::from("已加入待插入列表；你可以稍后手动点击插入，将它接入系统会话队列。");
+            self.status_message = String::from(
+                "已加入发送队列；当前轮次结束后会自动开始，点击插入可立即接入系统队列并插队。",
+            );
             return Task::batch([
                 self.persist_workspace_snapshot_task(),
                 operation::focus(COMPOSER_EDITOR_ID),
@@ -6880,6 +7418,21 @@ impl VulcanWorkbench {
             self.session_runtime_state.remove(&session_id);
             self.session_runtime_events.remove(&session_id);
             self.session_run_phases.remove(&session_id);
+            self.hydrated_session_ids.remove(&session_id);
+            self.dirty_session_payload_ids.remove(&session_id);
+            self.dirty_session_message_ids.remove(&session_id);
+            self.loading_session_ids.remove(&session_id);
+            self.session_history_earliest_ordinals.remove(&session_id);
+            self.session_history_has_more.remove(&session_id);
+            self.loading_older_session_history_ids.remove(&session_id);
+            self.session_history_search_inputs.remove(&session_id);
+            self.session_history_search_results.remove(&session_id);
+            self.loading_session_history_search_ids.remove(&session_id);
+            self.session_history_search_errors.remove(&session_id);
+            self.session_history_context_pages.remove(&session_id);
+            self.loading_session_history_context_ids.remove(&session_id);
+            self.session_history_context_errors.remove(&session_id);
+            self.remove_session_from_background_legacy_maintenance(session_id);
             if self.hovered_task_session == Some(session_id) {
                 self.hovered_task_session = None;
             }
@@ -6907,6 +7460,21 @@ impl VulcanWorkbench {
             self.session_runtime_state.remove(&session_id);
             self.session_runtime_events.remove(&session_id);
             self.session_run_phases.remove(&session_id);
+            self.hydrated_session_ids.remove(&session_id);
+            self.dirty_session_payload_ids.remove(&session_id);
+            self.dirty_session_message_ids.remove(&session_id);
+            self.loading_session_ids.remove(&session_id);
+            self.session_history_earliest_ordinals.remove(&session_id);
+            self.session_history_has_more.remove(&session_id);
+            self.loading_older_session_history_ids.remove(&session_id);
+            self.session_history_search_inputs.remove(&session_id);
+            self.session_history_search_results.remove(&session_id);
+            self.loading_session_history_search_ids.remove(&session_id);
+            self.session_history_search_errors.remove(&session_id);
+            self.session_history_context_pages.remove(&session_id);
+            self.loading_session_history_context_ids.remove(&session_id);
+            self.session_history_context_errors.remove(&session_id);
+            self.remove_session_from_background_legacy_maintenance(session_id);
         }
 
         self.ensure_valid_selected_session();
@@ -6981,6 +7549,24 @@ impl VulcanWorkbench {
                 .or_else(|| archived_sessions.first().map(|session| session.id))
                 .unwrap_or_default()
         };
+        let replaceable_session_payload_ids = self
+            .dirty_session_payload_ids
+            .iter()
+            .copied()
+            .filter(|session_id| {
+                visible_session_ids.contains(session_id)
+                    || archived_session_ids.contains(session_id)
+            })
+            .collect::<BTreeSet<_>>();
+        let replaceable_session_message_ids = self
+            .dirty_session_message_ids
+            .iter()
+            .copied()
+            .filter(|session_id| {
+                visible_session_ids.contains(session_id)
+                    || archived_session_ids.contains(session_id)
+            })
+            .collect::<BTreeSet<_>>();
 
         WorkspaceSnapshot {
             task_projects: self.task_projects.clone(),
@@ -6991,6 +7577,7 @@ impl VulcanWorkbench {
                 .session_runtime_state
                 .iter()
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .filter(|(session_id, _)| replaceable_session_message_ids.contains(session_id))
                 .map(|(session_id, state)| {
                     (
                         *session_id,
@@ -7003,6 +7590,7 @@ impl VulcanWorkbench {
                 .archived_session_runtime_state
                 .iter()
                 .filter(|(session_id, _)| archived_session_ids.contains(session_id))
+                .filter(|(session_id, _)| replaceable_session_message_ids.contains(session_id))
                 .map(|(session_id, state)| {
                     (
                         *session_id,
@@ -7015,24 +7603,28 @@ impl VulcanWorkbench {
                 .session_compactions
                 .iter()
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .filter(|(session_id, _)| replaceable_session_payload_ids.contains(session_id))
                 .map(|(session_id, entries)| (*session_id, entries.clone()))
                 .collect(),
             archived_session_compactions: self
                 .archived_session_compactions
                 .iter()
                 .filter(|(session_id, _)| archived_session_ids.contains(session_id))
+                .filter(|(session_id, _)| replaceable_session_payload_ids.contains(session_id))
                 .map(|(session_id, entries)| (*session_id, entries.clone()))
                 .collect(),
             session_runtime_state: self
                 .session_runtime_state
                 .iter()
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
+                .filter(|(session_id, _)| replaceable_session_payload_ids.contains(session_id))
                 .map(|(session_id, state)| (*session_id, state.clone()))
                 .collect(),
             archived_session_runtime_state: self
                 .archived_session_runtime_state
                 .iter()
                 .filter(|(session_id, _)| archived_session_ids.contains(session_id))
+                .filter(|(session_id, _)| replaceable_session_payload_ids.contains(session_id))
                 .map(|(session_id, state)| (*session_id, state.clone()))
                 .collect(),
             session_run_phases: self
@@ -7043,6 +7635,7 @@ impl VulcanWorkbench {
                 .collect(),
             expanded_task_projects: self.expanded_task_projects.clone(),
             selected_session,
+            hydrated_session_ids: replaceable_session_payload_ids,
         }
     }
 
@@ -7671,6 +8264,7 @@ impl VulcanWorkbench {
         );
         let created_at = current_unix_millis_text();
         let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
+        self.dirty_session_message_ids.insert(session_id);
         self.append_session_record_to_conversation(session_id, &materialized_entry);
         self.session_message_raw_buffers.insert(
             message_id.clone(),
@@ -8236,7 +8830,9 @@ impl VulcanWorkbench {
         self.subagent_task_panel_state(parent_session_id, task_id)
             .is_some_and(|state| {
                 state.run_state != SubagentTaskRunState::Failed
-                    && self.subagent_task_panel_has_live_detail(task_id)
+                    && (state.run_state.is_running()
+                        || self
+                            .subagent_task_panel_has_recoverable_detail(parent_session_id, task_id))
             })
     }
 
@@ -8254,13 +8850,9 @@ impl VulcanWorkbench {
         let Some(session_id) = self.selected_session().map(|session| session.id) else {
             return Vec::new();
         };
-        let has_open_panel = self
-            .active_subagent_panel
-            .is_some_and(|selection| selection.parent_session_id == session_id);
-        let has_visible_round = has_open_panel
-            || self
-                .session_subagent_navigation_rounds
-                .contains(&session_id)
+        let has_visible_round = self
+            .session_subagent_navigation_rounds
+            .contains(&session_id)
             || self.session_has_running_subagent_tasks(session_id);
         if !has_visible_round {
             return Vec::new();
@@ -8271,9 +8863,7 @@ impl VulcanWorkbench {
                 entries
                     .values()
                     .map(|state| self.normalized_subagent_task_panel_state(state))
-                    .filter(|state| {
-                        self.subagent_task_panel_has_recoverable_detail(session_id, state.task_id)
-                    })
+                    .filter(|state| state.run_state.is_running())
                     .collect()
             })
             .unwrap_or_default()
@@ -8315,7 +8905,13 @@ impl VulcanWorkbench {
         task_id: SessionId,
     ) -> bool {
         self.rebuild_subagent_task_cache_for_session(parent_session_id);
-        if !self.subagent_task_panel_has_recoverable_detail(parent_session_id, task_id) {
+        let Some(state) = self.subagent_task_panel_state(parent_session_id, task_id) else {
+            return false;
+        };
+        let state = self.normalized_subagent_task_panel_state(state);
+        if !state.run_state.is_running()
+            && !self.subagent_task_panel_has_recoverable_detail(parent_session_id, task_id)
+        {
             return false;
         }
 
@@ -8655,6 +9251,10 @@ impl VulcanWorkbench {
             summary_body.to_string(),
             created_at.to_string(),
         );
+        compact_conversation_records_after_summary(
+            &mut runtime_state.conversation_state,
+            summary_message_id,
+        );
         runtime_state.updated_at = created_at.to_string();
     }
 
@@ -8664,6 +9264,8 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
     ) -> &mut SessionRuntimeStateEntry {
+        self.hydrated_session_ids.insert(session_id);
+        self.dirty_session_payload_ids.insert(session_id);
         self.session_runtime_state
             .entry(session_id)
             .or_insert_with(|| SessionRuntimeStateEntry {
@@ -8954,6 +9556,498 @@ impl VulcanWorkbench {
             .unwrap_or_default()
     }
 
+    /// Schedules the first lazy hydration task for one session when it has not been loaded yet.
+    /// 在单个会话尚未加载时，调度首次懒加载水合任务。
+    fn schedule_session_hydration(&mut self, session_id: SessionId) -> Task<Message> {
+        if session_id.is_nil()
+            || self.hydrated_session_ids.contains(&session_id)
+            || !self.loading_session_ids.insert(session_id)
+        {
+            return Task::none();
+        }
+
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            self.loading_session_ids.remove(&session_id);
+            return Task::none();
+        };
+
+        self.status_message = String::from("正在按需加载当前会话正文。");
+        Task::perform(
+            async move {
+                let result = workspace_store::load_session_hydration_snapshot(
+                    controller_runtime,
+                    session_id,
+                    SESSION_TRANSCRIPT_WINDOW_LIMIT,
+                )
+                .await;
+                (session_id, result)
+            },
+            |(session_id, result)| Message::SessionHydrationLoaded(session_id, result),
+        )
+    }
+
+    /// Schedules one older transcript page load when the current session window reaches the top.
+    /// 当当前会话窗口滚动到顶部时，调度一页更早转录历史加载。
+    fn schedule_older_session_history_load(&mut self, session_id: SessionId) -> Task<Message> {
+        if session_id.is_nil()
+            || !self.session_history_has_more.contains(&session_id)
+            || !self.loading_older_session_history_ids.insert(session_id)
+        {
+            return Task::none();
+        }
+
+        let Some(before_ordinal) = self
+            .session_history_earliest_ordinals
+            .get(&session_id)
+            .copied()
+        else {
+            self.loading_older_session_history_ids.remove(&session_id);
+            return Task::none();
+        };
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            self.loading_older_session_history_ids.remove(&session_id);
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                let result = workspace_store::load_session_history_page(
+                    controller_runtime,
+                    session_id,
+                    before_ordinal,
+                    SESSION_TRANSCRIPT_WINDOW_LIMIT,
+                )
+                .await;
+                (session_id, result)
+            },
+            |(session_id, result)| Message::OlderSessionHistoryLoaded(session_id, result),
+        )
+    }
+
+    /// Schedules one lightweight session-history search for the current root session.
+    /// 为当前根会话调度一次轻量会话历史搜索。
+    fn schedule_session_history_search(&mut self, session_id: SessionId) -> Task<Message> {
+        if session_id.is_nil() || !self.loading_session_history_search_ids.insert(session_id) {
+            return Task::none();
+        }
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            self.loading_session_history_search_ids.remove(&session_id);
+            return Task::none();
+        };
+        let query = self
+            .session_history_search_inputs
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+
+        Task::perform(
+            async move {
+                let result = workspace_store::search_session_history(
+                    controller_runtime,
+                    session_id,
+                    query,
+                    SESSION_HISTORY_SEARCH_RESULT_LIMIT,
+                )
+                .await;
+                (session_id, result)
+            },
+            |(session_id, result)| Message::SessionHistorySearchLoaded(session_id, result),
+        )
+    }
+
+    /// Schedules one read-only context load around a search-result anchor.
+    /// 围绕搜索结果锚点调度一次只读上下文加载。
+    fn schedule_session_history_context_load(
+        &mut self,
+        session_id: SessionId,
+        message_id: String,
+        ordinal: i64,
+        turn_index: i64,
+    ) -> Task<Message> {
+        if session_id.is_nil() || !self.loading_session_history_context_ids.insert(session_id) {
+            return Task::none();
+        }
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            self.loading_session_history_context_ids.remove(&session_id);
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                let result = workspace_store::load_session_history_context_page(
+                    controller_runtime,
+                    session_id,
+                    message_id,
+                    ordinal,
+                    turn_index,
+                )
+                .await;
+                (session_id, result)
+            },
+            |(session_id, result)| Message::SessionHistoryContextLoaded(session_id, result),
+        )
+    }
+
+    /// Schedules one tool-detail page load for a specific conversation turn.
+    /// 为指定对话轮次调度一页工具明细加载。
+    fn schedule_session_tool_detail_load(
+        &mut self,
+        session_id: SessionId,
+        turn_index: i64,
+    ) -> Task<Message> {
+        if session_id.is_nil() {
+            return Task::none();
+        }
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                let result = workspace_store::load_session_tool_detail_page(
+                    controller_runtime,
+                    session_id,
+                    turn_index,
+                    None,
+                    SESSION_TOOL_DETAIL_PAGE_LIMIT,
+                )
+                .await;
+                (session_id, result)
+            },
+            |(session_id, result)| Message::SessionToolDetailsLoaded(session_id, result),
+        )
+    }
+
+    /// Schedules best-effort storage maintenance for one already hydrated session.
+    /// 为单个已水合会话调度尽力而为的存储维护任务。
+    fn schedule_session_storage_maintenance(&self, session_id: SessionId) -> Task<Message> {
+        if session_id.is_nil() {
+            return Task::none();
+        }
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        let messages = self
+            .session_messages
+            .get(&session_id)
+            .or_else(|| self.archived_session_messages.get(&session_id))
+            .cloned()
+            .unwrap_or_default();
+
+        Task::perform(
+            async move {
+                let result = workspace_store::maintain_hydrated_session_storage(
+                    controller_runtime,
+                    session_id,
+                    messages,
+                )
+                .await;
+                (session_id, result)
+            },
+            |(session_id, result)| Message::SessionMaintenanceFinished(session_id, result),
+        )
+    }
+
+    /// Schedules the next low-priority legacy session maintenance task if the queue is idle.
+    /// 当队列空闲时调度下一条低优先级旧会话维护任务。
+    fn schedule_next_background_legacy_session_maintenance(&mut self) -> Task<Message> {
+        if self.background_legacy_maintenance_in_flight.is_some() {
+            return Task::none();
+        }
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        while let Some(session_id) = self.background_legacy_maintenance_queue.pop_front() {
+            if session_id.is_nil() {
+                continue;
+            }
+            self.background_legacy_maintenance_in_flight = Some(session_id);
+            return Task::perform(
+                async move {
+                    let result = workspace_store::maintain_legacy_session_storage(
+                        controller_runtime,
+                        session_id,
+                    )
+                    .await;
+                    (session_id, result)
+                },
+                |(session_id, result)| {
+                    Message::BackgroundLegacySessionMaintenanceFinished(session_id, result)
+                },
+            );
+        }
+
+        Task::none()
+    }
+
+    /// Rebuilds the background legacy maintenance queue for the currently loaded workspace.
+    /// 为当前已加载工作台重建后台旧数据维护队列。
+    fn reset_background_legacy_session_maintenance_queue(&mut self) {
+        self.background_legacy_maintenance_queue =
+            build_background_legacy_maintenance_queue(&self.sessions, &self.archived_sessions);
+        self.background_legacy_maintenance_in_flight = None;
+        self.background_legacy_maintenance_completed_count = 0;
+        self.background_legacy_maintenance_failed_count = 0;
+    }
+
+    /// Removes one session from any background legacy maintenance bookkeeping.
+    /// 从后台旧数据维护状态中移除单个会话。
+    fn remove_session_from_background_legacy_maintenance(&mut self, session_id: SessionId) {
+        self.background_legacy_maintenance_queue
+            .retain(|queued_session_id| *queued_session_id != session_id);
+        if self.background_legacy_maintenance_in_flight == Some(session_id) {
+            self.background_legacy_maintenance_in_flight = None;
+        }
+    }
+
+    /// Records a user-visible activity entry when a maintenance pass migrated legacy chunks.
+    /// 当维护过程迁移了旧版分片时记录一条用户可见活动日志。
+    fn record_session_legacy_chunk_migration_activity(
+        &mut self,
+        title: &'static str,
+        report: &SessionMaintenanceReport,
+    ) {
+        if report.legacy_chunk_migration.migrated_message_count == 0 {
+            return;
+        }
+
+        self.push_activity(
+            ActivityLevel::Success,
+            title,
+            format!(
+                "session_id={}，已迁移 {} 条旧版内联消息，生成约 {} 个正文分片。",
+                report.legacy_chunk_migration.session_id,
+                report.legacy_chunk_migration.migrated_message_count,
+                report.legacy_chunk_migration.inserted_chunk_count
+            ),
+        );
+    }
+
+    /// Applies one lazily loaded session payload to live transcript and runtime caches.
+    /// 将一份懒加载出的会话载荷应用到实时转录与运行时缓存。
+    fn apply_session_hydration_snapshot(&mut self, snapshot: SessionHydrationSnapshot) {
+        let session_id = snapshot.session_id;
+        self.hydrated_session_ids.insert(session_id);
+        self.loading_session_ids.remove(&session_id);
+        if let Some(earliest_ordinal) = snapshot.earliest_ordinal {
+            self.session_history_earliest_ordinals
+                .insert(session_id, earliest_ordinal);
+        } else {
+            self.session_history_earliest_ordinals.remove(&session_id);
+        }
+        if snapshot.has_more_history {
+            self.session_history_has_more.insert(session_id);
+        } else {
+            self.session_history_has_more.remove(&session_id);
+        }
+
+        let session_is_archived = self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id);
+        if session_is_archived {
+            self.archived_session_messages
+                .insert(session_id, snapshot.messages);
+            self.archived_session_compactions
+                .insert(session_id, snapshot.compactions);
+            if let Some(runtime_state) = snapshot.runtime_state {
+                self.archived_session_runtime_state
+                    .insert(session_id, runtime_state);
+            }
+        } else {
+            self.session_messages.insert(session_id, snapshot.messages);
+            self.session_compactions
+                .insert(session_id, snapshot.compactions);
+            if let Some(runtime_state) = snapshot.runtime_state {
+                self.session_runtime_state.insert(session_id, runtime_state);
+            }
+        }
+
+        self.rebuild_subagent_task_cache_for_session(session_id);
+        self.refresh_hydrated_session_message_buffers(session_id);
+        self.refresh_session_agent_view_buffers(session_id);
+        self.refresh_session_queued_steps(session_id);
+    }
+
+    /// Prepends one older transcript page to an already hydrated session cache.
+    /// 将一页更早转录历史追加到已水合会话缓存的头部。
+    fn apply_older_session_history_page(&mut self, page: SessionHistoryPage) {
+        let session_id = page.session_id;
+        if page.messages.is_empty() {
+            self.session_history_has_more.remove(&session_id);
+            return;
+        }
+
+        let session_is_archived = self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id);
+        let messages = if session_is_archived {
+            self.archived_session_messages
+                .entry(session_id)
+                .or_default()
+        } else {
+            self.session_messages.entry(session_id).or_default()
+        };
+        let existing_ids = messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut older_messages = page
+            .messages
+            .into_iter()
+            .filter(|message| !existing_ids.contains(&message.id))
+            .collect::<Vec<_>>();
+        older_messages.append(messages);
+        *messages = older_messages;
+
+        if let Some(earliest_ordinal) = page.earliest_ordinal {
+            self.session_history_earliest_ordinals
+                .insert(session_id, earliest_ordinal);
+        }
+        if page.has_more_history {
+            self.session_history_has_more.insert(session_id);
+        } else {
+            self.session_history_has_more.remove(&session_id);
+        }
+
+        let removed_count = self.prune_session_message_cache_to_limit(session_id);
+        if removed_count > 0 {
+            self.status_message = format!(
+                "已加载更早历史，并为控制内存保留最近 {SESSION_IN_MEMORY_MESSAGE_LIMIT} 条消息。"
+            );
+        }
+        self.refresh_hydrated_session_message_buffers(session_id);
+        self.refresh_session_agent_view_buffers(session_id);
+    }
+
+    /// Merges one on-demand tool-detail page into the already hydrated transcript cache.
+    /// 将一页按需工具明细合并到已经水合的转录缓存中。
+    fn apply_session_tool_detail_page(&mut self, page: SessionToolDetailPage) {
+        let session_id = page.session_id;
+        let _detail_cursor = (page.turn_index, page.earliest_ordinal, page.has_more_detail);
+        if page.messages.is_empty() {
+            return;
+        }
+
+        let session_is_archived = self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id);
+        let messages = if session_is_archived {
+            self.archived_session_messages
+                .entry(session_id)
+                .or_default()
+        } else {
+            self.session_messages.entry(session_id).or_default()
+        };
+        let existing_ids = messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<BTreeSet<_>>();
+        messages.extend(
+            page.messages
+                .into_iter()
+                .filter(|message| !existing_ids.contains(&message.id)),
+        );
+        messages
+            .sort_by_key(|message| parse_unix_millis_text(&message.created_at).unwrap_or_default());
+
+        self.prune_session_message_cache_to_limit(session_id);
+        self.refresh_hydrated_session_message_buffers(session_id);
+        self.refresh_session_agent_view_buffers(session_id);
+    }
+
+    /// Prunes one hydrated session's in-memory transcript cache without deleting persisted history.
+    /// 在不删除持久化历史的前提下裁剪单个已水合会话的内存转录缓存。
+    fn prune_session_message_cache_to_limit(&mut self, session_id: SessionId) -> usize {
+        let session_is_archived = self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id);
+        let removed_message_ids = if session_is_archived {
+            self.archived_session_messages
+                .get_mut(&session_id)
+                .map(|messages| {
+                    prune_session_messages_to_limit(messages, SESSION_IN_MEMORY_MESSAGE_LIMIT)
+                })
+                .unwrap_or_default()
+        } else {
+            self.session_messages
+                .get_mut(&session_id)
+                .map(|messages| {
+                    prune_session_messages_to_limit(messages, SESSION_IN_MEMORY_MESSAGE_LIMIT)
+                })
+                .unwrap_or_default()
+        };
+        if removed_message_ids.is_empty() {
+            return 0;
+        }
+
+        self.clear_session_message_view_caches(&removed_message_ids);
+        self.markdown_session_message_ids.remove(&session_id);
+        self.session_history_has_more.remove(&session_id);
+        self.session_history_earliest_ordinals.remove(&session_id);
+        self.loading_older_session_history_ids.remove(&session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.session_agent_view_buffers.remove(&session_id);
+        self.session_agent_view_raw_buffers.remove(&session_id);
+        self.session_agent_view_selectable_documents
+            .remove(&session_id);
+        self.session_agent_view_documents.remove(&session_id);
+        self.session_agent_view_block_collapsed.remove(&session_id);
+        self.close_thinking_modal_for_session(session_id);
+        self.close_tool_modal_for_session(session_id);
+
+        removed_message_ids.len()
+    }
+
+    /// Clears per-message projection caches for messages that are no longer retained in memory.
+    /// 清理已经不再保留在内存中的消息对应的逐消息投影缓存。
+    fn clear_session_message_view_caches(&mut self, message_ids: &[String]) {
+        for message_id in message_ids {
+            self.session_message_raw_buffers.remove(message_id);
+            self.session_message_markdown.remove(message_id);
+            self.session_message_markdown_buffers.remove(message_id);
+        }
+    }
+
+    /// Refreshes per-message raw and Markdown caches for one hydrated session only.
+    /// 仅刷新单个已水合会话的逐消息原文与 Markdown 缓存。
+    fn refresh_hydrated_session_message_buffers(&mut self, session_id: SessionId) {
+        let message_ids = self
+            .session_messages
+            .get(&session_id)
+            .or_else(|| self.archived_session_messages.get(&session_id))
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| message.id.clone())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+
+        self.session_message_raw_buffers
+            .retain(|message_id, _| !message_ids.contains(message_id));
+        self.session_message_markdown
+            .retain(|message_id, _| !message_ids.contains(message_id));
+        self.session_message_markdown_buffers
+            .retain(|message_id, _| !message_ids.contains(message_id));
+
+        let Some(messages) = self
+            .session_messages
+            .get(&session_id)
+            .or_else(|| self.archived_session_messages.get(&session_id))
+            .cloned()
+        else {
+            return;
+        };
+        for message in messages {
+            self.refresh_session_message_projection_buffers(session_id, &message.id);
+        }
+    }
+
     /// Applies one persisted workspace snapshot to the live GUI state in a single place.
     /// 将一份持久化工作台快照集中应用到当前图形界面状态。
     fn apply_workspace_snapshot(&mut self, snapshot: WorkspaceSnapshot) {
@@ -8967,20 +10061,25 @@ impl VulcanWorkbench {
         self.archived_session_compactions = snapshot.archived_session_compactions;
         self.session_runtime_state = snapshot.session_runtime_state;
         self.archived_session_runtime_state = snapshot.archived_session_runtime_state;
+        self.hydrated_session_ids = snapshot.hydrated_session_ids;
+        self.dirty_session_payload_ids.clear();
+        self.dirty_session_message_ids.clear();
+        self.loading_session_ids.clear();
+        self.session_history_earliest_ordinals.clear();
+        self.session_history_has_more.clear();
+        self.loading_older_session_history_ids.clear();
+        self.session_history_search_inputs.clear();
+        self.session_history_search_results.clear();
+        self.loading_session_history_search_ids.clear();
+        self.session_history_search_errors.clear();
+        self.session_history_context_pages.clear();
+        self.loading_session_history_context_ids.clear();
+        self.session_history_context_errors.clear();
+        self.reset_background_legacy_session_maintenance_queue();
         self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
         self.expanded_task_projects = snapshot.expanded_task_projects;
         self.selected_session = snapshot.selected_session;
-        let session_ids = self
-            .sessions
-            .iter()
-            .map(|session| session.id)
-            .chain(self.archived_sessions.iter().map(|session| session.id))
-            .collect::<Vec<_>>();
-        for session_id in session_ids {
-            self.ensure_session_conversation_state_loaded(session_id);
-            self.sync_session_messages_from_conversation_state(session_id);
-        }
         self.hovered_task_project = None;
         self.hovered_task_session = None;
         self.active_task_project_drop_target = None;
@@ -9007,7 +10106,16 @@ impl VulcanWorkbench {
         self.runtime_event_raw_buffers.clear();
         self.runtime_event_markdown.clear();
         self.runtime_event_markdown_buffers.clear();
-        self.rebuild_all_session_agent_view_buffers();
+        self.session_agent_view_buffers.clear();
+        self.session_agent_view_raw_buffers.clear();
+        self.session_agent_view_selectable_documents.clear();
+        self.session_agent_view_documents.clear();
+        self.session_agent_view_block_collapsed.clear();
+        self.session_agent_view_follow_tail.clear();
+        self.session_agent_view_viewports.clear();
+        if !self.selected_session.is_nil() {
+            self.refresh_session_agent_view_buffers(self.selected_session);
+        }
         self.refresh_all_session_queued_steps();
     }
 
@@ -9050,36 +10158,6 @@ impl VulcanWorkbench {
                 self.session_message_markdown_buffers
                     .insert(message.id.clone(), markdown_buffer);
             }
-        }
-    }
-
-    /// Rebuilds all unified transcript buffers from the current visible session and runtime-event state.
-    /// 根据当前可见会话与运行时事件状态重建全部统一转录缓冲区。
-    fn rebuild_all_session_agent_view_buffers(&mut self) {
-        self.session_agent_view_buffers.clear();
-        self.session_agent_view_raw_buffers.clear();
-        self.session_agent_view_selectable_documents.clear();
-        self.session_agent_view_documents.clear();
-        self.session_agent_view_block_collapsed.clear();
-        self.session_agent_view_follow_tail.clear();
-        self.session_agent_view_viewports.clear();
-        self.session_streaming_thinking_follow_tail.clear();
-        self.session_streaming_thinking_viewports.clear();
-        self.active_transcript_drag_auto_scroll = None;
-        self.active_thinking_overlay_drag_auto_scroll = None;
-        self.active_thinking_modal = None;
-        self.active_tool_modal = None;
-
-        let mut known_session_ids = self
-            .sessions
-            .iter()
-            .map(|session| session.id)
-            .collect::<BTreeSet<_>>();
-        known_session_ids.extend(self.session_messages.keys().copied());
-        known_session_ids.extend(self.session_runtime_events.keys().copied());
-
-        for session_id in known_session_ids {
-            self.refresh_session_agent_view_buffers(session_id);
         }
     }
 
@@ -9605,6 +10683,7 @@ impl VulcanWorkbench {
         ) {
             return false;
         }
+        let is_finished = event.kind == RuntimeEventKind::DelegateFinished;
 
         let Some(metadata) = event.metadata.as_ref() else {
             return true;
@@ -9621,11 +10700,14 @@ impl VulcanWorkbench {
         if let Some(conversation_state) = state.conversation_state.clone() {
             self.replace_subagent_task_conversation_state(state.task_id, conversation_state);
         }
-        if event.kind == RuntimeEventKind::DelegateFinished {
+        if is_finished {
             self.detached_subagent_task_listeners.remove(&state.task_id);
             self.enqueue_delegate_completion_followup_if_needed(session_id, &state);
         }
         self.upsert_subagent_task_panel_state(state);
+        if is_finished {
+            self.refresh_subagent_navigation_round_visibility(session_id);
+        }
         true
     }
 
@@ -10378,12 +11460,31 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        composer_text_has_submittable_content, composer_visible_line_count,
-        merge_tool_display_messages, task_session_payload_from_tool_metadata,
+        build_background_legacy_maintenance_queue, composer_text_has_submittable_content,
+        composer_visible_line_count, merge_tool_display_messages, prune_session_messages_to_limit,
+        task_session_payload_from_tool_metadata,
     };
-    use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+    use crate::model::{
+        SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionState,
+        SessionSummary,
+    };
     use iced::widget::text_editor;
     use serde_json::{Value, json};
+
+    /// Builds a compact session summary for queue-related unit tests.
+    /// 为队列相关单元测试构建一条紧凑会话摘要。
+    fn test_session_summary(id: SessionId, title: &str) -> SessionSummary {
+        SessionSummary::new(
+            id,
+            None,
+            title.to_string(),
+            String::new(),
+            SessionState::Draft,
+            0,
+            0,
+            String::from("刚刚"),
+        )
+    }
 
     /// Verifies that an empty composer still reserves one visible line.
     /// 验证空提示词编辑器仍会保留一条可见逻辑行。
@@ -10422,6 +11523,88 @@ mod tests {
         assert!(!composer_text_has_submittable_content("   \n\t  "));
         assert!(composer_text_has_submittable_content("执行这个任务"));
         assert!(composer_text_has_submittable_content("\n  执行这个任务  "));
+    }
+
+    /// Verifies that the background legacy-maintenance queue includes visible and archived sessions once.
+    /// 验证后台旧数据维护队列会将可见与归档会话各纳入一次。
+    #[test]
+    fn background_legacy_maintenance_queue_deduplicates_sessions() {
+        let first_session_id = SessionId::from_u128(101);
+        let second_session_id = SessionId::from_u128(102);
+        let visible_sessions = vec![test_session_summary(first_session_id, "可见会话")];
+        let archived_sessions = vec![
+            test_session_summary(first_session_id, "重复归档会话"),
+            test_session_summary(second_session_id, "归档会话"),
+        ];
+
+        let queue =
+            build_background_legacy_maintenance_queue(&visible_sessions, &archived_sessions);
+
+        assert_eq!(
+            queue.into_iter().collect::<Vec<_>>(),
+            vec![first_session_id, second_session_id]
+        );
+    }
+
+    /// Verifies that the background legacy-maintenance queue ignores nil draft identifiers.
+    /// 验证后台旧数据维护队列会忽略空的草稿标识。
+    #[test]
+    fn background_legacy_maintenance_queue_skips_nil_sessions() {
+        let session_id = SessionId::from_u128(103);
+        let visible_sessions = vec![
+            test_session_summary(SessionId::nil(), "空会话"),
+            test_session_summary(session_id, "正常会话"),
+        ];
+
+        let queue = build_background_legacy_maintenance_queue(&visible_sessions, &[]);
+
+        assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![session_id]);
+    }
+
+    /// Verifies that transcript pruning removes the oldest messages first.
+    /// 验证转录裁剪会优先移除最旧的消息。
+    #[test]
+    fn prune_session_messages_to_limit_removes_oldest_entries() {
+        let mut messages = (0..5)
+            .map(|index| SessionMessageEntry {
+                id: format!("message-{index}"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: format!("消息 {index}"),
+                body: format!("正文 {index}"),
+                metadata: None,
+                created_at: index.to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let removed = prune_session_messages_to_limit(&mut messages, 3);
+
+        assert_eq!(removed, vec!["message-0", "message-1"]);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message-2", "message-3", "message-4"]
+        );
+    }
+
+    /// Verifies that transcript pruning is a no-op when the current window is already small enough.
+    /// 验证当前窗口足够小时转录裁剪不会产生任何修改。
+    #[test]
+    fn prune_session_messages_to_limit_keeps_small_windows_unchanged() {
+        let mut messages = vec![SessionMessageEntry::new(
+            SessionMessageKind::User,
+            "用户指令",
+            "继续",
+        )];
+
+        let removed = prune_session_messages_to_limit(&mut messages, 3);
+
+        assert!(removed.is_empty());
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].title, "用户指令");
     }
 
     /// Verifies one tool call and its matching tool result merge into a single human-facing transcript card.

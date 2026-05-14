@@ -2,7 +2,8 @@
 //! 项目、会话、转录历史与隐藏上下文节点的控制器持久化辅助模块。
 
 use crate::conversation_protocol::{
-    SessionConversationState, conversation_state_to_session_messages,
+    SessionConversationState, SessionProviderContinuationState,
+    conversation_state_from_session_messages,
 };
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
@@ -18,6 +19,73 @@ use std::hash::{Hash, Hasher};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
+
+/// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.
+/// 在 protobuf/gRPC 结构开销接近 tonic 默认限制前使用的请求帧目标预算。
+const SQLITE_BATCH_SAFE_FRAME_TARGET_BYTES: usize = 1024 * 1024;
+/// Maximum row count kept in one SQLite batch regardless of byte-size estimates.
+/// 单个 SQLite 批处理在字节估算之外仍要遵守的最大行数。
+const SQLITE_BATCH_SAFE_ROW_LIMIT: usize = 128;
+/// Conservative per-batch structure overhead for typed SQLite requests.
+/// 类型化 SQLite 请求按批次估算的保守结构开销。
+const SQLITE_BATCH_FRAME_OVERHEAD_BYTES: usize = 4096;
+/// Conservative per-row structure overhead for typed SQLite request parameters.
+/// 类型化 SQLite 请求参数按行估算的保守结构开销。
+const SQLITE_ROW_FRAME_OVERHEAD_BYTES: usize = 256;
+/// Conservative per-value structure overhead for typed SQLite scalar values.
+/// 类型化 SQLite 标量值按字段估算的保守结构开销。
+const SQLITE_VALUE_FRAME_OVERHEAD_BYTES: usize = 48;
+/// First transcript turn-window size used when opening a session lazily.
+/// 懒加载打开会话时使用的首屏转录轮次数。
+pub const SESSION_TRANSCRIPT_WINDOW_LIMIT: usize = 30;
+/// Tool-detail page size used when a specific turn asks for its tool rows.
+/// 指定轮次请求工具明细行时使用的分页大小。
+pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
+/// Search-result page size used by the lightweight per-session history search.
+/// 单会话轻量历史搜索使用的搜索结果页大小。
+pub const SESSION_HISTORY_SEARCH_RESULT_LIMIT: usize = 20;
+/// Number of conversation turns loaded on either side of one search-result anchor.
+/// 单个搜索结果锚点两侧加载的对话轮次数。
+const SESSION_HISTORY_CONTEXT_TURN_RADIUS: i64 = 2;
+/// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
+/// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
+const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
+/// Minimum message-row cap retained for legacy data whose turn index has not been rebuilt yet.
+/// 为尚未重建轮次索引的旧数据保留的最小消息行上限。
+const SESSION_TRANSCRIPT_LEGACY_ROW_LIMIT: usize = 100;
+/// Maximum persisted metadata JSON size before large host payload fields are stripped.
+/// 触发剥离大型宿主载荷字段前允许持久化的最大 metadata JSON 大小。
+const SESSION_MESSAGE_METADATA_BUDGET_BYTES: usize = 64 * 1024;
+/// Maximum compact metadata preview length retained for oversized argument-like fields.
+/// 超大参数类字段被压缩后保留的最大预览长度。
+const SESSION_MESSAGE_METADATA_PREVIEW_CHARS: usize = 1024;
+/// Maximum body size kept inline in `session_messages.content` before chunk storage is used.
+/// 在启用分片存储前允许内联保留在 `session_messages.content` 中的最大正文大小。
+const SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES: usize = 48 * 1024;
+/// Maximum raw text bytes stored in one session-message chunk row.
+/// 单条会话消息分片行允许保存的最大原始文本字节数。
+const SESSION_MESSAGE_CHUNK_CONTENT_BYTES: usize = 128 * 1024;
+/// Maximum legacy oversized inline messages migrated during one maintenance pass.
+/// 单次维护最多迁移的旧版超大内联消息数量。
+const SESSION_LEGACY_INLINE_MIGRATION_MAX_MESSAGES_PER_PASS: usize = 32;
+/// Number of legacy inline-message candidates fetched per lightweight detection query.
+/// 单次轻量检测查询最多获取的旧版内联消息候选数量。
+const SESSION_LEGACY_INLINE_MIGRATION_CANDIDATE_LIMIT: usize = 4;
+/// Character chunk size used by SQLite-side legacy migration to stay safe for UTF-8 text.
+/// SQLite 侧旧数据迁移使用的字符分片大小，用于兼容 UTF-8 文本安全边界。
+const SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS: usize = SESSION_MESSAGE_CHUNK_CONTENT_BYTES / 4;
+/// Maximum chunk rows generated for one legacy message by the fixed-width SQLite number CTE.
+/// 固定宽度 SQLite 数字 CTE 为单条旧消息最多生成的分片行数。
+const SESSION_LEGACY_INLINE_MIGRATION_MAX_CHUNKS_PER_MESSAGE: usize = 100_000;
+/// Maximum chunk rows fetched in one query response while rebuilding one oversized message.
+/// 重建单条超大消息时单次查询响应最多拉取的分片行数。
+const SESSION_MESSAGE_CHUNK_QUERY_LIMIT: usize = 8;
+/// Maximum preview characters retained in the inline message row for a chunked body.
+/// 分片正文在内联消息行中保留的最大预览字符数。
+const SESSION_MESSAGE_CHUNK_PREVIEW_CHARS: usize = 2048;
+/// Maximum characters returned for one lightweight history-search preview.
+/// 单条轻量历史搜索预览允许返回的最大字符数。
+const SESSION_HISTORY_SEARCH_PREVIEW_CHARS: usize = 240;
 
 /// Stable in-memory snapshot hydrated from the controller-backed workspace database.
 /// 从控制器承载的工作台数据库中还原出的稳定内存快照。
@@ -62,6 +130,186 @@ pub struct WorkspaceSnapshot {
     /// Selected session identifier restored after startup.
     /// 启动完成后恢复出的当前选中会话标识。
     pub selected_session: SessionId,
+    /// Session identifiers whose transcript/runtime payloads were actually loaded into memory.
+    /// 已经真实加载到内存中的转录与运行时载荷会话标识集合。
+    pub hydrated_session_ids: BTreeSet<SessionId>,
+}
+
+/// Lazily loaded transcript and runtime payload for one opened session.
+/// 为单个已打开会话懒加载出的转录与运行时载荷。
+#[derive(Debug, Clone)]
+pub struct SessionHydrationSnapshot {
+    /// Session identifier owning the loaded payload.
+    /// 拥有本次加载载荷的会话标识。
+    pub session_id: SessionId,
+    /// Recent transcript messages restored in ascending display order.
+    /// 按展示正序恢复出的最近转录消息。
+    pub messages: Vec<SessionMessageEntry>,
+    /// Hidden compaction checkpoints scoped to this session.
+    /// 归属于该会话的隐藏压缩检查点。
+    pub compactions: Vec<SessionCompactionEntry>,
+    /// Runtime metadata restored without forcing global startup to read every session body.
+    /// 在不迫使全局启动读取所有会话正文的前提下恢复出的运行时元数据。
+    pub runtime_state: Option<SessionRuntimeStateEntry>,
+    /// Earliest loaded ordinal, used as the cursor for older history pagination.
+    /// 已加载的最早序号，用作继续分页加载更早历史的游标。
+    pub earliest_ordinal: Option<i64>,
+    /// Whether older transcript rows probably still exist before the current window.
+    /// 当前窗口之前是否大概率仍存在更早的转录行。
+    pub has_more_history: bool,
+    /// Latest loaded turn index used to lazily hydrate recent tool details.
+    /// 用于懒加载最近工具明细的已加载最新轮次索引。
+    pub latest_turn_index: Option<i64>,
+}
+
+/// One older transcript page loaded before an already hydrated session window.
+/// 在已水合会话窗口之前加载的一页更早转录历史。
+#[derive(Debug, Clone)]
+pub struct SessionHistoryPage {
+    /// Session identifier owning this page.
+    /// 拥有该页历史的会话标识。
+    pub session_id: SessionId,
+    /// Older transcript messages restored in ascending display order.
+    /// 按展示正序恢复出的更早转录消息。
+    pub messages: Vec<SessionMessageEntry>,
+    /// Earliest loaded ordinal after this page is merged.
+    /// 合并该页后已加载的最早序号。
+    pub earliest_ordinal: Option<i64>,
+    /// Whether more older transcript rows probably still exist.
+    /// 是否大概率仍存在更多更早的转录行。
+    pub has_more_history: bool,
+}
+
+/// Lightweight search results returned for one session history query.
+/// 单次会话历史查询返回的轻量搜索结果。
+#[derive(Debug, Clone)]
+pub struct SessionHistorySearchPage {
+    /// Session identifier owning these search hits.
+    /// 拥有这些搜索命中的会话标识。
+    pub session_id: SessionId,
+    /// Normalized user query used to produce the result page.
+    /// 生成该结果页时使用的规范化用户查询。
+    pub query: String,
+    /// Lightweight hits ordered from newest to oldest.
+    /// 按新到旧排序的轻量命中集合。
+    pub hits: Vec<SessionHistorySearchHit>,
+    /// Whether the result count reached the requested limit.
+    /// 结果数量是否已经达到请求上限。
+    pub limit_reached: bool,
+}
+
+/// One lightweight session-history search hit.
+/// 单条轻量会话历史搜索命中。
+#[derive(Debug, Clone)]
+pub struct SessionHistorySearchHit {
+    /// Stable identifier of the matched message row.
+    /// 命中消息行的稳定标识。
+    pub message_id: String,
+    /// Stable ordinal inside the session transcript.
+    /// 会话转录内部的稳定序号。
+    pub ordinal: i64,
+    /// Stable turn index inside the session transcript.
+    /// 会话转录内部的稳定轮次索引。
+    pub turn_index: i64,
+    /// Persisted message record kind.
+    /// 持久化消息记录类型。
+    pub record_kind: SessionMessageRecordKind,
+    /// Whether this persisted message is normally visible in the transcript.
+    /// 该持久化消息通常是否在转录中可见。
+    pub visible: bool,
+    /// Human-readable title restored from metadata or role fallback.
+    /// 从元数据或角色回退值恢复出的人类可读标题。
+    pub title: String,
+    /// Compact preview returned without loading the full message body.
+    /// 在不加载完整消息正文的前提下返回的紧凑预览。
+    pub preview: String,
+    /// Created-at timestamp stored as Unix milliseconds text.
+    /// 以 Unix 毫秒文本形式存储的创建时间。
+    pub created_at: String,
+}
+
+/// Read-only transcript context loaded around one search-result anchor.
+/// 围绕单条搜索结果锚点加载出的只读转录上下文。
+#[derive(Debug, Clone)]
+pub struct SessionHistoryContextPage {
+    /// Session identifier owning this context page.
+    /// 拥有该上下文页的会话标识。
+    pub session_id: SessionId,
+    /// Search-result message identifier used as the context anchor.
+    /// 作为上下文锚点的搜索结果消息标识。
+    pub anchor_message_id: String,
+    /// Search-result ordinal used as the context anchor.
+    /// 作为上下文锚点的搜索结果序号。
+    pub anchor_ordinal: i64,
+    /// Search-result turn index used as the context anchor.
+    /// 作为上下文锚点的搜索结果轮次索引。
+    pub anchor_turn_index: i64,
+    /// First loaded turn index, if any context rows were restored.
+    /// 已恢复上下文行中的首个轮次索引。
+    pub first_turn_index: Option<i64>,
+    /// Last loaded turn index, if any context rows were restored.
+    /// 已恢复上下文行中的最后轮次索引。
+    pub last_turn_index: Option<i64>,
+    /// Nearby transcript messages restored in ascending display order.
+    /// 按展示正序恢复出的附近转录消息。
+    pub messages: Vec<SessionMessageEntry>,
+    /// Whether the exact anchor message row was present in the returned context.
+    /// 返回的上下文中是否包含精确锚点消息行。
+    pub anchor_found: bool,
+}
+
+/// One tool-detail page loaded on demand for a single conversation turn.
+/// 为单个对话轮次按需加载的一页工具明细。
+#[derive(Debug, Clone)]
+pub struct SessionToolDetailPage {
+    /// Session identifier owning this tool-detail page.
+    /// 拥有该工具明细页的会话标识。
+    pub session_id: SessionId,
+    /// Conversation turn whose tool details were loaded.
+    /// 本次加载工具明细所属的对话轮次。
+    pub turn_index: i64,
+    /// Tool-call and tool-result messages restored in ascending display order.
+    /// 按展示正序恢复出的工具调用与工具结果消息。
+    pub messages: Vec<SessionMessageEntry>,
+    /// Earliest loaded ordinal after this page is merged.
+    /// 合并该页后已加载的最早序号。
+    pub earliest_ordinal: Option<i64>,
+    /// Whether more older tool-detail rows probably still exist in this turn.
+    /// 当前轮次内是否大概率仍存在更多更早的工具明细行。
+    pub has_more_detail: bool,
+}
+
+/// Result summary produced after one hydrated session receives legacy-storage maintenance.
+/// 单个已水合会话完成旧存储维护后产生的结果摘要。
+#[derive(Debug, Clone)]
+pub struct SessionMaintenanceReport {
+    /// Session identifier that was maintained.
+    /// 已执行维护的会话标识。
+    pub session_id: SessionId,
+    /// Number of currently loaded transcript messages upserted through the new storage path.
+    /// 通过新存储路径重新 upsert 的当前已加载转录消息数量。
+    pub upserted_message_count: usize,
+    /// Whether the legacy full conversation-state column was cleared successfully.
+    /// 旧版完整会话状态列是否已成功清理。
+    pub cleared_runtime_state_json: bool,
+    /// Legacy oversized inline-message migration summary for this maintenance pass.
+    /// 本次维护中旧版超大内联消息迁移的结果摘要。
+    pub legacy_chunk_migration: SessionLegacyChunkMigrationReport,
+}
+
+/// Result summary produced by one legacy oversized inline-message migration pass.
+/// 单次旧版超大内联消息迁移产生的结果摘要。
+#[derive(Debug, Clone, Default)]
+pub struct SessionLegacyChunkMigrationReport {
+    /// Session identifier whose legacy messages were inspected.
+    /// 被检查旧消息的会话标识。
+    pub session_id: SessionId,
+    /// Number of oversized inline messages migrated into chunk rows.
+    /// 已迁移到分片行的超大内联消息数量。
+    pub migrated_message_count: usize,
+    /// Number of chunk rows estimated from character lengths for migrated messages.
+    /// 根据字符长度估算出的已迁移分片行数量。
+    pub inserted_chunk_count: usize,
 }
 
 /// Raw project row decoded from the controller SQLite query payload.
@@ -122,9 +370,6 @@ struct StoredSessionMessageRow {
     /// Stable message identifier stored in SQLite.
     /// 存储在 SQLite 中的稳定消息标识。
     id: String,
-    /// Owning session identifier stored in SQLite.
-    /// 存储在 SQLite 中的所属会话标识。
-    session_id: String,
     /// Stable ordinal inside one transcript stream.
     /// 单个转录流内部的稳定序号。
     ordinal: i64,
@@ -137,9 +382,105 @@ struct StoredSessionMessageRow {
     /// SQLite numeric visible flag.
     /// SQLite 数值型可见标记。
     visible: i64,
+    /// Stable conversation-turn index derived from user-authored prompts.
+    /// 根据用户提示词派生出的稳定对话轮次索引。
+    #[serde(default)]
+    turn_index: i64,
     /// Persisted primary text body.
     /// 持久化后的主要正文文本。
     content: String,
+    /// Optional structured JSON metadata.
+    /// 可选的结构化 JSON 元数据。
+    meta_json: Option<String>,
+    /// Created-at timestamp stored as Unix milliseconds text.
+    /// 以 Unix 毫秒文本形式存储的创建时间。
+    created_at: String,
+}
+
+/// Raw session-message chunk row decoded from the controller SQLite query payload.
+/// 从控制器 SQLite 查询载荷中解码出的原始会话消息分片行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredSessionMessageChunkRow {
+    /// Stable message identifier owning this chunk.
+    /// 拥有该分片的稳定消息标识。
+    message_id: String,
+    /// Stable chunk order inside one message body.
+    /// 单条消息正文内部的稳定分片顺序。
+    chunk_index: i64,
+    /// Persisted chunk body.
+    /// 持久化后的分片正文。
+    content: String,
+}
+
+/// Lightweight chunk-presence row used before loading chunk content.
+/// 加载分片内容前用于判断分片是否存在的轻量行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredSessionMessageChunkPresenceRow {
+    /// Stable message identifier that has at least one chunk.
+    /// 至少拥有一个分片的稳定消息标识。
+    message_id: String,
+}
+
+/// Lightweight legacy oversized inline-message candidate row.
+/// 轻量旧版超大内联消息候选行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredLegacyOversizedMessageCandidateRow {
+    /// Stable message identifier selected for migration.
+    /// 被选中迁移的稳定消息标识。
+    id: String,
+    /// Inline body size measured by SQLite as UTF-8 bytes.
+    /// SQLite 以 UTF-8 字节计量出的内联正文大小。
+    content_bytes: i64,
+    /// Inline body length measured by SQLite as text characters.
+    /// SQLite 以文本字符计量出的内联正文长度。
+    content_chars: i64,
+}
+
+/// Lightweight persisted message position used to preserve partial-window upsert order.
+/// 用于保留局部窗口上写顺序的轻量持久化消息位置。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredSessionMessagePositionRow {
+    /// Stable message identifier stored in SQLite.
+    /// 存储在 SQLite 中的稳定消息标识。
+    id: String,
+    /// Stable ordinal already assigned inside one session transcript.
+    /// 已经在单个会话转录中分配的稳定序号。
+    ordinal: i64,
+    /// Stable turn index already assigned inside one session transcript.
+    /// 已经在单个会话转录中分配的稳定轮次索引。
+    turn_index: i64,
+}
+
+/// Maximum persisted message identifiers looked up in one position query.
+/// 单次位置查询最多查找的持久化消息标识数量。
+const SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT: usize = 128;
+
+/// Raw lightweight session-history search row decoded from the controller SQLite query payload.
+/// 从控制器 SQLite 查询载荷中解码出的原始轻量会话历史搜索行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredSessionHistorySearchRow {
+    /// Stable message identifier stored in SQLite.
+    /// 存储在 SQLite 中的稳定消息标识。
+    id: String,
+    /// Stable ordinal inside one transcript stream.
+    /// 单个转录流内部的稳定序号。
+    ordinal: i64,
+    /// Persisted message role used to reconstruct title fallback.
+    /// 用于重建标题回退值的持久化消息角色。
+    role: String,
+    /// Persisted record kind key.
+    /// 持久化记录类型键。
+    kind: String,
+    /// SQLite numeric visible flag.
+    /// SQLite 数值型可见标记。
+    visible: i64,
+    /// Stable conversation-turn index derived from user-authored prompts.
+    /// 根据用户提示词派生出的稳定对话轮次索引。
+    #[serde(default)]
+    turn_index: i64,
+    /// Lightweight content preview selected by SQL instead of the full body.
+    /// SQL 选择出的轻量正文预览，而不是完整正文。
+    content_preview: String,
     /// Optional structured JSON metadata.
     /// 可选的结构化 JSON 元数据。
     meta_json: Option<String>,
@@ -169,9 +510,6 @@ struct StoredCompactionRow {
     /// Stable compaction identifier.
     /// 稳定压缩标识。
     id: String,
-    /// Owning session identifier.
-    /// 所属会话标识。
-    session_id: String,
     /// Optional source tail message identifier.
     /// 可选的源历史尾消息标识。
     source_until_message_id: Option<String>,
@@ -211,9 +549,10 @@ struct StoredRuntimeStateRow {
     /// Optional persisted transcript UI state payload.
     /// 可选的持久化转录界面状态载荷。
     ui_state_json: Option<String>,
-    /// Optional persisted canonical conversation-state payload.
-    /// 可选的持久化规范会话状态载荷。
-    conversation_state_json: Option<String>,
+    /// Optional persisted lightweight provider continuation payload.
+    /// 可选的持久化轻量 Provider continuation 载荷。
+    #[serde(default)]
+    continuation_json: Option<String>,
     /// Updated-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的更新时间。
     updated_at: String,
@@ -249,9 +588,7 @@ pub async fn load_workspace_snapshot(
     if migrate_legacy_session_ids_if_needed(&controller, &session_rows).await? {
         session_rows = query_session_rows(&controller).await?;
     }
-    let message_rows = query_session_message_rows(&controller).await?;
-    let compaction_rows = query_session_compaction_rows(&controller).await?;
-    let runtime_state_rows = query_session_runtime_state_rows(&controller).await?;
+    let runtime_state_rows = query_session_runtime_state_shell_rows(&controller).await?;
 
     let mut task_projects = Vec::new();
     let mut archived_task_projects = Vec::new();
@@ -278,65 +615,10 @@ pub async fn load_workspace_snapshot(
         .filter_map(|row| parse_session_id(&row.id).ok())
         .collect::<BTreeSet<_>>();
 
-    let mut transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
-    let mut archived_transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> =
-        BTreeMap::new();
-    let mut ordered_message_rows = message_rows;
-    ordered_message_rows.sort_by_key(|row| (row.session_id.clone(), row.ordinal));
-
-    for row in ordered_message_rows {
-        let session_id = parse_session_id(&row.session_id)?;
-        let persisted_meta = row
-            .meta_json
-            .as_deref()
-            .and_then(parse_session_message_meta_from_json)
-            .unwrap_or_default();
-        let title = persisted_meta
-            .title
-            .unwrap_or_else(|| default_message_title(&row.role).to_string());
-        let entry = SessionMessageEntry {
-            id: row.id,
-            kind: session_kind_from_role(&row.role),
-            record_kind: SessionMessageRecordKind::from_persisted_key(&row.kind),
-            visible: row.visible != 0,
-            title,
-            body: row.content,
-            metadata: persisted_meta.metadata,
-            created_at: row.created_at,
-        };
-
-        if archived_session_ids.contains(&session_id) {
-            archived_transcript_map
-                .entry(session_id)
-                .or_default()
-                .push(entry);
-        } else {
-            transcript_map.entry(session_id).or_default().push(entry);
-        }
-    }
-
-    let mut compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
-    let mut archived_compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> =
-        BTreeMap::new();
-    for row in compaction_rows {
-        let session_id = parse_session_id(&row.session_id)?;
-        let entry = SessionCompactionEntry {
-            id: row.id,
-            source_until_message_id: row.source_until_message_id,
-            context_start_message_id: row.context_start_message_id,
-            summary_message_id: row.summary_message_id,
-            created_at: row.created_at,
-        };
-
-        if archived_session_ids.contains(&session_id) {
-            archived_compaction_map
-                .entry(session_id)
-                .or_default()
-                .push(entry);
-        } else {
-            compaction_map.entry(session_id).or_default().push(entry);
-        }
-    }
+    let transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
+    let archived_transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
+    let compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
+    let archived_compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
 
     let mut runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let mut archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> =
@@ -354,11 +636,7 @@ pub async fn load_workspace_snapshot(
                 .as_deref()
                 .and_then(parse_session_ui_state_from_json)
                 .unwrap_or_default(),
-            conversation_state: row
-                .conversation_state_json
-                .as_deref()
-                .and_then(parse_session_conversation_state_from_json)
-                .unwrap_or_default(),
+            conversation_state: conversation_state_with_continuation(row.continuation_json),
             updated_at: row.updated_at,
         };
 
@@ -369,34 +647,11 @@ pub async fn load_workspace_snapshot(
         }
     }
 
-    for (session_id, runtime_state) in &runtime_state_map {
-        if !runtime_state.conversation_state.records.is_empty() {
-            transcript_map.insert(
-                *session_id,
-                conversation_state_to_session_messages(&runtime_state.conversation_state),
-            );
-        }
-    }
-    for (session_id, runtime_state) in &archived_runtime_state_map {
-        if !runtime_state.conversation_state.records.is_empty() {
-            archived_transcript_map.insert(
-                *session_id,
-                conversation_state_to_session_messages(&runtime_state.conversation_state),
-            );
-        }
-    }
-
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
     for row in &session_rows {
         let session_id = parse_session_id(&row.id)?;
-        let focus = session_focus_preview(
-            transcript_map
-                .get(&session_id)
-                .or_else(|| archived_transcript_map.get(&session_id))
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-        );
+        let focus = session_focus_preview(&[]);
         let session_summary = SessionSummary::new(
             session_id,
             Some(row.project_id.clone()),
@@ -493,7 +748,483 @@ pub async fn load_workspace_snapshot(
         session_run_phases,
         expanded_task_projects,
         selected_session,
+        hydrated_session_ids: BTreeSet::new(),
     })
+}
+
+/// Lazily loads the recent transcript window and lightweight runtime state for one session.
+/// 为单个会话懒加载最近转录窗口与轻量运行时状态。
+pub async fn load_session_hydration_snapshot(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    requested_limit: usize,
+) -> Result<SessionHydrationSnapshot, String> {
+    migrate_legacy_oversized_session_messages(&controller, session_id).await?;
+
+    let requested_limit = requested_limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT);
+    let (message_rows, effective_limit) = query_session_message_window_rows_with_retry(
+        &controller,
+        session_id,
+        None,
+        requested_limit,
+    )
+    .await?;
+    let mut message_rows = message_rows;
+    message_rows.sort_by_key(|row| row.ordinal);
+    let earliest_ordinal = message_rows.first().map(|row| row.ordinal);
+    let latest_turn_index = message_rows.last().map(|row| row.turn_index);
+    let has_more_history = loaded_message_turn_count(&message_rows) >= effective_limit
+        && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
+    let message_body_chunks =
+        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
+    let messages = message_rows
+        .into_iter()
+        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
+        .collect::<Vec<_>>();
+    let compactions = query_session_compaction_rows_for_session(&controller, session_id)
+        .await?
+        .into_iter()
+        .map(stored_compaction_row_to_entry)
+        .collect::<Vec<_>>();
+    let runtime_state = query_session_runtime_state_shell_row(&controller, session_id)
+        .await?
+        .map(stored_runtime_state_row_to_entry)
+        .map(|runtime_state| runtime_state_with_recent_records(runtime_state, &messages))
+        .or_else(|| {
+            (!messages.is_empty()).then(|| SessionRuntimeStateEntry {
+                conversation_state: conversation_state_from_session_messages(&messages),
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            })
+        });
+
+    Ok(SessionHydrationSnapshot {
+        session_id,
+        messages,
+        compactions,
+        runtime_state,
+        earliest_ordinal,
+        has_more_history,
+        latest_turn_index,
+    })
+}
+
+/// Lazily loads one older transcript page before the provided ordinal cursor.
+/// 在给定序号游标之前懒加载一页更早的转录历史。
+pub async fn load_session_history_page(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    before_ordinal: i64,
+    requested_limit: usize,
+) -> Result<SessionHistoryPage, String> {
+    migrate_legacy_oversized_session_messages(&controller, session_id).await?;
+
+    let requested_limit = requested_limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT);
+    let (message_rows, effective_limit) = query_session_message_window_rows_with_retry(
+        &controller,
+        session_id,
+        Some(before_ordinal),
+        requested_limit,
+    )
+    .await?;
+    let mut message_rows = message_rows;
+    message_rows.sort_by_key(|row| row.ordinal);
+    let earliest_ordinal = message_rows.first().map(|row| row.ordinal);
+    let has_more_history = loaded_message_turn_count(&message_rows) >= effective_limit
+        && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
+    let message_body_chunks =
+        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
+    let messages = message_rows
+        .into_iter()
+        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
+        .collect::<Vec<_>>();
+
+    Ok(SessionHistoryPage {
+        session_id,
+        messages,
+        earliest_ordinal,
+        has_more_history,
+    })
+}
+
+/// Searches one session's persisted history with a small lightweight result page.
+/// 使用小型轻量结果页搜索单个会话的持久化历史。
+pub async fn search_session_history(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    query: String,
+    requested_limit: usize,
+) -> Result<SessionHistorySearchPage, String> {
+    let query = normalize_session_history_search_query(&query);
+    if query.is_empty() {
+        return Ok(SessionHistorySearchPage {
+            session_id,
+            query,
+            hits: Vec::new(),
+            limit_reached: false,
+        });
+    }
+
+    let limit = requested_limit
+        .max(1)
+        .min(SESSION_HISTORY_SEARCH_RESULT_LIMIT);
+    let rows = query_session_history_search_rows(&controller, session_id, &query, limit).await?;
+    let limit_reached = rows.len() >= limit;
+    let hits = rows
+        .into_iter()
+        .map(stored_session_history_search_row_to_hit)
+        .collect::<Vec<_>>();
+
+    Ok(SessionHistorySearchPage {
+        session_id,
+        query,
+        hits,
+        limit_reached,
+    })
+}
+
+/// Lazily loads one read-only transcript context window around a search-result anchor.
+/// 围绕搜索结果锚点懒加载一段只读转录上下文窗口。
+pub async fn load_session_history_context_page(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    anchor_message_id: String,
+    anchor_ordinal: i64,
+    anchor_turn_index: i64,
+) -> Result<SessionHistoryContextPage, String> {
+    migrate_legacy_oversized_session_messages(&controller, session_id).await?;
+
+    let (first_turn_index, last_turn_index) =
+        session_history_context_turn_bounds(anchor_turn_index, SESSION_HISTORY_CONTEXT_TURN_RADIUS);
+    let message_rows = query_session_history_context_rows(
+        &controller,
+        session_id,
+        &anchor_message_id,
+        first_turn_index,
+        last_turn_index,
+    )
+    .await?;
+    let anchor_found = message_rows
+        .iter()
+        .any(|row| row.id == anchor_message_id && row.ordinal == anchor_ordinal);
+    let loaded_first_turn_index = message_rows.first().map(|row| row.turn_index);
+    let loaded_last_turn_index = message_rows.last().map(|row| row.turn_index);
+    let message_body_chunks =
+        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
+    let messages = message_rows
+        .into_iter()
+        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
+        .collect::<Vec<_>>();
+
+    Ok(SessionHistoryContextPage {
+        session_id,
+        anchor_message_id,
+        anchor_ordinal,
+        anchor_turn_index,
+        first_turn_index: loaded_first_turn_index,
+        last_turn_index: loaded_last_turn_index,
+        messages,
+        anchor_found,
+    })
+}
+
+/// Lazily loads one tool-detail page for a specific conversation turn.
+/// 为指定对话轮次懒加载一页工具明细。
+pub async fn load_session_tool_detail_page(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    turn_index: i64,
+    before_ordinal: Option<i64>,
+    requested_limit: usize,
+) -> Result<SessionToolDetailPage, String> {
+    migrate_legacy_oversized_session_messages(&controller, session_id).await?;
+
+    let requested_limit = requested_limit.max(1).min(SESSION_TOOL_DETAIL_PAGE_LIMIT);
+    let (message_rows, effective_limit) = query_session_tool_detail_rows_with_retry(
+        &controller,
+        session_id,
+        turn_index,
+        before_ordinal,
+        requested_limit,
+    )
+    .await?;
+    let mut message_rows = message_rows;
+    message_rows.sort_by_key(|row| row.ordinal);
+    let earliest_ordinal = message_rows.first().map(|row| row.ordinal);
+    let has_more_detail = message_rows.len() >= effective_limit
+        && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
+    let message_body_chunks =
+        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
+    let messages = message_rows
+        .into_iter()
+        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
+        .collect::<Vec<_>>();
+
+    Ok(SessionToolDetailPage {
+        session_id,
+        turn_index,
+        messages,
+        earliest_ordinal,
+        has_more_detail,
+    })
+}
+
+/// Maintains the storage shape for one already hydrated session without scanning unrelated history.
+/// 在不扫描无关历史的前提下维护单个已水合会话的存储形态。
+pub async fn maintain_hydrated_session_storage(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    messages: Vec<SessionMessageEntry>,
+) -> Result<SessionMaintenanceReport, String> {
+    let legacy_chunk_migration =
+        migrate_legacy_oversized_session_messages(&controller, session_id).await?;
+    clear_session_runtime_conversation_state_json(&controller, session_id).await?;
+
+    let upserted_message_count = messages.len();
+    let mut message_batch_params = Vec::new();
+    let mut chunk_batch_params = Vec::new();
+    let persisted_positions =
+        query_session_message_positions_for_entries(&controller, session_id, &messages).await?;
+    let (max_ordinal, max_turn_index) =
+        query_session_message_max_position(&controller, session_id).await?;
+    push_session_message_rows_for_session(
+        &persisted_positions,
+        max_ordinal,
+        max_turn_index,
+        &mut message_batch_params,
+        &mut chunk_batch_params,
+        session_id,
+        &messages,
+    );
+    upsert_session_message_batches(&controller, message_batch_params, chunk_batch_params).await?;
+
+    Ok(SessionMaintenanceReport {
+        session_id,
+        upserted_message_count,
+        cleared_runtime_state_json: true,
+        legacy_chunk_migration,
+    })
+}
+
+/// Maintains legacy storage shape for one session without hydrating transcript messages.
+/// 在不水合转录消息的前提下维护单个会话的旧存储形态。
+pub async fn maintain_legacy_session_storage(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<SessionMaintenanceReport, String> {
+    let legacy_chunk_migration =
+        migrate_legacy_oversized_session_messages(&controller, session_id).await?;
+    clear_session_runtime_conversation_state_json(&controller, session_id).await?;
+
+    Ok(SessionMaintenanceReport {
+        session_id,
+        upserted_message_count: 0,
+        cleared_runtime_state_json: true,
+        legacy_chunk_migration,
+    })
+}
+
+/// Migrates legacy oversized inline message bodies into chunk rows without returning full bodies to Rust.
+/// 在不向 Rust 返回完整正文的前提下，将旧版超大内联消息正文迁移为分片行。
+async fn migrate_legacy_oversized_session_messages(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<SessionLegacyChunkMigrationReport, String> {
+    let mut report = SessionLegacyChunkMigrationReport {
+        session_id,
+        ..SessionLegacyChunkMigrationReport::default()
+    };
+
+    while report.migrated_message_count < SESSION_LEGACY_INLINE_MIGRATION_MAX_MESSAGES_PER_PASS {
+        let remaining_limit = SESSION_LEGACY_INLINE_MIGRATION_MAX_MESSAGES_PER_PASS
+            .saturating_sub(report.migrated_message_count)
+            .min(SESSION_LEGACY_INLINE_MIGRATION_CANDIDATE_LIMIT);
+        let candidates =
+            query_legacy_oversized_message_candidates(controller, session_id, remaining_limit)
+                .await?;
+        if candidates.is_empty() {
+            break;
+        }
+
+        let candidate_count = candidates.len();
+        for candidate in candidates {
+            let chunk_count = legacy_inline_message_chunk_count(candidate.content_chars)?;
+            if chunk_count > SESSION_LEGACY_INLINE_MIGRATION_MAX_CHUNKS_PER_MESSAGE {
+                return Err(format!(
+                    "旧版超大消息分片数量超出安全上限：session_id={session_id}, message_id={}, content_bytes={}, chunks={}, limit={}",
+                    candidate.id,
+                    candidate.content_bytes,
+                    chunk_count,
+                    SESSION_LEGACY_INLINE_MIGRATION_MAX_CHUNKS_PER_MESSAGE
+                ));
+            }
+            let script = legacy_inline_message_chunk_migration_script(session_id, &candidate.id);
+            controller
+                .client
+                .execute_sqlite_script_typed(
+                    APP_SPACE_ID,
+                    app_sqlite_binding_id(controller),
+                    script,
+                    Vec::<ControllerSqliteValue>::new(),
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "迁移旧版超大内联消息失败：session_id={session_id}, message_id={}, error={error}",
+                        candidate.id
+                    )
+                })?;
+            report.migrated_message_count += 1;
+            report.inserted_chunk_count = report.inserted_chunk_count.saturating_add(chunk_count);
+        }
+
+        if candidate_count < remaining_limit {
+            break;
+        }
+    }
+
+    Ok(report)
+}
+
+/// Queries legacy oversized inline-message candidates without selecting their full content.
+/// 在不选择完整正文的前提下查询旧版超大内联消息候选。
+async fn query_legacy_oversized_message_candidates(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    limit: usize,
+) -> Result<Vec<StoredLegacyOversizedMessageCandidateRow>, String> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            legacy_oversized_message_candidate_query(),
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::Int64(SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES as i64),
+                ControllerSqliteValue::Int64(
+                    limit.min(SESSION_LEGACY_INLINE_MIGRATION_CANDIDATE_LIMIT) as i64,
+                ),
+            ],
+        )
+        .await
+        .map_err(|error| format!("查询旧版超大内联消息候选失败：{error}"))?;
+
+    decode_query_rows::<StoredLegacyOversizedMessageCandidateRow>(&result.json_data)
+}
+
+/// Returns the lightweight candidate query used by legacy inline-message migration.
+/// 返回旧版内联消息迁移使用的轻量候选查询。
+fn legacy_oversized_message_candidate_query() -> &'static str {
+    r#"
+SELECT
+    m.id,
+    length(CAST(m.content AS BLOB)) AS content_bytes,
+    length(m.content) AS content_chars
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND length(CAST(m.content AS BLOB)) > ?2
+  AND NOT EXISTS (
+      SELECT 1
+      FROM session_message_chunks AS c
+      WHERE c.message_id = m.id
+      LIMIT 1
+  )
+ORDER BY m.ordinal DESC
+LIMIT ?3;
+"#
+}
+
+/// Builds one SQLite-side migration script for a legacy oversized inline message.
+/// 为单条旧版超大内联消息构建 SQLite 侧迁移脚本。
+fn legacy_inline_message_chunk_migration_script(session_id: SessionId, message_id: &str) -> String {
+    let escaped_session_id = sqlite_escape_text(&session_id.to_string());
+    let escaped_message_id = sqlite_escape_text(message_id);
+    format!(
+        r#"
+BEGIN IMMEDIATE TRANSACTION;
+
+WITH
+digits(n) AS (
+    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+),
+numbers(n) AS (
+    SELECT d0.n + d1.n * 10 + d2.n * 100 + d3.n * 1000 + d4.n * 10000
+    FROM digits AS d0
+    CROSS JOIN digits AS d1
+    CROSS JOIN digits AS d2
+    CROSS JOIN digits AS d3
+    CROSS JOIN digits AS d4
+),
+source(content_text, content_chars) AS (
+    SELECT content, length(content)
+    FROM session_messages
+    WHERE session_id = '{session_id}'
+      AND id = '{message_id}'
+      AND length(CAST(content AS BLOB)) > {inline_budget_bytes}
+      AND NOT EXISTS (
+          SELECT 1
+          FROM session_message_chunks
+          WHERE message_id = '{message_id}'
+          LIMIT 1
+      )
+)
+INSERT OR REPLACE INTO session_message_chunks (
+    session_id,
+    message_id,
+    chunk_index,
+    content
+)
+SELECT
+    '{session_id}',
+    '{message_id}',
+    numbers.n,
+    substr(source.content_text, numbers.n * {chunk_chars} + 1, {chunk_chars})
+FROM source
+JOIN numbers ON numbers.n * {chunk_chars} < source.content_chars
+ORDER BY numbers.n;
+
+UPDATE session_messages
+SET content = substr(content, 1, {preview_chars})
+WHERE session_id = '{session_id}'
+  AND id = '{message_id}'
+  AND length(CAST(content AS BLOB)) > {inline_budget_bytes}
+  AND EXISTS (
+      SELECT 1
+      FROM session_message_chunks
+      WHERE message_id = '{message_id}'
+      LIMIT 1
+  );
+
+COMMIT;
+"#,
+        session_id = escaped_session_id,
+        message_id = escaped_message_id,
+        chunk_chars = SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS,
+        inline_budget_bytes = SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES,
+        preview_chars = SESSION_MESSAGE_CHUNK_PREVIEW_CHARS
+    )
+}
+
+/// Estimates how many chunk rows a legacy inline message will produce from its character length.
+/// 根据旧版内联消息的字符长度估算其会生成多少分片行。
+fn legacy_inline_message_chunk_count(content_chars: i64) -> Result<usize, String> {
+    if content_chars <= 0 {
+        return Ok(0);
+    }
+
+    let content_chars = content_chars as u128;
+    let chunk_chars = SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS.max(1) as u128;
+    let chunk_count = content_chars.div_ceil(chunk_chars);
+    if chunk_count > usize::MAX as u128 {
+        return Err(format!("旧版超大消息字符长度无法安全转换：{content_chars}"));
+    }
+
+    Ok(chunk_count as usize)
 }
 
 /// Persists the current visible workspace snapshot back into the controller-backed SQLite database.
@@ -583,6 +1314,7 @@ pub async fn persist_workspace_snapshot(
         &snapshot.session_runtime_state,
         &snapshot.archived_sessions,
         &snapshot.archived_session_runtime_state,
+        &snapshot.hydrated_session_ids,
     )
     .await
 }
@@ -604,6 +1336,7 @@ fn build_empty_workspace_snapshot() -> WorkspaceSnapshot {
         session_run_phases: BTreeMap::new(),
         expanded_task_projects: BTreeSet::new(),
         selected_session: SessionId::nil(),
+        hydrated_session_ids: BTreeSet::new(),
     }
 }
 
@@ -656,6 +1389,7 @@ async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result
             r#"
 DELETE FROM session_runtime_state;
 DELETE FROM session_compactions;
+DELETE FROM session_message_chunks;
 DELETE FROM session_messages;
 DELETE FROM sessions;
 DELETE FROM projects;
@@ -803,34 +1537,372 @@ async fn query_active_session_ids(
         .collect())
 }
 
-/// Queries all transcript message rows, including hidden summary and compaction nodes, for both visible and archived sessions.
-/// 查询可见与归档会话的全部转录消息行，包含隐藏摘要与压缩节点。
-async fn query_session_message_rows(
+/// Queries one bounded transcript window for a single session, ordered newest-first at SQL level.
+/// 查询单个会话的一段有界转录窗口，SQL 层按新到旧排序。
+async fn query_session_message_window_rows(
     controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    before_ordinal: Option<i64>,
+    limit: usize,
 ) -> Result<Vec<StoredSessionMessageRow>, String> {
+    let session_id_text = session_id.to_string();
+    let limit = limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT) as i64;
+    let (statement, params) = if let Some(before_ordinal) = before_ordinal {
+        (
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
+FROM session_messages AS m
+INNER JOIN (
+    SELECT DISTINCT turn_index
+    FROM session_messages
+    WHERE session_id = ?1 AND ordinal < ?2
+    ORDER BY turn_index DESC
+    LIMIT ?3
+) AS selected_turns ON selected_turns.turn_index = m.turn_index
+WHERE m.session_id = ?1 AND m.ordinal < ?2 AND m.kind NOT IN ('tool-call-output', 'tool-result-output')
+ORDER BY m.ordinal DESC
+LIMIT ?4;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id_text),
+                ControllerSqliteValue::Int64(before_ordinal),
+                ControllerSqliteValue::Int64(limit),
+                ControllerSqliteValue::Int64(
+                    session_transcript_row_limit_for_turns(limit as usize) as i64,
+                ),
+            ],
+        )
+    } else {
+        (
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
+FROM session_messages AS m
+INNER JOIN (
+    SELECT DISTINCT turn_index
+    FROM session_messages
+    WHERE session_id = ?1
+    ORDER BY turn_index DESC
+    LIMIT ?2
+) AS selected_turns ON selected_turns.turn_index = m.turn_index
+WHERE m.session_id = ?1 AND m.kind NOT IN ('tool-call-output', 'tool-result-output')
+ORDER BY m.ordinal DESC
+LIMIT ?3;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id_text),
+                ControllerSqliteValue::Int64(limit),
+                ControllerSqliteValue::Int64(
+                    session_transcript_row_limit_for_turns(limit as usize) as i64,
+                ),
+            ],
+        )
+    };
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            statement,
+            params,
+        )
+        .await
+        .map_err(|error| format!("查询会话转录窗口失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionMessageRow>(&result.json_data)
+}
+
+/// Returns the maximum message rows fetched for one turn-level transcript window.
+/// 返回单个轮次级转录窗口允许拉取的最大消息行数。
+fn session_transcript_row_limit_for_turns(turn_limit: usize) -> usize {
+    SESSION_TRANSCRIPT_LEGACY_ROW_LIMIT
+        .max(turn_limit.saturating_mul(SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT))
+}
+
+/// Returns whether one persisted record kind should be part of the default transcript window.
+/// 返回某个持久化记录类型是否应进入默认转录窗口。
+#[cfg(test)]
+fn persisted_kind_in_default_transcript_window(kind: &str) -> bool {
+    !matches!(kind, "tool-call-output" | "tool-result-output")
+}
+
+/// Returns whether one persisted record kind belongs to the on-demand tool-detail stream.
+/// 返回某个持久化记录类型是否属于按需工具明细流。
+#[cfg(test)]
+fn persisted_kind_in_tool_detail_stream(kind: &str) -> bool {
+    matches!(kind, "tool-call-output" | "tool-result-output")
+}
+
+/// Counts distinct persisted turn indexes in one loaded message window.
+/// 统计一个已加载消息窗口中的不同持久化轮次索引数量。
+fn loaded_message_turn_count(message_rows: &[StoredSessionMessageRow]) -> usize {
+    message_rows
+        .iter()
+        .map(|row| row.turn_index)
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
+/// Queries lightweight search rows for one session without loading full chunk bodies.
+/// 在不加载完整分片正文的前提下查询单个会话的轻量搜索行。
+async fn query_session_history_search_rows(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<StoredSessionHistorySearchRow>, String> {
+    let like_pattern = session_history_search_like_pattern(query);
     let result = controller
         .client
         .query_sqlite_json_typed(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT m.id, m.session_id, m.ordinal, m.role, m.kind, m.visible, m.content, m.meta_json, m.created_at
+SELECT
+    m.id,
+    m.ordinal,
+    m.role,
+    m.kind,
+    m.visible,
+    m.turn_index,
+    substr(m.content, 1, ?3) AS content_preview,
+    m.meta_json,
+    m.created_at
 FROM session_messages AS m
-INNER JOIN sessions AS s ON s.id = m.session_id
-ORDER BY m.session_id ASC, m.ordinal ASC;
+WHERE m.session_id = ?1
+  AND (
+    m.content LIKE ?2 ESCAPE '\'
+    OR IFNULL(m.meta_json, '') LIKE ?2 ESCAPE '\'
+    OR EXISTS (
+        SELECT 1
+        FROM session_message_chunks AS c
+        WHERE c.session_id = m.session_id
+          AND c.message_id = m.id
+          AND c.content LIKE ?2 ESCAPE '\'
+        LIMIT 1
+    )
+  )
+ORDER BY m.ordinal DESC
+LIMIT ?4;
 "#,
-            Vec::new(),
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::String(like_pattern),
+                ControllerSqliteValue::Int64(SESSION_HISTORY_SEARCH_PREVIEW_CHARS as i64),
+                ControllerSqliteValue::Int64(limit.max(1) as i64),
+            ],
         )
         .await
-        .map_err(|error| format!("查询会话转录消息失败：{error}"))?;
+        .map_err(|error| format!("搜索会话历史失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionHistorySearchRow>(&result.json_data)
+}
+
+/// Queries a small transcript context window around one search-result anchor.
+/// 查询围绕单条搜索结果锚点的一段小型转录上下文窗口。
+async fn query_session_history_context_rows(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    anchor_message_id: &str,
+    first_turn_index: i64,
+    last_turn_index: i64,
+) -> Result<Vec<StoredSessionMessageRow>, String> {
+    let requested_turns = last_turn_index
+        .saturating_sub(first_turn_index)
+        .saturating_add(1)
+        .max(1) as usize;
+    let row_limit = session_transcript_row_limit_for_turns(requested_turns) as i64;
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND m.turn_index BETWEEN ?2 AND ?3
+  AND (m.kind NOT IN ('tool-call-output', 'tool-result-output') OR m.id = ?4)
+ORDER BY m.ordinal ASC
+LIMIT ?5;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::Int64(first_turn_index),
+                ControllerSqliteValue::Int64(last_turn_index),
+                ControllerSqliteValue::String(anchor_message_id.to_string()),
+                ControllerSqliteValue::Int64(row_limit),
+            ],
+        )
+        .await
+        .map_err(|error| format!("加载搜索命中附近上下文失败：{error}"))?;
 
     decode_query_rows::<StoredSessionMessageRow>(&result.json_data)
 }
 
-/// Queries hidden compaction checkpoint rows for both visible and archived sessions.
-/// 查询可见与归档会话对应的隐藏压缩检查点行。
-async fn query_session_compaction_rows(
+/// Queries and rebuilds chunked message bodies for one already-bounded transcript window.
+/// 查询并重建一个已限界转录窗口中的分片消息正文。
+async fn query_session_message_body_chunks_for_rows(
     controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    message_rows: &[StoredSessionMessageRow],
+) -> Result<BTreeMap<String, String>, String> {
+    if message_rows.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let chunked_message_ids =
+        query_chunked_message_ids_for_window(controller, session_id, message_rows).await?;
+    let mut rebuilt_bodies = BTreeMap::new();
+    for message_id in chunked_message_ids {
+        let chunk_rows =
+            query_session_message_chunk_rows_for_message(controller, session_id, &message_id)
+                .await?;
+        let rebuilt_body = rebuild_session_message_body_from_chunks(&message_id, chunk_rows)?;
+        rebuilt_bodies.insert(message_id, rebuilt_body);
+    }
+
+    Ok(rebuilt_bodies)
+}
+
+/// Queries the subset of one transcript window that has external body chunks.
+/// 查询一个转录窗口中拥有外部分片正文的消息子集。
+async fn query_chunked_message_ids_for_window(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    message_rows: &[StoredSessionMessageRow],
+) -> Result<Vec<String>, String> {
+    let message_ids = message_rows
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<Vec<_>>();
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = (2..message_ids.len() + 2)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let statement = format!(
+        r#"
+SELECT DISTINCT message_id
+FROM session_message_chunks
+WHERE session_id = ?1 AND message_id IN ({placeholders})
+ORDER BY message_id ASC;
+"#
+    );
+    let mut params = Vec::with_capacity(message_ids.len() + 1);
+    params.push(ControllerSqliteValue::String(session_id.to_string()));
+    params.extend(
+        message_ids
+            .into_iter()
+            .map(|message_id| ControllerSqliteValue::String(message_id.to_string())),
+    );
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            statement,
+            params,
+        )
+        .await
+        .map_err(|error| format!("查询会话消息分片索引失败：{error}"))?;
+
+    Ok(
+        decode_query_rows::<StoredSessionMessageChunkPresenceRow>(&result.json_data)?
+            .into_iter()
+            .map(|row| row.message_id)
+            .collect(),
+    )
+}
+
+/// Queries chunk rows for one oversized message in small pages to stay below gRPC response limits.
+/// 以小分页查询单条超大消息的分片行，避免超过 gRPC 响应限制。
+async fn query_session_message_chunk_rows_for_message(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    message_id: &str,
+) -> Result<Vec<StoredSessionMessageChunkRow>, String> {
+    let mut rows = Vec::new();
+    let mut last_chunk_index = -1_i64;
+    let mut effective_limit = SESSION_MESSAGE_CHUNK_QUERY_LIMIT.max(1);
+
+    loop {
+        match query_session_message_chunk_rows_after_index(
+            controller,
+            session_id,
+            message_id,
+            last_chunk_index,
+            effective_limit,
+        )
+        .await
+        {
+            Ok(page) => {
+                if page.is_empty() {
+                    break;
+                }
+                last_chunk_index = page
+                    .last()
+                    .map(|row| row.chunk_index)
+                    .unwrap_or(last_chunk_index);
+                let page_len = page.len();
+                rows.extend(page);
+                if page_len < effective_limit {
+                    break;
+                }
+            }
+            Err(error) if effective_limit > 1 && is_grpc_message_frame_size_error(&error) => {
+                effective_limit = (effective_limit / 2).max(1);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(rows)
+}
+
+/// Queries one bounded chunk page after the provided chunk-index cursor.
+/// 查询给定分片序号游标之后的一段有限分片页。
+async fn query_session_message_chunk_rows_after_index(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    message_id: &str,
+    after_chunk_index: i64,
+    limit: usize,
+) -> Result<Vec<StoredSessionMessageChunkRow>, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT message_id, chunk_index, content
+FROM session_message_chunks
+WHERE session_id = ?1 AND message_id = ?2 AND chunk_index > ?3
+ORDER BY chunk_index ASC
+LIMIT ?4;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::String(message_id.to_string()),
+                ControllerSqliteValue::Int64(after_chunk_index),
+                ControllerSqliteValue::Int64(limit.max(1) as i64),
+            ],
+        )
+        .await
+        .map_err(|error| format!("查询会话消息分片内容失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionMessageChunkRow>(&result.json_data)
+}
+
+/// Queries hidden compaction checkpoint rows for one session.
+/// 查询单个会话对应的隐藏压缩检查点行。
+async fn query_session_compaction_rows_for_session(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
 ) -> Result<Vec<StoredCompactionRow>, String> {
     let result = controller
         .client
@@ -838,12 +1910,12 @@ async fn query_session_compaction_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT c.id, c.session_id, c.source_until_message_id, c.context_start_message_id, c.summary_message_id, c.created_at
+SELECT c.id, c.source_until_message_id, c.context_start_message_id, c.summary_message_id, c.created_at
 FROM session_compactions AS c
-INNER JOIN sessions AS s ON s.id = c.session_id
-ORDER BY c.session_id ASC, c.created_at ASC;
+WHERE c.session_id = ?1
+ORDER BY c.created_at ASC;
 "#,
-            Vec::new(),
+            vec![ControllerSqliteValue::String(session_id.to_string())],
         )
         .await
         .map_err(|error| format!("查询会话压缩节点失败：{error}"))?;
@@ -851,9 +1923,9 @@ ORDER BY c.session_id ASC, c.created_at ASC;
     decode_query_rows::<StoredCompactionRow>(&result.json_data)
 }
 
-/// Queries runtime-state rows for both visible and archived sessions.
-/// 查询可见与归档会话对应的运行时状态行。
-async fn query_session_runtime_state_rows(
+/// Queries lightweight runtime-state rows for startup without the large canonical conversation JSON.
+/// 启动时查询不含大型规范会话 JSON 的轻量运行时状态行。
+async fn query_session_runtime_state_shell_rows(
     controller: &ControllerRuntimeHandle,
 ) -> Result<Vec<StoredRuntimeStateRow>, String> {
     let result = controller
@@ -862,7 +1934,7 @@ async fn query_session_runtime_state_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.conversation_state_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.continuation_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -873,6 +1945,167 @@ ORDER BY r.session_id ASC;
         .map_err(|error| format!("查询会话运行时状态失败：{error}"))?;
 
     decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)
+}
+
+/// Queries lightweight runtime-state metadata for one session without the large canonical conversation JSON.
+/// 查询单个会话不含大型规范会话 JSON 的轻量运行时状态元数据。
+async fn query_session_runtime_state_shell_row(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<Option<StoredRuntimeStateRow>, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.continuation_json, r.updated_at
+FROM session_runtime_state AS r
+WHERE r.session_id = ?1
+LIMIT 1;
+"#,
+            vec![ControllerSqliteValue::String(session_id.to_string())],
+        )
+        .await
+        .map_err(|error| format!("查询会话运行时状态失败：{error}"))?;
+
+    Ok(
+        decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)?
+            .into_iter()
+            .next(),
+    )
+}
+
+/// Queries one transcript window with progressive limit reduction when gRPC frame limits are hit.
+/// 查询单段转录窗口，并在触发 gRPC 帧限制时逐步缩小 limit 重试。
+async fn query_session_message_window_rows_with_retry(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    before_ordinal: Option<i64>,
+    requested_limit: usize,
+) -> Result<(Vec<StoredSessionMessageRow>, usize), String> {
+    let mut effective_limit = requested_limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT);
+
+    loop {
+        match query_session_message_window_rows(
+            controller,
+            session_id,
+            before_ordinal,
+            effective_limit,
+        )
+        .await
+        {
+            Ok(rows) => return Ok((rows, effective_limit)),
+            Err(error) if effective_limit > 1 && is_grpc_message_frame_size_error(&error) => {
+                effective_limit = (effective_limit / 2).max(1);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Queries one tool-detail window with progressive limit reduction when gRPC frame limits are hit.
+/// 查询单段工具明细窗口，并在触发 gRPC 帧限制时逐步缩小 limit 重试。
+async fn query_session_tool_detail_rows_with_retry(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    turn_index: i64,
+    before_ordinal: Option<i64>,
+    requested_limit: usize,
+) -> Result<(Vec<StoredSessionMessageRow>, usize), String> {
+    let mut effective_limit = requested_limit
+        .max(1)
+        .min(SESSION_TRANSCRIPT_LEGACY_ROW_LIMIT);
+
+    loop {
+        match query_session_tool_detail_rows(
+            controller,
+            session_id,
+            turn_index,
+            before_ordinal,
+            effective_limit,
+        )
+        .await
+        {
+            Ok(rows) => return Ok((rows, effective_limit)),
+            Err(error) if effective_limit > 1 && is_grpc_message_frame_size_error(&error) => {
+                effective_limit = (effective_limit / 2).max(1);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Queries one bounded tool-detail window for a single turn, ordered newest-first at SQL level.
+/// 查询单个轮次的一段有界工具明细窗口，SQL 层按新到旧排序。
+async fn query_session_tool_detail_rows(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    turn_index: i64,
+    before_ordinal: Option<i64>,
+    limit: usize,
+) -> Result<Vec<StoredSessionMessageRow>, String> {
+    let session_id_text = session_id.to_string();
+    let limit = limit.max(1).min(SESSION_TRANSCRIPT_LEGACY_ROW_LIMIT) as i64;
+    let (statement, params) = if let Some(before_ordinal) = before_ordinal {
+        (
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND m.turn_index = ?2
+  AND m.ordinal < ?3
+  AND m.kind IN ('tool-call-output', 'tool-result-output')
+ORDER BY m.ordinal DESC
+LIMIT ?4;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id_text),
+                ControllerSqliteValue::Int64(turn_index),
+                ControllerSqliteValue::Int64(before_ordinal),
+                ControllerSqliteValue::Int64(limit),
+            ],
+        )
+    } else {
+        (
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND m.turn_index = ?2
+  AND m.kind IN ('tool-call-output', 'tool-result-output')
+ORDER BY m.ordinal DESC
+LIMIT ?3;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id_text),
+                ControllerSqliteValue::Int64(turn_index),
+                ControllerSqliteValue::Int64(limit),
+            ],
+        )
+    };
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            statement,
+            params,
+        )
+        .await
+        .map_err(|error| format!("查询会话工具明细窗口失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionMessageRow>(&result.json_data)
+}
+
+/// Returns whether one controller error looks like tonic's protobuf message-size guard.
+/// 判断一条控制器错误是否类似 tonic 的 protobuf 消息大小保护。
+fn is_grpc_message_frame_size_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("decoded message length too large")
+        || normalized.contains("message length too large")
+        || normalized.contains("limit is: 4194304")
 }
 
 /// Upserts all visible project rows while clearing the archive flag.
@@ -1108,6 +2341,13 @@ pub async fn permanently_delete_archived_session(
 
     delete_session_scoped_rows(
         &controller,
+        "session_message_chunks",
+        &session_ids,
+        "删除归档会话转录消息分片失败",
+    )
+    .await?;
+    delete_session_scoped_rows(
+        &controller,
         "session_messages",
         &session_ids,
         "删除归档会话转录消息失败",
@@ -1154,6 +2394,13 @@ pub async fn permanently_delete_archived_project(
         .map(|session_id| session_id.to_string())
         .collect::<Vec<_>>();
 
+    delete_session_scoped_rows(
+        &controller,
+        "session_message_chunks",
+        &session_id_texts,
+        "删除归档项目下的转录消息分片失败",
+    )
+    .await?;
     delete_session_scoped_rows(
         &controller,
         "session_messages",
@@ -1207,8 +2454,8 @@ pub async fn permanently_delete_archived_project(
     Ok(())
 }
 
-/// Replaces all transcript message rows for the currently visible sessions while leaving archived sessions intact.
-/// 在保留已归档会话数据的前提下替换当前可见会话的全部转录消息行。
+/// Upserts loaded transcript message rows while leaving not-yet-loaded history intact.
+/// 在保留尚未加载历史的前提下上写已加载的转录消息行。
 async fn replace_session_messages(
     controller: &ControllerRuntimeHandle,
     sessions: &[SessionSummary],
@@ -1216,56 +2463,90 @@ async fn replace_session_messages(
     archived_sessions: &[SessionSummary],
     archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
 ) -> Result<(), String> {
-    let active_session_ids = sessions
-        .iter()
-        .chain(archived_sessions.iter())
-        .map(|session| session.id.to_string())
-        .collect::<Vec<_>>();
-
-    delete_session_scoped_rows(
+    let mut message_batch_params = Vec::new();
+    let mut chunk_batch_params = Vec::new();
+    push_session_message_batch_rows(
         controller,
-        "session_messages",
-        &active_session_ids,
-        "删除当前可见会话的旧转录消息失败",
+        &mut message_batch_params,
+        &mut chunk_batch_params,
+        sessions,
+        session_messages,
+    )
+    .await?;
+    push_session_message_batch_rows(
+        controller,
+        &mut message_batch_params,
+        &mut chunk_batch_params,
+        archived_sessions,
+        archived_session_messages,
     )
     .await?;
 
-    let mut batch_params = Vec::new();
-    push_session_message_batch_rows(&mut batch_params, sessions, session_messages);
-    push_session_message_batch_rows(
-        &mut batch_params,
-        archived_sessions,
-        archived_session_messages,
-    );
+    upsert_session_message_batches(controller, message_batch_params, chunk_batch_params).await
+}
 
-    if batch_params.is_empty() {
+/// Upserts prepared transcript rows and rewrites only their own chunk rows.
+/// 上写已预处理的转录行，并且只重写这些消息自身的分片行。
+async fn upsert_session_message_batches(
+    controller: &ControllerRuntimeHandle,
+    message_batch_params: Vec<Vec<ControllerSqliteValue>>,
+    chunk_batch_params: Vec<Vec<ControllerSqliteValue>>,
+) -> Result<(), String> {
+    if message_batch_params.is_empty() {
         return Ok(());
     }
 
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-INSERT INTO session_messages (
-    id,
-    session_id,
-    ordinal,
-    role,
-    kind,
-    visible,
-    content,
-    meta_json,
-    created_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);
-"#,
-            batch_params,
+    let message_ids = message_batch_params
+        .iter()
+        .filter_map(|row| match row.first() {
+            Some(ControllerSqliteValue::String(message_id)) => Some(message_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    delete_session_message_chunks_for_message_ids(
+        controller,
+        &message_ids,
+        "删除当前窗口消息的旧正文分片失败",
+    )
+    .await?;
+
+    execute_sqlite_batch_safely(
+        controller,
+        "session_messages",
+        session_message_upsert_statement(),
+        message_batch_params,
+        "写入会话转录消息失败",
+    )
+    .await?;
+
+    if !chunk_batch_params.is_empty() {
+        execute_sqlite_batch_safely(
+            controller,
+            "session_message_chunks",
+            session_message_chunk_upsert_statement(),
+            chunk_batch_params,
+            "写入会话转录消息分片失败",
         )
-        .await
-        .map_err(|error| format!("写入会话转录消息失败：{error}"))?;
+        .await?;
+    }
 
     Ok(())
+}
+
+/// Returns the upsert SQL used to persist chunk rows safely across overlapping maintenance tasks.
+/// 返回用于在重叠维护任务间安全持久化分片行的 upsert SQL。
+fn session_message_chunk_upsert_statement() -> &'static str {
+    r#"
+INSERT INTO session_message_chunks (
+    session_id,
+    message_id,
+    chunk_index,
+    content
+) VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(message_id, chunk_index) DO UPDATE SET
+    session_id = excluded.session_id,
+    content = excluded.content;
+"#
 }
 
 /// Replaces all compaction checkpoint rows for the currently visible sessions while leaving archived sessions intact.
@@ -1280,6 +2561,10 @@ async fn replace_session_compactions(
     let active_session_ids = sessions
         .iter()
         .chain(archived_sessions.iter())
+        .filter(|session| {
+            session_compactions.contains_key(&session.id)
+                || archived_session_compactions.contains_key(&session.id)
+        })
         .map(|session| session.id.to_string())
         .collect::<Vec<_>>();
 
@@ -1303,12 +2588,10 @@ async fn replace_session_compactions(
         return Ok(());
     }
 
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    execute_sqlite_batch_safely(
+        controller,
+        "session_compactions",
+        r#"
 INSERT INTO session_compactions (
     id,
     session_id,
@@ -1318,10 +2601,10 @@ INSERT INTO session_compactions (
     created_at
 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6);
 "#,
-            batch_params,
-        )
-        .await
-        .map_err(|error| format!("写入会话压缩节点失败：{error}"))?;
+        batch_params,
+        "写入会话压缩节点失败",
+    )
+    .await?;
 
     Ok(())
 }
@@ -1334,10 +2617,12 @@ async fn replace_session_runtime_state(
     session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
     archived_sessions: &[SessionSummary],
     archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    hydrated_session_ids: &BTreeSet<SessionId>,
 ) -> Result<(), String> {
     let active_session_ids = sessions
         .iter()
         .chain(archived_sessions.iter())
+        .filter(|session| hydrated_session_ids.contains(&session.id))
         .map(|session| session.id.to_string())
         .collect::<Vec<_>>();
 
@@ -1361,12 +2646,10 @@ async fn replace_session_runtime_state(
         return Ok(());
     }
 
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    execute_sqlite_batch_safely(
+        controller,
+        "session_runtime_state",
+        r#"
 INSERT INTO session_runtime_state (
     session_id,
     active_agent_id,
@@ -1376,49 +2659,335 @@ INSERT INTO session_runtime_state (
     context_start_message_id,
     ui_state_json,
     conversation_state_json,
+    continuation_json,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);
 "#,
-            batch_params,
-        )
-        .await
-        .map_err(|error| format!("写入会话运行时状态失败：{error}"))?;
+        batch_params,
+        "写入会话运行时状态失败",
+    )
+    .await?;
 
     Ok(())
 }
 
+/// Queries existing ordinals and turn indexes for loaded entries so partial upserts keep their positions.
+/// 查询已加载消息已有的序号与轮次索引，确保局部上写保留原位置。
+async fn query_session_message_positions_for_entries(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    messages: &[SessionMessageEntry],
+) -> Result<BTreeMap<String, StoredSessionMessagePositionRow>, String> {
+    let message_ids = messages
+        .iter()
+        .filter_map(|message| {
+            let message_id = message.id.trim();
+            (!message_id.is_empty()).then(|| message_id.to_string())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut positions = BTreeMap::new();
+    for chunk in message_ids.chunks(SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT) {
+        let chunk_positions =
+            query_session_message_positions_for_ids(controller, session_id, chunk).await?;
+        positions.extend(
+            chunk_positions
+                .into_iter()
+                .map(|position| (position.id.clone(), position)),
+        );
+    }
+
+    Ok(positions)
+}
+
+/// Queries existing persisted positions for a bounded set of message identifiers.
+/// 查询一组有界消息标识对应的已持久化位置。
+async fn query_session_message_positions_for_ids(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    message_ids: &[String],
+) -> Result<Vec<StoredSessionMessagePositionRow>, String> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = (2..message_ids.len() + 2)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let statement = format!(
+        r#"
+SELECT id, ordinal, turn_index
+FROM session_messages
+WHERE session_id = ?1 AND id IN ({placeholders})
+ORDER BY ordinal ASC;
+"#
+    );
+    let mut params = Vec::with_capacity(message_ids.len() + 1);
+    params.push(ControllerSqliteValue::String(session_id.to_string()));
+    params.extend(
+        message_ids
+            .iter()
+            .cloned()
+            .map(ControllerSqliteValue::String),
+    );
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            statement,
+            params,
+        )
+        .await
+        .map_err(|error| format!("查询会话消息持久化位置失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionMessagePositionRow>(&result.json_data)
+}
+
+/// Queries the maximum persisted ordinal and turn index for one session without loading bodies.
+/// 在不加载正文的前提下查询单个会话已持久化的最大序号与轮次索引。
+async fn query_session_message_max_position(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(i64, i64), String> {
+    #[derive(Deserialize)]
+    struct MaxPositionRow {
+        /// Maximum persisted ordinal or -1 when the session has no rows.
+        /// 最大已持久化序号；会话没有行时为 -1。
+        max_ordinal: i64,
+        /// Maximum persisted turn index or -1 when the session has no rows.
+        /// 最大已持久化轮次索引；会话没有行时为 -1。
+        max_turn_index: i64,
+    }
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT
+    COALESCE(MAX(ordinal), -1) AS max_ordinal,
+    COALESCE(MAX(turn_index), -1) AS max_turn_index
+FROM session_messages
+WHERE session_id = ?1;
+"#,
+            vec![ControllerSqliteValue::String(session_id.to_string())],
+        )
+        .await
+        .map_err(|error| format!("查询会话消息最大位置失败：{error}"))?;
+
+    let rows = decode_query_rows::<MaxPositionRow>(&result.json_data)?;
+    let row = rows.into_iter().next().unwrap_or(MaxPositionRow {
+        max_ordinal: -1,
+        max_turn_index: -1,
+    });
+    Ok((row.max_ordinal, row.max_turn_index))
+}
+
 /// Pushes transcript-message batch rows for one session slice into the shared SQLite batch payload.
 /// 将某个会话切片的转录消息批量行推入共享 SQLite 批处理载荷。
-fn push_session_message_batch_rows(
-    batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+async fn push_session_message_batch_rows(
+    controller: &ControllerRuntimeHandle,
+    message_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+    chunk_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
     sessions: &[SessionSummary],
     session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-) {
+) -> Result<(), String> {
     for session in sessions {
         if let Some(messages) = session_messages.get(&session.id) {
-            for (ordinal, message) in messages.iter().enumerate() {
-                let meta_json = serialize_session_message_meta_to_json(message);
-
-                batch_params.push(vec![
-                    ControllerSqliteValue::String(if message.id.trim().is_empty() {
-                        format!("session-{}-message-{}", session.id, ordinal)
-                    } else {
-                        message.id.clone()
-                    }),
-                    ControllerSqliteValue::String(session.id.to_string()),
-                    ControllerSqliteValue::Int64(ordinal as i64),
-                    ControllerSqliteValue::String(role_from_session_kind(message.kind).to_string()),
-                    ControllerSqliteValue::String(
-                        message.record_kind.as_persisted_key().to_string(),
-                    ),
-                    ControllerSqliteValue::Int64(i64::from(message.visible)),
-                    ControllerSqliteValue::String(message.body.clone()),
-                    optional_sqlite_string(&meta_json),
-                    ControllerSqliteValue::String(non_empty_timestamp_text(&message.created_at)),
-                ]);
-            }
+            let persisted_positions =
+                query_session_message_positions_for_entries(controller, session.id, messages)
+                    .await?;
+            let (max_ordinal, max_turn_index) =
+                query_session_message_max_position(controller, session.id).await?;
+            push_session_message_rows_for_session(
+                &persisted_positions,
+                max_ordinal,
+                max_turn_index,
+                message_batch_params,
+                chunk_batch_params,
+                session.id,
+                messages,
+            );
         }
     }
+
+    Ok(())
+}
+
+/// Pushes transcript-message batch rows for one concrete session identifier.
+/// 为一个明确的会话标识推入转录消息批处理行。
+fn push_session_message_rows_for_session(
+    persisted_positions: &BTreeMap<String, StoredSessionMessagePositionRow>,
+    max_persisted_ordinal: i64,
+    max_persisted_turn_index: i64,
+    message_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+    chunk_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+    session_id: SessionId,
+    messages: &[SessionMessageEntry],
+) {
+    let mut next_new_ordinal = max_persisted_ordinal.saturating_add(1).max(0);
+    let mut current_turn_index = max_persisted_turn_index.max(0);
+    let mut has_prior_turn_context = max_persisted_turn_index >= 0;
+    for (local_index, message) in messages.iter().enumerate() {
+        let meta_json = serialize_session_message_meta_to_json(message);
+        let message_id = if message.id.trim().is_empty() {
+            format!("session-{}-message-{}", session_id, local_index)
+        } else {
+            message.id.clone()
+        };
+        let (ordinal, turn_index) = if let Some(position) = persisted_positions.get(&message_id) {
+            current_turn_index = position.turn_index.max(0);
+            has_prior_turn_context = true;
+            (position.ordinal, position.turn_index)
+        } else {
+            if session_message_starts_new_turn(message) && has_prior_turn_context {
+                current_turn_index = current_turn_index.saturating_add(1);
+            }
+            has_prior_turn_context = true;
+            let ordinal = next_new_ordinal;
+            next_new_ordinal = next_new_ordinal.saturating_add(1);
+            (ordinal, current_turn_index)
+        };
+        let prepared_body = prepare_session_message_body_for_storage(&message.body);
+
+        message_batch_params.push(vec![
+            ControllerSqliteValue::String(message_id.clone()),
+            ControllerSqliteValue::String(session_id.to_string()),
+            ControllerSqliteValue::Int64(ordinal),
+            ControllerSqliteValue::String(role_from_session_kind(message.kind).to_string()),
+            ControllerSqliteValue::String(message.record_kind.as_persisted_key().to_string()),
+            ControllerSqliteValue::Int64(i64::from(message.visible)),
+            ControllerSqliteValue::Int64(turn_index),
+            ControllerSqliteValue::String(prepared_body.inline_content),
+            optional_sqlite_string(&meta_json),
+            ControllerSqliteValue::String(non_empty_timestamp_text(&message.created_at)),
+        ]);
+
+        chunk_batch_params.extend(prepared_body.chunks.into_iter().enumerate().map(
+            |(chunk_index, chunk)| {
+                vec![
+                    ControllerSqliteValue::String(session_id.to_string()),
+                    ControllerSqliteValue::String(message_id.clone()),
+                    ControllerSqliteValue::Int64(chunk_index as i64),
+                    ControllerSqliteValue::String(chunk),
+                ]
+            },
+        ));
+    }
+}
+
+/// Returns the upsert SQL used to persist loaded transcript rows without deleting unloaded history.
+/// 返回用于持久化已加载转录行且不删除未加载历史的 upsert SQL。
+fn session_message_upsert_statement() -> &'static str {
+    r#"
+INSERT INTO session_messages (
+    id,
+    session_id,
+    ordinal,
+    role,
+    kind,
+    visible,
+    turn_index,
+    content,
+    meta_json,
+    created_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+ON CONFLICT(id) DO UPDATE SET
+    session_id = excluded.session_id,
+    ordinal = excluded.ordinal,
+    role = excluded.role,
+    kind = excluded.kind,
+    visible = excluded.visible,
+    turn_index = excluded.turn_index,
+    content = excluded.content,
+    meta_json = excluded.meta_json,
+    created_at = excluded.created_at;
+"#
+}
+
+/// Assigns stable turn indexes to one ordered transcript slice.
+/// 为一段有序转录消息分配稳定轮次索引。
+#[cfg(test)]
+fn assign_session_message_turn_indexes(messages: &[SessionMessageEntry]) -> Vec<i64> {
+    let mut turn_indexes = Vec::with_capacity(messages.len());
+    let mut current_turn_index = 0_i64;
+    let mut has_seen_user_turn = false;
+
+    for message in messages {
+        if session_message_starts_new_turn(message) {
+            if has_seen_user_turn {
+                current_turn_index = current_turn_index.saturating_add(1);
+            } else {
+                has_seen_user_turn = true;
+            }
+        }
+        turn_indexes.push(current_turn_index);
+    }
+
+    turn_indexes
+}
+
+/// Returns whether one transcript message should open a new user-driven dialogue turn.
+/// 返回一条转录消息是否应开启新的用户驱动对话轮次。
+fn session_message_starts_new_turn(message: &SessionMessageEntry) -> bool {
+    matches!(message.kind, SessionMessageKind::User)
+        && message.visible
+        && message.contributes_to_context()
+}
+
+/// Prepared persistence payload for one transcript message body.
+/// 单条转录消息正文的预处理持久化载荷。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedSessionMessageBody {
+    /// Inline content stored directly on the lightweight `session_messages` row.
+    /// 直接存储在轻量 `session_messages` 行上的内联内容。
+    inline_content: String,
+    /// External body chunks stored in `session_message_chunks` when the body is oversized.
+    /// 正文过大时存储在 `session_message_chunks` 中的外部分片。
+    chunks: Vec<String>,
+}
+
+/// Prepares one message body for inline storage or chunked external storage.
+/// 将单条消息正文预处理为内联存储或外部分片存储。
+fn prepare_session_message_body_for_storage(body: &str) -> PreparedSessionMessageBody {
+    if body.len() <= SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES {
+        return PreparedSessionMessageBody {
+            inline_content: body.to_string(),
+            chunks: Vec::new(),
+        };
+    }
+
+    PreparedSessionMessageBody {
+        inline_content: truncate_preview_lines(body, 4, SESSION_MESSAGE_CHUNK_PREVIEW_CHARS),
+        chunks: split_text_into_byte_chunks(body, SESSION_MESSAGE_CHUNK_CONTENT_BYTES),
+    }
+}
+
+/// Splits UTF-8 text into chunks that do not exceed the requested byte limit.
+/// 将 UTF-8 文本拆分为不超过指定字节上限的分片。
+fn split_text_into_byte_chunks(value: &str, max_bytes: usize) -> Vec<String> {
+    let max_bytes = max_bytes.max(4);
+    let mut chunks = Vec::new();
+    let mut chunk_start = 0usize;
+
+    for (char_start, ch) in value.char_indices() {
+        let char_end = char_start + ch.len_utf8();
+        if char_end.saturating_sub(chunk_start) > max_bytes && char_start > chunk_start {
+            chunks.push(value[chunk_start..char_start].to_string());
+            chunk_start = char_start;
+        }
+    }
+
+    if chunk_start < value.len() {
+        chunks.push(value[chunk_start..].to_string());
+    }
+
+    chunks
 }
 
 /// Pushes compaction-checkpoint batch rows for one session slice into the shared SQLite batch payload.
@@ -1461,8 +3030,9 @@ fn push_session_runtime_state_batch_rows(
                 optional_sqlite_string(&entry.last_compaction_id),
                 optional_sqlite_string(&entry.context_start_message_id),
                 optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
-                optional_sqlite_string(&serialize_session_conversation_state_to_json(
-                    &entry.conversation_state,
+                ControllerSqliteValue::Null,
+                optional_sqlite_string(&serialize_session_continuation_to_json(
+                    &entry.conversation_state.continuation,
                 )),
                 ControllerSqliteValue::String(non_empty_timestamp_text(&entry.updated_at)),
             ]);
@@ -1489,18 +3059,183 @@ async fn delete_session_scoped_rows(
         .map(|session_id| vec![ControllerSqliteValue::String(session_id)])
         .collect::<Vec<_>>();
 
+    execute_sqlite_batch_safely(controller, table_name, &statement, params, error_prefix).await?;
+
+    Ok(())
+}
+
+/// Clears the legacy full conversation-state JSON for one hydrated session without reading it first.
+/// 在不预读旧大字段的前提下清理单个已水合会话的旧完整会话状态 JSON。
+async fn clear_session_runtime_conversation_state_json(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    execute_sqlite_batch_safely(
+        controller,
+        "session_runtime_state",
+        session_runtime_conversation_state_cleanup_statement(),
+        vec![vec![ControllerSqliteValue::String(session_id.to_string())]],
+        "清理旧会话运行时完整状态失败",
+    )
+    .await
+}
+
+/// Returns the SQL used to null out legacy full conversation-state payloads after hydration.
+/// 返回会话水合后用于清空旧完整会话状态载荷的 SQL。
+fn session_runtime_conversation_state_cleanup_statement() -> &'static str {
+    "UPDATE session_runtime_state SET conversation_state_json = NULL WHERE session_id = ?1;"
+}
+
+/// Deletes chunk rows for the provided message identifiers before those messages are upserted.
+/// 在对应消息被上写前，删除这些消息标识关联的正文分片行。
+async fn delete_session_message_chunks_for_message_ids(
+    controller: &ControllerRuntimeHandle,
+    message_ids: &[String],
+    error_prefix: &str,
+) -> Result<(), String> {
+    if message_ids.is_empty() {
+        return Ok(());
+    }
+
+    let params = message_ids
+        .iter()
+        .cloned()
+        .map(|message_id| vec![ControllerSqliteValue::String(message_id)])
+        .collect::<Vec<_>>();
+
+    execute_sqlite_batch_safely(
+        controller,
+        "session_message_chunks",
+        "DELETE FROM session_message_chunks WHERE message_id = ?1;",
+        params,
+        error_prefix,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Executes a typed SQLite batch in safe chunks estimated against the full gRPC protobuf frame.
+/// 按完整 gRPC protobuf 帧估算将类型化 SQLite 批处理拆成安全小批执行。
+async fn execute_sqlite_batch_safely(
+    controller: &ControllerRuntimeHandle,
+    table_name: &str,
+    statement: &str,
+    params: Vec<Vec<ControllerSqliteValue>>,
+    error_prefix: &str,
+) -> Result<(), String> {
+    if params.is_empty() {
+        return Ok(());
+    }
+
+    let statement_bytes = estimate_text_frame_bytes(statement);
+    let mut batch_index = 0usize;
+    let mut current_rows: Vec<Vec<ControllerSqliteValue>> = Vec::new();
+    let mut current_estimated_bytes =
+        SQLITE_BATCH_FRAME_OVERHEAD_BYTES.saturating_add(statement_bytes);
+
+    for row in params {
+        let row_estimated_bytes = estimate_sqlite_row_frame_bytes(&row);
+        let row_would_overflow = !current_rows.is_empty()
+            && (current_rows.len() >= SQLITE_BATCH_SAFE_ROW_LIMIT
+                || current_estimated_bytes.saturating_add(row_estimated_bytes)
+                    > SQLITE_BATCH_SAFE_FRAME_TARGET_BYTES);
+
+        if row_would_overflow {
+            batch_index = batch_index.saturating_add(1);
+            execute_sqlite_batch_chunk(
+                controller,
+                table_name,
+                statement,
+                std::mem::take(&mut current_rows),
+                batch_index,
+                current_estimated_bytes,
+                error_prefix,
+            )
+            .await?;
+            current_estimated_bytes =
+                SQLITE_BATCH_FRAME_OVERHEAD_BYTES.saturating_add(statement_bytes);
+        }
+
+        current_estimated_bytes = current_estimated_bytes.saturating_add(row_estimated_bytes);
+        current_rows.push(row);
+    }
+
+    if !current_rows.is_empty() {
+        batch_index = batch_index.saturating_add(1);
+        execute_sqlite_batch_chunk(
+            controller,
+            table_name,
+            statement,
+            current_rows,
+            batch_index,
+            current_estimated_bytes,
+            error_prefix,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Executes one already-sized SQLite batch chunk and reports frame-budget context on failure.
+/// 执行一段已经切好大小的 SQLite 批处理，并在失败时报告帧预算上下文。
+async fn execute_sqlite_batch_chunk(
+    controller: &ControllerRuntimeHandle,
+    table_name: &str,
+    statement: &str,
+    params: Vec<Vec<ControllerSqliteValue>>,
+    batch_index: usize,
+    estimated_bytes: usize,
+    error_prefix: &str,
+) -> Result<(), String> {
+    let row_count = params.len();
     controller
         .client
         .execute_sqlite_batch_typed(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
-            &statement,
+            statement,
             params,
         )
         .await
-        .map_err(|error| format!("{error_prefix}：{error}"))?;
+        .map_err(|error| {
+            format!(
+                "{error_prefix}：表 {table_name} 第 {batch_index} 批失败，行数 {row_count}，估算完整帧 {estimated_bytes} bytes：{error}"
+            )
+        })?;
 
     Ok(())
+}
+
+/// Estimates one SQLite row's contribution to the encoded request frame.
+/// 估算一行 SQLite 参数对编码后请求帧的贡献。
+fn estimate_sqlite_row_frame_bytes(row: &[ControllerSqliteValue]) -> usize {
+    SQLITE_ROW_FRAME_OVERHEAD_BYTES
+        + row
+            .iter()
+            .map(estimate_sqlite_value_frame_bytes)
+            .sum::<usize>()
+}
+
+/// Estimates one SQLite scalar value's encoded request-frame contribution.
+/// 估算一个 SQLite 标量值对编码后请求帧的贡献。
+fn estimate_sqlite_value_frame_bytes(value: &ControllerSqliteValue) -> usize {
+    SQLITE_VALUE_FRAME_OVERHEAD_BYTES
+        + match value {
+            ControllerSqliteValue::Int64(_) => 16,
+            ControllerSqliteValue::Float64(_) => 16,
+            ControllerSqliteValue::String(value) => estimate_text_frame_bytes(value),
+            ControllerSqliteValue::Bytes(value) => value.len(),
+            ControllerSqliteValue::Bool(_) => 8,
+            ControllerSqliteValue::Null => 4,
+        }
+}
+
+/// Estimates a text field after JSON/protobuf structural overhead and escaping slack are considered.
+/// 在考虑 JSON/protobuf 结构开销与转义余量后估算文本字段大小。
+fn estimate_text_frame_bytes(value: &str) -> usize {
+    value.len().saturating_mul(2).saturating_add(32)
 }
 
 /// Decodes one controller JSON row-set payload into typed Rust rows.
@@ -1511,6 +3246,150 @@ where
 {
     serde_json::from_str::<Vec<T>>(json_data)
         .map_err(|error| format!("解析控制器 SQLite 查询结果失败：{error}"))
+}
+
+/// Converts one persisted message row into the in-memory transcript entry shape.
+/// 将一条持久化消息行转换为内存中的转录消息结构。
+fn stored_session_message_row_to_entry(
+    row: StoredSessionMessageRow,
+    message_body_chunks: &BTreeMap<String, String>,
+) -> SessionMessageEntry {
+    let persisted_meta = row
+        .meta_json
+        .as_deref()
+        .and_then(parse_session_message_meta_from_json)
+        .unwrap_or_default();
+    let title = persisted_meta
+        .title
+        .unwrap_or_else(|| default_message_title(&row.role).to_string());
+    let body = message_body_chunks
+        .get(&row.id)
+        .cloned()
+        .unwrap_or_else(|| row.content.clone());
+
+    SessionMessageEntry {
+        id: row.id,
+        kind: session_kind_from_role(&row.role),
+        record_kind: SessionMessageRecordKind::from_persisted_key(&row.kind),
+        visible: row.visible != 0,
+        title,
+        body,
+        metadata: persisted_meta.metadata,
+        created_at: row.created_at,
+    }
+}
+
+/// Converts one persisted lightweight search row into the public search-hit shape.
+/// 将一条持久化轻量搜索行转换为公开搜索命中结构。
+fn stored_session_history_search_row_to_hit(
+    row: StoredSessionHistorySearchRow,
+) -> SessionHistorySearchHit {
+    let persisted_meta = row
+        .meta_json
+        .as_deref()
+        .and_then(parse_session_message_meta_from_json)
+        .unwrap_or_default();
+    let title = persisted_meta
+        .title
+        .unwrap_or_else(|| default_message_title(&row.role).to_string());
+
+    SessionHistorySearchHit {
+        message_id: row.id,
+        ordinal: row.ordinal,
+        turn_index: row.turn_index,
+        record_kind: SessionMessageRecordKind::from_persisted_key(&row.kind),
+        visible: row.visible != 0,
+        title,
+        preview: session_history_search_preview(&row.content_preview),
+        created_at: row.created_at,
+    }
+}
+
+/// Rebuilds one oversized message body from ordered chunk rows and validates ownership.
+/// 从有序分片行重建单条超大消息正文，并校验归属关系。
+fn rebuild_session_message_body_from_chunks(
+    message_id: &str,
+    mut chunk_rows: Vec<StoredSessionMessageChunkRow>,
+) -> Result<String, String> {
+    chunk_rows.sort_by_key(|row| row.chunk_index);
+
+    let mut rebuilt_body = String::new();
+    for (expected_index, row) in chunk_rows.into_iter().enumerate() {
+        if row.message_id != message_id {
+            return Err(format!(
+                "会话消息分片归属不一致：期望 `{message_id}`，实际 `{}`。",
+                row.message_id
+            ));
+        }
+        if row.chunk_index != expected_index as i64 {
+            return Err(format!(
+                "会话消息 `{message_id}` 分片序号不连续：期望 {expected_index}，实际 {}。",
+                row.chunk_index
+            ));
+        }
+        rebuilt_body.push_str(&row.content);
+    }
+
+    Ok(rebuilt_body)
+}
+
+/// Converts one persisted compaction row into the in-memory checkpoint shape.
+/// 将一条持久化压缩行转换为内存中的检查点结构。
+fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompactionEntry {
+    SessionCompactionEntry {
+        id: row.id,
+        source_until_message_id: row.source_until_message_id,
+        context_start_message_id: row.context_start_message_id,
+        summary_message_id: row.summary_message_id,
+        created_at: row.created_at,
+    }
+}
+
+/// Converts one persisted runtime row into the in-memory runtime-state shape.
+/// 将一条持久化运行时行转换为内存中的运行时状态结构。
+fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRuntimeStateEntry {
+    SessionRuntimeStateEntry {
+        active_agent_id: row.active_agent_id,
+        active_provider_id: row.active_provider_id,
+        active_model_id: row.active_model_id,
+        last_compaction_id: row.last_compaction_id,
+        context_start_message_id: row.context_start_message_id,
+        ui_state: row
+            .ui_state_json
+            .as_deref()
+            .and_then(parse_session_ui_state_from_json)
+            .unwrap_or_default(),
+        conversation_state: conversation_state_with_continuation(row.continuation_json),
+        updated_at: row.updated_at,
+    }
+}
+
+/// Seeds runtime conversation records from the recent transcript window when no full state was loaded.
+/// 当未加载完整状态时，基于最近转录窗口为运行时会话补齐记录。
+fn runtime_state_with_recent_records(
+    mut runtime_state: SessionRuntimeStateEntry,
+    messages: &[SessionMessageEntry],
+) -> SessionRuntimeStateEntry {
+    if runtime_state.conversation_state.records.is_empty() && !messages.is_empty() {
+        let continuation = runtime_state.conversation_state.continuation.clone();
+        runtime_state.conversation_state = conversation_state_from_session_messages(messages);
+        runtime_state.conversation_state.continuation = continuation;
+    }
+    runtime_state
+}
+
+/// Builds a minimal conversation state from one persisted continuation payload.
+/// 根据一条持久化 continuation 载荷构建最小会话状态。
+fn conversation_state_with_continuation(
+    continuation_json: Option<String>,
+) -> SessionConversationState {
+    SessionConversationState {
+        continuation: continuation_json
+            .as_deref()
+            .and_then(parse_session_continuation_from_json)
+            .unwrap_or_default(),
+        ..SessionConversationState::default()
+    }
 }
 
 /// Parses one persisted session identifier back into the in-memory UUID session key.
@@ -1556,6 +3435,9 @@ async fn migrate_legacy_session_ids_if_needed(
         let escaped_canonical_id = sqlite_escape_text(canonical_id);
         migration_script.push_str(&format!(
             "UPDATE session_messages SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
+        ));
+        migration_script.push_str(&format!(
+            "UPDATE session_message_chunks SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
         ));
         migration_script.push_str(&format!(
             "UPDATE session_compactions SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
@@ -1643,7 +3525,7 @@ fn parse_session_message_meta_from_json(meta_json: &str) -> Option<StoredSession
 fn serialize_session_message_meta_to_json(message: &SessionMessageEntry) -> Option<String> {
     let metadata = StoredSessionMessageMeta {
         title: (!message.title.trim().is_empty()).then(|| message.title.clone()),
-        metadata: message.metadata.clone(),
+        metadata: sanitize_session_message_metadata_for_persistence(message.metadata.clone()),
     };
     if metadata.title.is_none() && metadata.metadata.is_none() {
         None
@@ -1652,15 +3534,185 @@ fn serialize_session_message_meta_to_json(message: &SessionMessageEntry) -> Opti
     }
 }
 
+/// Normalizes a user-provided session-history search query before it reaches SQLite.
+/// 在用户提供的会话历史搜索词进入 SQLite 前进行规范化。
+fn normalize_session_history_search_query(query: &str) -> String {
+    query.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Builds an escaped SQLite LIKE pattern for a normalized session-history query.
+/// 为规范化后的会话历史查询构建已转义的 SQLite LIKE 模式。
+fn session_history_search_like_pattern(query: &str) -> String {
+    format!("%{}%", escape_sqlite_like_pattern(query))
+}
+
+/// Escapes SQLite LIKE wildcard characters while preserving literal user text.
+/// 转义 SQLite LIKE 通配符，同时保留用户文本的字面含义。
+fn escape_sqlite_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+/// Produces a compact search preview from one SQL-selected content fragment.
+/// 从 SQL 选出的正文字段片段生成紧凑搜索预览。
+fn session_history_search_preview(value: &str) -> String {
+    let preview = truncate_preview_lines(value, 3, SESSION_HISTORY_SEARCH_PREVIEW_CHARS);
+    if preview.trim().is_empty() {
+        String::from("（该命中位于分片正文或元数据中，当前仅显示轻量定位信息。）")
+    } else {
+        preview
+    }
+}
+
+/// Returns the inclusive turn-index bounds used for one search-result context load.
+/// 返回单次搜索结果上下文加载使用的闭区间轮次边界。
+fn session_history_context_turn_bounds(anchor_turn_index: i64, radius: i64) -> (i64, i64) {
+    let safe_anchor = anchor_turn_index.max(0);
+    let safe_radius = radius.max(0);
+    (
+        safe_anchor.saturating_sub(safe_radius).max(0),
+        safe_anchor.saturating_add(safe_radius),
+    )
+}
+
+/// Sanitizes transcript metadata before persistence so oversized host payloads do not dominate gRPC frames.
+/// 持久化前清洗转录元数据，避免超大宿主载荷主导 gRPC 帧大小。
+fn sanitize_session_message_metadata_for_persistence(metadata: Option<Value>) -> Option<Value> {
+    let metadata = metadata?;
+    let sanitized = strip_large_metadata_fields(metadata);
+    if estimate_json_value_bytes(&sanitized) <= SESSION_MESSAGE_METADATA_BUDGET_BYTES {
+        return Some(sanitized);
+    }
+
+    compact_metadata_to_essential_fields(&sanitized)
+}
+
+/// Removes known large host-result and argument payload fields while preserving display metadata.
+/// 移除已知的大型宿主结果与参数载荷字段，同时保留展示所需元数据。
+fn strip_large_metadata_fields(value: Value) -> Value {
+    match value {
+        Value::Object(mut object) => {
+            for key in [
+                "host_result",
+                "payload",
+                "raw_payload",
+                "raw_result",
+                "result_payload",
+                "conversation_state",
+                "provider_message_state",
+            ] {
+                if let Some(value) = object.get_mut(key) {
+                    *value = compact_large_metadata_field(key, value.clone());
+                }
+            }
+            for key in ["arguments", "input", "request", "response"] {
+                if let Some(value) = object.get_mut(key) {
+                    if estimate_json_value_bytes(value) > SESSION_MESSAGE_METADATA_BUDGET_BYTES / 4
+                    {
+                        *value = compact_large_metadata_field(key, value.clone());
+                    }
+                }
+            }
+            Value::Object(
+                object
+                    .into_iter()
+                    .map(|(key, value)| (key, strip_large_metadata_fields(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(strip_large_metadata_fields)
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// Compacts one oversized metadata field into a small audit-friendly placeholder.
+/// 将一个超大元数据字段压缩为便于审计的小型占位结构。
+fn compact_large_metadata_field(key: &str, value: Value) -> Value {
+    let estimated_bytes = estimate_json_value_bytes(&value);
+    let preview = match &value {
+        Value::String(text) => {
+            truncate_preview_lines(text, 4, SESSION_MESSAGE_METADATA_PREVIEW_CHARS)
+        }
+        _ => serde_json::to_string(&value)
+            .ok()
+            .map(|text| truncate_preview_lines(&text, 4, SESSION_MESSAGE_METADATA_PREVIEW_CHARS))
+            .unwrap_or_default(),
+    };
+
+    serde_json::json!({
+        "omitted": true,
+        "field": key,
+        "estimated_bytes": estimated_bytes,
+        "preview": preview,
+    })
+}
+
+/// Falls back to a small allow-list when metadata remains too large after structural pruning.
+/// 当结构化裁剪后元数据仍过大时，回退到一个小型白名单。
+fn compact_metadata_to_essential_fields(metadata: &Value) -> Option<Value> {
+    let object = metadata.as_object()?;
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "tool_call_id",
+        "tool_result_id",
+        "tool_name",
+        "name",
+        "title",
+        "display_title",
+        "status",
+        "execution_status",
+        "run_state",
+        "task_id",
+        "session_id",
+        "parent_session_id",
+        "public_id",
+    ] {
+        if let Some(value) = object.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    if compact.is_empty() {
+        None
+    } else {
+        compact.insert(
+            "metadata_omitted".to_string(),
+            Value::String(String::from("oversized")),
+        );
+        Some(Value::Object(compact))
+    }
+}
+
+/// Estimates a JSON value's serialized byte size for persistence-budget decisions.
+/// 为持久化预算判断估算 JSON 值序列化后的字节大小。
+fn estimate_json_value_bytes(value: &Value) -> usize {
+    serde_json::to_string(value)
+        .map(|text| text.len())
+        .unwrap_or_default()
+}
+
 /// Parses one persisted transcript UI-state JSON payload into the typed runtime-state structure.
 /// 将一条持久化转录界面状态 JSON 载荷解析为带类型的运行时状态结构。
 fn parse_session_ui_state_from_json(value: &str) -> Option<SessionTranscriptUiState> {
     serde_json::from_str(value).ok()
 }
 
-/// Parses one persisted canonical conversation-state JSON payload into the typed runtime-state structure.
-/// 将一条持久化规范会话状态 JSON 载荷解析为带类型的运行时状态结构。
-fn parse_session_conversation_state_from_json(value: &str) -> Option<SessionConversationState> {
+/// Parses one persisted provider continuation JSON payload into the typed cursor structure.
+/// 将一条持久化 Provider continuation JSON 载荷解析为带类型的游标结构。
+fn parse_session_continuation_from_json(value: &str) -> Option<SessionProviderContinuationState> {
     serde_json::from_str(value).ok()
 }
 
@@ -1674,21 +3726,19 @@ fn serialize_session_ui_state_to_json(state: &SessionTranscriptUiState) -> Optio
     }
 }
 
-/// Serializes one typed canonical conversation state into the persisted JSON payload when needed.
-/// 在需要时将一条带类型的规范会话状态序列化为持久化 JSON 载荷。
-fn serialize_session_conversation_state_to_json(
-    state: &SessionConversationState,
+/// Serializes one typed provider continuation cursor into the persisted JSON payload when needed.
+/// 在需要时将一条带类型的 Provider continuation 游标序列化为持久化 JSON 载荷。
+fn serialize_session_continuation_to_json(
+    continuation: &SessionProviderContinuationState,
 ) -> Option<String> {
-    if state.messages.is_empty()
-        && state.records.is_empty()
-        && state.continuation.provider_id.is_none()
-        && state.continuation.model_id.is_none()
-        && state.continuation.last_provider_message_id.is_none()
-        && state.continuation.updated_at.is_none()
+    if continuation.provider_id.is_none()
+        && continuation.model_id.is_none()
+        && continuation.last_provider_message_id.is_none()
+        && continuation.updated_at.is_none()
     {
         None
     } else {
-        serde_json::to_string(state).ok()
+        serde_json::to_string(continuation).ok()
     }
 }
 
@@ -1859,10 +3909,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Verifies that transcript metadata is preserved when encoding and decoding the SQLite `meta_json` payload.
-    /// 验证转录元数据在编码与解码 SQLite `meta_json` 载荷时能够被完整保留。
+    /// Verifies that transcript metadata keeps display fields while sanitizing oversized host payloads.
+    /// 验证转录元数据会保留展示字段，同时清洗超大的宿主载荷。
     #[test]
-    fn session_message_meta_json_roundtrip_preserves_metadata() {
+    fn session_message_meta_json_sanitizes_large_host_payloads() {
         let message = SessionMessageEntry {
             id: String::from("message-1"),
             kind: SessionMessageKind::Assistant,
@@ -1888,6 +3938,514 @@ mod tests {
             .expect("expected metadata payload to be parsed");
 
         assert_eq!(parsed.title.as_deref(), Some("工具返回"));
-        assert_eq!(parsed.metadata, message.metadata);
+        let metadata = parsed.metadata.expect("expected sanitized metadata");
+        assert_eq!(
+            metadata.get("tool_name").and_then(|value| value.as_str()),
+            Some("write_file")
+        );
+
+        let host_result = metadata
+            .get("host_result")
+            .and_then(|value| value.as_object())
+            .expect("expected host result to be compacted");
+        assert_eq!(
+            host_result.get("omitted").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            host_result.get("field").and_then(|value| value.as_str()),
+            Some("host_result")
+        );
+        let preview = host_result
+            .get("preview")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        assert!(preview.contains("change_set"));
+        assert!(preview.contains("src/main.rs"));
+    }
+
+    /// Verifies that oversized transcript bodies are split without losing UTF-8 content.
+    /// 验证超大转录正文会在不破坏 UTF-8 内容的前提下被拆分。
+    #[test]
+    fn oversized_session_message_body_is_split_and_rebuilt() {
+        let body = "工具输出包含中文与 ASCII content\n".repeat(8_000);
+        let prepared = prepare_session_message_body_for_storage(&body);
+
+        assert_ne!(prepared.inline_content, body);
+        assert!(!prepared.chunks.is_empty());
+        assert!(
+            prepared
+                .chunks
+                .iter()
+                .all(|chunk| chunk.len() <= SESSION_MESSAGE_CHUNK_CONTENT_BYTES)
+        );
+        assert_eq!(prepared.chunks.concat(), body);
+
+        let chunk_rows = prepared
+            .chunks
+            .into_iter()
+            .enumerate()
+            .map(|(chunk_index, content)| StoredSessionMessageChunkRow {
+                message_id: String::from("message-1"),
+                chunk_index: chunk_index as i64,
+                content,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rebuild_session_message_body_from_chunks("message-1", chunk_rows)
+                .expect("expected chunks to rebuild"),
+            body
+        );
+    }
+
+    /// Verifies that SQL row preparation keeps large bodies out of the lightweight message row.
+    /// 验证 SQL 行预处理会避免将大型正文写入轻量消息行。
+    #[test]
+    fn session_message_batch_rows_store_oversized_body_as_chunks() {
+        let session_id = SessionId::from_u128(42);
+        let body = "大型工具结果 payload ".repeat(10_000);
+        let message = SessionMessageEntry {
+            id: String::from("message-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回"),
+            body: body.clone(),
+            metadata: None,
+            created_at: String::from("1"),
+        };
+        let mut message_rows = Vec::new();
+        let mut chunk_rows = Vec::new();
+
+        push_session_message_rows_for_session(
+            &BTreeMap::new(),
+            -1,
+            -1,
+            &mut message_rows,
+            &mut chunk_rows,
+            session_id,
+            &[message],
+        );
+
+        assert_eq!(message_rows.len(), 1);
+        assert!(!chunk_rows.is_empty());
+        match &message_rows[0][7] {
+            ControllerSqliteValue::String(inline_content) => {
+                assert_ne!(inline_content, &body);
+                assert!(inline_content.len() < body.len());
+            }
+            other => panic!("expected inline content string, got {other:?}"),
+        }
+
+        let rebuilt = chunk_rows
+            .iter()
+            .map(|row| match &row[3] {
+                ControllerSqliteValue::String(content) => content.as_str(),
+                other => panic!("expected chunk content string, got {other:?}"),
+            })
+            .collect::<String>();
+        assert_eq!(rebuilt, body);
+    }
+
+    /// Verifies that user messages start stable dialogue turns while following outputs stay grouped.
+    /// 验证用户消息会开启稳定对话轮次，后续输出会保持归组。
+    #[test]
+    fn session_message_turn_indexes_group_outputs_under_user_turns() {
+        let messages = vec![
+            SessionMessageEntry::hidden(
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ExploreOutput,
+                "探索",
+                "项目概览",
+            ),
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "第一轮"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "AI 输出", "第一轮回答"),
+            SessionMessageEntry {
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                ..SessionMessageEntry::new(SessionMessageKind::Assistant, "工具返回", "结果")
+            },
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "第二轮"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "AI 输出", "第二轮回答"),
+        ];
+
+        assert_eq!(
+            assign_session_message_turn_indexes(&messages),
+            vec![0, 0, 0, 0, 1, 1]
+        );
+    }
+
+    /// Verifies that message batch rows persist the computed turn index beside ordinal order.
+    /// 验证消息批处理行会在 ordinal 顺序之外持久化计算后的轮次索引。
+    #[test]
+    fn session_message_batch_rows_persist_turn_indexes() {
+        let session_id = SessionId::from_u128(44);
+        let messages = vec![
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "第一轮"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "AI 输出", "第一轮回答"),
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "第二轮"),
+        ];
+        let mut message_rows = Vec::new();
+        let mut chunk_rows = Vec::new();
+
+        push_session_message_rows_for_session(
+            &BTreeMap::new(),
+            -1,
+            -1,
+            &mut message_rows,
+            &mut chunk_rows,
+            session_id,
+            &messages,
+        );
+
+        let turn_indexes = message_rows
+            .iter()
+            .map(|row| match row[6] {
+                ControllerSqliteValue::Int64(value) => value,
+                ref other => panic!("expected turn index integer, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(turn_indexes, vec![0, 0, 1]);
+        assert!(chunk_rows.is_empty());
+    }
+
+    /// Verifies partial-window persistence keeps existing ordinals instead of renumbering from zero.
+    /// 验证局部窗口持久化会保留已有序号，而不是从零重新编号。
+    #[test]
+    fn session_message_rows_preserve_existing_positions_for_partial_windows() {
+        let session_id = SessionId::from_u128(46);
+        let existing_message = SessionMessageEntry {
+            id: String::from("existing-message"),
+            ..SessionMessageEntry::new(SessionMessageKind::Assistant, "AI 输出", "历史回答")
+        };
+        let new_message = SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "新问题");
+        let messages = vec![existing_message, new_message];
+        let mut persisted_positions = BTreeMap::new();
+        persisted_positions.insert(
+            String::from("existing-message"),
+            StoredSessionMessagePositionRow {
+                id: String::from("existing-message"),
+                ordinal: 42,
+                turn_index: 7,
+            },
+        );
+        let mut message_rows = Vec::new();
+        let mut chunk_rows = Vec::new();
+
+        push_session_message_rows_for_session(
+            &persisted_positions,
+            42,
+            7,
+            &mut message_rows,
+            &mut chunk_rows,
+            session_id,
+            &messages,
+        );
+
+        let ordinals = message_rows
+            .iter()
+            .map(|row| match row[2] {
+                ControllerSqliteValue::Int64(value) => value,
+                ref other => panic!("expected ordinal integer, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        let turn_indexes = message_rows
+            .iter()
+            .map(|row| match row[6] {
+                ControllerSqliteValue::Int64(value) => value,
+                ref other => panic!("expected turn index integer, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordinals, vec![42, 43]);
+        assert_eq!(turn_indexes, vec![7, 8]);
+        assert!(chunk_rows.is_empty());
+    }
+
+    /// Verifies that one-session maintenance row building does not require a full session list.
+    /// 验证单会话维护行构建不需要依赖完整会话列表。
+    #[test]
+    fn single_session_message_rows_can_be_built_for_maintenance() {
+        let session_id = SessionId::from_u128(45);
+        let messages = vec![
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "第一轮"),
+            SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "AI 输出",
+                &"维护路径正文 ".repeat(10_000),
+            ),
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "第二轮"),
+        ];
+        let mut message_rows = Vec::new();
+        let mut chunk_rows = Vec::new();
+
+        push_session_message_rows_for_session(
+            &BTreeMap::new(),
+            -1,
+            -1,
+            &mut message_rows,
+            &mut chunk_rows,
+            session_id,
+            &messages,
+        );
+
+        assert_eq!(message_rows.len(), 3);
+        assert!(!chunk_rows.is_empty());
+        assert!(message_rows.iter().all(|row| {
+            matches!(&row[1], ControllerSqliteValue::String(value) if value == &session_id.to_string())
+        }));
+        let turn_indexes = message_rows
+            .iter()
+            .map(|row| match row[6] {
+                ControllerSqliteValue::Int64(value) => value,
+                ref other => panic!("expected turn index integer, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(turn_indexes, vec![0, 0, 1]);
+    }
+
+    /// Verifies that default transcript windows keep tool details out of the mainline query profile.
+    /// 验证默认转录窗口会将工具明细排除在主线查询画像之外。
+    #[test]
+    fn default_transcript_window_filters_tool_detail_kinds() {
+        assert!(persisted_kind_in_default_transcript_window(
+            "assistant-output"
+        ));
+        assert!(persisted_kind_in_default_transcript_window(
+            "summary-output"
+        ));
+        assert!(!persisted_kind_in_default_transcript_window(
+            "tool-call-output"
+        ));
+        assert!(!persisted_kind_in_default_transcript_window(
+            "tool-result-output"
+        ));
+    }
+
+    /// Verifies that the on-demand tool-detail stream accepts only tool call and result rows.
+    /// 验证按需工具明细流只接收工具调用与工具结果行。
+    #[test]
+    fn tool_detail_stream_filters_only_tool_detail_kinds() {
+        assert!(persisted_kind_in_tool_detail_stream("tool-call-output"));
+        assert!(persisted_kind_in_tool_detail_stream("tool-result-output"));
+        assert!(!persisted_kind_in_tool_detail_stream("assistant-output"));
+        assert!(!persisted_kind_in_tool_detail_stream("summary-output"));
+    }
+
+    /// Verifies that transcript persistence uses upsert semantics instead of full-session deletion.
+    /// 验证转录持久化使用 upsert 语义，而不是整会话删除。
+    #[test]
+    fn session_message_persistence_statement_uses_upsert() {
+        let statement = session_message_upsert_statement();
+
+        assert!(statement.contains("ON CONFLICT(id) DO UPDATE"));
+        assert!(!statement.contains("DELETE FROM session_messages"));
+    }
+
+    /// Verifies that chunk persistence tolerates overlapping maintenance tasks.
+    /// 验证分片持久化可以容忍重叠维护任务。
+    #[test]
+    fn session_message_chunk_persistence_statement_uses_upsert() {
+        let statement = session_message_chunk_upsert_statement();
+
+        assert!(statement.contains("ON CONFLICT(message_id, chunk_index) DO UPDATE"));
+        assert!(statement.contains("content = excluded.content"));
+    }
+
+    /// Verifies that user search text is treated literally inside SQLite LIKE patterns.
+    /// 验证用户搜索文本会在 SQLite LIKE 模式中按字面量处理。
+    #[test]
+    fn session_history_search_like_pattern_escapes_wildcards() {
+        assert_eq!(
+            session_history_search_like_pattern(r"src\foo_%"),
+            r"%src\\foo\_\%%"
+        );
+    }
+
+    /// Verifies that lightweight search previews stay compact and non-empty.
+    /// 验证轻量搜索预览会保持紧凑且非空。
+    #[test]
+    fn session_history_search_preview_compacts_text() {
+        let preview = session_history_search_preview(
+            "第一行命中内容\n\n第二行包含 src/main.rs\n第三行还有更多上下文\n第四行应被截断",
+        );
+
+        assert!(preview.contains("第一行命中内容"));
+        assert!(preview.contains("src/main.rs"));
+        assert!(!preview.contains("第四行应被截断"));
+    }
+
+    /// Verifies that context windows never request negative turn indexes.
+    /// 验证上下文窗口不会请求负数轮次索引。
+    #[test]
+    fn session_history_context_turn_bounds_clamp_lower_edge() {
+        assert_eq!(session_history_context_turn_bounds(1, 2), (0, 3));
+        assert_eq!(session_history_context_turn_bounds(-5, 2), (0, 2));
+    }
+
+    /// Verifies that context windows keep a stable inclusive turn span around the anchor.
+    /// 验证上下文窗口会围绕锚点保留稳定的闭区间轮次范围。
+    #[test]
+    fn session_history_context_turn_bounds_expand_around_anchor() {
+        assert_eq!(session_history_context_turn_bounds(12, 2), (10, 14));
+        assert_eq!(session_history_context_turn_bounds(12, -1), (12, 12));
+    }
+
+    /// Verifies that legacy migration candidates do not project full message content.
+    /// 验证旧数据迁移候选查询不会投影完整消息正文。
+    #[test]
+    fn legacy_oversized_message_candidate_query_avoids_full_content_projection() {
+        let statement = legacy_oversized_message_candidate_query();
+        let normalized = statement
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+
+        assert!(normalized.contains("length(cast(m.content as blob)) as content_bytes"));
+        assert!(normalized.contains("length(m.content) as content_chars"));
+        assert!(normalized.contains("not exists"));
+        assert!(normalized.contains("from session_message_chunks"));
+        assert!(!normalized.contains("select m.id, m.content"));
+        assert!(!normalized.contains("substr(m.content"));
+    }
+
+    /// Verifies that legacy migration scripts split content inside SQLite before shrinking inline text.
+    /// 验证旧数据迁移脚本会在 SQLite 内部分片后再收缩内联文本。
+    #[test]
+    fn legacy_inline_message_chunk_migration_script_uses_sqlite_substr() {
+        let session_id = SessionId::from_u128(55);
+        let script = legacy_inline_message_chunk_migration_script(session_id, "message-'quoted");
+
+        assert!(script.contains("BEGIN IMMEDIATE TRANSACTION"));
+        assert!(script.contains("INSERT OR REPLACE INTO session_message_chunks"));
+        assert!(script.contains("substr(source.content_text"));
+        assert!(script.contains("NOT EXISTS"));
+        assert!(script.contains("UPDATE session_messages"));
+        assert!(script.contains("SET content = substr(content"));
+        assert!(script.contains("length(CAST(content AS BLOB))"));
+        assert!(script.contains("message-''quoted"));
+        assert!(script.contains("CROSS JOIN digits"));
+        assert!(!script.contains("DELETE FROM session_message_chunks"));
+        assert!(script.contains("COMMIT"));
+    }
+
+    /// Verifies that legacy chunk-count estimates use ceiling division over text characters.
+    /// 验证旧数据分片数量估算会基于文本字符数做向上取整。
+    #[test]
+    fn legacy_inline_message_chunk_count_rounds_up() {
+        let chunk_chars = SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS as i64;
+
+        assert_eq!(legacy_inline_message_chunk_count(0).unwrap(), 0);
+        assert_eq!(legacy_inline_message_chunk_count(chunk_chars).unwrap(), 1);
+        assert_eq!(
+            legacy_inline_message_chunk_count(chunk_chars + 1).unwrap(),
+            2
+        );
+    }
+
+    /// Verifies that legacy runtime cleanup nulls the large column without selecting it.
+    /// 验证旧运行态清理会直接置空大字段而不会查询该字段。
+    #[test]
+    fn runtime_state_cleanup_statement_nulls_legacy_conversation_json() {
+        let statement = session_runtime_conversation_state_cleanup_statement();
+
+        assert!(statement.contains("conversation_state_json = NULL"));
+        assert!(statement.contains("WHERE session_id = ?1"));
+        assert!(!statement.to_ascii_uppercase().contains("SELECT"));
+    }
+
+    /// Verifies that lightweight runtime persistence keeps continuation separate from large records.
+    /// 验证轻量运行时持久化会将 continuation 与大型记录分离保存。
+    #[test]
+    fn runtime_state_rows_store_continuation_without_full_conversation_state() {
+        let session_id = SessionId::from_u128(43);
+        let session = SessionSummary::new(
+            session_id,
+            None,
+            String::from("测试会话"),
+            String::new(),
+            SessionState::Draft,
+            0,
+            0,
+            String::from("刚刚"),
+        );
+        let runtime_state = SessionRuntimeStateEntry {
+            conversation_state: SessionConversationState {
+                messages: Vec::new(),
+                records: vec![crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolResultOutput,
+                    visible: true,
+                    title: String::from("工具返回"),
+                    body: "大型正文 ".repeat(10_000),
+                    metadata: None,
+                    created_at: String::from("1"),
+                }],
+                continuation: SessionProviderContinuationState {
+                    provider_id: Some(String::from("openai")),
+                    model_id: Some(String::from("gpt-test")),
+                    last_provider_message_id: Some(String::from("resp-1")),
+                    updated_at: Some(String::from("123")),
+                },
+            },
+            updated_at: String::from("1"),
+            ..SessionRuntimeStateEntry::default()
+        };
+        let mut runtime_states = BTreeMap::new();
+        runtime_states.insert(session_id, runtime_state);
+        let mut rows = Vec::new();
+
+        push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
+
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0][7], ControllerSqliteValue::Null));
+        let continuation_json = match &rows[0][8] {
+            ControllerSqliteValue::String(value) => value,
+            other => panic!("expected continuation JSON string, got {other:?}"),
+        };
+        assert!(continuation_json.contains("resp-1"));
+        assert!(!continuation_json.contains("大型正文"));
+    }
+
+    /// Verifies that rebuilding runtime state from recent messages preserves provider continuation.
+    /// 验证基于最近消息重建运行时状态时会保留 Provider continuation。
+    #[test]
+    fn runtime_state_rebuild_from_recent_messages_preserves_continuation() {
+        let runtime_state = SessionRuntimeStateEntry {
+            conversation_state: SessionConversationState {
+                continuation: SessionProviderContinuationState {
+                    provider_id: Some(String::from("openai")),
+                    model_id: Some(String::from("gpt-test")),
+                    last_provider_message_id: Some(String::from("resp-1")),
+                    updated_at: Some(String::from("123")),
+                },
+                ..SessionConversationState::default()
+            },
+            ..SessionRuntimeStateEntry::default()
+        };
+        let messages = vec![SessionMessageEntry {
+            id: String::from("message-1"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: String::from("继续。"),
+            metadata: None,
+            created_at: String::from("1"),
+        }];
+
+        let rebuilt = runtime_state_with_recent_records(runtime_state, &messages);
+
+        assert_eq!(rebuilt.conversation_state.records.len(), 1);
+        assert_eq!(
+            rebuilt
+                .conversation_state
+                .continuation
+                .last_provider_message_id
+                .as_deref(),
+            Some("resp-1")
+        );
     }
 }

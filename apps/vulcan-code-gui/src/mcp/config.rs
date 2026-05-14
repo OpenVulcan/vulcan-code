@@ -237,10 +237,10 @@ fn runtime_mcp_server_from_persisted(id: &str, entry: &PersistedMcpServerEntry) 
 
 #[cfg(test)]
 mod tests {
-    use super::{McpServerConfig, McpTransportKind};
+    use super::{McpServerConfig, McpServerOAuthConfig, McpTransportKind};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use vulcan_mcp_runtime::McpTransportLaunchSpec;
+    use vulcan_mcp_runtime::{McpTransportLaunchSpec, McpTransportOAuthSpec};
 
     fn sample_server(transport: McpTransportKind) -> McpServerConfig {
         McpServerConfig {

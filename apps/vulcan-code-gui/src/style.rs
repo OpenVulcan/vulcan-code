@@ -357,11 +357,11 @@ pub fn subtle_panel_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
-/// Returns the left-edge handle style used by the collapsible subagent dispatch navigation overlay.
-/// 返回可折叠子代理调度导航覆盖层使用的左侧贴边把手样式。
+/// Returns the D-shaped handle style used by the compact subagent dispatch navigation overlay.
+/// 返回紧凑子代理调度导航覆盖层使用的 D 形把手样式。
 pub fn subagent_overlay_navigation_handle_style(
     theme: &Theme,
-    is_expanded: bool,
+    _is_expanded: bool,
 ) -> container::Style {
     let palette = theme.extended_palette();
 
@@ -371,8 +371,8 @@ pub fn subagent_overlay_navigation_handle_style(
         border: Border {
             radius: iced::border::Radius {
                 top_left: 0.0,
-                top_right: if is_expanded { 0.0 } else { 12.0 },
-                bottom_right: if is_expanded { 0.0 } else { 12.0 },
+                top_right: 12.0,
+                bottom_right: 12.0,
                 bottom_left: 0.0,
             },
             width: 1.0,
@@ -390,8 +390,8 @@ pub fn subagent_overlay_navigation_handle_style(
     }
 }
 
-/// Returns the expanded panel style used by the left-edge subagent dispatch navigation overlay.
-/// 返回左侧贴边子代理调度导航覆盖层使用的展开面板样式。
+/// Returns the fixed-height subagent dispatch panel style attached to the D-shaped handle.
+/// 返回附着在 D 形把手左侧的固定高度子代理调度面板样式。
 pub fn subagent_overlay_navigation_panel_style(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
 
@@ -402,8 +402,8 @@ pub fn subagent_overlay_navigation_panel_style(theme: &Theme) -> container::Styl
         border: Border {
             radius: iced::border::Radius {
                 top_left: 0.0,
-                top_right: 8.0,
-                bottom_right: 8.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
                 bottom_left: 0.0,
             },
             width: 1.0,
@@ -666,6 +666,76 @@ pub fn workbench_composer_trigger_button_style(
         },
         button::Status::Pressed => button::Style {
             background: Some(Background::Color(pressed_background)),
+            border: Border {
+                color: accent_color.scale_alpha(0.62),
+                ..base.border
+            },
+            shadow: Shadow {
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+                ..base.shadow
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.28),
+            border: Border {
+                color: palette.background.strong.color.scale_alpha(0.18),
+                ..base.border
+            },
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+/// Returns the success-colored circular return button style used by the subagent panel title.
+/// 返回子代理面板标题使用的成功色圆形返回按钮样式。
+pub fn subagent_panel_return_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let accent_color = palette.success.strong.color;
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.98),
+        )),
+        text_color: accent_color,
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: palette.success.weak.color.scale_alpha(0.42),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.14,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 16.0,
+        },
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(
+                palette.background.weak.color.scale_alpha(0.98),
+            )),
+            border: Border {
+                color: accent_color.scale_alpha(0.55),
+                ..base.border
+            },
+            shadow: Shadow {
+                offset: Vector::new(0.0, 7.0),
+                blur_radius: 18.0,
+                ..base.shadow
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(
+                palette.success.base.color.scale_alpha(0.14),
+            )),
             border: Border {
                 color: accent_color.scale_alpha(0.62),
                 ..base.border
