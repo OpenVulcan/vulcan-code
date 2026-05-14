@@ -8,6 +8,7 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
+use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
 
 /// Builds one validated execution-preparation object from the current runtime foundation and GUI request.
@@ -31,7 +32,7 @@ pub(crate) fn prepare_execution(
 
     let model_blueprint = resolve_active_provider_blueprint(config, request.reasoning_effort)?;
     let mut warnings = Vec::new();
-    let workspace_path = request.workspace_path.trim().to_string();
+    let workspace_path = normalize_workspace_path_text(&request.workspace_path);
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
         foundation.native_tool_catalog().clone(),

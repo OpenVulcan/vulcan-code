@@ -557,8 +557,8 @@ mod tests {
         assert!(!preamble.contains("LuaSkills 工具目录"));
         assert!(!preamble.contains("MCP 工具已真实注册"));
         assert!(!preamble.contains("可委派代理"));
-        assert!(preamble.contains("当前工作区：D:/workspace"));
-        assert!(preamble.contains("当前执行模式：Build"));
+        assert!(preamble.contains("Current workspace: D:/workspace"));
+        assert!(preamble.contains("Current execution mode: Build"));
     }
 
     /// Verifies host-side tool-result correlation prefers provider call ids while still generating stable synthetic tool-result ids.
@@ -657,11 +657,18 @@ mod tests {
                 text: String::from("文件修改完成"),
             },
         };
+        let continuation = CoreProviderContinuation {
+            provider_id: Some(String::from("groq")),
+            model_id: Some(String::from("llama-4")),
+            last_provider_message_id: Some(String::from("assistant-1")),
+            updated_at: Some(String::from("123")),
+        };
 
         let snapshot = build_openai_compatible_turn_request_snapshot(
             "groq",
             "llama-4",
             "system prompt body",
+            &continuation,
             &history,
             &prompt,
             Some(0.3),
@@ -679,5 +686,52 @@ mod tests {
             snapshot.continuation.last_provider_message_id.as_deref(),
             Some("assistant-1")
         );
+    }
+
+    /// Verifies host-controlled OpenAI-compatible snapshots drop a foreign continuation cursor when the session switches to another provider family mid-history.
+    /// 验证当会话在中途切换到另一家 Provider 时，宿主控制的 OpenAI 兼容请求快照会丢弃外部 continuation 游标。
+    #[test]
+    fn openai_compatible_turn_snapshot_drops_foreign_provider_continuation() {
+        let headers = reqwest::header::HeaderMap::new();
+        let history = vec![CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("之前由其他协议完成了一轮调用。"),
+                reasoning: String::new(),
+                provider_message_id: Some(String::from("foreign-response-1")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+            },
+        }];
+        let prompt = CoreConversationMessage {
+            id: String::from("user-2"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("现在切到 Anthropic 继续。"),
+            },
+        };
+        let foreign_continuation = CoreProviderContinuation {
+            provider_id: Some(String::from("openai-responses")),
+            model_id: Some(String::from("gpt-4.1")),
+            last_provider_message_id: Some(String::from("resp_prev")),
+            updated_at: Some(String::from("123")),
+        };
+
+        let snapshot = build_openai_compatible_turn_request_snapshot(
+            "anthropic",
+            "claude-sonnet-4-6",
+            "system prompt body",
+            &foreign_continuation,
+            &history,
+            &prompt,
+            Some(0.3),
+            6,
+            &[],
+            &headers,
+            None,
+        );
+
+        assert!(snapshot.continuation.provider_id.is_none());
+        assert!(snapshot.continuation.model_id.is_none());
+        assert!(snapshot.continuation.last_provider_message_id.is_none());
     }
 }

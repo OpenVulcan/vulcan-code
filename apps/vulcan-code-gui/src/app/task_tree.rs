@@ -3,6 +3,9 @@
 
 use super::helpers::*;
 use super::*;
+use crate::workspace_path::{
+    normalize_workspace_path_text, normalized_workspace_path_text_from_path,
+};
 
 impl VulcanWorkbench {
     /// Returns the session summary matching one identifier, if it still exists.
@@ -18,7 +21,7 @@ impl VulcanWorkbench {
     pub(super) fn workspace_path_for_session_id(&self, session_id: SessionId) -> Option<String> {
         let project_id = self.session_by_id(session_id)?.project_id.as_deref()?;
         self.task_project_by_id(project_id)
-            .map(|project| project.path.clone())
+            .map(|project| normalize_workspace_path_text(&project.path))
     }
 
     /// Synchronizes the visible workspace-path field from one session when the session belongs to a project node.
@@ -318,13 +321,12 @@ impl VulcanWorkbench {
     /// 从选中的文件夹路径新增一个项目节点，若已存在则聚焦已有节点。
     pub(super) fn add_task_project_from_folder(&mut self, selected_path: &Path) {
         let normalized_path = normalize_task_project_path(selected_path);
-        let normalized_path_text = normalized_path.to_string_lossy().replace('\\', "/");
+        let normalized_path_text = normalized_workspace_path_text_from_path(&normalized_path);
 
         if let Some(existing_project) = self.task_projects.iter().find(|project| {
-            normalize_task_project_path(Path::new(&project.path))
-                .to_string_lossy()
-                .replace('\\', "/")
-                == normalized_path_text
+            normalized_workspace_path_text_from_path(&normalize_task_project_path(Path::new(
+                &project.path,
+            ))) == normalized_path_text
         }) {
             self.expanded_task_projects
                 .insert(existing_project.id.clone());
@@ -337,10 +339,9 @@ impl VulcanWorkbench {
         }
 
         if let Some(archived_index) = self.archived_task_projects.iter().position(|project| {
-            normalize_task_project_path(Path::new(&project.path))
-                .to_string_lossy()
-                .replace('\\', "/")
-                == normalized_path_text
+            normalized_workspace_path_text_from_path(&normalize_task_project_path(Path::new(
+                &project.path,
+            ))) == normalized_path_text
         }) {
             let restored_project_id = self.archived_task_projects[archived_index].id.clone();
             let _ = self.restore_archived_task_project_by_id(&restored_project_id);

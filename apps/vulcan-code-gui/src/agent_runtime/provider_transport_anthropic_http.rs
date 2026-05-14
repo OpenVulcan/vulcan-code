@@ -517,6 +517,63 @@ fn parse_anthropic_provider_message_state(state: &Value) -> Option<Vec<Anthropic
         .and_then(|value| serde_json::from_value::<Vec<AnthropicContentBlock>>(value).ok())
 }
 
+/// Coalesces consecutive Anthropic user messages into one content array so one assistant tool-use turn can replay multiple tool results as a single legal follow-up message.
+/// 将连续的 Anthropic user 消息合并为同一个内容数组，确保同一条助手工具调用回合产生的多个工具结果会以一条合法的后续消息回放。
+///
+/// This regrouping is intentionally Anthropic-specific and must not be generalized to other provider transports, because their native replay rules still accept one result message per tool call.
+/// 这段重组逻辑被刻意限制为 Anthropic 专用，不能泛化到其他 Provider 传输链路，因为其他 Provider 的原生回放规则仍然接受每次工具调用对应一条结果消息。
+fn coalesce_consecutive_anthropic_user_messages(messages: Vec<Value>) -> Vec<Value> {
+    let mut merged_messages: Vec<Value> = Vec::with_capacity(messages.len());
+
+    for message in messages {
+        let Some(message_tool_results) = anthropic_user_tool_result_blocks(&message) else {
+            merged_messages.push(message);
+            continue;
+        };
+
+        let Some(previous_message) = merged_messages.last_mut() else {
+            merged_messages.push(message);
+            continue;
+        };
+
+        let previous_is_tool_result_only =
+            anthropic_user_tool_result_blocks(previous_message).is_some();
+        if previous_is_tool_result_only
+            && let Some(previous_content) = previous_message
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+        {
+            // Merge only adjacent tool-result turns because Anthropic binds tool_result blocks to the immediately preceding assistant tool_use turn.
+            // 仅合并相邻的工具结果回合，因为 Anthropic 会把 tool_result 内容块绑定到紧邻的上一条 assistant tool_use 回合。
+            previous_content.extend(message_tool_results);
+            continue;
+        }
+
+        merged_messages.push(message);
+    }
+
+    merged_messages
+}
+
+/// Extracts one Anthropic user message content array only when every block is a `tool_result`, so asynchronous task acknowledgements can be regrouped without mixing in ordinary user text.
+/// 仅当一条 Anthropic user 消息的所有内容块都是 `tool_result` 时提取其内容数组，以便在不混入普通用户文本的前提下重组异步任务确认消息。
+fn anthropic_user_tool_result_blocks(message: &Value) -> Option<Vec<Value>> {
+    let role = message.get("role").and_then(Value::as_str)?;
+    if role != "user" {
+        return None;
+    }
+
+    let content = message.get("content").and_then(Value::as_array)?;
+    if content
+        .iter()
+        .all(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+    {
+        Some(content.clone())
+    } else {
+        None
+    }
+}
+
 /// Builds the final Anthropic JSON payload from one host-controlled turn request and tool schema set.
 /// 根据一份宿主控制回合请求与工具 schema 集合构建最终 Anthropic JSON 载荷。
 fn build_anthropic_request_payload(
@@ -561,7 +618,7 @@ fn build_anthropic_request_payload(
 
     payload.insert(
         String::from("messages"),
-        Value::Array(
+        Value::Array(coalesce_consecutive_anthropic_user_messages(
             current_history
                 .iter()
                 .map(|message| {
@@ -572,7 +629,7 @@ fn build_anthropic_request_payload(
                     provider_tool_definitions,
                 )))
                 .collect::<Result<Vec<_>, _>>()?,
-        ),
+        )),
     );
 
     if !provider_tool_definitions.is_empty() {
@@ -641,9 +698,11 @@ fn core_message_to_anthropic_message(
                 .as_ref()
                 .and_then(parse_anthropic_provider_message_state)
             {
+                let replayable_content =
+                    repair_replayable_anthropic_provider_content(content, tool_calls);
                 return Ok(json!({
                     "role": "assistant",
-                    "content": content
+                    "content": replayable_content
                 }));
             }
 
@@ -727,11 +786,73 @@ fn parse_pending_anthropic_tool_use_input_json(
 fn anthropic_content_block_from_pending_tool_use(
     tool_use: &PendingAnthropicToolUse,
 ) -> Result<AnthropicContentBlock, VulcanCoreError> {
+    let input_json = parse_pending_anthropic_tool_use_input_json(tool_use)?;
     Ok(AnthropicContentBlock::ToolUse {
-        id: tool_use.id.clone(),
+        id: replayable_anthropic_tool_use_id(&tool_use.id, &tool_use.name, &input_json),
         name: tool_use.name.clone(),
-        input: parse_pending_anthropic_tool_use_input_json(tool_use)?,
+        input: input_json,
     })
+}
+
+/// Builds one replayable Anthropic tool-use identifier, preferring the upstream visible id and falling back to a deterministic local surrogate when the provider emitted blanks.
+/// 构建一条可回放的 Anthropic tool-use 标识；优先使用上游可见 id，若 Provider 发来空白值则回退到确定性的本地代理标识。
+fn replayable_anthropic_tool_use_id(
+    provider_visible_id: &str,
+    tool_name: &str,
+    input_json: &Value,
+) -> String {
+    let provider_visible_id = provider_visible_id.trim();
+    if !provider_visible_id.is_empty() {
+        return provider_visible_id.to_string();
+    }
+
+    format!(
+        "{}:{}",
+        tool_name,
+        serde_json::to_string(input_json).unwrap_or_else(|_| input_json.to_string())
+    )
+}
+
+/// Resolves one replay-safe host-visible tool-call identifier from the canonical core tool-call entry.
+/// 从规范 core 工具调用条目中解析一条可安全回放的宿主可见工具调用标识。
+fn replayable_core_tool_call_id(tool_call: &CoreConversationToolCall) -> String {
+    tool_call
+        .tool_call_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| tool_call.id.clone())
+}
+
+/// Repairs replayable Anthropic-native assistant content blocks using the canonical tool-call list so older broken sessions with blank stored tool-use ids can still be resent safely.
+/// 使用规范工具调用列表修复可回放的 Anthropic 原生助手内容块，使得历史上已存入空白 tool-use id 的损坏会话仍能被安全重放。
+fn repair_replayable_anthropic_provider_content(
+    content: Vec<AnthropicContentBlock>,
+    tool_calls: &[CoreConversationToolCall],
+) -> Vec<AnthropicContentBlock> {
+    let mut tool_use_index = 0usize;
+
+    content
+        .into_iter()
+        .map(|block| match block {
+            AnthropicContentBlock::ToolUse { id, name, input } => {
+                let repaired_id = if id.trim().is_empty() {
+                    tool_calls
+                        .get(tool_use_index)
+                        .map(replayable_core_tool_call_id)
+                        .unwrap_or_else(|| replayable_anthropic_tool_use_id("", &name, &input))
+                } else {
+                    id.trim().to_string()
+                };
+                tool_use_index = tool_use_index.saturating_add(1);
+                AnthropicContentBlock::ToolUse {
+                    id: repaired_id,
+                    name,
+                    input,
+                }
+            }
+            other => other,
+        })
+        .collect()
 }
 
 /// Converts one canonical core tool call into one Anthropic `tool_use` block.
@@ -740,11 +861,7 @@ fn core_tool_call_to_anthropic_tool_use(
     tool_call: &CoreConversationToolCall,
     provider_tool_definitions: &[ProviderToolDefinition],
 ) -> Value {
-    let replayable_tool_call_id = tool_call
-        .tool_call_id
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| tool_call.id.clone());
+    let replayable_tool_call_id = replayable_core_tool_call_id(tool_call);
     let provider_visible_tool_name = resolve_provider_visible_anthropic_tool_name(
         &tool_call.tool_name,
         provider_tool_definitions,
@@ -777,13 +894,7 @@ fn finalize_pending_anthropic_tool_use(
 
     let provider_visible_id = tool_use.id.trim().to_string();
     let provider_visible_id = (!provider_visible_id.is_empty()).then_some(provider_visible_id);
-    let local_id = provider_visible_id.clone().unwrap_or_else(|| {
-        format!(
-            "{}:{}",
-            tool_use.name,
-            serde_json::to_string(&input_json).unwrap_or_else(|_| input_json.to_string())
-        )
-    });
+    let local_id = replayable_anthropic_tool_use_id(&tool_use.id, &tool_use.name, &input_json);
     let host_tool_name =
         resolve_host_owned_anthropic_tool_name(&tool_use.name, provider_tool_definitions);
 
@@ -895,7 +1006,8 @@ fn forward_anthropic_delta<S>(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnthropicContentBlock, PendingAnthropicToolUse, build_anthropic_provider_message_state,
+        AnthropicContentBlock, PendingAnthropicToolUse,
+        anthropic_content_block_from_pending_tool_use, build_anthropic_provider_message_state,
         build_anthropic_provider_tool_name, build_anthropic_request_payload,
         finalize_pending_anthropic_tool_use,
     };
@@ -1081,6 +1193,82 @@ mod tests {
         );
     }
 
+    /// Verifies Anthropic replay ignores foreign provider-message-state payloads and rebuilds the assistant tool turn from canonical text/tool-call fields when a session switches from another protocol family.
+    /// 验证当会话从其他协议家族切换过来时，Anthropic 回放会忽略外部 provider-message-state，并改为基于规范文本与工具调用字段重建助手工具回合。
+    #[test]
+    fn request_payload_ignores_foreign_provider_message_state_after_protocol_switch() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("我先继续调用工具。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("foreign-resp-1")),
+                    provider_message_state: Some(json!({
+                        "gemini_native": {
+                            "role": "model",
+                            "parts": [{ "text": "这是一段外部协议状态" }]
+                        }
+                    })),
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("local-call-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from("spawn_agent"),
+                        arguments: json!({ "task": "delegate-1" }),
+                    }],
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("spawn_agent"),
+                description: String::from("Spawn one delegate agent"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "task": { "type": "string" }
+                    },
+                    "required": ["task"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["content"][0]["type"], "text");
+        assert_eq!(messages[0]["content"][0]["text"], "我先继续调用工具。");
+        assert_eq!(messages[0]["content"][1]["type"], "tool_use");
+        assert_eq!(messages[0]["content"][1]["id"], "call-1");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "call-1");
+    }
+
     /// Verifies Anthropic replay falls back to the local tool-call identifier when the upstream provider omits a stable visible id.
     /// 验证当上游 Provider 缺失稳定可见 id 时，Anthropic 回放会回退到本地工具调用标识。
     #[test]
@@ -1146,6 +1334,294 @@ mod tests {
             .expect("messages should be an array");
         assert_eq!(messages[0]["content"][2]["id"], "local-call-1");
         assert_eq!(messages[1]["content"][0]["tool_use_id"], "local-call-1");
+    }
+
+    /// Verifies newly stored Anthropic provider-message-state tool-use blocks already carry the replayable local fallback identifier when the upstream provider omitted its visible id.
+    /// 验证当上游 Provider 缺失可见 id 时，新写入的 Anthropic provider-message-state 工具块会直接携带可回放的本地回退标识。
+    #[test]
+    fn anthropic_provider_state_stores_replayable_local_tool_id_when_upstream_id_is_blank() {
+        let block = anthropic_content_block_from_pending_tool_use(&PendingAnthropicToolUse {
+            id: String::new(),
+            name: String::from("spawn_agent"),
+            input_json: String::from("{\"task\":\"delegate-1\"}"),
+        })
+        .expect("tool-use block should build");
+
+        match block {
+            AnthropicContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "spawn_agent:{\"task\":\"delegate-1\"}");
+                assert_eq!(name, "spawn_agent");
+                assert_eq!(input, json!({ "task": "delegate-1" }));
+            }
+            other => panic!("unexpected content block: {other:?}"),
+        }
+    }
+
+    /// Verifies Anthropic request replay heals older stored provider-message-state blocks whose tool-use ids were blank, so legacy broken sessions can still resend parallel tool results.
+    /// 验证 Anthropic 请求回放会修复历史上已存入空白 tool-use id 的 provider-message-state，从而让旧的损坏会话仍能重放并行工具结果。
+    #[test]
+    fn request_payload_repairs_stored_blank_tool_use_ids_for_parallel_tool_results() {
+        let assistant_state = build_anthropic_provider_message_state(&[
+            AnthropicContentBlock::ToolUse {
+                id: String::new(),
+                name: String::from("spawn_agent"),
+                input: json!({ "task": "delegate-1" }),
+            },
+            AnthropicContentBlock::ToolUse {
+                id: String::new(),
+                name: String::from("spawn_agent"),
+                input: json!({ "task": "delegate-2" }),
+            },
+            AnthropicContentBlock::ToolUse {
+                id: String::new(),
+                name: String::from("spawn_agent"),
+                input: json!({ "task": "delegate-3" }),
+            },
+            AnthropicContentBlock::ToolUse {
+                id: String::new(),
+                name: String::from("spawn_agent"),
+                input: json!({ "task": "delegate-4" }),
+            },
+        ]);
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body 4"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![
+                CoreConversationMessage {
+                    id: String::from("assistant-1"),
+                    payload: CoreConversationPayload::Assistant {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: Some(assistant_state),
+                        tool_calls: vec![
+                            CoreConversationToolCall {
+                                id: String::from("local-call-1"),
+                                tool_call_id: None,
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-1" }),
+                            },
+                            CoreConversationToolCall {
+                                id: String::from("local-call-2"),
+                                tool_call_id: None,
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-2" }),
+                            },
+                            CoreConversationToolCall {
+                                id: String::from("local-call-3"),
+                                tool_call_id: None,
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-3" }),
+                            },
+                            CoreConversationToolCall {
+                                id: String::from("local-call-4"),
+                                tool_call_id: None,
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-4" }),
+                            },
+                        ],
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("tool-result-1"),
+                    payload: CoreConversationPayload::ToolResult {
+                        tool_result_id: String::from("result-1"),
+                        tool_call_id: Some(String::from("local-call-1")),
+                        text: String::from("tool result body 1"),
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("tool-result-2"),
+                    payload: CoreConversationPayload::ToolResult {
+                        tool_result_id: String::from("result-2"),
+                        tool_call_id: Some(String::from("local-call-2")),
+                        text: String::from("tool result body 2"),
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("tool-result-3"),
+                    payload: CoreConversationPayload::ToolResult {
+                        tool_result_id: String::from("result-3"),
+                        tool_call_id: Some(String::from("local-call-3")),
+                        text: String::from("tool result body 3"),
+                    },
+                },
+            ],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-4"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-4"),
+                    tool_call_id: Some(String::from("local-call-4")),
+                    text: String::from("tool result body 4"),
+                },
+            },
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("spawn_agent"),
+                description: String::from("Spawn one delegate agent"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "task": { "type": "string" }
+                    },
+                    "required": ["task"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[0]["content"][0]["id"], "local-call-1");
+        assert_eq!(messages[0]["content"][1]["id"], "local-call-2");
+        assert_eq!(messages[0]["content"][2]["id"], "local-call-3");
+        assert_eq!(messages[0]["content"][3]["id"], "local-call-4");
+        let tool_results = messages[1]["content"]
+            .as_array()
+            .expect("tool result content should be an array");
+        assert_eq!(tool_results[0]["tool_use_id"], "local-call-1");
+        assert_eq!(tool_results[1]["tool_use_id"], "local-call-2");
+        assert_eq!(tool_results[2]["tool_use_id"], "local-call-3");
+        assert_eq!(tool_results[3]["tool_use_id"], "local-call-4");
+    }
+
+    /// Verifies Anthropic request payloads coalesce multiple consecutive tool results into one user message so parallel delegate completions replay against the same assistant tool-use turn.
+    /// 验证 Anthropic 请求载荷会把多个连续工具结果合并为一条 user 消息，确保并行委托完成结果会回放到同一条助手工具调用回合。
+    #[test]
+    fn request_payload_coalesces_consecutive_tool_results_into_one_user_message() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body 4"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![
+                CoreConversationMessage {
+                    id: String::from("assistant-1"),
+                    payload: CoreConversationPayload::Assistant {
+                        text: String::from("并行等待四个子代理完成。"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
+                        tool_calls: vec![
+                            CoreConversationToolCall {
+                                id: String::from("local-call-1"),
+                                tool_call_id: Some(String::from("call-1")),
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-1" }),
+                            },
+                            CoreConversationToolCall {
+                                id: String::from("local-call-2"),
+                                tool_call_id: Some(String::from("call-2")),
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-2" }),
+                            },
+                            CoreConversationToolCall {
+                                id: String::from("local-call-3"),
+                                tool_call_id: Some(String::from("call-3")),
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-3" }),
+                            },
+                            CoreConversationToolCall {
+                                id: String::from("local-call-4"),
+                                tool_call_id: Some(String::from("call-4")),
+                                tool_name: String::from("spawn_agent"),
+                                arguments: json!({ "task": "delegate-4" }),
+                            },
+                        ],
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("tool-result-1"),
+                    payload: CoreConversationPayload::ToolResult {
+                        tool_result_id: String::from("result-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        text: String::from("tool result body 1"),
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("tool-result-2"),
+                    payload: CoreConversationPayload::ToolResult {
+                        tool_result_id: String::from("result-2"),
+                        tool_call_id: Some(String::from("call-2")),
+                        text: String::from("tool result body 2"),
+                    },
+                },
+                CoreConversationMessage {
+                    id: String::from("tool-result-3"),
+                    payload: CoreConversationPayload::ToolResult {
+                        tool_result_id: String::from("result-3"),
+                        tool_call_id: Some(String::from("call-3")),
+                        text: String::from("tool result body 3"),
+                    },
+                },
+            ],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-4"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-4"),
+                    tool_call_id: Some(String::from("call-4")),
+                    text: String::from("tool result body 4"),
+                },
+            },
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("spawn_agent"),
+                description: String::from("Spawn one delegate agent"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "task": { "type": "string" }
+                    },
+                    "required": ["task"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[1]["role"], "user");
+        let tool_results = messages[1]["content"]
+            .as_array()
+            .expect("tool result content should be an array");
+        assert_eq!(tool_results.len(), 4);
+        assert_eq!(tool_results[0]["type"], "tool_result");
+        assert_eq!(tool_results[0]["tool_use_id"], "call-1");
+        assert_eq!(tool_results[1]["tool_use_id"], "call-2");
+        assert_eq!(tool_results[2]["tool_use_id"], "call-3");
+        assert_eq!(tool_results[3]["tool_use_id"], "call-4");
     }
 
     /// Verifies Anthropic tool-use finalization synthesizes one stable local identifier when the provider omits the upstream id.

@@ -6,7 +6,8 @@ use std::time::Duration;
 use rmcp::ClientHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, JsonObject,
-    Prompt, ReadResourceRequestParams, ReadResourceResult, Resource, Tool as RmcpTool,
+    Prompt, ReadResourceRequestParams, ReadResourceResult, Resource, ServerCapabilities,
+    Tool as RmcpTool,
 };
 use rmcp::service::{NotificationContext, Peer, RoleClient};
 use serde_json::Value;
@@ -144,6 +145,34 @@ pub(crate) fn rmcp_tool_to_schema(tool: RmcpTool) -> McpToolSchema {
     }
 }
 
+/// Returns whether one negotiated rmcp server capability snapshot advertises prompt support.
+/// 返回单份已协商 rmcp 服务器能力快照是否声明了 prompt 支持。
+pub(crate) fn rmcp_capabilities_support_prompts(capabilities: &ServerCapabilities) -> bool {
+    capabilities.prompts.is_some()
+}
+
+/// Returns whether one negotiated rmcp server capability snapshot advertises resource support.
+/// 返回单份已协商 rmcp 服务器能力快照是否声明了资源支持。
+pub(crate) fn rmcp_capabilities_support_resources(capabilities: &ServerCapabilities) -> bool {
+    capabilities.resources.is_some()
+}
+
+/// Returns whether one connected rmcp peer advertises prompt support after initialize.
+/// 返回单个已连接 rmcp peer 在 initialize 后是否声明了 prompt 支持。
+fn rmcp_peer_supports_prompts(peer: &Peer<RoleClient>) -> bool {
+    peer.peer_info()
+        .map(|info| rmcp_capabilities_support_prompts(&info.capabilities))
+        .unwrap_or(false)
+}
+
+/// Returns whether one connected rmcp peer advertises resource support after initialize.
+/// 返回单个已连接 rmcp peer 在 initialize 后是否声明了资源支持。
+fn rmcp_peer_supports_resources(peer: &Peer<RoleClient>) -> bool {
+    peer.peer_info()
+        .map(|info| rmcp_capabilities_support_resources(&info.capabilities))
+        .unwrap_or(false)
+}
+
 /// List tools from one rmcp client peer and convert them into the host-owned MCP schema contract.
 /// 从单个 rmcp 客户端 peer 拉取工具列表，并将其转换为宿主自有 MCP schema 契约。
 pub(crate) async fn list_rmcp_tools(
@@ -174,6 +203,9 @@ pub(crate) async fn list_rmcp_prompts(
     peer: &Peer<RoleClient>,
     error_context: &str,
 ) -> Result<Vec<Prompt>, McpRuntimeError> {
+    if !rmcp_peer_supports_prompts(peer) {
+        return Ok(Vec::new());
+    }
     peer.list_all_prompts().await.map_err(|error| {
         McpRuntimeError::transport(format!("prompts/list({error_context}): {error}"))
     })
@@ -187,6 +219,11 @@ pub(crate) async fn get_rmcp_prompt(
     name: &str,
     args: Value,
 ) -> Result<GetPromptResult, McpRuntimeError> {
+    if !rmcp_peer_supports_prompts(peer) {
+        return Err(McpRuntimeError::transport(format!(
+            "prompts/get({error_context}): server does not advertise prompts capability"
+        )));
+    }
     let mut params = GetPromptRequestParams::new(name.to_string());
     params.arguments = build_rmcp_prompt_arguments(args)?;
     peer.get_prompt(params).await.map_err(|error| {
@@ -200,6 +237,9 @@ pub(crate) async fn list_rmcp_resources(
     peer: &Peer<RoleClient>,
     error_context: &str,
 ) -> Result<Vec<Resource>, McpRuntimeError> {
+    if !rmcp_peer_supports_resources(peer) {
+        return Ok(Vec::new());
+    }
     peer.list_all_resources().await.map_err(|error| {
         McpRuntimeError::transport(format!("resources/list({error_context}): {error}"))
     })
@@ -212,6 +252,11 @@ pub(crate) async fn read_rmcp_resource(
     error_context: &str,
     uri: &str,
 ) -> Result<ReadResourceResult, McpRuntimeError> {
+    if !rmcp_peer_supports_resources(peer) {
+        return Err(McpRuntimeError::transport(format!(
+            "resources/read({error_context}): server does not advertise resources capability"
+        )));
+    }
     peer.read_resource(ReadResourceRequestParams::new(uri.to_string()))
         .await
         .map_err(|error| {
@@ -236,8 +281,11 @@ pub(crate) async fn call_rmcp_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value};
-    use rmcp::model::CallToolResult;
+    use super::{
+        build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value,
+        rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources,
+    };
+    use rmcp::model::{CallToolResult, ServerCapabilities};
     use serde_json::{Value, json};
 
     #[test]
@@ -271,5 +319,25 @@ mod tests {
             rmcp_call_tool_result_to_value(result).expect("plain text should decode"),
             Value::String(String::from("plain-text"))
         );
+    }
+
+    #[test]
+    fn rmcp_prompt_capability_detection_requires_explicit_support() {
+        assert!(!rmcp_capabilities_support_prompts(
+            &ServerCapabilities::default()
+        ));
+        assert!(rmcp_capabilities_support_prompts(
+            &ServerCapabilities::builder().enable_prompts().build()
+        ));
+    }
+
+    #[test]
+    fn rmcp_resource_capability_detection_requires_explicit_support() {
+        assert!(!rmcp_capabilities_support_resources(
+            &ServerCapabilities::default()
+        ));
+        assert!(rmcp_capabilities_support_resources(
+            &ServerCapabilities::builder().enable_resources().build()
+        ));
     }
 }

@@ -103,12 +103,34 @@ impl AgentViewBlock {
             Self::Directive(block) => block.selectable_text(),
         }
     }
+
+    /// Returns the shared attribute map carried by the current block.
+    /// 返回当前区块携带的共享属性映射。
+    pub fn attributes(&self) -> &AgentViewAttributes {
+        match self {
+            Self::Markdown(block) => &block.attributes,
+            Self::Directive(block) => &block.attributes,
+        }
+    }
+
+    /// Returns the mutable shared attribute map carried by the current block.
+    /// 返回当前区块携带的可变共享属性映射。
+    pub fn attributes_mut(&mut self) -> &mut AgentViewAttributes {
+        match self {
+            Self::Markdown(block) => &mut block.attributes,
+            Self::Directive(block) => &mut block.attributes,
+        }
+    }
 }
 
 /// Standard Markdown block preserved before future renderer-specific layout expansion.
 /// 在后续渲染器特定布局展开之前保留的标准 Markdown 区块。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentViewMarkdownBlock {
+    /// Parsed key-value attributes attached by higher-level runtime adapters.
+    /// 由上层运行时适配器附着的已解析键值属性集合。
+    #[serde(default)]
+    pub attributes: AgentViewAttributes,
     /// Exact Markdown source stored for lossless copy, persistence, and reparsing.
     /// 为无损复制、持久化与重新解析保留的精确 Markdown 源文本。
     pub raw_source: String,
@@ -118,7 +140,17 @@ impl AgentViewMarkdownBlock {
     /// Creates one Markdown block from the provided raw source.
     /// 根据提供的原始源码创建一个 Markdown 区块。
     pub fn new(raw_source: impl Into<String>) -> Self {
+        Self::new_with_attributes(raw_source, AgentViewAttributes::new())
+    }
+
+    /// Creates one Markdown block from the provided raw source and higher-level runtime attributes.
+    /// 根据提供的原始源码与上层运行时属性创建一个 Markdown 区块。
+    pub fn new_with_attributes(
+        raw_source: impl Into<String>,
+        attributes: AgentViewAttributes,
+    ) -> Self {
         Self {
+            attributes,
             raw_source: raw_source.into(),
         }
     }

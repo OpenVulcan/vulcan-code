@@ -18,7 +18,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use vldb_controller_client::ControllerSqliteValue;
+use vldb_controller_client::{
+    ControllerSqliteSearchFtsHit, ControllerSqliteTokenizerMode, ControllerSqliteValue,
+};
 
 /// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.
 /// 在 protobuf/gRPC 结构开销接近 tonic 默认限制前使用的请求帧目标预算。
@@ -44,9 +46,15 @@ pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
 /// Search-result page size used by the lightweight per-session history search.
 /// 单会话轻量历史搜索使用的搜索结果页大小。
 pub const SESSION_HISTORY_SEARCH_RESULT_LIMIT: usize = 20;
-/// Number of conversation turns loaded on either side of one search-result anchor.
-/// 单个搜索结果锚点两侧加载的对话轮次数。
-const SESSION_HISTORY_CONTEXT_TURN_RADIUS: i64 = 2;
+/// Stable global index name used by controller-managed workspace-history FTS search.
+/// 控制器托管工作台历史 FTS 搜索使用的稳定全局索引名。
+const WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME: &str = "workspace_history_search_all";
+/// Stable project-index prefix used by controller-managed workspace-history FTS search.
+/// 控制器托管工作台历史 FTS 搜索使用的稳定项目索引前缀。
+const WORKSPACE_HISTORY_SEARCH_PROJECT_INDEX_PREFIX: &str = "workspace_history_search_project_";
+/// SQLite name filter used to enumerate controller-managed workspace-history FTS virtual tables.
+/// 用于枚举控制器托管工作台历史 FTS 虚表的 SQLite 名称过滤模式。
+const WORKSPACE_HISTORY_SEARCH_INDEX_NAME_LIKE_PATTERN: &str = "workspace_history_search_%";
 /// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
 /// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
 const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
@@ -180,28 +188,43 @@ pub struct SessionHistoryPage {
     pub has_more_history: bool,
 }
 
-/// Lightweight search results returned for one session history query.
-/// 单次会话历史查询返回的轻量搜索结果。
+/// Workspace-scoped BM25 search results returned for one left-panel history query.
+/// 左侧面板历史查询返回的工作区级 BM25 搜索结果。
 #[derive(Debug, Clone)]
-pub struct SessionHistorySearchPage {
-    /// Session identifier owning these search hits.
-    /// 拥有这些搜索命中的会话标识。
-    pub session_id: SessionId,
+pub struct WorkspaceHistorySearchPage {
     /// Normalized user query used to produce the result page.
     /// 生成该结果页时使用的规范化用户查询。
     pub query: String,
-    /// Lightweight hits ordered from newest to oldest.
-    /// 按新到旧排序的轻量命中集合。
-    pub hits: Vec<SessionHistorySearchHit>,
+    /// Search hits ordered by BM25 score and recency.
+    /// 按 BM25 分数与时间新旧排序的搜索命中集合。
+    pub hits: Vec<WorkspaceHistorySearchHit>,
     /// Whether the result count reached the requested limit.
     /// 结果数量是否已经达到请求上限。
     pub limit_reached: bool,
+    /// Total match count reported by SQLite FTS for the current query and scope.
+    /// SQLite FTS 针对当前查询与范围返回的总命中数量。
+    pub total_hits: usize,
+    /// Next result offset that should be requested when the user asks to load more.
+    /// 用户请求继续加载时应使用的下一页偏移量。
+    pub next_offset: usize,
+    /// Whether more results still remain after the currently returned page.
+    /// 当前结果页之后是否仍然存在更多命中。
+    pub has_more: bool,
 }
 
-/// One lightweight session-history search hit.
-/// 单条轻量会话历史搜索命中。
+/// One workspace-scoped BM25 history-search hit.
+/// 单条工作区级 BM25 历史搜索命中。
 #[derive(Debug, Clone)]
-pub struct SessionHistorySearchHit {
+pub struct WorkspaceHistorySearchHit {
+    /// Human-readable project name rendered in the left search panel.
+    /// 渲染在左侧搜索面板中的项目名称。
+    pub project_name: String,
+    /// Stable session identifier owning the matched message row.
+    /// 拥有该命中消息行的稳定会话标识。
+    pub session_id: SessionId,
+    /// Human-readable session title restored from the persisted session row.
+    /// 从持久化会话行恢复出的会话标题。
+    pub session_title: String,
     /// Stable identifier of the matched message row.
     /// 命中消息行的稳定标识。
     pub message_id: String,
@@ -211,51 +234,21 @@ pub struct SessionHistorySearchHit {
     /// Stable turn index inside the session transcript.
     /// 会话转录内部的稳定轮次索引。
     pub turn_index: i64,
-    /// Persisted message record kind.
-    /// 持久化消息记录类型。
-    pub record_kind: SessionMessageRecordKind,
-    /// Whether this persisted message is normally visible in the transcript.
-    /// 该持久化消息通常是否在转录中可见。
-    pub visible: bool,
-    /// Human-readable title restored from metadata or role fallback.
-    /// 从元数据或角色回退值恢复出的人类可读标题。
-    pub title: String,
-    /// Compact preview returned without loading the full message body.
-    /// 在不加载完整消息正文的前提下返回的紧凑预览。
+    /// High-level message kind reconstructed from the persisted role.
+    /// 根据持久化角色恢复出的高层消息类型。
+    pub message_kind: SessionMessageKind,
+    /// Compact preview fragment extracted by the FTS snippet helper.
+    /// 由 FTS snippet 辅助函数提取出的紧凑预览片段。
     pub preview: String,
+    /// Raw preview markup returned by the FTS snippet helper, including optional `<mark>` tags.
+    /// FTS snippet 辅助函数返回的原始预览标记片段，可能包含 `<mark>` 标签。
+    pub preview_markup: String,
     /// Created-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的创建时间。
     pub created_at: String,
-}
-
-/// Read-only transcript context loaded around one search-result anchor.
-/// 围绕单条搜索结果锚点加载出的只读转录上下文。
-#[derive(Debug, Clone)]
-pub struct SessionHistoryContextPage {
-    /// Session identifier owning this context page.
-    /// 拥有该上下文页的会话标识。
-    pub session_id: SessionId,
-    /// Search-result message identifier used as the context anchor.
-    /// 作为上下文锚点的搜索结果消息标识。
-    pub anchor_message_id: String,
-    /// Search-result ordinal used as the context anchor.
-    /// 作为上下文锚点的搜索结果序号。
-    pub anchor_ordinal: i64,
-    /// Search-result turn index used as the context anchor.
-    /// 作为上下文锚点的搜索结果轮次索引。
-    pub anchor_turn_index: i64,
-    /// First loaded turn index, if any context rows were restored.
-    /// 已恢复上下文行中的首个轮次索引。
-    pub first_turn_index: Option<i64>,
-    /// Last loaded turn index, if any context rows were restored.
-    /// 已恢复上下文行中的最后轮次索引。
-    pub last_turn_index: Option<i64>,
-    /// Nearby transcript messages restored in ascending display order.
-    /// 按展示正序恢复出的附近转录消息。
-    pub messages: Vec<SessionMessageEntry>,
-    /// Whether the exact anchor message row was present in the returned context.
-    /// 返回的上下文中是否包含精确锚点消息行。
-    pub anchor_found: bool,
+    /// Raw BM25 score returned by SQLite for tie-break visibility.
+    /// SQLite 返回的原始 BM25 分值，用于并列诊断。
+    pub score: f64,
 }
 
 /// One tool-detail page loaded on demand for a single conversation turn.
@@ -455,38 +448,68 @@ struct StoredSessionMessagePositionRow {
 /// 单次位置查询最多查找的持久化消息标识数量。
 const SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT: usize = 128;
 
-/// Raw lightweight session-history search row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始轻量会话历史搜索行。
+/// Raw workspace-history search metadata row decoded from the controller SQLite query payload.
+/// 从控制器 SQLite 查询载荷中解码出的原始工作台历史搜索元数据行。
 #[derive(Debug, Clone, Deserialize)]
-struct StoredSessionHistorySearchRow {
+struct StoredWorkspaceHistorySearchMetadataRow {
+    /// Human-readable project name stored on the project row.
+    /// 存储在项目行中的项目名称。
+    project_name: String,
+    /// Stable session identifier stored in SQLite.
+    /// 存储在 SQLite 中的稳定会话标识。
+    session_id: String,
+    /// Human-readable session title stored on the session row.
+    /// 存储在会话行中的会话标题。
+    session_title: String,
     /// Stable message identifier stored in SQLite.
     /// 存储在 SQLite 中的稳定消息标识。
-    id: String,
+    message_id: String,
     /// Stable ordinal inside one transcript stream.
     /// 单个转录流内部的稳定序号。
     ordinal: i64,
-    /// Persisted message role used to reconstruct title fallback.
-    /// 用于重建标题回退值的持久化消息角色。
-    role: String,
-    /// Persisted record kind key.
-    /// 持久化记录类型键。
-    kind: String,
-    /// SQLite numeric visible flag.
-    /// SQLite 数值型可见标记。
-    visible: i64,
-    /// Stable conversation-turn index derived from user-authored prompts.
-    /// 根据用户提示词派生出的稳定对话轮次索引。
-    #[serde(default)]
+    /// Stable turn index inside one transcript stream.
+    /// 单个转录流内部的稳定轮次索引。
     turn_index: i64,
-    /// Lightweight content preview selected by SQL instead of the full body.
-    /// SQL 选择出的轻量正文预览，而不是完整正文。
-    content_preview: String,
-    /// Optional structured JSON metadata.
-    /// 可选的结构化 JSON 元数据。
-    meta_json: Option<String>,
+    /// Persisted message role used to reconstruct the user-facing label.
+    /// 用于重建用户界面标签的持久化消息角色。
+    role: String,
     /// Created-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的创建时间。
     created_at: String,
+}
+
+/// Raw workspace-history search ownership row decoded from the controller SQLite query payload.
+/// 从控制器 SQLite 查询载荷中解码出的原始工作台历史搜索归属行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredWorkspaceHistorySearchDocumentStateRow {
+    /// Stable message identifier stored in SQLite.
+    /// 存储在 SQLite 中的稳定消息标识。
+    message_id: String,
+    /// Stable session identifier stored in SQLite.
+    /// 存储在 SQLite 中的稳定会话标识。
+    #[serde(rename = "session_id")]
+    _session_id: String,
+    /// Stable project identifier stored in SQLite.
+    /// 存储在 SQLite 中的稳定项目标识。
+    project_id: String,
+}
+
+/// One prepared workspace-history search document awaiting controller-managed FTS synchronization.
+/// 一条等待同步到控制器托管 FTS 的预处理工作台历史搜索文档。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkspaceHistorySearchDocumentUpsert {
+    /// Stable message identifier used as the document id.
+    /// 作为文档标识使用的稳定消息 ID。
+    message_id: String,
+    /// Stable session identifier owning the document.
+    /// 拥有该文档的稳定会话标识。
+    session_id: String,
+    /// Stable project identifier used to route the document into its project index.
+    /// 用于将文档路由到所属项目索引的稳定项目标识。
+    project_id: String,
+    /// Final transcript body indexed by controller-managed FTS search.
+    /// 由控制器托管 FTS 搜索建立索引的最终转录正文。
+    content: String,
 }
 
 /// Structured transcript-message metadata payload persisted inside the SQLite `meta_json` column.
@@ -847,84 +870,79 @@ pub async fn load_session_history_page(
     })
 }
 
-/// Searches one session's persisted history with a small lightweight result page.
-/// 使用小型轻量结果页搜索单个会话的持久化历史。
-pub async fn search_session_history(
+/// Searches visible workspace history with SQLite FTS5 and BM25 scoring.
+/// 使用 SQLite FTS5 与 BM25 评分搜索可见工作台历史。
+pub async fn search_workspace_history(
     controller: ControllerRuntimeHandle,
-    session_id: SessionId,
+    project_id: Option<String>,
     query: String,
     requested_limit: usize,
-) -> Result<SessionHistorySearchPage, String> {
+    offset: usize,
+) -> Result<WorkspaceHistorySearchPage, String> {
     let query = normalize_session_history_search_query(&query);
     if query.is_empty() {
-        return Ok(SessionHistorySearchPage {
-            session_id,
+        return Ok(WorkspaceHistorySearchPage {
             query,
             hits: Vec::new(),
             limit_reached: false,
+            total_hits: 0,
+            next_offset: 0,
+            has_more: false,
         });
     }
 
     let limit = requested_limit
         .max(1)
         .min(SESSION_HISTORY_SEARCH_RESULT_LIMIT);
-    let rows = query_session_history_search_rows(&controller, session_id, &query, limit).await?;
-    let limit_reached = rows.len() >= limit;
-    let hits = rows
-        .into_iter()
-        .map(stored_session_history_search_row_to_hit)
-        .collect::<Vec<_>>();
-
-    Ok(SessionHistorySearchPage {
-        session_id,
-        query,
-        hits,
-        limit_reached,
-    })
-}
-
-/// Lazily loads one read-only transcript context window around a search-result anchor.
-/// 围绕搜索结果锚点懒加载一段只读转录上下文窗口。
-pub async fn load_session_history_context_page(
-    controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-    anchor_message_id: String,
-    anchor_ordinal: i64,
-    anchor_turn_index: i64,
-) -> Result<SessionHistoryContextPage, String> {
-    migrate_legacy_oversized_session_messages(&controller, session_id).await?;
-
-    let (first_turn_index, last_turn_index) =
-        session_history_context_turn_bounds(anchor_turn_index, SESSION_HISTORY_CONTEXT_TURN_RADIUS);
-    let message_rows = query_session_history_context_rows(
-        &controller,
-        session_id,
-        &anchor_message_id,
-        first_turn_index,
-        last_turn_index,
-    )
-    .await?;
-    let anchor_found = message_rows
+    let scoped_project_id = project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let index_name = scoped_project_id
+        .map(workspace_history_search_project_index_name)
+        .unwrap_or_else(|| WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME.to_string());
+    ensure_workspace_history_search_index(&controller, &index_name).await?;
+    let search_result = controller
+        .client
+        .search_sqlite_fts(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            index_name.clone(),
+            ControllerSqliteTokenizerMode::Jieba,
+            query.clone(),
+            limit as u32,
+            offset as u32,
+        )
+        .await
+        .map_err(|error| format!("搜索工作台历史失败：{error}"))?;
+    let message_ids = search_result
+        .hits
         .iter()
-        .any(|row| row.id == anchor_message_id && row.ordinal == anchor_ordinal);
-    let loaded_first_turn_index = message_rows.first().map(|row| row.turn_index);
-    let loaded_last_turn_index = message_rows.last().map(|row| row.turn_index);
-    let message_body_chunks =
-        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
-    let messages = message_rows
+        .map(|hit| hit.id.clone())
+        .collect::<Vec<_>>();
+    let metadata_rows =
+        query_workspace_history_search_metadata_rows(&controller, &message_ids).await?;
+    let metadata_by_message_id = metadata_rows
         .into_iter()
-        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
+        .map(|row| (row.message_id.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    let hits = search_result
+        .hits
+        .into_iter()
+        .filter_map(|hit| {
+            metadata_by_message_id
+                .get(&hit.id)
+                .map(|row| stored_workspace_history_search_hit(row, &hit))
+        })
         .collect::<Vec<_>>();
 
-    Ok(SessionHistoryContextPage {
-        session_id,
-        anchor_message_id,
-        anchor_ordinal,
-        anchor_turn_index,
-        first_turn_index: loaded_first_turn_index,
-        last_turn_index: loaded_last_turn_index,
-        messages,
-        anchor_found,
+    Ok(WorkspaceHistorySearchPage {
+        query,
+        total_hits: search_result.total as usize,
+        next_offset: offset.saturating_add(hits.len()),
+        has_more: offset.saturating_add(hits.len()) < search_result.total as usize,
+        hits,
+        limit_reached: search_result.total >= limit as u64,
     })
 }
 
@@ -983,6 +1001,14 @@ pub async fn maintain_hydrated_session_storage(
     let upserted_message_count = messages.len();
     let mut message_batch_params = Vec::new();
     let mut chunk_batch_params = Vec::new();
+    let mut search_batch_params = Vec::new();
+    let Some((project_id, session_title)) =
+        query_session_workspace_history_search_routing(&controller, session_id).await?
+    else {
+        return Err(format!(
+            "维护已水合会话存储失败：未找到会话 `{session_id}` 的项目归属。"
+        ));
+    };
     let persisted_positions =
         query_session_message_positions_for_entries(&controller, session_id, &messages).await?;
     let (max_ordinal, max_turn_index) =
@@ -993,10 +1019,20 @@ pub async fn maintain_hydrated_session_storage(
         max_turn_index,
         &mut message_batch_params,
         &mut chunk_batch_params,
+        &mut search_batch_params,
+        project_id.as_str(),
+        true,
         session_id,
+        session_title.as_str(),
         &messages,
     );
-    upsert_session_message_batches(&controller, message_batch_params, chunk_batch_params).await?;
+    upsert_session_message_batches(
+        &controller,
+        message_batch_params,
+        chunk_batch_params,
+        search_batch_params,
+    )
+    .await?;
 
     Ok(SessionMaintenanceReport {
         session_id,
@@ -1387,6 +1423,7 @@ async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
+DELETE FROM workspace_history_search_docs;
 DELETE FROM session_runtime_state;
 DELETE FROM session_compactions;
 DELETE FROM session_message_chunks;
@@ -1399,6 +1436,10 @@ DELETE FROM projects;
         .await
         .map_err(|error| format!("清理旧原型工作台数据失败：{error}"))?;
 
+    let index_names = query_workspace_history_search_index_names(controller).await?;
+    drop_workspace_history_search_indexes(controller, &index_names, "清理工作台历史搜索索引失败")
+        .await?;
+
     Ok(())
 }
 
@@ -1406,6 +1447,92 @@ DELETE FROM projects;
 /// 返回应用工作台表当前使用的控制器作用域 SQLite 绑定标识符。
 fn app_sqlite_binding_id(controller: &ControllerRuntimeHandle) -> &str {
     controller.sqlite_binding_id.as_str()
+}
+
+/// Queries all controller-managed workspace-history FTS virtual table names currently stored in SQLite.
+/// 查询当前 SQLite 中存储的全部控制器托管工作台历史 FTS 虚表名称。
+async fn query_workspace_history_search_index_names(
+    controller: &ControllerRuntimeHandle,
+) -> Result<Vec<String>, String> {
+    #[derive(Debug, Deserialize)]
+    struct IndexNameRow {
+        /// Virtual-table name.
+        /// 虚表名称。
+        name: String,
+    }
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 AND sql LIKE 'CREATE VIRTUAL TABLE%' ORDER BY name ASC;",
+            vec![ControllerSqliteValue::String(
+                WORKSPACE_HISTORY_SEARCH_INDEX_NAME_LIKE_PATTERN.to_string(),
+            )],
+        )
+        .await
+        .map_err(|error| format!("查询工作台历史搜索索引列表失败：{error}"))?;
+
+    Ok(decode_query_rows::<IndexNameRow>(&result.json_data)?
+        .into_iter()
+        .map(|row| row.name)
+        .collect())
+}
+
+/// Drops the provided controller-managed workspace-history FTS virtual tables.
+/// 删除给定的控制器托管工作台历史 FTS 虚表。
+async fn drop_workspace_history_search_indexes(
+    controller: &ControllerRuntimeHandle,
+    index_names: &[String],
+    error_prefix: &str,
+) -> Result<(), String> {
+    if index_names.is_empty() {
+        return Ok(());
+    }
+
+    let script = index_names
+        .iter()
+        .map(|index_name| {
+            format!(
+                "DROP TABLE IF EXISTS {};",
+                quote_sqlite_identifier(index_name)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    controller
+        .client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            script,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("{error_prefix}：{error}"))?;
+
+    Ok(())
+}
+
+/// Ensures one controller-managed workspace-history FTS index exists with Jieba tokenization enabled.
+/// 确保某个控制器托管工作台历史 FTS 索引已经启用 Jieba 分词并存在。
+async fn ensure_workspace_history_search_index(
+    controller: &ControllerRuntimeHandle,
+    index_name: &str,
+) -> Result<(), String> {
+    controller
+        .client
+        .ensure_sqlite_fts_index(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            index_name.to_string(),
+            ControllerSqliteTokenizerMode::Jieba,
+        )
+        .await
+        .map_err(|error| format!("确保工作台历史搜索索引 `{index_name}` 失败：{error}"))?;
+
+    Ok(())
 }
 
 /// Queries the number of visible project rows currently stored in the application database.
@@ -1643,101 +1770,55 @@ fn loaded_message_turn_count(message_rows: &[StoredSessionMessageRow]) -> usize 
         .len()
 }
 
-/// Queries lightweight search rows for one session without loading full chunk bodies.
-/// 在不加载完整分片正文的前提下查询单个会话的轻量搜索行。
-async fn query_session_history_search_rows(
+/// Queries workspace-history metadata rows for a bounded list of matched message identifiers.
+/// 为一组有界命中的消息标识查询工作台历史元数据行。
+async fn query_workspace_history_search_metadata_rows(
     controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<StoredSessionHistorySearchRow>, String> {
-    let like_pattern = session_history_search_like_pattern(query);
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
+    message_ids: &[String],
+) -> Result<Vec<StoredWorkspaceHistorySearchMetadataRow>, String> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = (1..=message_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let statement = format!(
+        r#"
 SELECT
-    m.id,
+    p.name AS project_name,
+    s.id AS session_id,
+    s.title AS session_title,
+    m.id AS message_id,
     m.ordinal,
-    m.role,
-    m.kind,
-    m.visible,
     m.turn_index,
-    substr(m.content, 1, ?3) AS content_preview,
-    m.meta_json,
+    m.role,
     m.created_at
 FROM session_messages AS m
-WHERE m.session_id = ?1
-  AND (
-    m.content LIKE ?2 ESCAPE '\'
-    OR IFNULL(m.meta_json, '') LIKE ?2 ESCAPE '\'
-    OR EXISTS (
-        SELECT 1
-        FROM session_message_chunks AS c
-        WHERE c.session_id = m.session_id
-          AND c.message_id = m.id
-          AND c.content LIKE ?2 ESCAPE '\'
-        LIMIT 1
-    )
-  )
-ORDER BY m.ordinal DESC
-LIMIT ?4;
-"#,
-            vec![
-                ControllerSqliteValue::String(session_id.to_string()),
-                ControllerSqliteValue::String(like_pattern),
-                ControllerSqliteValue::Int64(SESSION_HISTORY_SEARCH_PREVIEW_CHARS as i64),
-                ControllerSqliteValue::Int64(limit.max(1) as i64),
-            ],
-        )
-        .await
-        .map_err(|error| format!("搜索会话历史失败：{error}"))?;
-
-    decode_query_rows::<StoredSessionHistorySearchRow>(&result.json_data)
-}
-
-/// Queries a small transcript context window around one search-result anchor.
-/// 查询围绕单条搜索结果锚点的一段小型转录上下文窗口。
-async fn query_session_history_context_rows(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    anchor_message_id: &str,
-    first_turn_index: i64,
-    last_turn_index: i64,
-) -> Result<Vec<StoredSessionMessageRow>, String> {
-    let requested_turns = last_turn_index
-        .saturating_sub(first_turn_index)
-        .saturating_add(1)
-        .max(1) as usize;
-    let row_limit = session_transcript_row_limit_for_turns(requested_turns) as i64;
+INNER JOIN sessions AS s ON s.id = m.session_id
+INNER JOIN projects AS p ON p.id = s.project_id
+WHERE m.id IN ({placeholders})
+  AND s.archived = 0
+  AND p.archived = 0;
+"#
+    );
     let result = controller
         .client
         .query_sqlite_json_typed(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
-            r#"
-SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
-FROM session_messages AS m
-WHERE m.session_id = ?1
-  AND m.turn_index BETWEEN ?2 AND ?3
-  AND (m.kind NOT IN ('tool-call-output', 'tool-result-output') OR m.id = ?4)
-ORDER BY m.ordinal ASC
-LIMIT ?5;
-"#,
-            vec![
-                ControllerSqliteValue::String(session_id.to_string()),
-                ControllerSqliteValue::Int64(first_turn_index),
-                ControllerSqliteValue::Int64(last_turn_index),
-                ControllerSqliteValue::String(anchor_message_id.to_string()),
-                ControllerSqliteValue::Int64(row_limit),
-            ],
+            statement,
+            message_ids
+                .iter()
+                .cloned()
+                .map(ControllerSqliteValue::String)
+                .collect(),
         )
         .await
-        .map_err(|error| format!("加载搜索命中附近上下文失败：{error}"))?;
+        .map_err(|error| format!("查询工作台历史搜索元数据失败：{error}"))?;
 
-    decode_query_rows::<StoredSessionMessageRow>(&result.json_data)
+    decode_query_rows::<StoredWorkspaceHistorySearchMetadataRow>(&result.json_data)
 }
 
 /// Queries and rebuilds chunked message bodies for one already-bounded transcript window.
@@ -1974,6 +2055,39 @@ LIMIT 1;
             .into_iter()
             .next(),
     )
+}
+
+/// Queries the current project ownership and title needed to route one session into workspace-history search indexes.
+/// 查询将某个会话路由到工作台历史搜索索引所需的当前项目归属与标题。
+async fn query_session_workspace_history_search_routing(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<Option<(String, String)>, String> {
+    #[derive(Debug, Deserialize)]
+    struct SessionRoutingRow {
+        /// Stable project identifier owning the session.
+        /// 拥有该会话的稳定项目标识。
+        project_id: String,
+        /// Human-readable session title.
+        /// 人类可读的会话标题。
+        title: String,
+    }
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "SELECT project_id, title FROM sessions WHERE id = ?1 LIMIT 1;",
+            vec![ControllerSqliteValue::String(session_id.to_string())],
+        )
+        .await
+        .map_err(|error| format!("查询会话搜索索引归属失败：{error}"))?;
+
+    Ok(decode_query_rows::<SessionRoutingRow>(&result.json_data)?
+        .into_iter()
+        .next()
+        .map(|row| (row.project_id, row.title)))
 }
 
 /// Queries one transcript window with progressive limit reduction when gRPC frame limits are hit.
@@ -2307,7 +2421,8 @@ async fn archive_missing_sessions(
 
     let now = current_unix_millis_text();
     let params = missing_ids
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|session_id| {
             vec![
                 ControllerSqliteValue::String(now.clone()),
@@ -2326,6 +2441,12 @@ async fn archive_missing_sessions(
         )
         .await
         .map_err(|error| format!("软归档会话失败：{error}"))?;
+    delete_workspace_history_search_documents_for_session_ids(
+        controller,
+        &missing_ids,
+        "删除已软归档会话的搜索索引失败",
+    )
+    .await?;
 
     Ok(())
 }
@@ -2344,6 +2465,12 @@ pub async fn permanently_delete_archived_session(
         "session_message_chunks",
         &session_ids,
         "删除归档会话转录消息分片失败",
+    )
+    .await?;
+    delete_workspace_history_search_documents_for_session_ids(
+        &controller,
+        &session_ids,
+        "删除归档会话搜索索引失败",
     )
     .await?;
     delete_session_scoped_rows(
@@ -2389,6 +2516,7 @@ pub async fn permanently_delete_archived_project(
     project_id: String,
     session_ids: Vec<SessionId>,
 ) -> Result<(), String> {
+    let project_index_name = workspace_history_search_project_index_name(&project_id);
     let session_id_texts = session_ids
         .into_iter()
         .map(|session_id| session_id.to_string())
@@ -2399,6 +2527,12 @@ pub async fn permanently_delete_archived_project(
         "session_message_chunks",
         &session_id_texts,
         "删除归档项目下的转录消息分片失败",
+    )
+    .await?;
+    delete_workspace_history_search_documents_for_session_ids(
+        &controller,
+        &session_id_texts,
+        "删除归档项目下的搜索索引失败",
     )
     .await?;
     delete_session_scoped_rows(
@@ -2450,6 +2584,12 @@ pub async fn permanently_delete_archived_project(
         )
         .await
         .map_err(|error| format!("删除归档项目记录失败：{error}"))?;
+    drop_workspace_history_search_indexes(
+        &controller,
+        &[project_index_name],
+        "删除归档项目对应的搜索索引失败",
+    )
+    .await?;
 
     Ok(())
 }
@@ -2465,10 +2605,13 @@ async fn replace_session_messages(
 ) -> Result<(), String> {
     let mut message_batch_params = Vec::new();
     let mut chunk_batch_params = Vec::new();
+    let mut search_batch_params = Vec::new();
     push_session_message_batch_rows(
         controller,
         &mut message_batch_params,
         &mut chunk_batch_params,
+        &mut search_batch_params,
+        true,
         sessions,
         session_messages,
     )
@@ -2477,12 +2620,20 @@ async fn replace_session_messages(
         controller,
         &mut message_batch_params,
         &mut chunk_batch_params,
+        &mut search_batch_params,
+        false,
         archived_sessions,
         archived_session_messages,
     )
     .await?;
 
-    upsert_session_message_batches(controller, message_batch_params, chunk_batch_params).await
+    upsert_session_message_batches(
+        controller,
+        message_batch_params,
+        chunk_batch_params,
+        search_batch_params,
+    )
+    .await
 }
 
 /// Upserts prepared transcript rows and rewrites only their own chunk rows.
@@ -2491,6 +2642,7 @@ async fn upsert_session_message_batches(
     controller: &ControllerRuntimeHandle,
     message_batch_params: Vec<Vec<ControllerSqliteValue>>,
     chunk_batch_params: Vec<Vec<ControllerSqliteValue>>,
+    search_batch_params: Vec<WorkspaceHistorySearchDocumentUpsert>,
 ) -> Result<(), String> {
     if message_batch_params.is_empty() {
         return Ok(());
@@ -2507,6 +2659,12 @@ async fn upsert_session_message_batches(
         controller,
         &message_ids,
         "删除当前窗口消息的旧正文分片失败",
+    )
+    .await?;
+    delete_workspace_history_search_documents_for_message_ids(
+        controller,
+        &message_ids,
+        "删除当前窗口消息的旧搜索索引失败",
     )
     .await?;
 
@@ -2529,6 +2687,8 @@ async fn upsert_session_message_batches(
         )
         .await?;
     }
+
+    upsert_workspace_history_search_documents(controller, search_batch_params).await?;
 
     Ok(())
 }
@@ -2794,6 +2954,8 @@ async fn push_session_message_batch_rows(
     controller: &ControllerRuntimeHandle,
     message_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
     chunk_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+    search_batch_params: &mut Vec<WorkspaceHistorySearchDocumentUpsert>,
+    index_search_documents: bool,
     sessions: &[SessionSummary],
     session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
 ) -> Result<(), String> {
@@ -2804,13 +2966,18 @@ async fn push_session_message_batch_rows(
                     .await?;
             let (max_ordinal, max_turn_index) =
                 query_session_message_max_position(controller, session.id).await?;
+            let project_id = session.project_id.as_deref().unwrap_or_default();
             push_session_message_rows_for_session(
                 &persisted_positions,
                 max_ordinal,
                 max_turn_index,
                 message_batch_params,
                 chunk_batch_params,
+                search_batch_params,
+                project_id,
+                index_search_documents && !project_id.trim().is_empty(),
                 session.id,
+                session.title.as_str(),
                 messages,
             );
         }
@@ -2827,7 +2994,11 @@ fn push_session_message_rows_for_session(
     max_persisted_turn_index: i64,
     message_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
     chunk_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+    search_batch_params: &mut Vec<WorkspaceHistorySearchDocumentUpsert>,
+    project_id: &str,
+    index_search_documents: bool,
     session_id: SessionId,
+    _session_title: &str,
     messages: &[SessionMessageEntry],
 ) {
     let mut next_new_ordinal = max_persisted_ordinal.saturating_add(1).max(0);
@@ -2878,6 +3049,18 @@ fn push_session_message_rows_for_session(
                 ]
             },
         ));
+
+        if index_search_documents
+            && session_message_is_workspace_history_search_indexable(message)
+            && !message.body.trim().is_empty()
+        {
+            search_batch_params.push(WorkspaceHistorySearchDocumentUpsert {
+                message_id,
+                session_id: session_id.to_string(),
+                project_id: project_id.to_string(),
+                content: message.body.clone(),
+            });
+        }
     }
 }
 
@@ -2910,6 +3093,46 @@ ON CONFLICT(id) DO UPDATE SET
 "#
 }
 
+/// Returns the upsert SQL used to persist workspace-history document ownership rows.
+/// 返回用于持久化工作台历史文档归属状态行的 upsert SQL。
+fn workspace_history_search_state_upsert_statement() -> &'static str {
+    r#"
+INSERT INTO workspace_history_search_docs (
+    message_id,
+    session_id,
+    project_id
+) VALUES (?1, ?2, ?3)
+ON CONFLICT(message_id) DO UPDATE SET
+    session_id = excluded.session_id,
+    project_id = excluded.project_id;
+"#
+}
+
+/// Returns the insert SQL used to persist controller-managed workspace-history FTS documents.
+/// 返回用于持久化控制器托管工作台历史 FTS 文档的插入 SQL。
+fn workspace_history_search_index_insert_statement(index_name: &str) -> String {
+    format!(
+        r#"
+INSERT INTO {} (
+    id,
+    file_path,
+    title,
+    content
+) VALUES (?1, ?2, ?3, ?4);
+"#,
+        quote_sqlite_identifier(index_name)
+    )
+}
+
+/// Returns the delete SQL used to remove controller-managed workspace-history FTS documents by id.
+/// 返回用于按文档 ID 删除控制器托管工作台历史 FTS 文档的 SQL。
+fn workspace_history_search_index_delete_statement(index_name: &str) -> String {
+    format!(
+        "DELETE FROM {} WHERE id = ?1;",
+        quote_sqlite_identifier(index_name)
+    )
+}
+
 /// Assigns stable turn indexes to one ordered transcript slice.
 /// 为一段有序转录消息分配稳定轮次索引。
 #[cfg(test)]
@@ -2938,6 +3161,23 @@ fn session_message_starts_new_turn(message: &SessionMessageEntry) -> bool {
     matches!(message.kind, SessionMessageKind::User)
         && message.visible
         && message.contributes_to_context()
+}
+
+/// Returns whether one visible transcript message should participate in workspace BM25 search indexing.
+/// 返回某条可见转录消息是否应参与工作台 BM25 搜索索引。
+fn session_message_is_workspace_history_search_indexable(message: &SessionMessageEntry) -> bool {
+    matches!(
+        (message.kind, message.record_kind, message.visible),
+        (
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            true
+        ) | (
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            true,
+        )
+    )
 }
 
 /// Prepared persistence payload for one transcript message body.
@@ -3115,6 +3355,302 @@ async fn delete_session_message_chunks_for_message_ids(
     Ok(())
 }
 
+/// Upserts controller-managed workspace-history FTS documents together with their ownership state rows.
+/// 上写控制器托管工作台历史 FTS 文档，并同步更新对应的归属状态行。
+async fn upsert_workspace_history_search_documents(
+    controller: &ControllerRuntimeHandle,
+    documents: Vec<WorkspaceHistorySearchDocumentUpsert>,
+) -> Result<(), String> {
+    if documents.is_empty() {
+        return Ok(());
+    }
+
+    ensure_workspace_history_search_index(controller, WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME)
+        .await?;
+    let mut project_index_rows = BTreeMap::<String, Vec<Vec<ControllerSqliteValue>>>::new();
+    let mut global_index_rows = Vec::with_capacity(documents.len());
+    let mut state_rows = Vec::with_capacity(documents.len());
+    let mut ensured_project_indexes = BTreeSet::new();
+
+    for document in documents {
+        let project_index_name = workspace_history_search_project_index_name(&document.project_id);
+        if ensured_project_indexes.insert(project_index_name.clone()) {
+            ensure_workspace_history_search_index(controller, &project_index_name).await?;
+        }
+
+        let file_path =
+            workspace_history_search_document_file_path(&document.project_id, &document.session_id);
+        let index_row = vec![
+            ControllerSqliteValue::String(document.message_id.clone()),
+            ControllerSqliteValue::String(file_path),
+            ControllerSqliteValue::String(String::new()),
+            ControllerSqliteValue::String(document.content.clone()),
+        ];
+        global_index_rows.push(index_row.clone());
+        project_index_rows
+            .entry(project_index_name)
+            .or_default()
+            .push(index_row);
+        state_rows.push(vec![
+            ControllerSqliteValue::String(document.message_id),
+            ControllerSqliteValue::String(document.session_id),
+            ControllerSqliteValue::String(document.project_id),
+        ]);
+    }
+
+    execute_sqlite_batch_safely(
+        controller,
+        WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
+        &workspace_history_search_index_insert_statement(
+            WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
+        ),
+        global_index_rows,
+        "写入全局工作台历史搜索索引失败",
+    )
+    .await?;
+    for (index_name, params) in project_index_rows {
+        execute_sqlite_batch_safely(
+            controller,
+            &index_name,
+            &workspace_history_search_index_insert_statement(&index_name),
+            params,
+            "写入项目工作台历史搜索索引失败",
+        )
+        .await?;
+    }
+    execute_sqlite_batch_safely(
+        controller,
+        "workspace_history_search_docs",
+        workspace_history_search_state_upsert_statement(),
+        state_rows,
+        "写入工作台历史搜索归属状态失败",
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Deletes controller-managed workspace-history FTS documents for the provided message identifiers.
+/// 删除这些消息标识关联的控制器托管工作台历史 FTS 文档。
+async fn delete_workspace_history_search_documents_for_message_ids(
+    controller: &ControllerRuntimeHandle,
+    message_ids: &[String],
+    error_prefix: &str,
+) -> Result<(), String> {
+    let state_rows =
+        query_workspace_history_search_document_state_for_message_ids(controller, message_ids)
+            .await?;
+    delete_workspace_history_search_documents_from_rows(controller, &state_rows, error_prefix)
+        .await?;
+    delete_workspace_history_search_document_state_for_message_ids(
+        controller,
+        message_ids,
+        error_prefix,
+    )
+    .await
+}
+
+/// Deletes controller-managed workspace-history FTS documents for the provided session identifiers.
+/// 删除这些会话标识关联的控制器托管工作台历史 FTS 文档。
+async fn delete_workspace_history_search_documents_for_session_ids(
+    controller: &ControllerRuntimeHandle,
+    session_ids: &[String],
+    error_prefix: &str,
+) -> Result<(), String> {
+    let state_rows =
+        query_workspace_history_search_document_state_for_session_ids(controller, session_ids)
+            .await?;
+    delete_workspace_history_search_documents_from_rows(controller, &state_rows, error_prefix)
+        .await?;
+    delete_workspace_history_search_document_state_for_session_ids(
+        controller,
+        session_ids,
+        error_prefix,
+    )
+    .await
+}
+
+/// Queries workspace-history document ownership rows for the provided message identifiers.
+/// 查询给定消息标识对应的工作台历史文档归属状态行。
+async fn query_workspace_history_search_document_state_for_message_ids(
+    controller: &ControllerRuntimeHandle,
+    message_ids: &[String],
+) -> Result<Vec<StoredWorkspaceHistorySearchDocumentStateRow>, String> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut rows = Vec::new();
+    for chunk in message_ids.chunks(SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT) {
+        let placeholders = (1..=chunk.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let statement = format!(
+            "SELECT message_id, session_id, project_id FROM workspace_history_search_docs WHERE message_id IN ({placeholders});"
+        );
+        let result = controller
+            .client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                app_sqlite_binding_id(controller),
+                statement,
+                chunk
+                    .iter()
+                    .cloned()
+                    .map(ControllerSqliteValue::String)
+                    .collect(),
+            )
+            .await
+            .map_err(|error| format!("查询工作台历史搜索文档归属失败：{error}"))?;
+        rows.extend(decode_query_rows::<
+            StoredWorkspaceHistorySearchDocumentStateRow,
+        >(&result.json_data)?);
+    }
+
+    Ok(rows)
+}
+
+/// Queries workspace-history document ownership rows for the provided session identifiers.
+/// 查询给定会话标识对应的工作台历史文档归属状态行。
+async fn query_workspace_history_search_document_state_for_session_ids(
+    controller: &ControllerRuntimeHandle,
+    session_ids: &[String],
+) -> Result<Vec<StoredWorkspaceHistorySearchDocumentStateRow>, String> {
+    if session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut rows = Vec::new();
+    for chunk in session_ids.chunks(SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT) {
+        let placeholders = (1..=chunk.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let statement = format!(
+            "SELECT message_id, session_id, project_id FROM workspace_history_search_docs WHERE session_id IN ({placeholders});"
+        );
+        let result = controller
+            .client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                app_sqlite_binding_id(controller),
+                statement,
+                chunk
+                    .iter()
+                    .cloned()
+                    .map(ControllerSqliteValue::String)
+                    .collect(),
+            )
+            .await
+            .map_err(|error| format!("查询工作台历史搜索会话归属失败：{error}"))?;
+        rows.extend(decode_query_rows::<
+            StoredWorkspaceHistorySearchDocumentStateRow,
+        >(&result.json_data)?);
+    }
+
+    Ok(rows)
+}
+
+/// Deletes controller-managed workspace-history FTS documents using preloaded ownership rows.
+/// 基于预加载归属状态行删除控制器托管工作台历史 FTS 文档。
+async fn delete_workspace_history_search_documents_from_rows(
+    controller: &ControllerRuntimeHandle,
+    state_rows: &[StoredWorkspaceHistorySearchDocumentStateRow],
+    error_prefix: &str,
+) -> Result<(), String> {
+    if state_rows.is_empty() {
+        return Ok(());
+    }
+
+    let global_params = state_rows
+        .iter()
+        .map(|row| vec![ControllerSqliteValue::String(row.message_id.clone())])
+        .collect::<Vec<_>>();
+    execute_sqlite_batch_safely(
+        controller,
+        WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
+        &workspace_history_search_index_delete_statement(
+            WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
+        ),
+        global_params,
+        error_prefix,
+    )
+    .await?;
+
+    let mut project_params = BTreeMap::<String, Vec<Vec<ControllerSqliteValue>>>::new();
+    for row in state_rows {
+        project_params
+            .entry(workspace_history_search_project_index_name(&row.project_id))
+            .or_default()
+            .push(vec![ControllerSqliteValue::String(row.message_id.clone())]);
+    }
+    for (index_name, params) in project_params {
+        execute_sqlite_batch_safely(
+            controller,
+            &index_name,
+            &workspace_history_search_index_delete_statement(&index_name),
+            params,
+            error_prefix,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Deletes workspace-history document ownership rows for the provided message identifiers.
+/// 删除给定消息标识对应的工作台历史文档归属状态行。
+async fn delete_workspace_history_search_document_state_for_message_ids(
+    controller: &ControllerRuntimeHandle,
+    message_ids: &[String],
+    error_prefix: &str,
+) -> Result<(), String> {
+    if message_ids.is_empty() {
+        return Ok(());
+    }
+
+    let params = message_ids
+        .iter()
+        .cloned()
+        .map(|message_id| vec![ControllerSqliteValue::String(message_id)])
+        .collect::<Vec<_>>();
+    execute_sqlite_batch_safely(
+        controller,
+        "workspace_history_search_docs",
+        "DELETE FROM workspace_history_search_docs WHERE message_id = ?1;",
+        params,
+        error_prefix,
+    )
+    .await
+}
+
+/// Deletes workspace-history document ownership rows for the provided session identifiers.
+/// 删除给定会话标识对应的工作台历史文档归属状态行。
+async fn delete_workspace_history_search_document_state_for_session_ids(
+    controller: &ControllerRuntimeHandle,
+    session_ids: &[String],
+    error_prefix: &str,
+) -> Result<(), String> {
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+
+    let params = session_ids
+        .iter()
+        .cloned()
+        .map(|session_id| vec![ControllerSqliteValue::String(session_id)])
+        .collect::<Vec<_>>();
+    execute_sqlite_batch_safely(
+        controller,
+        "workspace_history_search_docs",
+        "DELETE FROM workspace_history_search_docs WHERE session_id = ?1;",
+        params,
+        error_prefix,
+    )
+    .await
+}
+
 /// Executes a typed SQLite batch in safe chunks estimated against the full gRPC protobuf frame.
 /// 按完整 gRPC protobuf 帧估算将类型化 SQLite 批处理拆成安全小批执行。
 async fn execute_sqlite_batch_safely(
@@ -3279,29 +3815,31 @@ fn stored_session_message_row_to_entry(
     }
 }
 
-/// Converts one persisted lightweight search row into the public search-hit shape.
-/// 将一条持久化轻量搜索行转换为公开搜索命中结构。
-fn stored_session_history_search_row_to_hit(
-    row: StoredSessionHistorySearchRow,
-) -> SessionHistorySearchHit {
-    let persisted_meta = row
-        .meta_json
-        .as_deref()
-        .and_then(parse_session_message_meta_from_json)
-        .unwrap_or_default();
-    let title = persisted_meta
-        .title
-        .unwrap_or_else(|| default_message_title(&row.role).to_string());
-
-    SessionHistorySearchHit {
-        message_id: row.id,
+/// Converts one metadata row plus one controller FTS hit into the public workspace-history search-hit shape.
+/// 将一条元数据行与一条控制器 FTS 命中转换为公开的工作台历史搜索命中结构。
+fn stored_workspace_history_search_hit(
+    row: &StoredWorkspaceHistorySearchMetadataRow,
+    search_hit: &ControllerSqliteSearchFtsHit,
+) -> WorkspaceHistorySearchHit {
+    let preview_source = if !search_hit.content_snippet.trim().is_empty() {
+        search_hit.content_snippet.as_str()
+    } else if !search_hit.title_highlight.trim().is_empty() {
+        search_hit.title_highlight.as_str()
+    } else {
+        search_hit.title.as_str()
+    };
+    WorkspaceHistorySearchHit {
+        project_name: row.project_name.clone(),
+        session_id: parse_session_id(&row.session_id).unwrap_or_default(),
+        session_title: row.session_title.clone(),
+        message_id: row.message_id.clone(),
         ordinal: row.ordinal,
         turn_index: row.turn_index,
-        record_kind: SessionMessageRecordKind::from_persisted_key(&row.kind),
-        visible: row.visible != 0,
-        title,
-        preview: session_history_search_preview(&row.content_preview),
-        created_at: row.created_at,
+        message_kind: session_kind_from_role(&row.role),
+        preview: workspace_history_search_preview(preview_source),
+        preview_markup: workspace_history_search_preview_markup(preview_source),
+        created_at: row.created_at.clone(),
+        score: search_hit.score,
     }
 }
 
@@ -3493,6 +4031,36 @@ fn sqlite_escape_text(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+/// Quotes one SQLite identifier after the caller has already constrained its allowed character set.
+/// 在调用方已约束允许字符集后，为一条 SQLite 标识符添加引号。
+fn quote_sqlite_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+/// Builds the stable project-scoped controller FTS index name used for workspace-history search.
+/// 构建工作台历史搜索使用的稳定项目级控制器 FTS 索引名。
+fn workspace_history_search_project_index_name(project_id: &str) -> String {
+    format!(
+        "{WORKSPACE_HISTORY_SEARCH_PROJECT_INDEX_PREFIX}{:016x}",
+        stable_workspace_history_search_hash(project_id)
+    )
+}
+
+/// Builds the logical controller FTS file-path field used only for deterministic tie-breaking.
+/// 构建仅用于稳定并列排序的逻辑控制器 FTS file_path 字段。
+fn workspace_history_search_document_file_path(project_id: &str, session_id: &str) -> String {
+    format!("project/{project_id}/session/{session_id}")
+}
+
+/// Returns one stable hash used to compress long workspace-history search routing identifiers.
+/// 返回一个用于压缩长工作台历史搜索路由标识的稳定哈希值。
+fn stable_workspace_history_search_hash(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    "workspace-history-search".hash(&mut hasher);
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Converts one persisted message-role string back into the session message kind.
 /// 将一条持久化消息角色字符串转换回会话消息类型。
 fn session_kind_from_role(role: &str) -> SessionMessageKind {
@@ -3542,12 +4110,14 @@ fn normalize_session_history_search_query(query: &str) -> String {
 
 /// Builds an escaped SQLite LIKE pattern for a normalized session-history query.
 /// 为规范化后的会话历史查询构建已转义的 SQLite LIKE 模式。
+#[cfg(test)]
 fn session_history_search_like_pattern(query: &str) -> String {
     format!("%{}%", escape_sqlite_like_pattern(query))
 }
 
 /// Escapes SQLite LIKE wildcard characters while preserving literal user text.
 /// 转义 SQLite LIKE 通配符，同时保留用户文本的字面含义。
+#[cfg(test)]
 fn escape_sqlite_like_pattern(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -3564,6 +4134,7 @@ fn escape_sqlite_like_pattern(value: &str) -> String {
 
 /// Produces a compact search preview from one SQL-selected content fragment.
 /// 从 SQL 选出的正文字段片段生成紧凑搜索预览。
+#[cfg(test)]
 fn session_history_search_preview(value: &str) -> String {
     let preview = truncate_preview_lines(value, 3, SESSION_HISTORY_SEARCH_PREVIEW_CHARS);
     if preview.trim().is_empty() {
@@ -3573,8 +4144,34 @@ fn session_history_search_preview(value: &str) -> String {
     }
 }
 
+/// Produces a compact workspace-history preview from one FTS snippet fragment.
+/// 从一段 FTS snippet 片段生成紧凑的工作台历史预览。
+fn workspace_history_search_preview(value: &str) -> String {
+    let preview = truncate_preview_lines(
+        &value.replace("<mark>", "").replace("</mark>", ""),
+        3,
+        SESSION_HISTORY_SEARCH_PREVIEW_CHARS,
+    );
+    if preview.trim().is_empty() {
+        String::from("（该命中缺少可展示预览，但仍可定位到对应会话位置。）")
+    } else {
+        preview
+    }
+}
+
+/// Preserves the original FTS preview markup so the UI can render highlighted spans without losing the fallback plain preview.
+/// 保留原始 FTS 预览标记片段，便于 UI 渲染高亮片段，同时不丢失纯文本回退预览。
+fn workspace_history_search_preview_markup(value: &str) -> String {
+    if value.trim().is_empty() {
+        String::from("（该命中缺少可展示预览，但仍可定位到对应会话位置。）")
+    } else {
+        value.to_string()
+    }
+}
+
 /// Returns the inclusive turn-index bounds used for one search-result context load.
 /// 返回单次搜索结果上下文加载使用的闭区间轮次边界。
+#[cfg(test)]
 fn session_history_context_turn_bounds(anchor_turn_index: i64, radius: i64) -> (i64, i64) {
     let safe_anchor = anchor_turn_index.max(0);
     let safe_radius = radius.max(0);
@@ -4017,6 +4614,7 @@ mod tests {
         };
         let mut message_rows = Vec::new();
         let mut chunk_rows = Vec::new();
+        let mut search_rows = Vec::new();
 
         push_session_message_rows_for_session(
             &BTreeMap::new(),
@@ -4024,12 +4622,17 @@ mod tests {
             -1,
             &mut message_rows,
             &mut chunk_rows,
+            &mut search_rows,
+            "project-1",
+            true,
             session_id,
+            "会话标题",
             &[message],
         );
 
         assert_eq!(message_rows.len(), 1);
         assert!(!chunk_rows.is_empty());
+        assert!(search_rows.is_empty());
         match &message_rows[0][7] {
             ControllerSqliteValue::String(inline_content) => {
                 assert_ne!(inline_content, &body);
@@ -4087,6 +4690,7 @@ mod tests {
         ];
         let mut message_rows = Vec::new();
         let mut chunk_rows = Vec::new();
+        let mut search_rows = Vec::new();
 
         push_session_message_rows_for_session(
             &BTreeMap::new(),
@@ -4094,7 +4698,11 @@ mod tests {
             -1,
             &mut message_rows,
             &mut chunk_rows,
+            &mut search_rows,
+            "project-1",
+            true,
             session_id,
+            "会话标题",
             &messages,
         );
 
@@ -4107,6 +4715,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(turn_indexes, vec![0, 0, 1]);
         assert!(chunk_rows.is_empty());
+        assert_eq!(search_rows.len(), 2);
     }
 
     /// Verifies partial-window persistence keeps existing ordinals instead of renumbering from zero.
@@ -4131,6 +4740,7 @@ mod tests {
         );
         let mut message_rows = Vec::new();
         let mut chunk_rows = Vec::new();
+        let mut search_rows = Vec::new();
 
         push_session_message_rows_for_session(
             &persisted_positions,
@@ -4138,7 +4748,11 @@ mod tests {
             7,
             &mut message_rows,
             &mut chunk_rows,
+            &mut search_rows,
+            "project-1",
+            true,
             session_id,
+            "会话标题",
             &messages,
         );
 
@@ -4160,6 +4774,7 @@ mod tests {
         assert_eq!(ordinals, vec![42, 43]);
         assert_eq!(turn_indexes, vec![7, 8]);
         assert!(chunk_rows.is_empty());
+        assert_eq!(search_rows.len(), 1);
     }
 
     /// Verifies that one-session maintenance row building does not require a full session list.
@@ -4178,6 +4793,7 @@ mod tests {
         ];
         let mut message_rows = Vec::new();
         let mut chunk_rows = Vec::new();
+        let mut search_rows = Vec::new();
 
         push_session_message_rows_for_session(
             &BTreeMap::new(),
@@ -4185,7 +4801,11 @@ mod tests {
             -1,
             &mut message_rows,
             &mut chunk_rows,
+            &mut search_rows,
+            "project-1",
+            true,
             session_id,
+            "会话标题",
             &messages,
         );
 
@@ -4202,6 +4822,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(turn_indexes, vec![0, 0, 1]);
+        assert_eq!(search_rows.len(), 2);
     }
 
     /// Verifies that default transcript windows keep tool details out of the mainline query profile.
@@ -4273,6 +4894,72 @@ mod tests {
         assert!(preview.contains("第一行命中内容"));
         assert!(preview.contains("src/main.rs"));
         assert!(!preview.contains("第四行应被截断"));
+    }
+
+    /// Verifies that project-scoped controller FTS index names stay deterministic and use the dedicated prefix.
+    /// 验证项目级控制器 FTS 索引名保持确定性并使用专用前缀。
+    #[test]
+    fn workspace_history_search_project_index_name_is_stable() {
+        let first = workspace_history_search_project_index_name("project-alpha");
+        let second = workspace_history_search_project_index_name("project-alpha");
+        let third = workspace_history_search_project_index_name("project-beta");
+
+        assert_eq!(first, second);
+        assert_ne!(first, third);
+        assert!(first.starts_with(WORKSPACE_HISTORY_SEARCH_PROJECT_INDEX_PREFIX));
+    }
+
+    /// Verifies that controller FTS preview fragments strip highlight tags before compact rendering.
+    /// 验证控制器 FTS 预览片段会在紧凑渲染前移除高亮标签。
+    #[test]
+    fn workspace_history_search_preview_strips_mark_tags() {
+        let preview = workspace_history_search_preview(
+            "第一行 <mark>命中</mark>\n第二行继续\n第三行还有内容\n第四行应被截断",
+        );
+
+        assert!(preview.contains("第一行 命中"));
+        assert!(!preview.contains("<mark>"));
+        assert!(!preview.contains("第四行应被截断"));
+    }
+
+    /// Verifies that raw preview markup keeps the original `<mark>` tags for UI-side highlight rendering.
+    /// 验证原始预览标记会保留 `<mark>` 标签，供 UI 侧渲染命中高亮。
+    #[test]
+    fn workspace_history_search_preview_markup_preserves_mark_tags() {
+        let preview = workspace_history_search_preview_markup("第一行 <mark>命中</mark>");
+
+        assert!(preview.contains("<mark>命中</mark>"));
+    }
+
+    /// Verifies that only visible user prompts and visible assistant final outputs enter the workspace BM25 index.
+    /// 验证只有可见用户提问与可见助手最终回复会进入工作台 BM25 索引。
+    #[test]
+    fn workspace_history_search_indexable_messages_filter_intermediate_records() {
+        assert!(session_message_is_workspace_history_search_indexable(
+            &SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "继续")
+        ));
+        assert!(session_message_is_workspace_history_search_indexable(
+            &SessionMessageEntry {
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                ..SessionMessageEntry::new(SessionMessageKind::Assistant, "AI 输出", "最终答案")
+            }
+        ));
+        assert!(!session_message_is_workspace_history_search_indexable(
+            &SessionMessageEntry::hidden(
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolResultOutput,
+                "工具返回",
+                "中间结果"
+            )
+        ));
+        assert!(!session_message_is_workspace_history_search_indexable(
+            &SessionMessageEntry::hidden(
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ExploreOutput,
+                "探索",
+                "分析过程"
+            )
+        ));
     }
 
     /// Verifies that context windows never request negative turn indexes.

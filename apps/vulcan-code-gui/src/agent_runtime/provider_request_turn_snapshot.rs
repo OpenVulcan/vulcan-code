@@ -1,6 +1,7 @@
 //! Host-controlled single-turn request snapshot helpers used by transport dispatch and regression tests.
 //! 供传输分发与回归测试使用的宿主控制单回合请求快照辅助逻辑。
 
+use crate::agent_runtime::provider_protocol_bridge::scope_continuation_to_active_provider;
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
 use crate::agent_runtime::provider_request_bridge_tools::provider_tool_definition_to_core_tool_schema;
@@ -21,6 +22,7 @@ pub(crate) fn build_openai_compatible_turn_request_snapshot(
     provider_id: &str,
     model_id: &str,
     system_preamble: &str,
+    continuation: &CoreProviderContinuation,
     current_history: &[CoreConversationMessage],
     current_prompt: &CoreConversationMessage,
     temperature: Option<f64>,
@@ -29,22 +31,16 @@ pub(crate) fn build_openai_compatible_turn_request_snapshot(
     headers: &HeaderMap,
     additional_params: Option<Value>,
 ) -> CoreProviderRequestSnapshot {
+    let mut scoped_continuation =
+        scope_continuation_to_active_provider(continuation, provider_id, model_id);
+    if scoped_continuation.last_provider_message_id.is_some()
+        && scoped_continuation.updated_at.is_none()
+    {
+        scoped_continuation.updated_at = Some(current_unix_millis_text());
+    }
     let core_snapshot = CoreConversationSnapshot {
         messages: current_history.to_vec(),
-        continuation: CoreProviderContinuation {
-            provider_id: Some(provider_id.to_string()),
-            model_id: Some(model_id.to_string()),
-            last_provider_message_id: current_history.iter().rev().find_map(
-                |message| match &message.payload {
-                    CoreConversationPayload::Assistant {
-                        provider_message_id,
-                        ..
-                    } => provider_message_id.clone(),
-                    _ => None,
-                },
-            ),
-            updated_at: Some(current_unix_millis_text()),
-        },
+        continuation: scoped_continuation,
         ..CoreConversationSnapshot::default()
     };
 

@@ -22,8 +22,8 @@ use rmcp::model::{
     InitializeRequestParams, InitializedNotification, JsonRpcMessage, ListPromptsRequest,
     ListPromptsResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
     ListToolsResult, NumberOrString, Prompt, ReadResourceRequest, ReadResourceRequestParams,
-    ReadResourceResult, RequestId, Resource, ServerJsonRpcMessage, ServerNotification,
-    ServerResult,
+    ReadResourceResult, RequestId, Resource, ServerCapabilities, ServerJsonRpcMessage,
+    ServerNotification, ServerResult,
 };
 use serde_json::Value;
 use sse_stream::{Sse, SseStream};
@@ -37,7 +37,8 @@ use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
 use crate::error::McpRuntimeError;
 use crate::http_support::parse_http_headers_to_header_map;
 use crate::rmcp_support::{
-    build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value, rmcp_tool_to_schema,
+    build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value,
+    rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources, rmcp_tool_to_schema,
 };
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
@@ -79,6 +80,9 @@ pub struct SseTransport {
     /// Optional shared host-owned OAuth session reused across reconnects.
     /// 在重连之间复用的可选共享宿主自有 OAuth 会话。
     auth_session: Option<Arc<McpOAuthSession>>,
+    /// Negotiated server capabilities captured from the initialize handshake.
+    /// 从 initialize 握手中捕获的已协商服务器能力。
+    capabilities: ServerCapabilities,
 }
 
 impl SseTransport {
@@ -115,7 +119,7 @@ impl SseTransport {
             auth_session.clone(),
         );
 
-        let transport = Self {
+        let mut transport = Self {
             endpoint: endpoint.into(),
             http_client,
             bearer_token,
@@ -126,15 +130,16 @@ impl SseTransport {
             shutdown_token,
             event_sender,
             auth_session,
+            capabilities: ServerCapabilities::default(),
         };
 
-        transport.initialize().await?;
+        transport.capabilities = transport.initialize().await?;
         Ok(transport)
     }
 
     /// Perform the MCP initialize handshake on the legacy message endpoint.
     /// 在旧式消息端点上执行 MCP initialize 握手。
-    async fn initialize(&self) -> Result<(), McpRuntimeError> {
+    async fn initialize(&self) -> Result<ServerCapabilities, McpRuntimeError> {
         let request_id = self.next_request_id();
         let initialize_request = InitializeRequest::new(InitializeRequestParams::new(
             ClientCapabilities::default(),
@@ -150,19 +155,21 @@ impl SseTransport {
             )
             .await?;
 
-        let ServerResult::InitializeResult(_) = extract_server_result(response)? else {
+        let ServerResult::InitializeResult(result) = extract_server_result(response)? else {
             return Err(McpRuntimeError::transport(
                 "legacy SSE initialize did not return initialize result".to_string(),
             ));
         };
 
+        let capabilities = result.capabilities;
         let initialized_notification = ClientJsonRpcMessage::notification(
             ClientNotification::InitializedNotification(InitializedNotification {
                 method: Default::default(),
                 extensions: Default::default(),
             }),
         );
-        self.send_notification(initialized_notification).await
+        self.send_notification(initialized_notification).await?;
+        Ok(capabilities)
     }
 
     /// Send one JSON-RPC notification without waiting for a response.
@@ -277,6 +284,18 @@ impl SseTransport {
     fn next_request_id(&self) -> RequestId {
         NumberOrString::Number(self.next_request_id.fetch_add(1, Ordering::Relaxed) as i64)
     }
+
+    /// Returns whether the negotiated legacy SSE server capabilities include prompt support.
+    /// 返回已协商 legacy SSE 服务器能力中是否包含 prompt 支持。
+    fn supports_prompt_capability(&self) -> bool {
+        rmcp_capabilities_support_prompts(&self.capabilities)
+    }
+
+    /// Returns whether the negotiated legacy SSE server capabilities include resource support.
+    /// 返回已协商 legacy SSE 服务器能力中是否包含资源支持。
+    fn supports_resource_capability(&self) -> bool {
+        rmcp_capabilities_support_resources(&self.capabilities)
+    }
 }
 
 impl Drop for SseTransport {
@@ -321,6 +340,9 @@ impl McpTransport for SseTransport {
     }
 
     async fn list_prompts(&self) -> Result<Vec<Prompt>, McpRuntimeError> {
+        if !self.supports_prompt_capability() {
+            return Ok(Vec::new());
+        }
         let request_id = self.next_request_id();
         let request = ListPromptsRequest {
             method: Default::default(),
@@ -351,6 +373,12 @@ impl McpTransport for SseTransport {
         name: &str,
         args: Value,
     ) -> Result<GetPromptResult, McpRuntimeError> {
+        if !self.supports_prompt_capability() {
+            return Err(McpRuntimeError::transport(format!(
+                "prompts/get({}): server does not advertise prompts capability",
+                self.endpoint()
+            )));
+        }
         let request_id = self.next_request_id();
         let request = GetPromptRequest::new(build_legacy_prompt_request_params(name, args)?);
         let response = self
@@ -368,6 +396,9 @@ impl McpTransport for SseTransport {
     }
 
     async fn list_resources(&self) -> Result<Vec<Resource>, McpRuntimeError> {
+        if !self.supports_resource_capability() {
+            return Ok(Vec::new());
+        }
         let request_id = self.next_request_id();
         let request = ListResourcesRequest {
             method: Default::default(),
@@ -394,6 +425,12 @@ impl McpTransport for SseTransport {
     }
 
     async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, McpRuntimeError> {
+        if !self.supports_resource_capability() {
+            return Err(McpRuntimeError::transport(format!(
+                "resources/read({}): server does not advertise resources capability",
+                self.endpoint()
+            )));
+        }
         let request_id = self.next_request_id();
         let request = ReadResourceRequest::new(ReadResourceRequestParams::new(uri.to_string()));
         let response = self

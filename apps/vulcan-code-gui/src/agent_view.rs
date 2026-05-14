@@ -107,18 +107,32 @@ fn append_session_message_blocks(document: &mut AgentViewDocument, message: &Ses
             document.push_directive(build_error_notice_block(message));
         }
         (_, SessionMessageRecordKind::AssistantOutput | SessionMessageRecordKind::Transcript) => {
-            append_parsed_markdown_document(document, &message.body);
+            append_parsed_markdown_document(document, &message.body, Some(&message.id));
         }
         _ => {
-            append_parsed_markdown_document(document, &message.body);
+            append_parsed_markdown_document(document, &message.body, Some(&message.id));
         }
     }
 }
 
 /// Appends the parsed Markdown/extension block sequence from one source string into the target document.
 /// 将某段源码中解析得到的 Markdown 或扩展区块序列追加到目标文档中。
-fn append_parsed_markdown_document(document: &mut AgentViewDocument, source: &str) {
-    let parsed_document = parse_agent_view_document(source);
+fn append_parsed_markdown_document(
+    document: &mut AgentViewDocument,
+    source: &str,
+    message_id: Option<&str>,
+) {
+    let mut parsed_document = parse_agent_view_document(source);
+
+    if let Some(message_id) = message_id.filter(|value| !value.trim().is_empty()) {
+        for block in &mut parsed_document.blocks {
+            block
+                .attributes_mut()
+                .entry(String::from("message-id"))
+                .or_insert_with(|| message_id.to_string());
+        }
+    }
+
     document.blocks.extend(parsed_document.blocks);
 }
 
@@ -431,7 +445,14 @@ mod tests {
             AgentViewBlock::Directive(block)
                 if block.kind == AgentViewDirectiveKind::Thinking
         ));
-        assert!(matches!(&document.blocks[2], AgentViewBlock::Markdown(_)));
+        assert!(matches!(
+            &document.blocks[2],
+            AgentViewBlock::Markdown(block)
+                if block
+                    .attributes
+                    .get("message-id")
+                    .is_some_and(|value| value == "assistant-1")
+        ));
     }
 
     /// Verifies that runtime events no longer sink to the bottom of the unified transcript, even when tool-like payloads are passed directly into the adapter.

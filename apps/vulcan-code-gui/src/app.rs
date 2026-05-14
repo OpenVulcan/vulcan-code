@@ -48,7 +48,8 @@ use crate::project_temp_maintenance;
 use crate::provider_config::{
     self, ModelChoice, PersistedControllerConfiguration, PersistedMcpServerEntry,
     PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
-    ProviderConfigurationFile, ProviderFieldKey, ReasoningEffortLevel, ReasoningSelectionOption,
+    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
+    ReasoningSelectionOption,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
@@ -61,11 +62,11 @@ use crate::skills::{
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
 use crate::wheel_passthrough::WheelPassthrough;
+use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
     self, SESSION_HISTORY_SEARCH_RESULT_LIMIT, SESSION_TOOL_DETAIL_PAGE_LIMIT,
-    SESSION_TRANSCRIPT_WINDOW_LIMIT, SessionHistoryContextPage, SessionHistoryPage,
-    SessionHistorySearchPage, SessionHydrationSnapshot, SessionMaintenanceReport,
-    SessionToolDetailPage, WorkspaceSnapshot,
+    SESSION_TRANSCRIPT_WINDOW_LIMIT, SessionHistoryPage, SessionHydrationSnapshot,
+    SessionMaintenanceReport, SessionToolDetailPage, WorkspaceHistorySearchPage, WorkspaceSnapshot,
 };
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
@@ -253,6 +254,9 @@ const TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD: f32 = 28.0;
 /// Shared bottom spacer kept at the tail of transcript surfaces so the newest content does not stick to the bottom edge.
 /// 保留在转录表面尾部的共享底部留白，用于避免最新内容紧贴底边。
 const TRANSCRIPT_BOTTOM_SPACER_HEIGHT: f32 = 72.0;
+/// Conservative estimated row height used when scrolling to one searched transcript hit.
+/// 滚动定位某条搜索命中时使用的保守估算行高。
+const WORKSPACE_HISTORY_SEARCH_SCROLL_ESTIMATED_ROW_HEIGHT: f32 = 132.0;
 
 /// Maximum session messages retained in GUI memory for one hydrated transcript window.
 /// 单个已水合转录窗口允许保留在 GUI 内存中的最大会话消息数量。
@@ -406,6 +410,13 @@ const COMPOSER_EDITOR_ID: &str = "vulcan-code.composer-editor";
 /// 工作台内嵌模型选择弹窗过滤输入框使用的稳定部件标识。
 const WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID: &str =
     "vulcan-code.workbench-model-picker-filter-input";
+/// Stable widget identifier used by the left-panel workspace-history search input.
+/// 左侧面板工作台历史搜索输入框使用的稳定部件标识。
+const WORKSPACE_HISTORY_SEARCH_INPUT_ID: &str = "vulcan-code.workspace-history-search-input";
+/// Stable widget identifier used by the left-panel search project-filter input.
+/// 左侧搜索项目过滤输入框使用的稳定部件标识。
+const WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID: &str =
+    "vulcan-code.workspace-history-search-project-filter-input";
 
 /// Shared logical line height used by the main prompt composer.
 /// 主提示词编辑器使用的共享逻辑行高。
@@ -498,6 +509,18 @@ const WORKBENCH_MODEL_PICKER_MODAL_WIDTH: f32 = 680.0;
 /// Shared fixed height used by the scrollable result list inside the workbench model-picker modal.
 /// 工作台模型选择弹窗内部滚动结果列表使用的共享固定高度。
 const WORKBENCH_MODEL_PICKER_LIST_HEIGHT: f32 = 340.0;
+
+/// Shared fixed width used by the in-app workspace-history search modal card.
+/// 工作台历史搜索弹窗卡片使用的共享固定宽度。
+const WORKSPACE_HISTORY_SEARCH_MODAL_WIDTH: f32 = 760.0;
+
+/// Shared fixed height used by the scrollable result list inside the workspace-history search modal.
+/// 工作台历史搜索弹窗内部滚动结果列表使用的共享固定高度。
+const WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT: f32 = 360.0;
+
+/// Shared fixed height used by the optional project-scope picker list inside the workspace-history search modal.
+/// 工作台历史搜索弹窗内可选项目范围列表使用的共享固定高度。
+const WORKSPACE_HISTORY_SEARCH_SCOPE_LIST_HEIGHT: f32 = 220.0;
 
 /// Returns the inner text width available to the main prompt composer after subtracting the editor padding.
 /// 返回主提示词编辑器在扣除内部边距之后可用于文本排版的实际宽度。
@@ -968,6 +991,31 @@ fn pending_prompt_panel_label_text(prompt: &str) -> String {
     } else {
         normalized
     }
+}
+
+/// Returns whether pending-prompt dispatch must stay blocked because Anthropic sessions cannot safely continue the parent coordinator while detached subagents from the previous tool round are still running.
+/// 返回待发送提示词分发是否必须继续保持阻塞，因为 Anthropic 会话在前一轮工具回合的分离子代理仍在运行时，无法安全地让父协调器继续推进。
+fn anthropic_pending_prompt_dispatch_is_blocked(
+    uses_anthropic_runtime: bool,
+    has_running_subagents: bool,
+) -> bool {
+    uses_anthropic_runtime && has_running_subagents
+}
+
+/// Returns the internal queue index that should dispatch next, optionally preferring delegated-completion callbacks so Anthropic sessions can close older tool rounds before user-authored follow-ups resume.
+/// 返回内部队列下一条应被分发的索引；在需要时优先选择子代理完成回流项，使 Anthropic 会话能先闭合旧工具回合，再恢复处理用户跟进消息。
+fn pending_prompt_dispatch_index(
+    queue: &[PendingSessionPromptEntry],
+    prefer_delegate_completion: bool,
+) -> usize {
+    if prefer_delegate_completion
+        && let Some(index) = queue
+            .iter()
+            .position(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
+    {
+        return index;
+    }
+    0
 }
 
 /// Resolves the localized terminal status label injected into delegated completion follow-up prompts.
@@ -1522,27 +1570,9 @@ pub struct VulcanWorkbench {
     /// Session identifiers currently loading one older transcript page.
     /// 当前正在加载更早转录分页的会话标识集合。
     loading_older_session_history_ids: BTreeSet<SessionId>,
-    /// Session-scoped lightweight history search inputs keyed by session id.
-    /// 按会话标识保存的轻量历史搜索输入。
-    session_history_search_inputs: BTreeMap<SessionId, String>,
-    /// Session-scoped lightweight history search result pages keyed by session id.
-    /// 按会话标识保存的轻量历史搜索结果页。
-    session_history_search_results: BTreeMap<SessionId, SessionHistorySearchPage>,
-    /// Session identifiers currently running a lightweight history search task.
-    /// 当前正在执行轻量历史搜索任务的会话标识集合。
-    loading_session_history_search_ids: BTreeSet<SessionId>,
-    /// Session-scoped lightweight history search errors keyed by session id.
-    /// 按会话标识保存的轻量历史搜索错误。
-    session_history_search_errors: BTreeMap<SessionId, String>,
-    /// Session-scoped read-only context pages loaded around search-result anchors.
-    /// 按会话标识保存的搜索结果附近只读上下文页。
-    session_history_context_pages: BTreeMap<SessionId, SessionHistoryContextPage>,
-    /// Session identifiers currently loading one search-result context page.
-    /// 当前正在加载搜索结果附近上下文页的会话标识集合。
-    loading_session_history_context_ids: BTreeSet<SessionId>,
-    /// Session-scoped search-result context loading errors keyed by session id.
-    /// 按会话标识保存的搜索结果上下文加载错误。
-    session_history_context_errors: BTreeMap<SessionId, String>,
+    /// Aggregated left-panel workspace-history search UI state shared across projects and sessions.
+    /// 跨项目与会话共享的左侧面板工作台历史搜索聚合界面状态。
+    workspace_history_search: WorkspaceHistorySearchPanelState,
     /// Low-priority legacy maintenance queue that scans sessions without hydrating transcripts.
     /// 不水合转录正文的低优先级旧数据维护会话队列。
     background_legacy_maintenance_queue: VecDeque<SessionId>,
@@ -1924,6 +1954,110 @@ struct PendingPendingPromptDrag {
     /// Cursor origin captured when the drag candidate was pressed.
     /// 按下拖拽候选时捕获到的鼠标起始位置。
     origin: iced::Point,
+}
+
+/// Stable scope selection used by the left-panel workspace-history search.
+/// 左侧面板工作台历史搜索使用的稳定范围选择。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkspaceHistorySearchScope {
+    /// Searches across every visible project and session.
+    /// 跨全部可见项目与会话执行搜索。
+    Global,
+    /// Restricts search to one concrete visible project identifier.
+    /// 将搜索限制到某个具体的可见项目标识。
+    Project(String),
+}
+
+impl Default for WorkspaceHistorySearchScope {
+    /// Returns the default global scope used before one session-derived project scope is chosen.
+    /// 返回在根据当前会话推导项目范围前使用的默认全局范围。
+    fn default() -> Self {
+        Self::Global
+    }
+}
+
+/// One selectable scope option rendered inside the left-panel workspace-history project dropdown.
+/// 渲染在左侧工作台历史项目下拉列表中的单条可选范围项。
+#[derive(Debug, Clone)]
+struct WorkspaceHistorySearchScopeOption {
+    /// Stable scope value applied when this option is selected.
+    /// 选中该项后会应用的稳定范围值。
+    scope: WorkspaceHistorySearchScope,
+    /// Human-readable option label shown to the user.
+    /// 展示给用户的人类可读选项标签。
+    label: String,
+    /// Searchable helper text used by the project keyword filter.
+    /// 供项目关键字过滤使用的可搜索辅助文本。
+    filter_text: String,
+}
+
+/// Pending transcript navigation target retained while one search result is opening or hydrating.
+/// 当某条搜索结果正在打开或补载时保留的待定位转录目标。
+#[derive(Debug, Clone)]
+struct PendingWorkspaceHistorySearchNavigation {
+    /// Stable session identifier owning the matched message row.
+    /// 拥有该命中消息行的稳定会话标识。
+    session_id: SessionId,
+    /// Stable message identifier that should become visible inside the transcript.
+    /// 应在转录中可见的稳定消息标识。
+    message_id: String,
+    /// Stable ordinal used to decide whether older history still needs loading.
+    /// 用于判断是否仍需补载更早历史的稳定序号。
+    ordinal: i64,
+    /// Stable turn index used when reporting search-navigation context to the user.
+    /// 在向用户回报搜索定位上下文时使用的稳定轮次索引。
+    turn_index: i64,
+}
+
+/// Active transcript highlight target retained after one workspace-history search hit has been opened successfully.
+/// 某条工作台历史搜索命中成功打开后保留的活动转录高亮目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkspaceHistorySearchHighlightTarget {
+    /// Stable session identifier owning the highlighted visible message row.
+    /// 拥有当前高亮可见消息行的稳定会话标识。
+    session_id: SessionId,
+    /// Stable visible message identifier that should stay highlighted inside the transcript.
+    /// 应在转录中保持高亮的稳定可见消息标识。
+    message_id: String,
+}
+
+/// Aggregated state retained by the left-panel workspace-history search UI.
+/// 左侧面板工作台历史搜索界面保留的聚合状态。
+#[derive(Debug, Clone, Default)]
+struct WorkspaceHistorySearchPanelState {
+    /// Whether the dedicated search panel is currently expanded.
+    /// 当前专用搜索面板是否处于展开状态。
+    panel_open: bool,
+    /// Current query text shown inside the search input.
+    /// 显示在搜索输入框中的当前查询文本。
+    query: String,
+    /// Latest search result page returned by the BM25 workspace query.
+    /// BM25 工作区查询返回的最近一页搜索结果。
+    results: Option<WorkspaceHistorySearchPage>,
+    /// Whether one workspace-history search request is currently in flight.
+    /// 当前是否有一条工作台历史搜索请求正在执行。
+    loading: bool,
+    /// Whether the current in-flight search request is loading an additional result page.
+    /// 当前正在执行中的搜索请求是否属于继续加载下一页结果。
+    loading_more: bool,
+    /// Latest search error shown inline to the user, if any.
+    /// 若存在，则为当前内联展示给用户的最近一次搜索错误。
+    error: Option<String>,
+    /// Current visible search scope.
+    /// 当前可见搜索范围。
+    scope: WorkspaceHistorySearchScope,
+    /// Whether the project selector dropdown is currently expanded.
+    /// 当前项目选择下拉区是否处于展开状态。
+    project_picker_open: bool,
+    /// Current project keyword filter text.
+    /// 当前项目关键字过滤文本。
+    project_filter: String,
+    /// Optional pending transcript navigation target created from one clicked search result.
+    /// 由某条已点击搜索结果创建的可选待定位转录目标。
+    pending_navigation: Option<PendingWorkspaceHistorySearchNavigation>,
+    /// Optional active transcript highlight target retained after one search result has been resolved into the visible transcript.
+    /// 某条搜索结果已经成功解析到可见转录后保留的可选活动高亮目标。
+    active_highlight: Option<WorkspaceHistorySearchHighlightTarget>,
 }
 
 /// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
@@ -3084,34 +3218,59 @@ enum Message {
     /// Requests loading one older transcript page for the visible root session.
     /// 请求为当前可见根会话加载一页更早转录历史。
     LoadOlderSessionHistoryRequested(SessionId),
-    /// Updates the lightweight history search query for one root session.
-    /// 更新某个根会话的轻量历史搜索词。
-    SessionHistorySearchInputChanged(SessionId, String),
-    /// Requests running a lightweight history search for one root session.
-    /// 请求为某个根会话执行轻量历史搜索。
-    SessionHistorySearchSubmitted(SessionId),
-    /// Applies the completed lightweight history search result page.
-    /// 应用已完成的轻量历史搜索结果页。
-    SessionHistorySearchLoaded(SessionId, Result<SessionHistorySearchPage, String>),
-    /// Requests loading a read-only context page around one search-result anchor.
-    /// 请求围绕单个搜索结果锚点加载一页只读上下文。
-    SessionHistoryContextRequested {
-        /// Session identifier owning the clicked search hit.
-        /// 拥有所点击搜索命中的会话标识。
+    /// Opens the dedicated workspace-history search modal from the left task drawer trigger.
+    /// 通过左侧任务抽屉触发器打开专用工作台历史搜索弹窗。
+    OpenWorkspaceHistorySearchPanel,
+    /// Closes the dedicated workspace-history search modal without clearing the current query state.
+    /// 在不清空当前查询状态的前提下关闭专用工作台历史搜索弹窗。
+    CloseWorkspaceHistorySearchPanel,
+    /// Updates the current left-panel workspace-history query text.
+    /// 更新左侧工作台历史查询文本。
+    WorkspaceHistorySearchQueryChanged(String),
+    /// Requests running one workspace-scoped BM25 history search.
+    /// 请求执行一次工作区级 BM25 历史搜索。
+    SubmitWorkspaceHistorySearch,
+    /// Requests loading the next page of the current workspace-history search result set.
+    /// 请求继续加载当前工作台历史搜索结果的下一页。
+    LoadMoreWorkspaceHistorySearchResults,
+    /// Applies the completed workspace-scoped BM25 history search result page.
+    /// 应用已完成的工作区级 BM25 历史搜索结果页。
+    WorkspaceHistorySearchLoaded {
+        /// Whether the loaded page should be appended to the current result set.
+        /// 本次加载完成的结果页是否应追加到当前结果集中。
+        append: bool,
+        /// Final page payload or the failure returned by the controller-backed search task.
+        /// 控制器承载搜索任务返回的最终结果页或失败信息。
+        result: Result<WorkspaceHistorySearchPage, String>,
+    },
+    /// Toggles the project-scope dropdown used by the left search panel.
+    /// 切换左侧搜索面板使用的项目范围下拉区。
+    ToggleWorkspaceHistorySearchProjectPicker,
+    /// Updates the project keyword filter shown inside the left search panel scope dropdown.
+    /// 更新左侧搜索面板范围下拉区中的项目关键字过滤文本。
+    WorkspaceHistorySearchProjectFilterChanged(String),
+    /// Applies one concrete workspace-history search scope chosen from the left dropdown.
+    /// 应用从左侧下拉区选择的一条具体工作台历史搜索范围。
+    WorkspaceHistorySearchScopeSelected(WorkspaceHistorySearchScope),
+    /// Confirms the currently highlighted project-scope filter selection.
+    /// 确认当前项目范围过滤列表中的高亮选择。
+    ConfirmWorkspaceHistorySearchScopeSelection,
+    /// Opens one workspace-history search hit and navigates the transcript to the matched message.
+    /// 打开一条工作台历史搜索命中并将转录定位到匹配消息。
+    OpenWorkspaceHistorySearchHit {
+        /// Stable session identifier owning the matched message row.
+        /// 拥有该命中消息行的稳定会话标识。
         session_id: SessionId,
-        /// Stable message identifier of the clicked search hit.
-        /// 所点击搜索命中的稳定消息标识。
+        /// Stable message identifier that should become visible in the transcript.
+        /// 应在转录中变为可见的稳定消息标识。
         message_id: String,
-        /// Stable ordinal of the clicked search hit.
-        /// 所点击搜索命中的稳定序号。
+        /// Stable ordinal used to decide whether older history still needs loading.
+        /// 用于判断是否仍需补载更早历史的稳定序号。
         ordinal: i64,
-        /// Stable turn index of the clicked search hit.
-        /// 所点击搜索命中的稳定轮次索引。
+        /// Stable turn index used for user-facing status copy.
+        /// 用于面向用户状态文案的稳定轮次索引。
         turn_index: i64,
     },
-    /// Applies the completed read-only search-result context page.
-    /// 应用已完成的搜索结果只读上下文页。
-    SessionHistoryContextLoaded(SessionId, Result<SessionHistoryContextPage, String>),
     /// Updates the active drag auto-scroll request emitted by the main rendered transcript surface.
     /// 更新主渲染转录表面发出的当前拖拽自动滚动请求。
     SelectedSessionTranscriptDragAutoScrollChanged {
@@ -3537,13 +3696,7 @@ impl VulcanWorkbench {
             session_history_earliest_ordinals: BTreeMap::new(),
             session_history_has_more: BTreeSet::new(),
             loading_older_session_history_ids: BTreeSet::new(),
-            session_history_search_inputs: BTreeMap::new(),
-            session_history_search_results: BTreeMap::new(),
-            loading_session_history_search_ids: BTreeSet::new(),
-            session_history_search_errors: BTreeMap::new(),
-            session_history_context_pages: BTreeMap::new(),
-            loading_session_history_context_ids: BTreeSet::new(),
-            session_history_context_errors: BTreeMap::new(),
+            workspace_history_search: WorkspaceHistorySearchPanelState::default(),
             background_legacy_maintenance_queue: VecDeque::new(),
             background_legacy_maintenance_in_flight: None,
             background_legacy_maintenance_completed_count: 0,
@@ -3866,13 +4019,7 @@ impl VulcanWorkbench {
                 self.session_history_earliest_ordinals.clear();
                 self.session_history_has_more.clear();
                 self.loading_older_session_history_ids.clear();
-                self.session_history_search_inputs.clear();
-                self.session_history_search_results.clear();
-                self.loading_session_history_search_ids.clear();
-                self.session_history_search_errors.clear();
-                self.session_history_context_pages.clear();
-                self.loading_session_history_context_ids.clear();
-                self.session_history_context_errors.clear();
+                self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
                 self.background_legacy_maintenance_queue.clear();
                 self.background_legacy_maintenance_in_flight = None;
                 self.background_legacy_maintenance_completed_count = 0;
@@ -4073,6 +4220,8 @@ impl VulcanWorkbench {
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
                         {
+                            let continue_search_navigation =
+                                self.maybe_continue_workspace_history_search_navigation(session_id);
                             self.status_message = String::from("当前会话正文已按需加载完成。");
                             return Task::batch([
                                 maintenance_task,
@@ -4087,6 +4236,7 @@ impl VulcanWorkbench {
                                 self.maybe_follow_selected_session_thinking_overlay_tail(
                                     session_id,
                                 ),
+                                continue_search_navigation,
                             ]);
                         }
 
@@ -4106,6 +4256,7 @@ impl VulcanWorkbench {
                     Ok(page) => {
                         self.apply_older_session_history_page(page);
                         self.status_message = String::from("已加载更早一段会话历史。");
+                        return self.maybe_continue_workspace_history_search_navigation(session_id);
                     }
                     Err(error) => {
                         self.status_message = format!("加载更早会话历史失败：{error}");
@@ -5398,6 +5549,19 @@ impl VulcanWorkbench {
             }
             Message::SessionSelected(session_id) => {
                 self.prune_unmaterialized_sessions(Some(session_id));
+                if self
+                    .workspace_history_search
+                    .pending_navigation
+                    .as_ref()
+                    .is_some_and(|pending| pending.session_id != session_id)
+                {
+                    self.workspace_history_search.pending_navigation = None;
+                }
+                let has_pending_search_navigation = self
+                    .workspace_history_search
+                    .pending_navigation
+                    .as_ref()
+                    .is_some_and(|pending| pending.session_id == session_id);
                 self.selected_session = session_id;
                 self.hovered_task_session = Some(session_id);
                 self.clear_pending_prompt_drag_state();
@@ -5408,7 +5572,8 @@ impl VulcanWorkbench {
                 self.active_subagent_panel = None;
                 self.rebuild_subagent_task_cache_for_session(session_id);
                 self.refresh_session_agent_view_buffers(session_id);
-                self.session_agent_view_follow_tail.insert(session_id, true);
+                self.session_agent_view_follow_tail
+                    .insert(session_id, !has_pending_search_navigation);
                 self.session_streaming_thinking_follow_tail
                     .insert(session_id, true);
                 // Capture the selected session title to keep footer feedback specific.
@@ -5421,8 +5586,13 @@ impl VulcanWorkbench {
                 self.status_message = format!("当前会话已切换为：{selected_title}。");
                 Task::batch([
                     self.schedule_session_hydration(session_id),
-                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                    if has_pending_search_navigation {
+                        Task::none()
+                    } else {
+                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                    },
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+                    self.maybe_continue_workspace_history_search_navigation(session_id),
                 ])
             }
             Message::ShowSelectedSessionDocumentRawSource => {
@@ -5632,125 +5802,213 @@ impl VulcanWorkbench {
                 self.status_message = String::from("正在加载更早一段会话历史。");
                 self.schedule_older_session_history_load(session_id)
             }
-            Message::SessionHistorySearchInputChanged(session_id, query) => {
-                if self.selected_session().map(|session| session.id) != Some(session_id) {
-                    return Task::none();
-                }
-                if query.trim().is_empty() {
-                    self.session_history_search_inputs.remove(&session_id);
-                    self.session_history_search_results.remove(&session_id);
-                    self.session_history_search_errors.remove(&session_id);
-                    self.session_history_context_pages.remove(&session_id);
-                    self.session_history_context_errors.remove(&session_id);
-                } else {
-                    self.session_history_search_inputs.insert(session_id, query);
-                    self.session_history_search_errors.remove(&session_id);
-                    self.session_history_context_pages.remove(&session_id);
-                    self.session_history_context_errors.remove(&session_id);
-                }
-
+            Message::OpenWorkspaceHistorySearchPanel => self.open_workspace_history_search_panel(),
+            Message::CloseWorkspaceHistorySearchPanel => {
+                self.workspace_history_search.panel_open = false;
+                self.workspace_history_search.project_picker_open = false;
+                self.workspace_history_search.project_filter.clear();
                 Task::none()
             }
-            Message::SessionHistorySearchSubmitted(session_id) => {
-                if self.selected_session().map(|session| session.id) != Some(session_id) {
+            Message::WorkspaceHistorySearchQueryChanged(query) => {
+                self.workspace_history_search.query = query;
+                self.workspace_history_search.error = None;
+                if self.workspace_history_search.query.trim().is_empty() {
+                    self.workspace_history_search.results = None;
+                    self.workspace_history_search.pending_navigation = None;
+                }
+                Task::none()
+            }
+            Message::SubmitWorkspaceHistorySearch => {
+                if self.workspace_history_search.loading {
+                    self.status_message = String::from("工作台历史搜索正在进行中。");
                     return Task::none();
                 }
-                if self
-                    .loading_session_history_search_ids
-                    .contains(&session_id)
-                {
-                    self.status_message = String::from("会话历史搜索正在进行中。");
-                    return Task::none();
-                }
-                let query = self
-                    .session_history_search_inputs
-                    .get(&session_id)
-                    .map(String::as_str)
-                    .unwrap_or_default()
-                    .trim();
+                let query = self.workspace_history_search.query.trim();
                 if query.is_empty() {
-                    self.session_history_search_results.remove(&session_id);
-                    self.session_history_search_errors.remove(&session_id);
-                    self.session_history_context_pages.remove(&session_id);
-                    self.session_history_context_errors.remove(&session_id);
-                    self.status_message = String::from("请输入要搜索的会话历史关键词。");
+                    self.workspace_history_search.results = None;
+                    self.workspace_history_search.error = None;
+                    self.status_message = String::from("请输入要搜索的历史关键词。");
+                    return self.open_workspace_history_search_panel();
+                }
+
+                self.workspace_history_search.panel_open = true;
+                self.workspace_history_search.project_picker_open = false;
+                self.workspace_history_search.project_filter.clear();
+                self.workspace_history_search.error = None;
+                self.status_message = String::from("正在搜索工作台历史。");
+                self.schedule_workspace_history_search(false)
+            }
+            Message::LoadMoreWorkspaceHistorySearchResults => {
+                if self.workspace_history_search.loading {
+                    self.status_message = String::from("工作台历史搜索正在进行中。");
+                    return Task::none();
+                }
+                let Some(current_page) = self.workspace_history_search.results.as_ref() else {
+                    self.status_message = String::from("当前还没有可继续加载的搜索结果。");
+                    return Task::none();
+                };
+                if !current_page.has_more {
+                    self.status_message = String::from("当前搜索结果已经全部加载完成。");
+                    return Task::none();
+                }
+                if self.workspace_history_search.query.trim() != current_page.query {
+                    self.status_message =
+                        String::from("搜索词已变更，请先重新搜索，再继续加载更多结果。");
                     return Task::none();
                 }
 
-                self.status_message = String::from("正在搜索当前会话历史。");
-                self.schedule_session_history_search(session_id)
+                self.workspace_history_search.error = None;
+                self.status_message = String::from("正在继续加载更多工作台历史结果。");
+                self.schedule_workspace_history_search(true)
             }
-            Message::SessionHistorySearchLoaded(session_id, result) => {
-                self.loading_session_history_search_ids.remove(&session_id);
+            Message::WorkspaceHistorySearchLoaded { append, result } => {
+                self.workspace_history_search.loading = false;
+                self.workspace_history_search.loading_more = false;
                 match result {
                     Ok(page) => {
-                        let hit_count = page.hits.len();
-                        self.session_history_search_errors.remove(&session_id);
-                        self.session_history_context_pages.remove(&session_id);
-                        self.session_history_context_errors.remove(&session_id);
-                        self.session_history_search_results.insert(session_id, page);
-                        self.status_message =
-                            format!("会话历史搜索完成，找到 {hit_count} 条轻量命中。");
+                        let WorkspaceHistorySearchPage {
+                            query,
+                            hits,
+                            limit_reached,
+                            total_hits,
+                            next_offset,
+                            has_more,
+                        } = page;
+                        let hit_count = hits.len();
+                        self.workspace_history_search.error = None;
+                        if append {
+                            if let Some(existing_page) =
+                                self.workspace_history_search.results.as_mut()
+                            {
+                                if existing_page.query == query {
+                                    existing_page.hits.extend(hits);
+                                    existing_page.limit_reached = limit_reached;
+                                    existing_page.total_hits = total_hits;
+                                    existing_page.next_offset = next_offset;
+                                    existing_page.has_more = has_more;
+                                } else {
+                                    self.workspace_history_search.results =
+                                        Some(WorkspaceHistorySearchPage {
+                                            query,
+                                            hits,
+                                            limit_reached,
+                                            total_hits,
+                                            next_offset,
+                                            has_more,
+                                        });
+                                }
+                            } else {
+                                self.workspace_history_search.results =
+                                    Some(WorkspaceHistorySearchPage {
+                                        query,
+                                        hits,
+                                        limit_reached,
+                                        total_hits,
+                                        next_offset,
+                                        has_more,
+                                    });
+                            }
+                            let loaded_count = self
+                                .workspace_history_search
+                                .results
+                                .as_ref()
+                                .map(|merged_page| merged_page.hits.len())
+                                .unwrap_or(0);
+                            let total_hits = self
+                                .workspace_history_search
+                                .results
+                                .as_ref()
+                                .map(|merged_page| merged_page.total_hits)
+                                .unwrap_or(loaded_count);
+                            self.status_message = format!(
+                                "已继续加载 {hit_count} 条结果，当前共显示 {loaded_count}/{total_hits} 条 BM25 命中。"
+                            );
+                        } else {
+                            self.workspace_history_search.results =
+                                Some(WorkspaceHistorySearchPage {
+                                    query,
+                                    hits,
+                                    limit_reached,
+                                    total_hits,
+                                    next_offset,
+                                    has_more,
+                                });
+                            self.status_message =
+                                format!("工作台历史搜索完成，找到 {total_hits} 条 BM25 命中。");
+                        }
                     }
                     Err(error) => {
-                        self.session_history_search_results.remove(&session_id);
-                        self.session_history_context_pages.remove(&session_id);
-                        self.session_history_context_errors.remove(&session_id);
-                        self.session_history_search_errors
-                            .insert(session_id, error.clone());
-                        self.status_message = format!("会话历史搜索失败：{error}");
-                        self.push_activity(ActivityLevel::Warning, "会话历史搜索失败", error);
+                        self.workspace_history_search.error = Some(error.clone());
+                        self.status_message = format!("工作台历史搜索失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "工作台历史搜索失败", error);
                     }
                 }
 
                 Task::none()
             }
-            Message::SessionHistoryContextRequested {
+            Message::ToggleWorkspaceHistorySearchProjectPicker => {
+                self.workspace_history_search.panel_open = true;
+                let next_open = !self.workspace_history_search.project_picker_open;
+                self.workspace_history_search.project_picker_open = next_open;
+                if next_open {
+                    self.workspace_history_search.project_filter.clear();
+                    operation::focus(WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID)
+                } else {
+                    self.workspace_history_search.project_filter.clear();
+                    operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
+                }
+            }
+            Message::WorkspaceHistorySearchProjectFilterChanged(value) => {
+                self.workspace_history_search.project_filter = value;
+                Task::none()
+            }
+            Message::WorkspaceHistorySearchScopeSelected(scope) => {
+                self.workspace_history_search.scope = scope;
+                self.workspace_history_search.project_picker_open = false;
+                self.workspace_history_search.project_filter.clear();
+                self.workspace_history_search.error = None;
+                operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
+            }
+            Message::ConfirmWorkspaceHistorySearchScopeSelection => {
+                let Some(option) = self
+                    .filtered_workspace_history_search_scope_options()
+                    .into_iter()
+                    .next()
+                else {
+                    self.status_message = String::from("没有匹配的项目范围可供选择。");
+                    return operation::focus(WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID);
+                };
+
+                self.workspace_history_search.scope = option.scope;
+                self.workspace_history_search.project_picker_open = false;
+                self.workspace_history_search.project_filter.clear();
+                self.workspace_history_search.error = None;
+                operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
+            }
+            Message::OpenWorkspaceHistorySearchHit {
                 session_id,
                 message_id,
                 ordinal,
                 turn_index,
             } => {
-                if self.selected_session().map(|session| session.id) != Some(session_id) {
-                    return Task::none();
-                }
-                if self
-                    .loading_session_history_context_ids
-                    .contains(&session_id)
-                {
-                    self.status_message = String::from("搜索命中附近上下文正在加载中。");
-                    return Task::none();
-                }
+                self.workspace_history_search.active_highlight = None;
+                self.workspace_history_search.pending_navigation =
+                    Some(PendingWorkspaceHistorySearchNavigation {
+                        session_id,
+                        message_id,
+                        ordinal,
+                        turn_index,
+                    });
+                self.workspace_history_search.project_picker_open = false;
+                self.workspace_history_search.project_filter.clear();
+                self.workspace_history_search.panel_open = false;
+                self.status_message = String::from("正在打开搜索命中并定位对应历史位置。");
 
-                self.status_message = String::from("正在加载搜索命中附近上下文。");
-                self.schedule_session_history_context_load(
-                    session_id, message_id, ordinal, turn_index,
-                )
-            }
-            Message::SessionHistoryContextLoaded(session_id, result) => {
-                self.loading_session_history_context_ids.remove(&session_id);
-                match result {
-                    Ok(page) => {
-                        let message_count = page.messages.len();
-                        self.session_history_context_errors.remove(&session_id);
-                        self.session_history_context_pages.insert(session_id, page);
-                        self.status_message =
-                            format!("已加载搜索命中附近 {message_count} 条上下文消息。");
-                    }
-                    Err(error) => {
-                        self.session_history_context_pages.remove(&session_id);
-                        self.session_history_context_errors
-                            .insert(session_id, error.clone());
-                        self.status_message = format!("搜索命中附近上下文加载失败：{error}");
-                        self.push_activity(
-                            ActivityLevel::Warning,
-                            "搜索命中附近上下文加载失败",
-                            error,
-                        );
-                    }
+                if self.selected_session().map(|session| session.id) == Some(session_id) {
+                    self.maybe_continue_workspace_history_search_navigation(session_id)
+                } else {
+                    Task::done(Message::SessionSelected(session_id))
                 }
-
-                Task::none()
             }
             Message::SelectedSessionTranscriptScrolled {
                 session_id,
@@ -6465,6 +6723,195 @@ impl VulcanWorkbench {
             .find(|session| session.id == self.selected_session)
     }
 
+    /// Returns the default search scope derived from the currently selected session, or global when no visible project is active.
+    /// 返回根据当前选中会话推导出的默认搜索范围；若当前没有可见项目会话则回退到全局。
+    fn default_workspace_history_search_scope(&self) -> WorkspaceHistorySearchScope {
+        self.selected_session()
+            .and_then(|session| session.project_id.clone())
+            .filter(|project_id| self.task_project_by_id(project_id).is_some())
+            .map(WorkspaceHistorySearchScope::Project)
+            .unwrap_or(WorkspaceHistorySearchScope::Global)
+    }
+
+    /// Returns the human-readable label shown by the current workspace-history scope selector.
+    /// 返回当前工作台历史范围选择器显示的人类可读标签。
+    fn workspace_history_search_scope_label(&self) -> String {
+        match &self.workspace_history_search.scope {
+            WorkspaceHistorySearchScope::Global => String::from("全部项目"),
+            WorkspaceHistorySearchScope::Project(project_id) => self
+                .task_project_by_id(project_id)
+                .map(|project| project.title.clone())
+                .unwrap_or_else(|| String::from("全部项目")),
+        }
+    }
+
+    /// Builds the full visible scope-option list used by the left-panel workspace-history search picker.
+    /// 构建左侧工作台历史搜索选择器使用的完整可见范围选项列表。
+    fn workspace_history_search_scope_options(&self) -> Vec<WorkspaceHistorySearchScopeOption> {
+        let mut options = vec![WorkspaceHistorySearchScopeOption {
+            scope: WorkspaceHistorySearchScope::Global,
+            label: String::from("全部项目"),
+            filter_text: String::from("全部项目 global all"),
+        }];
+
+        options.extend(self.task_projects.iter().map(|project| {
+            WorkspaceHistorySearchScopeOption {
+                scope: WorkspaceHistorySearchScope::Project(project.id.clone()),
+                label: project.title.clone(),
+                filter_text: format!("{} {}", project.title, project.path).to_lowercase(),
+            }
+        }));
+
+        options
+    }
+
+    /// Returns the scope options filtered by the current project keyword text inside the left search panel.
+    /// 返回根据左侧搜索面板当前项目关键字文本过滤后的范围选项集合。
+    fn filtered_workspace_history_search_scope_options(
+        &self,
+    ) -> Vec<WorkspaceHistorySearchScopeOption> {
+        let filter = self
+            .workspace_history_search
+            .project_filter
+            .trim()
+            .to_lowercase();
+        let options = self.workspace_history_search_scope_options();
+        if filter.is_empty() {
+            return options;
+        }
+
+        options
+            .into_iter()
+            .filter(|option| option.filter_text.contains(&filter))
+            .collect()
+    }
+
+    /// Opens the dedicated left-panel workspace-history search surface and focuses the main query input.
+    /// 打开左侧专用工作台历史搜索表面，并聚焦主查询输入框。
+    fn open_workspace_history_search_panel(&mut self) -> Task<Message> {
+        let should_reset_scope = !self.workspace_history_search.panel_open
+            || matches!(
+                &self.workspace_history_search.scope,
+                WorkspaceHistorySearchScope::Project(project_id)
+                    if self.task_project_by_id(project_id).is_none()
+            );
+        if should_reset_scope {
+            self.workspace_history_search.scope = self.default_workspace_history_search_scope();
+        }
+        self.workspace_history_search.panel_open = true;
+        self.workspace_history_search.project_picker_open = false;
+        self.workspace_history_search.project_filter.clear();
+
+        operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
+    }
+
+    /// Continues one pending search-result navigation by hydrating older history until the target message becomes visible.
+    /// 继续推进一条待完成的搜索结果定位流程，按需补载更早历史直到目标消息可见。
+    fn maybe_continue_workspace_history_search_navigation(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        let Some(pending_navigation) = self
+            .workspace_history_search
+            .pending_navigation
+            .clone()
+            .filter(|pending| pending.session_id == session_id)
+        else {
+            return Task::none();
+        };
+
+        if self.selected_session().map(|session| session.id) != Some(session_id) {
+            return Task::none();
+        }
+
+        self.session_agent_view_follow_tail
+            .insert(session_id, false);
+
+        if self
+            .session_message_entry(session_id, &pending_navigation.message_id)
+            .is_some()
+        {
+            self.workspace_history_search.active_highlight =
+                Some(WorkspaceHistorySearchHighlightTarget {
+                    session_id,
+                    message_id: pending_navigation.message_id.clone(),
+                });
+            self.workspace_history_search.pending_navigation = None;
+            self.status_message = format!(
+                "已定位并高亮搜索命中：轮次 {} · 会话 {}。",
+                pending_navigation.turn_index,
+                self.selected_session()
+                    .map(|session| session.title.clone())
+                    .unwrap_or_else(|| String::from("未知会话"))
+            );
+            return operation::scroll_to(
+                transcript_scrollable_id(session_id),
+                scrollable::AbsoluteOffset {
+                    x: 0.0,
+                    y: self.estimated_workspace_history_search_scroll_offset(
+                        session_id,
+                        &pending_navigation.message_id,
+                    ),
+                },
+            );
+        }
+
+        if self.loading_session_ids.contains(&session_id)
+            || self.loading_older_session_history_ids.contains(&session_id)
+        {
+            return Task::none();
+        }
+
+        if !self.hydrated_session_ids.contains(&session_id) {
+            self.status_message = String::from("正在载入目标会话正文以定位搜索命中。");
+            return self.schedule_session_hydration(session_id);
+        }
+
+        if self
+            .session_history_earliest_ordinals
+            .get(&session_id)
+            .copied()
+            .is_some_and(|earliest_ordinal| pending_navigation.ordinal >= earliest_ordinal)
+        {
+            self.workspace_history_search.active_highlight = None;
+            self.workspace_history_search.pending_navigation = None;
+            self.status_message = String::from("已打开目标会话，但当前窗口中未恢复出该搜索命中。");
+            return Task::none();
+        }
+
+        if self.session_history_has_more.contains(&session_id) {
+            self.status_message = String::from("正在补载更早会话历史以定位搜索命中。");
+            return self.schedule_older_session_history_load(session_id);
+        }
+
+        self.workspace_history_search.active_highlight = None;
+        self.workspace_history_search.pending_navigation = None;
+        self.status_message = String::from("已加载完可见历史，但仍未定位到该搜索命中。");
+        Task::none()
+    }
+
+    /// Estimates the transcript scroll offset needed to bring one searched message close to the viewport center.
+    /// 估算将某条搜索命中消息带到视口附近所需的转录滚动偏移量。
+    fn estimated_workspace_history_search_scroll_offset(
+        &self,
+        session_id: SessionId,
+        message_id: &str,
+    ) -> f32 {
+        let message_index = self
+            .visible_session_messages_for_agent_view(session_id)
+            .iter()
+            .position(|message| message.id == message_id)
+            .or_else(|| {
+                self.session_messages.get(&session_id).and_then(|messages| {
+                    messages.iter().position(|message| message.id == message_id)
+                })
+            })
+            .unwrap_or(0);
+
+        (message_index as f32 * WORKSPACE_HISTORY_SEARCH_SCROLL_ESTIMATED_ROW_HEIGHT - 48.0)
+            .max(0.0)
+    }
+
     /// Returns the current execution phase tracked for the provided session, defaulting to idle when no explicit state exists yet.
     /// 返回给定会话当前跟踪到的执行阶段；若尚无显式状态则默认视为空闲。
     fn session_run_phase_for(&self, session_id: SessionId) -> SessionRunPhase {
@@ -6529,6 +6976,15 @@ impl VulcanWorkbench {
         self.session_has_active_run(session_id)
             || self.session_has_running_subagent_tasks(session_id)
             || self.session_has_pending_delegate_completion_prompt(session_id)
+    }
+
+    /// Returns whether the session currently uses the Anthropic runtime family, including third-party providers that are routed through the host-owned Anthropic transport.
+    /// 返回该会话当前是否正在使用 Anthropic 运行时族，包含那些被路由到宿主 Anthropic 传输链路的第三方 Provider。
+    fn session_uses_anthropic_runtime(&self, session_id: SessionId) -> bool {
+        self.session_runtime_state(session_id)
+            .and_then(|state| state.active_provider_id.as_deref())
+            .and_then(provider_config::supported_provider_by_id)
+            .is_some_and(|definition| definition.runtime == ProviderRuntimeKind::Anthropic)
     }
 
     /// Collapses and hides the subagent navigation round once the parent run, child tasks, and delegated callbacks have all settled.
@@ -6708,12 +7164,20 @@ impl VulcanWorkbench {
         session_id: SessionId,
     ) -> Option<PendingSessionPromptEntry> {
         let now = current_unix_millis_text();
+        let prefer_delegate_completion = self.session_uses_anthropic_runtime(session_id);
         let next_entry = {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
             if runtime_state.ui_state.pending_prompt_queue.is_empty() {
                 None
             } else {
-                let entry = runtime_state.ui_state.pending_prompt_queue.remove(0);
+                let dispatch_index = pending_prompt_dispatch_index(
+                    runtime_state.ui_state.pending_prompt_queue.as_slice(),
+                    prefer_delegate_completion,
+                );
+                let entry = runtime_state
+                    .ui_state
+                    .pending_prompt_queue
+                    .remove(dispatch_index);
                 runtime_state.updated_at = now;
                 Some(entry)
             }
@@ -6990,7 +7454,16 @@ impl VulcanWorkbench {
         }
         let _ = self.mark_session_pending_prompt_entry_inserted(session_id, entry_id);
         self.mark_session_waiting_for_inserted_prompt_dispatch(session_id);
-        self.status_message = String::from("已接入系统会话队列，正在尝试立即插入主会话。");
+        self.status_message = if anthropic_pending_prompt_dispatch_is_blocked(
+            self.session_uses_anthropic_runtime(session_id),
+            self.session_has_running_subagent_tasks(session_id),
+        ) {
+            String::from(
+                "已接入系统会话队列；Anthropic 协议下需等待当前子代理全部完成后，才能继续插入主会话。",
+            )
+        } else {
+            String::from("已接入系统会话队列，正在尝试立即插入主会话。")
+        };
         Task::batch([
             self.persist_workspace_snapshot_task(),
             self.maybe_start_next_pending_prompt(session_id, true),
@@ -7146,6 +7619,12 @@ impl VulcanWorkbench {
         session_id: SessionId,
         allow_from_stopped_phase: bool,
     ) -> Task<Message> {
+        if anthropic_pending_prompt_dispatch_is_blocked(
+            self.session_uses_anthropic_runtime(session_id),
+            self.session_has_running_subagent_tasks(session_id),
+        ) {
+            return Task::none();
+        }
         if self.session_has_active_run(session_id) {
             return Task::none();
         }
@@ -7425,13 +7904,6 @@ impl VulcanWorkbench {
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
-            self.session_history_search_inputs.remove(&session_id);
-            self.session_history_search_results.remove(&session_id);
-            self.loading_session_history_search_ids.remove(&session_id);
-            self.session_history_search_errors.remove(&session_id);
-            self.session_history_context_pages.remove(&session_id);
-            self.loading_session_history_context_ids.remove(&session_id);
-            self.session_history_context_errors.remove(&session_id);
             self.remove_session_from_background_legacy_maintenance(session_id);
             if self.hovered_task_session == Some(session_id) {
                 self.hovered_task_session = None;
@@ -7467,13 +7939,6 @@ impl VulcanWorkbench {
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
-            self.session_history_search_inputs.remove(&session_id);
-            self.session_history_search_results.remove(&session_id);
-            self.loading_session_history_search_ids.remove(&session_id);
-            self.session_history_search_errors.remove(&session_id);
-            self.session_history_context_pages.remove(&session_id);
-            self.loading_session_history_context_ids.remove(&session_id);
-            self.session_history_context_errors.remove(&session_id);
             self.remove_session_from_background_legacy_maintenance(session_id);
         }
 
@@ -9624,67 +10089,46 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Schedules one lightweight session-history search for the current root session.
-    /// 为当前根会话调度一次轻量会话历史搜索。
-    fn schedule_session_history_search(&mut self, session_id: SessionId) -> Task<Message> {
-        if session_id.is_nil() || !self.loading_session_history_search_ids.insert(session_id) {
+    /// Schedules one workspace-scoped BM25 history search for the left task panel.
+    /// Schedules one workspace-scoped BM25 history search for the left task panel.
+    /// 为左侧任务面板调度一次工作区级 BM25 历史搜索。
+    fn schedule_workspace_history_search(&mut self, append: bool) -> Task<Message> {
+        if self.workspace_history_search.loading {
             return Task::none();
         }
         let Some(controller_runtime) = self.controller_runtime.clone() else {
-            self.loading_session_history_search_ids.remove(&session_id);
             return Task::none();
         };
-        let query = self
-            .session_history_search_inputs
-            .get(&session_id)
-            .cloned()
-            .unwrap_or_default();
+
+        self.workspace_history_search.loading = true;
+        self.workspace_history_search.loading_more = append;
+        let query = self.workspace_history_search.query.clone();
+        let project_scope = match &self.workspace_history_search.scope {
+            WorkspaceHistorySearchScope::Global => None,
+            WorkspaceHistorySearchScope::Project(project_id) => Some(project_id.clone()),
+        };
+        let offset = if append {
+            self.workspace_history_search
+                .results
+                .as_ref()
+                .map(|page| page.next_offset)
+                .unwrap_or(0)
+        } else {
+            0
+        };
 
         Task::perform(
             async move {
-                let result = workspace_store::search_session_history(
+                workspace_store::search_workspace_history(
                     controller_runtime,
-                    session_id,
+                    project_scope,
                     query,
                     SESSION_HISTORY_SEARCH_RESULT_LIMIT,
+                    offset,
                 )
-                .await;
-                (session_id, result)
+                .await
             },
-            |(session_id, result)| Message::SessionHistorySearchLoaded(session_id, result),
-        )
-    }
-
-    /// Schedules one read-only context load around a search-result anchor.
-    /// 围绕搜索结果锚点调度一次只读上下文加载。
-    fn schedule_session_history_context_load(
-        &mut self,
-        session_id: SessionId,
-        message_id: String,
-        ordinal: i64,
-        turn_index: i64,
-    ) -> Task<Message> {
-        if session_id.is_nil() || !self.loading_session_history_context_ids.insert(session_id) {
-            return Task::none();
-        }
-        let Some(controller_runtime) = self.controller_runtime.clone() else {
-            self.loading_session_history_context_ids.remove(&session_id);
-            return Task::none();
-        };
-
-        Task::perform(
-            async move {
-                let result = workspace_store::load_session_history_context_page(
-                    controller_runtime,
-                    session_id,
-                    message_id,
-                    ordinal,
-                    turn_index,
-                )
-                .await;
-                (session_id, result)
-            },
-            |(session_id, result)| Message::SessionHistoryContextLoaded(session_id, result),
+            move |result| Message::WorkspaceHistorySearchLoaded { append, result },
         )
     }
 
@@ -10051,8 +10495,22 @@ impl VulcanWorkbench {
     /// Applies one persisted workspace snapshot to the live GUI state in a single place.
     /// 将一份持久化工作台快照集中应用到当前图形界面状态。
     fn apply_workspace_snapshot(&mut self, snapshot: WorkspaceSnapshot) {
-        self.task_projects = snapshot.task_projects;
-        self.archived_task_projects = snapshot.archived_task_projects;
+        self.task_projects = snapshot
+            .task_projects
+            .into_iter()
+            .map(|mut project| {
+                project.path = normalize_workspace_path_text(&project.path);
+                project
+            })
+            .collect();
+        self.archived_task_projects = snapshot
+            .archived_task_projects
+            .into_iter()
+            .map(|mut project| {
+                project.path = normalize_workspace_path_text(&project.path);
+                project
+            })
+            .collect();
         self.sessions = snapshot.sessions;
         self.archived_sessions = snapshot.archived_sessions;
         self.session_messages.clear();
@@ -10068,13 +10526,7 @@ impl VulcanWorkbench {
         self.session_history_earliest_ordinals.clear();
         self.session_history_has_more.clear();
         self.loading_older_session_history_ids.clear();
-        self.session_history_search_inputs.clear();
-        self.session_history_search_results.clear();
-        self.loading_session_history_search_ids.clear();
-        self.session_history_search_errors.clear();
-        self.session_history_context_pages.clear();
-        self.loading_session_history_context_ids.clear();
-        self.session_history_context_errors.clear();
+        self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
         self.reset_background_legacy_session_maintenance_queue();
         self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
@@ -10116,6 +10568,8 @@ impl VulcanWorkbench {
         if !self.selected_session.is_nil() {
             self.refresh_session_agent_view_buffers(self.selected_session);
         }
+        self.sync_workspace_path_with_selected_session();
+        self.workspace_path = normalize_workspace_path_text(&self.workspace_path);
         self.refresh_all_session_queued_steps();
     }
 
@@ -10821,18 +11275,57 @@ impl VulcanWorkbench {
         let mut document = build_agent_view_document(&messages, &[]);
         for (block_index, block) in document.blocks.iter_mut().enumerate() {
             let block_id = agent_view_block_id(state.task_id, block_index, block);
-            self.decorate_subagent_task_block_for_render(&block_id, block);
+            self.decorate_subagent_task_block_for_render(state.task_id, &block_id, block);
         }
         Some(document)
+    }
+
+    /// Returns whether the provided block belongs to the currently active workspace-history search highlight target.
+    /// 返回给定区块是否属于当前活动中的工作台历史搜索高亮目标。
+    fn agent_view_block_matches_workspace_history_search_highlight(
+        &self,
+        session_id: SessionId,
+        block: &vulcan_agent_view::AgentViewBlock,
+    ) -> bool {
+        let Some(active_highlight) = self
+            .workspace_history_search
+            .active_highlight
+            .as_ref()
+            .filter(|active_highlight| active_highlight.session_id == session_id)
+        else {
+            return false;
+        };
+
+        block
+            .attributes()
+            .get("message-id")
+            .is_some_and(|message_id| message_id == &active_highlight.message_id)
+    }
+
+    /// Attaches the transient workspace-history search-hit render marker to one block when it owns the currently highlighted message.
+    /// 当某个区块归属于当前高亮消息时，为其附着临时工作台历史搜索命中渲染标记。
+    fn decorate_agent_view_block_workspace_history_search_hit(
+        &self,
+        session_id: SessionId,
+        block: &mut vulcan_agent_view::AgentViewBlock,
+    ) {
+        if self.agent_view_block_matches_workspace_history_search_highlight(session_id, block) {
+            block
+                .attributes_mut()
+                .insert(String::from("ui-search-hit"), String::from("true"));
+        }
     }
 
     /// Decorates one child-panel block with the minimal runtime-only attributes needed by the shared transcript renderer.
     /// 使用共享转录渲染器所需的最小运行时属性装饰单个子面板区块。
     fn decorate_subagent_task_block_for_render(
         &self,
+        session_id: SessionId,
         block_id: &str,
         block: &mut vulcan_agent_view::AgentViewBlock,
     ) {
+        self.decorate_agent_view_block_workspace_history_search_hit(session_id, block);
+
         let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
             return;
         };
@@ -10934,6 +11427,8 @@ impl VulcanWorkbench {
         block_id: &str,
         block: &mut vulcan_agent_view::AgentViewBlock,
     ) {
+        self.decorate_agent_view_block_workspace_history_search_hit(session_id, block);
+
         let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
             return;
         };
@@ -11304,6 +11799,10 @@ impl VulcanWorkbench {
 
         for block in &document.blocks {
             block.raw_source().hash(&mut hasher);
+            for (key, value) in block.attributes() {
+                key.hash(&mut hasher);
+                value.hash(&mut hasher);
+            }
         }
 
         document.blocks.len().hash(&mut hasher);
@@ -11460,13 +11959,14 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_background_legacy_maintenance_queue, composer_text_has_submittable_content,
-        composer_visible_line_count, merge_tool_display_messages, prune_session_messages_to_limit,
-        task_session_payload_from_tool_metadata,
+        anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
+        composer_text_has_submittable_content, composer_visible_line_count,
+        merge_tool_display_messages, pending_prompt_dispatch_index,
+        prune_session_messages_to_limit, task_session_payload_from_tool_metadata,
     };
     use crate::model::{
-        SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionState,
-        SessionSummary,
+        PendingSessionPromptEntry, PendingSessionPromptSource, SessionId, SessionMessageEntry,
+        SessionMessageKind, SessionMessageRecordKind, SessionState, SessionSummary,
     };
     use iced::widget::text_editor;
     use serde_json::{Value, json};
@@ -11484,6 +11984,24 @@ mod tests {
             0,
             String::from("刚刚"),
         )
+    }
+
+    /// Builds one compact pending-session prompt entry for queue-order unit tests.
+    /// 为队列顺序相关单元测试构建一条紧凑的待发送提示词项。
+    fn test_pending_prompt_entry(
+        source: PendingSessionPromptSource,
+        prompt: &str,
+    ) -> PendingSessionPromptEntry {
+        PendingSessionPromptEntry {
+            id: format!("entry-{prompt}"),
+            prompt: prompt.to_string(),
+            preview: prompt.to_string(),
+            source,
+            task_id: (source == PendingSessionPromptSource::DelegateCompletion)
+                .then(|| format!("task-{prompt}")),
+            panel_entry_id: None,
+            created_at: String::from("1"),
+        }
     }
 
     /// Verifies that an empty composer still reserves one visible line.
@@ -11559,6 +12077,33 @@ mod tests {
         let queue = build_background_legacy_maintenance_queue(&visible_sessions, &[]);
 
         assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![session_id]);
+    }
+
+    /// Verifies Anthropic queue dispatch prefers delegated completion callbacks over user-authored follow-ups once background subagents have fully settled.
+    /// 验证在后台子代理全部收敛后，Anthropic 队列分发会优先选择子代理完成回流项，而不是优先处理用户跟进消息。
+    #[test]
+    fn pending_prompt_dispatch_index_prefers_delegate_completion_for_anthropic() {
+        let queue = vec![
+            test_pending_prompt_entry(PendingSessionPromptSource::UserInterrupt, "interrupt"),
+            test_pending_prompt_entry(
+                PendingSessionPromptSource::DelegateCompletion,
+                "delegate-finished",
+            ),
+            test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "followup"),
+        ];
+
+        assert_eq!(pending_prompt_dispatch_index(&queue, true), 1);
+        assert_eq!(pending_prompt_dispatch_index(&queue, false), 0);
+    }
+
+    /// Verifies Anthropic sessions block pending-prompt dispatch while detached subagents from the previous tool round are still running, whereas other runtimes keep the original behavior.
+    /// 验证当上一轮工具回合的分离子代理仍在运行时，Anthropic 会话会阻止待发送提示词分发，而其他运行时保持原有行为。
+    #[test]
+    fn anthropic_pending_prompt_dispatch_blocks_only_for_running_subagents() {
+        assert!(anthropic_pending_prompt_dispatch_is_blocked(true, true));
+        assert!(!anthropic_pending_prompt_dispatch_is_blocked(true, false));
+        assert!(!anthropic_pending_prompt_dispatch_is_blocked(false, true));
+        assert!(!anthropic_pending_prompt_dispatch_is_blocked(false, false));
     }
 
     /// Verifies that transcript pruning removes the oldest messages first.

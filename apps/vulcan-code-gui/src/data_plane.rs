@@ -22,7 +22,7 @@ pub const APP_SQLITE_BINDING_TAG: &str = "app-state";
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 3;
+pub const APP_SCHEMA_VERSION: i64 = 5;
 
 /// One-shot metadata key that marks the non-compatible session reset required by the protocol refactor.
 /// 标记协议重构所需一次性不兼容会话清理已经完成的元数据键。
@@ -284,6 +284,7 @@ async fn ensure_application_schema_migrations(
     )
     .await?;
     ensure_session_message_chunk_table(client, sqlite_binding_id).await?;
+    ensure_workspace_history_search_state_table(client, sqlite_binding_id).await?;
     ensure_session_message_turn_index(client, sqlite_binding_id).await?;
     ensure_protocol_reset_applied(client, sqlite_binding_id).await
 }
@@ -313,6 +314,25 @@ async fn ensure_session_message_chunk_table(
         )
         .await
         .map_err(|error| format!("执行会话消息分片结构迁移失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Ensures the additive workspace-history search state table exists for controller-managed FTS ownership tracking.
+/// 确保控制器托管 FTS 归属跟踪使用的工作台历史搜索状态表已经存在。
+async fn ensure_workspace_history_search_state_table(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+) -> Result<(), String> {
+    client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            workspace_history_search_state_schema_script(),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("执行工作台历史搜索状态结构迁移失败：{error}"))?;
 
     Ok(())
 }
@@ -531,6 +551,8 @@ ON session_messages(session_id, ordinal);
 
 {session_message_chunk_schema}
 
+{workspace_history_search_state_schema}
+
 CREATE TABLE IF NOT EXISTS session_compactions (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -563,7 +585,8 @@ CREATE INDEX IF NOT EXISTS idx_session_compactions_session
 ON session_compactions(session_id, created_at DESC);
 "#,
         schema_version = APP_SCHEMA_VERSION,
-        session_message_chunk_schema = session_message_chunk_schema_script()
+        session_message_chunk_schema = session_message_chunk_schema_script(),
+        workspace_history_search_state_schema = workspace_history_search_state_schema_script()
     )
 }
 
@@ -581,6 +604,22 @@ CREATE TABLE IF NOT EXISTS session_message_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_session_message_chunks_session_message
 ON session_message_chunks(session_id, message_id, chunk_index);
+"#
+    .to_string()
+}
+
+/// Builds the additive state table used to track controller-managed workspace-history FTS ownership.
+/// 构建用于跟踪控制器托管工作台历史 FTS 归属关系的追加式状态表。
+fn workspace_history_search_state_schema_script() -> String {
+    r#"
+CREATE TABLE IF NOT EXISTS workspace_history_search_docs (
+    message_id TEXT PRIMARY KEY REFERENCES session_messages(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_history_search_docs_session
+ON workspace_history_search_docs(session_id, project_id);
 "#
     .to_string()
 }
@@ -607,5 +646,15 @@ mod tests {
 
         assert!(statement.contains("idx_session_messages_session_turn_ordinal"));
         assert!(statement.contains("turn_index"));
+    }
+
+    /// Verifies that the base schema includes the workspace-history search ownership state table.
+    /// 验证基础结构已经包含工作台历史搜索归属状态表定义。
+    #[test]
+    fn base_schema_includes_workspace_history_search_state_table() {
+        let schema = build_application_schema_script();
+
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS workspace_history_search_docs"));
+        assert!(schema.contains("idx_workspace_history_search_docs_session"));
     }
 }

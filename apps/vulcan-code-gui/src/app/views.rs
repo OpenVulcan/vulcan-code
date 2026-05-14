@@ -3,40 +3,8 @@
 
 use super::helpers::*;
 use super::*;
-use iced::widget::{column, pin};
-
-/// Maximum characters shown for one message inside the search-result context preview.
-/// 搜索结果上下文预览中单条消息最多展示的字符数。
-const SESSION_HISTORY_CONTEXT_MESSAGE_PREVIEW_CHARS: usize = 420;
-
-/// Builds one compact body preview for the read-only search-result context panel.
-/// 为只读搜索结果上下文面板构建单条紧凑正文预览。
-fn session_history_context_message_preview(value: &str) -> String {
-    let normalized = value
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(4)
-        .collect::<Vec<_>>()
-        .join(" / ");
-    let normalized = if normalized.is_empty() {
-        value.split_whitespace().collect::<Vec<_>>().join(" ")
-    } else {
-        normalized
-    };
-    if normalized.is_empty() {
-        return String::from("（该消息没有可展示正文。）");
-    }
-    if normalized.chars().count() <= SESSION_HISTORY_CONTEXT_MESSAGE_PREVIEW_CHARS {
-        return normalized;
-    }
-
-    let preview = normalized
-        .chars()
-        .take(SESSION_HISTORY_CONTEXT_MESSAGE_PREVIEW_CHARS.saturating_sub(1))
-        .collect::<String>();
-    format!("{preview}…")
-}
+use iced::widget::{column, pin, rich_text};
+use iced::{Background, Border, Color};
 
 /// Returns the active subagent dispatch list height needed for the current running task count.
 /// 返回当前运行中任务数量所需的活动子代理调度列表高度。
@@ -48,6 +16,91 @@ fn subagent_navigation_panel_height(task_count: usize) -> f32 {
         + (gap_count * SUBAGENT_NAVIGATION_ROW_GAP);
 
     content_height.max(SUBAGENT_NAVIGATION_PANEL_HEIGHT)
+}
+
+/// Splits one workspace-history preview markup string into ordered plain/highlight segments for rich-text rendering.
+/// 将一段工作台历史预览标记字符串拆分为有序的普通片段与高亮片段，以供富文本渲染。
+fn workspace_history_search_preview_segments(
+    preview_markup: &str,
+    fallback_preview: &str,
+) -> Vec<(String, bool)> {
+    let source = if preview_markup.trim().is_empty() {
+        fallback_preview
+    } else {
+        preview_markup
+    };
+    let mut remaining = source;
+    let mut segments = Vec::new();
+
+    while let Some(start_index) = remaining.find("<mark>") {
+        let (before_mark, after_mark_start) = remaining.split_at(start_index);
+        if !before_mark.is_empty() {
+            segments.push((before_mark.to_string(), false));
+        }
+
+        let marked_body = &after_mark_start["<mark>".len()..];
+        if let Some(end_index) = marked_body.find("</mark>") {
+            let (marked_text, after_mark_end) = marked_body.split_at(end_index);
+            if !marked_text.is_empty() {
+                segments.push((marked_text.to_string(), true));
+            }
+            remaining = &after_mark_end["</mark>".len()..];
+        } else {
+            if !marked_body.is_empty() {
+                segments.push((marked_body.to_string(), true));
+            }
+            remaining = "";
+        }
+    }
+
+    if !remaining.is_empty() {
+        segments.push((remaining.to_string(), false));
+    }
+
+    if segments.is_empty() {
+        segments.push((fallback_preview.to_string(), false));
+    }
+
+    segments
+}
+
+/// Builds the rich-text preview widget used by workspace-history search hits, preserving controller-provided highlight tags.
+/// 构建工作台历史搜索命中使用的富文本预览部件，保留控制器提供的高亮标记效果。
+fn workspace_history_search_preview_rich_text<'a>(
+    theme: &Theme,
+    preview_markup: &str,
+    fallback_preview: &str,
+) -> Element<'a, Message> {
+    let palette = theme.extended_palette();
+    let highlight_background = palette.primary.weak.color.scale_alpha(0.82);
+    let highlight_border = Border {
+        radius: 4.0.into(),
+        width: 0.0,
+        color: Color::TRANSPARENT,
+    };
+    let spans: Vec<iced::widget::text::Span<'static, (), iced::Font>> =
+        workspace_history_search_preview_segments(preview_markup, fallback_preview)
+            .into_iter()
+            .map(|(text_segment, highlighted)| {
+                let base = iced::widget::text::Span::<'_, (), iced::Font>::new(text_segment).color(
+                    if highlighted {
+                        palette.primary.strong.text
+                    } else {
+                        palette.background.base.text
+                    },
+                );
+                if highlighted {
+                    base.background(Background::Color(highlight_background))
+                        .border(highlight_border)
+                        .padding([0, 2])
+                        .to_static()
+                } else {
+                    base.to_static()
+                }
+            })
+            .collect::<Vec<_>>();
+
+    rich_text(spans).size(12).width(Fill).into()
 }
 
 impl VulcanWorkbench {
@@ -99,6 +152,12 @@ impl VulcanWorkbench {
             };
         let composed_surface: Element<'_, Message> =
             if let Some(overlay) = self.view_composer_context_menu_overlay() {
+                stack([composed_surface, overlay]).into()
+            } else {
+                composed_surface
+            };
+        let composed_surface: Element<'_, Message> =
+            if let Some(overlay) = self.view_workspace_history_search_modal() {
                 stack([composed_surface, overlay]).into()
             } else {
                 composed_surface
@@ -368,6 +427,201 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Builds the in-app workspace-history search modal shown above the main workbench when history lookup is requested.
+    /// 构建在请求历史检索时显示在主工作台之上的内嵌工作台历史搜索弹窗。
+    pub(super) fn view_workspace_history_search_modal(&self) -> Option<Element<'_, Message>> {
+        if !self.workspace_history_search.panel_open {
+            return None;
+        }
+
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseWorkspaceHistorySearchPanel);
+
+        let scope_label = self.workspace_history_search_scope_label();
+        let scope_button_label = if self.workspace_history_search.project_picker_open {
+            format!("范围：{scope_label}  ▲")
+        } else {
+            format!("范围：{scope_label}  ▼")
+        };
+        let search_input_row = row![
+            text_input(
+                "搜索用户提问与 AI 最终回复",
+                &self.workspace_history_search.query
+            )
+            .id(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
+            .on_input(Message::WorkspaceHistorySearchQueryChanged)
+            .on_submit(Message::SubmitWorkspaceHistorySearch)
+            .padding([10, 12])
+            .width(Fill),
+            button(text(if self.workspace_history_search.loading {
+                "搜索中"
+            } else {
+                "搜索"
+            }))
+            .padding([8, 14])
+            .style(style::subtle_panel_button_style)
+            .on_press_maybe(
+                (!self.workspace_history_search.loading
+                    && !self.workspace_history_search.query.trim().is_empty())
+                .then_some(Message::SubmitWorkspaceHistorySearch),
+            ),
+        ]
+        .spacing(10)
+        .align_y(Center);
+
+        let mut modal_body = column![
+            row![text("搜索历史").size(20), space::horizontal(), close_button].align_y(Center),
+            search_input_row,
+            row![
+                button(text(scope_button_label).size(12))
+                    .padding([7, 12])
+                    .style(style::subtle_panel_button_style)
+                    .on_press(Message::ToggleWorkspaceHistorySearchProjectPicker),
+                space::horizontal().width(Fill),
+                text("仅检索活跃项目").size(11),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        ]
+        .spacing(14);
+
+        if self.workspace_history_search.project_picker_open {
+            let scope_options = self.filtered_workspace_history_search_scope_options();
+            let scope_picker: Element<'_, Message> = if scope_options.is_empty() {
+                container(
+                    container(text("没有匹配的项目范围。").size(13))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill),
+                )
+                .width(Fill)
+                .height(WORKSPACE_HISTORY_SEARCH_SCOPE_LIST_HEIGHT)
+                .into()
+            } else {
+                scrollable(
+                    column(scope_options.into_iter().map(|option| {
+                        let is_selected = self.workspace_history_search.scope == option.scope;
+                        button(
+                            container(text(option.label).size(13))
+                                .width(Fill)
+                                .center_y(Fill),
+                        )
+                        .width(Fill)
+                        .padding([8, 12])
+                        .style(move |theme, status| {
+                            style::main_task_search_result_button_style(theme, status, is_selected)
+                        })
+                        .on_press(Message::WorkspaceHistorySearchScopeSelected(option.scope))
+                        .into()
+                    }))
+                    .spacing(6),
+                )
+                .height(WORKSPACE_HISTORY_SEARCH_SCOPE_LIST_HEIGHT)
+                .into()
+            };
+
+            modal_body = modal_body.push(
+                container(
+                    column![
+                        text_input(
+                            "输入项目名或路径过滤，回车选择首项",
+                            &self.workspace_history_search.project_filter
+                        )
+                        .id(WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID)
+                        .on_input(Message::WorkspaceHistorySearchProjectFilterChanged)
+                        .on_submit(Message::ConfirmWorkspaceHistorySearchScopeSelection)
+                        .padding([10, 12]),
+                        scope_picker,
+                    ]
+                    .spacing(10),
+                )
+                .padding([10, 12])
+                .style(style::main_task_search_panel_style),
+            );
+        }
+
+        let result_surface: Element<'_, Message> = if self.workspace_history_search.loading
+            && !self.workspace_history_search.loading_more
+        {
+            container(
+                container(text("正在按 BM25 排序搜索工作台历史...").size(14))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT)
+            .into()
+        } else if let Some(page) = self.workspace_history_search.results.as_ref() {
+            scrollable(self.view_workspace_history_search_results(page))
+                .height(WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT)
+                .into()
+        } else if let Some(error) = self.workspace_history_search.error.as_ref() {
+            container(
+                container(text(format!("搜索失败：{error}")).size(14))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT)
+            .into()
+        } else {
+            container(
+                container(
+                    text("输入关键词后回车搜索。仅检索用户提问、AI 最终回复，并默认按 BM25 相关性排序。")
+                        .size(14),
+                )
+                .width(Fill)
+                .height(Fill)
+                .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT)
+            .into()
+        };
+
+        let modal_card = container(modal_body.push(result_surface))
+            .padding([22, 24])
+            .width(WORKSPACE_HISTORY_SEARCH_MODAL_WIDTH)
+            .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseWorkspaceHistorySearchPanel);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(modal_card)
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
     /// Builds the currently selected top-level panel shown inside the main display region.
     /// 构建当前显示在主显示区域中的顶层面板内容。
     pub(super) fn view_active_main_panel(&self) -> Element<'_, Message> {
@@ -502,7 +756,9 @@ impl VulcanWorkbench {
                     .scroller_width(6),
             ));
 
-        let panel_body = column![session_tree].spacing(0).height(Fill);
+        let panel_body = column![self.view_main_task_search_panel(), session_tree]
+            .spacing(10)
+            .height(Fill);
 
         let body: Element<'_, Message> = if let Some(preview) = self.view_main_task_drag_preview() {
             stack([panel_body.into(), preview]).into()
@@ -515,6 +771,151 @@ impl VulcanWorkbench {
             .width(Fill)
             .height(Fill)
             .into()
+    }
+
+    /// Builds the dedicated workspace-history search surface shown at the top of the left task drawer.
+    /// 构建显示在左侧任务抽屉顶部的专用工作台历史搜索表面。
+    fn view_main_task_search_panel(&self) -> Element<'_, Message> {
+        let trigger = button(
+            row![
+                lucide::search().size(15).line_height(1.0),
+                text("搜索").size(13),
+                space::horizontal().width(Fill),
+                container(text("Ctrl+F").size(11))
+                    .padding([3, 7])
+                    .style(style::main_task_search_shortcut_badge_style),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        )
+        .width(Fill)
+        .padding([8, 10])
+        .style(move |theme, status| {
+            style::main_task_search_result_button_style(
+                theme,
+                status,
+                self.workspace_history_search.panel_open,
+            )
+        })
+        .on_press(Message::OpenWorkspaceHistorySearchPanel);
+
+        container(column![trigger].spacing(8).width(Fill))
+            .width(Fill)
+            .into()
+    }
+
+    /// Builds the workspace-scoped BM25 search result list shown inside the left task drawer.
+    /// 构建显示在左侧任务抽屉中的工作区级 BM25 搜索结果列表。
+    fn view_workspace_history_search_results(
+        &self,
+        page: &WorkspaceHistorySearchPage,
+    ) -> Element<'_, Message> {
+        if page.query.trim().is_empty() {
+            return space::vertical().height(0).into();
+        }
+        if page.hits.is_empty() {
+            return text(format!("没有找到与“{}”匹配的历史记录。", page.query))
+                .size(12)
+                .into();
+        }
+
+        let active_target = self
+            .workspace_history_search
+            .pending_navigation
+            .as_ref()
+            .map(|pending| (pending.session_id, pending.message_id.as_str()));
+        let mut result_list = column![
+            text(format!(
+                "“{}” 的命中：已加载 {} / 总计 {} 条{}",
+                page.query,
+                page.hits.len(),
+                page.total_hits,
+                if page.limit_reached {
+                    "（已达上限）"
+                } else if page.has_more {
+                    "（可继续加载）"
+                } else {
+                    "（已全部加载）"
+                }
+            ))
+            .size(12)
+        ]
+        .spacing(6)
+        .width(Fill);
+
+        if let Some(error) = self.workspace_history_search.error.as_ref() {
+            result_list = result_list.push(text(format!("最近一次搜索失败：{error}")).size(12));
+        }
+
+        for hit in &page.hits {
+            let is_active = active_target.is_some_and(|(session_id, message_id)| {
+                session_id == hit.session_id && message_id == hit.message_id
+            });
+            let kind_label = match hit.message_kind {
+                SessionMessageKind::User => "USER",
+                SessionMessageKind::Assistant => "AI",
+                SessionMessageKind::Error => "ERROR",
+            };
+            let meta = format!(
+                "{} · {} · 轮次 {} · {:.2}",
+                hit.project_name, hit.session_title, hit.turn_index, hit.score
+            );
+
+            result_list = result_list.push(
+                button(
+                    container(
+                        column![
+                            row![
+                                text(kind_label).size(11),
+                                text(meta).size(11),
+                                space::horizontal().width(Fill),
+                                text(hit.created_at.clone()).size(11),
+                            ]
+                            .spacing(8)
+                            .align_y(Center),
+                            workspace_history_search_preview_rich_text(
+                                &self.app_theme,
+                                &hit.preview_markup,
+                                &hit.preview,
+                            ),
+                        ]
+                        .spacing(5)
+                        .width(Fill),
+                    )
+                    .width(Fill),
+                )
+                .width(Fill)
+                .padding([8, 10])
+                .style(move |theme, status| {
+                    style::main_task_search_result_button_style(theme, status, is_active)
+                })
+                .on_press(Message::OpenWorkspaceHistorySearchHit {
+                    session_id: hit.session_id,
+                    message_id: hit.message_id.clone(),
+                    ordinal: hit.ordinal,
+                    turn_index: hit.turn_index,
+                }),
+            );
+        }
+
+        if page.has_more || self.workspace_history_search.loading_more {
+            let load_more_label = if self.workspace_history_search.loading_more {
+                "正在加载更多..."
+            } else {
+                "加载更多"
+            };
+            result_list = result_list.push(
+                button(text(load_more_label).size(12))
+                    .padding([8, 12])
+                    .style(style::subtle_panel_button_style)
+                    .on_press_maybe(
+                        (!self.workspace_history_search.loading_more)
+                            .then_some(Message::LoadMoreWorkspaceHistorySearchResults),
+                    ),
+            );
+        }
+
+        result_list.into()
     }
 
     /// Builds the floating ghost preview that follows the cursor while one project card is being dragged.
@@ -2799,59 +3200,7 @@ impl VulcanWorkbench {
         if !is_selected_root_session {
             return space::vertical().height(0).into();
         }
-
-        let search_query = self
-            .session_history_search_inputs
-            .get(&session_id)
-            .cloned()
-            .unwrap_or_default();
-        let is_searching = self
-            .loading_session_history_search_ids
-            .contains(&session_id);
-        let mut search_button = button(text(if is_searching { "搜索中" } else { "搜索" }).size(12))
-            .padding([7, 12])
-            .style(style::subtle_panel_button_style);
-        if !is_searching && !search_query.trim().is_empty() {
-            search_button =
-                search_button.on_press(Message::SessionHistorySearchSubmitted(session_id));
-        }
-        let search_row = row![
-            text_input("搜索历史：文件路径、工具名、关键词", &search_query)
-                .on_input(move |value| Message::SessionHistorySearchInputChanged(session_id, value))
-                .on_submit(Message::SessionHistorySearchSubmitted(session_id))
-                .padding([8, 10])
-                .width(Fill),
-            search_button,
-        ]
-        .spacing(8)
-        .align_y(Center);
-
-        let mut controls = column![search_row].spacing(8).width(Fill);
-        if is_searching {
-            controls = controls.push(text("正在轻量搜索当前会话历史...").size(12));
-        } else if let Some(error) = self.session_history_search_errors.get(&session_id) {
-            controls = controls.push(text(format!("搜索失败：{error}")).size(12));
-        } else if let Some(page) = self
-            .session_history_search_results
-            .get(&session_id)
-            .filter(|page| page.session_id == session_id)
-        {
-            controls = controls.push(self.view_session_history_search_results(page));
-            if self
-                .loading_session_history_context_ids
-                .contains(&session_id)
-            {
-                controls = controls.push(text("正在加载搜索命中附近上下文...").size(12));
-            } else if let Some(error) = self.session_history_context_errors.get(&session_id) {
-                controls = controls.push(text(format!("上下文加载失败：{error}")).size(12));
-            } else if let Some(context_page) = self
-                .session_history_context_pages
-                .get(&session_id)
-                .filter(|page| page.session_id == session_id)
-            {
-                controls = controls.push(self.view_session_history_context_page(context_page));
-            }
-        }
+        let mut controls = column![].spacing(8).width(Fill);
 
         let is_history_loading = self.loading_older_session_history_ids.contains(&session_id);
         let has_more_history = self.session_history_has_more.contains(&session_id);
@@ -2887,194 +3236,6 @@ impl VulcanWorkbench {
             })
             .width(Fill)
             .into()
-    }
-
-    /// Builds the lightweight history-search result list shown above one transcript.
-    /// 构建显示在转录上方的轻量历史搜索结果列表。
-    pub(super) fn view_session_history_search_results(
-        &self,
-        page: &SessionHistorySearchPage,
-    ) -> Element<'_, Message> {
-        if page.query.trim().is_empty() {
-            return space::vertical().height(0).into();
-        }
-        if page.hits.is_empty() {
-            return text(format!("没有找到与“{}”匹配的历史记录。", page.query))
-                .size(12)
-                .into();
-        }
-
-        let mut result_list = column![
-            text(format!(
-                "“{}” 的轻量命中：{} 条{}",
-                page.query,
-                page.hits.len(),
-                if page.limit_reached {
-                    "（已达上限）"
-                } else {
-                    ""
-                }
-            ))
-            .size(12)
-        ]
-        .spacing(6)
-        .width(Fill);
-        let context_is_loading = self
-            .loading_session_history_context_ids
-            .contains(&page.session_id);
-        for hit in &page.hits {
-            let visibility = if hit.visible { "可见" } else { "隐藏" };
-            let short_message_id = hit.message_id.chars().take(8).collect::<String>();
-            let meta = format!(
-                "轮次 {} · 序号 {} · {} · {} · {} · {}",
-                hit.turn_index,
-                hit.ordinal,
-                hit.record_kind.as_persisted_key(),
-                visibility,
-                short_message_id,
-                hit.created_at
-            );
-            let context_is_active = self
-                .session_history_context_pages
-                .get(&page.session_id)
-                .is_some_and(|context| context.anchor_message_id == hit.message_id);
-            let mut context_button = button(
-                text(if context_is_active {
-                    "已加载"
-                } else if context_is_loading {
-                    "加载中"
-                } else {
-                    "查看附近上下文"
-                })
-                .size(11),
-            )
-            .padding([5, 9])
-            .style(style::subtle_panel_button_style);
-            if !context_is_loading && !context_is_active {
-                context_button = context_button.on_press(Message::SessionHistoryContextRequested {
-                    session_id: page.session_id,
-                    message_id: hit.message_id.clone(),
-                    ordinal: hit.ordinal,
-                    turn_index: hit.turn_index,
-                });
-            }
-            let card = container(
-                column![
-                    row![
-                        text(hit.title.clone()).size(13),
-                        space::horizontal().width(Fill),
-                        text(meta).size(11),
-                        context_button,
-                    ]
-                    .spacing(8)
-                    .align_y(Center),
-                    text(hit.preview.clone()).size(12).width(Fill),
-                ]
-                .spacing(4)
-                .width(Fill),
-            )
-            .padding(8)
-            .width(Fill)
-            .style(style::workbench_composer_panel_style);
-            result_list = result_list.push(card);
-        }
-
-        result_list.into()
-    }
-
-    /// Builds the read-only context panel loaded around a search-result anchor.
-    /// 构建围绕搜索结果锚点加载出的只读上下文面板。
-    pub(super) fn view_session_history_context_page(
-        &self,
-        page: &SessionHistoryContextPage,
-    ) -> Element<'_, Message> {
-        let turn_range = match (page.first_turn_index, page.last_turn_index) {
-            (Some(first), Some(last)) if first == last => format!("轮次 {first}"),
-            (Some(first), Some(last)) => format!("轮次 {first} - {last}"),
-            _ => String::from("未加载到轮次"),
-        };
-        let anchor_status = if page.anchor_found {
-            "已包含命中消息"
-        } else {
-            "命中消息可能属于被折叠的工具明细，仅展示附近默认转录"
-        };
-        let mut panel = column![
-            row![
-                text("搜索命中附近上下文").size(13),
-                space::horizontal().width(Fill),
-                text(format!(
-                    "{} · 锚点轮次 {} · 锚点序号 {} · {} 条 · {}",
-                    turn_range,
-                    page.anchor_turn_index,
-                    page.anchor_ordinal,
-                    page.messages.len(),
-                    anchor_status
-                ))
-                .size(11),
-            ]
-            .align_y(Center)
-        ]
-        .spacing(6)
-        .width(Fill);
-
-        if page.messages.is_empty() {
-            panel = panel.push(text("没有加载到该命中附近的默认转录消息。").size(12));
-        } else {
-            for message in &page.messages {
-                panel = panel.push(self.view_session_history_context_message(page, message));
-            }
-        }
-
-        container(panel)
-            .padding(8)
-            .width(Fill)
-            .style(style::workbench_composer_panel_style)
-            .into()
-    }
-
-    /// Builds one compact message row inside the read-only search-result context panel.
-    /// 构建只读搜索结果上下文面板中的单条紧凑消息行。
-    fn view_session_history_context_message(
-        &self,
-        page: &SessionHistoryContextPage,
-        message: &SessionMessageEntry,
-    ) -> Element<'_, Message> {
-        let is_anchor = message.id == page.anchor_message_id;
-        let title = if message.title.trim().is_empty() {
-            message.kind.label().to_string()
-        } else {
-            message.title.clone()
-        };
-        let short_message_id = message.id.chars().take(8).collect::<String>();
-        let meta = format!(
-            "{} · {} · {} · {}",
-            message.kind.label(),
-            message.record_kind.as_persisted_key(),
-            short_message_id,
-            message.created_at
-        );
-        let marker = if is_anchor { "命中" } else { "附近" };
-        let preview = session_history_context_message_preview(&message.body);
-
-        container(
-            column![
-                row![
-                    text(marker).size(11),
-                    text(title).size(12),
-                    space::horizontal().width(Fill),
-                    text(meta).size(11),
-                ]
-                .spacing(8)
-                .align_y(Center),
-                text(preview).size(12).width(Fill),
-            ]
-            .spacing(4)
-            .width(Fill),
-        )
-        .padding(7)
-        .width(Fill)
-        .style(style::workbench_composer_panel_style)
-        .into()
     }
 
     /// Builds the dedicated subagent transcript panel or its lightweight running placeholder inside the main transcript region.
@@ -4853,6 +5014,24 @@ impl VulcanWorkbench {
             }
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                match key.as_ref() {
+                    keyboard::Key::Character("f") | keyboard::Key::Character("F") => {
+                        Some(Message::OpenWorkspaceHistorySearchPanel)
+                    }
+                    _ => None,
+                }
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
                 physical_key,
                 modifiers,
                 repeat,
@@ -6320,5 +6499,42 @@ impl VulcanWorkbench {
         .height(44)
         .width(Fill)
         .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_history_search_preview_segments;
+
+    /// Verifies that preview markup is split into alternating plain and highlighted segments.
+    /// 验证预览标记会被拆分成按顺序交替出现的普通片段与高亮片段。
+    #[test]
+    fn workspace_history_search_preview_segments_split_marked_ranges() {
+        let segments =
+            workspace_history_search_preview_segments("开始 <mark>命中</mark> 结束", "回退文本");
+
+        assert_eq!(
+            segments,
+            vec![
+                (String::from("开始 "), false),
+                (String::from("命中"), true),
+                (String::from(" 结束"), false),
+            ]
+        );
+    }
+
+    /// Verifies that malformed preview markup still preserves the highlighted tail instead of exposing raw tags.
+    /// 验证格式不完整的预览标记仍会保留高亮尾段，而不会把原始标签直接暴露出来。
+    #[test]
+    fn workspace_history_search_preview_segments_tolerate_unclosed_mark() {
+        let segments = workspace_history_search_preview_segments("前缀 <mark>高亮尾段", "回退文本");
+
+        assert_eq!(
+            segments,
+            vec![
+                (String::from("前缀 "), false),
+                (String::from("高亮尾段"), true),
+            ]
+        );
     }
 }

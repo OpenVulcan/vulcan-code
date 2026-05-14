@@ -1,7 +1,9 @@
 //! Shared streaming adapter support helpers reused by provider-specific transport adapters.
 //! 供各 Provider 专用传输适配器复用的共享流式适配器支持辅助模块。
 
-use crate::agent_runtime::provider_protocol_bridge::inject_previous_response_id_into_additional_params;
+use crate::agent_runtime::provider_protocol_bridge::{
+    inject_previous_response_id_into_additional_params, scope_continuation_to_active_provider,
+};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::{
@@ -93,9 +95,11 @@ pub(crate) fn build_openai_responses_streaming_request(
     request_headers: &HeaderMap,
     live_sender: &ProviderLiveDeltaSender,
 ) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
+    let scoped_continuation =
+        scope_continuation_to_active_provider(&snapshot.continuation, provider_id, model_id);
     let effective_additional_params = inject_previous_response_id_into_additional_params(
         config.additional_params.clone(),
-        &snapshot.continuation,
+        &scoped_continuation,
     );
     build_host_controlled_turn_request(
         provider_id,

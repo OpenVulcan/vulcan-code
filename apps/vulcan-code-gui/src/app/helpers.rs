@@ -510,7 +510,7 @@ pub(super) fn pick_task_project_folder(
 /// Normalizes one project path to a canonical form when the platform can resolve it.
 /// 当平台能够解析时，将某个项目路径规范化为标准形式。
 pub(super) fn normalize_task_project_path(path: &Path) -> std::path::PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    crate::workspace_path::canonicalize_workspace_path(path)
 }
 
 /// Builds one compact ASCII slug from the project title so generated identifiers stay readable.

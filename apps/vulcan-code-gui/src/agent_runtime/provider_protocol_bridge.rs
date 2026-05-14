@@ -18,6 +18,38 @@ pub(crate) fn build_host_tool_result_id(tool_call_id: &str) -> String {
     format!("tool-result-{tool_call_id}")
 }
 
+/// Scopes one persisted continuation cursor to the currently active provider/model pair so cross-protocol session switches do not reuse a foreign upstream cursor.
+/// 将一条已持久化 continuation 游标限制到当前激活的 provider/model 组合，避免跨协议切换时误复用外部上游游标。
+pub(crate) fn scope_continuation_to_active_provider(
+    continuation: &CoreProviderContinuation,
+    provider_id: &str,
+    model_id: &str,
+) -> CoreProviderContinuation {
+    let Some(saved_provider_id) = continuation.provider_id.as_deref() else {
+        return CoreProviderContinuation::default();
+    };
+    if saved_provider_id != provider_id {
+        return CoreProviderContinuation::default();
+    }
+    if continuation
+        .model_id
+        .as_deref()
+        .is_some_and(|saved_model_id| saved_model_id != model_id)
+    {
+        return CoreProviderContinuation::default();
+    }
+
+    CoreProviderContinuation {
+        provider_id: Some(provider_id.to_string()),
+        model_id: Some(model_id.to_string()),
+        last_provider_message_id: continuation
+            .last_provider_message_id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        updated_at: continuation.updated_at.clone(),
+    }
+}
+
 /// Injects `previous_response_id` into one additional-params payload when the current continuation snapshot already carries a usable upstream response identifier.
 /// 当当前 continuation 快照已经携带可用的上游响应标识时，将 `previous_response_id` 注入到附加参数载荷中。
 pub(crate) fn inject_previous_response_id_into_additional_params(

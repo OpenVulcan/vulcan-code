@@ -1,6 +1,7 @@
 //! Snapshot-only provider adapter used by request-preview construction before real transport dispatch.
 //! 面向真实传输分发前请求预览构建的仅快照 Provider 适配器模块。
 
+use crate::agent_runtime::provider_protocol_bridge::scope_continuation_to_active_provider;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -87,7 +88,11 @@ impl VulcanProviderAdapter for PreviewSnapshotProviderAdapter {
             tool_schemas: self.tool_schemas.clone(),
             additional_params: config.additional_params.clone(),
             request_headers: self.request_headers.clone(),
-            continuation: snapshot.continuation.clone(),
+            continuation: scope_continuation_to_active_provider(
+                &snapshot.continuation,
+                config.provider_id.as_str(),
+                config.model_id.as_str(),
+            ),
         })
     }
 

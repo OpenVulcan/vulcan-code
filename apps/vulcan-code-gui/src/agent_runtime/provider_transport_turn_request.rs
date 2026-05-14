@@ -58,6 +58,7 @@ pub(crate) fn build_host_controlled_turn_request(
         provider_id,
         model_id,
         config.system_prompt.as_str(),
+        &snapshot.continuation,
         current_history_messages,
         current_prompt_message,
         config.temperature,

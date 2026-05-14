@@ -13,8 +13,11 @@ pub(crate) fn build_runtime_system_preamble(preparation: &ExecutionPreparation) 
         load_provider_base_system_prompt(&preparation.model_blueprint)
             .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent.")),
     );
-    sections.push(format!("当前工作区：{}", preparation.workspace_path));
-    sections.push(format!("当前执行模式：{}", preparation.execution_mode));
+    sections.push(format!("Current workspace: {}", preparation.workspace_path));
+    sections.push(format!(
+        "Current execution mode: {}",
+        preparation.execution_mode
+    ));
 
     sections.join("\n")
 }

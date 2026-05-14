@@ -357,6 +357,126 @@ pub fn subtle_panel_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
+/// Returns the compact rounded panel style used by the left-drawer workspace history search surface.
+/// 返回左侧抽屉工作台历史搜索表面使用的紧凑圆角面板样式。
+pub fn main_task_search_panel_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.weak.color.scale_alpha(0.98),
+        )),
+        border: Border {
+            radius: 14.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.12,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 14.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the compact filled badge style used by the left-drawer search shortcut hint.
+/// 返回左侧抽屉搜索快捷键提示使用的紧凑填充徽标样式。
+pub fn main_task_search_shortcut_badge_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.primary.weak.color.scale_alpha(0.92),
+        )),
+        text_color: Some(palette.primary.strong.text),
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: palette.primary.strong.color.scale_alpha(0.20),
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the row-button style shared by the left-drawer search trigger, scope options, and result hits.
+/// 返回左侧抽屉搜索触发器、范围选项与结果命中共用的行按钮样式。
+pub fn main_task_search_result_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_active: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let active_background = palette.primary.base.color.scale_alpha(0.16);
+    let active_border = palette.primary.base.color.scale_alpha(0.42);
+    let base = button::Style {
+        background: Some(Background::Color(if is_active {
+            active_background
+        } else {
+            palette.background.base.color.scale_alpha(0.40)
+        })),
+        text_color: if is_active {
+            palette.primary.strong.text
+        } else {
+            palette.background.base.text
+        },
+        border: Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: if is_active {
+                active_border
+            } else {
+                palette.background.strong.color.scale_alpha(0.18)
+            },
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(if is_active {
+                palette.primary.base.color.scale_alpha(0.22)
+            } else {
+                palette.background.strong.color.scale_alpha(0.12)
+            })),
+            border: Border {
+                color: if is_active {
+                    palette.primary.base.color.scale_alpha(0.56)
+                } else {
+                    palette.background.strong.color.scale_alpha(0.28)
+                },
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(if is_active {
+                palette.primary.base.color.scale_alpha(0.28)
+            } else {
+                palette.background.strong.color.scale_alpha(0.18)
+            })),
+            border: Border {
+                color: if is_active {
+                    palette.primary.base.color.scale_alpha(0.62)
+                } else {
+                    palette.background.strong.color.scale_alpha(0.34)
+                },
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.34),
+            ..base
+        },
+    }
+}
+
 /// Returns the D-shaped handle style used by the compact subagent dispatch navigation overlay.
 /// 返回紧凑子代理调度导航覆盖层使用的 D 形把手样式。
 pub fn subagent_overlay_navigation_handle_style(

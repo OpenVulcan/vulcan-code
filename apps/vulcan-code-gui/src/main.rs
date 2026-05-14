@@ -23,6 +23,7 @@ mod tool_result_format;
 mod tooling;
 mod vulcan_tools_bridge;
 mod wheel_passthrough;
+mod workspace_path;
 mod workspace_store;
 
 /// Starts the GUI application bootstrap sequence.
