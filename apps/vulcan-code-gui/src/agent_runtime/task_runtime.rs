@@ -103,6 +103,9 @@ struct TaskSessionRecord {
     /// Optional subagent label selected for the task.
     /// 任务选用的可选子代理标签。
     subagent: Option<String>,
+    /// Stable human-readable title persisted for cards, badges, and child-panel headers.
+    /// 为卡片、徽标与子面板标题持久化保存的稳定人类可读标题。
+    display_title: String,
     /// Fully resolved controller configuration reused when this task is resumed.
     /// 任务续跑时复用的完整控制器配置。
     controller_config: Option<CoreControllerConfig>,
@@ -148,6 +151,9 @@ pub struct TaskExecutionRequest {
     /// Optional subagent label used to annotate the task session.
     /// 用于标注任务会话的可选子代理标签。
     pub subagent: Option<String>,
+    /// Stable human-readable title reused across parent cards and child-panel surfaces.
+    /// 在父卡片与子面板表面之间复用的稳定人类可读标题。
+    pub display_title: String,
     /// Optional parent task identifier for nested task chains.
     /// 嵌套任务链的可选父任务标识。
     pub parent_task_id: Option<SessionId>,
@@ -618,6 +624,7 @@ impl TaskRuntime {
                     invocation.depth,
                     invocation.description.clone(),
                     invocation.subagent.clone(),
+                    invocation.display_title.clone(),
                     invocation
                         .controller_config
                         .clone()
@@ -636,6 +643,7 @@ impl TaskRuntime {
         record.last_result_text = outcome.final_output_text.clone();
         record.updated_at = now;
         record.last_status = status;
+        record.display_title = invocation.display_title.clone();
         if record.description.is_none() {
             record.description = invocation.description.clone();
         }
@@ -668,6 +676,7 @@ impl TaskRuntime {
                     invocation.depth,
                     invocation.description.clone(),
                     invocation.subagent.clone(),
+                    invocation.display_title.clone(),
                     invocation.controller_config.clone(),
                     invocation.snapshot.clone(),
                     invocation.prompt.clone(),
@@ -680,6 +689,7 @@ impl TaskRuntime {
         record.last_result_text = error.to_string();
         record.updated_at = current_unix_millis_text();
         record.last_status = String::from("failed");
+        record.display_title = invocation.display_title.clone();
         if record.controller_config.is_none() {
             record.controller_config = invocation.controller_config.clone();
         }
@@ -694,7 +704,9 @@ pub fn build_task_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCa
         descriptor: VulcanToolDescriptor {
             id: String::from("task"),
             name: String::from("task"),
-            description: String::from("创建或续跑一个可恢复的子任务会话。"),
+            description: String::from(
+                "创建或续跑一个可恢复的子任务会话。调用时应始终提供 description 与 subagent，确保子任务拥有稳定命名、续跑身份与界面标题。",
+            ),
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: task_tool_args_schema(),
@@ -722,11 +734,11 @@ fn task_tool_args_schema() -> Value {
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "用于启动或续跑子任务的提示词。"
+                "description": "用于启动或续跑子任务的详细提示词，应明确说明目标、边界、返回格式以及是否允许修改代码。"
             },
             "description": {
                 "type": "string",
-                "description": "可选的任务描述，用于展示和系统提示词增强。"
+                "description": "建议必填的简短任务标题（3-8 个词），用于稳定的任务命名、卡片标题与续跑展示。"
             },
             "task_id": {
                 "type": "string",
@@ -734,10 +746,10 @@ fn task_tool_args_schema() -> Value {
             },
             "subagent": {
                 "type": "string",
-                "description": "可选的子代理标签，仅用于展示与提示词增强。"
+                "description": "建议必填的子代理名称或角色标签，用于稳定显示子代理类型与任务分工。"
             }
         },
-        "required": ["prompt"],
+        "required": ["prompt", "description", "subagent"],
         "additionalProperties": false
     })
 }
@@ -814,6 +826,73 @@ fn normalize_public_task_identifier(task_id_text: &str) -> Result<String, String
     Ok(normalized_task_id.to_string())
 }
 
+/// Trims one optional task-facing label and drops it when only whitespace remains.
+/// 裁剪一条可选任务标签，并在仅剩空白时将其丢弃。
+fn normalize_optional_task_label(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Builds one compact prompt preview that can serve as a last-resort task title fallback.
+/// 构建一条紧凑的提示词预览文本，作为任务标题的最后兜底来源。
+fn build_task_prompt_preview(prompt: &str) -> Option<String> {
+    let compact = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(prompt)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let compact = compact.trim();
+    if compact.is_empty() {
+        return None;
+    }
+    const MAX_PREVIEW_CHARS: usize = 48;
+    let preview = compact.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
+    if compact.chars().count() > MAX_PREVIEW_CHARS {
+        return Some(format!("{preview}..."));
+    }
+    Some(preview)
+}
+
+/// Builds one stable human-readable task title from the best available task metadata.
+/// 根据当前可用的最佳任务元数据构建一条稳定的人类可读任务标题。
+fn build_task_display_title(
+    description: Option<&str>,
+    subagent: Option<&str>,
+    public_task_id: &str,
+    prompt: &str,
+    task_id: SessionId,
+) -> String {
+    let description = normalize_optional_task_label(description);
+    let subagent = normalize_optional_task_label(subagent);
+    match (description.as_deref(), subagent.as_deref()) {
+        (Some(description), Some(subagent)) if description != subagent => {
+            return format!("{description}（{subagent}）");
+        }
+        (Some(description), _) => return description.to_string(),
+        (_, Some(subagent)) => return subagent.to_string(),
+        _ => {}
+    }
+
+    let normalized_public_task_id = public_task_id.trim();
+    if !normalized_public_task_id.is_empty()
+        && SessionId::parse_str(normalized_public_task_id).is_err()
+    {
+        return normalized_public_task_id.to_string();
+    }
+    if let Some(prompt_preview) = build_task_prompt_preview(prompt) {
+        return prompt_preview;
+    }
+    if !normalized_public_task_id.is_empty() {
+        return normalized_public_task_id.to_string();
+    }
+    format!("子代理 {}", task_id)
+}
+
 /// Prepares one task execution request from the current invocation and the stored registry state.
 /// 根据当前调用与已存储注册表状态准备一份任务执行请求。
 fn prepare_task_execution_request(
@@ -827,7 +906,10 @@ fn prepare_task_execution_request(
         public_task_id,
         is_resumed,
     } = resolved_identifier;
-    let (parent_task_id, depth, snapshot, controller_config) = {
+    let normalized_description = normalize_optional_task_label(args.description.as_deref());
+    let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref());
+    let prompt = args.prompt;
+    let (parent_task_id, depth, snapshot, controller_config, description, subagent, display_title) = {
         let mut sessions = task_runtime
             .sessions
             .write()
@@ -836,17 +918,36 @@ fn prepare_task_execution_request(
             if is_resumed {
                 record.updated_at = current_unix_millis_text();
                 if record.description.is_none() {
-                    record.description = args.description.clone();
+                    record.description = normalized_description.clone();
                 }
                 if record.subagent.is_none() {
-                    record.subagent = args.subagent.clone();
+                    record.subagent = normalized_subagent.clone();
                 }
             }
+            let description = record
+                .description
+                .clone()
+                .or_else(|| normalized_description.clone());
+            let subagent = record
+                .subagent
+                .clone()
+                .or_else(|| normalized_subagent.clone());
+            let display_title = build_task_display_title(
+                description.as_deref(),
+                subagent.as_deref(),
+                &public_task_id,
+                &prompt,
+                task_id,
+            );
+            record.display_title = display_title.clone();
             (
                 record.parent_task_id,
                 record.depth,
                 record.snapshot.clone(),
                 record.controller_config.clone(),
+                description,
+                subagent,
+                display_title,
             )
         } else {
             let current_depth = sessions
@@ -867,6 +968,13 @@ fn prepare_task_execution_request(
             let parent_task_id = sessions
                 .get(&current_session_id)
                 .map(|record| record.task_id);
+            let display_title = build_task_display_title(
+                normalized_description.as_deref(),
+                normalized_subagent.as_deref(),
+                &public_task_id,
+                &prompt,
+                task_id,
+            );
             let timestamp = current_unix_millis_text();
             sessions.insert(
                 task_id,
@@ -876,11 +984,12 @@ fn prepare_task_execution_request(
                     origin_session_id: current_session_id,
                     parent_task_id,
                     depth,
-                    description: args.description.clone(),
-                    subagent: args.subagent.clone(),
+                    description: normalized_description.clone(),
+                    subagent: normalized_subagent.clone(),
+                    display_title: display_title.clone(),
                     controller_config: None,
                     snapshot: CoreConversationSnapshot::default(),
-                    last_prompt: args.prompt.clone(),
+                    last_prompt: prompt.clone(),
                     last_result_text: String::new(),
                     created_at: timestamp.clone(),
                     updated_at: timestamp,
@@ -892,6 +1001,9 @@ fn prepare_task_execution_request(
                 depth,
                 CoreConversationSnapshot::default(),
                 None,
+                normalized_description.clone(),
+                normalized_subagent.clone(),
+                display_title,
             )
         }
     };
@@ -900,9 +1012,10 @@ fn prepare_task_execution_request(
         current_session_id,
         task_id,
         public_task_id,
-        prompt: args.prompt,
-        description: args.description,
-        subagent: args.subagent,
+        prompt,
+        description,
+        subagent,
+        display_title,
         parent_task_id,
         depth,
         snapshot,
@@ -921,6 +1034,7 @@ fn build_task_session_record(
     depth: usize,
     description: Option<String>,
     subagent: Option<String>,
+    display_title: String,
     controller_config: Option<CoreControllerConfig>,
     snapshot: CoreConversationSnapshot,
     last_prompt: String,
@@ -935,6 +1049,7 @@ fn build_task_session_record(
         depth,
         description,
         subagent,
+        display_title,
         controller_config,
         snapshot,
         last_prompt,
@@ -956,6 +1071,7 @@ fn build_task_invocation_result(
     let model_output = json!({
         "task_id": invocation.public_task_id.clone(),
         "task_session_id": outcome.task_id.to_string(),
+        "display_title": invocation.display_title.clone(),
         "status": task_status,
         "execution_status": execution_status,
         "origin_session_id": invocation.current_session_id.to_string(),
@@ -1446,6 +1562,7 @@ fn build_task_host_payload(
     let mut payload = json!({
         "task_id": invocation.public_task_id.clone(),
         "task_session_id": invocation.task_id.to_string(),
+        "display_title": invocation.display_title.clone(),
         "status": task_invocation_status_text(invocation.is_resumed),
         "execution_status": execution_status,
         "origin_session_id": invocation.current_session_id.to_string(),
@@ -1474,17 +1591,7 @@ fn build_task_delegate_runtime_event(
     detail: &str,
     payload: Value,
 ) -> RuntimeEvent {
-    let task_label = invocation
-        .subagent
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            invocation
-                .description
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .unwrap_or("子代理");
+    let task_label = invocation.display_title.as_str();
     let title = match kind {
         RuntimeEventKind::DelegateStarted => {
             format!("子代理启动 · {} · {task_label}", invocation.task_id)
@@ -1684,6 +1791,7 @@ mod tests {
                     1,
                     None,
                     None,
+                    String::from("research_readme"),
                     None,
                     CoreConversationSnapshot::default(),
                     String::from("inspect readme"),

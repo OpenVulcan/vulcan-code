@@ -576,6 +576,16 @@ fn task_session_public_id_from_payload(payload: &Value) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+/// Returns the stable human-readable task title stored inside one task-session payload when available.
+/// 返回 task 会话载荷中保存的稳定人类可读任务标题。
+fn task_session_display_title_from_payload(payload: &Value) -> Option<&str> {
+    payload
+        .get("display_title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 /// Returns the internal child-session identifier stored inside one task-session payload, falling back to legacy payloads that only persisted `task_id`.
 /// 返回 task 会话载荷中保存的内部子会话标识；若旧版本只持久化了 `task_id`，则回退兼容解析。
 fn task_session_internal_id_from_payload(payload: &Value) -> Option<SessionId> {
@@ -669,6 +679,13 @@ fn task_session_subagent_from_tool_metadata(metadata: &Value) -> Option<&str> {
         })
 }
 
+/// Returns one stable human-readable task title extracted from persisted payload metadata when present.
+/// 当存在时，从持久化 payload 元数据中返回一条稳定的人类可读任务标题。
+fn task_session_display_title_from_tool_metadata(metadata: &Value) -> Option<&str> {
+    task_session_payload_from_tool_metadata(metadata)
+        .and_then(task_session_display_title_from_payload)
+}
+
 /// Builds the Markdown summary shown by the legacy tool modal when only a persisted task-session result remains available.
 /// 当仅剩持久化 task-session 结果可用时，构建旧工具弹层展示的 Markdown 摘要。
 fn task_session_modal_markdown_from_tool_metadata(metadata: &Value) -> Option<String> {
@@ -697,20 +714,71 @@ fn subagent_task_stopped_summary_text() -> &'static str {
     "子代理已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。"
 }
 
+/// Returns the emoji-prefixed UI badge text for one subagent execution-status string.
+/// 返回单条子代理 execution-status 字符串对应的 emoji 前缀界面徽标文案。
+fn subagent_execution_status_badge_label(execution_status: &str) -> &'static str {
+    match execution_status {
+        "running" => "🔄 运行中",
+        "stopped" => "⏹️ 已停止",
+        "failed" => "❌ 失败",
+        "completed" => "✅ 完成",
+        _ => "✅ 完成",
+    }
+}
+
+/// Returns the emoji-prefixed UI badge text for one subagent run-state value.
+/// 返回单个子代理运行状态对应的 emoji 前缀界面徽标文案。
+fn subagent_run_state_badge_label(run_state: SubagentTaskRunState) -> &'static str {
+    match run_state {
+        SubagentTaskRunState::Running => "🔄 运行中",
+        SubagentTaskRunState::Stopped => "⏹️ 已停止",
+        SubagentTaskRunState::Completed => "✅ 完成",
+        SubagentTaskRunState::Failed => "❌ 失败",
+    }
+}
+
 /// Builds one compact human-facing task-session label from the optional task description and subagent name.
 /// 根据可选任务描述与子代理名称构建一条紧凑的人类可读 task-session 标签。
-fn task_session_tool_display_label(description: Option<&str>, subagent: Option<&str>) -> String {
+fn task_session_tool_display_label(
+    display_title: Option<&str>,
+    description: Option<&str>,
+    subagent: Option<&str>,
+    public_task_id: Option<&str>,
+    prompt: Option<&str>,
+) -> String {
+    if let Some(display_title) = display_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return display_title.to_string();
+    }
     let description = description.map(str::trim).filter(|value| !value.is_empty());
     let subagent = subagent.map(str::trim).filter(|value| !value.is_empty());
+    let public_task_id = public_task_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     match (description, subagent) {
         (Some(description), Some(subagent)) if description != subagent => {
-            format!("{description}（{subagent}）")
+            return format!("{description}（{subagent}）");
         }
-        (Some(description), _) => description.to_string(),
-        (_, Some(subagent)) => subagent.to_string(),
-        _ => String::from("子代理"),
+        (Some(description), _) => return description.to_string(),
+        (_, Some(subagent)) => return subagent.to_string(),
+        _ => {}
     }
+
+    if let Some(public_task_id) = public_task_id {
+        if SessionId::parse_str(public_task_id).is_err() {
+            return public_task_id.to_string();
+        }
+    }
+    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
+        return pending_prompt_preview_text(prompt);
+    }
+    if let Some(public_task_id) = public_task_id {
+        return public_task_id.to_string();
+    }
+    String::from("子代理")
 }
 
 /// Resolves the localized task-session status copy shown inside the dedicated `task` transcript card title.
@@ -720,18 +788,12 @@ fn task_session_tool_display_status(
     metadata: &Value,
 ) -> &'static str {
     if let Some(execution_status) = task_session_execution_status_from_tool_metadata(metadata) {
-        return match execution_status {
-            "running" => "进行中",
-            "stopped" => "已停止",
-            "failed" => "已失败",
-            "completed" => "已完成",
-            _ => "已完成",
-        };
+        return subagent_execution_status_badge_label(execution_status);
     }
 
     match record_kind {
-        SessionMessageRecordKind::ToolResultOutput => "已完成",
-        _ => "进行中",
+        SessionMessageRecordKind::ToolResultOutput => "✅ 完成",
+        _ => "🔄 运行中",
     }
 }
 
@@ -743,13 +805,19 @@ fn task_session_tool_display_title(
 ) -> Option<String> {
     let label = if let Some(payload) = task_session_payload_from_tool_metadata(metadata) {
         task_session_tool_display_label(
+            task_session_display_title_from_payload(payload),
             payload.get("description").and_then(Value::as_str),
             payload.get("subagent").and_then(Value::as_str),
+            task_session_public_id_from_payload(payload),
+            payload.get("prompt").and_then(Value::as_str),
         )
     } else if let Some(arguments) = task_session_arguments_from_tool_metadata(metadata) {
         task_session_tool_display_label(
+            task_session_display_title_from_tool_metadata(metadata),
             arguments.get("description").and_then(Value::as_str),
             arguments.get("subagent").and_then(Value::as_str),
+            arguments.get("task_id").and_then(Value::as_str),
+            arguments.get("prompt").and_then(Value::as_str),
         )
     } else {
         return None;
@@ -863,17 +931,24 @@ fn merge_tool_result_into_display_entry(
     existing: &mut SessionMessageEntry,
     tool_result_message: SessionMessageEntry,
 ) {
+    let tool_result_was_task_session = tool_display_message_is_task_session(&tool_result_message);
+    let tool_result_title = tool_result_message.title.clone();
     existing.record_kind = SessionMessageRecordKind::ToolCallOutput;
-    if (existing.title.trim().is_empty()
-        || tool_display_message_is_task_session(&tool_result_message))
-        && !tool_result_message.title.trim().is_empty()
-    {
-        existing.title = tool_result_message.title;
-    }
     existing.body = merge_tool_display_body(&existing.body, &tool_result_message.body);
     existing.metadata =
         merge_tool_display_metadata(existing.metadata.take(), tool_result_message.metadata);
     existing.metadata = attach_tool_display_state_metadata(existing.metadata.take(), "completed");
+    if let Some(metadata) = existing.metadata.as_ref() {
+        if let Some(task_title) = task_session_tool_display_title(existing.record_kind, metadata) {
+            existing.title = task_title;
+            return;
+        }
+    }
+    if (existing.title.trim().is_empty() || tool_result_was_task_session)
+        && !tool_result_title.trim().is_empty()
+    {
+        existing.title = tool_result_title;
+    }
 }
 
 /// Combines one tool-call body and one tool-result body into the single Markdown payload shown inside the merged display card.
@@ -897,7 +972,26 @@ fn merge_tool_display_metadata(
 ) -> Option<Value> {
     match (tool_call_metadata, tool_result_metadata) {
         (Some(Value::Object(mut tool_call_object)), Some(Value::Object(tool_result_object))) => {
+            let preferred_task_session_payload = match (
+                task_session_payload_execution_rank_from_metadata_object(&tool_call_object),
+                task_session_payload_execution_rank_from_metadata_object(&tool_result_object),
+            ) {
+                (Some(call_rank), Some(result_rank)) if call_rank > result_rank => {
+                    task_session_payload_from_metadata_object(&tool_call_object).cloned()
+                }
+                (Some(call_rank), Some(result_rank)) if result_rank > call_rank => {
+                    task_session_payload_from_metadata_object(&tool_result_object).cloned()
+                }
+                _ => None,
+            };
             tool_call_object.extend(tool_result_object);
+            if let Some(preferred_payload) = preferred_task_session_payload {
+                tool_call_object.insert(
+                    String::from("kind"),
+                    Value::String(String::from("task_session")),
+                );
+                tool_call_object.insert(String::from("payload"), preferred_payload);
+            }
             Some(Value::Object(tool_call_object))
         }
         (Some(metadata), None) => Some(metadata),
@@ -905,6 +999,36 @@ fn merge_tool_display_metadata(
         (Some(_), Some(metadata)) => Some(metadata),
         (None, None) => None,
     }
+}
+
+/// Returns the nested task-session payload stored inside one tool-display metadata object when available.
+/// 当存在时，返回单份工具显示元数据对象中嵌套保存的 task-session payload。
+fn task_session_payload_from_metadata_object(
+    metadata: &serde_json::Map<String, Value>,
+) -> Option<&Value> {
+    metadata
+        .get("payload")
+        .filter(|payload| payload.is_object())
+}
+
+/// Returns one comparable execution-rank score for the task-session payload embedded in tool-display metadata.
+/// 返回工具显示元数据中嵌入的 task-session payload 的可比较执行阶段优先级分值。
+fn task_session_payload_execution_rank_from_metadata_object(
+    metadata: &serde_json::Map<String, Value>,
+) -> Option<u8> {
+    let execution_status = task_session_payload_from_metadata_object(metadata)
+        .and_then(|payload| payload.get("execution_status"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(match execution_status {
+        "running" => 0,
+        "created" => 0,
+        "completed" => 2,
+        "stopped" => 2,
+        "failed" => 2,
+        _ => 1,
+    })
 }
 
 /// Returns the stable display state used by one human-facing tool execution card.
@@ -939,16 +1063,6 @@ fn parse_session_id_text(value: Option<&str>) -> Option<SessionId> {
         .and_then(|value| SessionId::parse_str(value).ok())
 }
 
-/// Returns one compact readable suffix for a stable session identifier.
-/// 返回稳定会话标识的紧凑可读后缀。
-fn short_session_id(session_id: SessionId) -> String {
-    let session_id = session_id.to_string();
-    session_id
-        .get(..session_id.len().min(8))
-        .unwrap_or(session_id.as_str())
-        .to_string()
-}
-
 /// Parses one persisted task-session payload object into a cacheable subagent task panel state.
 /// 将一份持久化 task 会话载荷对象解析为可缓存的子代理任务面板状态。
 fn parse_subagent_task_panel_payload(
@@ -971,16 +1085,16 @@ fn parse_subagent_task_panel_payload(
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|value| !value.trim().is_empty());
-    let subagent_label = payload
-        .get("subagent")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| description.clone())
-        .unwrap_or_else(|| format!("子代理 {}", short_session_id(task_id)));
     let public_task_id = task_session_public_id_from_payload(payload)
         .map(str::to_string)
         .unwrap_or_else(|| task_id.to_string());
+    let subagent_label = task_session_tool_display_label(
+        task_session_display_title_from_payload(payload),
+        description.as_deref(),
+        payload.get("subagent").and_then(Value::as_str),
+        Some(public_task_id.as_str()),
+        payload.get("prompt").and_then(Value::as_str),
+    );
 
     Some(SubagentTaskPanelState {
         task_id,
@@ -9582,11 +9696,11 @@ impl VulcanWorkbench {
 mod tests {
     use super::{
         composer_text_has_submittable_content, composer_visible_line_count,
-        merge_tool_display_messages,
+        merge_tool_display_messages, task_session_payload_from_tool_metadata,
     };
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use iced::widget::text_editor;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     /// Verifies that an empty composer still reserves one visible line.
     /// 验证空提示词编辑器仍会保留一条可见逻辑行。
@@ -9778,13 +9892,76 @@ mod tests {
 
         let merged = merge_tool_display_messages(messages);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].title, "调度 审查仓库（explorer） 已完成");
+        assert_eq!(merged[0].title, "调度 审查仓库（explorer） ✅ 完成");
         assert_eq!(
             merged[0]
                 .metadata
                 .as_ref()
                 .and_then(|metadata| metadata.get("tool_display_state"))
                 .and_then(|value| value.as_str()),
+            Some("completed")
+        );
+    }
+
+    #[test]
+    fn merge_tool_display_messages_prefers_terminal_task_payload_over_stale_running_result() {
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("task-call-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::from("调用 task 工具"),
+                body: String::from("## 调用参数"),
+                metadata: Some(json!({
+                    "tool_call_id": "call-task-1",
+                    "tool_name": "task",
+                    "kind": "task_session",
+                    "payload": {
+                        "task_id": "count_10",
+                        "task_session_id": "00000000-0000-0000-0000-000000000001",
+                        "display_title": "数数到10（worker）",
+                        "description": "数数到10",
+                        "subagent": "worker",
+                        "execution_status": "completed",
+                    },
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("task-result-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("调用 task 工具"),
+                body: String::from("## 工具返回\n\n运行中。"),
+                metadata: Some(json!({
+                    "tool_call_id": "call-task-1",
+                    "tool_name": "task",
+                    "kind": "task_session",
+                    "payload": {
+                        "task_id": "count_10",
+                        "task_session_id": "00000000-0000-0000-0000-000000000001",
+                        "display_title": "数数到10（worker）",
+                        "description": "数数到10",
+                        "subagent": "worker",
+                        "execution_status": "running",
+                    },
+                })),
+                created_at: String::from("2"),
+            },
+        ];
+
+        let merged = merge_tool_display_messages(messages);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].title, "调度 数数到10（worker） ✅ 完成");
+        assert_eq!(
+            merged[0]
+                .metadata
+                .as_ref()
+                .and_then(task_session_payload_from_tool_metadata)
+                .and_then(|payload| payload.get("execution_status"))
+                .and_then(Value::as_str),
             Some("completed")
         );
     }

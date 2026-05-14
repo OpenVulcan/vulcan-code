@@ -2537,12 +2537,7 @@ impl VulcanWorkbench {
             SubagentTaskRunState::Completed => "子代理已结束，但当前没有可回看的转录内容。",
             SubagentTaskRunState::Failed => "子代理已失败，当前仅保留失败摘要。",
         };
-        let status_label = match state.run_state {
-            SubagentTaskRunState::Running => "运行中",
-            SubagentTaskRunState::Stopped => "已停止",
-            SubagentTaskRunState::Completed => "已完成",
-            SubagentTaskRunState::Failed => "已失败",
-        };
+        let status_label = super::subagent_run_state_badge_label(state.run_state);
         let title = state.subagent_label.clone();
         let description = state.description.clone();
         let result_text = state.result_text.clone();

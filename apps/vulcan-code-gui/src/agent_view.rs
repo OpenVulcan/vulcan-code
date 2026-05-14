@@ -530,7 +530,7 @@ mod tests {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolResultOutput,
             visible: true,
-            title: String::from("🤖 调度 审查仓库（explorer） 已完成"),
+            title: String::from("🤖 调度 审查仓库（explorer） ✅ 完成"),
             body: String::from("## 工具返回\n\n子代理已完成。"),
             metadata: Some(json!({
                 "tool_call_id": "call-task-1",

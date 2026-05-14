@@ -63,6 +63,35 @@ impl VulcanManagedToolRuntimeBridge {
     }
 }
 
+/// Builds one controller-visible error result so host-managed tool failures can be returned to the model instead of aborting the whole turn.
+/// 构建一条控制器可见的错误结果，使宿主管理工具失败能够回传给模型，而不是直接中断整轮执行。
+fn build_tool_failure_invocation_result(
+    request: &CoreToolInvocationRequest,
+    message: impl Into<String>,
+) -> CoreToolInvocationResult {
+    let message = message.into();
+    let model_output = format!(
+        "工具 `{}` 调用失败。\n原因：{}\n请根据错误原因修正参数、缩小范围，或改用其它更合适的工具后继续。",
+        request.tool_name, message
+    );
+    CoreToolInvocationResult {
+        tool_call_id: request.tool_call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        model_output,
+        host_result: Some(json!({
+            "kind": "tool_error",
+            "payload": {
+                "tool_call_id": request.tool_call_id,
+                "tool_name": request.tool_name,
+                "status": "failed",
+                "error": message,
+                "arguments": request.arguments,
+            }
+        })),
+        is_error: true,
+    }
+}
+
 #[async_trait::async_trait]
 impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
     /// Executes one controller-owned tool request through the shared host-managed tool bridge.
@@ -72,20 +101,21 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
         let Some(definition) = self.definitions_by_id.get(&request.tool_name) else {
-            return Err(VulcanCoreError::InvalidState {
-                message: format!(
+            return Ok(build_tool_failure_invocation_result(
+                request,
+                format!(
                     "工具 `{}` 当前未在已解析定义集合中注册。",
                     request.tool_name
                 ),
-            });
+            ));
         };
-        let result = self
+        let result = match self
             .invoke_definition(definition, request.arguments.clone())
             .await
-            .map_err(|message| VulcanCoreError::ToolFailure {
-                tool_name: request.tool_name.clone(),
-                message,
-            })?;
+        {
+            Ok(result) => result,
+            Err(message) => return Ok(build_tool_failure_invocation_result(request, message)),
+        };
 
         Ok(CoreToolInvocationResult {
             tool_call_id: request.tool_call_id.clone(),
@@ -132,35 +162,59 @@ mod tests {
         VulcanToolsManager,
         Vec<vulcan_tools_manager::ResolvedToolDefinition>,
     ) {
-        let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
-            descriptor: VulcanToolDescriptor {
-                id: String::from("demo_tool"),
-                name: String::from("demo_tool"),
-                description: String::from("Demo tool"),
-                source: VulcanToolSourceKind::Native,
-            },
-            parameters_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string" }
+        let manager = VulcanToolsManager::new(vec![
+            VulcanToolCandidate {
+                descriptor: VulcanToolDescriptor {
+                    id: String::from("demo_tool"),
+                    name: String::from("demo_tool"),
+                    description: String::from("Demo tool"),
+                    source: VulcanToolSourceKind::Native,
                 },
-                "required": ["path"]
-            }),
-            ai_visible: true,
-            plan_policy: VulcanPlanToolPolicy::Visible,
-            invoke: Arc::new(|args, session_id| {
-                Box::pin(async move {
-                    Ok(VulcanToolInvocationResult::from_model_output(json!({
-                        "args": args,
-                        "session_id": session_id,
-                    }))
-                    .with_host_result(VulcanToolHostResult {
-                        kind: String::from("change_set"),
-                        payload: json!({ "path": "src/main.rs", "op": "read" }),
-                    }))
-                })
-            }),
-        }]);
+                parameters_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+                ai_visible: true,
+                plan_policy: VulcanPlanToolPolicy::Visible,
+                invoke: Arc::new(|args, session_id| {
+                    Box::pin(async move {
+                        Ok(VulcanToolInvocationResult::from_model_output(json!({
+                            "args": args,
+                            "session_id": session_id,
+                        }))
+                        .with_host_result(VulcanToolHostResult {
+                            kind: String::from("change_set"),
+                            payload: json!({ "path": "src/main.rs", "op": "read" }),
+                        }))
+                    })
+                }),
+            },
+            VulcanToolCandidate {
+                descriptor: VulcanToolDescriptor {
+                    id: String::from("failing_tool"),
+                    name: String::from("failing_tool"),
+                    description: String::from("Failing demo tool"),
+                    source: VulcanToolSourceKind::Native,
+                },
+                parameters_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+                ai_visible: true,
+                plan_policy: VulcanPlanToolPolicy::Visible,
+                invoke: Arc::new(|_args, _session_id| {
+                    Box::pin(async move {
+                        Err(String::from("LuaSkills 工具解析失败：演示错误"))
+                    })
+                }),
+            },
+        ]);
         let resolved = manager.resolve_for_execution_mode("Build");
         (manager, resolved.definitions)
     }
@@ -298,6 +352,51 @@ mod tests {
         );
     }
 
+    /// Verifies host-managed tool invocation failures are downgraded into one error result returned to the controller instead of aborting the whole turn.
+    /// 验证宿主管理工具调用失败会被降级为回传给控制器的一条错误结果，而不是直接中断整轮执行。
+    #[test]
+    fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
+        let (manager, definitions) = build_demo_manager();
+        let runtime_bridge =
+            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil());
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("call-error-1"),
+            tool_name: String::from("failing_tool"),
+            arguments: json!({ "query": "README" }),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let result = runtime
+            .block_on(runtime_bridge.execute_tool(&request))
+            .expect("failing tool should still return one controller-visible result");
+
+        assert_eq!(result.tool_call_id, "call-error-1");
+        assert_eq!(result.tool_name, "failing_tool");
+        assert!(result.is_error);
+        assert!(result.model_output.contains("工具 `failing_tool` 调用失败"));
+        assert!(
+            result
+                .model_output
+                .contains("LuaSkills 工具解析失败：演示错误")
+        );
+        assert_eq!(
+            result.host_result,
+            Some(json!({
+                "kind": "tool_error",
+                "payload": {
+                    "tool_call_id": "call-error-1",
+                    "tool_name": "failing_tool",
+                    "status": "failed",
+                    "error": "LuaSkills 工具解析失败：演示错误",
+                    "arguments": { "query": "README" }
+                }
+            }))
+        );
+    }
+
     /// Verifies the host-owned `vulcan-core` loop can execute through the shared GUI tool bridge and preserve host metadata in canonical records.
     /// 验证宿主自有的 `vulcan-core` 循环能够经由共享 GUI 工具桥接执行，并在规范记录中保留宿主元数据。
     #[test]
@@ -369,5 +468,79 @@ mod tests {
                     .and_then(serde_json::Value::as_str)
                     == Some("change_set")
         }));
+    }
+
+    /// Verifies the controller loop keeps running after one host-managed tool failure and can still receive a follow-up assistant response.
+    /// 验证宿主管理工具失败后控制器循环仍会继续运行，并且依然可以接收后续助手响应。
+    #[test]
+    fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() {
+        let (manager, definitions) = build_demo_manager();
+        let runtime_bridge =
+            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil());
+        let provider = MockControllerProviderAdapter::new(vec![
+            ProviderTurnResponse {
+                assistant_text: String::new(),
+                assistant_reasoning: String::from("先尝试调用会失败的工具。"),
+                provider_message_id: Some(String::from("provider-1")),
+                provider_message_state: None,
+                tool_calls: vec![ConversationToolCall {
+                    id: String::from("tool-item-1"),
+                    tool_call_id: Some(String::from("tool-call-1")),
+                    tool_name: String::from("failing_tool"),
+                    arguments: json!({ "query": "README" }),
+                }],
+                continuation: None,
+            },
+            ProviderTurnResponse {
+                assistant_text: String::from("我已收到工具错误原因，接下来会调整策略继续处理。"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("provider-2")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+            },
+        ]);
+        let mut controller = VulcanCoreController::new(
+            ControllerConfig {
+                provider_id: String::from("mock-openai"),
+                model_id: String::from("mock-model"),
+                system_prompt: String::from("system"),
+                temperature: Some(0.2),
+                max_turns: 3,
+                additional_params: None,
+            },
+            ConversationSnapshot::default(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let result = runtime
+            .block_on(controller.run_user_turn(
+                &provider,
+                &runtime_bridge,
+                &AllowAllToolPolicy,
+                "请继续分析 README",
+            ))
+            .expect("controller loop should continue after one tool failure");
+
+        assert_eq!(result.provider_turns_executed, 2);
+        assert_eq!(result.tool_calls_processed, 1);
+        assert!(matches!(
+            &controller.snapshot().messages[2].payload,
+            ConversationPayload::ToolResult { text, .. }
+                if text.contains("工具 `failing_tool` 调用失败")
+                    && text.contains("LuaSkills 工具解析失败：演示错误")
+        ));
+        assert!(matches!(
+            controller
+                .snapshot()
+                .messages
+                .last()
+                .map(|message| &message.payload),
+            Some(ConversationPayload::Assistant { text, .. })
+                if text == "我已收到工具错误原因，接下来会调整策略继续处理。"
+        ));
     }
 }
