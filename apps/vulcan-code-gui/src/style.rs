@@ -755,6 +755,82 @@ pub fn workbench_compact_pick_list_menu_style(theme: &Theme) -> menu::Style {
     }
 }
 
+/// Returns the queue-panel style attached above the floating workbench composer surface.
+/// 返回附着在浮动工作台提示词输入区上方的待发送队列面板样式。
+pub fn workbench_pending_prompt_queue_panel_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.weak.color.scale_alpha(0.98),
+        )),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 18.0,
+                top_right: 18.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.26),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.18,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the row style used by one pending-prompt queue entry inside the floating queue panel.
+/// 返回浮动队列面板内单条待发送队列项使用的行样式。
+pub fn workbench_pending_prompt_queue_row_style(
+    theme: &Theme,
+    is_drag_source: bool,
+) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(if is_drag_source {
+            palette.primary.weak.color.scale_alpha(0.20)
+        } else {
+            palette.background.base.color.scale_alpha(0.72)
+        })),
+        border: Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: if is_drag_source {
+                palette.primary.weak.color.scale_alpha(0.60)
+            } else {
+                palette.background.strong.color.scale_alpha(0.20)
+            },
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the insertion-indicator style shown while pending-prompt queue rows are being reordered.
+/// 返回待发送队列行重排期间显示的插入指示线样式。
+pub fn workbench_pending_prompt_drop_indicator_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.primary.base.color.scale_alpha(0.84),
+        )),
+        border: Border {
+            radius: 999.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the rounded panel style used by the centered workbench composer surface.
 /// 返回居中工作台提示词面板使用的圆角样式。
 pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {

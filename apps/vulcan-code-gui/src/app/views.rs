@@ -1507,22 +1507,33 @@ impl VulcanWorkbench {
     /// Builds the compact send-or-stop button shown at the right side of prompt inputs.
     /// 构建显示在提示词输入框右侧的紧凑发送或停止按钮。
     pub(super) fn view_run_trigger_button(&self) -> Element<'_, Message> {
-        let is_running = self.has_active_run();
+        let is_busy = self.selected_session_has_busy_execution_lane();
         let can_submit = self.composer_has_submittable_content();
-        let tooltip_text = if is_running {
+        let show_stop = is_busy && !can_submit;
+        let tooltip_text = if show_stop {
+            "停止全部 AI 调用与等待中的系统任务"
+        } else if is_busy {
             if can_submit {
-                "将当前任务指令加入待发送队列"
+                "将当前任务指令加入待插入列表"
             } else {
-                "输入任务指令后可加入待发送队列"
+                "停止全部 AI 调用与等待中的系统任务"
             }
         } else if can_submit {
             "发送当前任务指令"
         } else {
             "请输入任务指令后再发送"
         };
-        let icon = lucide::send()
-            .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
-            .line_height(1.0);
+        let icon: Element<'_, Message> = if show_stop {
+            codicon::debug_stop()
+                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+                .line_height(1.0)
+                .into()
+        } else {
+            lucide::send()
+                .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
+                .line_height(1.0)
+                .into()
+        };
         let icon_surface: Element<'_, Message> = container(icon)
             .width(COMPOSER_TRIGGER_BUTTON_SIZE)
             .height(COMPOSER_TRIGGER_BUTTON_SIZE)
@@ -1530,9 +1541,11 @@ impl VulcanWorkbench {
             .into();
 
         let button = button(icon_surface).padding(0).style(move |theme, status| {
-            style::workbench_composer_trigger_button_style(theme, status, false)
+            style::workbench_composer_trigger_button_style(theme, status, show_stop)
         });
-        let button = if can_submit {
+        let button = if show_stop {
+            button.on_press(Message::StopRun)
+        } else if can_submit {
             button.on_press(Message::StartRun)
         } else {
             button
@@ -1549,10 +1562,10 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Builds the dedicated stop button kept beside the queue/send trigger while one root-session run is still active.
-    /// 构建在根会话运行期间保留在排队发送按钮旁边的独立停止按钮。
+    /// Builds the dedicated stop button kept beside the queue/send trigger while one session still owns any busy execution lane.
+    /// 构建在某个会话仍占有繁忙执行通道时保留在排队发送按钮旁边的独立停止按钮。
     pub(super) fn view_stop_run_button(&self) -> Element<'_, Message> {
-        let is_running = self.has_active_run();
+        let is_busy = self.selected_session_has_busy_execution_lane();
         let icon_surface: Element<'_, Message> = container(
             codicon::debug_stop()
                 .size(COMPOSER_TRIGGER_BUTTON_ICON_SIZE)
@@ -1565,7 +1578,7 @@ impl VulcanWorkbench {
         let button = button(icon_surface).padding(0).style(move |theme, status| {
             style::workbench_composer_trigger_button_style(theme, status, true)
         });
-        let button = if is_running {
+        let button = if is_busy {
             button.on_press(Message::StopRun)
         } else {
             button
@@ -1575,90 +1588,222 @@ impl VulcanWorkbench {
             button
                 .width(COMPOSER_TRIGGER_BUTTON_SIZE)
                 .height(COMPOSER_TRIGGER_BUTTON_SIZE),
-            "停止当前 AI 调用",
+            "停止全部 AI 调用与等待中的系统任务",
             tooltip::Position::Bottom,
         )
         .style(container::rounded_box)
         .into()
     }
 
-    /// Builds the one-line pending prompt queue strip that exposes queued follow-ups, delegate callbacks, and the explicit interrupt action.
-    /// 构建单行待发送提示词队列条，用于展示排队跟进、子代理回流以及显式插队动作。
-    pub(super) fn view_pending_prompt_queue_strip(&self) -> Element<'_, Message> {
-        let pending_entries = self.selected_session_pending_prompt_entries();
-        let is_running = self.has_active_run();
-        let can_interrupt = is_running && self.composer_has_submittable_content();
-        let hint_text = if pending_entries.is_empty() {
-            String::from("当前会话正在执行，新消息会在这里排队等待。")
+    /// Builds the insertion indicator shown before one pending-prompt queue row while reordering.
+    /// 构建待发送队列重排期间显示在某条队列行之前的插入指示器。
+    pub(super) fn view_pending_prompt_queue_drop_indicator(
+        &self,
+        is_visible: bool,
+    ) -> Element<'_, Message> {
+        let height = if is_visible {
+            COMPOSER_PENDING_QUEUE_DROP_INDICATOR_HEIGHT
         } else {
-            format!(
-                "待发送 {} / {}",
-                pending_entries.len(),
-                SESSION_PENDING_PROMPT_QUEUE_LIMIT
-            )
+            0.0
         };
-
-        let queue_body: Element<'_, Message> = if pending_entries.is_empty() {
-            container(text(hint_text).size(12))
-                .padding([6, 10])
-                .style(container::rounded_box)
+        let indicator = if is_visible {
+            container(space())
                 .width(Fill)
-                .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
-                .center_y(Fill)
-                .into()
+                .height(2.0)
+                .style(style::workbench_pending_prompt_drop_indicator_style)
         } else {
-            let queue_row = row(pending_entries.iter().map(|entry| {
-                let source_label = match entry.source {
-                    PendingSessionPromptSource::UserFollowup => "排队",
-                    PendingSessionPromptSource::UserInterrupt => "插队",
-                    PendingSessionPromptSource::DelegateCompletion => "回流",
-                };
-                container(text(format!("{source_label} · {}", entry.preview)).size(12))
-                    .padding([6, 10])
-                    .style(container::rounded_box)
-                    .into()
-            }))
-            .spacing(8)
-            .align_y(Center);
-
-            container(
-                row![
-                    container(text(hint_text).size(12)).padding([0, 2]),
-                    scrollable(container(queue_row).width(Shrink))
-                        .direction(scrollable::Direction::Horizontal(
-                            scrollable::Scrollbar::default(),
-                        ))
-                        .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
-                        .width(Fill),
-                ]
-                .spacing(8)
-                .align_y(Center),
-            )
-            .padding([4, 8])
-            .style(container::rounded_box)
-            .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
+            container(space()).width(Fill).height(0.0)
+        };
+        container(indicator)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 2.0,
+                bottom: if is_visible { 2.0 } else { 0.0 },
+                left: 2.0,
+            })
+            .height(height)
             .width(Fill)
             .into()
-        };
+    }
 
-        let interrupt_button = {
+    /// Builds one draggable queue row rendered inside the pending-prompt queue panel.
+    /// 构建渲染在待发送队列面板中的单条可拖拽队列行。
+    pub(super) fn view_pending_prompt_queue_row(
+        &self,
+        index: usize,
+        entry: PendingPromptPanelEntry,
+    ) -> Element<'_, Message> {
+        let is_drag_source =
+            self.dragging_pending_prompt_entry_id.as_deref() == Some(entry.id.as_str());
+        let queue_label = pending_prompt_panel_label_text(&entry.prompt);
+        let drag_handle = mouse_area(
+            container(
+                text("⋮⋮")
+                    .size(12)
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            )
+            .width(18)
+            .center(Fill),
+        )
+        .interaction(if self.dragging_pending_prompt_entry_id.is_some() {
+            iced::mouse::Interaction::Move
+        } else {
+            iced::mouse::Interaction::Grab
+        })
+        .on_press(Message::StartPendingPromptQueueDrag(entry.id.clone()))
+        .on_move({
+            let entry_id = entry.id.clone();
+            move |position| Message::PendingPromptQueueDropPreviewMoved(entry_id.clone(), position)
+        });
+        let label_surface: Element<'_, Message> = scrollable(
+            container(
+                text(queue_label)
+                    .size(13)
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            )
+            .width(Shrink),
+        )
+        .direction(scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::default(),
+        ))
+        .height(COMPOSER_PENDING_QUEUE_ROW_HEIGHT)
+        .width(Fill)
+        .into();
+        let action_button = |label: &'static str, message: Option<Message>| {
             let button =
-                button(text("插队").size(12))
-                    .padding([6, 12])
+                button(text(label).size(12))
+                    .padding([4, 8])
                     .style(move |theme, status| {
                         style::workbench_transcript_mode_button_style(theme, status, false)
                     });
-            if can_interrupt {
-                button.on_press(Message::InterruptComposerPrompt)
+            if let Some(message) = message {
+                button.on_press(message)
             } else {
                 button
             }
         };
+        let action_surface: Element<'_, Message> =
+            if entry.state == PendingPromptPanelEntryState::Inserted {
+                container(
+                    text("已接入系统队列").size(12).color(
+                        self.app_theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.56),
+                    ),
+                )
+                .padding([0, 6])
+                .center_y(Fill)
+                .into()
+            } else {
+                row![
+                    action_button(
+                        "插入",
+                        Some(Message::PendingPromptQueueInsertNow(entry.id.clone()))
+                    ),
+                    action_button(
+                        "编辑",
+                        Some(Message::PendingPromptQueueEdit(entry.id.clone()))
+                    ),
+                    action_button(
+                        "移除",
+                        Some(Message::PendingPromptQueueRemove(entry.id.clone()))
+                    ),
+                ]
+                .spacing(6)
+                .align_y(Center)
+                .into()
+            };
+        container(
+            row![
+                container(text(format!("{}", index + 1)).size(12))
+                    .width(28)
+                    .center_y(Fill),
+                drag_handle,
+                container(label_surface).width(Fill).center_y(Fill),
+                action_surface,
+            ]
+            .spacing(10)
+            .align_y(Center),
+        )
+        .padding([6, 10])
+        .width(Fill)
+        .height(COMPOSER_PENDING_QUEUE_ROW_HEIGHT)
+        .style(move |theme| style::workbench_pending_prompt_queue_row_style(theme, is_drag_source))
+        .into()
+    }
 
-        row![queue_body, interrupt_button]
-            .spacing(COMPOSER_PANEL_CONTROL_GAP)
-            .align_y(Center)
-            .height(COMPOSER_PENDING_QUEUE_STRIP_HEIGHT)
+    /// Builds the tail drop zone shown after the pending-prompt queue rows so drag reordering can land at the end.
+    /// 构建显示在待发送队列行末尾的尾部落点，以便拖拽重排落到最后。
+    pub(super) fn view_pending_prompt_queue_tail_drop_zone(&self) -> Element<'_, Message> {
+        if self.dragging_pending_prompt_entry_id.is_none() {
+            return space::vertical().height(0.0).into();
+        }
+        let shows_drop_tail = matches!(
+            self.active_pending_prompt_drop_target.as_ref(),
+            Some(PendingPromptDropTarget::End)
+        );
+        mouse_area(
+            container(if shows_drop_tail {
+                container(space())
+                    .width(Fill)
+                    .height(2.0)
+                    .style(style::workbench_pending_prompt_drop_indicator_style)
+            } else {
+                container(space()).width(Fill).height(0.0)
+            })
+            .padding(iced::Padding {
+                top: 2.0,
+                right: 2.0,
+                bottom: 0.0,
+                left: 2.0,
+            })
+            .height(COMPOSER_PENDING_QUEUE_DROP_INDICATOR_HEIGHT)
+            .width(Fill),
+        )
+        .interaction(iced::mouse::Interaction::Move)
+        .on_enter(Message::PendingPromptQueueTailHovered(true))
+        .on_exit(Message::PendingPromptQueueTailHovered(false))
+        .into()
+    }
+
+    /// Builds the pending prompt queue panel that exposes queued follow-ups above the composer instead of mixing them into the transcript.
+    /// 构建显示在提示词输入框上方的待发送队列面板，而不是把这些跟进混进转录正文。
+    pub(super) fn view_pending_prompt_queue_strip(&self) -> Element<'_, Message> {
+        let pending_entries = self.selected_session_pending_prompt_entries();
+        if pending_entries.is_empty() {
+            return space::vertical().height(0.0).into();
+        }
+        let pending_entry_count = pending_entries.len();
+        let queue_body = pending_entries.into_iter().enumerate().fold(
+            column![].spacing(0).width(Fill),
+            |column, (index, entry)| {
+                let shows_drop_before = matches!(
+                    self.active_pending_prompt_drop_target.as_ref(),
+                    Some(PendingPromptDropTarget::Before(target_entry_id))
+                        if target_entry_id == &entry.id
+                );
+                let column = column
+                    .push(self.view_pending_prompt_queue_drop_indicator(shows_drop_before))
+                    .push(self.view_pending_prompt_queue_row(index, entry));
+                if index + 1 < pending_entry_count {
+                    column.push(space::vertical().height(COMPOSER_PENDING_QUEUE_ROW_GAP))
+                } else {
+                    column
+                }
+            },
+        );
+        let queue_body = queue_body.push(self.view_pending_prompt_queue_tail_drop_zone());
+        container(container(queue_body).style(style::workbench_pending_prompt_queue_panel_style))
+            .padding(iced::Padding {
+                top: 0.0,
+                right: COMPOSER_PENDING_QUEUE_PANEL_SIDE_INSET,
+                bottom: 0.0,
+                left: COMPOSER_PENDING_QUEUE_PANEL_SIDE_INSET,
+            })
+            .width(Fill)
             .into()
     }
 
@@ -1860,7 +2005,7 @@ impl VulcanWorkbench {
         let pending_queue_strip_height = if self.selected_subagent_task_panel_state().is_none()
             && self.should_show_selected_session_pending_prompt_strip()
         {
-            COMPOSER_PENDING_QUEUE_STRIP_HEIGHT + COMPOSER_PANEL_CONTROL_GAP
+            self.selected_session_pending_prompt_panel_height()
         } else {
             0.0
         };
@@ -2297,7 +2442,9 @@ impl VulcanWorkbench {
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)
         .align_y(Center);
-        let composer_secondary_controls = if self.has_active_run() {
+        let show_explicit_stop_button = self.selected_session_has_busy_execution_lane()
+            && self.composer_has_submittable_content();
+        let composer_secondary_controls = if show_explicit_stop_button {
             row![
                 self.view_workbench_reasoning_effort_selector(),
                 self.view_stop_run_button(),
@@ -2324,8 +2471,11 @@ impl VulcanWorkbench {
         .width(Fill);
         let composer_body = if self.should_show_selected_session_pending_prompt_strip() {
             column![
-                self.view_pending_prompt_queue_strip(),
-                self.view_inline_composer_editor(),
+                column![
+                    self.view_pending_prompt_queue_strip(),
+                    self.view_inline_composer_editor(),
+                ]
+                .spacing(0),
                 composer_controls_row,
             ]
             .spacing(COMPOSER_PANEL_CONTROL_GAP)

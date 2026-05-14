@@ -37,10 +37,11 @@ use crate::luaskills_runtime::{
 };
 use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingSessionPromptEntry,
-    PendingSessionPromptSource, SessionCompactionEntry, SessionId, SessionMessageEntry,
-    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingPromptPanelEntry,
+    PendingPromptPanelEntryState, PendingSessionPromptEntry, PendingSessionPromptSource,
+    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
+    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
+    SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
 use crate::provider_config::{
@@ -396,9 +397,25 @@ const COMPOSER_PANEL_CONTROL_GAP: f32 = 10.0;
 /// 主提示词编辑器下方低矮控制行使用的共享目标高度。
 const COMPOSER_CONTROL_ROW_HEIGHT: f32 = 36.0;
 
-/// Shared target height used by the one-line pending-prompt queue strip above the main composer controls.
-/// 主提示词控制区上方单行待发送队列条使用的共享目标高度。
-const COMPOSER_PENDING_QUEUE_STRIP_HEIGHT: f32 = 34.0;
+/// Shared fixed horizontal inset kept on both sides of the pending-prompt queue panel above the composer.
+/// 主提示词输入框上方待发送队列面板两侧保留的共享水平留白。
+const COMPOSER_PENDING_QUEUE_PANEL_SIDE_INSET: f32 = 25.0;
+
+/// Shared fixed row height used by each pending-prompt queue entry line.
+/// 每一条待发送队列项使用的共享固定行高。
+const COMPOSER_PENDING_QUEUE_ROW_HEIGHT: f32 = 36.0;
+
+/// Shared vertical padding used by the pending-prompt queue panel container.
+/// 待发送队列面板容器使用的共享垂直内边距。
+const COMPOSER_PENDING_QUEUE_PANEL_VERTICAL_PADDING: f32 = 8.0;
+
+/// Shared gap used between pending-prompt queue rows.
+/// 待发送队列行之间使用的共享间距。
+const COMPOSER_PENDING_QUEUE_ROW_GAP: f32 = 6.0;
+
+/// Shared indicator height shown while one pending-prompt queue row is being reordered.
+/// 当某条待发送队列行正在重排时显示的共享插入指示高度。
+const COMPOSER_PENDING_QUEUE_DROP_INDICATOR_HEIGHT: f32 = 8.0;
 
 /// Shared square size used by the fixed send-or-stop button beside the main prompt composer.
 /// 主提示词编辑器右侧固定发送或停止按钮使用的共享方形尺寸。
@@ -853,6 +870,24 @@ fn pending_prompt_preview_text(prompt: &str) -> String {
                 .take(max_chars.saturating_sub(1))
                 .collect::<String>()
         )
+    }
+}
+
+/// Builds one full single-line label used by the visible pending-prompt queue panel.
+/// 构建显示在可见待发送队列面板中的完整单行标签文本。
+fn pending_prompt_panel_label_text(prompt: &str) -> String {
+    let normalized = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(prompt)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        String::from("空白消息")
+    } else {
+        normalized
     }
 }
 
@@ -1348,6 +1383,15 @@ pub struct VulcanWorkbench {
     /// Project identifier currently being reordered through drag interaction.
     /// 当前正在通过拖拽交互调整顺序的项目标识。
     dragging_task_project: Option<String>,
+    /// Current drop target preview shown while one pending-prompt queue row is being reordered.
+    /// 当前在待发送队列项重排期间展示的插入目标预览。
+    active_pending_prompt_drop_target: Option<PendingPromptDropTarget>,
+    /// Pending click-or-drag interaction captured from one pending-prompt queue handle press.
+    /// 从某次待发送队列拖拽柄按下动作中捕获的待判定点击或拖拽交互状态。
+    pending_pending_prompt_drag: Option<PendingPendingPromptDrag>,
+    /// Queue entry identifier currently being reordered through drag interaction.
+    /// 当前正在通过拖拽交互调整顺序的待发送队列项标识。
+    dragging_pending_prompt_entry_id: Option<String>,
     /// Currently selected session identifier.
     /// 当前被选中的会话标识。
     selected_session: SessionId,
@@ -1728,6 +1772,21 @@ struct PendingTaskProjectInteraction {
     origin: iced::Point,
 }
 
+/// Pending drag candidate captured from one pending-prompt queue handle press.
+/// 从某次待发送队列拖拽柄按下动作中捕获的待确认拖拽候选状态。
+#[derive(Debug, Clone)]
+struct PendingPendingPromptDrag {
+    /// Stable root-session identifier that owns the queue being reordered.
+    /// 拥有当前重排队列的稳定根会话标识。
+    session_id: SessionId,
+    /// Stable queue-entry identifier that may turn into the active drag source.
+    /// 可能升级为激活拖拽源的稳定队列项标识。
+    entry_id: String,
+    /// Cursor origin captured when the drag candidate was pressed.
+    /// 按下拖拽候选时捕获到的鼠标起始位置。
+    origin: iced::Point,
+}
+
 /// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
 /// 当某个内联思考区块被显式打开到转录上方时保留的居中弹层状态。
 #[derive(Debug, Clone)]
@@ -1929,6 +1988,18 @@ enum TaskProjectDropTarget {
     /// Inserts the dragged regular project at the end of the regular section.
     /// 将正在拖拽的普通项目插入到普通分区末尾。
     EndOfRegular,
+}
+
+/// Drop-target previews used while pending-prompt queue rows are being reordered.
+/// 待发送队列行重排期间使用的插入目标预览类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingPromptDropTarget {
+    /// Inserts the dragged queue entry before one concrete queue row.
+    /// 将正在拖拽的队列项插入到某个具体队列行之前。
+    Before(String),
+    /// Inserts the dragged queue entry at the tail of the current queue.
+    /// 将正在拖拽的队列项插入到当前队列尾部。
+    End,
 }
 
 impl DiffVisualSliceRange {
@@ -2982,9 +3053,24 @@ enum Message {
     /// Primary execution action requested.
     /// 请求执行主任务动作。
     StartRun,
-    /// Interrupts the active run after enqueueing the current composer draft at the front of the pending queue.
-    /// 将当前提示词草稿插入待发送队列头部后打断活动运行。
-    InterruptComposerPrompt,
+    /// Dispatches one existing queued prompt immediately, interrupting the current run first when needed.
+    /// 立即分发一条现有排队提示词；若当前仍在运行则先中断当前执行。
+    PendingPromptQueueInsertNow(String),
+    /// Restores one queued prompt back into the composer editor for further editing.
+    /// 将某条已排队提示词恢复回提示词编辑器，以便继续修改。
+    PendingPromptQueueEdit(String),
+    /// Removes one queued prompt from the selected session queue without dispatching it.
+    /// 从当前选中会话队列中移除某条已排队提示词且不再发送。
+    PendingPromptQueueRemove(String),
+    /// Starts one click-or-drag interaction from a pending-prompt queue handle.
+    /// 从某条待发送队列拖拽柄启动一次点击或拖拽交互。
+    StartPendingPromptQueueDrag(String),
+    /// Updates the drop-target preview inside one pending-prompt queue row using local pointer movement.
+    /// 使用队列行内部的局部鼠标移动更新待发送队列的插入目标预览。
+    PendingPromptQueueDropPreviewMoved(String, iced::Point),
+    /// Updates whether the tail drop zone of the pending-prompt queue is currently hovered.
+    /// 更新待发送队列尾部落点当前是否处于悬停状态。
+    PendingPromptQueueTailHovered(bool),
     /// Applies one incremental execution-stream event returned by the async runtime stream.
     /// 应用异步运行时流返回的一条增量执行事件。
     RunExecutionStreamEvent {
@@ -3243,6 +3329,9 @@ impl VulcanWorkbench {
             suppress_task_session_hover: false,
             pending_task_project_interaction: None,
             dragging_task_project: None,
+            active_pending_prompt_drop_target: None,
+            pending_pending_prompt_drag: None,
+            dragging_pending_prompt_entry_id: None,
             selected_session: SessionId::nil(),
             activities,
             activity_raw_buffers,
@@ -4219,6 +4308,21 @@ impl VulcanWorkbench {
                             self.hovered_task_session = None;
                         }
                     }
+                    if let Some(pending_queue_drag) = self.pending_pending_prompt_drag.as_ref() {
+                        if self.dragging_pending_prompt_entry_id.is_none()
+                            && ((position.x - pending_queue_drag.origin.x).abs()
+                                >= WINDOW_TITLE_BAR_DRAG_THRESHOLD
+                                || (position.y - pending_queue_drag.origin.y).abs()
+                                    >= WINDOW_TITLE_BAR_DRAG_THRESHOLD)
+                        {
+                            self.dragging_pending_prompt_entry_id =
+                                Some(pending_queue_drag.entry_id.clone());
+                            self.active_pending_prompt_drop_target =
+                                Some(PendingPromptDropTarget::Before(
+                                    pending_queue_drag.entry_id.clone(),
+                                ));
+                        }
+                    }
                 }
                 Task::none()
             }
@@ -4226,6 +4330,7 @@ impl VulcanWorkbench {
                 self.clear_transcript_drag_auto_scrolls();
                 self.composer_scrollbar_drag_grab_offset = None;
                 let mut did_commit_drop = false;
+                let mut did_commit_pending_prompt_drop = false;
                 if self.main_window_id == Some(window_id) {
                     self.pending_main_task_panel_resize = None;
 
@@ -4250,11 +4355,32 @@ impl VulcanWorkbench {
                     self.dragging_task_project = None;
                     self.active_task_project_drop_target = None;
 
+                    let committed_pending_prompt_drop = self
+                        .selected_session()
+                        .map(|session| session.id)
+                        .zip(self.dragging_pending_prompt_entry_id.clone())
+                        .zip(self.active_pending_prompt_drop_target.clone())
+                        .map(|((session_id, dragged_entry_id), drop_target)| {
+                            (session_id, dragged_entry_id, drop_target)
+                        });
+                    self.pending_pending_prompt_drag = None;
+                    if let Some((session_id, dragged_entry_id, drop_target)) =
+                        committed_pending_prompt_drop
+                    {
+                        did_commit_pending_prompt_drop = self.apply_pending_prompt_drop_target(
+                            session_id,
+                            &dragged_entry_id,
+                            &drop_target,
+                        );
+                    }
+                    self.dragging_pending_prompt_entry_id = None;
+                    self.active_pending_prompt_drop_target = None;
+
                     if let Some(project_id) = toggled_project_id {
                         self.toggle_task_project_expanded(&project_id);
                     }
                 }
-                if did_commit_drop {
+                if did_commit_drop || did_commit_pending_prompt_drop {
                     self.persist_workspace_snapshot_task()
                 } else {
                     Task::none()
@@ -4883,6 +5009,7 @@ impl VulcanWorkbench {
                 self.prune_unmaterialized_sessions(Some(session_id));
                 self.selected_session = session_id;
                 self.hovered_task_session = Some(session_id);
+                self.clear_pending_prompt_drag_state();
                 self.sync_workspace_path_with_selected_session();
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_thinking_modal = None;
@@ -5597,7 +5724,79 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::StartRun => self.submit_selected_session_prompt(false),
-            Message::InterruptComposerPrompt => self.submit_selected_session_prompt(true),
+            Message::PendingPromptQueueInsertNow(entry_id) => {
+                self.dispatch_pending_prompt_entry_now(&entry_id)
+            }
+            Message::PendingPromptQueueEdit(entry_id) => self.edit_pending_prompt_entry(&entry_id),
+            Message::PendingPromptQueueRemove(entry_id) => {
+                self.remove_pending_prompt_entry(&entry_id)
+            }
+            Message::StartPendingPromptQueueDrag(entry_id) => {
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                if let Some(position) = self.main_window_cursor_position {
+                    self.pending_pending_prompt_drag = Some(PendingPendingPromptDrag {
+                        session_id,
+                        entry_id,
+                        origin: position,
+                    });
+                }
+                Task::none()
+            }
+            Message::PendingPromptQueueDropPreviewMoved(target_entry_id, position) => {
+                let Some(session_id) = self.selected_session().map(|session| session.id) else {
+                    return Task::none();
+                };
+                let Some(dragged_entry_id) = self.dragging_pending_prompt_entry_id.as_ref() else {
+                    return Task::none();
+                };
+                if let Some(pending_drag) = self.pending_pending_prompt_drag.as_ref() {
+                    if pending_drag.session_id != session_id {
+                        return Task::none();
+                    }
+                }
+                if dragged_entry_id == &target_entry_id {
+                    self.active_pending_prompt_drop_target =
+                        Some(PendingPromptDropTarget::Before(target_entry_id));
+                    return Task::none();
+                }
+                self.active_pending_prompt_drop_target =
+                    Some(if position.y <= COMPOSER_PENDING_QUEUE_ROW_HEIGHT / 2.0 {
+                        PendingPromptDropTarget::Before(target_entry_id)
+                    } else {
+                        let queue_entries = self.session_pending_prompt_panel_queue(session_id);
+                        let target_index = queue_entries
+                            .iter()
+                            .position(|entry| entry.id == target_entry_id)
+                            .unwrap_or(queue_entries.len());
+                        let next_entry_id = queue_entries
+                            .get(target_index.saturating_add(1))
+                            .map(|entry| entry.id.clone());
+                        if let Some(next_entry_id) = next_entry_id {
+                            if next_entry_id == *dragged_entry_id {
+                                PendingPromptDropTarget::Before(target_entry_id)
+                            } else {
+                                PendingPromptDropTarget::Before(next_entry_id)
+                            }
+                        } else {
+                            PendingPromptDropTarget::End
+                        }
+                    });
+                Task::none()
+            }
+            Message::PendingPromptQueueTailHovered(is_hovered) => {
+                if !is_hovered {
+                    if self.dragging_pending_prompt_entry_id.is_none() {
+                        self.active_pending_prompt_drop_target = None;
+                    }
+                    return Task::none();
+                }
+                if self.dragging_pending_prompt_entry_id.is_some() {
+                    self.active_pending_prompt_drop_target = Some(PendingPromptDropTarget::End);
+                }
+                Task::none()
+            }
             Message::RunExecutionStreamEvent { run_id, event } => {
                 let Some(session_id) = self.active_run_session_id_for_run_id(run_id) else {
                     return Task::none();
@@ -5699,7 +5898,7 @@ impl VulcanWorkbench {
                     self.status_message = String::from("当前没有正在执行的 AI 调用。");
                     return Task::none();
                 };
-                self.stop_session_run_for_session(session_id, false)
+                self.stop_all_session_work(session_id)
             }
             Message::PaneFocused(pane) => {
                 self.focus = Some(pane);
@@ -5745,19 +5944,74 @@ impl VulcanWorkbench {
             .unwrap_or(&[])
     }
 
-    /// Returns cloned pending prompt queue entries for the currently selected root session so the floating composer strip can render them safely.
-    /// 返回当前选中根会话的待发送提示词队列副本，供浮动提示词条安全渲染使用。
-    fn selected_session_pending_prompt_entries(&self) -> Vec<PendingSessionPromptEntry> {
+    /// Returns the visible prompt-panel queue attached to the provided session runtime state.
+    /// 返回附着在给定会话运行时状态上的可见提示词面板队列。
+    fn session_pending_prompt_panel_queue(
+        &self,
+        session_id: SessionId,
+    ) -> &[PendingPromptPanelEntry] {
+        self.session_runtime_state(session_id)
+            .map(|state| state.ui_state.pending_prompt_panel_queue.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Returns cloned visible prompt-panel queue entries for the currently selected root session so the floating composer panel can render them safely.
+    /// 返回当前选中根会话的可见提示词面板队列副本，供浮动提示词面板安全渲染使用。
+    fn selected_session_pending_prompt_entries(&self) -> Vec<PendingPromptPanelEntry> {
         self.selected_session()
-            .map(|session| self.session_pending_prompt_queue(session.id).to_vec())
+            .map(|session| self.session_pending_prompt_panel_queue(session.id).to_vec())
             .unwrap_or_default()
     }
 
-    /// Returns whether the selected root session should currently render the pending-prompt queue strip above the floating composer controls.
-    /// 返回当前选中的根会话是否应在浮动提示词控制区上方显示待发送队列条。
+    /// Returns whether one parent session still has running subagents that have not fully reported back yet.
+    /// 返回某个父会话是否仍有尚未完全回报结果的运行中子代理。
+    fn session_has_running_subagent_tasks(&self, session_id: SessionId) -> bool {
+        self.session_subagent_tasks
+            .get(&session_id)
+            .is_some_and(|entries| {
+                entries.values().any(|state| {
+                    self.normalized_subagent_task_panel_state(state)
+                        .run_state
+                        .is_running()
+                })
+            })
+    }
+
+    /// Returns whether the internal system execution lane is still busy for the provided session, including active runs, internal queued callbacks, and running subagents.
+    /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、内部排队回调以及运行中的子代理。
+    fn session_has_blocking_system_prompt_work(&self, session_id: SessionId) -> bool {
+        self.session_has_active_run(session_id)
+            || !self.session_pending_prompt_queue(session_id).is_empty()
+            || self.session_has_running_subagent_tasks(session_id)
+    }
+
+    /// Returns whether the selected root session should currently render the pending-prompt queue panel above the floating composer controls.
+    /// 返回当前选中的根会话是否应在浮动提示词控制区上方显示待发送队列面板。
     fn should_show_selected_session_pending_prompt_strip(&self) -> bool {
         self.selected_session().is_some()
-            && (!self.selected_session_pending_prompt_entries().is_empty() || self.has_active_run())
+            && !self.selected_session_pending_prompt_entries().is_empty()
+    }
+
+    /// Returns whether the selected session still owns any busy execution lane, including active runs, queued system follow-ups, and running subagents.
+    /// 返回当前选中会话是否仍占用任一繁忙执行通道，包括活动运行、系统内部排队跟进与运行中的子代理。
+    pub(super) fn selected_session_has_busy_execution_lane(&self) -> bool {
+        self.selected_session()
+            .map(|session| self.session_has_blocking_system_prompt_work(session.id))
+            .unwrap_or(false)
+    }
+
+    /// Returns the current floating queue-panel height needed by the composer and transcript spacer calculations.
+    /// 返回当前浮动队列面板需要占用的高度，供提示词区与转录留白计算复用。
+    fn selected_session_pending_prompt_panel_height(&self) -> f32 {
+        let entry_count = self.selected_session_pending_prompt_entries().len();
+        if entry_count == 0 {
+            return 0.0;
+        }
+        let visible_row_count = entry_count.min(SESSION_PENDING_PROMPT_QUEUE_LIMIT);
+        let row_stack_height = visible_row_count as f32 * COMPOSER_PENDING_QUEUE_ROW_HEIGHT;
+        let row_gap_height =
+            visible_row_count.saturating_sub(1) as f32 * COMPOSER_PENDING_QUEUE_ROW_GAP;
+        COMPOSER_PENDING_QUEUE_PANEL_VERTICAL_PADDING * 2.0 + row_stack_height + row_gap_height
     }
 
     /// Refreshes the lightweight queued-step counter shown on one session card from the persisted prompt queue length.
@@ -5797,14 +6051,15 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Builds one persisted pending-prompt entry from the provided prompt, source, and optional delegated task identifier.
-    /// 根据给定提示词、来源与可选委派任务标识构建一条持久化待发送提示词项。
+    /// Builds one persisted internal pending-prompt entry from the provided prompt, source, and optional delegated task identifier.
+    /// 根据给定提示词、来源与可选委派任务标识构建一条持久化内部待发送提示词项。
     fn build_pending_prompt_entry(
         &self,
         prompt: String,
         source: PendingSessionPromptSource,
         task_id: Option<SessionId>,
         preview: Option<String>,
+        panel_entry_id: Option<String>,
     ) -> PendingSessionPromptEntry {
         let created_at = current_unix_millis_text();
         PendingSessionPromptEntry {
@@ -5813,6 +6068,20 @@ impl VulcanWorkbench {
             prompt,
             source,
             task_id: task_id.map(|value| value.to_string()),
+            panel_entry_id,
+            created_at,
+        }
+    }
+
+    /// Builds one persisted visible prompt-panel entry from the provided user-authored prompt text.
+    /// 根据给定用户提示词文本构建一条持久化可见提示词面板项。
+    fn build_pending_prompt_panel_entry(&self, prompt: String) -> PendingPromptPanelEntry {
+        let created_at = current_unix_millis_text();
+        PendingPromptPanelEntry {
+            id: format!("pending-panel-{created_at}-{}", Uuid::new_v4()),
+            preview: pending_prompt_preview_text(&prompt),
+            prompt,
+            state: PendingPromptPanelEntryState::Ready,
             created_at,
         }
     }
@@ -5866,8 +6135,8 @@ impl VulcanWorkbench {
         Ok(())
     }
 
-    /// Removes and returns the next pending prompt scheduled for the provided session.
-    /// 移除并返回为给定会话排到最前面的下一条待发送提示词。
+    /// Removes and returns the next dispatchable internal prompt for the provided session.
+    /// 移除并返回给定会话当前允许分发的下一条内部提示词。
     fn dequeue_session_pending_prompt(
         &mut self,
         session_id: SessionId,
@@ -5883,8 +6152,222 @@ impl VulcanWorkbench {
                 Some(entry)
             }
         };
-        self.refresh_session_queued_steps(session_id);
+        if next_entry.is_some() {
+            self.refresh_session_queued_steps(session_id);
+        }
         next_entry
+    }
+
+    /// Appends one visible prompt-panel entry into the provided session queue.
+    /// 向给定会话的可见提示词面板队列追加一条条目。
+    fn enqueue_session_pending_prompt_panel_entry(
+        &mut self,
+        session_id: SessionId,
+        entry: PendingPromptPanelEntry,
+    ) -> Result<(), String> {
+        let queue_full_error =
+            String::from("待插入消息队列已满，最多保留 10 条，请先处理前面的消息。");
+        let now = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
+        if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
+            return Err(queue_full_error);
+        }
+        queue.push(entry);
+        runtime_state.updated_at = now;
+        Ok(())
+    }
+
+    /// Returns one cloned visible prompt-panel entry when it still exists in the provided session queue.
+    /// 返回给定会话可见提示词面板队列中仍然存在的一条条目副本。
+    fn pending_prompt_panel_entry(
+        &self,
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> Option<PendingPromptPanelEntry> {
+        self.session_pending_prompt_panel_queue(session_id)
+            .iter()
+            .find(|entry| entry.id == entry_id)
+            .cloned()
+    }
+
+    /// Removes one concrete visible prompt-panel entry from the provided session queue and returns it when found.
+    /// 从给定会话的可见提示词面板队列中移除一条具体条目，并在找到时返回它。
+    fn remove_session_pending_prompt_entry(
+        &mut self,
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> Option<PendingPromptPanelEntry> {
+        let now = current_unix_millis_text();
+        let removed_entry = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
+            let index = queue.iter().position(|entry| entry.id == entry_id)?;
+            let removed = queue.remove(index);
+            runtime_state.updated_at = now;
+            Some(removed)
+        };
+        removed_entry
+    }
+
+    /// Marks one visible prompt-panel entry as already inserted into the internal system queue.
+    /// 将某条可见提示词面板条目标记为已经插入到内部系统队列。
+    fn mark_session_pending_prompt_entry_inserted(
+        &mut self,
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> bool {
+        let now = current_unix_millis_text();
+        let did_update = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
+            let Some(entry) = queue.iter_mut().find(|entry| entry.id == entry_id) else {
+                return false;
+            };
+            if entry.state == PendingPromptPanelEntryState::Inserted {
+                return true;
+            }
+            entry.state = PendingPromptPanelEntryState::Inserted;
+            runtime_state.updated_at = now;
+            true
+        };
+        did_update
+    }
+
+    /// Restores one visible prompt-panel entry back to the ready state after its linked internal system-queue item gets cleared.
+    /// 在关联的内部系统队列项被清除后，将某条可见提示词面板项恢复为可再次插入的待命状态。
+    fn mark_session_pending_prompt_entry_ready(
+        &mut self,
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> bool {
+        let now = current_unix_millis_text();
+        let did_update = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
+            let Some(entry) = queue.iter_mut().find(|entry| entry.id == entry_id) else {
+                return false;
+            };
+            if entry.state == PendingPromptPanelEntryState::Ready {
+                return true;
+            }
+            entry.state = PendingPromptPanelEntryState::Ready;
+            runtime_state.updated_at = now;
+            true
+        };
+        did_update
+    }
+
+    /// Clears the internal system prompt queue of one session and optionally restores linked visible panel entries back to the ready state.
+    /// 清空某个会话的内部系统提示词队列，并可选地把关联的可见面板项恢复为待命状态。
+    fn clear_session_pending_prompt_queue(
+        &mut self,
+        session_id: SessionId,
+        restore_panel_entries: bool,
+    ) -> bool {
+        let now = current_unix_millis_text();
+        let cleared_entries = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_queue;
+            if queue.is_empty() {
+                return false;
+            }
+            let drained = queue.drain(..).collect::<Vec<_>>();
+            runtime_state.updated_at = now;
+            drained
+        };
+        self.refresh_session_queued_steps(session_id);
+        if restore_panel_entries {
+            for panel_entry_id in cleared_entries
+                .iter()
+                .filter_map(|entry| entry.panel_entry_id.as_deref())
+            {
+                let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
+            }
+        }
+        true
+    }
+
+    /// Applies one drag-drop target to reorder the visible prompt-panel entries of the provided session.
+    /// 将一次拖拽落点应用到给定会话的可见提示词面板队列，以完成重排。
+    fn apply_pending_prompt_drop_target(
+        &mut self,
+        session_id: SessionId,
+        dragged_entry_id: &str,
+        drop_target: &PendingPromptDropTarget,
+    ) -> bool {
+        let now = current_unix_millis_text();
+        let did_move = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
+            let Some(current_index) = queue.iter().position(|entry| entry.id == dragged_entry_id)
+            else {
+                return false;
+            };
+            let mut target_index = match drop_target {
+                PendingPromptDropTarget::Before(target_entry_id) => {
+                    let Some(index) = queue.iter().position(|entry| entry.id == *target_entry_id)
+                    else {
+                        return false;
+                    };
+                    index
+                }
+                PendingPromptDropTarget::End => queue.len(),
+            };
+            let entry = queue.remove(current_index);
+            if current_index < target_index {
+                target_index = target_index.saturating_sub(1);
+            }
+            if target_index == current_index {
+                queue.insert(current_index, entry);
+                return false;
+            }
+            let bounded_target_index = target_index.min(queue.len());
+            queue.insert(bounded_target_index, entry);
+            runtime_state.updated_at = now;
+            true
+        };
+        did_move
+    }
+
+    /// Clears all transient drag state retained for the pending-prompt queue overlay.
+    /// 清除为待发送队列覆盖层保留的全部瞬时拖拽状态。
+    fn clear_pending_prompt_drag_state(&mut self) {
+        self.active_pending_prompt_drop_target = None;
+        self.pending_pending_prompt_drag = None;
+        self.dragging_pending_prompt_entry_id = None;
+    }
+
+    /// Marks one session as waiting on already-inserted internal queue work so the UI no longer looks idle while follow-up dispatch is pending.
+    /// 将某个会话标记为正在等待已接入的内部队列任务，避免后续分发待命期间界面错误表现为空闲。
+    fn mark_session_waiting_for_inserted_prompt_dispatch(&mut self, session_id: SessionId) {
+        if self.session_has_active_run(session_id) {
+            return;
+        }
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Blocked;
+            session.focus =
+                String::from("已有消息接入主会话，正在等待当前系统任务与子代理处理完成后继续。");
+            session.last_updated_label = String::from("刚刚");
+        }
+    }
+
+    /// Replaces the main composer buffer with the provided prompt text and focuses the editor again.
+    /// 使用给定提示词文本替换主提示词缓冲区，并重新聚焦编辑器。
+    fn restore_prompt_into_composer(&mut self, prompt: String) -> Task<Message> {
+        self.push_composer_undo_snapshot();
+        self.composer = prompt.clone();
+        self.composer_buffer = text_editor::Content::with_text(&prompt);
+        self.composer_scroll_offset = 0.0;
+        self.composer_scrollbar_pointer_y = None;
+        self.composer_scrollbar_drag_grab_offset = None;
+        self.composer_context_menu_open = false;
+        self.composer_context_clipboard_text = None;
+        operation::focus(COMPOSER_EDITOR_ID)
     }
 
     /// Clears the floating composer input surface after one successful submit, queue, or interrupt action.
@@ -5900,6 +6383,83 @@ impl VulcanWorkbench {
         self.composer_context_clipboard_text = None;
     }
 
+    /// Inserts one visible prompt-panel entry into the internal system queue immediately, while letting actual execution wait for the system lane to become eligible.
+    /// 立即将一条可见提示词面板项接入内部系统队列，同时让真实执行继续等待系统通道变为可运行状态。
+    fn dispatch_pending_prompt_entry_now(&mut self, entry_id: &str) -> Task<Message> {
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            self.status_message = String::from("当前没有可执行的会话。");
+            return Task::none();
+        };
+        let Some(panel_entry) = self.pending_prompt_panel_entry(session_id, entry_id) else {
+            self.status_message = String::from("未找到可立即处理的待发送消息。");
+            return Task::none();
+        };
+        if panel_entry.state == PendingPromptPanelEntryState::Inserted {
+            self.status_message =
+                String::from("该消息已经进入系统会话队列，请等待主流程继续处理。");
+            return Task::none();
+        }
+        let prompt_entry = self.build_pending_prompt_entry(
+            panel_entry.prompt.clone(),
+            PendingSessionPromptSource::UserFollowup,
+            None,
+            Some(panel_entry.preview.clone()),
+            Some(panel_entry.id.clone()),
+        );
+        if let Err(error) = self.enqueue_session_pending_prompt(session_id, prompt_entry, true) {
+            self.status_message = error;
+            return Task::none();
+        }
+        let _ = self.mark_session_pending_prompt_entry_inserted(session_id, entry_id);
+        self.mark_session_waiting_for_inserted_prompt_dispatch(session_id);
+        self.status_message = String::from("已接入系统会话队列，正在尝试立即插入主会话。");
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_start_next_pending_prompt(session_id, true),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+            operation::focus(COMPOSER_EDITOR_ID),
+        ])
+    }
+
+    /// Restores one queued prompt entry back into the composer so the user can modify it before resubmitting.
+    /// 将某条已排队提示词恢复回编辑器，供用户在重新提交前继续修改。
+    fn edit_pending_prompt_entry(&mut self, entry_id: &str) -> Task<Message> {
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            self.status_message = String::from("当前没有可编辑队列的会话。");
+            return Task::none();
+        };
+        let Some(prompt_entry) = self.remove_session_pending_prompt_entry(session_id, entry_id)
+        else {
+            self.status_message = String::from("未找到要编辑的待发送消息。");
+            return Task::none();
+        };
+        self.clear_pending_prompt_drag_state();
+        self.status_message = String::from("已将待发送消息恢复到输入框，可继续修改。");
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.restore_prompt_into_composer(prompt_entry.prompt),
+        ])
+    }
+
+    /// Removes one queued prompt entry without dispatching it and persists the updated queue order.
+    /// 移除一条已排队提示词且不发送，并持久化更新后的队列顺序。
+    fn remove_pending_prompt_entry(&mut self, entry_id: &str) -> Task<Message> {
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            self.status_message = String::from("当前没有可修改队列的会话。");
+            return Task::none();
+        };
+        if self
+            .remove_session_pending_prompt_entry(session_id, entry_id)
+            .is_none()
+        {
+            self.status_message = String::from("未找到要移除的待发送消息。");
+            return Task::none();
+        }
+        self.clear_pending_prompt_drag_state();
+        self.status_message = String::from("已移除所选待发送消息。");
+        self.persist_workspace_snapshot_task()
+    }
+
     /// Starts one concrete runtime run from the provided prompt entry after it has already been accepted for immediate dispatch.
     /// 在某条提示词项已经被接受为立即分发后，根据它启动一次具体运行时执行。
     fn begin_session_run_from_prompt_entry(
@@ -5911,6 +6471,12 @@ impl VulcanWorkbench {
         if !composer_text_has_submittable_content(&prompt_entry.prompt) {
             self.status_message = String::from("请输入任务指令后再启动执行。");
             return Task::none();
+        }
+        if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
+            let _ = self.remove_session_pending_prompt_entry(session_id, panel_entry_id);
+            if self.selected_session().map(|session| session.id) == Some(session_id) {
+                self.clear_pending_prompt_drag_state();
+            }
         }
 
         self.ensure_session_conversation_state_loaded(session_id);
@@ -6029,6 +6595,49 @@ impl VulcanWorkbench {
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }
 
+    /// Stops every active or queued work item owned by one session, including the root run, child subagents, and pending internal follow-ups.
+    /// 停止某个会话拥有的全部活动或排队工作，包括根运行、子代理与内部待处理跟进消息。
+    fn stop_all_session_work(&mut self, session_id: SessionId) -> Task<Message> {
+        if self.session_has_active_run(session_id) {
+            return self.stop_session_run_for_session(session_id, false);
+        }
+        let had_running_subagents = self.session_has_running_subagent_tasks(session_id);
+        let cleared_system_queue = self.clear_session_pending_prompt_queue(session_id, true);
+        if !had_running_subagents && !cleared_system_queue {
+            self.status_message = String::from("当前没有正在执行的 AI 调用。");
+            return Task::none();
+        }
+
+        self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.mark_running_subagent_tasks_stopped(session_id);
+        self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Blocked;
+            session.last_updated_label = String::from("刚刚");
+        }
+        self.status_message = String::from("已停止全部 AI 调用与等待中的系统任务。");
+        self.push_session_message(
+            session_id,
+            SessionMessageKind::Assistant,
+            "执行已停止",
+            "已按用户请求停止当前会话的子代理与系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。",
+        );
+        self.push_activity(
+            ActivityLevel::Warning,
+            "会话全部任务已停止",
+            "当前会话的根执行、子代理以及系统内部等待中的后续消息都已停止；你可以重新整理待插入列表后再继续。",
+        );
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+        ])
+    }
+
     /// Stops one specific session run and optionally continues with the next queued prompt immediately afterward.
     /// 停止某个指定会话的运行，并可选地在其后立即继续处理下一条排队提示词。
     fn stop_session_run_for_session(
@@ -6055,6 +6664,9 @@ impl VulcanWorkbench {
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.mark_running_subagent_tasks_stopped(session_id);
+        if !continue_with_next_prompt {
+            self.clear_session_pending_prompt_queue(session_id, true);
+        }
         self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
 
         if continue_with_next_prompt {
@@ -6065,17 +6677,17 @@ impl VulcanWorkbench {
                 "当前真实执行已被最新消息打断，系统将立即切换到队列头部的新请求。",
             );
         } else {
-            self.status_message = String::from("已停止当前 AI 调用。");
+            self.status_message = String::from("已停止全部 AI 调用与等待中的系统任务。");
             self.push_session_message(
                 session_id,
                 SessionMessageKind::Assistant,
                 "执行已停止",
-                "已按用户请求停止当前 AI 调用，系统保留截至停止时的上下文、思考与输出片段。",
+                "已按用户请求停止当前 AI 调用、运行中的子代理以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。",
             );
             self.push_activity(
                 ActivityLevel::Warning,
-                "AI 调用已停止",
-                "当前真实执行已被用户中止，可直接修改提示词后重新发起新的调用。",
+                "会话全部任务已停止",
+                "当前真实执行已被用户中止；子代理与等待中的系统消息也已一并停止，可整理待插入列表后重新发起新的调用。",
             );
         }
 
@@ -6091,8 +6703,8 @@ impl VulcanWorkbench {
         ])
     }
 
-    /// Submits the current composer draft for the selected session, queueing it when another run is already active and optionally interrupting the in-flight run first.
-    /// 为当前选中会话提交提示词草稿；若已有活动运行则先排队，并可选地在排队前打断正在执行的运行。
+    /// Submits the current composer draft for the selected session, staging it in the visible panel whenever the internal system lane is still busy.
+    /// 为当前选中会话提交提示词草稿；若内部系统通道仍然繁忙，则先把它暂存到可见面板中。
     fn submit_selected_session_prompt(&mut self, interrupt_running: bool) -> Task<Message> {
         let Some((session_id, session_title)) = self
             .selected_session()
@@ -6109,30 +6721,30 @@ impl VulcanWorkbench {
             return Task::none();
         }
 
+        if self.session_has_blocking_system_prompt_work(session_id) {
+            let panel_entry = self.build_pending_prompt_panel_entry(current_prompt);
+            if let Err(error) =
+                self.enqueue_session_pending_prompt_panel_entry(session_id, panel_entry)
+            {
+                self.status_message = error;
+                return Task::none();
+            }
+            self.clear_composer_input();
+            self.status_message =
+                String::from("已加入待插入列表；你可以稍后手动点击插入，将它接入系统会话队列。");
+            return Task::batch([
+                self.persist_workspace_snapshot_task(),
+                operation::focus(COMPOSER_EDITOR_ID),
+            ]);
+        }
+
         let prompt_source = if interrupt_running {
             PendingSessionPromptSource::UserInterrupt
         } else {
             PendingSessionPromptSource::UserFollowup
         };
         let prompt_entry =
-            self.build_pending_prompt_entry(current_prompt, prompt_source, None, None);
-
-        if self.session_has_active_run(session_id) {
-            if let Err(error) =
-                self.enqueue_session_pending_prompt(session_id, prompt_entry, interrupt_running)
-            {
-                self.status_message = error;
-                return Task::none();
-            }
-            self.clear_composer_input();
-            if interrupt_running {
-                return self.stop_session_run_for_session(session_id, true);
-            }
-            self.status_message =
-                String::from("已加入待发送队列，当前会在本轮执行结束后自动发送。");
-            return self.persist_workspace_snapshot_task();
-        }
-
+            self.build_pending_prompt_entry(current_prompt, prompt_source, None, None, None);
         self.clear_composer_input();
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }
@@ -6152,6 +6764,7 @@ impl VulcanWorkbench {
             PendingSessionPromptSource::DelegateCompletion,
             Some(state.task_id),
             Some(build_delegate_completion_followup_preview(state)),
+            None,
         );
         if let Err(error) =
             self.enqueue_session_pending_prompt(parent_session_id, prompt_entry, false)
@@ -8948,14 +9561,6 @@ impl VulcanWorkbench {
     /// 返回某个指定会话当前是否拥有活动的真实 AI 运行。
     fn session_has_active_run(&self, session_id: SessionId) -> bool {
         self.active_runs.contains_key(&session_id)
-    }
-
-    /// Returns whether the currently selected session owns an active real-AI run.
-    /// 返回当前选中会话是否拥有活动的真实 AI 运行。
-    pub(super) fn has_active_run(&self) -> bool {
-        self.selected_session()
-            .map(|session| self.session_has_active_run(session.id))
-            .unwrap_or(false)
     }
 
     /// Clears the active run state tracked for one session after its stream finishes or is stopped.

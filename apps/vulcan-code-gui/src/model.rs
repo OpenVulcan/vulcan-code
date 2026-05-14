@@ -676,8 +676,55 @@ pub struct PendingSessionPromptEntry {
     /// Optional delegated task identifier associated with the queued follow-up.
     /// 与该排队跟进关联的可选委派任务标识。
     pub task_id: Option<String>,
+    /// Optional visible-panel queue entry identifier from which this system prompt was inserted.
+    /// 该系统提示词由哪个可见面板队列项插入而来的可选标识。
+    #[serde(default)]
+    pub panel_entry_id: Option<String>,
     /// Unix-millis text captured when the queue entry was created.
     /// 捕获该队列项创建时间的 Unix 毫秒文本。
+    pub created_at: String,
+}
+
+/// Stable state retained by one visible prompt-panel queue entry shown above the composer.
+/// 显示在提示词输入框上方的可见队列项所保留的稳定状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingPromptPanelEntryState {
+    /// Entry is still waiting for an explicit user insertion into the internal system queue.
+    /// 当前条目仍在等待用户显式插入到内部系统队列。
+    Ready,
+    /// Entry has already been inserted into the internal system queue and is now waiting there silently.
+    /// 当前条目已经插入到内部系统队列，并正在该队列中静默等待。
+    Inserted,
+}
+
+impl Default for PendingPromptPanelEntryState {
+    /// Returns the default visible prompt-panel entry state used for older persisted snapshots.
+    /// 返回旧持久化快照恢复时使用的默认可见队列项状态。
+    fn default() -> Self {
+        Self::Ready
+    }
+}
+
+/// One visible user-authored prompt retained inside the dedicated insertion panel above the composer.
+/// 保留在提示词输入框上方独立插入面板中的一条用户可见提示词项。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPromptPanelEntry {
+    /// Stable panel-entry identifier used for reordering, editing, and insertion tracking.
+    /// 用于重排、编辑与插入跟踪的稳定面板项标识。
+    pub id: String,
+    /// Full user-authored prompt text retained until it is explicitly inserted or removed.
+    /// 在被显式插入或移除之前一直保留的完整用户提示词文本。
+    pub prompt: String,
+    /// Compact preview text rendered inside the visible prompt-panel row.
+    /// 渲染在可见提示词面板行中的紧凑预览文本。
+    pub preview: String,
+    /// Stable insertion state used to hide controls after the prompt has entered the internal system queue.
+    /// 提示词进入内部系统队列后用于隐藏控制按钮的稳定插入状态。
+    #[serde(default)]
+    pub state: PendingPromptPanelEntryState,
+    /// Unix-millis text captured when the visible prompt-panel entry was created.
+    /// 捕获该可见提示词面板项创建时间的 Unix 毫秒文本。
     pub created_at: String,
 }
 
@@ -693,6 +740,10 @@ pub struct SessionTranscriptUiState {
     /// 随会话一起持久化保存的待发送提示词队列，用于让排队跟进跨重载保留。
     #[serde(default)]
     pub pending_prompt_queue: Vec<PendingSessionPromptEntry>,
+    /// Visible prompt-panel queue persisted with the session so user-authored staged inserts survive reloads independently from the internal system queue.
+    /// 随会话一起持久化保存的可见提示词面板队列，使用户分批插入项可以独立于内部系统队列跨重载保留。
+    #[serde(default)]
+    pub pending_prompt_panel_queue: Vec<PendingPromptPanelEntry>,
 }
 
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
