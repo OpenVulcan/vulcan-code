@@ -2301,30 +2301,125 @@ impl VulcanWorkbench {
             .into()
     }
 
-    /// Builds one floating edge-attached navigation button used by the transcript-level subagent overlay.
-    /// 构建一枚转录层子代理悬浮导航使用的贴边按钮。
-    pub(super) fn view_subagent_navigation_button(
+    /// Builds the collapsed vertical handle used by the left-edge subagent dispatch navigation overlay.
+    /// 构建左侧贴边子代理调度导航覆盖层使用的折叠竖向把手。
+    pub(super) fn view_subagent_navigation_handle(
         &self,
-        label: impl Into<String>,
-        icon: impl Into<Element<'static, Message>>,
+        is_expanded: bool,
+    ) -> Element<'_, Message> {
+        let handle_label = column![
+            text("子").size(12),
+            text("代").size(12),
+            text("理").size(12),
+        ]
+        .spacing(1)
+        .align_x(Center);
+        container(handle_label)
+            .width(SUBAGENT_NAVIGATION_COLLAPSED_WIDTH)
+            .height(118)
+            .center(Fill)
+            .style(move |theme| style::subagent_overlay_navigation_handle_style(theme, is_expanded))
+            .into()
+    }
+
+    /// Builds one rectangular row button shown inside the expanded subagent dispatch navigation panel.
+    /// 构建展开的子代理调度导航面板内部显示的单个直角行按钮。
+    pub(super) fn view_subagent_navigation_row_button(
+        &self,
+        label: String,
         on_press: Message,
         is_selected: bool,
-    ) -> Element<'static, Message> {
-        let label = label.into();
-        let icon = icon.into();
+        is_danger: bool,
+    ) -> Element<'_, Message> {
         button(
-            container(row![icon, text(label).size(13),].spacing(8).align_y(Center))
-                .padding([9, 16]),
+            container(
+                text(label)
+                    .size(12)
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            )
+            .width(Fill)
+            .height(SUBAGENT_NAVIGATION_ROW_HEIGHT)
+            .padding([0, 8])
+            .clip(true)
+            .align_y(Center)
+            .align_x(iced::Alignment::Start),
         )
+        .padding(0)
+        .width(Fill)
+        .height(SUBAGENT_NAVIGATION_ROW_HEIGHT)
         .style(move |theme, status| {
-            style::subagent_overlay_navigation_button_style(theme, status, is_selected)
+            style::subagent_overlay_navigation_row_button_style(
+                theme,
+                status,
+                is_selected,
+                is_danger,
+            )
         })
         .on_press(on_press)
         .into()
     }
 
-    /// Builds one floating navigation overlay pinned against the left edge of the whole session panel instead of the inner transcript frame.
-    /// 构建一个贴着整个会话面板左边缘而非内部转录框的悬浮导航覆盖层。
+    /// Builds the compact label used by one subagent dispatch row from its agent name and optional task description.
+    /// 根据代理名称与可选任务简介构建单条子代理调度行使用的紧凑标签。
+    pub(super) fn subagent_navigation_task_label(&self, state: &SubagentTaskPanelState) -> String {
+        let label = state.subagent_label.trim();
+        let description = state
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        match description {
+            Some(description) if !label.contains(description) => {
+                format!("{label}（{description}）")
+            }
+            _ if !label.is_empty() => label.to_string(),
+            _ => String::from("子代理"),
+        }
+    }
+
+    /// Builds the expanded subagent dispatch navigation panel rows.
+    /// 构建展开状态下的子代理调度导航面板任务行。
+    pub(super) fn view_expanded_subagent_navigation_panel(
+        &self,
+        active_subagent_panel_state: Option<&SubagentTaskPanelState>,
+        active_subagent_task_id: Option<SessionId>,
+        navigation_tasks: Vec<SubagentTaskPanelState>,
+    ) -> Element<'_, Message> {
+        let mut navigation_column = column![].spacing(SUBAGENT_NAVIGATION_ROW_GAP);
+        if active_subagent_panel_state.is_some() {
+            navigation_column = navigation_column.push(self.view_subagent_navigation_row_button(
+                String::from("返回主会话"),
+                Message::ReturnToSelectedSessionTranscript,
+                false,
+                false,
+            ));
+        }
+        if active_subagent_panel_state.is_some_and(|state| state.run_state.is_running()) {
+            navigation_column = navigation_column.push(self.view_subagent_navigation_row_button(
+                String::from("停止当前代理"),
+                Message::StopSelectedSubagentTask,
+                false,
+                true,
+            ));
+        }
+        for state in navigation_tasks {
+            let is_selected = Some(state.task_id) == active_subagent_task_id;
+            navigation_column = navigation_column.push(self.view_subagent_navigation_row_button(
+                self.subagent_navigation_task_label(&state),
+                Message::OpenSelectedSessionSubagentPanel(state.task_id),
+                is_selected,
+                false,
+            ));
+        }
+        container(navigation_column)
+            .width(SUBAGENT_NAVIGATION_EXPANDED_WIDTH - SUBAGENT_NAVIGATION_COLLAPSED_WIDTH)
+            .padding([8, 8])
+            .style(style::subagent_overlay_navigation_panel_style)
+            .into()
+    }
+
+    /// Builds one collapsible floating navigation overlay pinned against the left edge of the whole session panel instead of the inner transcript frame.
+    /// 构建一个可折叠、贴着整个会话面板左边缘而非内部转录框的悬浮导航覆盖层。
     pub(super) fn view_selected_session_subagent_navigation_overlay(
         &self,
     ) -> Option<Element<'_, Message>> {
@@ -2334,79 +2429,43 @@ impl VulcanWorkbench {
         let active_subagent_task_id = active_subagent_panel_state
             .as_ref()
             .map(|state| state.task_id);
-        let active_tasks = self.selected_session_active_subagent_tasks();
-        let has_switch_targets = active_tasks
-            .iter()
-            .any(|state| Some(state.task_id) != active_subagent_task_id);
+        let navigation_tasks = self.selected_session_active_subagent_tasks();
 
-        if active_subagent_panel_state.is_none() && active_tasks.is_empty() {
+        if active_subagent_panel_state.is_none() && navigation_tasks.is_empty() {
             return None;
         }
 
-        let mut navigation_column = column![].spacing(10).align_x(iced::Alignment::Start);
-        if active_subagent_panel_state.is_some() {
-            let return_icon: Element<'static, Message> =
-                codicon::chevron_left().size(12).line_height(1.0).into();
-            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
-                "返回主会话",
-                return_icon,
-                Message::ReturnToSelectedSessionTranscript,
-                false,
-            ));
-        }
-
-        if active_subagent_panel_state
-            .as_ref()
-            .is_some_and(|state| state.run_state == SubagentTaskRunState::Running)
-        {
-            let stop_icon: Element<'static, Message> =
-                codicon::debug_stop().size(12).line_height(1.0).into();
-            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
-                "停止当前代理",
-                stop_icon,
-                Message::StopSelectedSubagentTask,
-                false,
-            ));
-        }
-
-        if let Some(current_state) = active_subagent_panel_state
-            .as_ref()
-            .filter(|_| has_switch_targets)
-        {
-            let current_icon: Element<'static, Message> =
-                if current_state.run_state == SubagentTaskRunState::Running {
-                    codicon::sync().size(13).line_height(1.0).into()
-                } else {
-                    codicon::check().size(13).line_height(1.0).into()
-                };
-            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
-                current_state.subagent_label.clone(),
-                current_icon,
-                Message::OpenSelectedSessionSubagentPanel(current_state.task_id),
-                true,
-            ));
-        }
-
-        for state in active_tasks {
-            if Some(state.task_id) == active_subagent_task_id {
-                continue;
-            }
-            let running_icon: Element<'static, Message> =
-                codicon::sync().size(13).line_height(1.0).into();
-            navigation_column = navigation_column.push(self.view_subagent_navigation_button(
-                state.subagent_label.clone(),
-                running_icon,
-                Message::OpenSelectedSessionSubagentPanel(state.task_id),
-                false,
-            ));
-        }
+        let is_expanded = self.subagent_navigation_expanded;
+        let handle = self.view_subagent_navigation_handle(is_expanded);
+        let overlay_width = if is_expanded {
+            SUBAGENT_NAVIGATION_EXPANDED_WIDTH
+        } else {
+            SUBAGENT_NAVIGATION_COLLAPSED_WIDTH
+        };
+        let overlay_content: Element<'_, Message> = if is_expanded {
+            row![
+                handle,
+                self.view_expanded_subagent_navigation_panel(
+                    active_subagent_panel_state.as_ref(),
+                    active_subagent_task_id,
+                    navigation_tasks
+                )
+            ]
+            .spacing(0)
+            .align_y(iced::Alignment::Start)
+            .into()
+        } else {
+            handle
+        };
 
         Some(
-            pin(container(navigation_column).width(Shrink))
-                .position(iced::Point::new(-16.0, 28.0))
-                .width(Fill)
-                .height(Fill)
-                .into(),
+            pin(mouse_area(container(overlay_content).width(overlay_width))
+                .on_enter(Message::SubagentNavigationHoverChanged(true))
+                .on_exit(Message::SubagentNavigationHoverChanged(false)))
+            .position(iced::Point::new(-1.0, 32.0))
+            .width(Fill)
+            .height(Fill)
+            .into(),
         )
     }
 

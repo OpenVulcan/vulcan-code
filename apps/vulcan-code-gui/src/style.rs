@@ -357,99 +357,155 @@ pub fn subtle_panel_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
-/// Returns the edge-attached button style used by the floating subagent navigation overlay.
-/// 返回悬浮子代理导航覆盖层使用的贴边按钮样式。
-pub fn subagent_overlay_navigation_button_style(
+/// Returns the left-edge handle style used by the collapsible subagent dispatch navigation overlay.
+/// 返回可折叠子代理调度导航覆盖层使用的左侧贴边把手样式。
+pub fn subagent_overlay_navigation_handle_style(
     theme: &Theme,
-    status: button::Status,
-    is_selected: bool,
-) -> button::Style {
+    is_expanded: bool,
+) -> container::Style {
     let palette = theme.extended_palette();
-    let base_background = if is_selected {
-        palette.primary.weak.color
-    } else {
-        palette.background.base.color
-    };
-    let base_text = if is_selected {
-        palette.primary.strong.text
-    } else {
-        palette.background.base.text
-    };
-    let base_border = if is_selected {
-        palette.primary.strong.color
-    } else {
-        palette.background.strong.color
-    };
-    let base = button::Style {
-        background: Some(Background::Color(base_background)),
-        text_color: base_text,
+
+    container::Style {
+        background: Some(Background::Color(palette.primary.base.color)),
+        text_color: Some(palette.primary.base.text),
         border: Border {
             radius: iced::border::Radius {
                 top_left: 0.0,
-                top_right: 16.0,
-                bottom_right: 16.0,
+                top_right: if is_expanded { 0.0 } else { 12.0 },
+                bottom_right: if is_expanded { 0.0 } else { 12.0 },
                 bottom_left: 0.0,
             },
             width: 1.0,
-            color: base_border,
+            color: palette.primary.strong.color.scale_alpha(0.72),
         },
         shadow: Shadow {
             color: Color {
                 a: 0.14,
                 ..Color::BLACK
             },
-            offset: Vector::new(0.0, 6.0),
-            blur_radius: 16.0,
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the expanded panel style used by the left-edge subagent dispatch navigation overlay.
+/// 返回左侧贴边子代理调度导航覆盖层使用的展开面板样式。
+pub fn subagent_overlay_navigation_panel_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.98),
+        )),
+        border: Border {
+            radius: iced::border::Radius {
+                top_left: 0.0,
+                top_right: 8.0,
+                bottom_right: 8.0,
+                bottom_left: 0.0,
+            },
+            width: 1.0,
+            color: palette.primary.weak.color.scale_alpha(0.44),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.18,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 18.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the rectangular row-button style used inside the expanded subagent dispatch navigation panel.
+/// 返回展开的子代理调度导航面板内部使用的直角行按钮样式。
+pub fn subagent_overlay_navigation_row_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_selected: bool,
+    is_danger: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base_background = if is_selected {
+        palette.primary.weak.color.scale_alpha(0.86)
+    } else {
+        palette.background.weak.color.scale_alpha(0.92)
+    };
+    let base_text = if is_danger {
+        palette.danger.base.color
+    } else if is_selected {
+        palette.primary.strong.text
+    } else {
+        palette.background.base.text
+    };
+    let base = button::Style {
+        background: Some(Background::Color(base_background)),
+        text_color: base_text,
+        border: Border {
+            radius: 0.0.into(),
+            width: if is_selected { 1.0 } else { 0.0 },
+            color: if is_selected {
+                palette.primary.strong.color
+            } else {
+                Color::TRANSPARENT
+            },
         },
         snap: true,
+        ..Default::default()
     };
 
     match status {
         button::Status::Active => base,
         button::Status::Hovered => button::Style {
-            background: Some(Background::Color(if is_selected {
-                palette.primary.base.color
+            background: Some(Background::Color(if is_danger {
+                palette.danger.weak.color.scale_alpha(0.86)
             } else {
-                palette.background.weak.color
+                palette.primary.weak.color
             })),
-            text_color: if is_selected {
-                palette.primary.strong.text
+            text_color: if is_danger {
+                palette.danger.strong.color
             } else {
-                palette.background.base.text
+                palette.primary.strong.text
             },
             border: Border {
-                color: if is_selected {
-                    palette.primary.strong.color
+                width: 1.0,
+                color: if is_danger {
+                    palette.danger.strong.color
                 } else {
-                    palette.primary.weak.color
+                    palette.primary.strong.color
                 },
                 ..base.border
             },
             ..base
         },
         button::Status::Pressed => button::Style {
-            background: Some(Background::Color(if is_selected {
-                palette.primary.strong.color
+            background: Some(Background::Color(if is_danger {
+                palette.danger.strong.color
             } else {
-                palette.background.strong.color
+                palette.primary.base.color
             })),
-            text_color: if is_selected {
-                palette.primary.strong.text
+            text_color: if is_danger {
+                palette.danger.strong.text
             } else {
-                palette.background.base.text
+                palette.primary.base.text
             },
             border: Border {
-                color: if is_selected {
-                    palette.primary.strong.color
+                width: 1.0,
+                color: if is_danger {
+                    palette.danger.strong.color
                 } else {
-                    palette.background.strong.text
+                    palette.primary.strong.color
                 },
                 ..base.border
             },
             ..base
         },
         button::Status::Disabled => button::Style {
-            text_color: palette.background.base.text.scale_alpha(0.34),
+            text_color: base.text_color.scale_alpha(0.34),
             ..base
         },
     }

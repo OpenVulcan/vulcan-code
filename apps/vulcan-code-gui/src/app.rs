@@ -256,6 +256,22 @@ const TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE: f32 = 38.0;
 /// 转录区浮动回底按钮覆盖层使用的共享底部内边距。
 const TRANSCRIPT_JUMP_TO_BOTTOM_OVERLAY_BOTTOM_INSET: u16 = 26;
 
+/// Collapsed width used by the left-edge subagent dispatch navigation handle.
+/// 左侧贴边子代理调度导航把手使用的折叠宽度。
+const SUBAGENT_NAVIGATION_COLLAPSED_WIDTH: f32 = 20.0;
+
+/// Expanded width used by the left-edge subagent dispatch navigation panel.
+/// 左侧贴边子代理调度导航面板使用的展开宽度。
+const SUBAGENT_NAVIGATION_EXPANDED_WIDTH: f32 = 220.0;
+
+/// Fixed height used by one subagent dispatch navigation row inside the expanded panel.
+/// 展开的子代理调度导航面板内单条任务行使用的固定高度。
+const SUBAGENT_NAVIGATION_ROW_HEIGHT: f32 = 32.0;
+
+/// Vertical spacing used between subagent dispatch navigation rows.
+/// 子代理调度导航任务行之间使用的垂直间距。
+const SUBAGENT_NAVIGATION_ROW_GAP: f32 = 2.0;
+
 /// Shared animation tick used by drag-driven transcript auto-scroll while the pointer is kept outside the visible viewport.
 /// 当指针持续停留在可见视口之外时，拖拽驱动的转录自动滚动使用的共享动画 Tick。
 const TRANSCRIPT_DRAG_AUTO_SCROLL_TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -1470,9 +1486,15 @@ pub struct VulcanWorkbench {
     /// Session-scoped cached subagent task panels keyed first by parent session and then by stable child task identifier.
     /// 先按父会话、再按稳定子任务标识索引的按会话归属子代理任务面板缓存集合。
     session_subagent_tasks: BTreeMap<SessionId, BTreeMap<SessionId, SubagentTaskPanelState>>,
+    /// Parent sessions whose current execution round should keep the subagent navigation panel visible until the round fully settles.
+    /// 当前执行轮次应保持子代理导航面板可见、直到整轮完全收敛的父会话集合。
+    session_subagent_navigation_rounds: BTreeSet<SessionId>,
     /// Currently opened subagent panel that temporarily replaces the main parent transcript surface.
     /// 当前已打开、并临时替代主父会话转录表面的子代理面板选择状态。
     active_subagent_panel: Option<SelectedSubagentTaskPanel>,
+    /// Whether the left-edge subagent navigation panel is currently expanded by pointer hover.
+    /// 左侧贴边子代理导航面板当前是否因鼠标悬停而展开。
+    subagent_navigation_expanded: bool,
     /// Detached subagent task identifiers that already own one live background listener task in the GUI layer.
     /// 已经在图形界面层挂接后台实时监听任务的分离子代理任务标识集合。
     detached_subagent_task_listeners: BTreeSet<SessionId>,
@@ -2890,6 +2912,9 @@ enum Message {
     /// Opens one cached subagent task panel inside the main transcript region.
     /// 在主转录区域内部打开一个已缓存的子代理任务面板。
     OpenSelectedSessionSubagentPanel(SessionId),
+    /// Updates whether the left-edge subagent navigation panel is expanded by pointer hover.
+    /// 更新左侧贴边子代理导航面板是否因鼠标悬停而展开。
+    SubagentNavigationHoverChanged(bool),
     /// Stops the currently opened running subagent task without aborting the parent session.
     /// 停止当前已打开的运行中子代理任务，而不影响父会话。
     StopSelectedSubagentTask,
@@ -3358,7 +3383,9 @@ impl VulcanWorkbench {
             active_thinking_modal: None,
             active_tool_modal: None,
             session_subagent_tasks: BTreeMap::new(),
+            session_subagent_navigation_rounds: BTreeSet::new(),
             active_subagent_panel: None,
+            subagent_navigation_expanded: false,
             detached_subagent_task_listeners: BTreeSet::new(),
             streaming_output_message_ids: BTreeMap::new(),
             session_tool_call_message_ids: BTreeMap::new(),
@@ -3665,7 +3692,9 @@ impl VulcanWorkbench {
                 self.active_thinking_modal = None;
                 self.active_tool_modal = None;
                 self.session_subagent_tasks.clear();
+                self.session_subagent_navigation_rounds.clear();
                 self.active_subagent_panel = None;
+                self.subagent_navigation_expanded = false;
                 self.detached_subagent_task_listeners.clear();
                 self.streaming_output_message_ids.clear();
                 self.runtime_event_raw_buffers.clear();
@@ -5108,6 +5137,10 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::SubagentNavigationHoverChanged(is_expanded) => {
+                self.subagent_navigation_expanded = is_expanded;
+                Task::none()
+            }
             Message::StopSelectedSubagentTask => {
                 let Some(state) = self.selected_subagent_task_panel_state().cloned() else {
                     self.status_message = String::from("当前没有可停止的子代理面板。");
@@ -5977,6 +6010,37 @@ impl VulcanWorkbench {
             })
     }
 
+    /// Returns whether the internal prompt queue still contains delegated subagent completion callbacks for the provided parent session.
+    /// 返回给定父会话的内部提示词队列中是否仍包含子代理完成回流回调。
+    fn session_has_pending_delegate_completion_prompt(&self, session_id: SessionId) -> bool {
+        self.session_pending_prompt_queue(session_id)
+            .iter()
+            .any(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
+    }
+
+    /// Returns whether one session should keep showing its subagent navigation round even after individual child tasks reach terminal states.
+    /// 返回某个会话是否仍应保留当前子代理导航轮次，即使单个子任务已经进入终态。
+    fn session_should_keep_subagent_navigation_round(&self, session_id: SessionId) -> bool {
+        self.session_has_active_run(session_id)
+            || self.session_has_running_subagent_tasks(session_id)
+            || self.session_has_pending_delegate_completion_prompt(session_id)
+            || self
+                .active_subagent_panel
+                .is_some_and(|selection| selection.parent_session_id == session_id)
+    }
+
+    /// Collapses and hides the subagent navigation round once the parent run, child tasks, and delegated callbacks have all settled.
+    /// 当父运行、子任务与委派回调全部收敛后，折叠并隐藏子代理导航轮次。
+    fn refresh_subagent_navigation_round_visibility(&mut self, session_id: SessionId) {
+        if self.session_should_keep_subagent_navigation_round(session_id) {
+            return;
+        }
+        self.session_subagent_navigation_rounds.remove(&session_id);
+        if self.selected_session().map(|session| session.id) == Some(session_id) {
+            self.subagent_navigation_expanded = false;
+        }
+    }
+
     /// Returns whether the internal system execution lane is still busy for the provided session, including active runs, internal queued callbacks, and running subagents.
     /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、内部排队回调以及运行中的子代理。
     fn session_has_blocking_system_prompt_work(&self, session_id: SessionId) -> bool {
@@ -6632,6 +6696,7 @@ impl VulcanWorkbench {
             "会话全部任务已停止",
             "当前会话的根执行、子代理以及系统内部等待中的后续消息都已停止；你可以重新整理待插入列表后再继续。",
         );
+        self.refresh_subagent_navigation_round_visibility(session_id);
         Task::batch([
             self.persist_workspace_snapshot_task(),
             self.maybe_follow_selected_session_transcript_tail(session_id),
@@ -6690,6 +6755,7 @@ impl VulcanWorkbench {
                 "当前真实执行已被用户中止；子代理与等待中的系统消息也已一并停止，可整理待插入列表后重新发起新的调用。",
             );
         }
+        self.refresh_subagent_navigation_round_visibility(session_id);
 
         let next_prompt_task = if continue_with_next_prompt {
             self.maybe_start_next_pending_prompt(session_id, true)
@@ -8182,12 +8248,23 @@ impl VulcanWorkbench {
             .or_else(|| self.selected_session().map(|session| session.id))
     }
 
-    /// Returns the running subagent task entries that should be rendered as badges for the selected parent session.
-    /// 返回当前选中父会话中应渲染为徽标的运行中子代理任务条目。
+    /// Returns the subagent task entries that should stay visible inside the selected session navigation panel for the current coordination round.
+    /// 返回当前协调轮次中应继续显示在选中会话导航面板里的子代理任务条目。
     fn selected_session_active_subagent_tasks(&self) -> Vec<SubagentTaskPanelState> {
         let Some(session_id) = self.selected_session().map(|session| session.id) else {
             return Vec::new();
         };
+        let has_open_panel = self
+            .active_subagent_panel
+            .is_some_and(|selection| selection.parent_session_id == session_id);
+        let has_visible_round = has_open_panel
+            || self
+                .session_subagent_navigation_rounds
+                .contains(&session_id)
+            || self.session_has_running_subagent_tasks(session_id);
+        if !has_visible_round {
+            return Vec::new();
+        }
         self.session_subagent_tasks
             .get(&session_id)
             .map(|entries| {
@@ -8195,11 +8272,7 @@ impl VulcanWorkbench {
                     .values()
                     .map(|state| self.normalized_subagent_task_panel_state(state))
                     .filter(|state| {
-                        state.run_state.is_running()
-                            && self.subagent_task_panel_has_recoverable_detail(
-                                session_id,
-                                state.task_id,
-                            )
+                        self.subagent_task_panel_has_recoverable_detail(session_id, state.task_id)
                     })
                     .collect()
             })
@@ -8809,6 +8882,7 @@ impl VulcanWorkbench {
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.refresh_session_agent_view_buffers(session_id);
+        self.refresh_subagent_navigation_round_visibility(session_id);
 
         Task::batch([
             self.persist_workspace_snapshot_task(),
@@ -8923,7 +8997,9 @@ impl VulcanWorkbench {
         self.active_thinking_modal = None;
         self.active_tool_modal = None;
         self.session_subagent_tasks.clear();
+        self.session_subagent_navigation_rounds.clear();
         self.active_subagent_panel = None;
+        self.subagent_navigation_expanded = false;
         self.detached_subagent_task_listeners.clear();
         self.streaming_output_message_ids.clear();
         self.rebuild_session_message_raw_buffers();
@@ -9245,6 +9321,7 @@ impl VulcanWorkbench {
         self.close_thinking_modal_for_session(session_id);
         self.close_tool_modal_for_session(session_id);
         self.session_subagent_tasks.remove(&session_id);
+        self.session_subagent_navigation_rounds.remove(&session_id);
         if self
             .active_subagent_panel
             .is_some_and(|selection| selection.parent_session_id == session_id)
@@ -9537,6 +9614,7 @@ impl VulcanWorkbench {
         let Some(state) = parse_subagent_task_panel_metadata(session_id, metadata) else {
             return true;
         };
+        self.session_subagent_navigation_rounds.insert(session_id);
         if let Some(prompt) = prompt.as_deref() {
             self.seed_subagent_task_prompt_if_needed(state.task_id, prompt);
         }
