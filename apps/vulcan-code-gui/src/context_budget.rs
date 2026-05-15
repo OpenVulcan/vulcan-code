@@ -358,14 +358,19 @@ fn estimate_core_message_tokens(message: &CoreConversationMessage) -> usize {
 fn estimate_conversation_attachment_tokens(
     attachment: &vulcan_core::types::ConversationAttachment,
 ) -> usize {
-    let kind_reserve = match attachment.kind {
-        vulcan_core::types::ConversationAttachmentKind::Audio => 1_536usize,
-        vulcan_core::types::ConversationAttachmentKind::Image => 768usize,
-        vulcan_core::types::ConversationAttachmentKind::Video => 4_096usize,
-        vulcan_core::types::ConversationAttachmentKind::Pdf => 2_048usize,
+    let (kind_reserve, byte_divisor) = match attachment.kind {
+        vulcan_core::types::ConversationAttachmentKind::Audio => (1_536usize, 768u64),
+        vulcan_core::types::ConversationAttachmentKind::Image => (768usize, 1_024u64),
+        vulcan_core::types::ConversationAttachmentKind::Video => (4_096usize, 512u64),
+        vulcan_core::types::ConversationAttachmentKind::Pdf => (2_048usize, 896u64),
     };
+    let byte_reserve = attachment
+        .byte_len
+        .map(|byte_len| ((byte_len / byte_divisor) as usize).min(kind_reserve.saturating_mul(4)))
+        .unwrap_or_default();
 
     kind_reserve
+        + byte_reserve
         + estimate_text_tokens(&attachment.file_name)
         + estimate_text_tokens(&attachment.mime_type)
         + 24usize
@@ -436,7 +441,8 @@ mod tests {
     use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
     use serde_json::json;
     use vulcan_core::types::{
-        ConversationMessage, ConversationPayload, ProviderContinuation, ProviderRequestSnapshot,
+        ConversationAttachment, ConversationAttachmentKind, ConversationMessage,
+        ConversationPayload, ProviderContinuation, ProviderRequestSnapshot,
         ProviderRequestToolSchema, ProviderUsageSnapshot,
     };
 
@@ -604,5 +610,89 @@ mod tests {
         );
 
         assert_eq!(left, right);
+    }
+
+    /// Scales attachment token estimation with stored byte length so larger multimodal payloads become visibly more expensive than tiny placeholders.
+    /// 依据已存储字节长度放大附件 Token 估算，使更大的多模态载荷显著高于微小占位附件。
+    #[test]
+    fn request_context_budget_snapshot_accounts_for_attachment_byte_length() {
+        let capabilities = test_capabilities();
+        let small_attachment = ConversationAttachment {
+            kind: ConversationAttachmentKind::Pdf,
+            file_name: String::from("small.pdf"),
+            local_path: String::from("managed/small.pdf"),
+            source_path: None,
+            asset_id: Some(String::from("asset-small")),
+            byte_len: Some(2_048),
+            mime_type: String::from("application/pdf"),
+        };
+        let large_attachment = ConversationAttachment {
+            kind: ConversationAttachmentKind::Pdf,
+            file_name: String::from("large.pdf"),
+            local_path: String::from("managed/large.pdf"),
+            source_path: None,
+            asset_id: Some(String::from("asset-large")),
+            byte_len: Some(2_048_000),
+            mime_type: String::from("application/pdf"),
+        };
+        let small_snapshot = ProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::new(),
+            prompt: String::from("请阅读附件"),
+            history: vec![ConversationMessage {
+                id: String::from("m1"),
+                payload: ConversationPayload::UserText {
+                    text: String::from("请阅读附件"),
+                    attachments: vec![small_attachment],
+                },
+            }],
+            temperature: None,
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        };
+        let large_snapshot = ProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::new(),
+            prompt: String::from("请阅读附件"),
+            history: vec![ConversationMessage {
+                id: String::from("m1"),
+                payload: ConversationPayload::UserText {
+                    text: String::from("请阅读附件"),
+                    attachments: vec![large_attachment],
+                },
+            }],
+            temperature: None,
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        };
+
+        let small_budget = build_request_context_budget_snapshot(
+            "openai",
+            "gpt-test",
+            ProviderApiFamily::OpenAiResponses,
+            &capabilities,
+            &ProviderRuntimeReasoningResolution::default(),
+            &small_snapshot,
+            None,
+        );
+        let large_budget = build_request_context_budget_snapshot(
+            "openai",
+            "gpt-test",
+            ProviderApiFamily::OpenAiResponses,
+            &capabilities,
+            &ProviderRuntimeReasoningResolution::default(),
+            &large_snapshot,
+            None,
+        );
+
+        assert!(large_budget.estimated_history_tokens > small_budget.estimated_history_tokens);
     }
 }

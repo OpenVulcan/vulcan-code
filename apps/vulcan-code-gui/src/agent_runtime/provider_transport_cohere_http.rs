@@ -22,6 +22,8 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::provider_config::ProviderApiFamily;
+use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde_json::{Map as JsonMap, Value, json};
@@ -424,18 +426,13 @@ fn core_message_to_cohere_message(
 ) -> Result<CohereChatMessage, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
-            if let Some(attachment) = attachments.first() {
-                return Err(VulcanCoreError::InvalidState {
-                    message: format!(
-                        "Cohere 当前直连传输尚未支持{}附件输入（`{}`），请切换到支持该模态的模型或移除附件后重试。",
-                        attachment.kind.display_label(),
-                        attachment.file_name
-                    ),
-                });
-            }
+            let normalized =
+                normalize_provider_user_input(ProviderApiFamily::CohereChat, text, attachments);
 
             Ok(CohereChatMessage::User {
-                content: vec![CohereUserContent::Text { text: text.clone() }],
+                content: vec![CohereUserContent::Text {
+                    text: normalized.text,
+                }],
             })
         }
         CoreConversationPayload::Assistant {
@@ -703,6 +700,9 @@ mod tests {
             kind,
             file_name: String::from(file_name),
             local_path: file_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(4),
             mime_type: String::from(mime_type),
         }
     }

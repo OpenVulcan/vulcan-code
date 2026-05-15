@@ -16,6 +16,8 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::provider_config::ProviderApiFamily;
+use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
@@ -484,14 +486,19 @@ fn core_message_to_openai_responses_input_items(
 ) -> Result<Vec<Value>, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
+            let normalized = normalize_provider_user_input(
+                ProviderApiFamily::OpenAiResponses,
+                text,
+                attachments,
+            );
             let mut content = Vec::new();
-            if !text.is_empty() {
+            if !normalized.text.is_empty() {
                 content.push(json!({
                     "type": "input_text",
-                    "text": text
+                    "text": normalized.text
                 }));
             }
-            for attachment in attachments {
+            for attachment in &normalized.attachments {
                 let attachment_payload = read_provider_attachment(attachment)?;
                 match attachment_payload.kind {
                     vulcan_core::types::ConversationAttachmentKind::Image => {
@@ -856,6 +863,9 @@ mod tests {
             kind,
             file_name: String::from(file_name),
             local_path: file_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(4),
             mime_type: String::from(mime_type),
         }
     }

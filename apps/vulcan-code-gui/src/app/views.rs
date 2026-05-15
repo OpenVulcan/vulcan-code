@@ -2485,7 +2485,7 @@ impl VulcanWorkbench {
             button
         };
         let tooltip_text = if supports_attachments {
-            "添加附件"
+            "添加附件（也支持拖拽或粘贴）"
         } else {
             "当前模型未声明可用附件输入模态"
         };
@@ -2562,6 +2562,37 @@ impl VulcanWorkbench {
             .height(COMPOSER_ATTACHMENT_ROW_HEIGHT)
             .width(Fill)
             .into()
+    }
+
+    /// Builds the lightweight drag-hover hint shown above the composer editor while files are hovering over the main window.
+    /// 构建当文件正悬停在主窗口上方时显示在提示词编辑器上方的轻量拖拽提示。
+    pub(super) fn view_composer_drag_hover_hint(&self) -> Option<Element<'_, Message>> {
+        if self.composer_drag_hover_labels.is_empty() {
+            return None;
+        }
+
+        let preview = if self.composer_drag_hover_labels.len() == 1 {
+            format!("释放以附加文件：{}", self.composer_drag_hover_labels[0])
+        } else {
+            format!(
+                "释放以附加 {} 个文件：{}",
+                self.composer_drag_hover_labels.len(),
+                self.composer_drag_hover_labels
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("、")
+            )
+        };
+
+        Some(
+            container(text(preview).size(12))
+                .padding([6, 10])
+                .width(Fill)
+                .style(container::rounded_box)
+                .into(),
+        )
     }
 
     /// Returns the current estimated visible line count of the main prompt composer.
@@ -2682,6 +2713,13 @@ impl VulcanWorkbench {
                 keyboard::Key::Character("z") if key_press.modifiers.command() => {
                     Some(text_editor::Binding::Custom(Message::ComposerUndo))
                 }
+                keyboard::Key::Character("v")
+                    if key_press.modifiers.command() && key_press.modifiers.shift() =>
+                {
+                    Some(text_editor::Binding::Custom(
+                        Message::PasteComposerClipboardAttachments,
+                    ))
+                }
                 keyboard::Key::Named(keyboard::key::Named::Enter)
                     if !key_press.modifiers.shift() =>
                 {
@@ -2782,7 +2820,7 @@ impl VulcanWorkbench {
     /// 返回提示词上下文菜单覆盖层使用的受边界约束的窗口相对位置。
     pub(super) fn composer_context_menu_position(&self) -> iced::Point {
         let menu_width = COMPOSER_CONTEXT_MENU_WIDTH;
-        let menu_height = (COMPOSER_CONTEXT_MENU_ROW_HEIGHT * 5.0) + 12.0;
+        let menu_height = (COMPOSER_CONTEXT_MENU_ROW_HEIGHT * 6.0) + 12.0;
         let window_width = self.main_window_size.width.max(menu_width + 12.0);
         let window_height = self.main_window_size.height.max(menu_height + 12.0);
         let anchor = self.composer_context_menu_anchor;
@@ -2812,6 +2850,10 @@ impl VulcanWorkbench {
                 self.view_composer_context_menu_button(
                     "添加附件",
                     supports_attachments.then_some(Message::AddComposerAttachments),
+                ),
+                self.view_composer_context_menu_button(
+                    "粘贴附件",
+                    supports_attachments.then_some(Message::PasteComposerClipboardAttachments),
                 ),
                 self.view_composer_context_menu_button(
                     "全选",
@@ -3157,16 +3199,17 @@ impl VulcanWorkbench {
         .align_y(Center)
         .height(COMPOSER_CONTROL_ROW_HEIGHT)
         .width(Fill);
-        let composer_editor_stack: Element<'_, Message> = if self.composer_attachments.is_empty() {
-            self.view_inline_composer_editor()
-        } else {
-            column![
-                self.view_inline_composer_editor(),
-                self.view_composer_attachment_strip(),
-            ]
-            .spacing(COMPOSER_PANEL_CONTROL_GAP)
-            .into()
-        };
+        let mut composer_editor_stack_column = column![].spacing(COMPOSER_PANEL_CONTROL_GAP);
+        if let Some(hint) = self.view_composer_drag_hover_hint() {
+            composer_editor_stack_column = composer_editor_stack_column.push(hint);
+        }
+        composer_editor_stack_column =
+            composer_editor_stack_column.push(self.view_inline_composer_editor());
+        if !self.composer_attachments.is_empty() {
+            composer_editor_stack_column =
+                composer_editor_stack_column.push(self.view_composer_attachment_strip());
+        }
+        let composer_editor_stack: Element<'_, Message> = composer_editor_stack_column.into();
         let composer_body = if self.should_show_selected_session_pending_prompt_strip() {
             column![
                 column![
@@ -5156,6 +5199,11 @@ impl VulcanWorkbench {
                     keyboard::Key::Character("f") | keyboard::Key::Character("F") => {
                         Some(Message::OpenWorkspaceHistorySearchPanel)
                     }
+                    keyboard::Key::Character("v") | keyboard::Key::Character("V")
+                        if modifiers.shift() =>
+                    {
+                        Some(Message::PasteComposerClipboardAttachments)
+                    }
                     _ => None,
                 }
             }
@@ -5186,6 +5234,15 @@ impl VulcanWorkbench {
             }
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(Message::WindowLeftButtonReleased(window_id))
+            }
+            iced::Event::Window(window::Event::FileHovered(path)) => {
+                Some(Message::WindowFileHovered(window_id, path))
+            }
+            iced::Event::Window(window::Event::FileDropped(path)) => {
+                Some(Message::WindowFileDropped(window_id, path))
+            }
+            iced::Event::Window(window::Event::FilesHoveredLeft) => {
+                Some(Message::WindowFilesHoverLeft(window_id))
             }
             _ => None,
         }

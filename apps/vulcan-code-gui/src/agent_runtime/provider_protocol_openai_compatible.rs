@@ -66,6 +66,9 @@ pub(crate) struct CompatibleChoice {
     /// Optional assistant reasoning delta emitted by the provider.
     /// Provider 发出的可选助手推理增量。
     pub(crate) reasoning: Option<String>,
+    /// Additional provider-visible assistant fields that must survive raw interleaved replay.
+    /// 必须在原生交错回放中保留的额外 Provider 可见助手字段。
+    pub(crate) provider_visible_assistant_fields: JsonMap<String, Value>,
     /// Streamed tool-call fragments emitted by the provider.
     /// Provider 发出的工具调用碎片集合。
     pub(crate) tool_calls: Vec<CompatibleToolCallChunk>,
@@ -84,6 +87,9 @@ pub(crate) struct CompatibleChoiceData<T> {
     /// Optional assistant reasoning delta emitted by the provider.
     /// Provider 发出的可选助手推理增量。
     pub(crate) reasoning: Option<String>,
+    /// Additional provider-visible assistant fields that must survive raw interleaved replay.
+    /// 必须在原生交错回放中保留的额外 Provider 可见助手字段。
+    pub(crate) provider_visible_assistant_fields: JsonMap<String, Value>,
     /// Provider-specific tool-call fragments that can be converted into the canonical compatible tool-call chunk.
     /// 可转换为标准兼容工具调用碎片的 Provider 专有工具调用片段。
     pub(crate) tool_calls: Vec<T>,
@@ -142,6 +148,7 @@ where
             finish_reason: value.finish_reason,
             text: value.text,
             reasoning: value.reasoning,
+            provider_visible_assistant_fields: value.provider_visible_assistant_fields,
             tool_calls: value.tool_calls.into_iter().map(Into::into).collect(),
         }
     }

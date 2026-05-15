@@ -41,7 +41,13 @@ pub(crate) fn build_provider_request_preview_markdown(
     let context_budget_label = preparation
         .context_budget
         .as_ref()
-        .map(|budget| budget.summary_note())
+        .map(|budget| {
+            format!(
+                "{}\n- 预算指纹：`{}`",
+                budget.summary_note(),
+                budget.fingerprint
+            )
+        })
         .unwrap_or_else(|| String::from("尚未生成上下文预算快照"));
     let tool_rows = if request_snapshot.tool_schemas.is_empty() {
         String::from("（本次请求未直接暴露工具 schema）")

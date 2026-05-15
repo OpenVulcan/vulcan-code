@@ -543,7 +543,20 @@ pub(super) fn pick_composer_attachments(
         return Ok(None);
     };
 
+    Ok(Some(stage_composer_attachment_paths(
+        initial_directory,
+        &selected_files,
+    )?))
+}
+
+/// Stages a batch of file-system paths into normalized composer attachments through the host-managed attachment store.
+/// 通过宿主管理附件存储，将一批文件系统路径暂存为规范化提示词附件。
+pub(super) fn stage_composer_attachment_paths(
+    workspace_path: &str,
+    selected_files: &[PathBuf],
+) -> Result<Vec<ConversationAttachment>, String> {
     let mut attachments = Vec::with_capacity(selected_files.len());
+
     for selected_file in selected_files {
         if !selected_file.is_file() {
             return Err(format!(
@@ -552,56 +565,21 @@ pub(super) fn pick_composer_attachments(
             ));
         }
 
-        let Some((kind, mime_type)) = composer_attachment_descriptor(&selected_file) else {
+        let Some(_descriptor) =
+            crate::attachment_assets::attachment_descriptor_from_path(&selected_file)
+        else {
             return Err(format!(
                 "文件 `{}` 不是受支持的附件格式。",
                 selected_file.display()
             ));
         };
-        let canonical_path = crate::workspace_path::canonicalize_workspace_path(&selected_file);
-        let file_name = canonical_path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| canonical_path.display().to_string());
-
-        attachments.push(ConversationAttachment {
-            kind,
-            file_name,
-            local_path: canonical_path.to_string_lossy().into_owned(),
-            mime_type: mime_type.to_string(),
-        });
+        attachments.push(crate::attachment_assets::stage_attachment_file(
+            workspace_path,
+            &selected_file,
+        )?);
     }
 
-    Ok(Some(attachments))
-}
-
-/// Resolves the stable attachment kind and MIME type for one local composer attachment path when the extension is supported.
-/// 当扩展名受支持时，为本地提示词附件路径解析稳定附件类型与 MIME 类型。
-fn composer_attachment_descriptor(
-    path: &Path,
-) -> Option<(ConversationAttachmentKind, &'static str)> {
-    let extension = path.extension()?.to_str()?.trim().to_ascii_lowercase();
-
-    match extension.as_str() {
-        "png" => Some((ConversationAttachmentKind::Image, "image/png")),
-        "jpg" | "jpeg" => Some((ConversationAttachmentKind::Image, "image/jpeg")),
-        "webp" => Some((ConversationAttachmentKind::Image, "image/webp")),
-        "gif" => Some((ConversationAttachmentKind::Image, "image/gif")),
-        "bmp" => Some((ConversationAttachmentKind::Image, "image/bmp")),
-        "mp3" => Some((ConversationAttachmentKind::Audio, "audio/mpeg")),
-        "wav" => Some((ConversationAttachmentKind::Audio, "audio/wav")),
-        "m4a" => Some((ConversationAttachmentKind::Audio, "audio/mp4")),
-        "aac" => Some((ConversationAttachmentKind::Audio, "audio/aac")),
-        "flac" => Some((ConversationAttachmentKind::Audio, "audio/flac")),
-        "ogg" => Some((ConversationAttachmentKind::Audio, "audio/ogg")),
-        "mp4" => Some((ConversationAttachmentKind::Video, "video/mp4")),
-        "mov" => Some((ConversationAttachmentKind::Video, "video/quicktime")),
-        "mkv" => Some((ConversationAttachmentKind::Video, "video/x-matroska")),
-        "webm" => Some((ConversationAttachmentKind::Video, "video/webm")),
-        "avi" => Some((ConversationAttachmentKind::Video, "video/x-msvideo")),
-        "pdf" => Some((ConversationAttachmentKind::Pdf, "application/pdf")),
-        _ => None,
-    }
+    Ok(attachments)
 }
 
 /// Normalizes one project path to a canonical form when the platform can resolve it.

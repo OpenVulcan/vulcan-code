@@ -20,6 +20,8 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::provider_config::ProviderApiFamily;
+use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
@@ -365,11 +367,16 @@ fn core_message_to_gemini_content(
 ) -> Result<GeminiContent, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
+            let normalized = normalize_provider_user_input(
+                ProviderApiFamily::GoogleGeminiGenerateContent,
+                text,
+                attachments,
+            );
             let mut parts = Vec::new();
-            if !text.is_empty() {
-                parts.push(GeminiPart::text(text.clone()));
+            if !normalized.text.is_empty() {
+                parts.push(GeminiPart::text(normalized.text));
             }
-            for attachment in attachments {
+            for attachment in &normalized.attachments {
                 let attachment_payload = read_provider_attachment(attachment)?;
                 let mut additional_fields = BTreeMap::new();
                 additional_fields.insert(
@@ -749,6 +756,9 @@ mod tests {
             kind,
             file_name: String::from(file_name),
             local_path: file_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(4),
             mime_type: String::from(mime_type),
         }
     }

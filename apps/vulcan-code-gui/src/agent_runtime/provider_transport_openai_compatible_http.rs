@@ -22,7 +22,8 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
-use crate::provider_config::ModelInterleavedCapability;
+use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily};
+use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
@@ -35,6 +36,10 @@ use vulcan_core::types::{
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+
+/// Protocol tag stored inside provider_message_state for OpenAI-compatible native assistant payload replays.
+/// 存入 provider_message_state 以支持 OpenAI 兼容原生助手载荷回放的协议标记。
+const OPENAI_COMPATIBLE_PROVIDER_MESSAGE_STATE_PROTOCOL: &str = "openai-compatible";
 
 /// Minimal OpenAI-compatible streaming function payload decoded from one delta chunk.
 /// 从单条增量块解码出的最小 OpenAI 兼容流式函数载荷。
@@ -92,6 +97,10 @@ struct OpenAiCompatibleStreamingDelta {
     /// 流式工具调用碎片集合。
     #[serde(default)]
     tool_calls: Vec<OpenAiCompatibleStreamingToolCall>,
+    /// Additional provider-visible assistant fields that should survive interleaved replay verbatim.
+    /// 应在交错回放中按原样保留的额外 Provider 可见助手字段。
+    #[serde(default, flatten)]
+    additional_fields: JsonMap<String, Value>,
 }
 
 /// Minimal OpenAI-compatible finish reason used by streamed choices.
@@ -329,6 +338,9 @@ where
     let mut pending_tool_calls: HashMap<usize, CompatibleAccumulatedToolCall> = HashMap::new();
     let mut finalized_tool_calls = Vec::new();
     let mut final_usage = None::<CoreProviderUsageSnapshot>;
+    let mut provider_visible_assistant_fields = JsonMap::new();
+    let mut saw_reasoning_content_field = false;
+    let mut raw_reasoning_content = String::new();
 
     while let Some(event_result) = events.next().await {
         let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
@@ -353,21 +365,31 @@ where
             continue;
         };
 
+        for (field_name, field_value) in choice.provider_visible_assistant_fields {
+            merge_openai_compatible_assistant_field(
+                &mut provider_visible_assistant_fields,
+                field_name,
+                field_value,
+            );
+        }
+
         process_compatible_tool_call_chunks(
             &mut pending_tool_calls,
             &mut finalized_tool_calls,
             choice.tool_calls,
         );
 
-        if let Some(reasoning) = choice.reasoning
-            && !reasoning.is_empty()
-        {
-            assistant_reasoning.push_str(&reasoning);
-            forward_openai_compatible_delta(
-                live_sender,
-                sink,
-                CoreProviderTurnDelta::Thinking { delta: reasoning },
-            );
+        if let Some(reasoning) = choice.reasoning {
+            saw_reasoning_content_field = true;
+            raw_reasoning_content.push_str(&reasoning);
+            if !reasoning.is_empty() {
+                assistant_reasoning.push_str(&reasoning);
+                forward_openai_compatible_delta(
+                    live_sender,
+                    sink,
+                    CoreProviderTurnDelta::Thinking { delta: reasoning },
+                );
+            }
         }
 
         if let Some(text) = choice.text
@@ -388,6 +410,12 @@ where
 
     flush_pending_compatible_tool_calls(&mut pending_tool_calls, &mut finalized_tool_calls);
 
+    let provider_message_state = build_openai_compatible_provider_message_state(
+        &assistant_text,
+        &finalized_tool_calls,
+        saw_reasoning_content_field.then_some(raw_reasoning_content),
+        provider_visible_assistant_fields,
+    );
     let mut assistant_content = Vec::new();
     if !assistant_text.is_empty() {
         assistant_content.push(ProviderAssistantContent::Text(assistant_text));
@@ -403,13 +431,15 @@ where
             .map(ProviderAssistantContent::ToolCall),
     );
 
-    Ok(build_openai_compatible_turn_response(
+    let mut response = build_openai_compatible_turn_response(
         provider_id,
         model_id,
         response_id,
         &assistant_content,
         final_usage,
-    ))
+    );
+    response.provider_message_state = provider_message_state;
+    Ok(response)
 }
 
 /// Builds one direct OpenAI-compatible HTTP client with merged authorization and caller-supplied request headers.
@@ -529,28 +559,33 @@ fn build_openai_compatible_request_payload(
     Ok(Value::Object(payload))
 }
 
-/// Converts one canonical core message into one OpenAI-compatible request message and replays textual reasoning only when the selected model explicitly requires `reasoning_content`.
-/// 将一条规范 core 消息转换为一条 OpenAI 兼容请求消息，并且仅在所选模型显式要求 `reasoning_content` 时回放文本型思考内容。
+/// Converts one canonical core message into one OpenAI-compatible request message and replays provider-native interleaved state only when the active model explicitly declares compatible support.
+/// 将一条规范 core 消息转换为一条 OpenAI 兼容请求消息，并且仅在当前模型显式声明兼容支持时回放 Provider 原生交错状态。
 fn core_message_to_openai_compatible_message(
     message: &CoreConversationMessage,
     interleaved_reasoning: Option<&ModelInterleavedCapability>,
 ) -> Result<Value, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
-            if attachments.is_empty() {
+            let normalized = normalize_provider_user_input(
+                ProviderApiFamily::OpenAiChatCompatible,
+                text,
+                attachments,
+            );
+            if normalized.attachments.is_empty() {
                 Ok(json!({
                     "role": "user",
-                    "content": text
+                    "content": normalized.text
                 }))
             } else {
                 let mut content = Vec::new();
-                if !text.is_empty() {
+                if !normalized.text.is_empty() {
                     content.push(json!({
                         "type": "text",
-                        "text": text
+                        "text": normalized.text
                     }));
                 }
-                for attachment in attachments {
+                for attachment in &normalized.attachments {
                     let attachment_payload = read_provider_attachment(attachment)?;
                     match attachment_payload.kind {
                         vulcan_core::types::ConversationAttachmentKind::Image => {
@@ -603,26 +638,27 @@ fn core_message_to_openai_compatible_message(
         CoreConversationPayload::Assistant {
             text,
             reasoning,
+            provider_message_state,
             tool_calls,
             ..
         } => {
-            let mut object = JsonMap::new();
+            let mut object =
+                if openai_compatible_supports_native_interleaved_replay(interleaved_reasoning) {
+                    provider_message_state
+                        .as_ref()
+                        .and_then(parse_openai_compatible_provider_message_state)
+                        .unwrap_or_default()
+                } else {
+                    JsonMap::new()
+                };
             object.insert(
                 String::from("role"),
                 Value::String(String::from("assistant")),
             );
-            if let Some(reasoning_field) =
-                openai_compatible_textual_interleaved_reasoning_field(interleaved_reasoning)
-            {
-                object.insert(
-                    reasoning_field.to_string(),
-                    Value::String(reasoning.clone()),
-                );
-            }
-            if !text.is_empty() {
+            if !text.is_empty() && !object.contains_key("content") {
                 object.insert(String::from("content"), Value::String(text.clone()));
             }
-            if !tool_calls.is_empty() {
+            if !tool_calls.is_empty() && !object.contains_key("tool_calls") {
                 object.insert(
                     String::from("tool_calls"),
                     Value::Array(
@@ -631,6 +667,15 @@ fn core_message_to_openai_compatible_message(
                             .map(core_tool_call_to_openai_compatible_tool_call)
                             .collect(),
                     ),
+                );
+            }
+            if let Some(reasoning_field) =
+                openai_compatible_textual_interleaved_reasoning_field(interleaved_reasoning)
+                && !object.contains_key(reasoning_field)
+            {
+                object.insert(
+                    reasoning_field.to_string(),
+                    Value::String(reasoning.clone()),
                 );
             }
             Ok(Value::Object(object))
@@ -724,9 +769,129 @@ fn normalize_openai_compatible_chunk(
             },
             text: choice.delta.content.clone(),
             reasoning: choice.delta.reasoning_content.clone(),
+            provider_visible_assistant_fields: choice.delta.additional_fields.clone(),
             tool_calls: tool_call_chunks(&choice.delta.tool_calls),
         },
     ))
+}
+
+/// Builds one provider_message_state payload that preserves an OpenAI-compatible assistant message for future high-fidelity history replay.
+/// 构建一份 provider_message_state 载荷，以便未来高保真历史回放时保留 OpenAI 兼容助手消息。
+fn build_openai_compatible_provider_message_state(
+    assistant_text: &str,
+    finalized_tool_calls: &[CoreConversationToolCall],
+    reasoning_content: Option<String>,
+    mut provider_visible_fields: JsonMap<String, Value>,
+) -> Option<Value> {
+    if provider_visible_fields.is_empty() && reasoning_content.is_none() {
+        return None;
+    }
+
+    provider_visible_fields.insert(
+        String::from("role"),
+        Value::String(String::from("assistant")),
+    );
+    if !assistant_text.is_empty() {
+        provider_visible_fields.insert(
+            String::from("content"),
+            Value::String(assistant_text.to_string()),
+        );
+    }
+    if let Some(reasoning_content) = reasoning_content {
+        provider_visible_fields.insert(
+            String::from("reasoning_content"),
+            Value::String(reasoning_content),
+        );
+    }
+    if !finalized_tool_calls.is_empty() {
+        provider_visible_fields.insert(
+            String::from("tool_calls"),
+            Value::Array(
+                finalized_tool_calls
+                    .iter()
+                    .map(core_tool_call_to_openai_compatible_tool_call)
+                    .collect(),
+            ),
+        );
+    }
+
+    Some(Value::Object(JsonMap::from_iter([
+        (
+            String::from("protocol"),
+            Value::String(String::from(
+                OPENAI_COMPATIBLE_PROVIDER_MESSAGE_STATE_PROTOCOL,
+            )),
+        ),
+        (
+            String::from("assistant_message"),
+            Value::Object(provider_visible_fields),
+        ),
+    ])))
+}
+
+/// Restores one previously persisted OpenAI-compatible provider_message_state into the raw assistant-message object expected by the wire protocol.
+/// 将一份已持久化的 OpenAI 兼容 provider_message_state 恢复为线协议期望的原生助手消息对象。
+fn parse_openai_compatible_provider_message_state(state: &Value) -> Option<JsonMap<String, Value>> {
+    let object = state.as_object()?;
+    if object.get("protocol")?.as_str()? != OPENAI_COMPATIBLE_PROVIDER_MESSAGE_STATE_PROTOCOL {
+        return None;
+    }
+    object.get("assistant_message")?.as_object().cloned()
+}
+
+/// Merges one streamed provider-visible assistant field into the accumulated replay state while preserving common append semantics for string, array, and object payloads.
+/// 将一条流式 Provider 可见助手字段合并进累计回放状态，同时为字符串、数组与对象载荷保留常见的追加语义。
+fn merge_openai_compatible_assistant_field(
+    fields: &mut JsonMap<String, Value>,
+    field_name: String,
+    field_value: Value,
+) {
+    match fields.get_mut(&field_name) {
+        Some(Value::String(existing)) => {
+            if let Value::String(incoming) = field_value {
+                existing.push_str(&incoming);
+            } else {
+                fields.insert(field_name, field_value);
+            }
+        }
+        Some(Value::Array(existing)) => {
+            if let Value::Array(mut incoming) = field_value {
+                existing.append(&mut incoming);
+            } else {
+                fields.insert(field_name, field_value);
+            }
+        }
+        Some(Value::Object(existing)) => {
+            if let Value::Object(incoming) = field_value {
+                for (nested_key, nested_value) in incoming {
+                    existing.insert(nested_key, nested_value);
+                }
+            } else {
+                fields.insert(field_name, field_value);
+            }
+        }
+        Some(existing) if existing.is_null() => {
+            *existing = field_value;
+        }
+        Some(_) => {
+            fields.insert(field_name, field_value);
+        }
+        None => {
+            fields.insert(field_name, field_value);
+        }
+    }
+}
+
+/// Returns whether the active model can safely replay provider-native OpenAI-compatible interleaved assistant fields.
+/// 返回当前模型是否可以安全回放 Provider 原生 OpenAI 兼容交错助手字段。
+fn openai_compatible_supports_native_interleaved_replay(
+    interleaved_reasoning: Option<&ModelInterleavedCapability>,
+) -> bool {
+    match interleaved_reasoning {
+        Some(ModelInterleavedCapability::Enabled(true)) => true,
+        Some(ModelInterleavedCapability::Field(field)) => !field.field.trim().is_empty(),
+        _ => false,
+    }
 }
 
 /// Converts one raw OpenAI-compatible usage payload into the shared normalized usage snapshot.
@@ -869,6 +1034,9 @@ mod tests {
             kind,
             file_name: String::from(file_name),
             local_path: file_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(4),
             mime_type: String::from(mime_type),
         }
     }
@@ -1158,6 +1326,199 @@ mod tests {
             .expect("messages should be an array");
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["reasoning_content"], "");
+    }
+
+    /// Verifies OpenAI-compatible request replay restores raw provider-visible interleaved fields from provider_message_state when the active model declares a matching field-based capability.
+    /// 验证当当前模型声明匹配的字段型交错能力时，OpenAI 兼容请求回放会从 provider_message_state 恢复原生 Provider 可见交错字段。
+    #[test]
+    fn request_payload_replays_reasoning_details_from_provider_message_state() {
+        let assistant_state = json!({
+            "protocol": "openai-compatible",
+            "assistant_message": {
+                "role": "assistant",
+                "content": "先总结已有上下文。",
+                "reasoning_details": [
+                    { "type": "summary", "text": "已读取主要文件结构。" }
+                ],
+                "tool_calls": [
+                    {
+                        "id": "tool-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"src/main.rs\"}"
+                        }
+                    }
+                ]
+            }
+        });
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai-compatible"),
+                model_id: String::from("qwen-test"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("先总结已有上下文。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: Some(assistant_state),
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("tool-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from("read_file"),
+                        arguments: json!({ "path": "src/main.rs" }),
+                    }],
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+            interleaved_reasoning: Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_details"),
+            })),
+        };
+
+        let payload = build_openai_compatible_request_payload(
+            "qwen-test",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+            true,
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(
+            messages[1]["reasoning_details"][0]["text"],
+            "已读取主要文件结构。"
+        );
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "tool-1");
+    }
+
+    /// Verifies OpenAI-compatible request replay restores provider-native interleaved fields for boolean-style capabilities and ignores them when the active model does not declare interleaved support.
+    /// 验证 OpenAI 兼容请求回放会为布尔型交错能力恢复 Provider 原生交错字段，并在当前模型未声明交错支持时忽略这些字段。
+    #[test]
+    fn request_payload_replays_or_ignores_provider_message_state_based_on_interleaved_capability() {
+        let assistant_state = json!({
+            "protocol": "openai-compatible",
+            "assistant_message": {
+                "role": "assistant",
+                "content": "先做规划。",
+                "reasoning_details": [
+                    { "type": "summary", "text": "这是隐藏规划。" }
+                ]
+            }
+        });
+        let assistant_message = CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("先做规划。"),
+                reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-1")),
+                provider_message_state: Some(assistant_state),
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        };
+        let current_prompt = CoreConversationMessage {
+            id: String::from("user-1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("继续"),
+                attachments: Vec::new(),
+            },
+        };
+
+        let payload_with_interleaved = build_openai_compatible_request_payload(
+            "qwen-test",
+            OpenAiCompatibleCoreTurnRequest {
+                snapshot: CoreProviderRequestSnapshot {
+                    provider_id: String::from("openai-compatible"),
+                    model_id: String::from("qwen-test"),
+                    system_prompt: String::new(),
+                    prompt: String::from("继续"),
+                    history: Vec::new(),
+                    temperature: None,
+                    max_turns: 4,
+                    tool_schemas: Vec::new(),
+                    additional_params: None,
+                    request_headers: None,
+                    continuation: CoreProviderContinuation::default(),
+                },
+                current_history: vec![assistant_message.clone()],
+                current_prompt: current_prompt.clone(),
+                interleaved_reasoning: Some(ModelInterleavedCapability::Enabled(true)),
+            },
+            &[],
+            true,
+        )
+        .expect("payload should build");
+        let payload_without_interleaved = build_openai_compatible_request_payload(
+            "qwen-test",
+            OpenAiCompatibleCoreTurnRequest {
+                snapshot: CoreProviderRequestSnapshot {
+                    provider_id: String::from("openai-compatible"),
+                    model_id: String::from("qwen-test"),
+                    system_prompt: String::new(),
+                    prompt: String::from("继续"),
+                    history: Vec::new(),
+                    temperature: None,
+                    max_turns: 4,
+                    tool_schemas: Vec::new(),
+                    additional_params: None,
+                    request_headers: None,
+                    continuation: CoreProviderContinuation::default(),
+                },
+                current_history: vec![assistant_message],
+                current_prompt,
+                interleaved_reasoning: None,
+            },
+            &[],
+            true,
+        )
+        .expect("payload should build");
+
+        let with_messages = payload_with_interleaved["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(
+            with_messages[0]["reasoning_details"][0]["text"],
+            "这是隐藏规划。"
+        );
+
+        let without_messages = payload_without_interleaved["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert!(without_messages[0].get("reasoning_details").is_none());
+        assert_eq!(without_messages[0]["content"], "先做规划。");
     }
 
     /// Verifies OpenAI-compatible user messages switch to content-part arrays and carry staged image attachments as data URLs.

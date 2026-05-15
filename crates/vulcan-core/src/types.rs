@@ -227,9 +227,21 @@ pub struct ConversationAttachment {
     /// Human-readable file name shown in transcript and queue previews.
     /// 展示在转录与队列预览中的人类可读文件名。
     pub file_name: String,
-    /// Canonical local file path used to re-read the attachment during future provider replays.
-    /// 在未来 Provider 回放期间用于重新读取附件的规范本地文件路径。
+    /// Canonical managed local file path used to re-read the attachment during future provider replays.
+    /// 在未来 Provider 回放期间用于重新读取附件的规范托管本地文件路径。
     pub local_path: String,
+    /// Optional original source path retained for diagnostics and replay fallback when the managed copy is missing.
+    /// 当托管副本缺失时，为诊断与回放回退保留的可选原始来源路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    /// Optional stable managed-asset identifier retained by the host-managed attachment store.
+    /// 宿主管理附件存储保留的可选稳定托管资产标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    /// Optional source byte length retained for host-side budget estimation and diagnostics.
+    /// 为宿主侧预算估算与诊断保留的可选源字节长度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_len: Option<u64>,
     /// Resolved MIME type attached to the local file.
     /// 绑定到本地文件上的已解析 MIME 类型。
     pub mime_type: String,

@@ -2048,24 +2048,39 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(&id)
                 .to_string();
+            let (input_modalities, output_modalities) = dynamic_model_modalities(object);
 
             Some(ModelChoice {
                 id,
                 name,
-                status: None,
-                family: None,
-                release_date: None,
-                context_limit: None,
-                input_limit: None,
-                output_limit: None,
-                reasoning: None,
-                tool_call: None,
-                temperature: None,
-                attachment: None,
-                interleaved: None,
-                reasoning_profile: None,
-                input_modalities: Vec::new(),
-                output_modalities: Vec::new(),
+                status: dynamic_model_string(object, &["status"]),
+                family: dynamic_model_string(object, &["family"]),
+                release_date: dynamic_model_string(
+                    object,
+                    &["releaseDate", "release_date", "releasedAt", "released_at"],
+                ),
+                context_limit: dynamic_model_usize(
+                    object,
+                    &[
+                        "contextLimit",
+                        "context_limit",
+                        "contextWindow",
+                        "context_window",
+                    ],
+                ),
+                input_limit: dynamic_model_usize(object, &["inputLimit", "input_limit"]),
+                output_limit: dynamic_model_usize(object, &["outputLimit", "output_limit"]),
+                reasoning: dynamic_model_bool(object, &["reasoning"]),
+                tool_call: dynamic_model_bool(object, &["toolCall", "tool_call"]),
+                temperature: dynamic_model_bool(object, &["temperature"]),
+                attachment: dynamic_model_bool(object, &["attachment"]),
+                interleaved: dynamic_model_interleaved(object, &["interleaved"]),
+                reasoning_profile: dynamic_model_reasoning_profile(
+                    object,
+                    &["reasoningProfile", "reasoning_profile"],
+                ),
+                input_modalities,
+                output_modalities,
             })
         })
         .collect()
@@ -2091,33 +2106,173 @@ fn merge_embedded_model_metadata(
 
             ModelChoice {
                 id: model.id,
-                name: model.name,
-                status: embedded.status.clone(),
-                family: embedded.family.clone(),
-                release_date: embedded.release_date.clone(),
-                context_limit: embedded.context_limit,
-                input_limit: embedded.input_limit,
-                output_limit: embedded.output_limit,
-                reasoning: embedded.reasoning,
-                tool_call: embedded.tool_call,
-                temperature: embedded.temperature,
-                attachment: embedded.attachment,
-                interleaved: embedded.interleaved.clone(),
-                reasoning_profile: embedded.reasoning_profile.clone(),
-                input_modalities: embedded.input_modalities.clone(),
-                output_modalities: embedded.output_modalities.clone(),
+                name: if model.name.trim().is_empty() {
+                    embedded.name.clone()
+                } else {
+                    model.name
+                },
+                status: model.status.or_else(|| embedded.status.clone()),
+                family: model.family.or_else(|| embedded.family.clone()),
+                release_date: model.release_date.or_else(|| embedded.release_date.clone()),
+                context_limit: model.context_limit.or(embedded.context_limit),
+                input_limit: model.input_limit.or(embedded.input_limit),
+                output_limit: model.output_limit.or(embedded.output_limit),
+                reasoning: model.reasoning.or(embedded.reasoning),
+                tool_call: model.tool_call.or(embedded.tool_call),
+                temperature: model.temperature.or(embedded.temperature),
+                attachment: model.attachment.or(embedded.attachment),
+                interleaved: model.interleaved.or_else(|| embedded.interleaved.clone()),
+                reasoning_profile: model
+                    .reasoning_profile
+                    .or_else(|| embedded.reasoning_profile.clone()),
+                input_modalities: if model.input_modalities.is_empty() {
+                    embedded.input_modalities.clone()
+                } else {
+                    model.input_modalities
+                },
+                output_modalities: if model.output_modalities.is_empty() {
+                    embedded.output_modalities.clone()
+                } else {
+                    model.output_modalities
+                },
             }
         })
         .collect()
 }
 
+/// Returns the first matching dynamic model JSON value from a list of candidate field names.
+/// 从候选字段名列表中返回第一条匹配的动态模型 JSON 值。
+fn dynamic_model_value<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a serde_json::Value> {
+    keys.iter().find_map(|key| object.get(*key))
+}
+
+/// Parses one optional dynamic model string field from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析一个可选动态模型字符串字段。
+fn dynamic_model_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    dynamic_model_value(object, keys)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Parses one optional dynamic model boolean field from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析一个可选动态模型布尔字段。
+fn dynamic_model_bool(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<bool> {
+    dynamic_model_value(object, keys).and_then(|value| match value {
+        serde_json::Value::Bool(flag) => Some(*flag),
+        serde_json::Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Parses one optional dynamic model numeric field from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析一个可选动态模型数值字段。
+fn dynamic_model_usize(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<usize> {
+    dynamic_model_value(object, keys).and_then(|value| match value {
+        serde_json::Value::Number(number) => number.as_u64().map(|value| value as usize),
+        serde_json::Value::String(text) => text.trim().parse::<usize>().ok(),
+        _ => None,
+    })
+}
+
+/// Parses one optional dynamic interleaved reasoning capability from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析一个可选动态交错推理能力描述。
+fn dynamic_model_interleaved(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<ModelInterleavedCapability> {
+    dynamic_model_value(object, keys)
+        .and_then(|value| serde_json::from_value::<ModelInterleavedCapability>(value.clone()).ok())
+}
+
+/// Parses one optional dynamic reasoning profile from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析一个可选动态推理档位配置。
+fn dynamic_model_reasoning_profile(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<ReasoningProfileConfig> {
+    dynamic_model_value(object, keys)
+        .and_then(|value| serde_json::from_value::<ReasoningProfileConfig>(value.clone()).ok())
+}
+
+/// Parses one ordered dynamic modality list while tolerating both flat and nested payload shapes.
+/// 在兼容扁平与嵌套载荷形状的前提下解析一组有序动态模态列表。
+fn dynamic_model_modalities(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> (Vec<String>, Vec<String>) {
+    let flat_input = dynamic_model_string_array(object, &["inputModalities", "input_modalities"]);
+    let flat_output =
+        dynamic_model_string_array(object, &["outputModalities", "output_modalities"]);
+
+    let nested = object
+        .get("modalities")
+        .and_then(serde_json::Value::as_object);
+    let nested_input = nested
+        .map(|modalities| dynamic_model_string_array(modalities, &["input"]))
+        .unwrap_or_default();
+    let nested_output = nested
+        .map(|modalities| dynamic_model_string_array(modalities, &["output"]))
+        .unwrap_or_default();
+
+    let input_modalities = if flat_input.is_empty() {
+        nested_input
+    } else {
+        flat_input
+    };
+    let output_modalities = if flat_output.is_empty() {
+        nested_output
+    } else {
+        flat_output
+    };
+
+    (input_modalities, output_modalities)
+}
+
+/// Parses one ordered dynamic string-array field from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析一个有序动态字符串数组字段。
+fn dynamic_model_string_array(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Vec<String> {
+    dynamic_model_value(object, keys)
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelChoice, ProviderApiFamily, ProviderBaseUrlConfig, ProviderBaseUrlKind,
-        ProviderConfigurationFile, ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind,
-        ProviderRuntimeKind, ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-        SupportedProviderDefinition,
+        ModelChoice, ModelInterleavedCapability, ModelInterleavedField, ProviderApiFamily,
+        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
+        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
+        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        SupportedProviderDefinition, extract_models_from_array, merge_embedded_model_metadata,
     };
     use serde_json::{Map as JsonMap, json};
 
@@ -2312,5 +2467,150 @@ mod tests {
             restored.workbench_reasoning_effort,
             Some(ReasoningEffortLevel::High)
         );
+    }
+
+    /// Verifies remote model extraction preserves declared flat capability metadata and field-mapped interleaved settings.
+    /// 验证远端模型提取会保留已声明的扁平能力元数据与字段映射型交错设置。
+    #[test]
+    fn extract_models_from_array_reads_flat_remote_metadata() {
+        let models = extract_models_from_array(&[json!({
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "status": "stable",
+            "family": "deepseek",
+            "releaseDate": "2026-05-01",
+            "contextLimit": 131072,
+            "inputLimit": "120000",
+            "outputLimit": 8192,
+            "reasoning": true,
+            "toolCall": "true",
+            "temperature": false,
+            "attachment": false,
+            "interleaved": { "field": "reasoning_content" },
+            "reasoningProfile": {
+                "kind": "binary",
+                "off": { "thinking": false },
+                "low": { "thinking": true }
+            },
+            "inputModalities": ["text", "image"],
+            "outputModalities": ["text"]
+        })]);
+
+        assert_eq!(models.len(), 1);
+        let model = &models[0];
+        assert_eq!(model.id, "deepseek-v4-pro");
+        assert_eq!(model.name, "DeepSeek V4 Pro");
+        assert_eq!(model.status.as_deref(), Some("stable"));
+        assert_eq!(model.family.as_deref(), Some("deepseek"));
+        assert_eq!(model.release_date.as_deref(), Some("2026-05-01"));
+        assert_eq!(model.context_limit, Some(131072));
+        assert_eq!(model.input_limit, Some(120000));
+        assert_eq!(model.output_limit, Some(8192));
+        assert_eq!(model.reasoning, Some(true));
+        assert_eq!(model.tool_call, Some(true));
+        assert_eq!(model.temperature, Some(false));
+        assert_eq!(model.attachment, Some(false));
+        assert_eq!(
+            model.interleaved,
+            Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_content"),
+            }))
+        );
+        assert_eq!(model.input_modalities, vec!["text", "image"]);
+        assert_eq!(model.output_modalities, vec!["text"]);
+        assert!(model.reasoning_profile.is_some());
+    }
+
+    /// Verifies remote model extraction accepts nested modality declarations when the provider returns a `modalities` object instead of flat arrays.
+    /// 验证当供应商返回 `modalities` 对象而非扁平数组时，远端模型提取仍可接受嵌套模态声明。
+    #[test]
+    fn extract_models_from_array_reads_nested_modalities() {
+        let models = extract_models_from_array(&[json!({
+            "id": "qwen3.6-plus",
+            "modalities": {
+                "input": ["text", "image", "video"],
+                "output": ["text"]
+            }
+        })]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].input_modalities, vec!["text", "image", "video"]);
+        assert_eq!(models[0].output_modalities, vec!["text"]);
+    }
+
+    /// Verifies embedded metadata only fills fields that the dynamically discovered remote model did not already declare explicitly.
+    /// 验证内置元数据只会补全动态发现模型未显式声明的字段，而不会覆盖远端已声明值。
+    #[test]
+    fn merge_embedded_model_metadata_keeps_remote_values_and_fills_blanks() {
+        let discovered_models = vec![ModelChoice {
+            id: String::from("qwen3.6-plus"),
+            name: String::from("Qwen 3.6 Plus Remote"),
+            status: None,
+            family: Some(String::from("qwen")),
+            release_date: None,
+            context_limit: Some(262144),
+            input_limit: None,
+            output_limit: Some(8192),
+            reasoning: Some(true),
+            tool_call: None,
+            temperature: Some(false),
+            attachment: Some(false),
+            interleaved: Some(ModelInterleavedCapability::Enabled(true)),
+            reasoning_profile: None,
+            input_modalities: vec![String::from("text"), String::from("image")],
+            output_modalities: Vec::new(),
+        }];
+        let embedded_models = vec![ModelChoice {
+            id: String::from("qwen3.6-plus"),
+            name: String::from("Qwen 3.6 Plus Embedded"),
+            status: Some(String::from("preview")),
+            family: Some(String::from("qwen-embedded")),
+            release_date: Some(String::from("2026-04-20")),
+            context_limit: Some(128000),
+            input_limit: Some(120000),
+            output_limit: Some(4096),
+            reasoning: Some(false),
+            tool_call: Some(true),
+            temperature: Some(true),
+            attachment: Some(true),
+            interleaved: Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_details"),
+            })),
+            reasoning_profile: Some(ReasoningProfileConfig {
+                kind: Some(ReasoningCapabilityKind::Binary),
+                off: Some(json!({ "thinking": false })),
+                low: Some(json!({ "thinking": true })),
+                ..ReasoningProfileConfig::default()
+            }),
+            input_modalities: vec![
+                String::from("text"),
+                String::from("image"),
+                String::from("video"),
+            ],
+            output_modalities: vec![String::from("text")],
+        }];
+
+        let merged = merge_embedded_model_metadata(discovered_models, &embedded_models);
+
+        assert_eq!(merged.len(), 1);
+        let model = &merged[0];
+        assert_eq!(model.name, "Qwen 3.6 Plus Remote");
+        assert_eq!(model.status.as_deref(), Some("preview"));
+        assert_eq!(model.family.as_deref(), Some("qwen"));
+        assert_eq!(model.release_date.as_deref(), Some("2026-04-20"));
+        assert_eq!(model.context_limit, Some(262144));
+        assert_eq!(model.input_limit, Some(120000));
+        assert_eq!(model.output_limit, Some(8192));
+        assert_eq!(model.reasoning, Some(true));
+        assert_eq!(model.tool_call, Some(true));
+        assert_eq!(model.temperature, Some(false));
+        assert_eq!(model.attachment, Some(false));
+        assert_eq!(
+            model.interleaved,
+            Some(ModelInterleavedCapability::Enabled(true))
+        );
+        assert!(model.reasoning_profile.is_some());
+        assert_eq!(model.input_modalities, vec!["text", "image"]);
+        assert_eq!(model.output_modalities, vec!["text"]);
     }
 }

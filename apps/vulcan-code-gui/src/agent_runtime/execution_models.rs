@@ -184,6 +184,7 @@ impl ExecutionPreparation {
 
         if let Some(context_budget) = self.context_budget.as_ref() {
             rows.push(format!("预算：{}", context_budget.summary_note()));
+            rows.push(format!("预算指纹：{}", context_budget.fingerprint));
         }
 
         if !self.skill_names.is_empty() {

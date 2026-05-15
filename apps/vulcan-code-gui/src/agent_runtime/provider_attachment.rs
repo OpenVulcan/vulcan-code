@@ -56,20 +56,19 @@ impl ProviderAttachmentPayload {
 pub(crate) fn read_provider_attachment(
     attachment: &ConversationAttachment,
 ) -> Result<ProviderAttachmentPayload, VulcanCoreError> {
-    let local_path = attachment.local_path.trim();
-    if local_path.is_empty() {
+    let Some(file_path) = crate::attachment_assets::resolve_attachment_replay_path(attachment)
+    else {
         return Err(VulcanCoreError::InvalidState {
             message: format!(
-                "{}附件 `{}` 缺少本地文件路径。",
+                "{}附件 `{}` 缺少可读回放路径。",
                 attachment.kind.display_label(),
                 attachment.file_name
             ),
         });
-    }
+    };
 
-    let file_path = Path::new(local_path);
     let attachment_bytes =
-        std::fs::read(file_path).map_err(|error| VulcanCoreError::InvalidState {
+        std::fs::read(&file_path).map_err(|error| VulcanCoreError::InvalidState {
             message: format!(
                 "读取{}附件 `{}` 失败：{}",
                 attachment.kind.display_label(),
@@ -77,7 +76,7 @@ pub(crate) fn read_provider_attachment(
                 error
             ),
         })?;
-    let mime_type = resolve_attachment_mime_type(attachment, file_path)?;
+    let mime_type = resolve_attachment_mime_type(attachment, &file_path)?;
     let base64_data = BASE64_STANDARD.encode(attachment_bytes);
     let data_url = format!("data:{mime_type};base64,{base64_data}");
 
@@ -183,6 +182,9 @@ mod tests {
             kind,
             file_name: format!("demo.{extension}"),
             local_path: file_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(4),
             mime_type: mime_type.to_string(),
         }
     }

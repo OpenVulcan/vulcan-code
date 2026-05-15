@@ -24,6 +24,10 @@ use crate::agent_view::{
     build_agent_view_document,
 };
 use crate::code_view;
+use crate::composer_parts::{
+    build_composer_input_parts, composer_parts_have_submittable_content, composer_parts_label_text,
+    composer_parts_preview_text, composer_parts_to_user_payload, composer_parts_transcript_body,
+};
 use crate::context_budget::{ContextBudgetSnapshot, build_session_context_budget_snapshot};
 use crate::conversation_protocol::{
     SessionConversationRecord, SessionConversationState, append_assistant_text_message,
@@ -599,7 +603,8 @@ fn composer_input_has_submittable_content(
     text: &str,
     attachments: &[ConversationAttachment],
 ) -> bool {
-    composer_text_has_submittable_content(text) || !attachments.is_empty()
+    let parts = build_composer_input_parts(text, attachments);
+    composer_parts_have_submittable_content(&parts)
 }
 
 /// Builds the low-priority legacy maintenance queue from visible and archived sessions.
@@ -965,75 +970,15 @@ fn task_session_tool_display_title(
 /// Builds one compact single-line preview used by the pending prompt queue strip.
 /// 构建待发送提示词队列条使用的一条紧凑单行预览文本。
 fn pending_prompt_preview_text(prompt: &str, attachments: &[ConversationAttachment]) -> String {
-    let normalized = prompt
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or(prompt)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let attachment_suffix = attachment_preview_suffix(attachments);
-    let preview = if normalized.is_empty() {
-        if attachment_suffix.is_empty() {
-            String::from("空白消息")
-        } else {
-            attachment_suffix
-        }
-    } else {
-        format!("{normalized}{attachment_suffix}")
-    };
-    let max_chars = 48usize;
-    if preview.chars().count() <= max_chars {
-        preview
-    } else {
-        format!(
-            "{}…",
-            preview
-                .chars()
-                .take(max_chars.saturating_sub(1))
-                .collect::<String>()
-        )
-    }
+    let parts = build_composer_input_parts(prompt, attachments);
+    composer_parts_preview_text(&parts, 48usize)
 }
 
 /// Builds one full single-line label used by the visible pending-prompt queue panel.
 /// 构建显示在可见待发送队列面板中的完整单行标签文本。
 fn pending_prompt_panel_label_text(prompt: &str, attachments: &[ConversationAttachment]) -> String {
-    let normalized = prompt
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or(prompt)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if normalized.is_empty() {
-        let attachment_suffix = attachment_preview_suffix(attachments);
-        if attachment_suffix.is_empty() {
-            String::from("空白消息")
-        } else {
-            attachment_suffix
-        }
-    } else {
-        format!("{normalized}{}", attachment_preview_suffix(attachments))
-    }
-}
-
-/// Builds one compact suffix that summarizes the current attachment list for previews and chips.
-/// 构建一段用于预览与附件标签的紧凑附件摘要后缀。
-fn attachment_preview_suffix(attachments: &[ConversationAttachment]) -> String {
-    if attachments.is_empty() {
-        return String::new();
-    }
-    if attachments.len() == 1 {
-        return format!(
-            " [{} {}]",
-            attachments[0].kind.display_label(),
-            attachments[0].file_name
-        );
-    }
-    format!(" [附件 {} 个]", attachments.len())
+    let parts = build_composer_input_parts(prompt, attachments);
+    composer_parts_label_text(&parts)
 }
 
 /// Builds one transcript-visible body that keeps user text and attachment names together.
@@ -1042,23 +987,8 @@ fn build_user_prompt_transcript_body(
     prompt: &str,
     attachments: &[ConversationAttachment],
 ) -> String {
-    if attachments.is_empty() {
-        return prompt.to_string();
-    }
-
-    let mut sections = Vec::new();
-    if !prompt.trim().is_empty() {
-        sections.push(prompt.trim().to_string());
-    }
-    sections.push(String::from("附件："));
-    sections.extend(attachments.iter().map(|attachment| {
-        format!(
-            "- {} `{}`",
-            attachment.kind.display_label(),
-            attachment.file_name
-        )
-    }));
-    sections.join("\n")
+    let parts = build_composer_input_parts(prompt, attachments);
+    composer_parts_transcript_body(&parts)
 }
 
 /// Returns whether pending-prompt dispatch must stay blocked because Anthropic sessions cannot safely continue the parent coordinator while detached subagents from the previous tool round are still running.
@@ -1500,6 +1430,9 @@ pub struct VulcanWorkbench {
     /// Structured multimodal attachments currently staged beside the prompt composer text.
     /// 当前与提示词文本一起暂存的结构化多模态附件集合。
     composer_attachments: Vec<ConversationAttachment>,
+    /// Human-readable file labels currently hovering over the main workbench window as potential composer drops.
+    /// 当前悬停在主工作台窗口上、可作为提示词拖拽导入候选项的人类可读文件标签集合。
+    composer_drag_hover_labels: Vec<String>,
     /// Undo snapshots retained for the main prompt composer.
     /// 为主提示词编辑器保留的撤销快照集合。
     composer_undo_history: Vec<ComposerUndoSnapshot>,
@@ -3091,9 +3024,27 @@ enum Message {
     /// Opens the native file picker and appends one or more supported attachments into the composer.
     /// 打开原生文件选择器并向提示词输入框追加一个或多个受支持附件。
     AddComposerAttachments,
+    /// Pastes file or image attachments from the current clipboard into the composer.
+    /// 将当前剪贴板中的文件或图片附件粘贴到提示词输入框。
+    PasteComposerClipboardAttachments,
+    /// Applies one clipboard file-path snapshot loaded for composer attachment import.
+    /// 应用为提示词附件导入载入的一份剪贴板文件路径快照。
+    ComposerClipboardFilesLoaded(Result<std::sync::Arc<[PathBuf]>, clipboard::Error>),
+    /// Applies one clipboard image snapshot loaded for composer attachment import.
+    /// 应用为提示词附件导入载入的一份剪贴板图片快照。
+    ComposerClipboardImageLoaded(Result<clipboard::Image, clipboard::Error>),
     /// Removes one staged composer attachment identified by its canonical local path.
     /// 根据规范本地路径移除一条已暂存的提示词附件。
     RemoveComposerAttachment(String),
+    /// Tracks one supported or unsupported file currently hovering over the main window as a potential composer drop target.
+    /// 跟踪当前悬停在主窗口上、可作为提示词拖放目标的一条受支持或不受支持文件。
+    WindowFileHovered(window::Id, PathBuf),
+    /// Reports that hovered files have left the target window and the composer drop preview should clear.
+    /// 回传悬停文件已离开目标窗口，提示词拖放预览应被清空。
+    WindowFilesHoverLeft(window::Id),
+    /// Reports that one file has been dropped onto the target window for composer attachment import.
+    /// 回传某个文件已被拖放到目标窗口，供提示词附件导入使用。
+    WindowFileDropped(window::Id, PathBuf),
     /// Opens the composer context menu at the latest tracked cursor position.
     /// 在最近一次追踪到的鼠标位置打开提示词上下文菜单。
     OpenComposerContextMenu,
@@ -3850,6 +3801,7 @@ impl VulcanWorkbench {
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
             composer_attachments: Vec::new(),
+            composer_drag_hover_labels: Vec::new(),
             composer_undo_history: Vec::new(),
             composer_scroll_offset: 0.0,
             composer_scrollbar_pointer_y: None,
@@ -5160,8 +5112,86 @@ impl VulcanWorkbench {
             Message::ComposerEditorAction(action) => self.apply_composer_editor_action(action),
             Message::ComposerUndo => self.restore_latest_composer_undo_snapshot(),
             Message::AddComposerAttachments => self.add_composer_attachments(),
+            Message::PasteComposerClipboardAttachments => {
+                self.composer_context_menu_open = false;
+                self.composer_context_clipboard_text = None;
+                clipboard::read_files().map(Message::ComposerClipboardFilesLoaded)
+            }
+            Message::ComposerClipboardFilesLoaded(result) => {
+                let files = result
+                    .ok()
+                    .map(|paths| paths.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if files.is_empty() {
+                    return clipboard::read_image().map(Message::ComposerClipboardImageLoaded);
+                }
+                match stage_composer_attachment_paths(self.workspace_path.trim(), &files) {
+                    Ok(attachments) => {
+                        self.append_imported_composer_attachments(attachments, "剪贴板文件")
+                    }
+                    Err(error) => {
+                        self.status_message = format!("导入剪贴板文件失败：{error}");
+                        operation::focus(COMPOSER_EDITOR_ID)
+                    }
+                }
+            }
+            Message::ComposerClipboardImageLoaded(result) => match result {
+                Ok(image) => match self.stage_composer_clipboard_image_attachment(&image) {
+                    Ok(attachment) => {
+                        self.append_imported_composer_attachments(vec![attachment], "剪贴板图片")
+                    }
+                    Err(error) => {
+                        self.status_message = format!("导入剪贴板图片失败：{error}");
+                        operation::focus(COMPOSER_EDITOR_ID)
+                    }
+                },
+                Err(error) => {
+                    self.status_message =
+                        format!("当前剪贴板中没有可导入的文件或图片附件：{:?}。", error);
+                    operation::focus(COMPOSER_EDITOR_ID)
+                }
+            },
             Message::RemoveComposerAttachment(local_path) => {
                 self.remove_composer_attachment(&local_path)
+            }
+            Message::WindowFileHovered(window_id, path) => {
+                if self.main_window_id != Some(window_id)
+                    || !self.active_workbench_supports_any_attachments()
+                {
+                    return Task::none();
+                }
+                self.push_composer_drag_hover_label(&path);
+                Task::none()
+            }
+            Message::WindowFilesHoverLeft(window_id) => {
+                if self.main_window_id == Some(window_id) {
+                    self.composer_drag_hover_labels.clear();
+                }
+                Task::none()
+            }
+            Message::WindowFileDropped(window_id, path) => {
+                if self.main_window_id != Some(window_id) {
+                    return Task::none();
+                }
+                self.composer_drag_hover_labels.clear();
+                if !self.active_workbench_supports_any_attachments() {
+                    self.status_message = String::from(
+                        "当前模型未声明可用附件输入模态，请切换到支持音频、图片、视频或 PDF 的模型后再试。",
+                    );
+                    return operation::focus(COMPOSER_EDITOR_ID);
+                }
+                match stage_composer_attachment_paths(
+                    self.workspace_path.trim(),
+                    std::slice::from_ref(&path),
+                ) {
+                    Ok(attachments) => {
+                        self.append_imported_composer_attachments(attachments, "拖拽")
+                    }
+                    Err(error) => {
+                        self.status_message = format!("处理拖拽附件失败：{error}");
+                        operation::focus(COMPOSER_EDITOR_ID)
+                    }
+                }
             }
             Message::OpenComposerContextMenu => self.open_composer_context_menu(),
             Message::CloseComposerContextMenu => {
@@ -7883,6 +7913,7 @@ impl VulcanWorkbench {
         self.composer = prompt.clone();
         self.composer_buffer = text_editor::Content::with_text(&prompt);
         self.composer_attachments = attachments;
+        self.composer_drag_hover_labels.clear();
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
@@ -7897,6 +7928,7 @@ impl VulcanWorkbench {
         self.composer.clear();
         self.composer_buffer = text_editor::Content::with_text("");
         self.composer_attachments.clear();
+        self.composer_drag_hover_labels.clear();
         self.composer_undo_history.clear();
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
@@ -7959,6 +7991,163 @@ impl VulcanWorkbench {
         Ok(())
     }
 
+    /// Builds one best-effort stable deduplication key for one staged composer attachment so repeated imports of the same source file do not flood the attachment strip.
+    /// 为单条已暂存提示词附件构建一条最佳努力的稳定去重键，避免同一源文件被重复导入后淹没附件条。
+    fn composer_attachment_identity_key(attachment: &ConversationAttachment) -> String {
+        if let Some(source_path) = attachment
+            .source_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return format!(
+                "source|{}|{}|{}",
+                attachment.kind.modality_name(),
+                attachment.mime_type,
+                source_path
+            );
+        }
+
+        format!(
+            "managed|{}|{}|{}|{:?}",
+            attachment.kind.modality_name(),
+            attachment.file_name,
+            attachment.mime_type,
+            attachment.byte_len
+        )
+    }
+
+    /// Appends one imported attachment batch into the composer while enforcing model modality gates, deduplicating repeated file imports, and refreshing focus.
+    /// 在强制模型模态门控、去重重复文件导入并刷新焦点的前提下，将一批导入附件追加到提示词输入框。
+    fn append_imported_composer_attachments(
+        &mut self,
+        attachments: Vec<ConversationAttachment>,
+        source_label: &str,
+    ) -> Task<Message> {
+        if attachments.is_empty() {
+            self.status_message = format!("{source_label}中没有可导入的附件。");
+            return operation::focus(COMPOSER_EDITOR_ID);
+        }
+
+        let existing_keys = self
+            .composer_attachments
+            .iter()
+            .map(Self::composer_attachment_identity_key)
+            .collect::<BTreeSet<_>>();
+        let mut next_keys = existing_keys;
+        let mut additions = Vec::new();
+        let mut duplicate_labels = Vec::new();
+        let mut skipped_labels = Vec::new();
+
+        for attachment in attachments {
+            if !self.active_workbench_supports_attachment_kind(attachment.kind.clone()) {
+                skipped_labels.push(format!(
+                    "{} `{}`",
+                    attachment.kind.display_label(),
+                    attachment.file_name
+                ));
+                continue;
+            }
+
+            let identity_key = Self::composer_attachment_identity_key(&attachment);
+            if !next_keys.insert(identity_key) {
+                duplicate_labels.push(format!(
+                    "{} `{}`",
+                    attachment.kind.display_label(),
+                    attachment.file_name
+                ));
+                continue;
+            }
+
+            additions.push(attachment);
+        }
+
+        if !additions.is_empty() {
+            self.push_composer_undo_snapshot();
+            self.composer_attachments.extend(additions.clone());
+        }
+
+        self.composer_context_menu_open = false;
+        self.composer_context_clipboard_text = None;
+        self.composer_drag_hover_labels.clear();
+        self.status_message = match (
+            additions.len(),
+            skipped_labels.is_empty(),
+            duplicate_labels.is_empty(),
+        ) {
+            (0, true, false) => format!(
+                "{source_label}附件已经全部存在于当前输入框附件列表中：{}。",
+                duplicate_labels.join("、")
+            ),
+            (0, false, true) => format!(
+                "未添加任何{source_label}附件；当前模型暂不支持：{}。",
+                skipped_labels.join("、")
+            ),
+            (0, false, false) => format!(
+                "未添加任何{source_label}附件；以下附件已存在：{}；以下附件当前模型暂不支持：{}。",
+                duplicate_labels.join("、"),
+                skipped_labels.join("、")
+            ),
+            (count, true, true) => format!("已从{source_label}添加 {count} 个附件。"),
+            (count, false, true) => format!(
+                "已从{source_label}添加 {count} 个附件；以下附件因模型未声明对应模态而被跳过：{}。",
+                skipped_labels.join("、")
+            ),
+            (count, true, false) => format!(
+                "已从{source_label}添加 {count} 个附件；以下附件已存在并被跳过：{}。",
+                duplicate_labels.join("、")
+            ),
+            (count, false, false) => format!(
+                "已从{source_label}添加 {count} 个附件；以下附件已存在：{}；以下附件因模型未声明对应模态而被跳过：{}。",
+                duplicate_labels.join("、"),
+                skipped_labels.join("、")
+            ),
+        };
+
+        operation::focus(COMPOSER_EDITOR_ID)
+    }
+
+    /// Stages one clipboard image snapshot as a managed PNG attachment that can later survive provider replays even if the system clipboard changes.
+    /// 将一份剪贴板图片快照暂存为受管理的 PNG 附件，以便后续即使系统剪贴板变化也能稳定参与 Provider 回放。
+    fn stage_composer_clipboard_image_attachment(
+        &self,
+        image: &clipboard::Image,
+    ) -> Result<ConversationAttachment, String> {
+        let descriptor =
+            crate::attachment_assets::attachment_descriptor_from_mime_type("image/png")
+                .ok_or_else(|| String::from("宿主暂不支持将剪贴板图片暂存为 PNG 附件。"))?;
+        let png_bytes = crate::attachment_assets::encode_rgba_image_to_png_bytes(
+            image.size.width,
+            image.size.height,
+            image.rgba.as_ref(),
+        )?;
+
+        crate::attachment_assets::stage_attachment_bytes(
+            self.workspace_path.trim(),
+            &descriptor,
+            "clipboard-image.png",
+            None,
+            &png_bytes,
+        )
+    }
+
+    /// Tracks one hovered file label so the floating composer panel can surface a drop hint before the user releases the pointer.
+    /// 跟踪一条悬停文件标签，使浮动提示词面板能在用户释放指针前展示拖放提示。
+    fn push_composer_drag_hover_label(&mut self, path: &Path) {
+        let label = path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        if self
+            .composer_drag_hover_labels
+            .iter()
+            .any(|value| value == &label)
+        {
+            return;
+        }
+        self.composer_drag_hover_labels.push(label);
+    }
+
     /// Opens the native attachment picker and appends unique supported attachments into the composer draft.
     /// 打开原生附件选择器，并向提示词草稿追加不重复且受支持的附件。
     fn add_composer_attachments(&mut self) -> Task<Message> {
@@ -7971,46 +8160,7 @@ impl VulcanWorkbench {
 
         match pick_composer_attachments(self.workspace_path.trim()) {
             Ok(Some(attachments)) => {
-                self.push_composer_undo_snapshot();
-                let mut added_count = 0usize;
-                let mut skipped_labels = Vec::new();
-                for attachment in attachments {
-                    if !self.active_workbench_supports_attachment_kind(attachment.kind.clone()) {
-                        skipped_labels.push(format!(
-                            "{} `{}`",
-                            attachment.kind.display_label(),
-                            attachment.file_name
-                        ));
-                        continue;
-                    }
-                    if self
-                        .composer_attachments
-                        .iter()
-                        .any(|existing| existing.local_path == attachment.local_path)
-                    {
-                        continue;
-                    }
-                    self.composer_attachments.push(attachment);
-                    added_count = added_count.saturating_add(1);
-                }
-                self.composer_context_menu_open = false;
-                self.composer_context_clipboard_text = None;
-                self.status_message = if added_count == 0 && skipped_labels.is_empty() {
-                    String::from("所选附件已经全部存在于当前输入框附件列表中。")
-                } else if added_count == 0 {
-                    format!(
-                        "未添加任何附件；当前模型暂不支持：{}。",
-                        skipped_labels.join("、")
-                    )
-                } else if skipped_labels.is_empty() {
-                    format!("已向当前输入框添加 {added_count} 个附件。")
-                } else {
-                    format!(
-                        "已向当前输入框添加 {added_count} 个附件；以下附件因模型未声明对应模态而被跳过：{}。",
-                        skipped_labels.join("、")
-                    )
-                };
-                operation::focus(COMPOSER_EDITOR_ID)
+                self.append_imported_composer_attachments(attachments, "文件选择")
             }
             Ok(None) => {
                 self.status_message = String::from("已取消添加附件。");
@@ -10318,6 +10468,8 @@ impl VulcanWorkbench {
         attachments: Vec<ConversationAttachment>,
     ) {
         self.ensure_session_conversation_state_loaded(session_id);
+        let parts = build_composer_input_parts(&prompt, &attachments);
+        let (canonical_text, canonical_attachments) = composer_parts_to_user_payload(&parts);
         let protocol_message_id = format!(
             "session-{session_id}-protocol-user-{}",
             current_unix_millis_text()
@@ -10327,8 +10479,8 @@ impl VulcanWorkbench {
         append_user_text_message(
             &mut runtime_state.conversation_state,
             protocol_message_id,
-            prompt,
-            attachments,
+            canonical_text,
+            canonical_attachments,
         );
         runtime_state.updated_at = updated_at;
     }

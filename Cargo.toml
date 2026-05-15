@@ -21,7 +21,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
-iced = { path = "third_party/iced", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced", "lazy"] }
+iced = { path = "third_party/iced", default-features = false, features = ["wgpu", "tokio", "svg", "markdown", "highlighter", "advanced", "lazy", "image"] }
 iced_aw = { path = "third_party/iced_aw", default-features = false, features = ["context_menu"] }
 iced_fonts = { path = "third_party/iced_fonts", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
