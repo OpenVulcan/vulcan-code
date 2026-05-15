@@ -7,6 +7,7 @@ use crate::agent_runtime::provider_stream_projection::{
     normalize_assistant_output, normalize_optional_stream_output,
 };
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
+use crate::context_budget::build_request_context_budget_snapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use vulcan_core::types::{
@@ -23,6 +24,19 @@ pub(crate) fn apply_latest_request_snapshot(
         return;
     };
 
+    let observed_usage = preparation
+        .context_budget
+        .as_ref()
+        .and_then(|budget| budget.observed_usage.as_ref());
+    preparation.context_budget = Some(build_request_context_budget_snapshot(
+        &preparation.model_blueprint.provider_id,
+        &preparation.model_blueprint.model_id,
+        preparation.model_blueprint.api_family(),
+        &preparation.model_blueprint.capabilities,
+        &preparation.model_blueprint.reasoning,
+        request_snapshot,
+        observed_usage,
+    ));
     preparation.provider_request_preview_markdown =
         crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown(
             preparation,
@@ -182,6 +196,7 @@ mod tests {
     use crate::agent_runtime::runtime_stream_delta::{
         RuntimeStreamDeltaState, process_provider_stream_delta,
     };
+    use crate::context_budget::ContextBudgetSnapshot;
     use crate::provider_config::ProviderRuntimeKind;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -189,7 +204,7 @@ mod tests {
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::types::{
         ControllerConfig, ConversationSnapshot, ProviderContinuation as CoreProviderContinuation,
-        ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+        ProviderRequestSnapshot as CoreProviderRequestSnapshot, ProviderUsageSnapshot,
     };
 
     /// Builds one minimal execution preparation used by terminal-batch tests.
@@ -215,6 +230,8 @@ mod tests {
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({}),
                 reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from("D:/workspace"),
@@ -228,6 +245,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            context_budget: None,
         }
     }
 
@@ -366,5 +384,32 @@ mod tests {
                 && report.mcp_discovery_errors == vec![String::from("mcp-error")]
                 && report.warnings == vec![String::from("warning")]
         ));
+    }
+
+    /// Rebuilds the latest request snapshot while preserving the previously observed usage floor for recalibration.
+    /// 在重建最新请求快照时保留先前观测到的用量下限，以便继续参与预算校准。
+    #[test]
+    fn apply_latest_request_snapshot_preserves_observed_usage_floor() {
+        let observed_usage = ProviderUsageSnapshot {
+            input_tokens: Some(4096),
+            output_tokens: Some(256),
+            reasoning_tokens: Some(128),
+            total_tokens: Some(4480),
+        };
+        let mut preparation = build_test_preparation();
+        preparation.model_blueprint.capabilities.input_limit = Some(8_000);
+        preparation.model_blueprint.capabilities.output_limit = Some(1_024);
+        preparation.context_budget = Some(ContextBudgetSnapshot {
+            observed_usage: Some(observed_usage.clone()),
+            ..ContextBudgetSnapshot::default()
+        });
+
+        apply_latest_request_snapshot(&mut preparation, Some(&build_request_snapshot()));
+
+        let context_budget = preparation
+            .context_budget
+            .expect("latest request snapshot should rebuild the budget");
+        assert_eq!(context_budget.observed_usage, Some(observed_usage));
+        assert_eq!(context_budget.estimated_input_tokens, 4096);
     }
 }

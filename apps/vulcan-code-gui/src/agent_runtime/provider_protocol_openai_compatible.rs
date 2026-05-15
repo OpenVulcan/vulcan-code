@@ -2,6 +2,7 @@
 //! 宿主自有的 OpenAI 兼容流式协议基础原语。
 
 use serde_json::{Map as JsonMap, Value};
+use vulcan_core::types::ProviderUsageSnapshot as CoreProviderUsageSnapshot;
 
 /// Finish reasons normalized for OpenAI Chat Completions-compatible provider streams.
 /// 为 OpenAI Chat Completions 兼容 Provider 流规范化的结束原因。
@@ -95,6 +96,9 @@ pub(crate) struct CompatibleChunk {
     /// Optional upstream response identifier carried by the current event.
     /// 当前事件携带的可选上游响应标识。
     pub(crate) response_id: Option<String>,
+    /// Optional normalized provider usage snapshot carried by the current event.
+    /// 当前事件携带的可选规范化 Provider 用量快照。
+    pub(crate) usage: Option<CoreProviderUsageSnapshot>,
     /// Optional first normalized choice extracted from the current event.
     /// 从当前事件提取出的可选首个规范化 choice。
     pub(crate) choice: Option<CompatibleChoice>,
@@ -147,6 +151,7 @@ where
 /// 在保留响应元数据与用量的同时，将首个 Provider choice 规范化为共享兼容块形状。
 pub(crate) fn normalize_first_choice_chunk<Choice, ToolCall, F>(
     response_id: Option<String>,
+    usage: Option<CoreProviderUsageSnapshot>,
     choices: &[Choice],
     map_choice: F,
 ) -> CompatibleChunk
@@ -158,6 +163,7 @@ where
 
     CompatibleChunk {
         response_id,
+        usage,
         choice,
     }
 }

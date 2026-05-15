@@ -12,6 +12,7 @@ use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::provider_capabilities::resolve_provider_api_key;
 use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
 use vulcan_core::types::{
@@ -54,7 +55,8 @@ pub(crate) fn execute_provider_prompt_stream(
         Ok(options) => options,
         Err(error) => return one_shot_provider_error_stream(error),
     };
-    let api_key = match options.resolved_api_key() {
+    let api_key = match resolve_provider_api_key(options, &preparation.model_blueprint.capabilities)
+    {
         Ok(Some(api_key)) => api_key,
         Ok(None) => {
             return one_shot_provider_error_stream(format!(
@@ -67,7 +69,8 @@ pub(crate) fn execute_provider_prompt_stream(
     let temperature = active_agent
         .and_then(|agent| agent.temperature)
         .or(preparation.temperature)
-        .map(|value| value.clamp(0.0, 2.0) as f64);
+        .map(|value| value.clamp(0.0, 2.0) as f64)
+        .filter(|_| preparation.model_blueprint.supports_temperature());
     let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
@@ -96,5 +99,6 @@ pub(crate) fn execute_provider_prompt_stream(
         preparation.session_id,
         resolved_tools,
         additional_params,
+        preparation.model_blueprint.interleaved_reasoning.clone(),
     ))
 }

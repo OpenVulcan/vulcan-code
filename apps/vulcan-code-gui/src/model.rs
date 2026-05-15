@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 use uuid::Uuid;
+use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 
 /// Execution modes for AI coding tasks.
 /// AI 编码任务的执行模式。
@@ -670,6 +671,10 @@ pub struct PendingSessionPromptEntry {
     /// Compact preview text rendered inside the pending-queue strip.
     /// 渲染在待发送队列条中的紧凑预览文本。
     pub preview: String,
+    /// Structured attachments that should be replayed together with the queued prompt text.
+    /// 应与排队提示词文本一起回放的结构化附件集合。
+    #[serde(default)]
+    pub attachments: Vec<ConversationAttachment>,
     /// Stable source kind attached to the queued prompt.
     /// 附着在该排队提示词上的稳定来源类型。
     pub source: PendingSessionPromptSource,
@@ -719,6 +724,10 @@ pub struct PendingPromptPanelEntry {
     /// Compact preview text rendered inside the visible prompt-panel row.
     /// 渲染在可见提示词面板行中的紧凑预览文本。
     pub preview: String,
+    /// Structured attachments retained until the row is inserted or removed.
+    /// 在该行被插入或移除前一直保留的结构化附件集合。
+    #[serde(default)]
+    pub attachments: Vec<ConversationAttachment>,
     /// Stable insertion state used to hide controls after the prompt has entered the internal system queue.
     /// 提示词进入内部系统队列后用于隐藏控制按钮的稳定插入状态。
     #[serde(default)]
@@ -771,6 +780,9 @@ pub struct SessionRuntimeStateEntry {
     /// Canonical conversation state used by the runtime instead of rebuilding history from transcript projections.
     /// 运行时使用的规范会话状态，用于替代从转录投影重建历史。
     pub conversation_state: SessionConversationState,
+    /// Latest provider usage snapshot retained for budget calibration across turns.
+    /// 为跨轮预算校准保留的最近一次 Provider 用量快照。
+    pub last_provider_usage: Option<ProviderUsageSnapshot>,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,

@@ -132,6 +132,8 @@ mod tests {
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({}),
                 reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from("D:/workspace"),
@@ -145,6 +147,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            context_budget: None,
         }
     }
 
@@ -171,6 +174,7 @@ mod tests {
                 id: String::from("user-1"),
                 payload: CoreConversationPayload::UserText {
                     text: String::from("历史用户输入"),
+                    attachments: Vec::new(),
                 },
             }],
             ..CoreConversationSnapshot::default()

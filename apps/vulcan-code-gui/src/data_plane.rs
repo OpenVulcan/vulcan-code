@@ -268,6 +268,12 @@ async fn ensure_application_schema_migrations(
     ensure_optional_runtime_state_column(
         client,
         sqlite_binding_id,
+        "ALTER TABLE session_runtime_state ADD COLUMN provider_usage_json TEXT;",
+    )
+    .await?;
+    ensure_optional_runtime_state_column(
+        client,
+        sqlite_binding_id,
         "ALTER TABLE session_runtime_state ADD COLUMN conversation_state_json TEXT;",
     )
     .await?;
@@ -570,6 +576,7 @@ CREATE TABLE IF NOT EXISTS session_runtime_state (
     last_compaction_id TEXT,
     context_start_message_id TEXT,
     ui_state_json TEXT,
+    provider_usage_json TEXT,
     conversation_state_json TEXT,
     continuation_json TEXT,
     updated_at TEXT NOT NULL

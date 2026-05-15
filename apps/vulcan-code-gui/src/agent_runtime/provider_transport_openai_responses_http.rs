@@ -1,6 +1,7 @@
 //! Direct OpenAI Responses HTTP and SSE transport owned by the host runtime.
 //! 宿主运行时自有的 OpenAI Responses HTTP 与 SSE 直连传输模块。
 
+use crate::agent_runtime::provider_attachment::read_provider_attachment;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
@@ -24,6 +25,7 @@ use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Minimal OpenAI Responses top-level error payload decoded from one failed HTTP response or SSE error event.
@@ -146,6 +148,42 @@ struct OpenAiResponsesCompletedResponse {
     /// 不完整终态响应携带的可选 incomplete-details 载荷。
     #[serde(default)]
     incomplete_details: Option<OpenAiResponsesIncompleteDetails>,
+    /// Optional terminal usage payload.
+    /// 可选的终态用量载荷。
+    #[serde(default)]
+    usage: Option<OpenAiResponsesUsage>,
+}
+
+/// Minimal OpenAI Responses terminal usage payload.
+/// 最小 OpenAI Responses 终态用量载荷。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpenAiResponsesUsage {
+    /// Optional input token count.
+    /// 可选的输入 Token 数量。
+    #[serde(default)]
+    input_tokens: Option<usize>,
+    /// Optional output token count.
+    /// 可选的输出 Token 数量。
+    #[serde(default)]
+    output_tokens: Option<usize>,
+    /// Optional total token count.
+    /// 可选的总 Token 数量。
+    #[serde(default)]
+    total_tokens: Option<usize>,
+    /// Optional output-token detail payload.
+    /// 可选的输出 Token 细分载荷。
+    #[serde(default)]
+    output_tokens_details: Option<OpenAiResponsesOutputTokenDetails>,
+}
+
+/// Minimal OpenAI Responses output-token detail payload.
+/// 最小 OpenAI Responses 输出 Token 细分载荷。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpenAiResponsesOutputTokenDetails {
+    /// Optional reasoning token count.
+    /// 可选的推理 Token 数量。
+    #[serde(default)]
+    reasoning_tokens: Option<usize>,
 }
 
 /// Executes one direct OpenAI Responses streaming turn without going through any third-party completion-model abstraction.
@@ -358,6 +396,7 @@ fn build_openai_responses_request_payload(
         snapshot,
         current_history,
         current_prompt,
+        ..
     } = request;
 
     let mut payload = match snapshot.additional_params {
@@ -444,15 +483,39 @@ fn core_message_to_openai_responses_input_items(
     message: &CoreConversationMessage,
 ) -> Result<Vec<Value>, VulcanCoreError> {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => Ok(vec![json!({
-            "role": "user",
-            "content": [
-                {
+        CoreConversationPayload::UserText { text, attachments } => {
+            let mut content = Vec::new();
+            if !text.is_empty() {
+                content.push(json!({
                     "type": "input_text",
                     "text": text
+                }));
+            }
+            for attachment in attachments {
+                let attachment_payload = read_provider_attachment(attachment)?;
+                match attachment_payload.kind {
+                    vulcan_core::types::ConversationAttachmentKind::Image => {
+                        content.push(json!({
+                            "type": "input_image",
+                            "image_url": attachment_payload.data_url
+                        }));
+                    }
+                    vulcan_core::types::ConversationAttachmentKind::Audio
+                    | vulcan_core::types::ConversationAttachmentKind::Video
+                    | vulcan_core::types::ConversationAttachmentKind::Pdf => {
+                        content.push(json!({
+                            "type": "input_file",
+                            "filename": attachment_payload.file_name,
+                            "file_data": attachment_payload.data_url
+                        }));
+                    }
                 }
-            ]
-        })]),
+            }
+            Ok(vec![json!({
+                "role": "user",
+                "content": content
+            })])
+        }
         CoreConversationPayload::Assistant {
             text,
             provider_message_id,
@@ -681,7 +744,24 @@ fn build_openai_responses_turn_response(
         model_id,
         Some(response.id),
         &assistant_content,
+        response.usage.and_then(openai_responses_usage_to_snapshot),
     ))
+}
+
+/// Converts one raw OpenAI Responses usage payload into the shared normalized usage snapshot.
+/// 将一份原始 OpenAI Responses 用量载荷转换为共享规范化用量快照。
+fn openai_responses_usage_to_snapshot(
+    usage: OpenAiResponsesUsage,
+) -> Option<CoreProviderUsageSnapshot> {
+    let snapshot = CoreProviderUsageSnapshot {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_tokens: usage
+            .output_tokens_details
+            .and_then(|details| details.reasoning_tokens),
+        total_tokens: usage.total_tokens,
+    };
+    snapshot.has_any_tokens().then_some(snapshot)
 }
 
 /// Formats one decoded OpenAI Responses error payload into one human-readable message.
@@ -746,13 +826,39 @@ mod tests {
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
+        ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
         ConversationToolCall as CoreConversationToolCall,
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
+
+    /// Builds one temporary attachment used by OpenAI Responses multimodal tests.
+    /// 构建一条供 OpenAI Responses 多模态测试使用的临时附件。
+    fn build_test_attachment(
+        extension: &str,
+        kind: ConversationAttachmentKind,
+        mime_type: &str,
+        file_name: &str,
+    ) -> ConversationAttachment {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let file_path =
+            std::env::temp_dir().join(format!("vulcan-openai-responses-{unique_id}.{extension}"));
+        std::fs::write(&file_path, [0_u8, 1, 2, 3]).expect("temporary attachment should write");
+
+        ConversationAttachment {
+            kind,
+            file_name: String::from(file_name),
+            local_path: file_path.to_string_lossy().into_owned(),
+            mime_type: String::from(mime_type),
+        }
+    }
 
     /// Verifies the direct OpenAI Responses request payload strips reasoning replay, injects chained continuation, and preserves function-call output shapes.
     /// 验证直连 OpenAI Responses 请求载荷会剥离思考回放、注入串联 continuation，并保留 function-call output 形状。
@@ -788,6 +894,7 @@ mod tests {
                         tool_name: String::from("read_file"),
                         arguments: json!({ "path": "src/main.rs" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -798,6 +905,7 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_openai_responses_request_payload(
@@ -838,6 +946,128 @@ mod tests {
             false
         );
         assert_eq!(payload["tools"][0]["parameters"]["required"][0], "path");
+    }
+
+    /// Verifies OpenAI Responses user input items carry staged image attachments as `input_image` parts.
+    /// 验证 OpenAI Responses 用户输入项会把已暂存图片附件编码为 `input_image` Part。
+    #[test]
+    fn request_payload_embeds_user_image_attachments_as_input_image_parts() {
+        let attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "diagram.png",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-5"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("分析图片"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析图片"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_responses_request_payload("gpt-5", request, &[])
+            .expect("payload should build");
+        let input = payload["input"]
+            .as_array()
+            .expect("input should be an array");
+        let content = input[0]["content"]
+            .as_array()
+            .expect("user content should be one part array");
+
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(
+            content[1]["image_url"],
+            json!("data:image/png;base64,AAECAw==")
+        );
+
+        let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies OpenAI Responses user input items encode staged PDF and audio attachments as `input_file` parts.
+    /// 验证 OpenAI Responses 用户输入项会把已暂存 PDF 与音频附件编码为 `input_file` Part。
+    #[test]
+    fn request_payload_embeds_user_file_like_attachments_as_input_file_parts() {
+        let pdf_attachment = build_test_attachment(
+            "pdf",
+            ConversationAttachmentKind::Pdf,
+            "application/pdf",
+            "guide.pdf",
+        );
+        let audio_attachment = build_test_attachment(
+            "mp3",
+            ConversationAttachmentKind::Audio,
+            "audio/mpeg",
+            "sample.mp3",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-5"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("分析附件"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析附件"),
+                    attachments: vec![pdf_attachment.clone(), audio_attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_responses_request_payload("gpt-5", request, &[])
+            .expect("payload should build");
+        let input = payload["input"]
+            .as_array()
+            .expect("input should be an array");
+        let content = input[0]["content"]
+            .as_array()
+            .expect("user content should be one part array");
+
+        assert_eq!(content[1]["type"], "input_file");
+        assert_eq!(content[1]["filename"], "guide.pdf");
+        assert_eq!(
+            content[1]["file_data"],
+            json!("data:application/pdf;base64,AAECAw==")
+        );
+        assert_eq!(content[2]["type"], "input_file");
+        assert_eq!(content[2]["filename"], "sample.mp3");
+        assert_eq!(
+            content[2]["file_data"],
+            json!("data:audio/mpeg;base64,AAECAw==")
+        );
+
+        let _ = std::fs::remove_file(&pdf_attachment.local_path);
+        let _ = std::fs::remove_file(&audio_attachment.local_path);
     }
 
     /// Verifies completed OpenAI Responses outputs become the canonical assistant text, reasoning, tool calls, and continuation response identifier.

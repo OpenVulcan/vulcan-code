@@ -1,6 +1,7 @@
 //! Direct Google Gemini HTTP and SSE transport owned by the host runtime.
 //! 宿主运行时自有的 Google Gemini HTTP 与 SSE 直连传输模块。
 
+use crate::agent_runtime::provider_attachment::read_provider_attachment;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::core_provider_turn_delta_to_runtime_delta;
 use crate::agent_runtime::provider_protocol_content::{
@@ -22,7 +23,7 @@ use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreT
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
@@ -30,6 +31,7 @@ use vulcan_core::types::{
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     ProviderContinuation as CoreProviderContinuation, ProviderTurnDelta as CoreProviderTurnDelta,
     ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Default Google Gemini REST base URL used by the host-owned direct transport.
@@ -94,6 +96,7 @@ where
     futures_util::pin_mut!(events);
 
     let mut response_model = None::<String>;
+    let mut final_usage = None::<CoreProviderUsageSnapshot>;
     let mut assistant_text = String::new();
     let mut finalized_parts = Vec::<GeminiPart>::new();
     let mut pending_reasoning_index = None::<usize>;
@@ -118,6 +121,13 @@ where
 
         if let Some(model_version) = chunk.model_version {
             response_model = Some(model_version);
+        }
+        if let Some(usage) = chunk
+            .usage_metadata
+            .as_ref()
+            .and_then(gemini_usage_to_snapshot)
+        {
+            final_usage = Some(usage);
         }
         let Some(candidate) = chunk.candidates.into_iter().next() else {
             continue;
@@ -200,6 +210,7 @@ where
             .join("\n"),
         provider_message_id: None,
         provider_message_state,
+        usage: final_usage,
         tool_calls,
         continuation: Some(CoreProviderContinuation {
             provider_id: Some(provider_id.to_string()),
@@ -208,6 +219,29 @@ where
             updated_at: Some(current_unix_millis_text()),
         }),
     })
+}
+
+/// Converts one Gemini-native usage payload into the shared normalized usage snapshot.
+/// 将一份 Gemini 原生用量载荷转换为共享规范化用量快照。
+fn gemini_usage_to_snapshot(
+    usage: &crate::agent_runtime::provider_protocol_gemini::GeminiUsageMetadata,
+) -> Option<CoreProviderUsageSnapshot> {
+    let snapshot = CoreProviderUsageSnapshot {
+        input_tokens: (usage.prompt_token_count >= 0).then_some(usage.prompt_token_count as usize),
+        output_tokens: usage
+            .candidates_token_count
+            .filter(|value| *value >= 0)
+            .map(|value| value as usize),
+        reasoning_tokens: usage
+            .thoughts_token_count
+            .filter(|value| *value >= 0)
+            .map(|value| value as usize),
+        total_tokens: usage
+            .total_token_count
+            .filter(|value| *value >= 0)
+            .map(|value| value as usize),
+    };
+    snapshot.has_any_tokens().then_some(snapshot)
 }
 
 /// Builds one direct Google Gemini HTTP client with merged API key and caller-supplied request headers.
@@ -249,6 +283,7 @@ fn build_google_gemini_request_payload(
         snapshot,
         current_history,
         current_prompt,
+        ..
     } = request;
 
     let mut payload = match snapshot.additional_params {
@@ -329,8 +364,28 @@ fn core_message_to_gemini_content(
     previous_messages: &[CoreConversationMessage],
 ) -> Result<GeminiContent, VulcanCoreError> {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => {
-            Ok(GeminiContent::user(vec![GeminiPart::text(text.clone())]))
+        CoreConversationPayload::UserText { text, attachments } => {
+            let mut parts = Vec::new();
+            if !text.is_empty() {
+                parts.push(GeminiPart::text(text.clone()));
+            }
+            for attachment in attachments {
+                let attachment_payload = read_provider_attachment(attachment)?;
+                let mut additional_fields = BTreeMap::new();
+                additional_fields.insert(
+                    String::from("inlineData"),
+                    json!({
+                        "mimeType": attachment_payload.mime_type,
+                        "data": attachment_payload.base64_data
+                    }),
+                );
+                parts.push(GeminiPart {
+                    thought: Some(false),
+                    additional_fields,
+                    ..GeminiPart::default()
+                });
+            }
+            Ok(GeminiContent::user(parts))
         }
         CoreConversationPayload::Assistant {
             text,
@@ -665,13 +720,38 @@ mod tests {
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
+        ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
         ConversationToolCall as CoreConversationToolCall,
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
+
+    /// Builds one temporary attachment used by Gemini multimodal request tests.
+    /// 构建一条供 Gemini 多模态请求测试使用的临时附件。
+    fn build_test_attachment(
+        extension: &str,
+        kind: ConversationAttachmentKind,
+        mime_type: &str,
+        file_name: &str,
+    ) -> ConversationAttachment {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let file_path = std::env::temp_dir().join(format!("vulcan-gemini-{unique_id}.{extension}"));
+        std::fs::write(&file_path, [0_u8, 1, 2, 3]).expect("temporary attachment should write");
+
+        ConversationAttachment {
+            kind,
+            file_name: String::from(file_name),
+            local_path: file_path.to_string_lossy().into_owned(),
+            mime_type: String::from(mime_type),
+        }
+    }
 
     /// Verifies one stored Gemini provider-message-state round-trips the native content payload without losing thought signatures.
     /// 验证一份已存储 Gemini provider_message_state 可以在不丢失 thought signature 的前提下往返恢复原生内容载荷。
@@ -714,6 +794,7 @@ mod tests {
                     tool_name: String::from("read_file"),
                     arguments: json!({"path":"src/main.rs"}),
                 }],
+                usage: None,
             },
         };
         let tool_result_message = CoreConversationMessage {
@@ -749,8 +830,10 @@ mod tests {
                 id: String::from("user-1"),
                 payload: CoreConversationPayload::UserText {
                     text: String::from("继续"),
+                    attachments: Vec::new(),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_google_gemini_request_payload(
@@ -798,6 +881,7 @@ mod tests {
                     tool_name: String::from("read_file"),
                     arguments: json!({"path":"src/main.rs"}),
                 }],
+                usage: None,
             },
         };
         let tool_result_message = CoreConversationMessage {
@@ -820,5 +904,126 @@ mod tests {
                 .and_then(|response| response.id.clone()),
             None
         );
+    }
+
+    /// Verifies Gemini user content includes inline image data parts when the prompt carries staged image attachments.
+    /// 验证当提示词携带已暂存图片附件时，Gemini 用户内容会包含内联图片数据 Part。
+    #[test]
+    fn gemini_request_payload_embeds_user_image_attachments_as_inline_data() {
+        let attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "diagram.png",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-2.5-flash"),
+                system_prompt: String::from("You are helpful."),
+                prompt: String::from("分析图片"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析图片"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_google_gemini_request_payload(request, &[])
+            .expect("gemini request payload should build");
+        let contents = payload["contents"]
+            .as_array()
+            .expect("contents should be one array");
+        let parts = contents[0]["parts"]
+            .as_array()
+            .expect("user parts should be one array");
+
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(parts[0]["text"], "分析图片");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[1]["inlineData"]["data"], "AAECAw==");
+
+        let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies Gemini user content includes inline data parts for audio, video, and PDF attachments in addition to images.
+    /// 验证 Gemini 用户内容除了图片外，也会为音频、视频与 PDF 附件生成内联数据 Part。
+    #[test]
+    fn gemini_request_payload_embeds_audio_video_and_pdf_attachments_as_inline_data() {
+        let audio_attachment = build_test_attachment(
+            "mp3",
+            ConversationAttachmentKind::Audio,
+            "audio/mpeg",
+            "sample.mp3",
+        );
+        let video_attachment = build_test_attachment(
+            "mp4",
+            ConversationAttachmentKind::Video,
+            "video/mp4",
+            "clip.mp4",
+        );
+        let pdf_attachment = build_test_attachment(
+            "pdf",
+            ConversationAttachmentKind::Pdf,
+            "application/pdf",
+            "guide.pdf",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-2.5-flash"),
+                system_prompt: String::from("You are helpful."),
+                prompt: String::from("分析附件"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析附件"),
+                    attachments: vec![
+                        audio_attachment.clone(),
+                        video_attachment.clone(),
+                        pdf_attachment.clone(),
+                    ],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_google_gemini_request_payload(request, &[])
+            .expect("gemini request payload should build");
+        let contents = payload["contents"]
+            .as_array()
+            .expect("contents should be one array");
+        let parts = contents[0]["parts"]
+            .as_array()
+            .expect("user parts should be one array");
+
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "audio/mpeg");
+        assert_eq!(parts[2]["inlineData"]["mimeType"], "video/mp4");
+        assert_eq!(parts[3]["inlineData"]["mimeType"], "application/pdf");
+
+        let _ = std::fs::remove_file(&audio_attachment.local_path);
+        let _ = std::fs::remove_file(&video_attachment.local_path);
+        let _ = std::fs::remove_file(&pdf_attachment.local_path);
     }
 }

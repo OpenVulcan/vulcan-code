@@ -54,6 +54,7 @@ pub(crate) fn execute_provider_transport_stream(
                 request.session_id,
                 request.resolved_tools,
                 request.additional_params,
+                request.interleaved_reasoning,
             ),
             ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
                 &request.provider_id,
@@ -71,6 +72,7 @@ pub(crate) fn execute_provider_transport_stream(
                 request.session_id,
                 request.resolved_tools,
                 request.additional_params,
+                request.interleaved_reasoning,
             ),
             _ => execute_openai_compatible_stream(
                 &request.provider_id,
@@ -90,6 +92,7 @@ pub(crate) fn execute_provider_transport_stream(
                 request.session_id,
                 request.resolved_tools,
                 request.additional_params,
+                request.interleaved_reasoning,
             ),
         },
         ProviderApiFamily::GoogleGeminiGenerateContent => execute_google_gemini_stream(

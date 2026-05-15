@@ -42,7 +42,7 @@ pub(crate) fn prepare_execution(
         foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
         foundation.resolved_mcp_tools_for_agent(&active_agent.id),
     );
-    let resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
+    let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
 
     if workspace_path.is_empty() {
         warnings.push(String::from(
@@ -60,6 +60,28 @@ pub(crate) fn prepare_execution(
         warnings.push(reasoning_note.clone());
     }
 
+    if !model_blueprint.supports_tool_call() && !resolved_tools.descriptors.is_empty() {
+        warnings.push(format!(
+            "当前模型 `{}` 未声明工具调用能力，本轮已自动隐藏 {} 个工具。",
+            model_blueprint.model_name,
+            resolved_tools.descriptors.len()
+        ));
+        resolved_tools.descriptors.clear();
+        resolved_tools.definitions.clear();
+    }
+
+    let temperature = if model_blueprint.supports_temperature() {
+        request.temperature
+    } else {
+        if request.temperature.is_some() {
+            warnings.push(format!(
+                "当前模型 `{}` 未声明显式温度能力，本轮将自动回退到模型默认采样设置。",
+                model_blueprint.model_name
+            ));
+        }
+        None
+    };
+
     let mcp_overview = foundation.mcp_overview();
 
     Ok(ExecutionPreparation {
@@ -73,7 +95,7 @@ pub(crate) fn prepare_execution(
         workspace_path,
         context_history_count: request.conversation_state.messages.len(),
         execution_mode: request.execution_mode.clone(),
-        temperature: request.temperature,
+        temperature,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors: resolved_tools.descriptors,
         delegate_agents: active_agent.delegates.clone(),
@@ -81,5 +103,6 @@ pub(crate) fn prepare_execution(
         warnings,
         provider_request_preview_markdown: String::new(),
         provider_request_snapshot_json: None,
+        context_budget: None,
     })
 }

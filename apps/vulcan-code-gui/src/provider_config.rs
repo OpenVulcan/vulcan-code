@@ -1057,6 +1057,62 @@ pub struct PersistedModelEntry {
     /// 人类可读的模型名称。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Optional lifecycle status.
+    /// 可选的生命周期状态。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Optional family label.
+    /// 可选的家族标签。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Optional release-date label.
+    /// 可选的发布日期标签。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    /// Optional context-window limit.
+    /// 可选的上下文窗口上限。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<usize>,
+    /// Optional input-token limit.
+    /// 可选的输入 Token 上限。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_limit: Option<usize>,
+    /// Optional output-token limit.
+    /// 可选的输出 Token 上限。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<usize>,
+    /// Optional reasoning capability flag.
+    /// 可选的推理能力标记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    /// Optional tool-calling capability flag.
+    /// 可选的工具调用能力标记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    /// Optional temperature capability flag.
+    /// 可选的温度能力标记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<bool>,
+    /// Optional attachment capability flag.
+    /// 可选的附件能力标记。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<bool>,
+    /// Optional interleaved reasoning descriptor.
+    /// 可选的交错推理描述。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interleaved: Option<ModelInterleavedCapability>,
+    /// Optional model-scoped reasoning profile.
+    /// 可选的模型级推理档位配置。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile: Option<ReasoningProfileConfig>,
+    /// Optional input modalities.
+    /// 可选的输入模态集合。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub input_modalities: Vec<String>,
+    /// Optional output modalities.
+    /// 可选的输出模态集合。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub output_modalities: Vec<String>,
 }
 
 /// Persisted provider entry written into the Vulcan configuration file.
@@ -1619,20 +1675,20 @@ pub fn effective_model_choices(
                 .map(|(id, model)| ModelChoice {
                     id: id.clone(),
                     name: model.name.clone().unwrap_or_else(|| id.clone()),
-                    status: None,
-                    family: None,
-                    release_date: None,
-                    context_limit: None,
-                    input_limit: None,
-                    output_limit: None,
-                    reasoning: None,
-                    tool_call: None,
-                    temperature: None,
-                    attachment: None,
-                    interleaved: None,
-                    reasoning_profile: None,
-                    input_modalities: Vec::new(),
-                    output_modalities: Vec::new(),
+                    status: model.status.clone(),
+                    family: model.family.clone(),
+                    release_date: model.release_date.clone(),
+                    context_limit: model.context_limit,
+                    input_limit: model.input_limit,
+                    output_limit: model.output_limit,
+                    reasoning: model.reasoning,
+                    tool_call: model.tool_call,
+                    temperature: model.temperature,
+                    attachment: model.attachment,
+                    interleaved: model.interleaved.clone(),
+                    reasoning_profile: model.reasoning_profile.clone(),
+                    input_modalities: model.input_modalities.clone(),
+                    output_modalities: model.output_modalities.clone(),
                 })
                 .collect::<Vec<_>>();
             let mut items = merge_embedded_model_metadata(items, &embedded_models);
@@ -1703,6 +1759,20 @@ pub fn persist_remote_models(models: &[ModelChoice]) -> BTreeMap<String, Persist
                 model.id.clone(),
                 PersistedModelEntry {
                     name: Some(model.name.clone()),
+                    status: model.status.clone(),
+                    family: model.family.clone(),
+                    release_date: model.release_date.clone(),
+                    context_limit: model.context_limit,
+                    input_limit: model.input_limit,
+                    output_limit: model.output_limit,
+                    reasoning: model.reasoning,
+                    tool_call: model.tool_call,
+                    temperature: model.temperature,
+                    attachment: model.attachment,
+                    interleaved: model.interleaved.clone(),
+                    reasoning_profile: model.reasoning_profile.clone(),
+                    input_modalities: model.input_modalities.clone(),
+                    output_modalities: model.output_modalities.clone(),
                 },
             )
         })

@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_core::types::{
     ProviderContinuation as CoreProviderContinuation, ProviderTurnDelta as CoreProviderTurnDelta,
     ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Builds one synthetic host-owned tool-result identifier that stays stable within the current execution turn.
@@ -135,6 +136,7 @@ pub(crate) fn build_openai_compatible_turn_response(
     model_id: &str,
     provider_message_id: Option<String>,
     assistant_content: &[ProviderAssistantContent],
+    usage: Option<CoreProviderUsageSnapshot>,
 ) -> CoreProviderTurnResponse {
     let assistant_text = assistant_content
         .iter()
@@ -168,6 +170,7 @@ pub(crate) fn build_openai_compatible_turn_response(
         assistant_reasoning,
         provider_message_id: provider_message_id.clone(),
         provider_message_state: None,
+        usage,
         tool_calls,
         continuation: Some(CoreProviderContinuation {
             provider_id: Some(provider_id.to_string()),

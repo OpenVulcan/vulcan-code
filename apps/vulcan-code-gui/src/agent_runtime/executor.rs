@@ -108,6 +108,8 @@ mod tests {
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({ "reasoning": { "effort": "high" } }),
                 reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析这段代码"),
             workspace_path: String::from("D:/workspace"),
@@ -126,6 +128,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            context_budget: None,
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -137,6 +140,7 @@ mod tests {
                     id: String::from("history-user-1"),
                     payload: CoreConversationPayload::UserText {
                         text: String::from("之前的用户问题"),
+                        attachments: Vec::new(),
                     },
                 },
                 CoreConversationMessage {
@@ -147,6 +151,7 @@ mod tests {
                         provider_message_id: Some(String::from("resp_1")),
                         provider_message_state: None,
                         tool_calls: Vec::new(),
+                        usage: None,
                     },
                 },
             ],
@@ -225,6 +230,8 @@ mod tests {
                 )]),
                 extra_body: json!({ "reasoning": { "effort": "medium" } }),
                 reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析这段代码"),
             workspace_path: String::from("D:/workspace"),
@@ -243,6 +250,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            context_budget: None,
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -250,6 +258,7 @@ mod tests {
                     id: String::from("history-user-1"),
                     payload: SessionConversationPayload::UserText {
                         text: String::from("之前的用户问题"),
+                        attachments: Vec::new(),
                     },
                 },
                 SessionConversationMessage {
@@ -260,6 +269,7 @@ mod tests {
                         provider_message_id: Some(String::from("resp_1")),
                         provider_message_state: None,
                         tool_calls: Vec::new(),
+                        usage: None,
                     },
                 },
             ],
@@ -337,6 +347,7 @@ mod tests {
                     id: String::from("user-1"),
                     payload: SessionConversationPayload::UserText {
                         text: String::from("请分析这个项目"),
+                        attachments: Vec::new(),
                     },
                 },
                 SessionConversationMessage {
@@ -352,6 +363,7 @@ mod tests {
                             tool_name: String::from("read_file"),
                             arguments: json!({ "path": "Cargo.toml" }),
                         }],
+                        usage: None,
                     },
                 },
             ],
@@ -445,6 +457,7 @@ mod tests {
                     tool_name: String::from("read_file"),
                     arguments: json!({ "path": "src/main.rs" }),
                 }],
+                usage: None,
             },
         }];
 
@@ -458,6 +471,7 @@ mod tests {
             provider_message_id,
             provider_message_state: _,
             tool_calls,
+            usage: _,
         } = &message.payload
         else {
             panic!("history should contain one assistant payload");
@@ -531,6 +545,8 @@ mod tests {
                 extra_headers: BTreeMap::new(),
                 extra_body: json!({}),
                 reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析这段代码"),
             workspace_path: String::from("D:/workspace"),
@@ -549,6 +565,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            context_budget: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -647,6 +664,7 @@ mod tests {
                 provider_message_id: Some(String::from("assistant-1")),
                 provider_message_state: None,
                 tool_calls: Vec::new(),
+                usage: None,
             },
         }];
         let prompt = CoreConversationMessage {
@@ -701,12 +719,14 @@ mod tests {
                 provider_message_id: Some(String::from("foreign-response-1")),
                 provider_message_state: None,
                 tool_calls: Vec::new(),
+                usage: None,
             },
         }];
         let prompt = CoreConversationMessage {
             id: String::from("user-2"),
             payload: CoreConversationPayload::UserText {
                 text: String::from("现在切到 Anthropic 继续。"),
+                attachments: Vec::new(),
             },
         };
         let foreign_continuation = CoreProviderContinuation {

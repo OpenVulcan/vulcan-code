@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
-use crate::provider_config::{ProviderApiFamily, ProviderRuntimeKind};
+use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily, ProviderRuntimeKind};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
@@ -73,6 +73,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional provider-specific additional parameters already merged by upper layers.
     /// 已由上层合并完成的可选 Provider 专用附加参数。
     pub(crate) additional_params: Option<Value>,
+    /// Optional model-scoped interleaved reasoning capability reused by OpenAI-compatible transports.
+    /// 供 OpenAI 兼容传输链路复用的可选模型级交错推理能力描述。
+    pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -96,6 +99,7 @@ pub(crate) fn build_provider_transport_execution_request(
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
+    interleaved_reasoning: Option<ModelInterleavedCapability>,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         api_family: runtime_kind.api_family(),
@@ -117,5 +121,6 @@ pub(crate) fn build_provider_transport_execution_request(
         session_id,
         resolved_tools,
         additional_params,
+        interleaved_reasoning,
     }
 }

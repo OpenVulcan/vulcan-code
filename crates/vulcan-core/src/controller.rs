@@ -538,6 +538,7 @@ impl VulcanCoreController {
             id: message_id.clone(),
             payload: ConversationPayload::UserText {
                 text: prompt.to_string(),
+                attachments: Vec::new(),
             },
         });
         self.snapshot.records.push(ConversationRecord {
@@ -565,6 +566,7 @@ impl VulcanCoreController {
                 reasoning: response.assistant_reasoning.clone(),
                 provider_message_id: response.provider_message_id.clone(),
                 provider_message_state: response.provider_message_state.clone(),
+                usage: response.usage.clone(),
                 tool_calls: response.tool_calls.clone(),
             },
         });
@@ -578,7 +580,7 @@ impl VulcanCoreController {
                 visible: true,
                 title: String::from("模型输出"),
                 body: response.assistant_text.clone(),
-                metadata: None,
+                metadata: response.usage.as_ref().map(build_provider_usage_metadata),
                 created_at: timestamp.clone(),
             });
         }
@@ -724,6 +726,14 @@ fn build_tool_result_metadata(result: &ToolInvocationResult) -> Value {
         }
     }
     base
+}
+
+/// Builds one stable JSON metadata object for a provider usage snapshot.
+/// 为一份 Provider 用量快照构建稳定 JSON 元数据对象。
+fn build_provider_usage_metadata(usage: &crate::types::ProviderUsageSnapshot) -> Value {
+    json!({
+        "provider_usage": usage,
+    })
 }
 
 /// Merges one host metadata object into the base metadata object without dropping existing controller fields.
@@ -1113,6 +1123,7 @@ mod tests {
                         last_provider_message_id: Some(String::from("resp-1")),
                         updated_at: Some(String::from("1000")),
                     }),
+                    usage: None,
                 },
                 ProviderTurnResponse {
                     assistant_text: String::from("文件检查完成，已经拿到关键上下文。"),
@@ -1126,6 +1137,7 @@ mod tests {
                         last_provider_message_id: Some(String::from("resp-2")),
                         updated_at: Some(String::from("2000")),
                     }),
+                    usage: None,
                 },
             ]);
             let executor = MockToolExecutor::new().with_outcome(
@@ -1224,6 +1236,7 @@ mod tests {
                         last_provider_message_id: Some(String::from("resp-stream-1")),
                         updated_at: Some(String::from("2001")),
                     }),
+                    usage: None,
                 },
             )]);
             let executor = MockToolExecutor::new();
@@ -1266,6 +1279,7 @@ mod tests {
                     provider_message_id,
                     provider_message_state: _,
                     tool_calls,
+                    usage: _,
                 } if text == "已完成分析。"
                     && reasoning == "先读取文件。"
                     && provider_message_id.as_deref() == Some("resp-stream-1")
@@ -1293,6 +1307,7 @@ mod tests {
                         arguments: json!({"id":"42"}),
                     }],
                     continuation: None,
+                    usage: None,
                 },
                 ProviderTurnResponse {
                     assistant_text: String::from("已收到宿主返回的跳过结果。"),
@@ -1301,6 +1316,7 @@ mod tests {
                     provider_message_state: None,
                     tool_calls: Vec::new(),
                     continuation: None,
+                    usage: None,
                 },
             ]);
             let executor = MockToolExecutor::new();
@@ -1345,6 +1361,7 @@ mod tests {
                     arguments: json!({"path":"src/lib.rs"}),
                 }],
                 continuation: None,
+                usage: None,
             }]);
             let executor = MockToolExecutor::new().with_outcome(
                 "read_file",

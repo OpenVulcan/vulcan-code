@@ -3,6 +3,8 @@
 
 use super::helpers::*;
 use super::*;
+use crate::context_budget::build_context_budget_fingerprint;
+use crate::provider_capabilities::{ResolvedModelCapabilities, resolve_model_capabilities};
 
 impl VulcanWorkbench {
     /// Resolves the remembered initial workbench reasoning preference from persisted configuration and falls back to the shared medium preset when no prior selection exists.
@@ -261,6 +263,138 @@ impl VulcanWorkbench {
         view.note
     }
 
+    /// Resolves the full model entry for one concrete workbench model choice.
+    /// 根据指定工作台模型选项解析完整模型条目。
+    pub(super) fn resolve_workbench_model_entry(
+        &self,
+        choice: &WorkbenchModelChoice,
+    ) -> Option<provider_config::ModelChoice> {
+        provider_config::effective_model_choices(&choice.provider_id, &self.provider_configuration)
+            .into_iter()
+            .find(|model| model.id == choice.model_id)
+    }
+
+    /// Resolves the capability snapshot for one concrete workbench model choice.
+    /// 根据指定工作台模型选项解析能力快照。
+    fn resolve_workbench_model_capabilities(
+        &self,
+        choice: &WorkbenchModelChoice,
+    ) -> Option<ResolvedModelCapabilities> {
+        let definition = provider_config::supported_provider_by_id(&choice.provider_id)?;
+        let model = self.resolve_workbench_model_entry(choice);
+        Some(resolve_model_capabilities(definition, model.as_ref()))
+    }
+
+    /// Reconciles the visible temperature controls against the currently active workbench model capability set.
+    /// 将当前可见温度控制与激活工作台模型的能力集合对齐。
+    pub(super) fn reconcile_workbench_temperature_for_active_model(&mut self) -> Option<String> {
+        let active_choice = self.active_workbench_model_choice()?;
+        let capabilities = self.resolve_workbench_model_capabilities(&active_choice)?;
+
+        if capabilities.supports_temperature {
+            return None;
+        }
+
+        if self.temperature_enabled {
+            self.temperature_enabled = false;
+            return Some(format!(
+                "当前模型 `{}` 未声明显式温度能力，已自动关闭温度覆盖。",
+                active_choice.model_name
+            ));
+        }
+
+        None
+    }
+
+    /// Invalidates the selected session context anchor when the newly chosen model would no longer share the same budget fingerprint.
+    /// 当新选择模型不再共享相同预算指纹时，使当前选中会话的上下文锚点失效。
+    pub(super) fn reconcile_selected_session_context_anchor_after_model_switch(
+        &mut self,
+        choice: &WorkbenchModelChoice,
+    ) -> Option<String> {
+        let session_id = self.selected_session().map(|session| session.id)?;
+        let Some(previous_runtime_state) = self.session_runtime_state(session_id).cloned() else {
+            return None;
+        };
+        let Some(previous_provider_id) = previous_runtime_state.active_provider_id.as_deref()
+        else {
+            return None;
+        };
+        let Some(previous_model_id) = previous_runtime_state.active_model_id.as_deref() else {
+            return None;
+        };
+        if previous_provider_id == choice.provider_id && previous_model_id == choice.model_id {
+            return None;
+        }
+
+        let previous_choice = WorkbenchModelChoice {
+            provider_id: previous_provider_id.to_string(),
+            provider_label: provider_config::provider_summary(previous_provider_id),
+            model_id: previous_model_id.to_string(),
+            model_name: provider_config::model_summary(
+                previous_provider_id,
+                previous_model_id,
+                &self.provider_configuration,
+            ),
+        };
+        let Some(previous_capabilities) =
+            self.resolve_workbench_model_capabilities(&previous_choice)
+        else {
+            return None;
+        };
+        let Some(next_capabilities) = self.resolve_workbench_model_capabilities(choice) else {
+            return None;
+        };
+        let previous_api_family = provider_config::supported_provider_by_id(previous_provider_id)
+            .map(|definition| definition.runtime.api_family())?;
+        let next_api_family = provider_config::supported_provider_by_id(&choice.provider_id)
+            .map(|definition| definition.runtime.api_family())?;
+        let visible_tool_count = self
+            .last_execution_preparation
+            .as_ref()
+            .map(|preparation| preparation.tool_descriptors.len())
+            .unwrap_or(0usize);
+        let previous_fingerprint = build_context_budget_fingerprint(
+            previous_provider_id,
+            previous_model_id,
+            previous_api_family,
+            &previous_capabilities,
+            self.workbench_reasoning_effort,
+            visible_tool_count,
+        );
+        let next_fingerprint = build_context_budget_fingerprint(
+            &choice.provider_id,
+            &choice.model_id,
+            next_api_family,
+            &next_capabilities,
+            self.workbench_reasoning_effort,
+            visible_tool_count,
+        );
+        if previous_fingerprint == next_fingerprint {
+            return None;
+        }
+
+        {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state.last_compaction_id = None;
+            runtime_state.context_start_message_id = None;
+            runtime_state.updated_at = current_unix_millis_text();
+        }
+        self.last_execution_preparation = None;
+        self.sync_context_usage_from_preparation(None);
+        self.replace_session_last_api_request_preview(
+            session_id,
+            String::from(
+                "# 最后一次真实 API 请求快照\n\n模型已切换，上一份请求快照与预算结果已失效。",
+            ),
+        );
+
+        Some(format!(
+            "会话 `{}` 的旧上下文锚点已因模型预算变化失效，后续将按新模型预算重新压缩。",
+            choice.model_name
+        ))
+    }
+
     /// Persists the remembered workbench reasoning preference back into the shared provider configuration file.
     /// 将已记忆的工作台思考偏好持久化回共享供应商配置文件。
     pub(super) fn persist_workbench_reasoning_effort_preference(&mut self) -> Result<(), String> {
@@ -367,23 +501,35 @@ impl VulcanWorkbench {
 
         self.refresh_runtime_foundation();
         let reasoning_note = self.reconcile_workbench_reasoning_effort_for_active_model();
+        let temperature_note = self.reconcile_workbench_temperature_for_active_model();
+        let compaction_note =
+            self.reconcile_selected_session_context_anchor_after_model_switch(&choice);
         self.workbench_model_picker_open = false;
         self.workbench_model_picker_filter.clear();
         self.workbench_model_picker_highlighted_index = None;
-        self.status_message = reasoning_note.map_or_else(
-            || {
-                format!(
-                    "当前模型已切换为 `{}`（{}）。",
-                    choice.model_name, choice.provider_label
-                )
-            },
-            |note| {
-                format!(
-                    "当前模型已切换为 `{}`（{}）。{}",
-                    choice.model_name, choice.provider_label, note
-                )
-            },
-        );
+        let mut notes = Vec::new();
+        if let Some(note) = reasoning_note {
+            notes.push(note);
+        }
+        if let Some(note) = temperature_note {
+            notes.push(note);
+        }
+        if let Some(note) = compaction_note {
+            notes.push(note);
+        }
+        self.status_message = if notes.is_empty() {
+            format!(
+                "当前模型已切换为 `{}`（{}）。",
+                choice.model_name, choice.provider_label
+            )
+        } else {
+            format!(
+                "当前模型已切换为 `{}`（{}）。{}",
+                choice.model_name,
+                choice.provider_label,
+                notes.join(" ")
+            )
+        };
         Task::none()
     }
 
@@ -602,6 +748,144 @@ impl VulcanWorkbench {
         Task::perform(
             bootstrap_mcp_runtime_access(self.provider_configuration.clone()),
             Message::McpRuntimeBootstrapped,
+        )
+    }
+
+    /// Returns the currently selected persisted MCP server entry, if any.
+    /// 返回当前选中的持久化 MCP 服务器条目（如果存在）。
+    pub(super) fn selected_mcp_server_entry(
+        &self,
+    ) -> Option<&crate::provider_config::PersistedMcpServerEntry> {
+        let server_id = self.selected_mcp_server_id.as_deref()?;
+        self.provider_configuration.mcp.servers.get(server_id)
+    }
+
+    /// Returns the configured OAuth redirect URI for the currently selected MCP server, if any.
+    /// 返回当前选中 MCP 服务器已配置的 OAuth 回调 URI（如果存在）。
+    pub(super) fn selected_mcp_server_oauth_redirect_uri(&self) -> Option<String> {
+        self.selected_mcp_server_entry()
+            .and_then(|entry| entry.oauth.as_ref())
+            .and_then(|oauth| oauth.redirect_uri.clone())
+    }
+
+    /// Loads the latest OAuth status summary for the currently selected MCP server through the live runtime when possible.
+    /// 在可能时通过实时运行时载入当前选中 MCP 服务器的最新 OAuth 状态摘要。
+    pub(super) fn load_selected_mcp_server_oauth_status_task(&self) -> Task<Message> {
+        let Some(server_id) = self.selected_mcp_server_id.clone() else {
+            return Task::none();
+        };
+        let runtime = self.mcp_runtime.clone();
+        let status_server_id = server_id.clone();
+
+        Task::perform(
+            async move {
+                match runtime {
+                    Some(runtime_access) => {
+                        runtime_access
+                            .server_oauth_status_label(&status_server_id)
+                            .await
+                    }
+                    None => Ok(String::from("运行时未就绪")),
+                }
+            },
+            move |result| Message::SelectedMcpServerOAuthStatusLoaded(server_id.clone(), result),
+        )
+    }
+
+    /// Starts the host-driven OAuth flow for the currently selected MCP server.
+    /// 为当前选中的 MCP 服务器启动宿主驱动的 OAuth 流程。
+    pub(super) fn start_selected_mcp_server_oauth_task(&self) -> Task<Message> {
+        let Some(server_id) = self.selected_mcp_server_id.clone() else {
+            return Task::none();
+        };
+        let Some(runtime_access) = self.mcp_runtime.clone() else {
+            return Task::perform(
+                async {
+                    Err(String::from(
+                        "MCP 运行时尚未就绪，暂时无法启动 OAuth 授权。",
+                    ))
+                },
+                move |result| {
+                    Message::SelectedMcpServerOAuthChallengeReady(server_id.clone(), result)
+                },
+            );
+        };
+        let auth_server_id = server_id.clone();
+
+        Task::perform(
+            async move {
+                runtime_access
+                    .start_server_oauth(&auth_server_id, "Vulcan Code")
+                    .await
+                    .map(|challenge| {
+                        (
+                            challenge.authorization_url().to_string(),
+                            challenge.oauth_state().to_string(),
+                        )
+                    })
+            },
+            move |result| Message::SelectedMcpServerOAuthChallengeReady(server_id.clone(), result),
+        )
+    }
+
+    /// Finishes the host-driven OAuth flow for the currently selected MCP server from one resolved authorization code and state.
+    /// 根据一组已解析的授权码与 state，为当前选中的 MCP 服务器完成宿主驱动 OAuth 流程。
+    pub(super) fn finish_selected_mcp_server_oauth_task(
+        &self,
+        authorization_code: String,
+        oauth_state: String,
+    ) -> Task<Message> {
+        let Some(server_id) = self.selected_mcp_server_id.clone() else {
+            return Task::none();
+        };
+        let Some(runtime_access) = self.mcp_runtime.clone() else {
+            return Task::perform(
+                async {
+                    Err(String::from(
+                        "MCP 运行时尚未就绪，暂时无法完成 OAuth 授权。",
+                    ))
+                },
+                move |result| Message::SelectedMcpServerOAuthFinished(server_id.clone(), result),
+            );
+        };
+        let auth_server_id = server_id.clone();
+
+        Task::perform(
+            async move {
+                runtime_access
+                    .finish_server_oauth(&auth_server_id, &authorization_code, &oauth_state)
+                    .await
+                    .map(|status| status.label().to_string())
+            },
+            move |result| Message::SelectedMcpServerOAuthFinished(server_id.clone(), result),
+        )
+    }
+
+    /// Removes stored OAuth credentials for the currently selected MCP server.
+    /// 为当前选中的 MCP 服务器移除已存储 OAuth 凭据。
+    pub(super) fn remove_selected_mcp_server_oauth_task(&self) -> Task<Message> {
+        let Some(server_id) = self.selected_mcp_server_id.clone() else {
+            return Task::none();
+        };
+        let Some(runtime_access) = self.mcp_runtime.clone() else {
+            return Task::perform(
+                async {
+                    Err(String::from(
+                        "MCP 运行时尚未就绪，暂时无法清理 OAuth 凭据。",
+                    ))
+                },
+                move |result| {
+                    Message::SelectedMcpServerOAuthAuthorizationRemoved(server_id.clone(), result)
+                },
+            );
+        };
+        let auth_server_id = server_id.clone();
+
+        Task::perform(
+            async move { runtime_access.remove_server_oauth(&auth_server_id).await },
+            move |result| {
+                Message::SelectedMcpServerOAuthAuthorizationRemoved(server_id.clone(), result)
+            },
         )
     }
 }

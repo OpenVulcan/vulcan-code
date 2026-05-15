@@ -107,6 +107,7 @@ impl VulcanProviderAdapter for CohereCoreStreamingAdapter {
             &self.provider_tool_definitions,
             &self.request_headers,
             &self.live_sender,
+            None,
         )
     }
 

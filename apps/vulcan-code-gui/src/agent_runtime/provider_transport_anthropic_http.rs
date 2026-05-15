@@ -1,6 +1,9 @@
 //! Direct Anthropic HTTP and SSE transport owned by the host runtime.
 //! 宿主运行时自有的 Anthropic HTTP 与 SSE 直连传输模块。
 
+use crate::agent_runtime::provider_attachment::{
+    build_attachment_transport_error_text, read_provider_attachment,
+};
 use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropic_base_url;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
@@ -26,6 +29,7 @@ use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Latest Anthropic API version used by the host-owned direct transport.
@@ -180,6 +184,36 @@ struct AnthropicPartialUsage {
     _output_tokens: usize,
 }
 
+/// Converts one full Anthropic usage payload into the shared normalized usage snapshot.
+/// 将一份完整 Anthropic 用量载荷转换为共享规范化用量快照。
+fn anthropic_usage_to_snapshot(usage: &AnthropicUsage) -> Option<CoreProviderUsageSnapshot> {
+    let snapshot = CoreProviderUsageSnapshot {
+        input_tokens: Some(usage._input_tokens as usize),
+        output_tokens: Some(usage._output_tokens as usize),
+        reasoning_tokens: None,
+        total_tokens: Some((usage._input_tokens.saturating_add(usage._output_tokens)) as usize),
+    };
+    snapshot.has_any_tokens().then_some(snapshot)
+}
+
+/// Merges one Anthropic partial usage payload into the current normalized usage snapshot.
+/// 将一份 Anthropic 增量用量载荷合并进当前规范化用量快照。
+fn merge_anthropic_partial_usage(
+    current: Option<CoreProviderUsageSnapshot>,
+    partial: &AnthropicPartialUsage,
+) -> Option<CoreProviderUsageSnapshot> {
+    let mut snapshot = current.unwrap_or_default();
+    if partial._output_tokens > 0 {
+        snapshot.output_tokens = Some(partial._output_tokens);
+    }
+    if let (Some(input_tokens), Some(output_tokens)) =
+        (snapshot.input_tokens, snapshot.output_tokens)
+    {
+        snapshot.total_tokens = Some(input_tokens.saturating_add(output_tokens));
+    }
+    snapshot.has_any_tokens().then_some(snapshot)
+}
+
 /// Pending tool-use block assembled across multiple Anthropic stream events.
 /// 跨多条 Anthropic 流事件累计组装的待定工具使用块。
 #[derive(Debug, Default)]
@@ -268,6 +302,7 @@ where
 
     let mut response_id = None;
     let mut response_model = None;
+    let mut usage_snapshot = None::<CoreProviderUsageSnapshot>;
     let mut assistant_text = String::new();
     let mut assistant_reasoning_blocks = Vec::new();
     let mut finalized_provider_content_blocks = Vec::new();
@@ -296,6 +331,7 @@ where
 
         match event {
             AnthropicStreamingEvent::MessageStart { message } => {
+                usage_snapshot = anthropic_usage_to_snapshot(&message._usage);
                 response_id = Some(message.id);
                 response_model = Some(message.model);
             }
@@ -396,7 +432,8 @@ where
                     assistant_reasoning_blocks.push(ProviderReasoningPart::Text(thinking.thinking));
                 }
             }
-            AnthropicStreamingEvent::MessageDelta { delta, .. } => {
+            AnthropicStreamingEvent::MessageDelta { delta, _usage } => {
+                usage_snapshot = merge_anthropic_partial_usage(usage_snapshot.take(), &_usage);
                 if delta.stop_reason.as_deref() == Some("tool_use") {
                     if let Some(tool_use) = pending_tool_use.take() {
                         finalized_provider_content_blocks
@@ -457,6 +494,7 @@ where
         response_model.as_deref().unwrap_or(model_id),
         response_id,
         &assistant_content,
+        usage_snapshot,
     );
     response.provider_message_state = (!finalized_provider_content_blocks.is_empty())
         .then(|| build_anthropic_provider_message_state(&finalized_provider_content_blocks));
@@ -586,6 +624,7 @@ fn build_anthropic_request_payload(
         snapshot,
         current_history,
         current_prompt,
+        ..
     } = request;
 
     let mut payload = match snapshot.additional_params {
@@ -679,15 +718,57 @@ fn core_message_to_anthropic_message(
     provider_tool_definitions: &[ProviderToolDefinition],
 ) -> Result<Value, VulcanCoreError> {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => Ok(json!({
-            "role": "user",
-            "content": [
-                {
+        CoreConversationPayload::UserText { text, attachments } => {
+            let mut content = Vec::new();
+            if !text.is_empty() {
+                content.push(json!({
                     "type": "text",
                     "text": text
+                }));
+            }
+            for attachment in attachments {
+                let attachment_payload = read_provider_attachment(attachment)?;
+                match attachment_payload.kind {
+                    vulcan_core::types::ConversationAttachmentKind::Image => {
+                        content.push(json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": attachment_payload.mime_type,
+                                "data": attachment_payload.base64_data
+                            }
+                        }));
+                    }
+                    vulcan_core::types::ConversationAttachmentKind::Pdf
+                        if attachment_payload.is_pdf_document() =>
+                    {
+                        content.push(json!({
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": attachment_payload.mime_type,
+                                "data": attachment_payload.base64_data
+                            }
+                        }));
+                    }
+                    vulcan_core::types::ConversationAttachmentKind::Audio
+                    | vulcan_core::types::ConversationAttachmentKind::Video
+                    | vulcan_core::types::ConversationAttachmentKind::Pdf => {
+                        content.push(json!({
+                            "type": "text",
+                            "text": build_attachment_transport_error_text(
+                                attachment,
+                                "this API path"
+                            )
+                        }));
+                    }
                 }
-            ]
-        })),
+            }
+            Ok(json!({
+                "role": "user",
+                "content": content
+            }))
+        }
         CoreConversationPayload::Assistant {
             text,
             reasoning,
@@ -968,13 +1049,39 @@ mod tests {
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
+        ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
         ConversationToolCall as CoreConversationToolCall,
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
+
+    /// Builds one temporary attachment used by Anthropic multimodal request tests.
+    /// 构建一条供 Anthropic 多模态请求测试使用的临时附件。
+    fn build_test_attachment(
+        extension: &str,
+        kind: ConversationAttachmentKind,
+        mime_type: &str,
+        file_name: &str,
+    ) -> ConversationAttachment {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let file_path =
+            std::env::temp_dir().join(format!("vulcan-anthropic-{unique_id}.{extension}"));
+        std::fs::write(&file_path, [0_u8, 1, 2, 3]).expect("temporary attachment should write");
+
+        ConversationAttachment {
+            kind,
+            file_name: String::from(file_name),
+            local_path: file_path.to_string_lossy().into_owned(),
+            mime_type: String::from(mime_type),
+        }
+    }
 
     /// Verifies the direct Anthropic request payload replays legacy tool-turn reasoning blocks while preserving tool-use and tool-result message shapes.
     /// 验证直连 Anthropic 请求载荷会为旧版工具回合回放思考块，同时保留 tool_use 与 tool_result 消息形状。
@@ -1008,6 +1115,7 @@ mod tests {
                         tool_name: String::from("read_file"),
                         arguments: json!({ "path": "src/main.rs" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -1018,6 +1126,7 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(
@@ -1058,6 +1167,124 @@ mod tests {
         );
         assert_eq!(payload["tools"][0]["name"], "read_file");
         assert_eq!(payload["tool_choice"]["type"], "auto");
+    }
+
+    /// Verifies Anthropic user messages encode staged image attachments as base64 image blocks.
+    /// 验证 Anthropic 用户消息会把已暂存图片附件编码为 Base64 图片块。
+    #[test]
+    fn request_payload_embeds_user_image_attachments_as_image_blocks() {
+        let attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "diagram.png",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("分析图片"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析图片"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("user content should be one block array");
+
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "AAECAw==");
+
+        let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies Anthropic user messages encode staged PDF attachments as document blocks and degrade unsupported video attachments into explicit text errors.
+    /// 验证 Anthropic 用户消息会把已暂存 PDF 附件编码为文档块，并将不受支持的视频附件降级为显式文本错误。
+    #[test]
+    fn request_payload_embeds_pdf_and_degrades_video_attachments() {
+        let pdf_attachment = build_test_attachment(
+            "pdf",
+            ConversationAttachmentKind::Pdf,
+            "application/pdf",
+            "guide.pdf",
+        );
+        let video_attachment = build_test_attachment(
+            "mp4",
+            ConversationAttachmentKind::Video,
+            "video/mp4",
+            "clip.mp4",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("分析附件"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析附件"),
+                    attachments: vec![pdf_attachment.clone(), video_attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("user content should be one block array");
+
+        assert_eq!(content[1]["type"], "document");
+        assert_eq!(content[1]["source"]["media_type"], "application/pdf");
+        assert_eq!(content[1]["source"]["data"], "AAECAw==");
+        assert_eq!(
+            content[2]["text"],
+            json!(
+                "ERROR: Cannot read \"clip.mp4\" (this API path does not support video input). Inform the user."
+            )
+        );
+
+        let _ = std::fs::remove_file(&pdf_attachment.local_path);
+        let _ = std::fs::remove_file(&video_attachment.local_path);
     }
 
     /// Verifies one stored Anthropic provider-message-state round-trips native thinking signatures and provider-visible tool metadata during future history replay.
@@ -1105,6 +1332,7 @@ mod tests {
                         tool_name: String::from("functions.shell_command"),
                         arguments: json!({ "command": "Get-ChildItem" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -1115,6 +1343,7 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(
@@ -1180,6 +1409,7 @@ mod tests {
                         tool_name: String::from("spawn_agent"),
                         arguments: json!({ "task": "delegate-1" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -1190,6 +1420,7 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(
@@ -1251,6 +1482,7 @@ mod tests {
                         tool_name: String::from("read_file"),
                         arguments: json!({ "path": "src/main.rs" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -1261,6 +1493,7 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(
@@ -1382,6 +1615,7 @@ mod tests {
                                 arguments: json!({ "task": "delegate-4" }),
                             },
                         ],
+                        usage: None,
                     },
                 },
                 CoreConversationMessage {
@@ -1417,6 +1651,7 @@ mod tests {
                     text: String::from("tool result body 4"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(
@@ -1504,6 +1739,7 @@ mod tests {
                                 arguments: json!({ "task": "delegate-4" }),
                             },
                         ],
+                        usage: None,
                     },
                 },
                 CoreConversationMessage {
@@ -1539,6 +1775,7 @@ mod tests {
                     text: String::from("tool result body 4"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(
@@ -1629,6 +1866,7 @@ mod tests {
                         tool_name: String::from(host_tool_name),
                         arguments: json!({ "command": "pwd" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -1639,6 +1877,7 @@ mod tests {
                     text: String::from("D:/openvulcan/vulcan-code"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_anthropic_request_payload(

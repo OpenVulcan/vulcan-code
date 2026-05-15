@@ -1,6 +1,7 @@
 //! Direct OpenAI-compatible HTTP and SSE transport owned by the host runtime.
 //! 宿主运行时自有的 OpenAI 兼容 HTTP 与 SSE 直连传输模块。
 
+use crate::agent_runtime::provider_attachment::read_provider_attachment;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
@@ -21,6 +22,7 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::provider_config::ModelInterleavedCapability;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
@@ -31,6 +33,7 @@ use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Minimal OpenAI-compatible streaming function payload decoded from one delta chunk.
@@ -137,6 +140,42 @@ struct OpenAiCompatibleStreamingChunk {
     /// 流式 choice 列表。
     #[serde(default)]
     choices: Vec<OpenAiCompatibleStreamingChoice>,
+    /// Optional provider usage payload.
+    /// 可选的 Provider 用量载荷。
+    #[serde(default)]
+    usage: Option<OpenAiCompatibleUsage>,
+}
+
+/// Minimal OpenAI-compatible usage payload decoded from one streamed terminal chunk.
+/// 从一条流式终态块中解码出的最小 OpenAI 兼容用量载荷。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpenAiCompatibleUsage {
+    /// Optional prompt token count.
+    /// 可选的提示词 Token 数量。
+    #[serde(default)]
+    prompt_tokens: Option<usize>,
+    /// Optional completion token count.
+    /// 可选的补全文本 Token 数量。
+    #[serde(default)]
+    completion_tokens: Option<usize>,
+    /// Optional total token count.
+    /// 可选的总 Token 数量。
+    #[serde(default)]
+    total_tokens: Option<usize>,
+    /// Optional completion-token detail payload.
+    /// 可选的补全 Token 细分载荷。
+    #[serde(default)]
+    completion_tokens_details: Option<OpenAiCompatibleCompletionTokenDetails>,
+}
+
+/// Minimal OpenAI-compatible completion-token detail payload.
+/// 最小 OpenAI 兼容补全 Token 细分载荷。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpenAiCompatibleCompletionTokenDetails {
+    /// Optional reasoning token count.
+    /// 可选的推理 Token 数量。
+    #[serde(default)]
+    reasoning_tokens: Option<usize>,
 }
 
 /// Authorization strategy used by OpenAI-compatible wire protocols whose payload semantics are shared but whose auth headers may differ.
@@ -289,6 +328,7 @@ where
     let mut assistant_reasoning = String::new();
     let mut pending_tool_calls: HashMap<usize, CompatibleAccumulatedToolCall> = HashMap::new();
     let mut finalized_tool_calls = Vec::new();
+    let mut final_usage = None::<CoreProviderUsageSnapshot>;
 
     while let Some(event_result) = events.next().await {
         let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
@@ -303,6 +343,12 @@ where
         let chunk =
             normalize_openai_compatible_chunk(provider_id, provider_label.as_str(), &event.data)?;
         response_id = chunk.response_id.or(response_id);
+        if let Some(usage) = chunk
+            .usage
+            .filter(CoreProviderUsageSnapshot::has_any_tokens)
+        {
+            final_usage = Some(usage);
+        }
         let Some(choice) = chunk.choice else {
             continue;
         };
@@ -362,6 +408,7 @@ where
         model_id,
         response_id,
         &assistant_content,
+        final_usage,
     ))
 }
 
@@ -424,6 +471,7 @@ fn build_openai_compatible_request_payload(
         snapshot,
         current_history,
         current_prompt,
+        interleaved_reasoning,
     } = request;
 
     let mut payload = match snapshot.additional_params {
@@ -446,10 +494,15 @@ fn build_openai_compatible_request_payload(
     messages.extend(
         current_history
             .iter()
-            .map(core_message_to_openai_compatible_message)
+            .map(|message| {
+                core_message_to_openai_compatible_message(message, interleaved_reasoning.as_ref())
+            })
             .collect::<Result<Vec<_>, _>>()?,
     );
-    messages.push(core_message_to_openai_compatible_message(&current_prompt)?);
+    messages.push(core_message_to_openai_compatible_message(
+        &current_prompt,
+        interleaved_reasoning.as_ref(),
+    )?);
 
     if include_model_field {
         payload.insert(String::from("model"), Value::String(model_id.to_string()));
@@ -476,24 +529,96 @@ fn build_openai_compatible_request_payload(
     Ok(Value::Object(payload))
 }
 
-/// Converts one canonical core message into one OpenAI-compatible request message while intentionally dropping local-only reasoning replay.
-/// 将一条规范 core 消息转换为一条 OpenAI 兼容请求消息，同时刻意丢弃仅限本地使用的思考回放。
+/// Converts one canonical core message into one OpenAI-compatible request message and replays textual reasoning only when the selected model explicitly requires `reasoning_content`.
+/// 将一条规范 core 消息转换为一条 OpenAI 兼容请求消息，并且仅在所选模型显式要求 `reasoning_content` 时回放文本型思考内容。
 fn core_message_to_openai_compatible_message(
     message: &CoreConversationMessage,
+    interleaved_reasoning: Option<&ModelInterleavedCapability>,
 ) -> Result<Value, VulcanCoreError> {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => Ok(json!({
-            "role": "user",
-            "content": text
-        })),
+        CoreConversationPayload::UserText { text, attachments } => {
+            if attachments.is_empty() {
+                Ok(json!({
+                    "role": "user",
+                    "content": text
+                }))
+            } else {
+                let mut content = Vec::new();
+                if !text.is_empty() {
+                    content.push(json!({
+                        "type": "text",
+                        "text": text
+                    }));
+                }
+                for attachment in attachments {
+                    let attachment_payload = read_provider_attachment(attachment)?;
+                    match attachment_payload.kind {
+                        vulcan_core::types::ConversationAttachmentKind::Image => {
+                            content.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": attachment_payload.data_url
+                                }
+                            }));
+                        }
+                        vulcan_core::types::ConversationAttachmentKind::Audio => {
+                            if let Some(format) =
+                                attachment_payload.openai_compatible_audio_format()
+                            {
+                                content.push(json!({
+                                    "type": "input_audio",
+                                    "input_audio": {
+                                        "data": attachment_payload.base64_data,
+                                        "format": format
+                                    }
+                                }));
+                            } else {
+                                content.push(json!({
+                                    "type": "file",
+                                    "file": {
+                                        "filename": attachment_payload.file_name,
+                                        "file_data": attachment_payload.data_url
+                                    }
+                                }));
+                            }
+                        }
+                        vulcan_core::types::ConversationAttachmentKind::Video
+                        | vulcan_core::types::ConversationAttachmentKind::Pdf => {
+                            content.push(json!({
+                                "type": "file",
+                                "file": {
+                                    "filename": attachment_payload.file_name,
+                                    "file_data": attachment_payload.data_url
+                                }
+                            }));
+                        }
+                    }
+                }
+                Ok(json!({
+                    "role": "user",
+                    "content": content
+                }))
+            }
+        }
         CoreConversationPayload::Assistant {
-            text, tool_calls, ..
+            text,
+            reasoning,
+            tool_calls,
+            ..
         } => {
             let mut object = JsonMap::new();
             object.insert(
                 String::from("role"),
                 Value::String(String::from("assistant")),
             );
+            if let Some(reasoning_field) =
+                openai_compatible_textual_interleaved_reasoning_field(interleaved_reasoning)
+            {
+                object.insert(
+                    reasoning_field.to_string(),
+                    Value::String(reasoning.clone()),
+                );
+            }
             if !text.is_empty() {
                 object.insert(String::from("content"), Value::String(text.clone()));
             }
@@ -588,6 +713,7 @@ fn normalize_openai_compatible_chunk(
 
     Ok(normalize_first_choice_chunk(
         chunk.id,
+        chunk.usage.and_then(openai_compatible_usage_to_snapshot),
         &chunk.choices,
         |choice| CompatibleChoiceData {
             finish_reason: if choice.finish_reason == Some(OpenAiCompatibleFinishReason::ToolCalls)
@@ -601,6 +727,22 @@ fn normalize_openai_compatible_chunk(
             tool_calls: tool_call_chunks(&choice.delta.tool_calls),
         },
     ))
+}
+
+/// Converts one raw OpenAI-compatible usage payload into the shared normalized usage snapshot.
+/// 将一份原始 OpenAI 兼容用量载荷转换为共享规范化用量快照。
+fn openai_compatible_usage_to_snapshot(
+    usage: OpenAiCompatibleUsage,
+) -> Option<CoreProviderUsageSnapshot> {
+    let snapshot = CoreProviderUsageSnapshot {
+        input_tokens: usage.prompt_tokens,
+        output_tokens: usage.completion_tokens,
+        reasoning_tokens: usage
+            .completion_tokens_details
+            .and_then(|details| details.reasoning_tokens),
+        total_tokens: usage.total_tokens,
+    };
+    snapshot.has_any_tokens().then_some(snapshot)
 }
 
 /// Processes one batch of OpenAI-compatible tool-call chunks, merging fragments and emitting finalized calls when boundaries are reached.
@@ -695,8 +837,11 @@ mod tests {
     use super::build_openai_compatible_request_payload;
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+    use crate::provider_config::{ModelInterleavedCapability, ModelInterleavedField};
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
+        ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
         ConversationToolCall as CoreConversationToolCall,
@@ -704,10 +849,34 @@ mod tests {
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
 
-    /// Verifies the direct OpenAI-compatible request payload strips reasoning replay while preserving assistant tool calls and tool results.
-    /// 验证直连 OpenAI 兼容请求载荷会剥离思考回放，同时保留助手工具调用与工具结果。
+    /// Builds one temporary attachment used by multimodal transport tests.
+    /// 构建一条供多模态传输测试使用的临时附件。
+    fn build_test_attachment(
+        extension: &str,
+        kind: ConversationAttachmentKind,
+        mime_type: &str,
+        file_name: &str,
+    ) -> ConversationAttachment {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let file_path =
+            std::env::temp_dir().join(format!("vulcan-openai-compatible-{unique_id}.{extension}"));
+        std::fs::write(&file_path, [0_u8, 1, 2, 3]).expect("temporary attachment should write");
+
+        ConversationAttachment {
+            kind,
+            file_name: String::from(file_name),
+            local_path: file_path.to_string_lossy().into_owned(),
+            mime_type: String::from(mime_type),
+        }
+    }
+
+    /// Verifies the direct OpenAI-compatible request payload replays `reasoning_content` when the selected model explicitly declares a textual interleaved reasoning field.
+    /// 验证当所选模型显式声明文本型交错推理字段时，直连 OpenAI 兼容请求载荷会回放 `reasoning_content`。
     #[test]
-    fn request_payload_strips_reasoning_replay_and_preserves_tool_shapes() {
+    fn request_payload_replays_reasoning_content_and_preserves_tool_shapes() {
         let request = OpenAiCompatibleCoreTurnRequest {
             snapshot: CoreProviderRequestSnapshot {
                 provider_id: String::from("openai"),
@@ -737,6 +906,7 @@ mod tests {
                         tool_name: String::from("read_file"),
                         arguments: json!({ "path": "src/main.rs" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -747,6 +917,9 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_content"),
+            })),
         };
 
         let payload = build_openai_compatible_request_payload(
@@ -772,7 +945,7 @@ mod tests {
             .expect("messages should be an array");
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[1]["role"], "assistant");
-        assert!(messages[1].get("reasoning_content").is_none());
+        assert_eq!(messages[1]["reasoning_content"], "这段思考不应回放。");
         assert_eq!(messages[1]["tool_calls"][0]["id"], "tool-1");
         assert_eq!(
             messages[1]["tool_calls"][0]["function"]["name"],
@@ -842,6 +1015,7 @@ mod tests {
                                 arguments: json!({ "task": "delegate-4" }),
                             },
                         ],
+                        usage: None,
                     },
                 },
                 CoreConversationMessage {
@@ -877,6 +1051,7 @@ mod tests {
                     text: String::from("tool result body 4"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_openai_compatible_request_payload(
@@ -911,5 +1086,265 @@ mod tests {
         assert_eq!(messages[3]["tool_call_id"], "call-2");
         assert_eq!(messages[4]["tool_call_id"], "call-3");
         assert_eq!(messages[5]["tool_call_id"], "call-4");
+    }
+
+    /// Verifies OpenAI-compatible request replay preserves an explicitly empty `reasoning_content` field so DeepSeek-style thinking sessions can continue after tool calls.
+    /// 验证 OpenAI 兼容请求回放会保留显式为空的 `reasoning_content` 字段，以便 DeepSeek 风格的 thinking 会话在工具调用后继续执行。
+    #[test]
+    fn request_payload_preserves_empty_reasoning_content_when_interleaved() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("deepseek"),
+                model_id: String::from("deepseek-v4-pro"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("tool result body"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("先调用工具。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("tool-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from("read_file"),
+                        arguments: json!({ "path": "src/main.rs" }),
+                    }],
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+            interleaved_reasoning: Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_content"),
+            })),
+        };
+
+        let payload = build_openai_compatible_request_payload(
+            "deepseek-v4-pro",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+            true,
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["reasoning_content"], "");
+    }
+
+    /// Verifies OpenAI-compatible user messages switch to content-part arrays and carry staged image attachments as data URLs.
+    /// 验证 OpenAI 兼容用户消息会切换到内容 Part 数组，并以 Data URL 携带已暂存图片附件。
+    #[test]
+    fn request_payload_embeds_user_image_attachments_as_data_urls() {
+        let attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "diagram.png",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-4.1"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("请分析这张图"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("请分析这张图"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload("gpt-4.1", request, &[], true)
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("user content should be one part array");
+
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            json!("data:image/png;base64,AAECAw==")
+        );
+
+        let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies OpenAI-compatible user messages carry staged MP3 attachments as `input_audio` parts.
+    /// 验证 OpenAI 兼容用户消息会把已暂存 MP3 附件编码为 `input_audio` Part。
+    #[test]
+    fn request_payload_embeds_user_audio_attachments_as_input_audio_parts() {
+        let attachment = build_test_attachment(
+            "mp3",
+            ConversationAttachmentKind::Audio,
+            "audio/mpeg",
+            "sample.mp3",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-4.1"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("请转写这段音频"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("请转写这段音频"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload("gpt-4.1", request, &[], true)
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("user content should be one part array");
+
+        assert_eq!(content[1]["type"], "input_audio");
+        assert_eq!(content[1]["input_audio"]["format"], "mp3");
+        assert_eq!(content[1]["input_audio"]["data"], "AAECAw==");
+
+        let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies OpenAI-compatible user messages encode staged PDF and video attachments as `file` parts.
+    /// 验证 OpenAI 兼容用户消息会把已暂存 PDF 与视频附件编码为 `file` Part。
+    #[test]
+    fn request_payload_embeds_user_file_like_attachments_as_file_parts() {
+        let pdf_attachment = build_test_attachment(
+            "pdf",
+            ConversationAttachmentKind::Pdf,
+            "application/pdf",
+            "guide.pdf",
+        );
+        let video_attachment = build_test_attachment(
+            "mp4",
+            ConversationAttachmentKind::Video,
+            "video/mp4",
+            "clip.mp4",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-4.1"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("请分析这些附件"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("请分析这些附件"),
+                    attachments: vec![pdf_attachment.clone(), video_attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload("gpt-4.1", request, &[], true)
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("user content should be one part array");
+
+        assert_eq!(content[1]["type"], "file");
+        assert_eq!(content[1]["file"]["filename"], "guide.pdf");
+        assert_eq!(
+            content[1]["file"]["file_data"],
+            json!("data:application/pdf;base64,AAECAw==")
+        );
+        assert_eq!(content[2]["type"], "file");
+        assert_eq!(content[2]["file"]["filename"], "clip.mp4");
+        assert_eq!(
+            content[2]["file"]["file_data"],
+            json!("data:video/mp4;base64,AAECAw==")
+        );
+
+        let _ = std::fs::remove_file(&pdf_attachment.local_path);
+        let _ = std::fs::remove_file(&video_attachment.local_path);
+    }
+}
+
+/// Returns the supported OpenAI-compatible textual interleaved reasoning field when the selected model can safely replay flattened reasoning text.
+/// 返回所选模型可安全回放扁平化思考文本时支持的 OpenAI 兼容文本型交错推理字段。
+fn openai_compatible_textual_interleaved_reasoning_field(
+    interleaved_reasoning: Option<&ModelInterleavedCapability>,
+) -> Option<&str> {
+    match interleaved_reasoning {
+        Some(ModelInterleavedCapability::Field(field))
+            if field.field.trim().eq_ignore_ascii_case("reasoning_content") =>
+        {
+            Some("reasoning_content")
+        }
+        _ => None,
     }
 }

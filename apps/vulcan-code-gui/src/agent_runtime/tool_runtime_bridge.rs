@@ -417,6 +417,7 @@ mod tests {
                     arguments: json!({ "path": "src/main.rs" }),
                 }],
                 continuation: None,
+                usage: None,
             },
             ProviderTurnResponse {
                 assistant_text: String::from("工具执行完成，已经拿到宿主结果。"),
@@ -425,6 +426,7 @@ mod tests {
                 provider_message_state: None,
                 tool_calls: Vec::new(),
                 continuation: None,
+                usage: None,
             },
         ]);
         let mut controller = VulcanCoreController::new(
@@ -490,6 +492,7 @@ mod tests {
                     arguments: json!({ "query": "README" }),
                 }],
                 continuation: None,
+                usage: None,
             },
             ProviderTurnResponse {
                 assistant_text: String::from("我已收到工具错误原因，接下来会调整策略继续处理。"),
@@ -498,6 +501,7 @@ mod tests {
                 provider_message_state: None,
                 tool_calls: Vec::new(),
                 continuation: None,
+                usage: None,
             },
         ]);
         let mut controller = VulcanCoreController::new(

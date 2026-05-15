@@ -11,6 +11,7 @@ use crate::model::{
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
 };
+use crate::provider_usage::{parse_provider_usage_from_json, serialize_provider_usage_to_json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
@@ -572,6 +573,10 @@ struct StoredRuntimeStateRow {
     /// Optional persisted transcript UI state payload.
     /// 可选的持久化转录界面状态载荷。
     ui_state_json: Option<String>,
+    /// Optional persisted provider usage payload.
+    /// 可选的持久化 Provider 用量载荷。
+    #[serde(default)]
+    provider_usage_json: Option<String>,
     /// Optional persisted lightweight provider continuation payload.
     /// 可选的持久化轻量 Provider continuation 载荷。
     #[serde(default)]
@@ -660,6 +665,10 @@ pub async fn load_workspace_snapshot(
                 .and_then(parse_session_ui_state_from_json)
                 .unwrap_or_default(),
             conversation_state: conversation_state_with_continuation(row.continuation_json),
+            last_provider_usage: row
+                .provider_usage_json
+                .as_deref()
+                .and_then(parse_provider_usage_from_json),
             updated_at: row.updated_at,
         };
 
@@ -2015,7 +2024,7 @@ async fn query_session_runtime_state_shell_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.continuation_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -2040,7 +2049,7 @@ async fn query_session_runtime_state_shell_row(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.continuation_json, r.updated_at
 FROM session_runtime_state AS r
 WHERE r.session_id = ?1
 LIMIT 1;
@@ -2818,10 +2827,11 @@ INSERT INTO session_runtime_state (
     last_compaction_id,
     context_start_message_id,
     ui_state_json,
+    provider_usage_json,
     conversation_state_json,
     continuation_json,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11);
 "#,
         batch_params,
         "写入会话运行时状态失败",
@@ -3270,6 +3280,9 @@ fn push_session_runtime_state_batch_rows(
                 optional_sqlite_string(&entry.last_compaction_id),
                 optional_sqlite_string(&entry.context_start_message_id),
                 optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
+                optional_sqlite_string(&serialize_provider_usage_to_json(
+                    entry.last_provider_usage.as_ref(),
+                )),
                 ControllerSqliteValue::Null,
                 optional_sqlite_string(&serialize_session_continuation_to_json(
                     &entry.conversation_state.continuation,
@@ -3898,6 +3911,10 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             .and_then(parse_session_ui_state_from_json)
             .unwrap_or_default(),
         conversation_state: conversation_state_with_continuation(row.continuation_json),
+        last_provider_usage: row
+            .provider_usage_json
+            .as_deref()
+            .and_then(parse_provider_usage_from_json),
         updated_at: row.updated_at,
     }
 }

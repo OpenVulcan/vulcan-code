@@ -174,6 +174,67 @@ pub struct ConversationToolCall {
     pub arguments: Value,
 }
 
+/// Represents one canonical user attachment retained for future request replays.
+/// 表示一条为后续请求回放保留的规范用户附件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationAttachmentKind {
+    /// Audio attachment backed by one local file path.
+    /// 由本地文件路径支撑的音频附件。
+    Audio,
+    /// Image attachment backed by one local file path.
+    /// 由本地文件路径支撑的图片附件。
+    Image,
+    /// Video attachment backed by one local file path.
+    /// 由本地文件路径支撑的视频附件。
+    Video,
+    /// PDF attachment backed by one local file path.
+    /// 由本地文件路径支撑的 PDF 附件。
+    Pdf,
+}
+
+impl ConversationAttachmentKind {
+    /// Returns the stable lowercase modality name attached to the current attachment kind.
+    /// 返回绑定到当前附件类型上的稳定小写模态名称。
+    pub fn modality_name(&self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Pdf => "pdf",
+        }
+    }
+
+    /// Returns the compact Chinese label shown in host-side attachment previews and chips.
+    /// 返回展示在宿主侧附件预览与标签中的紧凑中文名称。
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            Self::Audio => "音频",
+            Self::Image => "图片",
+            Self::Video => "视频",
+            Self::Pdf => "PDF",
+        }
+    }
+}
+
+/// Represents one structured user attachment kept beside canonical user text.
+/// 表示一条保存在规范用户文本旁边的结构化用户附件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationAttachment {
+    /// Stable attachment kind used by capability gates and provider mappers.
+    /// 供能力门控与 Provider 映射使用的稳定附件类型。
+    pub kind: ConversationAttachmentKind,
+    /// Human-readable file name shown in transcript and queue previews.
+    /// 展示在转录与队列预览中的人类可读文件名。
+    pub file_name: String,
+    /// Canonical local file path used to re-read the attachment during future provider replays.
+    /// 在未来 Provider 回放期间用于重新读取附件的规范本地文件路径。
+    pub local_path: String,
+    /// Resolved MIME type attached to the local file.
+    /// 绑定到本地文件上的已解析 MIME 类型。
+    pub mime_type: String,
+}
+
 /// Represents one structured canonical payload inside the controller message window.
 /// 表示控制器消息窗口内部的一条结构化规范载荷。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +245,10 @@ pub enum ConversationPayload {
         /// Visible user text content.
         /// 用户可见文本内容。
         text: String,
+        /// Structured attachments that should travel with the user-authored text.
+        /// 应随用户文本一起传递的结构化附件集合。
+        #[serde(default)]
+        attachments: Vec<ConversationAttachment>,
     },
     /// Assistant turn that may contain visible text, reasoning, and tool calls.
     /// 可能同时包含可见文本、思考内容与工具调用的助手回合。
@@ -200,6 +265,10 @@ pub enum ConversationPayload {
         /// Optional provider-native assistant state that must survive future history replays.
         /// 必须在后续历史回放中保留下来的可选 Provider 原生助手状态。
         provider_message_state: Option<Value>,
+        /// Optional provider usage snapshot retained for host-side budget calibration.
+        /// 为宿主侧预算校准保留的可选 Provider 用量快照。
+        #[serde(default)]
+        usage: Option<ProviderUsageSnapshot>,
         /// Structured tool-call list emitted by the assistant turn.
         /// 由该助手回合发出的结构化工具调用列表。
         tool_calls: Vec<ConversationToolCall>,
@@ -303,6 +372,39 @@ pub struct ToolInvocationResult {
     pub is_error: bool,
 }
 
+/// Represents one normalized provider usage snapshot retained for budget calibration and diagnostics.
+/// 表示一份被保留用于预算校准与诊断的规范化 Provider 用量快照。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderUsageSnapshot {
+    /// Optional provider-reported input token count.
+    /// Provider 报告的可选输入 Token 数量。
+    #[serde(default)]
+    pub input_tokens: Option<usize>,
+    /// Optional provider-reported output token count.
+    /// Provider 报告的可选输出 Token 数量。
+    #[serde(default)]
+    pub output_tokens: Option<usize>,
+    /// Optional provider-reported reasoning token count.
+    /// Provider 报告的可选推理 Token 数量。
+    #[serde(default)]
+    pub reasoning_tokens: Option<usize>,
+    /// Optional provider-reported total token count.
+    /// Provider 报告的可选总 Token 数量。
+    #[serde(default)]
+    pub total_tokens: Option<usize>,
+}
+
+impl ProviderUsageSnapshot {
+    /// Returns whether the snapshot contains at least one concrete token count.
+    /// 返回该快照是否至少包含一个具体 Token 数量。
+    pub const fn has_any_tokens(&self) -> bool {
+        self.input_tokens.is_some()
+            || self.output_tokens.is_some()
+            || self.reasoning_tokens.is_some()
+            || self.total_tokens.is_some()
+    }
+}
+
 /// Represents one normalized provider turn response consumed by the host-owned controller loop.
 /// 表示一份由宿主自有控制器循环消费的规范化 Provider 单回合响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,6 +421,10 @@ pub struct ProviderTurnResponse {
     /// Optional provider-native assistant state that must survive canonical history replay.
     /// 必须在规范历史回放中保留下来的可选 Provider 原生助手状态。
     pub provider_message_state: Option<Value>,
+    /// Optional provider usage snapshot retained for host-side budget calibration.
+    /// 为宿主侧预算校准保留的可选 Provider 用量快照。
+    #[serde(default)]
+    pub usage: Option<ProviderUsageSnapshot>,
     /// Structured tool calls returned by the provider for the current turn.
     /// Provider 在当前回合返回的结构化工具调用集合。
     #[serde(default)]

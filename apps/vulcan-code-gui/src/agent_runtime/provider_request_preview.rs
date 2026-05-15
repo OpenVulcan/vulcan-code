@@ -38,6 +38,11 @@ pub(crate) fn build_provider_request_preview_markdown(
         .unwrap_or_else(|| String::from("（无附加请求头）"));
     let continuation_markdown =
         render_provider_continuation_markdown(&request_snapshot.continuation);
+    let context_budget_label = preparation
+        .context_budget
+        .as_ref()
+        .map(|budget| budget.summary_note())
+        .unwrap_or_else(|| String::from("尚未生成上下文预算快照"));
     let tool_rows = if request_snapshot.tool_schemas.is_empty() {
         String::from("（本次请求未直接暴露工具 schema）")
     } else {
@@ -67,6 +72,8 @@ pub(crate) fn build_provider_request_preview_markdown(
             "- 最大轮次：{}\n",
             "- 历史上下文：`{}` 条\n",
             "- 工具数量：`{}` 个\n\n",
+            "## Context Budget\n",
+            "{}\n\n",
             "## System Preamble\n",
             "{}\n\n",
             "## Continuation\n",
@@ -101,6 +108,7 @@ pub(crate) fn build_provider_request_preview_markdown(
         max_turns_label,
         request_snapshot.history.len(),
         request_snapshot.tool_schemas.len(),
+        context_budget_label,
         render_text_code_fence(&request_snapshot.system_prompt),
         continuation_markdown,
         outgoing_history_markdown,
@@ -133,12 +141,24 @@ fn render_core_conversation_message_preview(
     message: &CoreConversationMessage,
 ) -> String {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => format!(
-            "### {}. user · `{}`\n{}",
-            index + 1,
-            message.id,
-            render_text_code_fence(text)
-        ),
+        CoreConversationPayload::UserText { text, attachments } => {
+            let mut sections = vec![format!("### {}. user · `{}`", index + 1, message.id)];
+            if !text.trim().is_empty() {
+                sections.push(render_text_code_fence(text));
+            }
+            if !attachments.is_empty() {
+                sections.push(String::from("#### Attachments"));
+                sections.extend(attachments.iter().map(|attachment| {
+                    format!(
+                        "- `{}` · `{}` · `{}`",
+                        attachment.kind.display_label(),
+                        attachment.file_name,
+                        attachment.mime_type
+                    )
+                }));
+            }
+            sections.join("\n\n")
+        }
         CoreConversationPayload::Assistant {
             text,
             reasoning,
@@ -290,6 +310,8 @@ mod tests {
                 extra_headers: BTreeMap::new(),
                 extra_body: Value::Object(Default::default()),
                 reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
             },
             prompt_preview: String::from("检查请求预览"),
             workspace_path: String::from("D:/openvulcan/vulcan-code"),
@@ -303,6 +325,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            context_budget: None,
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),

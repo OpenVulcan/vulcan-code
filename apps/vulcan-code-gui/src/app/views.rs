@@ -1947,7 +1947,10 @@ impl VulcanWorkbench {
     /// Returns whether the current composer buffer contains any submittable user instruction text.
     /// 返回当前提示词缓冲区是否包含任何可提交的用户指令文本。
     pub(super) fn composer_has_submittable_content(&self) -> bool {
-        composer_text_has_submittable_content(&self.composer_buffer.text())
+        composer_input_has_submittable_content(
+            &self.composer_buffer.text(),
+            &self.composer_attachments,
+        )
     }
 
     /// Builds the compact send-or-stop button shown at the right side of prompt inputs.
@@ -2148,7 +2151,7 @@ impl VulcanWorkbench {
     ) -> Element<'_, Message> {
         let is_drag_source =
             self.dragging_pending_prompt_entry_id.as_deref() == Some(entry.id.as_str());
-        let queue_label = pending_prompt_panel_label_text(&entry.prompt);
+        let queue_label = pending_prompt_panel_label_text(&entry.prompt, &entry.attachments);
         let drag_handle = mouse_area(
             container(
                 text("⋮⋮")
@@ -2457,6 +2460,110 @@ impl VulcanWorkbench {
         .into()
     }
 
+    /// Builds the dedicated attachment button shown beside the composer execution controls.
+    /// 构建显示在提示词执行控制行旁侧的专用附件按钮。
+    pub(super) fn view_composer_attachment_button(&self) -> Element<'_, Message> {
+        let supports_attachments = self.active_workbench_supports_any_attachments();
+        let button = button(
+            container(
+                lucide::image_plus()
+                    .size(16)
+                    .line_height(1.0)
+                    .color(self.app_theme.extended_palette().background.base.text),
+            )
+            .width(COMPOSER_CONTROL_ROW_HEIGHT)
+            .height(COMPOSER_CONTROL_ROW_HEIGHT)
+            .center(Fill),
+        )
+        .padding(0)
+        .width(COMPOSER_CONTROL_ROW_HEIGHT)
+        .height(COMPOSER_CONTROL_ROW_HEIGHT)
+        .style(style::workbench_model_trigger_button_style);
+        let button = if supports_attachments {
+            button.on_press(Message::AddComposerAttachments)
+        } else {
+            button
+        };
+        let tooltip_text = if supports_attachments {
+            "添加附件"
+        } else {
+            "当前模型未声明可用附件输入模态"
+        };
+
+        tooltip(button, tooltip_text, tooltip::Position::Bottom)
+            .style(container::rounded_box)
+            .into()
+    }
+
+    /// Builds the staged composer attachment strip shown between the editor and the control row.
+    /// 构建显示在编辑器与控制行之间的已暂存提示词附件条。
+    pub(super) fn view_composer_attachment_strip(&self) -> Element<'_, Message> {
+        if self.composer_attachments.is_empty() {
+            return space::vertical().height(0.0).into();
+        }
+
+        let attachment_row = self.composer_attachments.iter().fold(
+            row![].spacing(8).align_y(Center),
+            |row, attachment| {
+                let attachment_label = truncate_with_ellipsis(
+                    &attachment.file_name,
+                    self.composer_panel_width() * 0.26,
+                );
+                let attachment_chip = container(
+                    row![
+                        container(text(attachment.kind.display_label()).size(11))
+                            .padding([2, 6])
+                            .style(container::rounded_box),
+                        text(attachment_label)
+                            .size(12)
+                            .wrapping(iced::advanced::text::Wrapping::None),
+                        button(
+                            container(codicon::chrome_close().size(12).line_height(1.0))
+                                .width(16)
+                                .height(16)
+                                .center(Fill),
+                        )
+                        .padding(0)
+                        .width(16)
+                        .height(16)
+                        .style(move |theme, status| {
+                            style::workbench_transcript_mode_button_style(theme, status, false)
+                        })
+                        .on_press(Message::RemoveComposerAttachment(
+                            attachment.local_path.clone(),
+                        )),
+                    ]
+                    .spacing(6)
+                    .align_y(Center),
+                )
+                .padding([6, 10])
+                .style(style::workbench_pending_prompt_queue_panel_style);
+
+                row.push(attachment_chip)
+            },
+        );
+        let strip_body = row![
+            container(text("附件").size(12))
+                .width(36)
+                .center_y(COMPOSER_ATTACHMENT_ROW_HEIGHT),
+            scrollable(container(attachment_row).width(Shrink))
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::default(),
+                ))
+                .height(COMPOSER_ATTACHMENT_ROW_HEIGHT)
+                .width(Fill),
+        ]
+        .spacing(8)
+        .align_y(Center)
+        .height(COMPOSER_ATTACHMENT_ROW_HEIGHT)
+        .width(Fill);
+
+        container(strip_body)
+            .height(COMPOSER_ATTACHMENT_ROW_HEIGHT)
+            .width(Fill)
+            .into()
+    }
+
     /// Returns the current estimated visible line count of the main prompt composer.
     /// 返回主提示词编辑器当前估算得到的可见行数量。
     pub(super) fn composer_line_count(&self) -> usize {
@@ -2515,6 +2622,11 @@ impl VulcanWorkbench {
         } else {
             COMPOSER_SINGLE_LINE_HEIGHT
         };
+        let attachment_strip_height = if self.composer_attachments.is_empty() {
+            0.0
+        } else {
+            COMPOSER_ATTACHMENT_ROW_HEIGHT + COMPOSER_PANEL_CONTROL_GAP
+        };
         let pending_queue_strip_height = if self.selected_subagent_task_panel_state().is_none()
             && self.should_show_selected_session_pending_prompt_strip()
         {
@@ -2525,6 +2637,7 @@ impl VulcanWorkbench {
 
         pending_queue_strip_height
             + visible_editor_height
+            + attachment_strip_height
             + COMPOSER_CONTROL_ROW_HEIGHT
             + COMPOSER_PANEL_CONTROL_GAP
             + (COMPOSER_PANEL_EDGE_PADDING as f32 * 2.0)
@@ -2669,7 +2782,7 @@ impl VulcanWorkbench {
     /// 返回提示词上下文菜单覆盖层使用的受边界约束的窗口相对位置。
     pub(super) fn composer_context_menu_position(&self) -> iced::Point {
         let menu_width = COMPOSER_CONTEXT_MENU_WIDTH;
-        let menu_height = (COMPOSER_CONTEXT_MENU_ROW_HEIGHT * 4.0) + 12.0;
+        let menu_height = (COMPOSER_CONTEXT_MENU_ROW_HEIGHT * 5.0) + 12.0;
         let window_width = self.main_window_size.width.max(menu_width + 12.0);
         let window_height = self.main_window_size.height.max(menu_height + 12.0);
         let anchor = self.composer_context_menu_anchor;
@@ -2692,9 +2805,14 @@ impl VulcanWorkbench {
             composer_selection_has_content(self.composer_buffer.selection().as_deref());
         let can_paste =
             composer_clipboard_text_is_pastable(self.composer_context_clipboard_text.as_deref());
+        let supports_attachments = self.active_workbench_supports_any_attachments();
 
         container(
             column![
+                self.view_composer_context_menu_button(
+                    "添加附件",
+                    supports_attachments.then_some(Message::AddComposerAttachments),
+                ),
                 self.view_composer_context_menu_button(
                     "全选",
                     has_any_text.then_some(Message::ComposerContextMenuSelectAll),
@@ -3008,6 +3126,7 @@ impl VulcanWorkbench {
         let composer_primary_controls = row![
             execution_mode_selector,
             self.view_workbench_model_selector(),
+            self.view_composer_attachment_button(),
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)
         .align_y(Center);
@@ -3038,18 +3157,28 @@ impl VulcanWorkbench {
         .align_y(Center)
         .height(COMPOSER_CONTROL_ROW_HEIGHT)
         .width(Fill);
+        let composer_editor_stack: Element<'_, Message> = if self.composer_attachments.is_empty() {
+            self.view_inline_composer_editor()
+        } else {
+            column![
+                self.view_inline_composer_editor(),
+                self.view_composer_attachment_strip(),
+            ]
+            .spacing(COMPOSER_PANEL_CONTROL_GAP)
+            .into()
+        };
         let composer_body = if self.should_show_selected_session_pending_prompt_strip() {
             column![
                 column![
                     self.view_pending_prompt_queue_strip(),
-                    self.view_inline_composer_editor(),
+                    composer_editor_stack,
                 ]
                 .spacing(0),
                 composer_controls_row,
             ]
             .spacing(COMPOSER_PANEL_CONTROL_GAP)
         } else {
-            column![self.view_inline_composer_editor(), composer_controls_row,]
+            column![composer_editor_stack, composer_controls_row,]
                 .spacing(COMPOSER_PANEL_CONTROL_GAP)
         };
         let composer_panel = container(composer_body)
@@ -5180,6 +5309,7 @@ impl VulcanWorkbench {
                 ]
                 .align_y(Center),
                 progress_bar(0.0..=100.0, self.context_usage),
+                text(self.context_usage_detail.clone()).size(12),
             ]
             .spacing(10),
         )
@@ -6360,6 +6490,105 @@ impl VulcanWorkbench {
             .spacing(10)
             .into(),
         };
+        let mut start_oauth_button = button(if self.mcp_oauth_flow_in_flight {
+            "OAuth 进行中"
+        } else {
+            "发起 OAuth"
+        })
+        .style(button::secondary);
+        if self.selected_mcp_server_id.is_some()
+            && !matches!(
+                self.mcp_server_form.transport,
+                PersistedMcpTransportKind::Stdio
+            )
+            && !self.mcp_oauth_flow_in_flight
+        {
+            start_oauth_button = start_oauth_button.on_press(Message::StartSelectedMcpServerOAuth);
+        }
+        let mut complete_oauth_button = button("完成授权").style(button::secondary);
+        if !self.mcp_oauth_callback_input.trim().is_empty() {
+            complete_oauth_button =
+                complete_oauth_button.on_press(Message::CompleteSelectedMcpServerOAuthFromInput);
+        }
+        let mut clear_oauth_button = button("清理凭据").style(button::secondary);
+        if self.selected_mcp_server_id.is_some()
+            && !matches!(
+                self.mcp_server_form.transport,
+                PersistedMcpTransportKind::Stdio
+            )
+        {
+            clear_oauth_button =
+                clear_oauth_button.on_press(Message::RemoveSelectedMcpServerOAuthAuthorization);
+        }
+        let authorization_url_summary: Element<'_, Message> =
+            if self.mcp_oauth_authorization_url.trim().is_empty() {
+                text("最近一次授权链接：尚未生成").size(12).into()
+            } else {
+                text(format!(
+                    "最近一次授权链接：{}",
+                    self.mcp_oauth_authorization_url
+                ))
+                .size(12)
+                .into()
+            };
+        let oauth_fields: Element<'_, Message> = if matches!(
+            self.mcp_server_form.transport,
+            PersistedMcpTransportKind::Stdio
+        ) {
+            container(text("stdio 传输不需要宿主侧 OAuth 浏览器授权。").size(12))
+                .padding(10)
+                .style(container::bordered_box)
+                .into()
+        } else {
+            column![
+                text("OAuth（可选）").size(14),
+                text(format!("当前认证状态：{}", self.mcp_oauth_status)).size(12),
+                text_input(
+                    "OAuth Client ID（可选，留空则尝试动态注册）",
+                    &self.mcp_server_form.oauth_client_id,
+                )
+                .on_input(Message::McpServerOAuthClientIdChanged)
+                .padding(10)
+                .width(Fill),
+                text_input(
+                    "OAuth Client Secret（可选）",
+                    &self.mcp_server_form.oauth_client_secret,
+                )
+                .on_input(Message::McpServerOAuthClientSecretChanged)
+                .padding(10)
+                .width(Fill),
+                text_input(
+                    "OAuth Scopes（可选，使用分号、逗号或空格分隔）",
+                    &self.mcp_server_form.oauth_scopes_text,
+                )
+                .on_input(Message::McpServerOAuthScopesChanged)
+                .padding(10)
+                .width(Fill),
+                text_input(
+                    "OAuth Redirect URI（建议填写 localhost 回调地址）",
+                    &self.mcp_server_form.oauth_redirect_uri,
+                )
+                .on_input(Message::McpServerOAuthRedirectUriChanged)
+                .padding(10)
+                .width(Fill),
+                authorization_url_summary,
+                text_input(
+                    "浏览器最终跳转 URL、/callback?... 路径或 query string",
+                    &self.mcp_oauth_callback_input,
+                )
+                .on_input(Message::McpServerOAuthCallbackInputChanged)
+                .padding(10)
+                .width(Fill),
+                row![
+                    start_oauth_button,
+                    complete_oauth_button,
+                    clear_oauth_button,
+                ]
+                .spacing(10),
+            ]
+            .spacing(10)
+            .into()
+        };
 
         container(
             column![
@@ -6379,6 +6608,7 @@ impl VulcanWorkbench {
                     .width(Fill),
                 transport_picker,
                 transport_fields,
+                oauth_fields,
                 row![
                     button("新增服务器")
                         .style(button::secondary)

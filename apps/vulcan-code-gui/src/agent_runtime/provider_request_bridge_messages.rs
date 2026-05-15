@@ -15,20 +15,25 @@ pub(crate) fn session_message_to_core_message(
     message: &SessionConversationMessage,
 ) -> CoreConversationMessage {
     let payload = match &message.payload {
-        SessionConversationPayload::UserText { text } => {
-            CoreConversationPayload::UserText { text: text.clone() }
+        SessionConversationPayload::UserText { text, attachments } => {
+            CoreConversationPayload::UserText {
+                text: text.clone(),
+                attachments: attachments.clone(),
+            }
         }
         SessionConversationPayload::Assistant {
             text,
             reasoning,
             provider_message_id,
             provider_message_state,
+            usage,
             tool_calls,
         } => CoreConversationPayload::Assistant {
             text: text.clone(),
             reasoning: reasoning.clone(),
             provider_message_id: provider_message_id.clone(),
             provider_message_state: provider_message_state.clone(),
+            usage: usage.clone(),
             tool_calls: tool_calls
                 .iter()
                 .map(session_tool_call_to_core_tool_call)
@@ -57,20 +62,25 @@ pub(crate) fn core_message_to_session_message(
     message: &CoreConversationMessage,
 ) -> SessionConversationMessage {
     let payload = match &message.payload {
-        CoreConversationPayload::UserText { text } => {
-            SessionConversationPayload::UserText { text: text.clone() }
+        CoreConversationPayload::UserText { text, attachments } => {
+            SessionConversationPayload::UserText {
+                text: text.clone(),
+                attachments: attachments.clone(),
+            }
         }
         CoreConversationPayload::Assistant {
             text,
             reasoning,
             provider_message_id,
             provider_message_state,
+            usage,
             tool_calls,
         } => SessionConversationPayload::Assistant {
             text: text.clone(),
             reasoning: reasoning.clone(),
             provider_message_id: provider_message_id.clone(),
             provider_message_state: provider_message_state.clone(),
+            usage: usage.clone(),
             tool_calls: tool_calls
                 .iter()
                 .map(core_tool_call_to_session_tool_call)
@@ -102,20 +112,25 @@ pub(crate) fn core_messages_to_provider_visible_history(
         .iter()
         .map(|message| {
             let payload = match &message.payload {
-                CoreConversationPayload::UserText { text } => {
-                    CoreConversationPayload::UserText { text: text.clone() }
+                CoreConversationPayload::UserText { text, attachments } => {
+                    CoreConversationPayload::UserText {
+                        text: text.clone(),
+                        attachments: attachments.clone(),
+                    }
                 }
                 CoreConversationPayload::Assistant {
                     text,
                     reasoning: _,
                     provider_message_id,
                     provider_message_state,
+                    usage,
                     tool_calls,
                 } => CoreConversationPayload::Assistant {
                     text: text.clone(),
                     reasoning: String::new(),
                     provider_message_id: provider_message_id.clone(),
                     provider_message_state: provider_message_state.clone(),
+                    usage: usage.clone(),
                     tool_calls: tool_calls.clone(),
                 },
                 CoreConversationPayload::ToolResult {

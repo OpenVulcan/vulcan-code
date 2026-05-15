@@ -31,6 +31,12 @@ impl McpServerRegistry {
         &self.servers
     }
 
+    /// Resolves one configured MCP server by stable identifier.
+    /// 根据稳定标识解析单个已配置 MCP 服务器。
+    pub(crate) fn server_by_id(&self, server_id: &str) -> Option<&McpServerConfig> {
+        self.servers.iter().find(|server| server.id == server_id)
+    }
+
     /// Returns the enabled MCP server entries.
     /// 返回已启用的 MCP 服务器条目。
     pub(crate) fn enabled_servers(&self) -> Vec<&McpServerConfig> {
@@ -93,9 +99,7 @@ impl McpServerRegistry {
         auth_session: Option<Arc<McpOAuthSession>>,
     ) -> Result<Arc<dyn McpTransport>, String> {
         let server = self
-            .servers
-            .iter()
-            .find(|server| server.id == server_id)
+            .server_by_id(server_id)
             .ok_or_else(|| format!("未找到 MCP 服务器 `{server_id}`。"))?;
 
         if !server.enabled {

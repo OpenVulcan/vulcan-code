@@ -304,10 +304,6 @@ impl CompactionSkill {
             .cloned()
             .collect::<Vec<_>>();
 
-        if context_candidates.len() < 10 {
-            return None;
-        }
-
         let retained_tail_count = 4usize;
         if context_candidates.len() <= retained_tail_count {
             return None;

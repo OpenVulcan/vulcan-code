@@ -2,10 +2,12 @@
 //! 桌面端骨架的主应用状态与界面组合逻辑。
 mod configuration;
 mod helpers;
+mod oauth_flow;
 mod task_tree;
 mod views;
 
 use self::helpers::*;
+use self::oauth_flow::*;
 
 use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
 use crate::agent_runtime::config::{
@@ -22,12 +24,12 @@ use crate::agent_view::{
     build_agent_view_document,
 };
 use crate::code_view;
+use crate::context_budget::{ContextBudgetSnapshot, build_session_context_budget_snapshot};
 use crate::conversation_protocol::{
-    PROTOCOL_COMPACTION_TRIGGER_COUNT, SessionConversationRecord, SessionConversationState,
-    append_assistant_text_message, append_record, append_record_body_delta,
-    append_user_text_message, compact_conversation_records_after_summary,
-    compact_conversation_with_summary, conversation_state_to_context_records,
-    conversation_state_to_session_messages,
+    SessionConversationRecord, SessionConversationState, append_assistant_text_message,
+    append_record, append_record_body_delta, append_user_text_message,
+    compact_conversation_records_after_summary, compact_conversation_with_summary,
+    conversation_state_to_context_records, conversation_state_to_session_messages,
 };
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
@@ -45,11 +47,12 @@ use crate::model::{
     SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
+use crate::provider_capabilities::resolve_model_capabilities;
 use crate::provider_config::{
-    self, ModelChoice, PersistedControllerConfiguration, PersistedMcpServerEntry,
-    PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
-    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
-    ReasoningSelectionOption,
+    self, ModelChoice, PersistedControllerConfiguration, PersistedMcpOAuthConfig,
+    PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedProviderEntry,
+    PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
+    ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
@@ -99,6 +102,7 @@ use vulcan_agent_view::{
     view_thinking_modal_surface, view_thinking_overlay_surface,
 };
 use vulcan_core::types::CoreEventKind as VulcanCoreEventKind;
+use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
 /// Bundled SVG mark bytes used in the header.
 /// 头部区域使用的内置 SVG 标识字节。
@@ -450,6 +454,10 @@ const COMPOSER_PANEL_CONTROL_GAP: f32 = 10.0;
 /// 主提示词编辑器下方低矮控制行使用的共享目标高度。
 const COMPOSER_CONTROL_ROW_HEIGHT: f32 = 36.0;
 
+/// Shared fixed row height reserved for the attachment strip shown under the main prompt composer editor.
+/// 主提示词编辑器下方附件条保留的共享固定行高。
+const COMPOSER_ATTACHMENT_ROW_HEIGHT: f32 = 34.0;
+
 /// Shared fixed horizontal inset kept on both sides of the pending-prompt queue panel above the composer.
 /// 主提示词输入框上方待发送队列面板两侧保留的共享水平留白。
 const COMPOSER_PENDING_QUEUE_PANEL_SIDE_INSET: f32 = 25.0;
@@ -583,6 +591,15 @@ fn composer_caret_scroll_target(
 /// 返回某段提示词文本是否包含任何可提交的非空白内容。
 fn composer_text_has_submittable_content(text: &str) -> bool {
     !text.trim().is_empty()
+}
+
+/// Returns whether one composer payload contains any dispatchable text or attachment input.
+/// 返回某条提示词输入载荷是否包含可分发的文本或附件输入。
+fn composer_input_has_submittable_content(
+    text: &str,
+    attachments: &[ConversationAttachment],
+) -> bool {
+    composer_text_has_submittable_content(text) || !attachments.is_empty()
 }
 
 /// Builds the low-priority legacy maintenance queue from visible and archived sessions.
@@ -892,7 +909,7 @@ fn task_session_tool_display_label(
         }
     }
     if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
-        return pending_prompt_preview_text(prompt);
+        return pending_prompt_preview_text(prompt, &[]);
     }
     if let Some(public_task_id) = public_task_id {
         return public_task_id.to_string();
@@ -947,7 +964,7 @@ fn task_session_tool_display_title(
 
 /// Builds one compact single-line preview used by the pending prompt queue strip.
 /// 构建待发送提示词队列条使用的一条紧凑单行预览文本。
-fn pending_prompt_preview_text(prompt: &str) -> String {
+fn pending_prompt_preview_text(prompt: &str, attachments: &[ConversationAttachment]) -> String {
     let normalized = prompt
         .lines()
         .map(str::trim)
@@ -956,10 +973,15 @@ fn pending_prompt_preview_text(prompt: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
+    let attachment_suffix = attachment_preview_suffix(attachments);
     let preview = if normalized.is_empty() {
-        String::from("空白消息")
+        if attachment_suffix.is_empty() {
+            String::from("空白消息")
+        } else {
+            attachment_suffix
+        }
     } else {
-        normalized
+        format!("{normalized}{attachment_suffix}")
     };
     let max_chars = 48usize;
     if preview.chars().count() <= max_chars {
@@ -977,7 +999,7 @@ fn pending_prompt_preview_text(prompt: &str) -> String {
 
 /// Builds one full single-line label used by the visible pending-prompt queue panel.
 /// 构建显示在可见待发送队列面板中的完整单行标签文本。
-fn pending_prompt_panel_label_text(prompt: &str) -> String {
+fn pending_prompt_panel_label_text(prompt: &str, attachments: &[ConversationAttachment]) -> String {
     let normalized = prompt
         .lines()
         .map(str::trim)
@@ -987,10 +1009,56 @@ fn pending_prompt_panel_label_text(prompt: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     if normalized.is_empty() {
-        String::from("空白消息")
+        let attachment_suffix = attachment_preview_suffix(attachments);
+        if attachment_suffix.is_empty() {
+            String::from("空白消息")
+        } else {
+            attachment_suffix
+        }
     } else {
-        normalized
+        format!("{normalized}{}", attachment_preview_suffix(attachments))
     }
+}
+
+/// Builds one compact suffix that summarizes the current attachment list for previews and chips.
+/// 构建一段用于预览与附件标签的紧凑附件摘要后缀。
+fn attachment_preview_suffix(attachments: &[ConversationAttachment]) -> String {
+    if attachments.is_empty() {
+        return String::new();
+    }
+    if attachments.len() == 1 {
+        return format!(
+            " [{} {}]",
+            attachments[0].kind.display_label(),
+            attachments[0].file_name
+        );
+    }
+    format!(" [附件 {} 个]", attachments.len())
+}
+
+/// Builds one transcript-visible body that keeps user text and attachment names together.
+/// 构建一段会在转录中可见的正文，同时保留用户文本与附件名称。
+fn build_user_prompt_transcript_body(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+) -> String {
+    if attachments.is_empty() {
+        return prompt.to_string();
+    }
+
+    let mut sections = Vec::new();
+    if !prompt.trim().is_empty() {
+        sections.push(prompt.trim().to_string());
+    }
+    sections.push(String::from("附件："));
+    sections.extend(attachments.iter().map(|attachment| {
+        format!(
+            "- {} `{}`",
+            attachment.kind.display_label(),
+            attachment.file_name
+        )
+    }));
+    sections.join("\n")
 }
 
 /// Returns whether pending-prompt dispatch must stay blocked because Anthropic sessions cannot safely continue the parent coordinator while detached subagents from the previous tool round are still running.
@@ -1312,6 +1380,9 @@ struct ComposerUndoSnapshot {
     /// Full text payload captured before one mutating composer action.
     /// 在某次会修改提示词内容的动作之前捕获的完整文本载荷。
     text: String,
+    /// Attachment list captured before one mutating composer action.
+    /// 在某次会修改提示词内容的动作之前捕获的附件列表。
+    attachments: Vec<ConversationAttachment>,
     /// Cursor and selection position captured before one mutating composer action.
     /// 在某次会修改提示词内容的动作之前捕获的光标与选区位置。
     cursor: text_editor::Cursor,
@@ -1426,6 +1497,9 @@ pub struct VulcanWorkbench {
     /// Prompt composer editor buffer used by the main Build/Plan input surface.
     /// 主 Build/Plan 输入表面使用的提示词编辑器缓冲区。
     composer_buffer: text_editor::Content,
+    /// Structured multimodal attachments currently staged beside the prompt composer text.
+    /// 当前与提示词文本一起暂存的结构化多模态附件集合。
+    composer_attachments: Vec<ConversationAttachment>,
     /// Undo snapshots retained for the main prompt composer.
     /// 为主提示词编辑器保留的撤销快照集合。
     composer_undo_history: Vec<ComposerUndoSnapshot>,
@@ -1781,6 +1855,21 @@ pub struct VulcanWorkbench {
     /// Editable MCP server form state for the selected MCP server entry.
     /// 当前选中 MCP 服务器条目对应的可编辑表单状态。
     mcp_server_form: McpServerFormState,
+    /// Human-readable OAuth status summary for the currently selected MCP server.
+    /// 当前选中 MCP 服务器对应的人类可读 OAuth 状态摘要。
+    mcp_oauth_status: String,
+    /// Raw manual callback input buffer used when the browser cannot return to the local listener automatically.
+    /// 当浏览器无法自动返回本地监听器时使用的原始手动回调输入缓冲区。
+    mcp_oauth_callback_input: String,
+    /// Latest authorization URL generated for the currently selected MCP server.
+    /// 为当前选中 MCP 服务器生成的最近一次授权 URL。
+    mcp_oauth_authorization_url: String,
+    /// Pending OAuth state retained while the host waits for a browser callback or manual paste.
+    /// 当宿主等待浏览器回调或手动粘贴时保留的待完成 OAuth state。
+    mcp_oauth_pending_state: Option<String>,
+    /// Whether one MCP OAuth flow is currently running.
+    /// 当前是否存在一条正在进行中的 MCP OAuth 流程。
+    mcp_oauth_flow_in_flight: bool,
     /// Latest validated execution preparation snapshot built from the current runtime state.
     /// 根据当前运行时状态构建出的最近一次执行准备快照。
     last_execution_preparation: Option<ExecutionPreparation>,
@@ -1822,6 +1911,9 @@ pub struct VulcanWorkbench {
     /// Estimated context usage percentage.
     /// 估算的上下文占用百分比。
     context_usage: f32,
+    /// Human-readable context usage detail shown beside the budget bar.
+    /// 展示在预算条旁边的人类可读上下文占用详情。
+    context_usage_detail: String,
     /// Whether plan-first workflow is enabled.
     /// 是否启用先计划后执行流程。
     generate_plan: bool,
@@ -2585,6 +2677,18 @@ struct McpServerFormState {
     /// Semicolon-delimited HTTP header declarations.
     /// 使用分号分隔的 HTTP 请求头声明文本。
     headers_text: String,
+    /// Optional OAuth client identifier used by remote MCP transports.
+    /// 远端 MCP 传输使用的可选 OAuth 客户端标识。
+    oauth_client_id: String,
+    /// Optional OAuth client secret used by remote MCP transports.
+    /// 远端 MCP 传输使用的可选 OAuth 客户端密钥。
+    oauth_client_secret: String,
+    /// Delimited OAuth scope declarations shown in the settings form.
+    /// 展示在设置表单中的分隔 OAuth scope 声明文本。
+    oauth_scopes_text: String,
+    /// Optional OAuth redirect URI used by remote MCP transports.
+    /// 远端 MCP 传输使用的可选 OAuth 回调 URI。
+    oauth_redirect_uri: String,
     /// Optional working directory override.
     /// 可选的工作目录覆盖值。
     cwd: String,
@@ -2606,6 +2710,26 @@ impl McpServerFormState {
             url: entry.url.clone().unwrap_or_default(),
             bearer_token: entry.bearer_token.clone().unwrap_or_default(),
             headers_text: join_mcp_server_headers(&entry.headers),
+            oauth_client_id: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_id.clone())
+                .unwrap_or_default(),
+            oauth_client_secret: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_secret.clone())
+                .unwrap_or_default(),
+            oauth_scopes_text: entry
+                .oauth
+                .as_ref()
+                .map(|oauth| join_mcp_server_oauth_scopes(&oauth.scopes))
+                .unwrap_or_default(),
+            oauth_redirect_uri: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.redirect_uri.clone())
+                .unwrap_or_default(),
             cwd: entry.cwd.clone().unwrap_or_default(),
             env_text: join_mcp_server_env(&entry.env),
         }
@@ -2618,6 +2742,7 @@ impl McpServerFormState {
         if name.is_empty() {
             return Err(String::from("请先填写 MCP 服务器名称。"));
         }
+        let oauth_config = self.oauth_config();
 
         match self.transport {
             PersistedMcpTransportKind::Stdio => {
@@ -2660,12 +2785,36 @@ impl McpServerFormState {
                     url: Some(url.to_string()),
                     bearer_token: trim_to_option(&self.bearer_token),
                     headers: parse_mcp_server_headers(&self.headers_text)?,
-                    oauth: None,
+                    oauth: oauth_config,
                     cwd: None,
                     env: BTreeMap::new(),
                 })
             }
         }
+    }
+
+    /// Resolves one persisted OAuth configuration block from the editable MCP server form when any OAuth field is currently populated.
+    /// 当任一 OAuth 字段已填写时，从可编辑 MCP 服务器表单解析出一份可持久化 OAuth 配置块。
+    fn oauth_config(&self) -> Option<PersistedMcpOAuthConfig> {
+        let client_id = trim_to_option(&self.oauth_client_id);
+        let client_secret = trim_to_option(&self.oauth_client_secret);
+        let redirect_uri = trim_to_option(&self.oauth_redirect_uri);
+        let scopes = parse_mcp_server_oauth_scopes(&self.oauth_scopes_text);
+
+        if client_id.is_none()
+            && client_secret.is_none()
+            && redirect_uri.is_none()
+            && scopes.is_empty()
+        {
+            return None;
+        }
+
+        Some(PersistedMcpOAuthConfig {
+            client_id,
+            client_secret,
+            scopes,
+            redirect_uri,
+        })
     }
 }
 
@@ -2682,6 +2831,10 @@ impl Default for McpServerFormState {
             url: String::new(),
             bearer_token: String::new(),
             headers_text: String::new(),
+            oauth_client_id: String::new(),
+            oauth_client_secret: String::new(),
+            oauth_scopes_text: String::new(),
+            oauth_redirect_uri: String::new(),
             cwd: String::new(),
             env_text: String::new(),
         }
@@ -2935,6 +3088,12 @@ enum Message {
     /// Restores the previous composer snapshot requested by the undo shortcut.
     /// 恢复由撤销快捷键请求的上一条提示词快照。
     ComposerUndo,
+    /// Opens the native file picker and appends one or more supported attachments into the composer.
+    /// 打开原生文件选择器并向提示词输入框追加一个或多个受支持附件。
+    AddComposerAttachments,
+    /// Removes one staged composer attachment identified by its canonical local path.
+    /// 根据规范本地路径移除一条已暂存的提示词附件。
+    RemoveComposerAttachment(String),
     /// Opens the composer context menu at the latest tracked cursor position.
     /// 在最近一次追踪到的鼠标位置打开提示词上下文菜单。
     OpenComposerContextMenu,
@@ -3073,12 +3232,27 @@ enum Message {
     /// Updates the editable MCP server HTTP headers field.
     /// 更新可编辑 MCP 服务器 HTTP 请求头字段。
     McpServerHeadersChanged(String),
+    /// Updates the editable MCP server OAuth client identifier field.
+    /// 更新可编辑 MCP 服务器 OAuth 客户端标识字段。
+    McpServerOAuthClientIdChanged(String),
+    /// Updates the editable MCP server OAuth client secret field.
+    /// 更新可编辑 MCP 服务器 OAuth 客户端密钥字段。
+    McpServerOAuthClientSecretChanged(String),
+    /// Updates the editable MCP server OAuth scopes field.
+    /// 更新可编辑 MCP 服务器 OAuth scopes 字段。
+    McpServerOAuthScopesChanged(String),
+    /// Updates the editable MCP server OAuth redirect URI field.
+    /// 更新可编辑 MCP 服务器 OAuth 回调 URI 字段。
+    McpServerOAuthRedirectUriChanged(String),
     /// Updates the editable MCP server working-directory field.
     /// 更新可编辑 MCP 服务器工作目录字段。
     McpServerCwdChanged(String),
     /// Updates the editable MCP server environment text field.
     /// 更新可编辑 MCP 服务器环境变量文本字段。
     McpServerEnvChanged(String),
+    /// Updates the editable MCP OAuth callback input field used for manual authorization completion.
+    /// 更新用于手动完成授权的 MCP OAuth 回调输入字段。
+    McpServerOAuthCallbackInputChanged(String),
     /// Toggles the editable MCP server enabled flag.
     /// 切换可编辑 MCP 服务器启用标记。
     McpServerEnabledToggled(bool),
@@ -3091,6 +3265,33 @@ enum Message {
     /// Removes the currently selected MCP server entry.
     /// 删除当前选中的 MCP 服务器条目。
     RemoveMcpServerConfiguration,
+    /// Starts the host-driven OAuth authorization flow for the currently selected MCP server.
+    /// 为当前选中的 MCP 服务器启动宿主驱动的 OAuth 授权流程。
+    StartSelectedMcpServerOAuth,
+    /// Applies the OAuth challenge payload generated for one selected MCP server.
+    /// 应用为某个选中 MCP 服务器生成的 OAuth 挑战载荷。
+    SelectedMcpServerOAuthChallengeReady(String, Result<(String, String), String>),
+    /// Applies the browser-open attempt result produced for one MCP OAuth flow.
+    /// 应用为一条 MCP OAuth 流程执行的浏览器打开结果。
+    McpServerOAuthBrowserOpened(Result<(), String>),
+    /// Applies one locally captured OAuth callback payload for the selected MCP server.
+    /// 应用为当前选中 MCP 服务器捕获到的一份本地 OAuth 回调载荷。
+    SelectedMcpServerOAuthCallbackCaptured(String, Result<String, String>),
+    /// Finishes the selected MCP server OAuth flow from the current manual callback input.
+    /// 使用当前手动回调输入完成所选 MCP 服务器的 OAuth 流程。
+    CompleteSelectedMcpServerOAuthFromInput,
+    /// Applies the completion result of one selected MCP server OAuth flow.
+    /// 应用某个已选 MCP 服务器 OAuth 流程的完成结果。
+    SelectedMcpServerOAuthFinished(String, Result<String, String>),
+    /// Removes stored OAuth credentials for the currently selected MCP server.
+    /// 移除当前选中 MCP 服务器的已存储 OAuth 凭据。
+    RemoveSelectedMcpServerOAuthAuthorization,
+    /// Applies the removal result of one selected MCP server OAuth credential set.
+    /// 应用某个已选 MCP 服务器 OAuth 凭据集合的移除结果。
+    SelectedMcpServerOAuthAuthorizationRemoved(String, Result<(), String>),
+    /// Applies the latest OAuth status summary loaded for one selected MCP server.
+    /// 应用为某个选中 MCP 服务器载入的最新 OAuth 状态摘要。
+    SelectedMcpServerOAuthStatusLoaded(String, Result<String, String>),
     /// Applies one freshly loaded LuaSkills catalog snapshot from the embedded host runtime.
     /// 应用一份来自嵌入式宿主运行时的最新 LuaSkills 技能目录快照。
     LuaSkillsCatalogLoaded(Result<LuaSkillsCatalog, String>),
@@ -3648,6 +3849,7 @@ impl VulcanWorkbench {
             workspace_path: String::from("D:/openvulcan/vulcan-code"),
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
+            composer_attachments: Vec::new(),
             composer_undo_history: Vec::new(),
             composer_scroll_offset: 0.0,
             composer_scrollbar_pointer_y: None,
@@ -3774,6 +3976,11 @@ impl VulcanWorkbench {
             },
             selected_mcp_server_id,
             mcp_server_form,
+            mcp_oauth_status: String::from("未配置 OAuth"),
+            mcp_oauth_callback_input: String::new(),
+            mcp_oauth_authorization_url: String::new(),
+            mcp_oauth_pending_state: None,
+            mcp_oauth_flow_in_flight: false,
             last_execution_preparation: None,
             last_mcp_discovery_rows: Vec::new(),
             last_mcp_discovery_errors: Vec::new(),
@@ -3786,7 +3993,8 @@ impl VulcanWorkbench {
             app_theme,
             temperature_enabled: false,
             temperature: 0.25,
-            context_usage: 42.0,
+            context_usage: 0.0,
+            context_usage_detail: String::from("尚未生成预算快照"),
             generate_plan: false,
             run_cargo_check: true,
             persist_memory: true,
@@ -3813,15 +4021,16 @@ impl VulcanWorkbench {
     fn push_composer_undo_snapshot(&mut self) {
         let snapshot = ComposerUndoSnapshot {
             text: self.composer_buffer.text(),
+            attachments: self.composer_attachments.clone(),
             cursor: self.composer_buffer.cursor(),
             scroll_offset: self.composer_scroll_offset,
         };
 
-        if self
-            .composer_undo_history
-            .last()
-            .is_some_and(|last| last.text == snapshot.text && last.cursor == snapshot.cursor)
-        {
+        if self.composer_undo_history.last().is_some_and(|last| {
+            last.text == snapshot.text
+                && last.attachments == snapshot.attachments
+                && last.cursor == snapshot.cursor
+        }) {
             return;
         }
 
@@ -3844,6 +4053,7 @@ impl VulcanWorkbench {
         restored_buffer.move_to(snapshot.cursor);
         self.composer_buffer = restored_buffer;
         self.composer = snapshot.text;
+        self.composer_attachments = snapshot.attachments;
         self.composer_scroll_offset = snapshot.scroll_offset.max(0.0);
         self.composer_context_menu_open = false;
 
@@ -4436,7 +4646,7 @@ impl VulcanWorkbench {
                     }
                 }
 
-                Task::none()
+                self.load_selected_mcp_server_oauth_status_task()
             }
             Message::RefreshLuaSkillsCatalog => {
                 let Some(handle) = self.luaskills_runtime.clone() else {
@@ -4949,6 +5159,10 @@ impl VulcanWorkbench {
             }
             Message::ComposerEditorAction(action) => self.apply_composer_editor_action(action),
             Message::ComposerUndo => self.restore_latest_composer_undo_snapshot(),
+            Message::AddComposerAttachments => self.add_composer_attachments(),
+            Message::RemoveComposerAttachment(local_path) => {
+                self.remove_composer_attachment(&local_path)
+            }
             Message::OpenComposerContextMenu => self.open_composer_context_menu(),
             Message::CloseComposerContextMenu => {
                 self.composer_context_menu_open = false;
@@ -5382,8 +5596,12 @@ impl VulcanWorkbench {
             Message::McpServerSelected(choice) => {
                 self.selected_mcp_server_id = Some(choice.id.clone());
                 self.reload_selected_mcp_server_form();
+                self.mcp_oauth_callback_input.clear();
+                self.mcp_oauth_authorization_url.clear();
+                self.mcp_oauth_pending_state = None;
+                self.mcp_oauth_flow_in_flight = false;
                 self.mcp_notice = format!("已切换到 MCP 服务器 `{}`。", choice.label);
-                Task::none()
+                self.load_selected_mcp_server_oauth_status_task()
             }
             Message::McpServerNameChanged(value) => {
                 self.mcp_server_form.name = value;
@@ -5413,12 +5631,32 @@ impl VulcanWorkbench {
                 self.mcp_server_form.headers_text = value;
                 Task::none()
             }
+            Message::McpServerOAuthClientIdChanged(value) => {
+                self.mcp_server_form.oauth_client_id = value;
+                Task::none()
+            }
+            Message::McpServerOAuthClientSecretChanged(value) => {
+                self.mcp_server_form.oauth_client_secret = value;
+                Task::none()
+            }
+            Message::McpServerOAuthScopesChanged(value) => {
+                self.mcp_server_form.oauth_scopes_text = value;
+                Task::none()
+            }
+            Message::McpServerOAuthRedirectUriChanged(value) => {
+                self.mcp_server_form.oauth_redirect_uri = value;
+                Task::none()
+            }
             Message::McpServerCwdChanged(value) => {
                 self.mcp_server_form.cwd = value;
                 Task::none()
             }
             Message::McpServerEnvChanged(value) => {
                 self.mcp_server_form.env_text = value;
+                Task::none()
+            }
+            Message::McpServerOAuthCallbackInputChanged(value) => {
+                self.mcp_oauth_callback_input = value;
                 Task::none()
             }
             Message::McpServerEnabledToggled(enabled) => {
@@ -5431,6 +5669,11 @@ impl VulcanWorkbench {
                     enabled: true,
                     ..McpServerFormState::default()
                 };
+                self.mcp_oauth_status = String::from("未配置 OAuth");
+                self.mcp_oauth_callback_input.clear();
+                self.mcp_oauth_authorization_url.clear();
+                self.mcp_oauth_pending_state = None;
+                self.mcp_oauth_flow_in_flight = false;
                 self.mcp_notice = String::from("已创建新的 MCP 服务器草稿，请填写名称与连接信息。");
                 Task::none()
             }
@@ -5439,6 +5682,10 @@ impl VulcanWorkbench {
                     Ok(server_id) => {
                         self.selected_mcp_server_id = Some(server_id);
                         self.reload_selected_mcp_server_form();
+                        self.mcp_oauth_callback_input.clear();
+                        self.mcp_oauth_authorization_url.clear();
+                        self.mcp_oauth_pending_state = None;
+                        self.mcp_oauth_flow_in_flight = false;
                         self.mcp_notice = String::from("MCP 服务器配置已保存。");
                         self.status_message = String::from("MCP 服务器配置已写入本地文件。");
                         return self.restart_mcp_runtime_task();
@@ -5454,6 +5701,11 @@ impl VulcanWorkbench {
                 match self.remove_selected_mcp_server_configuration() {
                     Ok(removed_name) => {
                         self.reload_selected_mcp_server_form();
+                        self.mcp_oauth_status = String::from("未配置 OAuth");
+                        self.mcp_oauth_callback_input.clear();
+                        self.mcp_oauth_authorization_url.clear();
+                        self.mcp_oauth_pending_state = None;
+                        self.mcp_oauth_flow_in_flight = false;
                         self.mcp_notice = format!("已移除 MCP 服务器 `{removed_name}`。");
                         self.status_message = format!("MCP 服务器 `{removed_name}` 配置已删除。");
                         return self.restart_mcp_runtime_task();
@@ -5463,6 +5715,221 @@ impl VulcanWorkbench {
                         self.status_message = error;
                     }
                 }
+                Task::none()
+            }
+            Message::StartSelectedMcpServerOAuth => {
+                let Some(server_id) = self.selected_mcp_server_id.clone() else {
+                    self.mcp_notice = String::from("请先选择并保存一个支持远端连接的 MCP 服务器。");
+                    self.status_message = self.mcp_notice.clone();
+                    return Task::none();
+                };
+                let Some(entry) = self.selected_mcp_server_entry() else {
+                    self.mcp_notice = String::from("当前选中的 MCP 服务器不存在，请先保存配置。");
+                    self.status_message = self.mcp_notice.clone();
+                    return Task::none();
+                };
+                if matches!(entry.transport, PersistedMcpTransportKind::Stdio) {
+                    self.mcp_notice =
+                        String::from("stdio 类型 MCP 服务器不需要宿主侧 OAuth 浏览器授权。");
+                    self.status_message = self.mcp_notice.clone();
+                    return Task::none();
+                }
+                if entry.oauth.is_none() {
+                    self.mcp_notice = String::from(
+                        "当前 MCP 服务器尚未配置 OAuth 信息，请先填写 redirect URI 或客户端参数并保存。",
+                    );
+                    self.status_message = self.mcp_notice.clone();
+                    return Task::none();
+                }
+                self.mcp_oauth_flow_in_flight = true;
+                self.mcp_notice = format!("正在为 MCP 服务器 `{server_id}` 生成 OAuth 授权链接。");
+                self.status_message = self.mcp_notice.clone();
+                self.start_selected_mcp_server_oauth_task()
+            }
+            Message::SelectedMcpServerOAuthChallengeReady(server_id, result) => {
+                if self.selected_mcp_server_id.as_deref() != Some(server_id.as_str()) {
+                    return Task::none();
+                }
+                match result {
+                    Ok((authorization_url, oauth_state)) => {
+                        self.mcp_oauth_authorization_url = authorization_url.clone();
+                        self.mcp_oauth_pending_state = Some(oauth_state.clone());
+                        self.mcp_oauth_flow_in_flight = true;
+                        self.mcp_notice = String::from(
+                            "OAuth 授权链接已生成，正在尝试打开默认浏览器；若自动回调失败，可粘贴浏览器最终跳转 URL 或查询串完成授权。",
+                        );
+                        self.status_message = self.mcp_notice.clone();
+
+                        let browser_task = Task::perform(
+                            open_external_url_in_browser(authorization_url),
+                            Message::McpServerOAuthBrowserOpened,
+                        );
+                        let callback_task = self
+                            .selected_mcp_server_oauth_redirect_uri()
+                            .and_then(|redirect_uri| {
+                                resolve_loopback_oauth_redirect_port(&redirect_uri)
+                            })
+                            .map(|port| {
+                                Task::perform(
+                                    capture_loopback_oauth_callback(
+                                        port,
+                                        oauth_state,
+                                        Duration::from_secs(300),
+                                    ),
+                                    move |callback_result| {
+                                        Message::SelectedMcpServerOAuthCallbackCaptured(
+                                            server_id.clone(),
+                                            callback_result,
+                                        )
+                                    },
+                                )
+                            });
+
+                        if let Some(callback_task) = callback_task {
+                            Task::batch([browser_task, callback_task])
+                        } else {
+                            browser_task
+                        }
+                    }
+                    Err(error) => {
+                        self.mcp_oauth_flow_in_flight = false;
+                        self.mcp_notice = format!("生成 MCP OAuth 授权链接失败：{error}");
+                        self.status_message = self.mcp_notice.clone();
+                        Task::none()
+                    }
+                }
+            }
+            Message::McpServerOAuthBrowserOpened(result) => {
+                if let Err(error) = result {
+                    self.mcp_notice = format!(
+                        "已生成 OAuth 授权链接，但自动打开浏览器失败：{error}。请手动复制并打开下方链接。"
+                    );
+                    self.status_message = self.mcp_notice.clone();
+                }
+                Task::none()
+            }
+            Message::SelectedMcpServerOAuthCallbackCaptured(server_id, result) => {
+                if self.selected_mcp_server_id.as_deref() != Some(server_id.as_str()) {
+                    return Task::none();
+                }
+                if self.mcp_oauth_pending_state.is_none() {
+                    return Task::none();
+                }
+                match result {
+                    Ok(callback_input) => {
+                        self.mcp_oauth_callback_input = callback_input.clone();
+                        let Ok(callback_payload) =
+                            parse_hosted_oauth_callback_input(&callback_input)
+                        else {
+                            self.mcp_oauth_flow_in_flight = false;
+                            self.mcp_notice = String::from(
+                                "本地回调已捕获，但解析失败，请手动检查并重新发起授权。",
+                            );
+                            self.status_message = self.mcp_notice.clone();
+                            return Task::none();
+                        };
+                        self.mcp_notice = String::from("已捕获本地 OAuth 回调，正在完成授权。");
+                        self.status_message = self.mcp_notice.clone();
+                        self.finish_selected_mcp_server_oauth_task(
+                            callback_payload.authorization_code,
+                            callback_payload.oauth_state,
+                        )
+                    }
+                    Err(error) => {
+                        self.mcp_notice = format!(
+                            "等待本地 OAuth 回调失败：{error}。请改为粘贴浏览器最终跳转 URL 或查询串完成授权。"
+                        );
+                        self.status_message = self.mcp_notice.clone();
+                        Task::none()
+                    }
+                }
+            }
+            Message::CompleteSelectedMcpServerOAuthFromInput => {
+                let parsed = parse_hosted_oauth_callback_input(&self.mcp_oauth_callback_input);
+                match parsed {
+                    Ok(callback_payload) => {
+                        if let Some(expected_state) = self.mcp_oauth_pending_state.as_deref() {
+                            if callback_payload.oauth_state != expected_state {
+                                self.mcp_notice = String::from(
+                                    "手动回调中的 `state` 与当前等待值不一致，请重新发起授权。",
+                                );
+                                self.status_message = self.mcp_notice.clone();
+                                self.mcp_oauth_flow_in_flight = false;
+                                return Task::none();
+                            }
+                        }
+                        self.mcp_notice = String::from("正在完成 MCP OAuth 授权。");
+                        self.status_message = self.mcp_notice.clone();
+                        self.finish_selected_mcp_server_oauth_task(
+                            callback_payload.authorization_code,
+                            callback_payload.oauth_state,
+                        )
+                    }
+                    Err(error) => {
+                        self.mcp_oauth_flow_in_flight = false;
+                        self.mcp_notice = error.clone();
+                        self.status_message = error;
+                        Task::none()
+                    }
+                }
+            }
+            Message::SelectedMcpServerOAuthFinished(server_id, result) => {
+                if self.selected_mcp_server_id.as_deref() != Some(server_id.as_str()) {
+                    return Task::none();
+                }
+                self.mcp_oauth_flow_in_flight = false;
+                match result {
+                    Ok(status_label) => {
+                        self.mcp_oauth_status = status_label.clone();
+                        self.mcp_notice = format!(
+                            "MCP 服务器 `{server_id}` OAuth 授权已完成，当前状态：{status_label}。正在重启运行时并刷新连接。"
+                        );
+                        self.status_message = self.mcp_notice.clone();
+                        self.mcp_oauth_pending_state = None;
+                        return self.restart_mcp_runtime_task();
+                    }
+                    Err(error) => {
+                        self.mcp_notice = format!("完成 MCP OAuth 授权失败：{error}");
+                        self.status_message = self.mcp_notice.clone();
+                    }
+                }
+                Task::none()
+            }
+            Message::RemoveSelectedMcpServerOAuthAuthorization => {
+                self.mcp_notice = String::from("正在清理当前 MCP 服务器的 OAuth 凭据。");
+                self.status_message = self.mcp_notice.clone();
+                self.remove_selected_mcp_server_oauth_task()
+            }
+            Message::SelectedMcpServerOAuthAuthorizationRemoved(server_id, result) => {
+                if self.selected_mcp_server_id.as_deref() != Some(server_id.as_str()) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(()) => {
+                        self.mcp_oauth_status = String::from("未认证");
+                        self.mcp_notice = format!(
+                            "MCP 服务器 `{server_id}` 的 OAuth 凭据已清理，正在重启运行时。"
+                        );
+                        self.status_message = self.mcp_notice.clone();
+                        self.mcp_oauth_pending_state = None;
+                        self.mcp_oauth_authorization_url.clear();
+                        self.mcp_oauth_callback_input.clear();
+                        self.mcp_oauth_flow_in_flight = false;
+                        return self.restart_mcp_runtime_task();
+                    }
+                    Err(error) => {
+                        self.mcp_notice = format!("清理 MCP OAuth 凭据失败：{error}");
+                        self.status_message = self.mcp_notice.clone();
+                    }
+                }
+                Task::none()
+            }
+            Message::SelectedMcpServerOAuthStatusLoaded(server_id, result) => {
+                if self.selected_mcp_server_id.as_deref() != Some(server_id.as_str()) {
+                    return Task::none();
+                }
+                self.mcp_oauth_status =
+                    result.unwrap_or_else(|error| format!("状态读取失败：{error}"));
                 Task::none()
             }
             Message::ThemeSelected(theme) => {
@@ -6605,7 +7072,7 @@ impl VulcanWorkbench {
                             preparation.provider_request_preview_markdown.clone(),
                         );
                         self.last_execution_preparation = Some(preparation.clone());
-                        self.context_usage = (self.context_usage + 8.0).min(100.0);
+                        self.sync_context_usage_from_preparation(Some(&preparation));
                         self.update_session_runtime_identity_from_preparation(
                             preparation.session_id,
                             &preparation,
@@ -7078,6 +7545,7 @@ impl VulcanWorkbench {
     fn build_pending_prompt_entry(
         &self,
         prompt: String,
+        attachments: Vec<ConversationAttachment>,
         source: PendingSessionPromptSource,
         task_id: Option<SessionId>,
         preview: Option<String>,
@@ -7086,8 +7554,9 @@ impl VulcanWorkbench {
         let created_at = current_unix_millis_text();
         PendingSessionPromptEntry {
             id: format!("pending-prompt-{created_at}-{}", Uuid::new_v4()),
-            preview: preview.unwrap_or_else(|| pending_prompt_preview_text(&prompt)),
+            preview: preview.unwrap_or_else(|| pending_prompt_preview_text(&prompt, &attachments)),
             prompt,
+            attachments,
             source,
             task_id: task_id.map(|value| value.to_string()),
             panel_entry_id,
@@ -7097,12 +7566,17 @@ impl VulcanWorkbench {
 
     /// Builds one persisted visible prompt-panel entry from the provided user-authored prompt text.
     /// 根据给定用户提示词文本构建一条持久化可见提示词面板项。
-    fn build_pending_prompt_panel_entry(&self, prompt: String) -> PendingPromptPanelEntry {
+    fn build_pending_prompt_panel_entry(
+        &self,
+        prompt: String,
+        attachments: Vec<ConversationAttachment>,
+    ) -> PendingPromptPanelEntry {
         let created_at = current_unix_millis_text();
         PendingPromptPanelEntry {
             id: format!("pending-panel-{created_at}-{}", Uuid::new_v4()),
-            preview: pending_prompt_preview_text(&prompt),
+            preview: pending_prompt_preview_text(&prompt, &attachments),
             prompt,
+            attachments,
             state: PendingPromptPanelEntryState::Ready,
             created_at,
         }
@@ -7400,10 +7874,15 @@ impl VulcanWorkbench {
 
     /// Replaces the main composer buffer with the provided prompt text and focuses the editor again.
     /// 使用给定提示词文本替换主提示词缓冲区，并重新聚焦编辑器。
-    fn restore_prompt_into_composer(&mut self, prompt: String) -> Task<Message> {
+    fn restore_prompt_into_composer(
+        &mut self,
+        prompt: String,
+        attachments: Vec<ConversationAttachment>,
+    ) -> Task<Message> {
         self.push_composer_undo_snapshot();
         self.composer = prompt.clone();
         self.composer_buffer = text_editor::Content::with_text(&prompt);
+        self.composer_attachments = attachments;
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
@@ -7417,12 +7896,165 @@ impl VulcanWorkbench {
     fn clear_composer_input(&mut self) {
         self.composer.clear();
         self.composer_buffer = text_editor::Content::with_text("");
+        self.composer_attachments.clear();
         self.composer_undo_history.clear();
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
         self.composer_context_menu_open = false;
         self.composer_context_clipboard_text = None;
+    }
+
+    /// Returns the resolved capability snapshot of the currently active workbench model when available.
+    /// 返回当前激活工作台模型的已解析能力快照（如果存在）。
+    fn active_workbench_model_capabilities_snapshot(
+        &self,
+    ) -> Option<crate::provider_capabilities::ResolvedModelCapabilities> {
+        let active_choice = self.active_workbench_model_choice()?;
+        let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
+        let model = self.resolve_workbench_model_entry(&active_choice);
+        Some(resolve_model_capabilities(definition, model.as_ref()))
+    }
+
+    /// Returns whether the currently active workbench model should accept one staged attachment kind according to declared input modalities.
+    /// 返回当前激活工作台模型是否应根据声明输入模态接受某种已暂存附件类型。
+    fn active_workbench_supports_attachment_kind(&self, kind: ConversationAttachmentKind) -> bool {
+        let Some(capabilities) = self.active_workbench_model_capabilities_snapshot() else {
+            return false;
+        };
+        capabilities.supports_attachment_kind(kind)
+    }
+
+    /// Returns whether the currently active workbench model should expose the generic attachment picker.
+    /// 返回当前激活工作台模型是否应暴露通用附件选择器。
+    fn active_workbench_supports_any_attachments(&self) -> bool {
+        [
+            ConversationAttachmentKind::Audio,
+            ConversationAttachmentKind::Image,
+            ConversationAttachmentKind::Video,
+            ConversationAttachmentKind::Pdf,
+        ]
+        .into_iter()
+        .any(|kind| self.active_workbench_supports_attachment_kind(kind))
+    }
+
+    /// Validates whether every staged attachment still matches the active model modality declaration.
+    /// 校验每条已暂存附件当前是否仍满足激活模型的模态声明。
+    fn validate_staged_attachments(
+        &self,
+        attachments: &[ConversationAttachment],
+    ) -> Result<(), String> {
+        if attachments.is_empty() {
+            return Ok(());
+        }
+        for attachment in attachments {
+            if !self.active_workbench_supports_attachment_kind(attachment.kind.clone()) {
+                return Err(format!(
+                    "当前模型未声明{}输入能力，无法发送附件 `{}`。",
+                    attachment.kind.display_label(),
+                    attachment.file_name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Opens the native attachment picker and appends unique supported attachments into the composer draft.
+    /// 打开原生附件选择器，并向提示词草稿追加不重复且受支持的附件。
+    fn add_composer_attachments(&mut self) -> Task<Message> {
+        if !self.active_workbench_supports_any_attachments() {
+            self.status_message = String::from(
+                "当前模型未声明可用附件输入模态，请切换到支持音频、图片、视频或 PDF 的模型后再试。",
+            );
+            return Task::none();
+        }
+
+        match pick_composer_attachments(self.workspace_path.trim()) {
+            Ok(Some(attachments)) => {
+                self.push_composer_undo_snapshot();
+                let mut added_count = 0usize;
+                let mut skipped_labels = Vec::new();
+                for attachment in attachments {
+                    if !self.active_workbench_supports_attachment_kind(attachment.kind.clone()) {
+                        skipped_labels.push(format!(
+                            "{} `{}`",
+                            attachment.kind.display_label(),
+                            attachment.file_name
+                        ));
+                        continue;
+                    }
+                    if self
+                        .composer_attachments
+                        .iter()
+                        .any(|existing| existing.local_path == attachment.local_path)
+                    {
+                        continue;
+                    }
+                    self.composer_attachments.push(attachment);
+                    added_count = added_count.saturating_add(1);
+                }
+                self.composer_context_menu_open = false;
+                self.composer_context_clipboard_text = None;
+                self.status_message = if added_count == 0 && skipped_labels.is_empty() {
+                    String::from("所选附件已经全部存在于当前输入框附件列表中。")
+                } else if added_count == 0 {
+                    format!(
+                        "未添加任何附件；当前模型暂不支持：{}。",
+                        skipped_labels.join("、")
+                    )
+                } else if skipped_labels.is_empty() {
+                    format!("已向当前输入框添加 {added_count} 个附件。")
+                } else {
+                    format!(
+                        "已向当前输入框添加 {added_count} 个附件；以下附件因模型未声明对应模态而被跳过：{}。",
+                        skipped_labels.join("、")
+                    )
+                };
+                operation::focus(COMPOSER_EDITOR_ID)
+            }
+            Ok(None) => {
+                self.status_message = String::from("已取消添加附件。");
+                Task::none()
+            }
+            Err(error) => {
+                self.status_message = format!("添加附件失败：{error}");
+                Task::none()
+            }
+        }
+    }
+
+    /// Removes one staged composer attachment and keeps undo state available for recovery.
+    /// 移除一条已暂存的提示词附件，并保留可恢复的撤销状态。
+    fn remove_composer_attachment(&mut self, local_path: &str) -> Task<Message> {
+        let Some(index) = self
+            .composer_attachments
+            .iter()
+            .position(|attachment| attachment.local_path == local_path)
+        else {
+            self.status_message = String::from("未找到要移除的附件。");
+            return Task::none();
+        };
+
+        self.push_composer_undo_snapshot();
+        let removed = self.composer_attachments.remove(index);
+        self.status_message = format!(
+            "已移除{}附件 `{}`。",
+            removed.kind.display_label(),
+            removed.file_name
+        );
+        Task::none()
+    }
+
+    /// Validates whether the provided prompt entry still matches the active model attachment capability set.
+    /// 校验给定提示词项当前是否仍满足激活模型的附件能力集合。
+    fn validate_prompt_entry_attachments(
+        &self,
+        prompt_entry: &PendingSessionPromptEntry,
+    ) -> Result<(), String> {
+        if prompt_entry.attachments.is_empty() {
+            return Ok(());
+        }
+        self.validate_staged_attachments(&prompt_entry.attachments)
     }
 
     /// Inserts one visible prompt-panel entry into the internal system queue immediately, while letting actual execution wait for the system lane to become eligible.
@@ -7443,6 +8075,7 @@ impl VulcanWorkbench {
         }
         let prompt_entry = self.build_pending_prompt_entry(
             panel_entry.prompt.clone(),
+            panel_entry.attachments.clone(),
             PendingSessionPromptSource::UserFollowup,
             None,
             Some(panel_entry.preview.clone()),
@@ -7488,7 +8121,7 @@ impl VulcanWorkbench {
         self.status_message = String::from("已将待发送消息恢复到输入框，可继续修改。");
         Task::batch([
             self.persist_workspace_snapshot_task(),
-            self.restore_prompt_into_composer(prompt_entry.prompt),
+            self.restore_prompt_into_composer(prompt_entry.prompt, prompt_entry.attachments),
         ])
     }
 
@@ -7519,8 +8152,16 @@ impl VulcanWorkbench {
         session_title: String,
         prompt_entry: PendingSessionPromptEntry,
     ) -> Task<Message> {
-        if !composer_text_has_submittable_content(&prompt_entry.prompt) {
+        if !composer_input_has_submittable_content(&prompt_entry.prompt, &prompt_entry.attachments)
+        {
             self.status_message = String::from("请输入任务指令后再启动执行。");
+            return Task::none();
+        }
+        if let Err(error) = self.validate_prompt_entry_attachments(&prompt_entry) {
+            if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
+                let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
+            }
+            self.status_message = error;
             return Task::none();
         }
         if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
@@ -7544,13 +8185,21 @@ impl VulcanWorkbench {
                 session_id,
                 SessionMessageKind::User,
                 "用户指令",
-                prompt_entry.prompt.clone(),
+                build_user_prompt_transcript_body(&prompt_entry.prompt, &prompt_entry.attachments),
             );
-            let _ = self
-                .maybe_generate_session_title_from_prompt(session_id, prompt_entry.prompt.as_str());
+            if composer_text_has_submittable_content(&prompt_entry.prompt) {
+                let _ = self.maybe_generate_session_title_from_prompt(
+                    session_id,
+                    prompt_entry.prompt.as_str(),
+                );
+            }
             self.materialize_session_after_first_user_turn(session_id);
         }
-        self.append_user_prompt_to_session_conversation(session_id, prompt_entry.prompt.clone());
+        self.append_user_prompt_to_session_conversation(
+            session_id,
+            prompt_entry.prompt.clone(),
+            prompt_entry.attachments.clone(),
+        );
 
         let request = ExecutionPreparationRequest {
             session_id,
@@ -7646,6 +8295,7 @@ impl VulcanWorkbench {
         } else if let Some(panel_entry) = self.first_ready_pending_prompt_panel_entry(session_id) {
             self.build_pending_prompt_entry(
                 panel_entry.prompt,
+                panel_entry.attachments,
                 PendingSessionPromptSource::UserFollowup,
                 None,
                 Some(panel_entry.preview),
@@ -7793,8 +8443,12 @@ impl VulcanWorkbench {
 
         let current_prompt = self.composer_buffer.text();
         self.composer = current_prompt.clone();
-        if !composer_text_has_submittable_content(&current_prompt) {
+        if !composer_input_has_submittable_content(&current_prompt, &self.composer_attachments) {
             self.status_message = String::from("请输入任务指令后再启动执行。");
+            return Task::none();
+        }
+        if let Err(error) = self.validate_staged_attachments(&self.composer_attachments) {
+            self.status_message = error;
             return Task::none();
         }
 
@@ -7804,7 +8458,10 @@ impl VulcanWorkbench {
         }
 
         if self.session_has_blocking_system_prompt_work(session_id) {
-            let panel_entry = self.build_pending_prompt_panel_entry(current_prompt);
+            let panel_entry = self.build_pending_prompt_panel_entry(
+                current_prompt,
+                self.composer_attachments.clone(),
+            );
             if let Err(error) =
                 self.enqueue_session_pending_prompt_panel_entry(session_id, panel_entry)
             {
@@ -7826,8 +8483,14 @@ impl VulcanWorkbench {
         } else {
             PendingSessionPromptSource::UserFollowup
         };
-        let prompt_entry =
-            self.build_pending_prompt_entry(current_prompt, prompt_source, None, None, None);
+        let prompt_entry = self.build_pending_prompt_entry(
+            current_prompt,
+            self.composer_attachments.clone(),
+            prompt_source,
+            None,
+            None,
+            None,
+        );
         self.clear_composer_input();
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }
@@ -7844,6 +8507,7 @@ impl VulcanWorkbench {
         }
         let prompt_entry = self.build_pending_prompt_entry(
             build_delegate_completion_followup_prompt(state),
+            Vec::new(),
             PendingSessionPromptSource::DelegateCompletion,
             Some(state.task_id),
             Some(build_delegate_completion_followup_preview(state)),
@@ -9651,6 +10315,7 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
         prompt: String,
+        attachments: Vec<ConversationAttachment>,
     ) {
         self.ensure_session_conversation_state_loaded(session_id);
         let protocol_message_id = format!(
@@ -9663,6 +10328,7 @@ impl VulcanWorkbench {
             &mut runtime_state.conversation_state,
             protocol_message_id,
             prompt,
+            attachments,
         );
         runtime_state.updated_at = updated_at;
     }
@@ -9706,10 +10372,6 @@ impl VulcanWorkbench {
     ) {
         self.ensure_session_conversation_state_loaded(session_id);
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        if runtime_state.conversation_state.messages.len() < PROTOCOL_COMPACTION_TRIGGER_COUNT {
-            return;
-        }
-
         compact_conversation_with_summary(
             &mut runtime_state.conversation_state,
             summary_message_id.to_string(),
@@ -9813,6 +10475,110 @@ impl VulcanWorkbench {
         runtime_state.updated_at = current_unix_millis_text();
     }
 
+    /// Synchronizes the visible workbench context bar from the latest execution preparation snapshot.
+    /// 根据最近一次执行准备快照同步可见工作台上下文条。
+    fn sync_context_usage_from_preparation(&mut self, preparation: Option<&ExecutionPreparation>) {
+        let Some(preparation) = preparation else {
+            self.context_usage = 0.0;
+            self.context_usage_detail = String::from("尚未生成预算快照");
+            return;
+        };
+
+        if let Some(context_budget) = preparation.context_budget.as_ref() {
+            self.context_usage = context_budget.usage_percent();
+            self.context_usage_detail = context_budget.summary_note();
+        } else {
+            self.context_usage = 0.0;
+            self.context_usage_detail = String::from("尚未生成预算快照");
+        }
+    }
+
+    /// Resolves one approximate context-budget snapshot from the remembered session runtime identity and visible transcript history.
+    /// 根据已记忆的会话运行时身份与可见转录历史解析一份近似上下文预算快照。
+    fn resolve_session_context_budget_snapshot(
+        &self,
+        session_id: SessionId,
+        runtime_state_snapshot: &SessionRuntimeStateEntry,
+        messages: &[SessionMessageEntry],
+    ) -> Option<ContextBudgetSnapshot> {
+        let (provider_id, model_id, api_family, capabilities) = if let (
+            Some(provider_id),
+            Some(model_id),
+        ) = (
+            runtime_state_snapshot.active_provider_id.as_deref(),
+            runtime_state_snapshot.active_model_id.as_deref(),
+        ) {
+            let definition = provider_config::supported_provider_by_id(provider_id)?;
+            let model =
+                provider_config::effective_model_choices(provider_id, &self.provider_configuration)
+                    .into_iter()
+                    .find(|entry| entry.id == model_id);
+            (
+                provider_id.to_string(),
+                model_id.to_string(),
+                definition.runtime.api_family(),
+                resolve_model_capabilities(definition, model.as_ref()),
+            )
+        } else {
+            let active_choice = self.active_workbench_model_choice()?;
+            let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
+            let model = self.resolve_workbench_model_entry(&active_choice);
+            (
+                active_choice.provider_id.clone(),
+                active_choice.model_id.clone(),
+                definition.runtime.api_family(),
+                resolve_model_capabilities(definition, model.as_ref()),
+            )
+        };
+        let visible_tool_count = self
+            .last_execution_preparation
+            .as_ref()
+            .filter(|preparation| {
+                preparation.session_id == session_id
+                    && preparation.model_blueprint.provider_id == provider_id
+                    && preparation.model_blueprint.model_id == model_id
+            })
+            .map(|preparation| preparation.tool_descriptors.len())
+            .unwrap_or(0usize);
+
+        Some(build_session_context_budget_snapshot(
+            &provider_id,
+            &model_id,
+            api_family,
+            &capabilities,
+            self.workbench_reasoning_effort,
+            messages,
+            visible_tool_count,
+            runtime_state_snapshot.last_provider_usage.as_ref(),
+        ))
+    }
+
+    /// Synchronizes the visible workbench context bar from the latest session-scoped budget snapshot after compaction or session switching.
+    /// 在压缩或会话切换后，根据最新会话级预算快照同步可见工作台上下文条。
+    fn sync_context_usage_from_session_budget(&mut self, session_id: SessionId) {
+        let selected_session_id = self.selected_session().map(|session| session.id);
+        if selected_session_id != Some(session_id) {
+            return;
+        }
+
+        let runtime_state_snapshot = self
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let messages = self.session_context_history(session_id);
+        let context_budget = self.resolve_session_context_budget_snapshot(
+            session_id,
+            &runtime_state_snapshot,
+            &messages,
+        );
+
+        if let Some(context_budget) = context_budget {
+            self.context_usage = context_budget.usage_percent();
+            self.context_usage_detail = context_budget.summary_note();
+        }
+    }
+
     /// Finalizes one streamed execution report, updates visible session state, and appends hidden derived nodes.
     /// 完成一份流式执行报告，更新可见会话状态并追加隐藏派生节点。
     fn apply_execution_run_report(&mut self, report: ExecutionRunReport) -> Task<Message> {
@@ -9821,7 +10587,7 @@ impl VulcanWorkbench {
         self.last_mcp_discovery_errors = report.mcp_discovery_errors.clone();
 
         if let Some(preparation) = report.preparation.clone() {
-            self.context_usage = (self.context_usage + 8.0).min(100.0);
+            self.sync_context_usage_from_preparation(Some(&preparation));
             self.replace_session_last_api_request_preview(
                 session_id,
                 preparation.provider_request_preview_markdown.clone(),
@@ -9859,6 +10625,10 @@ impl VulcanWorkbench {
             let preserved_records = runtime_state.conversation_state.records.clone();
             runtime_state.conversation_state = next_conversation_state;
             runtime_state.conversation_state.records = preserved_records;
+            runtime_state.last_provider_usage =
+                crate::provider_usage::latest_provider_usage_from_conversation_state(
+                    &runtime_state.conversation_state,
+                );
             runtime_state.updated_at = current_unix_millis_text();
             self.sync_session_messages_from_conversation_state(session_id);
         }
@@ -9970,6 +10740,17 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
+        let Some(context_budget) = self.resolve_session_context_budget_snapshot(
+            session_id,
+            &runtime_state_snapshot,
+            &messages,
+        ) else {
+            return;
+        };
+        if !context_budget.should_compact() {
+            self.sync_context_usage_from_session_budget(session_id);
+            return;
+        }
         let Some(compaction_result) =
             self.session_skill_chain
                 .run_compaction_skill(CompactionSkillInput {
@@ -9978,6 +10759,7 @@ impl VulcanWorkbench {
                     runtime_state: &runtime_state_snapshot,
                 })
         else {
+            self.sync_context_usage_from_session_budget(session_id);
             return;
         };
         let summary_message_id =
@@ -10006,6 +10788,15 @@ impl VulcanWorkbench {
                 &runtime_state_updated_at,
             );
         }
+        self.push_activity(
+            ActivityLevel::Info,
+            "上下文预算触发压缩",
+            format!(
+                "会话 #{session_id} 已根据预算快照执行压缩：{}。",
+                context_budget.summary_note()
+            ),
+        );
+        self.sync_context_usage_from_session_budget(session_id);
     }
 
     /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
@@ -11996,6 +12787,7 @@ mod tests {
             id: format!("entry-{prompt}"),
             prompt: prompt.to_string(),
             preview: prompt.to_string(),
+            attachments: Vec::new(),
             source,
             task_id: (source == PendingSessionPromptSource::DelegateCompletion)
                 .then(|| format!("task-{prompt}")),

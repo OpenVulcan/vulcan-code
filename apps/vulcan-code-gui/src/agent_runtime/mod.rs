@@ -7,6 +7,7 @@ pub mod execution_models;
 pub mod execution_preparation;
 pub mod executor;
 pub mod provider;
+pub mod provider_attachment;
 pub mod provider_prompt_loader;
 pub mod provider_protocol_anthropic_client;
 pub mod provider_protocol_anthropic_decoders;

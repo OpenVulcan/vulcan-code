@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::watch;
-use vulcan_mcp_runtime::{McpOAuthSession, McpTransport, McpTransportEvent};
+use tokio::sync::{RwLock as AsyncRwLock, watch};
+use vulcan_mcp_runtime::{
+    McpAuthChallenge, McpAuthStatus, McpOAuthSession, McpTransport, McpTransportEvent,
+};
 
 /// Stable MCP tool schema exposed to the host runtime and execution planner.
 /// 暴露给宿主运行时与执行规划器的稳定 MCP 工具 Schema。
@@ -239,6 +241,62 @@ impl McpRuntimeAccess {
         if let Some(runtime) = self.live_runtime.as_ref() {
             runtime.shutdown();
         }
+    }
+
+    /// Returns the current OAuth status label for one configured MCP server when live runtime state is available.
+    /// 当实时运行时状态可用时，返回单个已配置 MCP 服务器的当前 OAuth 状态标签。
+    pub(crate) async fn server_oauth_status_label(
+        &self,
+        server_id: &str,
+    ) -> Result<String, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Ok(String::from("运行时未就绪"));
+        };
+        runtime.server_auth_status_label(server_id).await
+    }
+
+    /// Starts one host-driven OAuth flow for the target MCP server and returns the browser challenge payload.
+    /// 为目标 MCP 服务器启动一条宿主驱动的 OAuth 流程，并返回浏览器挑战载荷。
+    pub(crate) async fn start_server_oauth(
+        &self,
+        server_id: &str,
+        client_name: &str,
+    ) -> Result<McpAuthChallenge, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from(
+                "MCP 运行时尚未就绪，暂时无法启动 OAuth 授权。",
+            ));
+        };
+        runtime.start_server_auth(server_id, client_name).await
+    }
+
+    /// Finishes one host-driven OAuth flow for the target MCP server with the returned authorization code and state.
+    /// 使用回传的授权码与 state 为目标 MCP 服务器完成一条宿主驱动的 OAuth 流程。
+    pub(crate) async fn finish_server_oauth(
+        &self,
+        server_id: &str,
+        authorization_code: &str,
+        oauth_state: &str,
+    ) -> Result<McpAuthStatus, String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from(
+                "MCP 运行时尚未就绪，暂时无法完成 OAuth 授权。",
+            ));
+        };
+        runtime
+            .finish_server_auth(server_id, authorization_code, oauth_state)
+            .await
+    }
+
+    /// Removes stored OAuth credentials for the target MCP server when live runtime state is available.
+    /// 当实时运行时状态可用时，为目标 MCP 服务器移除已存储的 OAuth 凭据。
+    pub(crate) async fn remove_server_oauth(&self, server_id: &str) -> Result<(), String> {
+        let Some(runtime) = self.live_runtime.as_ref() else {
+            return Err(String::from(
+                "MCP 运行时尚未就绪，暂时无法清理 OAuth 凭据。",
+            ));
+        };
+        runtime.remove_server_auth(server_id).await
     }
 }
 
@@ -807,6 +865,9 @@ struct McpRuntimeInner {
     /// Mutable transport map keyed by server identifier.
     /// 以服务器标识为键保存的可变传输映射。
     transports: RwLock<BTreeMap<String, Arc<dyn McpTransport>>>,
+    /// Mutable OAuth-session cache keyed by server identifier for host-driven remote authorization flows.
+    /// 以服务器标识为键保存的可变 OAuth 会话缓存，供宿主驱动的远端授权流程复用。
+    auth_sessions: AsyncRwLock<BTreeMap<String, Arc<McpOAuthSession>>>,
     /// Mutable snapshot published to the host runtime.
     /// 发布给宿主运行时的可变快照。
     snapshot: RwLock<McpRuntimeSnapshot>,
@@ -841,6 +902,43 @@ impl McpRuntimeHandle {
             .expect("mcp runtime transport map poisoned")
             .get(server_id)
             .cloned()
+    }
+
+    /// Resolves one configured server entry by identifier from the immutable registry snapshot.
+    /// 从不可变注册表快照中根据标识解析单个已配置服务器条目。
+    fn server_config(&self, server_id: &str) -> Option<McpServerConfig> {
+        self.inner.registry.server_by_id(server_id).cloned()
+    }
+
+    /// Resolves or lazily creates one reusable OAuth session for the target configured remote MCP server.
+    /// 为目标已配置远端 MCP 服务器解析或延迟创建一个可复用 OAuth 会话。
+    async fn auth_session_for_server(
+        &self,
+        server_id: &str,
+    ) -> Result<Option<Arc<McpOAuthSession>>, String> {
+        if let Some(session) = self
+            .inner
+            .auth_sessions
+            .read()
+            .await
+            .get(server_id)
+            .cloned()
+        {
+            return Ok(Some(session));
+        }
+
+        let Some(server) = self.server_config(server_id) else {
+            return Err(format!("未找到 MCP 服务器 `{server_id}`。"));
+        };
+        let Some(session) = build_server_auth_session(&server).await? else {
+            return Ok(None);
+        };
+        self.inner
+            .auth_sessions
+            .write()
+            .await
+            .insert(server_id.to_string(), session.clone());
+        Ok(Some(session))
     }
 
     /// Returns currently available MCP tool views filtered by one allowlist.
@@ -898,6 +996,58 @@ impl McpRuntimeHandle {
             })
     }
 
+    /// Returns the current OAuth status label for one configured MCP server.
+    /// 返回单个已配置 MCP 服务器的当前 OAuth 状态标签。
+    async fn server_auth_status_label(&self, server_id: &str) -> Result<String, String> {
+        let Some(session) = self.auth_session_for_server(server_id).await? else {
+            return Ok(String::from("未配置 OAuth"));
+        };
+        Ok(session.auth_status().await.label().to_string())
+    }
+
+    /// Starts one host-driven OAuth authorization flow for the target MCP server.
+    /// 为目标 MCP 服务器启动一条宿主驱动的 OAuth 授权流程。
+    async fn start_server_auth(
+        &self,
+        server_id: &str,
+        client_name: &str,
+    ) -> Result<McpAuthChallenge, String> {
+        let Some(session) = self.auth_session_for_server(server_id).await? else {
+            return Err(format!("MCP 服务器 `{server_id}` 未配置 OAuth。"));
+        };
+        session
+            .start_authorization(client_name)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Finishes one host-driven OAuth authorization flow for the target MCP server.
+    /// 为目标 MCP 服务器完成一条宿主驱动的 OAuth 授权流程。
+    async fn finish_server_auth(
+        &self,
+        server_id: &str,
+        authorization_code: &str,
+        oauth_state: &str,
+    ) -> Result<McpAuthStatus, String> {
+        let Some(session) = self.auth_session_for_server(server_id).await? else {
+            return Err(format!("MCP 服务器 `{server_id}` 未配置 OAuth。"));
+        };
+        session
+            .finish_authorization(authorization_code, oauth_state)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Removes every stored OAuth credential retained for the target MCP server.
+    /// 移除目标 MCP 服务器当前保留的全部 OAuth 凭据。
+    async fn remove_server_auth(&self, server_id: &str) -> Result<(), String> {
+        let Some(session) = self.auth_session_for_server(server_id).await? else {
+            return Err(format!("MCP 服务器 `{server_id}` 未配置 OAuth。"));
+        };
+        session.remove_authorization().await;
+        Ok(())
+    }
+
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
     /// 请求所有后台 MCP 运行时任务停止并拆除各自传输。
     fn shutdown(&self) {
@@ -922,6 +1072,7 @@ async fn bootstrap_mcp_runtime(
     let inner = Arc::new(McpRuntimeInner {
         registry: registry.clone(),
         transports: RwLock::new(BTreeMap::new()),
+        auth_sessions: AsyncRwLock::new(BTreeMap::new()),
         snapshot: RwLock::new(snapshot),
         shutdown_tx,
     });
@@ -978,6 +1129,7 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
                 return;
             }
         };
+        update_server_auth_session_cache(&inner, &server.id, auth_session.clone()).await;
 
         loop {
             if *shutdown_rx.borrow() {
@@ -1072,6 +1224,24 @@ fn spawn_server_runtime_task(inner: Arc<McpRuntimeInner>, server: McpServerConfi
             }
         }
     });
+}
+
+/// Updates the shared OAuth-session cache for one server after startup or teardown decisions have been made.
+/// 在完成启动或拆除决策后，更新单个服务器对应的共享 OAuth 会话缓存。
+async fn update_server_auth_session_cache(
+    inner: &Arc<McpRuntimeInner>,
+    server_id: &str,
+    auth_session: Option<Arc<McpOAuthSession>>,
+) {
+    let mut sessions = inner.auth_sessions.write().await;
+    match auth_session {
+        Some(session) => {
+            sessions.insert(server_id.to_string(), session);
+        }
+        None => {
+            sessions.remove(server_id);
+        }
+    }
 }
 
 /// Waits for a short reconnect backoff unless the runtime has already been asked to shut down.

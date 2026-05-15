@@ -9,6 +9,7 @@ use crate::agent_runtime::provider_transport_azure_http::execute_azure_openai_ht
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_stream_runtime::PreparedProviderTransportAdapterInputs;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::provider_config::ModelInterleavedCapability;
 use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use vulcan_core::provider::{
@@ -44,6 +45,9 @@ pub(crate) struct AzureOpenAiCoreStreamingAdapter {
     /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
     /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
     pub(crate) live_sender: ProviderLiveDeltaSender,
+    /// Optional model-scoped interleaved reasoning capability reused during request replay.
+    /// 在请求回放阶段复用的可选模型级交错推理能力描述。
+    pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
 }
 
 impl AzureOpenAiCoreStreamingAdapter {
@@ -53,6 +57,7 @@ impl AzureOpenAiCoreStreamingAdapter {
         adapter_inputs: PreparedProviderTransportAdapterInputs,
         api_key: String,
         base_url: Option<String>,
+        interleaved_reasoning: Option<ModelInterleavedCapability>,
         live_sender: ProviderLiveDeltaSender,
     ) -> Self {
         let PreparedProviderTransportAdapterInputs {
@@ -70,6 +75,7 @@ impl AzureOpenAiCoreStreamingAdapter {
             request_headers,
             provider_tool_definitions,
             live_sender,
+            interleaved_reasoning,
         }
     }
 }
@@ -107,6 +113,7 @@ impl VulcanProviderAdapter for AzureOpenAiCoreStreamingAdapter {
             &self.provider_tool_definitions,
             &self.request_headers,
             &self.live_sender,
+            self.interleaved_reasoning.clone(),
         )
     }
 

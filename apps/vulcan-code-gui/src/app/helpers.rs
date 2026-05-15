@@ -507,6 +507,103 @@ pub(super) fn pick_task_project_folder(
     Ok(dialog.pick_folder())
 }
 
+/// Opens one native attachment-picker dialog and converts the selected files into structured composer attachments.
+/// 打开一个原生附件选择对话框，并将所选文件转换为结构化提示词附件。
+pub(super) fn pick_composer_attachments(
+    initial_directory: &str,
+) -> Result<Option<Vec<ConversationAttachment>>, String> {
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("选择要附加到当前提示词的附件")
+        .add_filter(
+            "Supported Attachments",
+            &[
+                "png", "jpg", "jpeg", "webp", "gif", "bmp", "mp3", "wav", "m4a", "aac", "flac",
+                "ogg", "mp4", "mov", "mkv", "webm", "avi", "pdf",
+            ],
+        )
+        .add_filter("Image Files", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
+        .add_filter("Audio Files", &["mp3", "wav", "m4a", "aac", "flac", "ogg"])
+        .add_filter("Video Files", &["mp4", "mov", "mkv", "webm", "avi"])
+        .add_filter("PDF Files", &["pdf"]);
+    let trimmed_directory = initial_directory.trim();
+
+    if !trimmed_directory.is_empty() {
+        let initial_path = Path::new(trimmed_directory);
+        if initial_path.exists() {
+            let resolved_directory = if initial_path.is_dir() {
+                initial_path
+            } else {
+                initial_path.parent().unwrap_or(initial_path)
+            };
+            dialog = dialog.set_directory(resolved_directory);
+        }
+    }
+
+    let Some(selected_files) = dialog.pick_files() else {
+        return Ok(None);
+    };
+
+    let mut attachments = Vec::with_capacity(selected_files.len());
+    for selected_file in selected_files {
+        if !selected_file.is_file() {
+            return Err(format!(
+                "所选路径 `{}` 不是有效附件文件。",
+                selected_file.display()
+            ));
+        }
+
+        let Some((kind, mime_type)) = composer_attachment_descriptor(&selected_file) else {
+            return Err(format!(
+                "文件 `{}` 不是受支持的附件格式。",
+                selected_file.display()
+            ));
+        };
+        let canonical_path = crate::workspace_path::canonicalize_workspace_path(&selected_file);
+        let file_name = canonical_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| canonical_path.display().to_string());
+
+        attachments.push(ConversationAttachment {
+            kind,
+            file_name,
+            local_path: canonical_path.to_string_lossy().into_owned(),
+            mime_type: mime_type.to_string(),
+        });
+    }
+
+    Ok(Some(attachments))
+}
+
+/// Resolves the stable attachment kind and MIME type for one local composer attachment path when the extension is supported.
+/// 当扩展名受支持时，为本地提示词附件路径解析稳定附件类型与 MIME 类型。
+fn composer_attachment_descriptor(
+    path: &Path,
+) -> Option<(ConversationAttachmentKind, &'static str)> {
+    let extension = path.extension()?.to_str()?.trim().to_ascii_lowercase();
+
+    match extension.as_str() {
+        "png" => Some((ConversationAttachmentKind::Image, "image/png")),
+        "jpg" | "jpeg" => Some((ConversationAttachmentKind::Image, "image/jpeg")),
+        "webp" => Some((ConversationAttachmentKind::Image, "image/webp")),
+        "gif" => Some((ConversationAttachmentKind::Image, "image/gif")),
+        "bmp" => Some((ConversationAttachmentKind::Image, "image/bmp")),
+        "mp3" => Some((ConversationAttachmentKind::Audio, "audio/mpeg")),
+        "wav" => Some((ConversationAttachmentKind::Audio, "audio/wav")),
+        "m4a" => Some((ConversationAttachmentKind::Audio, "audio/mp4")),
+        "aac" => Some((ConversationAttachmentKind::Audio, "audio/aac")),
+        "flac" => Some((ConversationAttachmentKind::Audio, "audio/flac")),
+        "ogg" => Some((ConversationAttachmentKind::Audio, "audio/ogg")),
+        "mp4" => Some((ConversationAttachmentKind::Video, "video/mp4")),
+        "mov" => Some((ConversationAttachmentKind::Video, "video/quicktime")),
+        "mkv" => Some((ConversationAttachmentKind::Video, "video/x-matroska")),
+        "webm" => Some((ConversationAttachmentKind::Video, "video/webm")),
+        "avi" => Some((ConversationAttachmentKind::Video, "video/x-msvideo")),
+        "pdf" => Some((ConversationAttachmentKind::Pdf, "application/pdf")),
+        _ => None,
+    }
+}
+
 /// Normalizes one project path to a canonical form when the platform can resolve it.
 /// 当平台能够解析时，将某个项目路径规范化为标准形式。
 pub(super) fn normalize_task_project_path(path: &Path) -> std::path::PathBuf {
@@ -602,6 +699,23 @@ pub(super) fn join_mcp_server_headers(headers: &BTreeMap<String, String>) -> Str
         .join("; ")
 }
 
+/// Joins MCP OAuth scopes into one compact editable text field.
+/// 将 MCP OAuth scopes 拼接为一段紧凑的可编辑文本字段。
+pub(super) fn join_mcp_server_oauth_scopes(scopes: &[String]) -> String {
+    scopes.join("; ")
+}
+
+/// Parses one compact MCP OAuth scope field into its vector representation.
+/// 将一段紧凑 MCP OAuth scope 文本解析成向量表示。
+pub(super) fn parse_mcp_server_oauth_scopes(value: &str) -> Vec<String> {
+    value
+        .split([';', ',', ' '])
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Parses one compact MCP server HTTP headers field into its map representation.
 /// 将一段紧凑 MCP 服务器 HTTP 请求头文本解析成映射表示。
 pub(super) fn parse_mcp_server_headers(value: &str) -> Result<BTreeMap<String, String>, String> {
@@ -633,6 +747,28 @@ pub(super) fn parse_key_value_pairs(
     }
 
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    //! MCP OAuth helper regression tests covering scope parsing.
+    //! 覆盖 scope 解析的 MCP OAuth 辅助回归测试。
+
+    use super::parse_mcp_server_oauth_scopes;
+
+    /// Parses mixed-delimiter OAuth scopes into a stable ordered scope list.
+    /// 将混合分隔符的 OAuth scopes 解析为稳定有序的 scope 列表。
+    #[test]
+    fn parse_mcp_server_oauth_scopes_splits_mixed_delimiters() {
+        assert_eq!(
+            parse_mcp_server_oauth_scopes("read, write; offline_access"),
+            vec![
+                String::from("read"),
+                String::from("write"),
+                String::from("offline_access")
+            ]
+        );
+    }
 }
 
 /// Returns a compact human-readable label for one persisted agent kind.

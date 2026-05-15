@@ -2,6 +2,7 @@
 //! 供执行器、运行时事件与模块导出复用的共享执行模型类型。
 
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use crate::provider_config::ReasoningEffortLevel;
@@ -97,6 +98,9 @@ pub struct ExecutionPreparation {
     /// Structured provider-request snapshot JSON captured by `vulcan-core` right before dispatch.
     /// 由 `vulcan-core` 在分发前捕获的结构化 Provider 请求快照 JSON。
     pub provider_request_snapshot_json: Option<Value>,
+    /// Optional context-budget snapshot captured from the final provider-facing request shape.
+    /// 从最终面向 Provider 的请求形态捕获到的可选上下文预算快照。
+    pub context_budget: Option<ContextBudgetSnapshot>,
 }
 
 impl ExecutionPreparation {
@@ -129,6 +133,10 @@ impl ExecutionPreparation {
             format!("接口：{}", self.model_blueprint.endpoint_summary()),
             format!("凭据：{}", self.model_blueprint.credential_source),
             format!(
+                "生命周期：{}",
+                self.model_blueprint.capabilities.lifecycle_summary()
+            ),
+            format!(
                 "模型发现：{}",
                 if self.model_blueprint.supports_remote_model_refresh {
                     "支持远端刷新"
@@ -146,7 +154,37 @@ impl ExecutionPreparation {
             self.model_blueprint.reasoning.summary_label(),
             format!("工作区：{}", self.workspace_path),
             format!("上下文：{} 条历史消息", self.context_history_count),
+            format!(
+                "能力：工具调用 {} · 温度覆盖 {}",
+                if self.model_blueprint.supports_tool_call() {
+                    "支持"
+                } else {
+                    "不支持"
+                },
+                if self.model_blueprint.supports_temperature() {
+                    "支持"
+                } else {
+                    "不支持"
+                }
+            ),
+            format!(
+                "模态：{} · attachment 声明 {}",
+                if self.model_blueprint.capabilities.is_text_only() {
+                    String::from("text")
+                } else {
+                    self.model_blueprint.capabilities.input_modalities.join("/")
+                },
+                if self.model_blueprint.capabilities.supports_attachment {
+                    "已声明"
+                } else {
+                    "未声明"
+                }
+            ),
         ];
+
+        if let Some(context_budget) = self.context_budget.as_ref() {
+            rows.push(format!("预算：{}", context_budget.summary_note()));
+        }
 
         if !self.skill_names.is_empty() {
             rows.push(format!("技能：{}", self.skill_names.join("、")));

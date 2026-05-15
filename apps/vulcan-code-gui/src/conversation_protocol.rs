@@ -4,10 +4,7 @@
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// Minimum active-history size that triggers one protocol compaction rewrite.
-/// 触发一次协议历史压缩改写所需的最小活动历史条数。
-pub const PROTOCOL_COMPACTION_TRIGGER_COUNT: usize = 10;
+use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 
 /// Number of latest canonical messages retained verbatim after one compaction rewrite.
 /// 一次压缩改写后按原样保留的最新规范消息条数。
@@ -107,6 +104,10 @@ pub enum SessionConversationPayload {
         /// Visible user text content.
         /// 用户可见文本内容。
         text: String,
+        /// Structured attachments that should stay attached to the user-authored text.
+        /// 应与用户文本保持绑定的结构化附件集合。
+        #[serde(default)]
+        attachments: Vec<ConversationAttachment>,
     },
     /// Assistant turn that may contain visible text, structured reasoning, and tool calls.
     /// 可能同时包含可见文本、结构化思考与工具调用的助手回合。
@@ -123,6 +124,10 @@ pub enum SessionConversationPayload {
         /// Optional provider-native assistant state preserved for future provider-specific history replays.
         /// 为未来 Provider 专属历史回放保留的可选 Provider 原生助手状态。
         provider_message_state: Option<Value>,
+        /// Optional provider usage snapshot retained for host-side budget calibration.
+        /// 为宿主侧预算校准保留的可选 Provider 用量快照。
+        #[serde(default)]
+        usage: Option<ProviderUsageSnapshot>,
         /// Structured tool-call list emitted by the assistant turn.
         /// 由该助手回合发出的结构化工具调用列表。
         tool_calls: Vec<SessionConversationToolCall>,
@@ -166,10 +171,14 @@ pub fn append_user_text_message(
     state: &mut SessionConversationState,
     message_id: impl Into<String>,
     text: impl Into<String>,
+    attachments: Vec<ConversationAttachment>,
 ) {
     state.messages.push(SessionConversationMessage {
         id: message_id.into(),
-        payload: SessionConversationPayload::UserText { text: text.into() },
+        payload: SessionConversationPayload::UserText {
+            text: text.into(),
+            attachments,
+        },
     });
 }
 
@@ -187,6 +196,7 @@ pub fn append_assistant_text_message(
             reasoning: String::new(),
             provider_message_id: None,
             provider_message_state: None,
+            usage: None,
             tool_calls: Vec::new(),
         },
     });
@@ -234,6 +244,7 @@ pub fn compact_conversation_with_summary(
             reasoning: String::new(),
             provider_message_id: None,
             provider_message_state: None,
+            usage: None,
             tool_calls: Vec::new(),
         },
     });
@@ -370,6 +381,7 @@ fn session_message_to_protocol_message(
                 id: message.id.clone(),
                 payload: SessionConversationPayload::UserText {
                     text: message.body.clone(),
+                    attachments: Vec::new(),
                 },
             })
         }
@@ -383,6 +395,7 @@ fn session_message_to_protocol_message(
                     reasoning: String::new(),
                     provider_message_id: None,
                     provider_message_state: None,
+                    usage: None,
                     tool_calls: Vec::new(),
                 },
             })
@@ -459,6 +472,7 @@ mod tests {
                 provider_message_id: Some(String::from("resp-1")),
                 provider_message_state: None,
                 tool_calls: Vec::new(),
+                usage: None,
             },
         }];
 
@@ -476,6 +490,7 @@ mod tests {
             provider_message_id,
             provider_message_state: _,
             tool_calls,
+            usage: _,
         } = &message.payload
         else {
             panic!("expected one assistant history item");

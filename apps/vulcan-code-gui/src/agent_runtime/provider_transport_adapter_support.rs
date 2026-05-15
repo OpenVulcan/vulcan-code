@@ -9,6 +9,7 @@ use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender
 use crate::agent_runtime::provider_transport_turn_request::{
     OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
 };
+use crate::provider_config::ModelInterleavedCapability;
 use reqwest::header::HeaderMap;
 use std::fmt::Display;
 use vulcan_core::types::CoreError as VulcanCoreError;
@@ -70,6 +71,7 @@ pub(crate) fn build_standard_streaming_request(
     provider_tool_definitions: &[ProviderToolDefinition],
     request_headers: &HeaderMap,
     live_sender: &ProviderLiveDeltaSender,
+    interleaved_reasoning: Option<ModelInterleavedCapability>,
 ) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
     build_host_controlled_turn_request(
         provider_id,
@@ -81,6 +83,7 @@ pub(crate) fn build_standard_streaming_request(
         request_headers,
         live_sender,
         config.additional_params.clone(),
+        interleaved_reasoning,
     )
 }
 
@@ -111,5 +114,6 @@ pub(crate) fn build_openai_responses_streaming_request(
         request_headers,
         live_sender,
         effective_additional_params,
+        None,
     )
 }

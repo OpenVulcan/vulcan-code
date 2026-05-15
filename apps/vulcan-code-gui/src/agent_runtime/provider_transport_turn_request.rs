@@ -5,6 +5,7 @@ use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinit
 use crate::agent_runtime::provider_request_turn_snapshot::build_openai_compatible_turn_request_snapshot;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::provider_config::ModelInterleavedCapability;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use vulcan_core::types::{
@@ -29,6 +30,10 @@ pub(crate) struct OpenAiCompatibleCoreTurnRequest {
     /// 为最终传输适配器保留的规范 core 形状最后一条出站提示消息。
     #[serde(skip_serializing)]
     pub(crate) current_prompt: CoreConversationMessage,
+    /// Optional model-scoped interleaved reasoning capability reused by OpenAI-compatible replay code.
+    /// 供 OpenAI 兼容回放逻辑复用的可选模型级交错推理能力描述。
+    #[serde(skip_serializing)]
+    pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
 }
 
 /// Builds one exact host-controlled turn request from the canonical controller snapshot and forwards the structured snapshot immediately.
@@ -43,6 +48,7 @@ pub(crate) fn build_host_controlled_turn_request(
     request_headers: &HeaderMap,
     live_sender: &ProviderLiveDeltaSender,
     additional_params: Option<Value>,
+    interleaved_reasoning: Option<ModelInterleavedCapability>,
 ) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
     let Some((current_prompt_message, current_history_messages)) = snapshot.messages.split_last()
     else {
@@ -75,5 +81,6 @@ pub(crate) fn build_host_controlled_turn_request(
         snapshot: request_snapshot,
         current_history,
         current_prompt,
+        interleaved_reasoning,
     })
 }

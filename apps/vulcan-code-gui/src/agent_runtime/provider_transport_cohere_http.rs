@@ -30,6 +30,7 @@ use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Default Cohere REST base URL used by the host-owned direct transport.
@@ -131,7 +132,7 @@ where
     let mut tool_plan_text = String::new();
     let mut pending_tool_call = None::<PendingCohereToolCall>;
     let mut tool_calls = Vec::<CoreConversationToolCall>::new();
-    let mut _final_usage = None::<CohereUsage>;
+    let mut final_usage = None::<CoreProviderUsageSnapshot>;
 
     while let Some(event_result) = events.next().await {
         let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
@@ -236,7 +237,7 @@ where
                     response_id = id.filter(|value| !value.trim().is_empty());
                 }
                 if let Some(CohereMessageEndDeltaEnvelope { usage, .. }) = delta {
-                    _final_usage = usage;
+                    final_usage = usage.and_then(cohere_usage_to_snapshot);
                 }
                 break;
             }
@@ -277,7 +278,47 @@ where
         model_id,
         response_id,
         &assistant_content,
+        final_usage,
     ))
+}
+
+/// Converts one raw Cohere usage payload into the shared normalized usage snapshot.
+/// 将一份原始 Cohere 用量载荷转换为共享规范化用量快照。
+fn cohere_usage_to_snapshot(usage: CohereUsage) -> Option<CoreProviderUsageSnapshot> {
+    let input_tokens = usage
+        .tokens
+        .as_ref()
+        .and_then(|tokens| tokens.input_tokens)
+        .or_else(|| {
+            usage
+                .billed_units
+                .as_ref()
+                .and_then(|tokens| tokens.input_tokens)
+        })
+        .map(|value| value.max(0.0) as usize);
+    let output_tokens = usage
+        .tokens
+        .as_ref()
+        .and_then(|tokens| tokens.output_tokens)
+        .or_else(|| {
+            usage
+                .billed_units
+                .as_ref()
+                .and_then(|tokens| tokens.output_tokens)
+        })
+        .map(|value| value.max(0.0) as usize);
+    let snapshot = CoreProviderUsageSnapshot {
+        input_tokens,
+        output_tokens,
+        reasoning_tokens: None,
+        total_tokens: match (input_tokens, output_tokens) {
+            (Some(input_tokens), Some(output_tokens)) => {
+                Some(input_tokens.saturating_add(output_tokens))
+            }
+            _ => None,
+        },
+    };
+    snapshot.has_any_tokens().then_some(snapshot)
 }
 
 /// Builds one direct Cohere HTTP client with merged bearer authorization and caller-supplied request headers.
@@ -309,6 +350,7 @@ fn build_cohere_request_payload(
         snapshot,
         current_history,
         current_prompt,
+        ..
     } = request;
 
     let mut payload = match snapshot.additional_params {
@@ -381,9 +423,21 @@ fn core_message_to_cohere_message(
     message: &CoreConversationMessage,
 ) -> Result<CohereChatMessage, VulcanCoreError> {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => Ok(CohereChatMessage::User {
-            content: vec![CohereUserContent::Text { text: text.clone() }],
-        }),
+        CoreConversationPayload::UserText { text, attachments } => {
+            if let Some(attachment) = attachments.first() {
+                return Err(VulcanCoreError::InvalidState {
+                    message: format!(
+                        "Cohere 当前直连传输尚未支持{}附件输入（`{}`），请切换到支持该模态的模型或移除附件后重试。",
+                        attachment.kind.display_label(),
+                        attachment.file_name
+                    ),
+                });
+            }
+
+            Ok(CohereChatMessage::User {
+                content: vec![CohereUserContent::Text { text: text.clone() }],
+            })
+        }
         CoreConversationPayload::Assistant {
             text, tool_calls, ..
         } => {
@@ -620,13 +674,38 @@ mod tests {
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
+        ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
         ConversationToolCall as CoreConversationToolCall,
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
+
+    /// Builds one temporary attachment used by Cohere transport tests.
+    /// 构建一条供 Cohere 传输测试使用的临时附件。
+    fn build_test_attachment(
+        extension: &str,
+        kind: ConversationAttachmentKind,
+        mime_type: &str,
+        file_name: &str,
+    ) -> ConversationAttachment {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let file_path = std::env::temp_dir().join(format!("vulcan-cohere-{unique_id}.{extension}"));
+        std::fs::write(&file_path, [0_u8, 1, 2, 3]).expect("temporary attachment should write");
+
+        ConversationAttachment {
+            kind,
+            file_name: String::from(file_name),
+            local_path: file_path.to_string_lossy().into_owned(),
+            mime_type: String::from(mime_type),
+        }
+    }
 
     /// Verifies the direct Cohere request payload strips reasoning replay while preserving assistant tool calls and tool-result message shapes.
     /// 验证直连 Cohere 请求载荷会剥离思考回放，同时保留助手工具调用与工具结果消息形状。
@@ -664,6 +743,7 @@ mod tests {
                         tool_name: String::from("read_file"),
                         arguments: json!({ "path": "src/main.rs" }),
                     }],
+                    usage: None,
                 },
             }],
             current_prompt: CoreConversationMessage {
@@ -674,6 +754,7 @@ mod tests {
                     text: String::from("tool result body"),
                 },
             },
+            interleaved_reasoning: None,
         };
 
         let payload = build_cohere_request_payload(
@@ -714,5 +795,50 @@ mod tests {
         assert_eq!(payload["stream"], true);
         assert_eq!(payload["thinking"]["token_budget"], 8192);
         assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
+    }
+
+    /// Verifies Cohere request building rejects staged non-text attachments with one explicit modality-specific error.
+    /// 验证 Cohere 请求构建会用一条显式模态错误拒绝已暂存的非文本附件。
+    #[test]
+    fn request_payload_rejects_non_text_attachments() {
+        let attachment = build_test_attachment(
+            "mp3",
+            ConversationAttachmentKind::Audio,
+            "audio/mpeg",
+            "sample.mp3",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("cohere"),
+                model_id: String::from("command-a-reasoning-08-2025"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("请转写音频"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("请转写音频"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let error = build_cohere_request_payload("command-a-reasoning-08-2025", request, &[])
+            .expect_err("cohere should reject non-text attachments");
+        let rendered = format!("{error}");
+
+        assert!(rendered.contains("音频附件输入"));
+        assert!(rendered.contains("sample.mp3"));
+
+        let _ = std::fs::remove_file(&attachment.local_path);
     }
 }

@@ -4,9 +4,13 @@
 use crate::agent_runtime::provider_reasoning::{
     ProviderRuntimeReasoningResolution, resolve_provider_runtime_reasoning,
 };
+use crate::provider_capabilities::{
+    ResolvedModelCapabilities, resolve_credential_source_summary, resolve_model_capabilities,
+    resolve_provider_api_key,
+};
 use crate::provider_config::{
-    self, PersistedProviderOptions, ProviderApiFamily, ProviderConfigurationFile, ProviderFieldKey,
-    ProviderRuntimeKind, ReasoningEffortLevel,
+    self, ModelInterleavedCapability, PersistedProviderOptions, ProviderApiFamily,
+    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -54,6 +58,12 @@ pub struct ProviderRuntimeBlueprint {
     /// Shared reasoning-resolution result derived from model overrides, provider overrides, and runtime defaults.
     /// 由模型覆盖、供应商覆盖与运行时默认值共同解析出的共享推理控制结果。
     pub reasoning: ProviderRuntimeReasoningResolution,
+    /// Resolved host-consumed capability snapshot derived from the provider catalog and selected model entry.
+    /// 从供应商目录与选中模型条目派生出的宿主消费能力快照。
+    pub capabilities: ResolvedModelCapabilities,
+    /// Optional model-scoped interleaved reasoning capability used by OpenAI-compatible transports.
+    /// 供 OpenAI 兼容传输链路使用的可选模型级交错推理能力描述。
+    pub interleaved_reasoning: Option<ModelInterleavedCapability>,
 }
 
 impl ProviderRuntimeBlueprint {
@@ -101,6 +111,18 @@ impl ProviderRuntimeBlueprint {
             .clone()
             .unwrap_or_else(|| String::from("由运行时自动解析"))
     }
+
+    /// Returns whether the active model accepts direct tool exposure for the current turn.
+    /// 返回当前激活模型是否接受本轮直接暴露工具。
+    pub const fn supports_tool_call(&self) -> bool {
+        self.capabilities.supports_tool_call
+    }
+
+    /// Returns whether the active model accepts explicit temperature overrides.
+    /// 返回当前激活模型是否接受显式温度覆盖。
+    pub const fn supports_temperature(&self) -> bool {
+        self.capabilities.supports_temperature
+    }
 }
 
 /// Resolves the active provider/model pair into one validated runtime blueprint.
@@ -125,27 +147,26 @@ pub fn resolve_active_provider_blueprint(
     })?;
     let options = &provider_entry.options;
 
-    validate_required_provider_fields(
-        definition.input_fields().as_slice(),
-        options,
-        definition.name.as_str(),
-    )?;
-
     let selected_model = provider_config::effective_model_choices(provider_id, config)
         .into_iter()
         .find(|model| model.id == model_id);
+    let capabilities = resolve_model_capabilities(definition, selected_model.as_ref());
+    validate_required_provider_fields(
+        definition.input_fields().as_slice(),
+        options,
+        &capabilities,
+        definition.name.as_str(),
+    )?;
     let model_name = selected_model
         .as_ref()
         .map(|model| model.name.clone())
         .unwrap_or_else(|| model_id.to_string());
-    let model_supports_reasoning = selected_model
-        .as_ref()
-        .and_then(|model| model.reasoning)
-        .unwrap_or(false);
+    let model_supports_reasoning = capabilities.supports_reasoning;
     let model_reasoning_profile = selected_model
         .as_ref()
         .and_then(|model| model.reasoning_profile.clone());
-    let credential_source = credential_source_summary(options);
+    let model_interleaved_reasoning = capabilities.interleaved_reasoning.clone();
+    let credential_source = resolve_credential_source_summary(options, &capabilities);
     let provider_reasoning_profile = definition.reasoning_profile.clone();
     let reasoning = resolve_provider_runtime_reasoning(
         definition.runtime,
@@ -171,6 +192,8 @@ pub fn resolve_active_provider_blueprint(
         extra_headers: definition.extra_headers.clone(),
         extra_body: Value::Object(definition.extra_body.clone()),
         reasoning,
+        capabilities,
+        interleaved_reasoning: model_interleaved_reasoning,
     })
 }
 
@@ -179,12 +202,13 @@ pub fn resolve_active_provider_blueprint(
 fn validate_required_provider_fields(
     fields: &[ProviderFieldKey],
     options: &PersistedProviderOptions,
+    capabilities: &ResolvedModelCapabilities,
     provider_name: &str,
 ) -> Result<(), String> {
     for field in fields {
         match field {
             ProviderFieldKey::ApiKey => {
-                if options.resolved_api_key()?.is_none() {
+                if resolve_provider_api_key(options, capabilities)?.is_none() {
                     return Err(format!(
                         "供应商 `{provider_name}` 缺少可用的 API Key，无法启动执行。"
                     ));
@@ -205,29 +229,47 @@ fn validate_required_provider_fields(
     Ok(())
 }
 
-/// Builds a concise credential-source summary for execution diagnostics.
-/// 构建供执行诊断使用的紧凑凭据来源摘要。
-fn credential_source_summary(options: &PersistedProviderOptions) -> String {
-    let Some(raw_value) = options
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return String::from("未配置");
+#[cfg(test)]
+mod tests {
+    use super::resolve_active_provider_blueprint;
+    use crate::provider_config::{
+        ModelInterleavedCapability, PersistedProviderEntry, PersistedProviderOptions,
+        ProviderConfigurationFile, ReasoningEffortLevel,
     };
+    use std::collections::BTreeMap;
 
-    if let Some(env_name) = parse_env_placeholder_name(raw_value) {
-        format!("环境变量 `{env_name}`")
-    } else {
-        String::from("本地配置")
+    /// Verifies active provider-blueprint resolution preserves model-scoped interleaved reasoning metadata from the provider catalog.
+    /// 验证激活 Provider 蓝图解析会保留供应商目录中声明的模型级交错推理元数据。
+    #[test]
+    fn active_provider_blueprint_preserves_interleaved_reasoning_capability() {
+        let mut provider = BTreeMap::new();
+        provider.insert(
+            String::from("deepseek"),
+            PersistedProviderEntry {
+                name: Some(String::from("DeepSeek")),
+                options: PersistedProviderOptions {
+                    api_key: Some(String::from("test-key")),
+                    ..PersistedProviderOptions::default()
+                },
+                ..PersistedProviderEntry::default()
+            },
+        );
+        let config = ProviderConfigurationFile {
+            model: Some(String::from("deepseek/deepseek-v4-pro")),
+            provider,
+            ..ProviderConfigurationFile::default()
+        };
+
+        let blueprint = resolve_active_provider_blueprint(&config, ReasoningEffortLevel::Off)
+            .expect("provider blueprint should resolve");
+
+        match blueprint.interleaved_reasoning {
+            Some(ModelInterleavedCapability::Field(field)) => {
+                assert_eq!(field.field, "reasoning_content");
+            }
+            other => panic!("unexpected interleaved reasoning capability: {other:?}"),
+        }
+        assert!(blueprint.capabilities.supports_tool_call);
+        assert!(blueprint.capabilities.supports_temperature);
     }
-}
-
-/// Parses one `{env:NAME}` placeholder into the referenced environment variable name.
-/// 将一个 `{env:NAME}` 占位符解析成引用的环境变量名称。
-fn parse_env_placeholder_name(value: &str) -> Option<&str> {
-    let inner = value.strip_prefix("{env:")?.strip_suffix('}')?.trim();
-
-    if inner.is_empty() { None } else { Some(inner) }
 }

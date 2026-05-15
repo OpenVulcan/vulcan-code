@@ -6,6 +6,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::prepare_provider_tran
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
+use crate::provider_config::ModelInterleavedCapability;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
@@ -33,6 +34,7 @@ pub(crate) fn execute_openrouter_stream(
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
+    interleaved_reasoning: Option<ModelInterleavedCapability>,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let prepared_runtime_inputs = prepare_provider_transport_runtime_inputs(
@@ -57,6 +59,7 @@ pub(crate) fn execute_openrouter_stream(
             crate::agent_runtime::provider_transport_openrouter_adapter::OpenRouterCoreStreamingAdapter::new(
                 adapter_inputs,
                 api_key.clone(),
+                interleaved_reasoning.clone(),
                 live_sender,
             )
         },

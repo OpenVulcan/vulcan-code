@@ -66,7 +66,23 @@ pub(crate) fn build_openai_compatible_turn_request_snapshot(
 /// 将单条 Provider 可见提示消息渲染为纯文本，使请求快照能够反映精确的最后一条出站消息正文。
 fn render_provider_visible_prompt_message(message: &CoreConversationMessage) -> String {
     match &message.payload {
-        CoreConversationPayload::UserText { text } => text.trim().to_string(),
+        CoreConversationPayload::UserText { text, attachments } => {
+            let trimmed_text = text.trim();
+            let attachment_note = if attachments.is_empty() {
+                String::new()
+            } else {
+                format!(" [附件 {} 个]", attachments.len())
+            };
+            if trimmed_text.is_empty() {
+                if attachment_note.is_empty() {
+                    String::new()
+                } else {
+                    attachment_note.trim().to_string()
+                }
+            } else {
+                format!("{trimmed_text}{attachment_note}")
+            }
+        }
         CoreConversationPayload::Assistant { text, .. } => text.trim().to_string(),
         CoreConversationPayload::ToolResult { text, .. } => text.trim().to_string(),
     }
