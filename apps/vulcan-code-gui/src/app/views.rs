@@ -5895,6 +5895,12 @@ impl VulcanWorkbench {
                     column![
                         text(format!("运行时：{}", definition.runtime.label())).size(12),
                         text(format!(
+                            "接口族：{} · {}",
+                            definition.runtime.api_family().label(),
+                            definition.runtime.api_family().key()
+                        ))
+                        .size(12),
+                        text(format!(
                             "接口地址：{}",
                             self.selected_provider_endpoint_summary()
                         ))

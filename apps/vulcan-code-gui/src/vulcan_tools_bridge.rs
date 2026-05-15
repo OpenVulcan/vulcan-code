@@ -8,9 +8,13 @@ use crate::luaskills_runtime::{
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
-use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
+use crate::tooling::{
+    NativeToolCatalog, NativeToolDescriptor, allocate_unique_public_tool_name,
+    build_direct_public_tool_name, build_prefixed_public_tool_name,
+};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -31,14 +35,18 @@ pub fn build_vulcan_tools_manager(
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
+    let mut occupied_public_tool_ids = BTreeSet::new();
 
-    candidates.push(build_task_tool_candidate(task_runtime));
+    let task_candidate = build_task_tool_candidate(task_runtime);
+    occupied_public_tool_ids.insert(task_candidate.descriptor.id.clone());
+    candidates.push(task_candidate);
 
     for tool_id in candidate_native_tool_ids {
         let Some(definition) = native_catalog.definition(&tool_id) else {
             continue;
         };
         let descriptor = native_descriptor_to_vulcan(&definition.descriptor);
+        occupied_public_tool_ids.insert(descriptor.id.clone());
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         candidates.push(VulcanToolCandidate {
@@ -60,8 +68,11 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
+    let mut candidate_luaskills_tools = candidate_luaskills_tools;
+    candidate_luaskills_tools.sort_by(|left, right| left.canonical_name.cmp(&right.canonical_name));
+
     for entry in candidate_luaskills_tools {
-        let descriptor = luaskills_descriptor_to_vulcan(&entry);
+        let descriptor = luaskills_descriptor_to_vulcan(&entry, &mut occupied_public_tool_ids);
         let parameters_schema = luaskills_entry_args_schema(&entry, true);
         let canonical_name = entry.canonical_name.clone();
         let skill_id = entry.skill_id.clone();
@@ -132,8 +143,12 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
+    let mut candidate_mcp_tools = candidate_mcp_tools;
+    candidate_mcp_tools.sort_by(|left, right| left.id().cmp(right.id()));
+
     for tool in candidate_mcp_tools {
         let descriptor = mcp_tool_binding_to_vulcan(&tool);
+        occupied_public_tool_ids.insert(descriptor.id.clone());
         let parameters_schema = tool.args_schema().clone();
         let tool_name = tool.name().to_string();
         candidates.push(VulcanToolCandidate {
@@ -168,10 +183,23 @@ fn native_descriptor_to_vulcan(descriptor: &NativeToolDescriptor) -> VulcanToolD
 
 /// Converts one LuaSkills runtime entry into the unified host-facing tool descriptor.
 /// 将单条 LuaSkills 运行时入口转换为统一宿主侧工具描述。
-fn luaskills_descriptor_to_vulcan(entry: &RuntimeEntryDescriptor) -> VulcanToolDescriptor {
+fn luaskills_descriptor_to_vulcan(
+    entry: &RuntimeEntryDescriptor,
+    occupied_public_tool_ids: &mut BTreeSet<String>,
+) -> VulcanToolDescriptor {
+    let preferred_public_id = build_direct_public_tool_name(&entry.canonical_name);
+    let public_id = if occupied_public_tool_ids.contains(&preferred_public_id) {
+        allocate_unique_public_tool_name(
+            &build_prefixed_public_tool_name("ls", &[&entry.canonical_name]),
+            occupied_public_tool_ids,
+        )
+    } else {
+        allocate_unique_public_tool_name(&preferred_public_id, occupied_public_tool_ids)
+    };
+
     VulcanToolDescriptor {
-        id: entry.canonical_name.clone(),
-        name: entry.canonical_name.clone(),
+        id: public_id.clone(),
+        name: public_id,
         description: entry.description.clone(),
         source: VulcanToolSourceKind::LuaSkills,
     }

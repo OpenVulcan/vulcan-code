@@ -200,7 +200,7 @@ fn build_workspace_describe_tool(
     snapshot: Arc<NativeToolRuntimeSnapshot>,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
-        id: String::from("workspace.describe"),
+        id: String::from("native_workspace_describe"),
         name: String::from("工作区概览"),
         description: String::from("返回当前工作目录、激活模型以及基础运行时统计。"),
         ai_visible: true,
@@ -266,7 +266,7 @@ fn build_agent_list_tool(
         .collect::<Vec<_>>();
     let items = Arc::new(items);
     let descriptor = NativeToolDescriptor {
-        id: String::from("registry.list_agents"),
+        id: String::from("native_registry_list_agents"),
         name: String::from("列出代理"),
         description: String::from("返回当前已声明的代理清单。"),
         ai_visible: false,
@@ -313,7 +313,7 @@ fn build_skill_list_tool(
         .collect::<Vec<_>>();
     let items = Arc::new(items);
     let descriptor = NativeToolDescriptor {
-        id: String::from("registry.list_skills"),
+        id: String::from("native_registry_list_skills"),
         name: String::from("列出技能"),
         description: String::from("返回当前已声明的技能清单。"),
         ai_visible: true,
@@ -342,7 +342,7 @@ fn build_mcp_server_list_tool(
     snapshot: Arc<NativeToolRuntimeSnapshot>,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
-        id: String::from("mcp.list_servers"),
+        id: String::from("native_mcp_list_servers"),
         name: String::from("列出 MCP 服务器"),
         description: String::from("返回当前 MCP 服务器配置及启用情况。"),
         ai_visible: true,

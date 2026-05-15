@@ -1,7 +1,9 @@
 //! Shared provider reasoning-profile resolution and request-patch merge helpers.
 //! 共享的 Provider 推理档位解析与请求 Patch 合并辅助模块。
 
-use crate::provider_config::{ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig};
+use crate::provider_config::{
+    ProviderApiFamily, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig,
+};
 use serde_json::{Value, json};
 
 /// Resolved provider reasoning controls attached to one runtime blueprint after the shared fallback chain has been applied.
@@ -206,23 +208,16 @@ fn resolve_runtime_default_reasoning_patch(
     model_id: &str,
     requested_effort: ReasoningEffortLevel,
 ) -> Option<Value> {
-    match runtime_kind {
-        ProviderRuntimeKind::OpenAiCompatible
-        | ProviderRuntimeKind::OpenAi
-        | ProviderRuntimeKind::OpenRouter
-        | ProviderRuntimeKind::XAi
-        | ProviderRuntimeKind::Mistral
-        | ProviderRuntimeKind::Groq
-        | ProviderRuntimeKind::TogetherAi
-        | ProviderRuntimeKind::Perplexity
-        | ProviderRuntimeKind::AzureOpenAi => {
+    match runtime_kind.api_family() {
+        ProviderApiFamily::OpenAiResponses | ProviderApiFamily::OpenAiChatCompatible => {
             resolve_openai_family_reasoning_patch(requested_effort)
         }
-        ProviderRuntimeKind::Anthropic => resolve_anthropic_reasoning_patch(requested_effort),
-        ProviderRuntimeKind::GoogleGemini => {
+        ProviderApiFamily::AnthropicMessages => resolve_anthropic_reasoning_patch(requested_effort),
+        ProviderApiFamily::GoogleGeminiGenerateContent => {
             resolve_google_gemini_reasoning_patch(model_id, requested_effort)
         }
-        ProviderRuntimeKind::Cohere => resolve_cohere_reasoning_patch(requested_effort),
+        ProviderApiFamily::CohereChat => resolve_cohere_reasoning_patch(requested_effort),
+        ProviderApiFamily::BedrockConverse => None,
     }
 }
 

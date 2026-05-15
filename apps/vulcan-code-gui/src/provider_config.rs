@@ -131,6 +131,59 @@ pub enum ProviderRuntimeKind {
     OpenRouter,
 }
 
+/// Canonical provider API family derived from one runtime kind and used to group truly shared protocol behavior.
+/// 从运行时类型派生出的规范 Provider 接口族，用于归并真正共享的协议行为。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderApiFamily {
+    /// OpenAI Responses API family.
+    /// OpenAI Responses 接口族。
+    OpenAiResponses,
+    /// OpenAI Chat Completions compatible API family.
+    /// OpenAI Chat Completions 兼容接口族。
+    OpenAiChatCompatible,
+    /// Anthropic Messages API family.
+    /// Anthropic Messages 接口族。
+    AnthropicMessages,
+    /// Google Gemini GenerateContent API family.
+    /// Google Gemini GenerateContent 接口族。
+    GoogleGeminiGenerateContent,
+    /// Cohere Chat API family.
+    /// Cohere Chat 接口族。
+    CohereChat,
+    /// Reserved AWS Bedrock Converse API family.
+    /// 预留的 AWS Bedrock Converse 接口族。
+    BedrockConverse,
+}
+
+impl ProviderApiFamily {
+    /// Returns one stable API-family key used by diagnostics, previews, and future protocol factories.
+    /// 返回供诊断、预览与后续协议工厂复用的稳定接口族键值。
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "openai-responses",
+            Self::OpenAiChatCompatible => "openai-chat-compatible",
+            Self::AnthropicMessages => "anthropic-messages",
+            Self::GoogleGeminiGenerateContent => "google-gemini-generate-content",
+            Self::CohereChat => "cohere-chat",
+            Self::BedrockConverse => "bedrock-converse",
+        }
+    }
+
+    /// Returns one human-readable API-family label used by diagnostics and settings surfaces.
+    /// 返回供诊断面板与设置界面展示的人类可读接口族标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "OpenAI Responses",
+            Self::OpenAiChatCompatible => "OpenAI Chat Compatible",
+            Self::AnthropicMessages => "Anthropic Messages",
+            Self::GoogleGeminiGenerateContent => "Google Gemini GenerateContent",
+            Self::CohereChat => "Cohere Chat",
+            Self::BedrockConverse => "AWS Bedrock Converse",
+        }
+    }
+}
+
 impl ProviderRuntimeKind {
     /// Returns a concise runtime label for the configuration page.
     /// 返回配置页面使用的精简运行时标签。
@@ -148,6 +201,25 @@ impl ProviderRuntimeKind {
             Self::TogetherAi => "Together AI",
             Self::Perplexity => "Perplexity",
             Self::OpenRouter => "OpenRouter",
+        }
+    }
+
+    /// Returns the canonical provider API family behind the current runtime kind.
+    /// 返回当前运行时类型背后的规范 Provider 接口族。
+    pub const fn api_family(self) -> ProviderApiFamily {
+        match self {
+            Self::OpenAi => ProviderApiFamily::OpenAiResponses,
+            Self::OpenAiCompatible
+            | Self::AzureOpenAi
+            | Self::XAi
+            | Self::Mistral
+            | Self::Groq
+            | Self::TogetherAi
+            | Self::Perplexity
+            | Self::OpenRouter => ProviderApiFamily::OpenAiChatCompatible,
+            Self::Anthropic => ProviderApiFamily::AnthropicMessages,
+            Self::GoogleGemini => ProviderApiFamily::GoogleGeminiGenerateContent,
+            Self::Cohere => ProviderApiFamily::CohereChat,
         }
     }
 }
@@ -731,22 +803,23 @@ fn infer_runtime_reasoning_efforts(
 
     let model_id = model.id.to_ascii_lowercase();
 
-    match runtime {
-        ProviderRuntimeKind::GoogleGemini => infer_google_gemini_reasoning_efforts(&model_id),
-        ProviderRuntimeKind::Cohere => vec![ReasoningEffortLevel::Off, ReasoningEffortLevel::Low],
-        ProviderRuntimeKind::OpenAiCompatible if matches!(provider_id, "alibaba" | "bailing") => {
+    match runtime.api_family() {
+        ProviderApiFamily::GoogleGeminiGenerateContent => {
+            infer_google_gemini_reasoning_efforts(&model_id)
+        }
+        ProviderApiFamily::CohereChat => {
             vec![ReasoningEffortLevel::Off, ReasoningEffortLevel::Low]
         }
-        ProviderRuntimeKind::OpenAiCompatible
-        | ProviderRuntimeKind::OpenAi
-        | ProviderRuntimeKind::Anthropic
-        | ProviderRuntimeKind::AzureOpenAi
-        | ProviderRuntimeKind::XAi
-        | ProviderRuntimeKind::Mistral
-        | ProviderRuntimeKind::Groq
-        | ProviderRuntimeKind::TogetherAi
-        | ProviderRuntimeKind::Perplexity
-        | ProviderRuntimeKind::OpenRouter => ReasoningEffortLevel::ALL.into_iter().collect(),
+        ProviderApiFamily::OpenAiChatCompatible
+            if runtime == ProviderRuntimeKind::OpenAiCompatible
+                && matches!(provider_id, "alibaba" | "bailing") =>
+        {
+            vec![ReasoningEffortLevel::Off, ReasoningEffortLevel::Low]
+        }
+        ProviderApiFamily::OpenAiResponses
+        | ProviderApiFamily::OpenAiChatCompatible
+        | ProviderApiFamily::AnthropicMessages
+        | ProviderApiFamily::BedrockConverse => ReasoningEffortLevel::ALL.into_iter().collect(),
     }
 }
 
@@ -1971,9 +2044,9 @@ fn merge_embedded_model_metadata(
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelChoice, ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
-        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        ModelChoice, ProviderApiFamily, ProviderBaseUrlConfig, ProviderBaseUrlKind,
+        ProviderConfigurationFile, ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind,
+        ProviderRuntimeKind, ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
         SupportedProviderDefinition,
     };
     use serde_json::{Map as JsonMap, json};
@@ -2034,6 +2107,59 @@ mod tests {
             input_modalities: Vec::new(),
             output_modalities: Vec::new(),
         }
+    }
+
+    /// Verifies runtime kinds map into the expected canonical provider API families.
+    /// 验证运行时类型会映射到预期的规范 Provider 接口族。
+    #[test]
+    fn runtime_kind_maps_into_expected_api_family() {
+        assert_eq!(
+            ProviderRuntimeKind::OpenAi.api_family(),
+            ProviderApiFamily::OpenAiResponses
+        );
+        assert_eq!(
+            ProviderRuntimeKind::OpenAiCompatible.api_family(),
+            ProviderApiFamily::OpenAiChatCompatible
+        );
+        assert_eq!(
+            ProviderRuntimeKind::OpenRouter.api_family(),
+            ProviderApiFamily::OpenAiChatCompatible
+        );
+        assert_eq!(
+            ProviderRuntimeKind::Anthropic.api_family(),
+            ProviderApiFamily::AnthropicMessages
+        );
+        assert_eq!(
+            ProviderRuntimeKind::GoogleGemini.api_family(),
+            ProviderApiFamily::GoogleGeminiGenerateContent
+        );
+        assert_eq!(
+            ProviderRuntimeKind::Cohere.api_family(),
+            ProviderApiFamily::CohereChat
+        );
+    }
+
+    /// Verifies canonical provider API families expose stable labels and keys for diagnostics surfaces.
+    /// 验证规范 Provider 接口族会暴露稳定的标签与键值，供诊断界面复用。
+    #[test]
+    fn provider_api_family_exposes_stable_label_and_key() {
+        assert_eq!(ProviderApiFamily::OpenAiResponses.key(), "openai-responses");
+        assert_eq!(
+            ProviderApiFamily::OpenAiResponses.label(),
+            "OpenAI Responses"
+        );
+        assert_eq!(
+            ProviderApiFamily::AnthropicMessages.key(),
+            "anthropic-messages"
+        );
+        assert_eq!(
+            ProviderApiFamily::AnthropicMessages.label(),
+            "Anthropic Messages"
+        );
+        assert_eq!(
+            ProviderApiFamily::GoogleGeminiGenerateContent.key(),
+            "google-gemini-generate-content"
+        );
     }
 
     /// Verifies binary reasoning profiles collapse the selector into the expected on/off pair and remap higher remembered tiers to “开启”.

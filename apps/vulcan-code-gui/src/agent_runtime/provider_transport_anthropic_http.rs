@@ -16,6 +16,7 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::tooling::build_direct_public_tool_name;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -878,7 +879,7 @@ fn core_tool_call_to_anthropic_tool_use(
 /// 将一条宿主自有 Provider 工具定义转换为一条 Anthropic 工具 schema 对象。
 fn provider_tool_definition_to_anthropic_tool(definition: &ProviderToolDefinition) -> Value {
     json!({
-        "name": build_anthropic_provider_tool_name(&definition.name),
+        "name": definition.name,
         "description": definition.description,
         "input_schema": definition.parameters
     })
@@ -906,8 +907,8 @@ fn finalize_pending_anthropic_tool_use(
     })
 }
 
-/// Resolves one provider-visible Anthropic tool name from the host-owned tool identifier.
-/// 根据宿主自有工具标识解析一条面向 Anthropic 的 Provider 可见工具名称。
+/// Resolves one provider-visible Anthropic tool name from the host-owned tool identifier, mainly to keep historical invalid tool ids replayable after the unified dispatch layer started emitting provider-safe names directly.
+/// 根据宿主自有工具标识解析一条面向 Anthropic 的 Provider 可见工具名称，主要用于在统一调度层已经直接产出安全工具名后继续兼容历史非法标识的回放。
 fn resolve_provider_visible_anthropic_tool_name(
     host_tool_name: &str,
     provider_tool_definitions: &[ProviderToolDefinition],
@@ -915,79 +916,32 @@ fn resolve_provider_visible_anthropic_tool_name(
     provider_tool_definitions
         .iter()
         .find(|definition| definition.name == host_tool_name)
-        .map(|definition| build_anthropic_provider_tool_name(&definition.name))
+        .map(|definition| definition.name.clone())
         .unwrap_or_else(|| build_anthropic_provider_tool_name(host_tool_name))
 }
 
-/// Resolves one host-owned tool identifier from the provider-visible Anthropic tool name.
-/// 根据面向 Anthropic 的 Provider 可见工具名称反向解析一条宿主自有工具标识。
+/// Resolves one host-owned tool identifier from the provider-visible Anthropic tool name, keeping a legacy fallback for replayed sessions that were stored before the unified safe-name registry landed.
+/// 根据面向 Anthropic 的 Provider 可见工具名称反向解析一条宿主自有工具标识，并为统一安全名注册表落地前写入的历史回放会话保留旧格式回退。
 fn resolve_host_owned_anthropic_tool_name(
     provider_tool_name: &str,
     provider_tool_definitions: &[ProviderToolDefinition],
 ) -> String {
     provider_tool_definitions
         .iter()
-        .find(|definition| {
-            build_anthropic_provider_tool_name(&definition.name) == provider_tool_name
+        .find(|definition| definition.name == provider_tool_name)
+        .or_else(|| {
+            provider_tool_definitions.iter().find(|definition| {
+                build_anthropic_provider_tool_name(&definition.name) == provider_tool_name
+            })
         })
         .map(|definition| definition.name.clone())
         .unwrap_or_else(|| provider_tool_name.to_string())
 }
 
-/// Builds one Anthropic-compatible provider-visible tool name that starts with an ASCII letter and uses only supported identifier characters.
-/// 构建一条兼容 Anthropic 的 Provider 可见工具名称，确保以 ASCII 字母开头且仅使用受支持的标识符字符。
+/// Builds one Anthropic provider-visible tool name only for replay compatibility of historical invalid host identifiers.
+/// 仅为历史非法宿主标识的回放兼容构建一条 Anthropic Provider 可见工具名称。
 fn build_anthropic_provider_tool_name(host_tool_name: &str) -> String {
-    if anthropic_tool_name_is_valid(host_tool_name) {
-        return host_tool_name.to_string();
-    }
-
-    let mut sanitized = host_tool_name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    if sanitized.is_empty()
-        || !sanitized.starts_with(|character: char| character.is_ascii_alphabetic())
-    {
-        sanitized = format!("tool_{sanitized}");
-    }
-
-    sanitized.push('_');
-    sanitized.push_str(&format!(
-        "{:08x}",
-        stable_anthropic_tool_name_hash(host_tool_name)
-    ));
-    sanitized
-}
-
-/// Returns whether one tool name already satisfies the Anthropic-compatible identifier rules used by strict providers such as kimi-for-coding.
-/// 返回单条工具名称是否已经满足 kimi-for-coding 等严格 Provider 使用的 Anthropic 兼容标识符规则。
-fn anthropic_tool_name_is_valid(tool_name: &str) -> bool {
-    let mut characters = tool_name.chars();
-    let Some(first) = characters.next() else {
-        return false;
-    };
-
-    first.is_ascii_alphabetic()
-        && characters
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
-}
-
-/// Computes one deterministic FNV-1a hash used to disambiguate sanitized Anthropic tool names without depending on provider-side state.
-/// 计算一份确定性的 FNV-1a 哈希，用于在不依赖 Provider 侧状态的情况下区分已清洗的 Anthropic 工具名称。
-fn stable_anthropic_tool_name_hash(input: &str) -> u32 {
-    let mut hash = 0x811c9dc5u32;
-    for byte in input.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
+    build_direct_public_tool_name(host_tool_name)
 }
 
 /// Forwards one normalized provider delta into both the controller sink and the GUI live sender.
@@ -1120,7 +1074,7 @@ mod tests {
             },
             AnthropicContentBlock::ToolUse {
                 id: String::from("call-1"),
-                name: String::from("functions_shell_command_76a68409"),
+                name: String::from("functions_shell_command"),
                 input: json!({ "command": "Get-ChildItem" }),
             },
         ]);
@@ -1187,10 +1141,7 @@ mod tests {
         assert_eq!(messages[0]["content"][0]["thinking"], "先检查目录。");
         assert_eq!(messages[0]["content"][0]["signature"], "sig-1");
         assert_eq!(messages[0]["content"][2]["type"], "tool_use");
-        assert_eq!(
-            messages[0]["content"][2]["name"],
-            "functions_shell_command_76a68409"
-        );
+        assert_eq!(messages[0]["content"][2]["name"], "functions_shell_command");
     }
 
     /// Verifies Anthropic replay ignores foreign provider-message-state payloads and rebuilds the assistant tool turn from canonical text/tool-call fields when a session switches from another protocol family.
@@ -1644,12 +1595,13 @@ mod tests {
         assert_eq!(tool_call.arguments, json!({ "path": "src/main.rs" }));
     }
 
-    /// Verifies Anthropic request payloads sanitize invalid host tool identifiers before exposing them to strict providers.
-    /// 验证 Anthropic 请求载荷会先清洗非法宿主工具标识，再暴露给严格 Provider。
+    /// Verifies Anthropic request replay still sanitizes one historical invalid host tool identifier while the current provider tool definition already carries the unified safe public name.
+    /// 验证当当前 Provider 工具定义已经使用统一安全公开名时，Anthropic 请求回放仍会清洗历史遗留的非法宿主工具标识。
     #[test]
     fn request_payload_sanitizes_invalid_anthropic_tool_names() {
         let host_tool_name = "functions.shell_command";
         let provider_tool_name = build_anthropic_provider_tool_name(host_tool_name);
+        assert_eq!(provider_tool_name, "functions_shell_command");
         let request = OpenAiCompatibleCoreTurnRequest {
             snapshot: CoreProviderRequestSnapshot {
                 provider_id: String::from("anthropic"),
@@ -1693,7 +1645,7 @@ mod tests {
             "claude-sonnet-4-6",
             request,
             &[ProviderToolDefinition {
-                name: String::from(host_tool_name),
+                name: provider_tool_name.clone(),
                 description: String::from("Run one shell command"),
                 parameters: json!({
                     "type": "object",

@@ -5,7 +5,7 @@ use crate::agent_runtime::provider_reasoning::{
     ProviderRuntimeReasoningResolution, resolve_provider_runtime_reasoning,
 };
 use crate::provider_config::{
-    self, PersistedProviderOptions, ProviderConfigurationFile, ProviderFieldKey,
+    self, PersistedProviderOptions, ProviderApiFamily, ProviderConfigurationFile, ProviderFieldKey,
     ProviderRuntimeKind, ReasoningEffortLevel,
 };
 use serde_json::Value;
@@ -57,6 +57,24 @@ pub struct ProviderRuntimeBlueprint {
 }
 
 impl ProviderRuntimeBlueprint {
+    /// Returns the canonical provider API family derived from the resolved runtime kind.
+    /// 返回从已解析运行时类型派生出的规范 Provider 接口族。
+    pub const fn api_family(&self) -> ProviderApiFamily {
+        self.runtime_kind.api_family()
+    }
+
+    /// Returns the stable API-family key used by diagnostics and request previews.
+    /// 返回供诊断与请求预览复用的稳定接口族键值。
+    pub const fn api_family_key(&self) -> &'static str {
+        self.api_family().key()
+    }
+
+    /// Returns the human-readable API-family label used by diagnostics surfaces.
+    /// 返回供诊断界面使用的人类可读接口族标签。
+    pub const fn api_family_label(&self) -> &'static str {
+        self.api_family().label()
+    }
+
     /// Returns a compact stable runtime-kind key used by diagnostics and future factories.
     /// 返回供诊断与后续工厂使用的紧凑稳定运行时键值。
     pub const fn runtime_kind_key(&self) -> &'static str {

@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
-use crate::provider_config::ProviderRuntimeKind;
+use crate::provider_config::{ProviderApiFamily, ProviderRuntimeKind};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
@@ -16,6 +16,9 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// Owned provider transport execution request used to route one prepared runtime turn into the correct provider-specific adapter.
 /// 用于把一份已准备好的运行时回合路由到正确 Provider 专用适配器的自有 Provider 传输执行请求。
 pub(crate) struct ProviderTransportExecutionRequest {
+    /// Canonical provider API family used to group transport routing and shared protocol behavior.
+    /// 用于归并传输路由与共享协议行为的规范 Provider 接口族。
+    pub(crate) api_family: ProviderApiFamily,
     /// Runtime family used to select the concrete transport adapter implementation.
     /// 用于选择具体传输适配实现的运行时家族类型。
     pub(crate) runtime_kind: ProviderRuntimeKind,
@@ -95,6 +98,7 @@ pub(crate) fn build_provider_transport_execution_request(
     additional_params: Option<Value>,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
+        api_family: runtime_kind.api_family(),
         runtime_kind,
         provider_id,
         runtime_label,

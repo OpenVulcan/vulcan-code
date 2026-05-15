@@ -4,6 +4,7 @@
 use crate::mcp::config::McpServerConfig;
 use crate::mcp::registry::{McpServerRegistry, configured_mcp_registry_overview};
 use crate::provider_config::ProviderConfigurationFile;
+use crate::tooling::{allocate_unique_public_tool_name, build_prefixed_public_tool_name};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
@@ -63,14 +64,21 @@ impl McpRuntimeToolDescriptor {
         &self.server_id
     }
 
-    /// Returns one host-facing read-only tool view derived from the runtime descriptor.
-    /// 返回一份从运行时描述派生出的宿主侧只读工具视图。
-    fn host_tool_view(&self) -> McpRuntimeToolView {
+    /// Returns one preferred public tool name before conflict resolution is applied.
+    /// 返回应用冲突消解前的首选公开工具名。
+    fn preferred_public_tool_name(&self) -> String {
+        build_prefixed_public_tool_name("mcp", &[self.server_id(), self.tool_name()])
+    }
+
+    /// Returns one host-facing read-only tool view derived from the runtime descriptor and one resolved public identifier.
+    /// 根据运行时描述与一份已解析公开标识生成宿主侧只读工具视图。
+    fn host_tool_view(&self, public_tool_id: String) -> McpRuntimeToolView {
         McpRuntimeToolView {
-            id: self.qualified_name(),
-            name: self.tool_name().to_string(),
+            id: public_tool_id.clone(),
+            name: public_tool_id,
             description: self.tool_description().to_string(),
             args_schema: self.args_schema().clone(),
+            origin_tool_id: self.qualified_name(),
         }
     }
 
@@ -130,6 +138,9 @@ struct McpRuntimeToolView {
     /// JSON Schema describing the tool arguments.
     /// 描述工具参数的 JSON Schema。
     args_schema: serde_json::Value,
+    /// Original qualified MCP tool identifier preserved for live invocation.
+    /// 为实时调用保留的原始限定 MCP 工具标识。
+    origin_tool_id: String,
 }
 
 impl McpRuntimeToolView {
@@ -155,6 +166,12 @@ impl McpRuntimeToolView {
     /// 返回描述工具参数的 JSON Schema。
     fn args_schema(&self) -> &serde_json::Value {
         &self.args_schema
+    }
+
+    /// Returns the original qualified MCP tool identifier preserved for live invocation.
+    /// 返回为实时调用保留的原始限定 MCP 工具标识。
+    fn origin_tool_id(&self) -> &str {
+        &self.origin_tool_id
     }
 }
 
@@ -270,7 +287,9 @@ impl McpRuntimeToolBinding {
         &self,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        self.runtime.call_tool_by_id(self.id(), args).await
+        self.runtime
+            .call_tool_by_id(self.view.origin_tool_id(), args)
+            .await
     }
 }
 
@@ -689,6 +708,8 @@ impl McpRuntimeSnapshot {
     /// Returns host-facing tool views filtered by one allowlist.
     /// 返回按单份白名单过滤后的宿主侧工具视图集合。
     fn filtered_tool_views(&self, allowlist: &McpRuntimeToolAllowlist) -> Vec<McpRuntimeToolView> {
+        let mut occupied_public_tool_names = BTreeSet::new();
+
         self.tool_descriptors()
             .into_iter()
             .filter(|tool| {
@@ -697,7 +718,13 @@ impl McpRuntimeSnapshot {
                     allowlist.allowed_tool_names(),
                 )
             })
-            .map(|tool| tool.host_tool_view())
+            .map(|tool| {
+                let public_tool_id = allocate_unique_public_tool_name(
+                    &tool.preferred_public_tool_name(),
+                    &mut occupied_public_tool_names,
+                );
+                tool.host_tool_view(public_tool_id)
+            })
             .collect()
     }
 
@@ -1540,12 +1567,13 @@ mod tests {
             String::from("Read one file"),
             serde_json::json!({"type":"object"}),
         );
-        let view = descriptor.host_tool_view();
+        let view = descriptor.host_tool_view(String::from("mcp_server_a_read_file"));
 
-        assert_eq!(view.id(), "server-a/read_file");
-        assert_eq!(view.name(), "read_file");
+        assert_eq!(view.id(), "mcp_server_a_read_file");
+        assert_eq!(view.name(), "mcp_server_a_read_file");
         assert_eq!(view.description(), "Read one file");
         assert_eq!(view.args_schema(), &serde_json::json!({"type":"object"}));
+        assert_eq!(view.origin_tool_id(), "server-a/read_file");
     }
 
     #[test]
@@ -1595,21 +1623,59 @@ mod tests {
 
         assert_eq!(
             snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::default()),
-            vec![tool_a.host_tool_view(), tool_b.host_tool_view()]
+            vec![
+                tool_a.host_tool_view(String::from("mcp_server_a_read_file")),
+                tool_b.host_tool_view(String::from("mcp_server_b_edit_file"))
+            ]
         );
         assert_eq!(
             snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::new(
                 Some(BTreeSet::from([String::from("server-b")])),
                 None,
             )),
-            vec![tool_b.host_tool_view()]
+            vec![tool_b.host_tool_view(String::from("mcp_server_b_edit_file"))]
         );
         assert_eq!(
             snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::new(
                 None,
                 Some(BTreeSet::from([String::from("server-a/read_file")])),
             )),
-            vec![tool_a.host_tool_view()]
+            vec![tool_a.host_tool_view(String::from("mcp_server_a_read_file"))]
         );
+    }
+
+    #[test]
+    fn filtered_tool_views_apply_numbered_suffixes_for_public_name_collisions() {
+        let tool_a = McpRuntimeToolDescriptor::new(
+            String::from("server-a"),
+            String::from("read.file"),
+            String::from("Read one file"),
+            serde_json::json!({}),
+        );
+        let tool_b = McpRuntimeToolDescriptor::new(
+            String::from("server-a"),
+            String::from("read_file"),
+            String::from("Read one file safely"),
+            serde_json::json!({}),
+        );
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([(
+                String::from("server-a"),
+                McpRuntimeServerSnapshot {
+                    name: String::from("Server A"),
+                    enabled: true,
+                    transport_label: String::from("stdio"),
+                    endpoint_summary: String::from("server-a"),
+                    status: McpRuntimeServerStatus::Connected,
+                    last_error: None,
+                    tools: vec![tool_a, tool_b],
+                    ..empty_server_snapshot()
+                },
+            )]),
+        };
+
+        let views = snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::default());
+        assert_eq!(views[0].id(), "mcp_server_a_read_file");
+        assert_eq!(views[1].id(), "mcp_server_a_read_file_1");
     }
 }

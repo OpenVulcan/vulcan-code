@@ -121,6 +121,11 @@ impl ExecutionPreparation {
                 self.model_blueprint.model_id,
                 self.model_blueprint.runtime_kind_key()
             ),
+            format!(
+                "接口族：{} · family={}",
+                self.model_blueprint.api_family_label(),
+                self.model_blueprint.api_family_key()
+            ),
             format!("接口：{}", self.model_blueprint.endpoint_summary()),
             format!("凭据：{}", self.model_blueprint.credential_source),
             format!(

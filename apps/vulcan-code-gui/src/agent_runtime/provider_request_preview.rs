@@ -60,6 +60,7 @@ pub(crate) fn build_provider_request_preview_markdown(
             "- Provider：`{}` · `{}`\n",
             "- 模型：`{}` · `{}`\n",
             "- 运行时：`{}` · kind=`{}`\n",
+            "- 接口族：`{}` · family=`{}`\n",
             "- 接口：`{}`\n",
             "- 执行模式：`{}`\n",
             "- 温度：{}\n",
@@ -92,6 +93,8 @@ pub(crate) fn build_provider_request_preview_markdown(
         preparation.model_blueprint.model_id,
         preparation.model_blueprint.runtime_label,
         preparation.model_blueprint.runtime_kind_key(),
+        preparation.model_blueprint.api_family_label(),
+        preparation.model_blueprint.api_family_key(),
         preparation.model_blueprint.endpoint_summary(),
         preparation.execution_mode,
         temperature_label,
@@ -247,4 +250,77 @@ fn render_text_code_fence(content: &str) -> String {
 fn render_json_code_fence(value: &Value) -> String {
     let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     format!("````json\n{}\n````", pretty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_provider_request_preview_markdown;
+    use crate::agent_runtime::execution_models::ExecutionPreparation;
+    use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::provider_config::ProviderRuntimeKind;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use uuid::Uuid;
+    use vulcan_core::types::{
+        ProviderContinuation as CoreProviderContinuation,
+        ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    };
+
+    /// Verifies the provider request preview explicitly renders the canonical API family alongside the runtime kind.
+    /// 验证 Provider 请求预览会把规范接口族与运行时类型一起明确渲染出来。
+    #[test]
+    fn provider_request_preview_renders_api_family_summary_line() {
+        let preparation = ExecutionPreparation {
+            session_id: Uuid::nil(),
+            session_title: String::from("接口族预览测试"),
+            agent_id: String::from("main"),
+            agent_name: String::from("Main Agent"),
+            agent_kind: String::from("analysis"),
+            model_blueprint: ProviderRuntimeBlueprint {
+                provider_id: String::from("anthropic"),
+                provider_name: String::from("Anthropic"),
+                runtime_kind: ProviderRuntimeKind::Anthropic,
+                runtime_label: String::from("Anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                model_name: String::from("Claude Sonnet 4.6"),
+                base_url: Some(String::from("https://api.anthropic.com")),
+                supports_remote_model_refresh: false,
+                credential_source: String::from("环境变量 `ANTHROPIC_API_KEY`"),
+                user_agent: None,
+                extra_headers: BTreeMap::new(),
+                extra_body: Value::Object(Default::default()),
+                reasoning: Default::default(),
+            },
+            prompt_preview: String::from("检查请求预览"),
+            workspace_path: String::from("D:/openvulcan/vulcan-code"),
+            context_history_count: 0,
+            execution_mode: String::from("默认模式"),
+            temperature: Some(0.2),
+            skill_names: Vec::new(),
+            tool_descriptors: Vec::new(),
+            delegate_agents: Vec::new(),
+            enabled_mcp_servers: Vec::new(),
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+        };
+        let snapshot = CoreProviderRequestSnapshot {
+            provider_id: String::from("anthropic"),
+            model_id: String::from("claude-sonnet-4-6"),
+            system_prompt: String::from("system prompt"),
+            prompt: String::from("preview prompt"),
+            history: Vec::new(),
+            temperature: Some(0.2),
+            max_turns: 8,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: CoreProviderContinuation::default(),
+        };
+
+        let markdown = build_provider_request_preview_markdown(&preparation, &snapshot);
+
+        assert!(markdown.contains("- 运行时：`Anthropic` · kind=`anthropic`"));
+        assert!(markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages`"));
+    }
 }

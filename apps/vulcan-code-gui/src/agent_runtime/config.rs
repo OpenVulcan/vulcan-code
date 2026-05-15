@@ -542,9 +542,9 @@ fn default_analysis_tool_policy() -> PersistedToolPolicyEntry {
         name: Some(String::from("分析只读策略")),
         allow_all_native: false,
         native_tools: vec![
-            String::from("workspace.describe"),
-            String::from("registry.list_skills"),
-            String::from("mcp.list_servers"),
+            String::from("native_workspace_describe"),
+            String::from("native_registry_list_skills"),
+            String::from("native_mcp_list_servers"),
         ],
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
@@ -558,8 +558,8 @@ fn default_lua_tool_policy() -> PersistedToolPolicyEntry {
         name: Some(String::from("Lua 定向策略")),
         allow_all_native: false,
         native_tools: vec![
-            String::from("workspace.describe"),
-            String::from("registry.list_skills"),
+            String::from("native_workspace_describe"),
+            String::from("native_registry_list_skills"),
         ],
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
