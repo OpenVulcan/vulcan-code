@@ -1118,6 +1118,404 @@ pub fn workbench_composer_panel_drag_target_style(
     }
 }
 
+/// Returns the square preview-tile shell style used by staged composer attachments.
+/// 返回已暂存提示词附件使用的方形预览格外壳样式。
+pub fn workbench_composer_attachment_tile_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.92),
+        )),
+        border: Border {
+            radius: 16.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.14,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 10.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the inner icon backdrop style used when an attachment does not render a real image thumbnail.
+/// 返回当附件不渲染真实图片缩略图时使用的内部图标背景样式。
+pub fn workbench_composer_attachment_icon_tile_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.weak.color.scale_alpha(0.72),
+        )),
+        border: Border {
+            radius: 14.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the transparent click-target style used by image attachment preview tiles.
+/// 返回图片附件预览方格使用的透明点击目标按钮样式。
+pub fn workbench_composer_attachment_preview_button_style(
+    _theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let base = button::Style {
+        background: Some(Background::Color(Color::TRANSPARENT)),
+        text_color: Color::TRANSPARENT,
+        border: Border {
+            radius: 16.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(Color::WHITE.scale_alpha(0.08))),
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(Color::BLACK.scale_alpha(0.08))),
+            ..base
+        },
+        button::Status::Disabled => base,
+    }
+}
+
+/// Returns the compact close-button style used by reusable workbench notice modals.
+/// 返回可复用工作台提示弹窗使用的紧凑关闭按钮样式。
+pub fn workbench_notice_modal_close_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let text_color = palette.background.base.text;
+    let base = button::Style {
+        background: Some(Background::Color(Color::TRANSPARENT)),
+        text_color: text_color.scale_alpha(0.68),
+        border: Border {
+            radius: 999.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(
+                palette.background.weak.color.scale_alpha(0.72),
+            )),
+            text_color,
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(
+                palette.background.strong.color.scale_alpha(0.42),
+            )),
+            text_color,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: text_color.scale_alpha(0.24),
+            ..base
+        },
+    }
+}
+
+/// Returns the recessed image-preview surface style used inside the blocking preview modal.
+/// 返回阻塞式预览弹窗内部使用的内嵌图片预览区域样式。
+pub fn workbench_image_preview_surface_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.weak.color.scale_alpha(0.76),
+        )),
+        border: Border {
+            radius: 16.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the compact toolbar-button style used by image preview zoom controls.
+/// 返回图片预览缩放控制使用的紧凑工具栏按钮样式。
+pub fn workbench_image_preview_control_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.92),
+        )),
+        text_color: palette.background.base.text.scale_alpha(0.82),
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.22),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(
+                palette.primary.weak.color.scale_alpha(0.82),
+            )),
+            text_color: palette.primary.strong.text,
+            border: Border {
+                color: palette.primary.base.color.scale_alpha(0.36),
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(
+                palette.primary.base.color.scale_alpha(0.20),
+            )),
+            text_color: palette.primary.strong.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.30),
+            ..base
+        },
+    }
+}
+
+/// Returns the translucent floating-label style used inside the image preview surface.
+/// 返回图片预览区域内部使用的半透明浮动标签样式。
+pub fn workbench_image_preview_floating_label_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.86),
+        )),
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.22),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.12,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 3.0),
+            blur_radius: 8.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the translucent floating-toolbar style used by image preview zoom controls.
+/// 返回图片预览缩放控件使用的半透明浮动工具栏样式。
+pub fn workbench_image_preview_floating_toolbar_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.84),
+        )),
+        border: Border {
+            radius: 14.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.14,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 10.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the primary confirmation-button style used by reusable workbench notice modals.
+/// 返回可复用工作台提示弹窗使用的主确认按钮样式。
+pub fn workbench_notice_modal_confirm_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(Background::Color(palette.primary.base.color)),
+        text_color: palette.primary.base.text,
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: palette.primary.strong.color.scale_alpha(0.36),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.16,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 10.0,
+        },
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(palette.primary.strong.color)),
+            border: Border {
+                color: palette.primary.strong.color.scale_alpha(0.72),
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(
+                palette.primary.strong.color.scale_alpha(0.88),
+            )),
+            shadow: Shadow {
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 6.0,
+                ..base.shadow
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(Background::Color(
+                palette.background.strong.color.scale_alpha(0.42),
+            )),
+            text_color: palette.background.base.text.scale_alpha(0.34),
+            shadow: Shadow::default(),
+            ..base
+        },
+    }
+}
+
+/// Returns the secondary action-button style used by reusable workbench notice modals.
+/// 返回可复用工作台提示弹窗使用的次要操作按钮样式。
+pub fn workbench_notice_modal_secondary_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.76),
+        )),
+        text_color: palette.background.base.text.scale_alpha(0.78),
+        border: Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(
+                palette.background.weak.color.scale_alpha(0.82),
+            )),
+            text_color: palette.background.base.text,
+            border: Border {
+                color: palette.background.strong.color.scale_alpha(0.36),
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(
+                palette.background.strong.color.scale_alpha(0.34),
+            )),
+            text_color: palette.background.base.text,
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.30),
+            ..base
+        },
+    }
+}
+
+/// Returns the circular remove-button style shown on the top-right corner of a staged attachment tile.
+/// 返回显示在已暂存附件方格右上角的圆形移除按钮样式。
+pub fn workbench_composer_attachment_remove_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.94),
+        )),
+        text_color: palette.background.base.text.scale_alpha(0.82),
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.34),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.18,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 6.0,
+        },
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            background: Some(Background::Color(iced::color!(0xDC2626))),
+            text_color: Color::WHITE,
+            border: Border {
+                color: iced::color!(0xDC2626),
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(Background::Color(iced::color!(0xB91C1C))),
+            text_color: Color::WHITE,
+            border: Border {
+                color: iced::color!(0xB91C1C),
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: palette.background.base.text.scale_alpha(0.30),
+            ..base
+        },
+    }
+}
+
 /// Returns the rounded editable text-editor style used inside the floating workbench composer panel.
 /// 返回浮动工作台提示词面板内部使用的圆角可编辑文本框样式。
 pub fn workbench_composer_editor_style(

@@ -20,6 +20,20 @@ where
     content: Element<'a, Message, Theme, Renderer>,
 }
 
+/// Wraps one child widget and captures mouse-wheel events before they can bubble into lower surfaces.
+/// 包装单个子控件，并在鼠标滚轮事件冒泡到底层界面之前将其捕获。
+pub struct WheelIntercept<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
+where
+    Renderer: iced::advanced::Renderer,
+{
+    /// Wrapped content that should receive normal pointer interaction.
+    /// 需要继续接收常规指针交互的被包装内容。
+    content: Element<'a, Message, Theme, Renderer>,
+    /// Callback used to turn one wheel delta into an application message.
+    /// 用于将一条滚轮增量转换为应用消息的回调。
+    on_scroll: Box<dyn Fn(mouse::ScrollDelta) -> Message + 'a>,
+}
+
 impl<'a, Message, Theme, Renderer> WheelPassthrough<'a, Message, Theme, Renderer>
 where
     Renderer: iced::advanced::Renderer,
@@ -29,6 +43,23 @@ where
     pub fn new(content: impl Into<Element<'a, Message, Theme, Renderer>>) -> Self {
         Self {
             content: content.into(),
+        }
+    }
+}
+
+impl<'a, Message, Theme, Renderer> WheelIntercept<'a, Message, Theme, Renderer>
+where
+    Renderer: iced::advanced::Renderer,
+{
+    /// Creates a new wheel-intercept wrapper around the provided content.
+    /// 为给定内容创建新的滚轮拦截包装层。
+    pub fn new(
+        content: impl Into<Element<'a, Message, Theme, Renderer>>,
+        on_scroll: impl Fn(mouse::ScrollDelta) -> Message + 'a,
+    ) -> Self {
+        Self {
+            content: content.into(),
+            on_scroll: Box::new(on_scroll),
         }
     }
 }
@@ -174,6 +205,149 @@ where
     }
 }
 
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+    for WheelIntercept<'_, Message, Theme, Renderer>
+where
+    Renderer: iced::advanced::Renderer,
+{
+    /// Returns the size strategy inherited from the wrapped content.
+    /// 返回继承自被包装内容的尺寸策略。
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    /// Returns the child widget tree so runtime state stays aligned.
+    /// 返回子控件树，以保持运行时状态对齐。
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.content)]
+    }
+
+    /// Reconciles the wrapped child with the runtime widget tree.
+    /// 将被包装子控件与运行时控件树进行协调。
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(std::slice::from_ref(&self.content));
+    }
+
+    /// Delegates layout to the wrapped content.
+    /// 将布局计算委托给被包装内容。
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    /// Delegates widget operations to the wrapped content.
+    /// 将控件操作委托给被包装内容。
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    /// Captures wheel events over the wrapped bounds and forwards all other events to the child.
+    /// 捕获包装边界内的滚轮事件，并将其他事件继续转发给子控件。
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        if cursor.is_over(layout.bounds()) {
+            if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+                shell.publish((self.on_scroll)(*delta));
+                shell.capture_event();
+                return;
+            }
+        }
+
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            shell,
+            viewport,
+        );
+    }
+
+    /// Delegates hover interaction lookup to the wrapped content.
+    /// 将悬停交互查询委托给被包装内容。
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    /// Delegates drawing to the wrapped content.
+    /// 将绘制过程委托给被包装内容。
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        renderer_style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            renderer_style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    /// Delegates overlay creation to the wrapped content.
+    /// 将浮层构建委托给被包装内容。
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
 impl<'a, Message, Theme, Renderer> From<WheelPassthrough<'a, Message, Theme, Renderer>>
     for Element<'a, Message, Theme, Renderer>
 where
@@ -185,6 +359,22 @@ where
     /// 将包装层转换为常规 iced 元素。
     fn from(
         widget: WheelPassthrough<'a, Message, Theme, Renderer>,
+    ) -> Element<'a, Message, Theme, Renderer> {
+        Element::new(widget)
+    }
+}
+
+impl<'a, Message, Theme, Renderer> From<WheelIntercept<'a, Message, Theme, Renderer>>
+    for Element<'a, Message, Theme, Renderer>
+where
+    Renderer: iced::advanced::Renderer + 'a,
+    Theme: 'a,
+    Message: 'a,
+{
+    /// Converts the wrapper into a regular iced element.
+    /// 将包装层转换为常规 iced 元素。
+    fn from(
+        widget: WheelIntercept<'a, Message, Theme, Renderer>,
     ) -> Element<'a, Message, Theme, Renderer> {
         Element::new(widget)
     }

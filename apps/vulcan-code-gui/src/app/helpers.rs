@@ -701,21 +701,6 @@ fn read_windows_clipboard_image_payload_inner() -> Result<Option<ComposerClipboa
     Ok(None)
 }
 
-/// Shows one native warning dialog when the latest attachment import failure is caused by an unsupported file format.
-/// 当最近一次附件导入失败由不支持的文件格式引起时，显示一条原生警告弹窗。
-pub(super) fn maybe_show_unsupported_attachment_format_dialog(error: &str) {
-    if !error.contains("不是受支持的附件格式") {
-        return;
-    }
-
-    let _ = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("不支持的附件格式")
-        .set_description(error)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
 /// Normalizes one project path to a canonical form when the platform can resolve it.
 /// 当平台能够解析时，将某个项目路径规范化为标准形式。
 pub(super) fn normalize_task_project_path(path: &Path) -> std::path::PathBuf {

@@ -72,7 +72,7 @@ use crate::skills::{
 };
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
-use crate::wheel_passthrough::WheelPassthrough;
+use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
     self, SESSION_HISTORY_SEARCH_RESULT_LIMIT, SESSION_TOOL_DETAIL_PAGE_LIMIT,
@@ -82,14 +82,14 @@ use crate::workspace_store::{
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
-    PickList, button, checkbox, container, markdown, mouse_area, pick_list as iced_pick_list,
-    progress_bar, radio, row, rule, scrollable, slider, space, stack, svg, text, text_editor,
-    text_input, toggler, tooltip,
+    PickList, button, checkbox, container, image as iced_image, markdown, mouse_area,
+    pick_list as iced_pick_list, progress_bar, radio, row, rule, scrollable, slider, space, stack,
+    svg, text, text_editor, text_input, toggler, tooltip,
 };
 use iced::window;
 use iced::{
-    Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, clipboard,
-    keyboard, task,
+    Center, ContentFit, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme,
+    clipboard, keyboard, task,
 };
 use iced_aw::{ContextMenu, date_picker::Date};
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
@@ -463,7 +463,19 @@ const COMPOSER_CONTROL_ROW_HEIGHT: f32 = 36.0;
 
 /// Shared fixed row height reserved for the attachment strip shown under the main prompt composer editor.
 /// 主提示词编辑器下方附件条保留的共享固定行高。
-const COMPOSER_ATTACHMENT_ROW_HEIGHT: f32 = 34.0;
+const COMPOSER_ATTACHMENT_ROW_HEIGHT: f32 = 74.0;
+
+/// Shared square edge length used by each staged composer attachment preview tile.
+/// 每个已暂存提示词附件预览方格使用的共享边长。
+const COMPOSER_ATTACHMENT_TILE_SIZE: f32 = 64.0;
+
+/// Shared square edge length used by the circular remove button on an attachment tile.
+/// 附件方格右上角圆形移除按钮使用的共享边长。
+const COMPOSER_ATTACHMENT_REMOVE_BUTTON_SIZE: f32 = 20.0;
+
+/// Maximum staged attachment count accepted by the main composer.
+/// 主提示词输入框允许暂存的最大附件数量。
+const MAX_COMPOSER_ATTACHMENTS: usize = 10;
 
 /// Shared fixed horizontal inset kept on both sides of the pending-prompt queue panel above the composer.
 /// 主提示词输入框上方待发送队列面板两侧保留的共享水平留白。
@@ -521,6 +533,78 @@ const WORKBENCH_REASONING_SELECTOR_WIDTH: f32 = 76.0;
 /// 工作台内嵌模型选择弹窗卡片使用的共享固定宽度。
 const WORKBENCH_MODEL_PICKER_MODAL_WIDTH: f32 = 680.0;
 
+/// Shared fixed width used by the reusable blocking notice modal card.
+/// 可复用阻塞提示弹窗卡片使用的共享固定宽度。
+const WORKBENCH_NOTICE_MODAL_WIDTH: f32 = 460.0;
+
+/// Shared fixed height used by the reusable blocking notice modal card.
+/// 可复用阻塞提示弹窗卡片使用的共享固定高度。
+const WORKBENCH_NOTICE_MODAL_HEIGHT: f32 = 248.0;
+
+/// Shared fixed height used by the reusable blocking notice modal header.
+/// 可复用阻塞提示弹窗标题栏使用的共享固定高度。
+const WORKBENCH_NOTICE_MODAL_HEADER_HEIGHT: f32 = 36.0;
+
+/// Shared fixed width used by each reusable blocking notice modal action button.
+/// 可复用阻塞提示弹窗每个操作按钮使用的共享固定宽度。
+const WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH: f32 = 118.0;
+
+/// Ratio of the main window reserved by the blocking image-preview modal card.
+/// 阻塞式图片预览弹窗卡片相对于主窗口保留的尺寸比例。
+const WORKBENCH_IMAGE_PREVIEW_MODAL_RATIO: f32 = 0.70;
+
+/// Minimum width kept for the blocking image-preview modal card on narrow windows.
+/// 窄窗口下阻塞式图片预览弹窗卡片保留的最小宽度。
+const WORKBENCH_IMAGE_PREVIEW_MODAL_MIN_WIDTH: f32 = 520.0;
+
+/// Minimum height kept for the blocking image-preview modal card on short windows.
+/// 矮窗口下阻塞式图片预览弹窗卡片保留的最小高度。
+const WORKBENCH_IMAGE_PREVIEW_MODAL_MIN_HEIGHT: f32 = 360.0;
+
+/// Horizontal padding used inside the blocking image-preview modal card.
+/// 阻塞式图片预览弹窗卡片内部使用的水平内边距。
+const WORKBENCH_IMAGE_PREVIEW_CARD_PADDING_X: f32 = 20.0;
+
+/// Vertical padding used inside the blocking image-preview modal card.
+/// 阻塞式图片预览弹窗卡片内部使用的垂直内边距。
+const WORKBENCH_IMAGE_PREVIEW_CARD_PADDING_Y: f32 = 18.0;
+
+/// Vertical spacing kept between the image-preview header and the preview surface.
+/// 图片预览标题栏与预览区域之间保留的垂直间距。
+const WORKBENCH_IMAGE_PREVIEW_BODY_SPACING: f32 = 10.0;
+
+/// Shared fixed height used by the compact image-preview modal header.
+/// 紧凑图片预览弹窗标题栏使用的共享固定高度。
+const WORKBENCH_IMAGE_PREVIEW_HEADER_HEIGHT: f32 = 40.0;
+
+/// Default image preview zoom factor used when opening or resetting the preview.
+/// 打开或还原图片预览时使用的默认缩放倍率。
+const WORKBENCH_IMAGE_PREVIEW_DEFAULT_ZOOM: f32 = 1.0;
+
+/// Minimum image preview zoom factor accepted by wheel and button controls.
+/// 滚轮与按钮控制允许的最小图片预览缩放倍率。
+const WORKBENCH_IMAGE_PREVIEW_MIN_ZOOM: f32 = 0.25;
+
+/// Maximum image preview zoom factor accepted by wheel and button controls.
+/// 滚轮与按钮控制允许的最大图片预览缩放倍率。
+const WORKBENCH_IMAGE_PREVIEW_MAX_ZOOM: f32 = 4.0;
+
+/// Image preview zoom delta applied by toolbar buttons.
+/// 图片预览工具栏按钮应用的缩放步长。
+const WORKBENCH_IMAGE_PREVIEW_BUTTON_ZOOM_STEP: f32 = 0.25;
+
+/// Image preview zoom delta applied for each wheel-scroll notch.
+/// 每个滚轮滚动刻度应用的图片预览缩放步长。
+const WORKBENCH_IMAGE_PREVIEW_WHEEL_ZOOM_STEP: f32 = 0.10;
+
+/// Pixel scroll amount applied for each line-based wheel notch inside the image preview.
+/// 图片预览内部每个按行滚轮刻度转换出的像素滚动量。
+const WORKBENCH_IMAGE_PREVIEW_WHEEL_SCROLL_LINE_STEP: f32 = 60.0;
+
+/// Pixel movement below this threshold is ignored while left-button panning the image preview.
+/// 左键平移图片预览时低于该阈值的像素移动会被忽略。
+const WORKBENCH_IMAGE_PREVIEW_PAN_EPSILON: f32 = 0.5;
+
 /// Shared fixed height used by the scrollable result list inside the workbench model-picker modal.
 /// 工作台模型选择弹窗内部滚动结果列表使用的共享固定高度。
 const WORKBENCH_MODEL_PICKER_LIST_HEIGHT: f32 = 340.0;
@@ -545,6 +629,12 @@ const WORKSPACE_HISTORY_SEARCH_SCOPE_LIST_HEIGHT: f32 = 220.0;
 /// 返回主提示词编辑器在扣除内部边距之后可用于文本排版的实际宽度。
 fn composer_available_text_width(surface_width: f32) -> f32 {
     (surface_width - COMPOSER_EDITOR_HORIZONTAL_INSET).max(COMPOSER_EDITOR_TEXT_SIZE)
+}
+
+/// Builds the stable scrollable identifier used by the image preview modal panning surface.
+/// 构建图片预览弹窗平移区域使用的稳定滚动容器标识。
+fn workbench_image_preview_scrollable_id() -> iced::widget::Id {
+    iced::widget::Id::new("workbench-image-preview-scrollable")
 }
 
 /// Measures the current composer content with the native editor layout engine and returns its minimum bounds plus caret position.
@@ -1328,6 +1418,67 @@ struct ComposerUndoSnapshot {
     scroll_offset: f32,
 }
 
+/// Confirm action carried by the reusable blocking notice modal.
+/// 可复用阻塞提示弹窗携带的确认动作。
+#[derive(Debug, Clone)]
+enum WorkbenchNoticeConfirmAction {
+    /// Closes the modal without mutating domain state.
+    /// 关闭弹窗且不修改业务状态。
+    Acknowledge,
+    /// Applies one pending model switch and removes staged attachments unsupported by the target model.
+    /// 应用一次待确认模型切换，并移除目标模型不支持的已暂存附件。
+    ApplyModelSwitchRemovingUnsupportedAttachments {
+        /// Pending model choice selected by the user before compatibility confirmation.
+        /// 用户在兼容性确认之前选择的待切换模型。
+        choice: WorkbenchModelChoice,
+    },
+}
+
+/// Reusable blocking notice modal state shared by acknowledgement and confirmation prompts.
+/// 告知与确认提示共享的可复用阻塞提示弹窗状态。
+#[derive(Debug, Clone)]
+struct WorkbenchNoticeModalState {
+    /// Modal title shown in the header row.
+    /// 显示在弹窗标题行中的标题。
+    title: String,
+    /// Modal body explaining the condition that needs acknowledgement.
+    /// 解释需要确认条件的弹窗正文。
+    body: String,
+    /// Primary confirmation button label.
+    /// 主确认按钮标签。
+    confirm_label: String,
+    /// Optional secondary dismiss button label.
+    /// 可选次要取消按钮标签。
+    dismiss_label: Option<String>,
+    /// Domain action executed when the primary confirmation button is pressed.
+    /// 点击主确认按钮时执行的业务动作。
+    confirm_action: WorkbenchNoticeConfirmAction,
+}
+
+/// Blocking image preview modal state opened from one staged image attachment tile.
+/// 从已暂存图片附件方格打开的阻塞式图片预览弹窗状态。
+#[derive(Debug, Clone)]
+struct WorkbenchImagePreviewModalState {
+    /// File name shown in the preview modal header.
+    /// 显示在预览弹窗标题栏中的文件名。
+    file_name: String,
+    /// Local image path rendered by the preview surface.
+    /// 由预览区域渲染的本地图片路径。
+    local_path: String,
+    /// Current zoom factor applied to the preview image surface.
+    /// 当前应用到图片预览区域的缩放倍率。
+    zoom: f32,
+    /// Last window cursor position captured while left-button panning is active.
+    /// 左键平移激活时捕获的上一帧窗口光标位置。
+    pan_pointer: Option<iced::Point>,
+    /// Latest local cursor position tracked inside the preview image surface.
+    /// 最近一次在图片预览区域内部追踪到的局部光标位置。
+    preview_pointer: Option<iced::Point>,
+    /// Latest absolute scroll offset reported by the preview image scrollable.
+    /// 图片预览滚动容器最近一次回传的绝对滚动偏移。
+    scroll_offset: scrollable::AbsoluteOffset,
+}
+
 /// Live scrollbar geometry derived from the current composer editor content and viewport.
 /// 根据当前提示词编辑器内容与视口推导出的实时滚动条几何信息。
 #[derive(Debug, Clone, Copy)]
@@ -1402,6 +1553,9 @@ pub struct VulcanWorkbench {
     /// Latest cursor position tracked inside the main workbench window.
     /// 最近一次在主工作台窗口中追踪到的鼠标位置。
     main_window_cursor_position: Option<iced::Point>,
+    /// Latest keyboard modifier state used by global mouse gestures such as Ctrl + wheel.
+    /// 全局鼠标手势（例如 Ctrl + 滚轮）使用的最新键盘修饰键状态。
+    workbench_keyboard_modifiers: keyboard::Modifiers,
     /// Latest cursor position tracked inside one custom title bar drag region.
     /// 最近一次在某个自定义标题栏拖拽区域内记录到的鼠标位置。
     title_bar_pointer_position: Option<WindowTitleBarPointer>,
@@ -1438,6 +1592,12 @@ pub struct VulcanWorkbench {
     /// Structured multimodal attachments currently staged beside the prompt composer text.
     /// 当前与提示词文本一起暂存的结构化多模态附件集合。
     composer_attachments: Vec<ConversationAttachment>,
+    /// Reusable blocking notice modal currently shown above all main-workbench content.
+    /// 当前显示在所有主工作台内容之上的可复用阻塞提示弹窗。
+    workbench_notice_modal: Option<WorkbenchNoticeModalState>,
+    /// Blocking image preview modal currently opened from one staged composer attachment.
+    /// 当前从某个已暂存提示词附件打开的阻塞式图片预览弹窗。
+    workbench_image_preview_modal: Option<WorkbenchImagePreviewModalState>,
     /// Human-readable file labels currently hovering over the main workbench window as potential composer drops.
     /// 当前悬停在主工作台窗口上、可作为提示词拖拽导入候选项的人类可读文件标签集合。
     composer_drag_hover_labels: Vec<String>,
@@ -3035,6 +3195,9 @@ enum Message {
     /// Reports a pointer move tracked at the window level.
     /// 回传在窗口级别追踪到的鼠标移动事件。
     WindowPointerMoved(window::Id, iced::Point),
+    /// Tracks the latest keyboard modifier state reported by the window event stream.
+    /// 跟踪窗口事件流回传的最新键盘修饰键状态。
+    WorkbenchKeyboardModifiersChanged(keyboard::Modifiers),
     /// Reports that the left mouse button was released at the window level.
     /// 回传在窗口级别追踪到的鼠标左键释放事件。
     WindowLeftButtonReleased(window::Id),
@@ -3062,6 +3225,52 @@ enum Message {
     /// Removes one staged composer attachment identified by its canonical local path.
     /// 根据规范本地路径移除一条已暂存的提示词附件。
     RemoveComposerAttachment(String),
+    /// Opens the blocking image preview modal for one staged image attachment.
+    /// 为某个已暂存图片附件打开阻塞式图片预览弹窗。
+    OpenComposerImageAttachmentPreview {
+        /// File name shown in the image preview modal header.
+        /// 显示在图片预览弹窗标题栏中的文件名。
+        file_name: String,
+        /// Local image path rendered by the image preview modal.
+        /// 由图片预览弹窗渲染的本地图片路径。
+        local_path: String,
+    },
+    /// Closes the currently visible image preview modal.
+    /// 关闭当前可见的图片预览弹窗。
+    CloseWorkbenchImagePreviewModal,
+    /// Adjusts the current image preview zoom factor by one signed delta.
+    /// 按一个有符号增量调整当前图片预览缩放倍率。
+    AdjustWorkbenchImagePreviewZoom(f32),
+    /// Handles one captured mouse-wheel movement while the image preview modal is visible.
+    /// 处理图片预览弹窗可见时捕获到的一次鼠标滚轮移动。
+    WorkbenchImagePreviewWheelScrolled(iced::mouse::ScrollDelta),
+    /// Starts one left-button pan interaction inside the image preview surface.
+    /// 在图片预览区域内部启动一次鼠标左键平移交互。
+    WorkbenchImagePreviewLeftPressed,
+    /// Ends the active left-button pan interaction inside the image preview surface.
+    /// 结束图片预览区域内部当前激活的鼠标左键平移交互。
+    WorkbenchImagePreviewLeftReleased,
+    /// Tracks the latest local pointer position inside the image preview surface.
+    /// 跟踪图片预览区域内部最近一次局部鼠标位置。
+    WorkbenchImagePreviewPointerMoved(iced::Point),
+    /// Tracks the latest scrollable viewport emitted by the image preview surface.
+    /// 跟踪图片预览区域滚动容器最近一次回传的视口状态。
+    WorkbenchImagePreviewScrolled(scrollable::Viewport),
+    /// Resets the current image preview zoom factor to its default fit value.
+    /// 将当前图片预览缩放倍率还原到默认适配值。
+    ResetWorkbenchImagePreviewZoom,
+    /// Confirms and closes the currently visible reusable workbench notice modal.
+    /// 确认并关闭当前可见的可复用工作台提示弹窗。
+    ConfirmWorkbenchNoticeModal,
+    /// Closes the currently visible reusable workbench notice modal without changing domain state.
+    /// 关闭当前可见的可复用工作台提示弹窗且不修改业务状态。
+    CloseWorkbenchNoticeModal,
+    /// Dismisses the top-most keyboard-driven overlay, preferring the reusable notice modal before legacy overlays.
+    /// 关闭键盘驱动的最顶层遮罩，优先处理可复用提示弹窗再回退到旧弹层。
+    DismissTopLevelOverlay,
+    /// Confirms the top-most keyboard-driven overlay, preferring the reusable notice modal before model selection.
+    /// 确认键盘驱动的最顶层遮罩，优先处理可复用提示弹窗再回退到模型选择。
+    ConfirmTopLevelOverlay,
     /// Tracks one supported or unsupported file currently hovering over the main window as a potential composer drop target.
     /// 跟踪当前悬停在主窗口上、可作为提示词拖放目标的一条受支持或不受支持文件。
     WindowFileHovered(window::Id, PathBuf),
@@ -3143,9 +3352,6 @@ enum Message {
     /// Moves the highlighted option downward inside the filtered workbench model-picker result list.
     /// 在工作台模型选择弹窗的过滤结果列表中向下移动高亮选项。
     WorkbenchModelPickerMoveSelectionDown,
-    /// Confirms the currently highlighted option inside the workbench model-picker modal.
-    /// 确认工作台模型选择弹窗中当前高亮的选项。
-    ConfirmWorkbenchModelPickerSelection,
     /// Selects one already-configured provider entry for editing.
     /// 选中一个已配置的供应商条目进行编辑。
     ConfiguredProviderSelected(String),
@@ -3839,6 +4045,7 @@ impl VulcanWorkbench {
             diff_window_size: diff_window_settings().size,
             diff_window_maximized: diff_window_settings().maximized,
             main_window_cursor_position: None,
+            workbench_keyboard_modifiers: keyboard::Modifiers::default(),
             title_bar_pointer_position: None,
             pending_title_bar_drag: None,
             main_task_panel_width: MAIN_TASK_PANEL_DEFAULT_WIDTH,
@@ -3851,6 +4058,8 @@ impl VulcanWorkbench {
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
             composer_attachments: Vec::new(),
+            workbench_notice_modal: None,
+            workbench_image_preview_modal: None,
             composer_drag_hover_labels: Vec::new(),
             composer_undo_history: Vec::new(),
             composer_scroll_offset: 0.0,
@@ -5049,6 +5258,13 @@ impl VulcanWorkbench {
             Message::WindowPointerMoved(window_id, position) => {
                 if self.main_window_id == Some(window_id) {
                     self.main_window_cursor_position = Some(position);
+                    if self
+                        .workbench_image_preview_modal
+                        .as_ref()
+                        .is_some_and(|modal| modal.pan_pointer.is_some())
+                    {
+                        return self.apply_workbench_image_preview_pan(position);
+                    }
 
                     if let Some(pending_resize) = self.pending_main_task_panel_resize {
                         let new_width = (pending_resize.initial_width
@@ -5090,12 +5306,19 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::WorkbenchKeyboardModifiersChanged(modifiers) => {
+                self.workbench_keyboard_modifiers = modifiers;
+                Task::none()
+            }
             Message::WindowLeftButtonReleased(window_id) => {
                 self.clear_transcript_drag_auto_scrolls();
                 self.composer_scrollbar_drag_grab_offset = None;
                 let mut did_commit_drop = false;
                 let mut did_commit_pending_prompt_drop = false;
                 if self.main_window_id == Some(window_id) {
+                    if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
+                        modal.pan_pointer = None;
+                    }
                     self.pending_main_task_panel_resize = None;
 
                     let toggled_project_id = self
@@ -5177,6 +5400,74 @@ impl VulcanWorkbench {
             Message::RemoveComposerAttachment(local_path) => {
                 self.remove_composer_attachment(&local_path)
             }
+            Message::OpenComposerImageAttachmentPreview {
+                file_name,
+                local_path,
+            } => self.open_composer_image_attachment_preview(file_name, local_path),
+            Message::CloseWorkbenchImagePreviewModal => {
+                self.workbench_image_preview_modal = None;
+                Task::none()
+            }
+            Message::AdjustWorkbenchImagePreviewZoom(delta) => {
+                self.adjust_workbench_image_preview_zoom(delta)
+            }
+            Message::WorkbenchImagePreviewWheelScrolled(delta) => {
+                self.handle_workbench_image_preview_wheel(delta)
+            }
+            Message::WorkbenchImagePreviewLeftPressed => self.begin_workbench_image_preview_pan(),
+            Message::WorkbenchImagePreviewLeftReleased => self.end_workbench_image_preview_pan(),
+            Message::WorkbenchImagePreviewPointerMoved(position) => {
+                if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
+                    modal.preview_pointer = Some(position);
+                }
+                Task::none()
+            }
+            Message::WorkbenchImagePreviewScrolled(viewport) => {
+                if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
+                    modal.scroll_offset = viewport.absolute_offset();
+                }
+                Task::none()
+            }
+            Message::ResetWorkbenchImagePreviewZoom => self.reset_workbench_image_preview_zoom(),
+            Message::ConfirmWorkbenchNoticeModal => self.confirm_workbench_notice_modal(),
+            Message::CloseWorkbenchNoticeModal => {
+                self.workbench_notice_modal = None;
+                Task::none()
+            }
+            Message::DismissTopLevelOverlay => {
+                if self.workbench_image_preview_modal.take().is_some() {
+                    return Task::none();
+                }
+                if self.workbench_notice_modal.take().is_some() {
+                    return Task::none();
+                }
+                if self.workbench_model_picker_open {
+                    self.workbench_model_picker_open = false;
+                    self.workbench_model_picker_filter.clear();
+                    self.workbench_model_picker_highlighted_index = None;
+                    return Task::none();
+                }
+                self.begin_close_thinking_modal();
+                self.begin_close_tool_modal();
+                Task::none()
+            }
+            Message::ConfirmTopLevelOverlay => {
+                if self.workbench_image_preview_modal.is_some() {
+                    return Task::none();
+                }
+                if self.workbench_notice_modal.is_some() {
+                    return self.confirm_workbench_notice_modal();
+                }
+                if !self.workbench_model_picker_open {
+                    return Task::none();
+                }
+
+                let Some(choice) = self.highlighted_workbench_model_choice() else {
+                    return Task::none();
+                };
+
+                self.request_workbench_model_choice(choice)
+            }
             Message::WindowFileHovered(window_id, path) => {
                 if self.main_window_id != Some(window_id)
                     || !self.active_workbench_supports_any_attachments()
@@ -5198,9 +5489,15 @@ impl VulcanWorkbench {
                 }
                 self.composer_drag_hover_labels.clear();
                 if !self.active_workbench_supports_any_attachments() {
-                    self.status_message = String::from(
+                    let notice = String::from(
                         "当前模型未声明可用附件输入模态，请切换到支持音频、图片、视频或 PDF 的模型后再试。",
                     );
+                    self.show_workbench_notice_modal("当前模型不支持附件", notice.clone());
+                    self.status_message = notice;
+                    return operation::focus(COMPOSER_EDITOR_ID);
+                }
+                if self.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                    self.show_composer_attachment_limit_notice("拖拽文件");
                     return operation::focus(COMPOSER_EDITOR_ID);
                 }
                 let attachment_workspace_path = self.selected_attachment_workspace_path();
@@ -5212,7 +5509,10 @@ impl VulcanWorkbench {
                         self.append_imported_composer_attachments(attachments, "拖拽")
                     }
                     Err(error) => {
-                        maybe_show_unsupported_attachment_format_dialog(&error);
+                        self.show_workbench_notice_modal(
+                            Self::composer_attachment_error_title(&error),
+                            error.clone(),
+                        );
                         self.status_message = format!("处理拖拽附件失败：{error}");
                         operation::focus(COMPOSER_EDITOR_ID)
                     }
@@ -5221,6 +5521,7 @@ impl VulcanWorkbench {
             Message::OpenComposerContextMenu => self.open_composer_context_menu(),
             Message::CloseComposerContextMenu => {
                 self.composer_context_menu_open = false;
+                self.composer_context_clipboard_text = None;
                 Task::none()
             }
             Message::ComposerContextClipboardLoaded(result) => {
@@ -5455,7 +5756,7 @@ impl VulcanWorkbench {
                 );
                 Task::none()
             }
-            Message::WorkbenchModelSelected(choice) => self.apply_workbench_model_choice(choice),
+            Message::WorkbenchModelSelected(choice) => self.request_workbench_model_choice(choice),
             Message::OpenWorkbenchModelPicker => self.open_workbench_model_picker(),
             Message::CloseWorkbenchModelPicker => {
                 self.workbench_model_picker_open = false;
@@ -5505,17 +5806,6 @@ impl VulcanWorkbench {
                     )
                 };
                 Task::none()
-            }
-            Message::ConfirmWorkbenchModelPickerSelection => {
-                if !self.workbench_model_picker_open {
-                    return Task::none();
-                }
-
-                let Some(choice) = self.highlighted_workbench_model_choice() else {
-                    return Task::none();
-                };
-
-                self.apply_workbench_model_choice(choice)
             }
             Message::ConfiguredProviderSelected(provider_id) => {
                 if let Some(choice) = provider_config::supported_provider_choices()
@@ -8271,6 +8561,313 @@ impl VulcanWorkbench {
             .unwrap_or_else(|| self.workspace_path.trim().to_string())
     }
 
+    /// Opens the reusable blocking workbench notice modal with a default confirmation action.
+    /// 使用默认确认动作打开可复用阻塞工作台提示弹窗。
+    fn show_workbench_notice_modal(&mut self, title: impl Into<String>, body: impl Into<String>) {
+        self.workbench_notice_modal = Some(WorkbenchNoticeModalState {
+            title: title.into(),
+            body: body.into(),
+            confirm_label: String::from("确认"),
+            dismiss_label: None,
+            confirm_action: WorkbenchNoticeConfirmAction::Acknowledge,
+        });
+    }
+
+    /// Opens the reusable blocking workbench notice modal with an explicit confirm/cancel action pair.
+    /// 使用明确的确认与取消动作打开可复用阻塞工作台提示弹窗。
+    fn show_workbench_confirmation_modal(
+        &mut self,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        confirm_label: impl Into<String>,
+        dismiss_label: impl Into<String>,
+        confirm_action: WorkbenchNoticeConfirmAction,
+    ) {
+        self.workbench_notice_modal = Some(WorkbenchNoticeModalState {
+            title: title.into(),
+            body: body.into(),
+            confirm_label: confirm_label.into(),
+            dismiss_label: Some(dismiss_label.into()),
+            confirm_action,
+        });
+    }
+
+    /// Executes the domain action attached to the currently visible workbench notice modal.
+    /// 执行当前可见工作台提示弹窗附带的业务确认动作。
+    fn confirm_workbench_notice_modal(&mut self) -> Task<Message> {
+        let Some(modal) = self.workbench_notice_modal.take() else {
+            return Task::none();
+        };
+
+        match modal.confirm_action {
+            WorkbenchNoticeConfirmAction::Acknowledge => Task::none(),
+            WorkbenchNoticeConfirmAction::ApplyModelSwitchRemovingUnsupportedAttachments {
+                choice,
+            } => self.apply_confirmed_workbench_model_choice_after_attachment_cleanup(choice),
+        }
+    }
+
+    /// Opens one staged image attachment in the blocking preview modal after verifying the managed file still exists.
+    /// 在确认受管文件仍然存在后，将某个已暂存图片附件打开到阻塞式预览弹窗中。
+    fn open_composer_image_attachment_preview(
+        &mut self,
+        file_name: String,
+        local_path: String,
+    ) -> Task<Message> {
+        if !Path::new(&local_path).is_file() {
+            let notice = format!("图片附件 `{file_name}` 的本地缓存文件已不存在，无法打开预览。");
+            self.show_workbench_notice_modal("图片附件不可预览", notice.clone());
+            self.status_message = notice;
+            return Task::none();
+        }
+
+        self.workbench_image_preview_modal = Some(WorkbenchImagePreviewModalState {
+            file_name,
+            local_path,
+            zoom: WORKBENCH_IMAGE_PREVIEW_DEFAULT_ZOOM,
+            pan_pointer: None,
+            preview_pointer: None,
+            scroll_offset: scrollable::AbsoluteOffset::default(),
+        });
+        Task::none()
+    }
+
+    /// Computes the modal card size used by the current image preview overlay from the live main-window size.
+    /// 根据实时主窗口尺寸计算当前图片预览遮罩使用的弹窗卡片尺寸。
+    fn workbench_image_preview_modal_size(&self) -> iced::Size {
+        iced::Size::new(
+            (self.main_window_size.width * WORKBENCH_IMAGE_PREVIEW_MODAL_RATIO)
+                .max(WORKBENCH_IMAGE_PREVIEW_MODAL_MIN_WIDTH),
+            (self.main_window_size.height * WORKBENCH_IMAGE_PREVIEW_MODAL_RATIO)
+                .max(WORKBENCH_IMAGE_PREVIEW_MODAL_MIN_HEIGHT),
+        )
+    }
+
+    /// Computes the visible image viewport size inside the current image preview modal.
+    /// 计算当前图片预览弹窗内部可见图片视口尺寸。
+    fn workbench_image_preview_viewport_size(&self) -> iced::Size {
+        let modal_size = self.workbench_image_preview_modal_size();
+        iced::Size::new(
+            (modal_size.width - WORKBENCH_IMAGE_PREVIEW_CARD_PADDING_X * 2.0).max(160.0),
+            (modal_size.height
+                - WORKBENCH_IMAGE_PREVIEW_CARD_PADDING_Y * 2.0
+                - WORKBENCH_IMAGE_PREVIEW_HEADER_HEIGHT
+                - WORKBENCH_IMAGE_PREVIEW_BODY_SPACING)
+                .max(120.0),
+        )
+    }
+
+    /// Adjusts the currently open image preview zoom while preserving the hovered image point when possible.
+    /// 调整当前已打开图片预览的缩放倍率，并尽量保持鼠标悬停的图片点不漂移。
+    fn adjust_workbench_image_preview_zoom(&mut self, delta: f32) -> Task<Message> {
+        self.zoom_workbench_image_preview(delta, None)
+    }
+
+    /// Handles one intercepted wheel movement, using Ctrl for pointer-centered zoom and plain wheel for preview scrolling.
+    /// 处理一次被拦截的滚轮移动，按住 Ctrl 时围绕指针缩放，普通滚轮则滚动预览区域。
+    fn handle_workbench_image_preview_wheel(
+        &mut self,
+        delta: iced::mouse::ScrollDelta,
+    ) -> Task<Message> {
+        if self.workbench_image_preview_modal.is_none() {
+            return Task::none();
+        }
+
+        if !self.workbench_keyboard_modifiers.control() {
+            let scroll_offset = Self::workbench_image_preview_wheel_scroll_offset(delta);
+            if scroll_offset.x.abs() <= f32::EPSILON && scroll_offset.y.abs() <= f32::EPSILON {
+                return Task::none();
+            }
+            let viewport_size = self.workbench_image_preview_viewport_size();
+            let Some(modal) = self.workbench_image_preview_modal.as_mut() else {
+                return Task::none();
+            };
+            let next_offset = Self::clamp_workbench_image_preview_scroll_offset(
+                viewport_size,
+                modal.zoom,
+                scrollable::AbsoluteOffset {
+                    x: modal.scroll_offset.x + scroll_offset.x,
+                    y: modal.scroll_offset.y + scroll_offset.y,
+                },
+            );
+            modal.scroll_offset = next_offset;
+            return operation::scroll_to(workbench_image_preview_scrollable_id(), next_offset);
+        }
+
+        let raw_delta = match delta {
+            iced::mouse::ScrollDelta::Lines { y, .. } => y,
+            iced::mouse::ScrollDelta::Pixels { y, .. } => y.signum(),
+        };
+        if raw_delta.abs() <= f32::EPSILON {
+            return Task::none();
+        }
+
+        self.zoom_workbench_image_preview(
+            raw_delta.signum() * WORKBENCH_IMAGE_PREVIEW_WHEEL_ZOOM_STEP,
+            None,
+        )
+    }
+
+    /// Converts one wheel delta into the same absolute preview-scroll offset used by iced scrollables.
+    /// 将一次滚轮增量转换为与 iced 滚动容器一致的绝对预览滚动偏移。
+    fn workbench_image_preview_wheel_scroll_offset(
+        delta: iced::mouse::ScrollDelta,
+    ) -> scrollable::AbsoluteOffset {
+        match delta {
+            iced::mouse::ScrollDelta::Lines { x, y } => scrollable::AbsoluteOffset {
+                x: -x * WORKBENCH_IMAGE_PREVIEW_WHEEL_SCROLL_LINE_STEP,
+                y: -y * WORKBENCH_IMAGE_PREVIEW_WHEEL_SCROLL_LINE_STEP,
+            },
+            iced::mouse::ScrollDelta::Pixels { x, y } => {
+                scrollable::AbsoluteOffset { x: -x, y: -y }
+            }
+        }
+    }
+
+    /// Clamps one requested preview scroll offset to the currently reachable zoomed image content bounds.
+    /// 将请求的预览滚动偏移限制到当前缩放图片内容可达的边界内。
+    fn clamp_workbench_image_preview_scroll_offset(
+        viewport_size: iced::Size,
+        zoom: f32,
+        offset: scrollable::AbsoluteOffset,
+    ) -> scrollable::AbsoluteOffset {
+        let max_x = (viewport_size.width * zoom.max(WORKBENCH_IMAGE_PREVIEW_DEFAULT_ZOOM)
+            - viewport_size.width)
+            .max(0.0);
+        let max_y = (viewport_size.height * zoom.max(WORKBENCH_IMAGE_PREVIEW_DEFAULT_ZOOM)
+            - viewport_size.height)
+            .max(0.0);
+
+        scrollable::AbsoluteOffset {
+            x: offset.x.clamp(0.0, max_x),
+            y: offset.y.clamp(0.0, max_y),
+        }
+    }
+
+    /// Starts left-button panning for the image preview from the current window cursor position.
+    /// 从当前窗口光标位置开始图片预览左键平移。
+    fn begin_workbench_image_preview_pan(&mut self) -> Task<Message> {
+        if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
+            modal.pan_pointer = self.main_window_cursor_position;
+        }
+        Task::none()
+    }
+
+    /// Ends any active left-button image preview panning gesture.
+    /// 结束当前激活的任意左键图片预览平移手势。
+    fn end_workbench_image_preview_pan(&mut self) -> Task<Message> {
+        if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
+            modal.pan_pointer = None;
+        }
+        Task::none()
+    }
+
+    /// Applies one cursor movement as a left-button image preview pan operation.
+    /// 将一次光标移动应用为左键图片预览平移操作。
+    fn apply_workbench_image_preview_pan(&mut self, position: iced::Point) -> Task<Message> {
+        let viewport_size = self.workbench_image_preview_viewport_size();
+        let Some(modal) = self.workbench_image_preview_modal.as_mut() else {
+            return Task::none();
+        };
+        let Some(previous_position) = modal.pan_pointer.replace(position) else {
+            return Task::none();
+        };
+        let pan_delta_x = previous_position.x - position.x;
+        let pan_delta_y = previous_position.y - position.y;
+        if pan_delta_x.abs() <= WORKBENCH_IMAGE_PREVIEW_PAN_EPSILON
+            && pan_delta_y.abs() <= WORKBENCH_IMAGE_PREVIEW_PAN_EPSILON
+        {
+            return Task::none();
+        }
+
+        let next_offset = Self::clamp_workbench_image_preview_scroll_offset(
+            viewport_size,
+            modal.zoom,
+            scrollable::AbsoluteOffset {
+                x: modal.scroll_offset.x + pan_delta_x,
+                y: modal.scroll_offset.y + pan_delta_y,
+            },
+        );
+        modal.scroll_offset = next_offset;
+        operation::scroll_to(workbench_image_preview_scrollable_id(), next_offset)
+    }
+
+    /// Applies one zoom delta and scrolls the preview so the selected local anchor stays under the cursor.
+    /// 应用一次缩放增量，并滚动预览以尽量让选定的局部锚点停留在鼠标下方。
+    fn zoom_workbench_image_preview(
+        &mut self,
+        delta: f32,
+        anchor_override: Option<iced::Point>,
+    ) -> Task<Message> {
+        let viewport_size = self.workbench_image_preview_viewport_size();
+        let Some(modal) = self.workbench_image_preview_modal.as_mut() else {
+            return Task::none();
+        };
+        let previous_zoom = modal.zoom;
+        let next_zoom = (previous_zoom + delta).clamp(
+            WORKBENCH_IMAGE_PREVIEW_MIN_ZOOM,
+            WORKBENCH_IMAGE_PREVIEW_MAX_ZOOM,
+        );
+        if (next_zoom - previous_zoom).abs() <= f32::EPSILON {
+            return Task::none();
+        }
+
+        let anchor = anchor_override
+            .or(modal.preview_pointer)
+            .unwrap_or_else(|| {
+                iced::Point::new(viewport_size.width / 2.0, viewport_size.height / 2.0)
+            });
+        let zoom_ratio = next_zoom / previous_zoom.max(f32::EPSILON);
+        let next_offset = Self::clamp_workbench_image_preview_scroll_offset(
+            viewport_size,
+            next_zoom,
+            scrollable::AbsoluteOffset {
+                x: (modal.scroll_offset.x + anchor.x) * zoom_ratio - anchor.x,
+                y: (modal.scroll_offset.y + anchor.y) * zoom_ratio - anchor.y,
+            },
+        );
+
+        modal.zoom = next_zoom;
+        modal.scroll_offset = next_offset;
+        operation::scroll_to(workbench_image_preview_scrollable_id(), next_offset)
+    }
+
+    /// Resets the currently open image preview zoom to the default fit value.
+    /// 将当前已打开图片预览的缩放倍率还原到默认适配值。
+    fn reset_workbench_image_preview_zoom(&mut self) -> Task<Message> {
+        if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
+            modal.zoom = WORKBENCH_IMAGE_PREVIEW_DEFAULT_ZOOM;
+            modal.scroll_offset = scrollable::AbsoluteOffset::default();
+        }
+        operation::scroll_to(
+            workbench_image_preview_scrollable_id(),
+            scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+        )
+    }
+
+    /// Resolves a concise user-facing title for one attachment import error.
+    /// 为单条附件导入错误解析面向用户的简洁标题。
+    fn composer_attachment_error_title(error: &str) -> &'static str {
+        if error.contains("不是受支持的附件格式") {
+            "不支持的附件格式"
+        } else if error.contains("不是有效附件文件") {
+            "附件文件无效"
+        } else {
+            "附件导入失败"
+        }
+    }
+
+    /// Shows the standard attachment-limit notice for an import source that cannot accept more files.
+    /// 为无法继续接收文件的导入来源显示标准附件数量上限提示。
+    fn show_composer_attachment_limit_notice(&mut self, source_label: &str) {
+        let notice = format!(
+            "当前已暂存 {} 个附件，已达到上限 {MAX_COMPOSER_ATTACHMENTS}；请先移除部分附件后再通过{source_label}继续添加。",
+            self.composer_attachments.len()
+        );
+        self.show_workbench_notice_modal("附件数量已达上限", notice.clone());
+        self.status_message = notice;
+    }
+
     /// Validates whether every staged attachment still matches the active model modality declaration.
     /// 校验每条已暂存附件当前是否仍满足激活模型的模态声明。
     fn validate_staged_attachments(
@@ -8279,6 +8876,11 @@ impl VulcanWorkbench {
     ) -> Result<(), String> {
         if attachments.is_empty() {
             return Ok(());
+        }
+        if attachments.len() > MAX_COMPOSER_ATTACHMENTS {
+            return Err(format!(
+                "当前提示词最多支持 {MAX_COMPOSER_ATTACHMENTS} 个附件，请移除多余附件后再发送。"
+            ));
         }
         for attachment in attachments {
             if !self.active_workbench_supports_attachment_kind(attachment.kind.clone()) {
@@ -8339,6 +8941,9 @@ impl VulcanWorkbench {
         let mut additions = Vec::new();
         let mut duplicate_labels = Vec::new();
         let mut skipped_labels = Vec::new();
+        let mut limit_labels = Vec::new();
+        let remaining_slots =
+            MAX_COMPOSER_ATTACHMENTS.saturating_sub(self.composer_attachments.len());
 
         for attachment in attachments {
             if !self.active_workbench_supports_attachment_kind(attachment.kind.clone()) {
@@ -8360,50 +8965,70 @@ impl VulcanWorkbench {
                 continue;
             }
 
+            if additions.len() >= remaining_slots {
+                limit_labels.push(format!(
+                    "{} `{}`",
+                    attachment.kind.display_label(),
+                    attachment.file_name
+                ));
+                continue;
+            }
+
             additions.push(attachment);
         }
 
         if !additions.is_empty() {
             self.push_composer_undo_snapshot();
             self.composer_attachments.extend(additions.clone());
+            if skipped_labels.is_empty() && limit_labels.is_empty() {
+                self.workbench_notice_modal = None;
+            }
         }
 
         self.composer_context_menu_open = false;
         self.composer_context_clipboard_text = None;
         self.composer_drag_hover_labels.clear();
-        self.status_message = match (
-            additions.len(),
-            skipped_labels.is_empty(),
-            duplicate_labels.is_empty(),
-        ) {
-            (0, true, false) => format!(
-                "{source_label}附件已经全部存在于当前输入框附件列表中：{}。",
+        let mut status_parts = Vec::new();
+        if additions.is_empty() {
+            status_parts.push(format!("未添加任何{source_label}附件"));
+        } else {
+            status_parts.push(format!("已从{source_label}添加 {} 个附件", additions.len()));
+        }
+        if !duplicate_labels.is_empty() {
+            status_parts.push(format!(
+                "以下附件已存在并被跳过：{}",
                 duplicate_labels.join("、")
-            ),
-            (0, false, true) => format!(
-                "未添加任何{source_label}附件；当前模型暂不支持：{}。",
+            ));
+        }
+        if !skipped_labels.is_empty() {
+            status_parts.push(format!(
+                "以下附件因模型未声明对应模态而被跳过：{}",
                 skipped_labels.join("、")
-            ),
-            (0, false, false) => format!(
-                "未添加任何{source_label}附件；以下附件已存在：{}；以下附件当前模型暂不支持：{}。",
-                duplicate_labels.join("、"),
-                skipped_labels.join("、")
-            ),
-            (count, true, true) => format!("已从{source_label}添加 {count} 个附件。"),
-            (count, false, true) => format!(
-                "已从{source_label}添加 {count} 个附件；以下附件因模型未声明对应模态而被跳过：{}。",
-                skipped_labels.join("、")
-            ),
-            (count, true, false) => format!(
-                "已从{source_label}添加 {count} 个附件；以下附件已存在并被跳过：{}。",
-                duplicate_labels.join("、")
-            ),
-            (count, false, false) => format!(
-                "已从{source_label}添加 {count} 个附件；以下附件已存在：{}；以下附件因模型未声明对应模态而被跳过：{}。",
-                duplicate_labels.join("、"),
-                skipped_labels.join("、")
-            ),
-        };
+            ));
+        }
+        if !limit_labels.is_empty() {
+            status_parts.push(format!(
+                "附件数量上限为 {MAX_COMPOSER_ATTACHMENTS} 个，已跳过：{}",
+                limit_labels.join("、")
+            ));
+        }
+        self.status_message = format!("{}。", status_parts.join("；"));
+        if !skipped_labels.is_empty() || !limit_labels.is_empty() {
+            let mut notice_lines = Vec::new();
+            if !limit_labels.is_empty() {
+                notice_lines.push(format!(
+                    "当前最多可保留 {MAX_COMPOSER_ATTACHMENTS} 个附件；已跳过：{}。",
+                    limit_labels.join("、")
+                ));
+            }
+            if !skipped_labels.is_empty() {
+                notice_lines.push(format!(
+                    "当前模型未声明对应输入模态；已跳过：{}。",
+                    skipped_labels.join("、")
+                ));
+            }
+            self.show_workbench_notice_modal("附件未全部添加", notice_lines.join("\n"));
+        }
 
         operation::focus(COMPOSER_EDITOR_ID)
     }
@@ -8440,13 +9065,20 @@ impl VulcanWorkbench {
 
         match read_composer_clipboard_payload() {
             Ok(ComposerClipboardPayload::Files(files)) => {
+                if self.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                    self.show_composer_attachment_limit_notice("剪贴板文件");
+                    return operation::focus(COMPOSER_EDITOR_ID);
+                }
                 let attachment_workspace_path = self.selected_attachment_workspace_path();
                 match stage_composer_attachment_paths(&attachment_workspace_path, &files) {
                     Ok(attachments) => {
                         self.append_imported_composer_attachments(attachments, "剪贴板文件")
                     }
                     Err(error) => {
-                        maybe_show_unsupported_attachment_format_dialog(&error);
+                        self.show_workbench_notice_modal(
+                            Self::composer_attachment_error_title(&error),
+                            error.clone(),
+                        );
                         self.status_message = format!("粘贴剪贴板文件失败：{error}");
                         operation::focus(COMPOSER_EDITOR_ID)
                     }
@@ -8456,15 +9088,22 @@ impl VulcanWorkbench {
                 width,
                 height,
                 rgba,
-            }) => match self.stage_composer_rgba_image_attachment(width, height, rgba.as_slice()) {
-                Ok(attachment) => {
-                    self.append_imported_composer_attachments(vec![attachment], "剪贴板图片")
+            }) => {
+                if self.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                    self.show_composer_attachment_limit_notice("剪贴板图片");
+                    return operation::focus(COMPOSER_EDITOR_ID);
                 }
-                Err(error) => {
-                    self.status_message = format!("粘贴剪贴板图片失败：{error}");
-                    operation::focus(COMPOSER_EDITOR_ID)
+                match self.stage_composer_rgba_image_attachment(width, height, rgba.as_slice()) {
+                    Ok(attachment) => {
+                        self.append_imported_composer_attachments(vec![attachment], "剪贴板图片")
+                    }
+                    Err(error) => {
+                        self.show_workbench_notice_modal("剪贴板图片导入失败", error.clone());
+                        self.status_message = format!("粘贴剪贴板图片失败：{error}");
+                        operation::focus(COMPOSER_EDITOR_ID)
+                    }
                 }
-            },
+            }
             Ok(ComposerClipboardPayload::Text(text)) => {
                 if attachments_only {
                     self.status_message =
@@ -8524,9 +9163,15 @@ impl VulcanWorkbench {
     /// 打开原生附件选择器，并向提示词草稿追加不重复且受支持的附件。
     fn add_composer_attachments(&mut self) -> Task<Message> {
         if !self.active_workbench_supports_any_attachments() {
-            self.status_message = String::from(
+            let notice = String::from(
                 "当前模型未声明可用附件输入模态，请切换到支持音频、图片、视频或 PDF 的模型后再试。",
             );
+            self.show_workbench_notice_modal("当前模型不支持附件", notice.clone());
+            self.status_message = notice;
+            return Task::none();
+        }
+        if self.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+            self.show_composer_attachment_limit_notice("文件选择");
             return Task::none();
         }
 
@@ -8540,7 +9185,10 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Err(error) => {
-                maybe_show_unsupported_attachment_format_dialog(&error);
+                self.show_workbench_notice_modal(
+                    Self::composer_attachment_error_title(&error),
+                    error.clone(),
+                );
                 self.status_message = format!("添加附件失败：{error}");
                 Task::none()
             }
@@ -8561,6 +9209,13 @@ impl VulcanWorkbench {
 
         self.push_composer_undo_snapshot();
         let removed = self.composer_attachments.remove(index);
+        if self
+            .workbench_image_preview_modal
+            .as_ref()
+            .is_some_and(|modal| modal.local_path == removed.local_path)
+        {
+            self.workbench_image_preview_modal = None;
+        }
         self.status_message = format!(
             "已移除{}附件 `{}`。",
             removed.kind.display_label(),
@@ -8685,6 +9340,7 @@ impl VulcanWorkbench {
             if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
                 let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
             }
+            self.show_workbench_notice_modal("附件无法发送", error.clone());
             self.status_message = error;
             return Task::none();
         }
@@ -8972,6 +9628,7 @@ impl VulcanWorkbench {
             return Task::none();
         }
         if let Err(error) = self.validate_staged_attachments(&self.composer_attachments) {
+            self.show_workbench_notice_modal("附件无法发送", error.clone());
             self.status_message = error;
             return Task::none();
         }

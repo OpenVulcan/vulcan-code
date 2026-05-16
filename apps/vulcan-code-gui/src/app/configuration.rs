@@ -477,6 +477,140 @@ impl VulcanWorkbench {
         self.filtered_workbench_model_choices().get(index).cloned()
     }
 
+    /// Requests one workbench model switch, prompting first when staged attachments would be dropped by the target model.
+    /// 请求一次工作台模型切换；当目标模型会丢弃已暂存附件时先弹窗确认。
+    pub(super) fn request_workbench_model_choice(
+        &mut self,
+        choice: WorkbenchModelChoice,
+    ) -> Task<Message> {
+        if self.active_workbench_model_choice().as_ref() == Some(&choice) {
+            return self.apply_workbench_model_choice(choice);
+        }
+
+        if let Some((unsupported_kinds, unsupported_count)) =
+            self.unsupported_composer_attachments_for_model_choice(&choice)
+        {
+            let unsupported_labels = Self::format_attachment_kind_labels(&unsupported_kinds);
+            let body = format!(
+                "目标模型 `{}` 未声明支持当前输入框中的 {unsupported_labels} 附件。\n\n是否切换模型？点击「切换并移除」会自动移除 {unsupported_count} 个不受支持附件；点击「取消」将保持当前模型和附件不变。",
+                choice.model_name
+            );
+            self.show_workbench_confirmation_modal(
+                "目标模型不支持当前附件",
+                body,
+                "切换并移除",
+                "取消",
+                WorkbenchNoticeConfirmAction::ApplyModelSwitchRemovingUnsupportedAttachments {
+                    choice,
+                },
+            );
+            return Task::none();
+        }
+
+        self.apply_workbench_model_choice(choice)
+    }
+
+    /// Applies a previously confirmed model switch after removing staged attachments unsupported by the target model.
+    /// 移除目标模型不支持的已暂存附件后，应用一次已经确认的模型切换。
+    pub(super) fn apply_confirmed_workbench_model_choice_after_attachment_cleanup(
+        &mut self,
+        choice: WorkbenchModelChoice,
+    ) -> Task<Message> {
+        let (removed_count, removed_kinds) =
+            self.remove_unsupported_composer_attachments_for_model_choice(&choice);
+        let task = self.apply_workbench_model_choice(choice);
+
+        if removed_count > 0 {
+            let removed_labels = Self::format_attachment_kind_labels(&removed_kinds);
+            self.status_message.push_str(&format!(
+                " 已移除 {removed_count} 个不受支持的 {removed_labels} 附件。"
+            ));
+        }
+
+        task
+    }
+
+    /// Returns staged attachment kinds that the target workbench model does not declare as supported.
+    /// 返回目标工作台模型未声明支持的已暂存附件类型。
+    fn unsupported_composer_attachments_for_model_choice(
+        &self,
+        choice: &WorkbenchModelChoice,
+    ) -> Option<(Vec<ConversationAttachmentKind>, usize)> {
+        let capabilities = self.resolve_workbench_model_capabilities(choice)?;
+        let mut unsupported_kinds = Vec::new();
+        let mut unsupported_count = 0usize;
+
+        for attachment in &self.composer_attachments {
+            if capabilities.supports_attachment_kind(attachment.kind.clone()) {
+                continue;
+            }
+            unsupported_count += 1;
+            if !unsupported_kinds.contains(&attachment.kind) {
+                unsupported_kinds.push(attachment.kind.clone());
+            }
+        }
+
+        (unsupported_count > 0).then_some((unsupported_kinds, unsupported_count))
+    }
+
+    /// Removes staged composer attachments that the target workbench model does not declare as supported.
+    /// 移除目标工作台模型未声明支持的已暂存提示词附件。
+    fn remove_unsupported_composer_attachments_for_model_choice(
+        &mut self,
+        choice: &WorkbenchModelChoice,
+    ) -> (usize, Vec<ConversationAttachmentKind>) {
+        let Some(capabilities) = self.resolve_workbench_model_capabilities(choice) else {
+            return (0, Vec::new());
+        };
+        let mut removed_count = 0usize;
+        let mut removed_kinds = Vec::new();
+        let preview_path = self
+            .workbench_image_preview_modal
+            .as_ref()
+            .map(|modal| modal.local_path.clone());
+
+        self.push_composer_undo_snapshot();
+        self.composer_attachments.retain(|attachment| {
+            if capabilities.supports_attachment_kind(attachment.kind.clone()) {
+                return true;
+            }
+            removed_count += 1;
+            if !removed_kinds.contains(&attachment.kind) {
+                removed_kinds.push(attachment.kind.clone());
+            }
+            false
+        });
+
+        if removed_count == 0 {
+            let _ = self.composer_undo_history.pop();
+        }
+
+        if preview_path.is_some_and(|path| {
+            !self
+                .composer_attachments
+                .iter()
+                .any(|attachment| attachment.local_path == path)
+        }) {
+            self.workbench_image_preview_modal = None;
+        }
+
+        (removed_count, removed_kinds)
+    }
+
+    /// Formats attachment-kind labels into a compact slash-separated phrase for confirmation copy.
+    /// 将附件类型标签格式化为用于确认文案的紧凑斜杠分隔短语。
+    fn format_attachment_kind_labels(kinds: &[ConversationAttachmentKind]) -> String {
+        if kinds.is_empty() {
+            return String::from("附件");
+        }
+
+        kinds
+            .iter()
+            .map(ConversationAttachmentKind::display_label)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
     /// Applies one chosen workbench model to the persisted global runtime selection and closes the picker.
     /// 将某个工作台模型应用到持久化全局运行时选择并关闭选择弹窗。
     pub(super) fn apply_workbench_model_choice(

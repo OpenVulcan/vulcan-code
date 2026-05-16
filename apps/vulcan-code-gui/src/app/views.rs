@@ -175,8 +175,20 @@ impl VulcanWorkbench {
             } else {
                 composed_surface
             };
+        let composed_surface = self.wrap_with_window_resize_handles(window_id, composed_surface);
 
-        self.wrap_with_window_resize_handles(window_id, composed_surface)
+        let composed_surface: Element<'_, Message> =
+            if let Some(overlay) = self.view_workbench_notice_modal() {
+                stack([composed_surface, overlay]).into()
+            } else {
+                composed_surface
+            };
+
+        if let Some(overlay) = self.view_workbench_image_preview_modal() {
+            stack([composed_surface, overlay]).into()
+        } else {
+            composed_surface
+        }
     }
 
     /// Builds the framed main display region with dedicated top, left, and bottom separators.
@@ -403,7 +415,7 @@ impl VulcanWorkbench {
                 )
                 .id(WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID)
                 .on_input(Message::WorkbenchModelPickerFilterChanged)
-                .on_submit(Message::ConfirmWorkbenchModelPickerSelection)
+                .on_submit(Message::ConfirmTopLevelOverlay)
                 .padding([10, 12]),
                 option_list,
             ]
@@ -432,6 +444,309 @@ impl VulcanWorkbench {
             .height(Fill)
             .into(),
         )
+    }
+
+    /// Builds the reusable blocking notice modal shown above every main-workbench surface.
+    /// 构建显示在所有主工作台界面之上的可复用阻塞提示弹窗。
+    pub(super) fn view_workbench_notice_modal(&self) -> Option<Element<'_, Message>> {
+        let modal = self.workbench_notice_modal.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(28)
+        .height(28)
+        .padding(0)
+        .style(style::workbench_notice_modal_close_button_style)
+        .on_press(Message::CloseWorkbenchNoticeModal);
+        let confirm_button = button(
+            container(text(modal.confirm_label.as_str()).size(14))
+                .width(Fill)
+                .center(Fill),
+        )
+        .width(WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH)
+        .padding([9, 14])
+        .style(style::workbench_notice_modal_confirm_button_style)
+        .on_press(Message::ConfirmWorkbenchNoticeModal);
+        let mut action_row = row![space::horizontal()].spacing(10).align_y(Center);
+        if let Some(dismiss_label) = modal.dismiss_label.as_deref() {
+            let dismiss_button = button(
+                container(text(dismiss_label).size(14))
+                    .width(Fill)
+                    .center(Fill),
+            )
+            .width(WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH)
+            .padding([9, 14])
+            .style(style::workbench_notice_modal_secondary_button_style)
+            .on_press(Message::CloseWorkbenchNoticeModal);
+            action_row = action_row.push(dismiss_button);
+        }
+        action_row = action_row.push(confirm_button);
+        let body_scrollable = scrollable(
+            container(
+                text(modal.body.as_str())
+                    .size(14)
+                    .color(palette.background.base.text.scale_alpha(0.78))
+                    .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+            )
+            .width(Fill)
+            .padding([2, 2]),
+        )
+        .width(Fill)
+        .height(Fill);
+        let modal_body = column![
+            row![
+                container(
+                    codicon::warning()
+                        .size(18)
+                        .line_height(1.0)
+                        .color(iced::color!(0xB45309)),
+                )
+                .width(28)
+                .center_y(Fill),
+                text(modal.title.as_str()).size(18),
+                space::horizontal(),
+                close_button,
+            ]
+            .spacing(10)
+            .align_y(Center)
+            .height(WORKBENCH_NOTICE_MODAL_HEADER_HEIGHT),
+            body_scrollable,
+            action_row,
+        ]
+        .spacing(14)
+        .height(Fill);
+        let modal_card = container(modal_body)
+            .padding([20, 22])
+            .width(WORKBENCH_NOTICE_MODAL_WIDTH)
+            .height(WORKBENCH_NOTICE_MODAL_HEIGHT)
+            .style(style::startup_overlay_card_style);
+        let backdrop =
+            mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Noop);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(mouse_area(modal_card).on_press(Message::Noop))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Builds the blocking image preview modal opened from one staged image attachment.
+    /// 构建从某个已暂存图片附件打开的阻塞式图片预览弹窗。
+    pub(super) fn view_workbench_image_preview_modal(&self) -> Option<Element<'_, Message>> {
+        let modal = self.workbench_image_preview_modal.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let modal_size = self.workbench_image_preview_modal_size();
+        let preview_viewport_size = self.workbench_image_preview_viewport_size();
+        let zoom_percent = (modal.zoom * 100.0).round() as i32;
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_notice_modal_close_button_style)
+        .on_press(Message::CloseWorkbenchImagePreviewModal);
+        let zoom_out_button = button(
+            container(lucide::zoom_out().size(15).line_height(1.0))
+                .width(30)
+                .height(30)
+                .center(Fill),
+        )
+        .padding(0)
+        .width(30)
+        .height(30)
+        .style(style::workbench_image_preview_control_button_style)
+        .on_press(Message::AdjustWorkbenchImagePreviewZoom(
+            -WORKBENCH_IMAGE_PREVIEW_BUTTON_ZOOM_STEP,
+        ));
+        let reset_zoom_button = button(
+            container(lucide::rotate_ccw().size(15).line_height(1.0))
+                .width(30)
+                .height(30)
+                .center(Fill),
+        )
+        .padding(0)
+        .width(30)
+        .height(30)
+        .style(style::workbench_image_preview_control_button_style)
+        .on_press(Message::ResetWorkbenchImagePreviewZoom);
+        let zoom_in_button = button(
+            container(lucide::zoom_in().size(15).line_height(1.0))
+                .width(30)
+                .height(30)
+                .center(Fill),
+        )
+        .padding(0)
+        .width(30)
+        .height(30)
+        .style(style::workbench_image_preview_control_button_style)
+        .on_press(Message::AdjustWorkbenchImagePreviewZoom(
+            WORKBENCH_IMAGE_PREVIEW_BUTTON_ZOOM_STEP,
+        ));
+        let preview_width = preview_viewport_size.width * modal.zoom;
+        let preview_height = preview_viewport_size.height * modal.zoom;
+        let preview_content_width = preview_width.max(preview_viewport_size.width);
+        let preview_content_height = preview_height.max(preview_viewport_size.height);
+        let preview_image = iced_image(modal.local_path.clone())
+            .width(preview_width)
+            .height(preview_height)
+            .content_fit(ContentFit::Contain);
+        let preview_interaction = if modal.pan_pointer.is_some() {
+            iced::mouse::Interaction::Grabbing
+        } else {
+            iced::mouse::Interaction::Grab
+        };
+        let preview_scrollable = scrollable(
+            container(preview_image)
+                .width(preview_content_width)
+                .height(preview_content_height)
+                .center(Fill),
+        )
+        .id(workbench_image_preview_scrollable_id())
+        .direction(scrollable::Direction::Both {
+            vertical: scrollable::Scrollbar::default(),
+            horizontal: scrollable::Scrollbar::default(),
+        })
+        .on_scroll(Message::WorkbenchImagePreviewScrolled)
+        .width(Fill)
+        .height(Fill);
+        let preview_surface = mouse_area(
+            container(preview_scrollable)
+                .width(Fill)
+                .height(Fill)
+                .style(style::workbench_image_preview_surface_style),
+        )
+        .on_press(Message::WorkbenchImagePreviewLeftPressed)
+        .on_release(Message::WorkbenchImagePreviewLeftReleased)
+        .on_middle_press(Message::ResetWorkbenchImagePreviewZoom)
+        .on_move(Message::WorkbenchImagePreviewPointerMoved)
+        .interaction(preview_interaction);
+        let zoom_percent_label = container(text(format!("{zoom_percent}%")).size(13))
+            .padding([6, 10])
+            .style(style::workbench_image_preview_floating_label_style);
+        let zoom_toolbar = container(
+            row![zoom_out_button, reset_zoom_button, zoom_in_button,]
+                .spacing(6)
+                .align_y(Center),
+        )
+        .padding(4)
+        .style(style::workbench_image_preview_floating_toolbar_style);
+        let preview_hint = container(
+            text("左键拖动平移，滚轮滚动，Ctrl + 滚轮按鼠标位置缩放，中键还原；点击遮罩或按 Esc 关闭。")
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.72)),
+        )
+        .padding([6, 10])
+        .style(style::workbench_image_preview_floating_label_style);
+        let preview_panel = stack([
+            preview_surface.into(),
+            container(zoom_percent_label)
+                .width(Fill)
+                .height(Fill)
+                .padding(12)
+                .align_x(iced::Alignment::Start)
+                .align_y(iced::Alignment::Start)
+                .into(),
+            container(zoom_toolbar)
+                .width(Fill)
+                .height(Fill)
+                .padding(12)
+                .align_x(iced::Alignment::End)
+                .align_y(iced::Alignment::Start)
+                .into(),
+            container(preview_hint)
+                .width(Fill)
+                .height(Fill)
+                .padding(14)
+                .align_x(iced::Alignment::Center)
+                .align_y(iced::Alignment::End)
+                .into(),
+        ])
+        .width(Fill)
+        .height(Fill);
+        let modal_body = column![
+            row![
+                container(
+                    lucide::image()
+                        .size(16)
+                        .line_height(1.0)
+                        .color(palette.primary.base.color),
+                )
+                .width(24)
+                .center_y(Fill),
+                text("图片预览").size(16),
+                container(
+                    text(modal.file_name.as_str())
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.58))
+                        .wrapping(iced::advanced::text::Wrapping::None)
+                )
+                .width(Fill),
+                close_button,
+            ]
+            .spacing(10)
+            .align_y(Center)
+            .height(WORKBENCH_IMAGE_PREVIEW_HEADER_HEIGHT),
+            preview_panel,
+        ]
+        .spacing(WORKBENCH_IMAGE_PREVIEW_BODY_SPACING)
+        .height(Fill);
+        let modal_card = container(modal_body)
+            .padding([
+                WORKBENCH_IMAGE_PREVIEW_CARD_PADDING_Y,
+                WORKBENCH_IMAGE_PREVIEW_CARD_PADDING_X,
+            ])
+            .width(modal_size.width)
+            .height(modal_size.height)
+            .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseWorkbenchImagePreviewModal);
+
+        let overlay = stack([
+            container(backdrop)
+                .width(Fill)
+                .height(Fill)
+                .style(style::startup_overlay_backdrop_style)
+                .into(),
+            container(mouse_area(modal_card).on_press(Message::Noop))
+                .width(Fill)
+                .height(Fill)
+                .center(Fill)
+                .into(),
+        ])
+        .width(Fill)
+        .height(Fill);
+
+        Some(WheelIntercept::new(overlay, Message::WorkbenchImagePreviewWheelScrolled).into())
     }
 
     /// Builds the in-app workspace-history search modal shown above the main workbench when history lookup is requested.
@@ -2588,50 +2903,23 @@ impl VulcanWorkbench {
             return space::vertical().height(0.0).into();
         }
 
-        let attachment_row = self.composer_attachments.iter().fold(
-            row![].spacing(8).align_y(Center),
-            |row, attachment| {
-                let attachment_label = truncate_with_ellipsis(
-                    &attachment.file_name,
-                    self.composer_panel_width() * 0.26,
-                );
-                let attachment_chip = container(
-                    row![
-                        container(text(attachment.kind.display_label()).size(11))
-                            .padding([2, 6])
-                            .style(container::rounded_box),
-                        text(attachment_label)
-                            .size(12)
-                            .wrapping(iced::advanced::text::Wrapping::None),
-                        button(
-                            container(codicon::chrome_close().size(12).line_height(1.0))
-                                .width(16)
-                                .height(16)
-                                .center(Fill),
-                        )
-                        .padding(0)
-                        .width(16)
-                        .height(16)
-                        .style(move |theme, status| {
-                            style::workbench_transcript_mode_button_style(theme, status, false)
-                        })
-                        .on_press(Message::RemoveComposerAttachment(
-                            attachment.local_path.clone(),
-                        )),
-                    ]
-                    .spacing(6)
-                    .align_y(Center),
-                )
-                .padding([6, 10])
-                .style(style::workbench_pending_prompt_queue_panel_style);
-
-                row.push(attachment_chip)
-            },
-        );
+        let attachment_row = self
+            .composer_attachments
+            .iter()
+            .fold(row![].spacing(8).align_y(Center), |row, attachment| {
+                row.push(self.view_composer_attachment_tile(attachment))
+            });
         let strip_body = row![
-            container(text("附件").size(12))
-                .width(36)
-                .center_y(COMPOSER_ATTACHMENT_ROW_HEIGHT),
+            container(
+                text(format!(
+                    "附件 {}/{}",
+                    self.composer_attachments.len(),
+                    MAX_COMPOSER_ATTACHMENTS
+                ))
+                .size(12),
+            )
+            .width(64)
+            .center_y(COMPOSER_ATTACHMENT_ROW_HEIGHT),
             scrollable(container(attachment_row).width(Shrink))
                 .direction(scrollable::Direction::Horizontal(
                     scrollable::Scrollbar::default(),
@@ -2647,6 +2935,113 @@ impl VulcanWorkbench {
         container(strip_body)
             .height(COMPOSER_ATTACHMENT_ROW_HEIGHT)
             .width(Fill)
+            .into()
+    }
+
+    /// Builds one square staged-attachment tile with an icon or image preview, hover filename tooltip, and circular remove button.
+    /// 构建单个已暂存附件方格，包含图标或图片预览、悬浮文件名提示以及圆形移除按钮。
+    fn view_composer_attachment_tile<'a>(
+        &'a self,
+        attachment: &'a ConversationAttachment,
+    ) -> Element<'a, Message> {
+        let remove_button = button(
+            container(codicon::chrome_close().size(12).line_height(1.0))
+                .width(COMPOSER_ATTACHMENT_REMOVE_BUTTON_SIZE)
+                .height(COMPOSER_ATTACHMENT_REMOVE_BUTTON_SIZE)
+                .center(Fill),
+        )
+        .padding(0)
+        .width(COMPOSER_ATTACHMENT_REMOVE_BUTTON_SIZE)
+        .height(COMPOSER_ATTACHMENT_REMOVE_BUTTON_SIZE)
+        .style(style::workbench_composer_attachment_remove_button_style)
+        .on_press(Message::RemoveComposerAttachment(
+            attachment.local_path.clone(),
+        ));
+        let tile_body = container(self.view_composer_attachment_tile_body(attachment))
+            .width(COMPOSER_ATTACHMENT_TILE_SIZE)
+            .height(COMPOSER_ATTACHMENT_TILE_SIZE)
+            .style(style::workbench_composer_attachment_tile_style);
+        let tile_content: Element<'a, Message> =
+            if matches!(attachment.kind, ConversationAttachmentKind::Image) {
+                button(tile_body)
+                    .padding(0)
+                    .width(COMPOSER_ATTACHMENT_TILE_SIZE)
+                    .height(COMPOSER_ATTACHMENT_TILE_SIZE)
+                    .style(style::workbench_composer_attachment_preview_button_style)
+                    .on_press(Message::OpenComposerImageAttachmentPreview {
+                        file_name: attachment.file_name.clone(),
+                        local_path: attachment.local_path.clone(),
+                    })
+                    .into()
+            } else {
+                tile_body.into()
+            };
+        let tile_surface = stack([
+            tile_content,
+            container(remove_button)
+                .width(COMPOSER_ATTACHMENT_TILE_SIZE)
+                .height(COMPOSER_ATTACHMENT_TILE_SIZE)
+                .align_x(iced::Alignment::End)
+                .align_y(iced::Alignment::Start)
+                .into(),
+        ])
+        .width(COMPOSER_ATTACHMENT_TILE_SIZE)
+        .height(COMPOSER_ATTACHMENT_TILE_SIZE);
+
+        tooltip(
+            tile_surface,
+            text(attachment.file_name.clone()).size(12),
+            tooltip::Position::Top,
+        )
+        .style(container::rounded_box)
+        .into()
+    }
+
+    /// Builds the visual body of one attachment tile, using real thumbnails for available images and semantic icons for other media.
+    /// 构建单个附件方格的视觉主体，可用图片使用真实缩略图，其他媒体使用语义图标。
+    fn view_composer_attachment_tile_body<'a>(
+        &'a self,
+        attachment: &'a ConversationAttachment,
+    ) -> Element<'a, Message> {
+        if matches!(attachment.kind, ConversationAttachmentKind::Image)
+            && std::path::Path::new(&attachment.local_path).is_file()
+        {
+            return iced_image(attachment.local_path.clone())
+                .width(Fill)
+                .height(Fill)
+                .content_fit(ContentFit::Cover)
+                .border_radius(14.0)
+                .into();
+        }
+
+        let palette = self.app_theme.extended_palette();
+        let icon_color = match attachment.kind {
+            ConversationAttachmentKind::Image => palette.primary.base.color,
+            ConversationAttachmentKind::Audio => iced::color!(0x0E7490),
+            ConversationAttachmentKind::Video => iced::color!(0xB45309),
+            ConversationAttachmentKind::Pdf => iced::color!(0xB91C1C),
+        };
+        let icon = match attachment.kind {
+            ConversationAttachmentKind::Image => lucide::image(),
+            ConversationAttachmentKind::Audio => lucide::volume_two(),
+            ConversationAttachmentKind::Video => lucide::video(),
+            ConversationAttachmentKind::Pdf => lucide::file_text(),
+        }
+        .size(26)
+        .line_height(1.0)
+        .color(icon_color);
+        let kind_label = match attachment.kind {
+            ConversationAttachmentKind::Image => "IMG",
+            ConversationAttachmentKind::Audio => "AUDIO",
+            ConversationAttachmentKind::Video => "VIDEO",
+            ConversationAttachmentKind::Pdf => "PDF",
+        };
+
+        container(column![icon, text(kind_label).size(10).color(icon_color)].spacing(5))
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .style(style::workbench_composer_attachment_icon_tile_style)
             .into()
     }
 
@@ -5246,7 +5641,7 @@ impl VulcanWorkbench {
                 key: keyboard::Key::Named(keyboard::key::Named::Escape),
                 repeat,
                 ..
-            }) if !repeat => Some(Message::CloseSelectedSessionThinkingModal),
+            }) if !repeat => Some(Message::DismissTopLevelOverlay),
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::ArrowUp),
                 modifiers,
@@ -5284,7 +5679,7 @@ impl VulcanWorkbench {
                 && !modifiers.alt()
                 && !modifiers.logo() =>
             {
-                Some(Message::ConfirmWorkbenchModelPickerSelection)
+                Some(Message::ConfirmTopLevelOverlay)
             }
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
@@ -5328,6 +5723,9 @@ impl VulcanWorkbench {
             }
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(Message::WindowLeftButtonReleased(window_id))
+            }
+            iced::Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+                Some(Message::WorkbenchKeyboardModifiersChanged(modifiers))
             }
             iced::Event::Window(window::Event::FileHovered(path)) => {
                 Some(Message::WindowFileHovered(window_id, path))
