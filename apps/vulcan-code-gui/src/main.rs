@@ -5,6 +5,7 @@ mod agent_profile;
 mod agent_runtime;
 mod agent_view;
 mod app;
+mod attachment_asset_index;
 mod attachment_assets;
 mod code_view;
 mod composer_parts;

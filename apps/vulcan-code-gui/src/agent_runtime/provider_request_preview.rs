@@ -155,11 +155,22 @@ fn render_core_conversation_message_preview(
             if !attachments.is_empty() {
                 sections.push(String::from("#### Attachments"));
                 sections.extend(attachments.iter().map(|attachment| {
+                    let replay_status =
+                        crate::attachment_asset_index::resolve_attachment_replay_status(attachment);
+                    let replay_status_text = match replay_status {
+                        crate::attachment_asset_index::AttachmentReplayStatus::Available => "可回放",
+                        crate::attachment_asset_index::AttachmentReplayStatus::FallbackSourceOnly => {
+                            "回退来源"
+                        }
+                        crate::attachment_asset_index::AttachmentReplayStatus::Purged => "已清理",
+                        crate::attachment_asset_index::AttachmentReplayStatus::Missing => "已缺失",
+                    };
                     format!(
-                        "- `{}` · `{}` · `{}`",
+                        "- `{}` · `{}` · `{}` · `{}`",
                         attachment.kind.display_label(),
                         attachment.file_name,
-                        attachment.mime_type
+                        attachment.mime_type,
+                        replay_status_text
                     )
                 }));
             }

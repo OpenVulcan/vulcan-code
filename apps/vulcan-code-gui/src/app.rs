@@ -23,6 +23,10 @@ use crate::agent_view::{
     agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_document_raw_source,
     build_agent_view_document,
 };
+use crate::attachment_asset_index::{
+    AttachmentCleanupPreview, AttachmentCleanupReport, AttachmentCleanupSelection,
+    execute_attachment_cleanup, preview_attachment_cleanup,
+};
 use crate::code_view;
 use crate::composer_parts::{
     build_composer_input_parts, composer_parts_have_submittable_content, composer_parts_label_text,
@@ -87,7 +91,7 @@ use iced::{
     Center, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme, clipboard,
     keyboard, task,
 };
-use iced_aw::ContextMenu;
+use iced_aw::{ContextMenu, date_picker::Date};
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
 use serde_json::{Value, json};
 use std::borrow::Borrow;
@@ -95,7 +99,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque, hash_map::DefaultH
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vulcan_agent_view::{
@@ -529,6 +532,10 @@ const WORKSPACE_HISTORY_SEARCH_MODAL_WIDTH: f32 = 760.0;
 /// Shared fixed height used by the scrollable result list inside the workspace-history search modal.
 /// 工作台历史搜索弹窗内部滚动结果列表使用的共享固定高度。
 const WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT: f32 = 360.0;
+
+/// Shared fixed width used by the project settings modal card.
+/// 项目设置弹窗卡片使用的共享固定宽度。
+const TASK_PROJECT_SETTINGS_MODAL_WIDTH: f32 = 640.0;
 
 /// Shared fixed height used by the optional project-scope picker list inside the workspace-history search modal.
 /// 工作台历史搜索弹窗内可选项目范围列表使用的共享固定高度。
@@ -1367,6 +1374,7 @@ pub fn run() -> iced::Result {
     .font(theme::cjk_code_italic_font_bytes())
     .font(CODICON_FONT_BYTES)
     .font(LUCIDE_FONT_BYTES)
+    .font(iced_aw::ICED_AW_FONT_BYTES)
     .run()
 }
 
@@ -1803,6 +1811,27 @@ pub struct VulcanWorkbench {
     /// Whether one MCP OAuth flow is currently running.
     /// 当前是否存在一条正在进行中的 MCP OAuth 流程。
     mcp_oauth_flow_in_flight: bool,
+    /// Project identifier currently owning the project-settings modal, when the modal is open.
+    /// 当前拥有项目设置弹窗的项目标识（当弹窗打开时存在）。
+    project_settings_project_id: Option<String>,
+    /// Date-picker cutoff date used by the project-scoped historical attachment cleanup tool.
+    /// 项目级历史附件清理工具使用的日期选择器截止日期。
+    project_attachment_cleanup_cutoff_date: Date,
+    /// Whether the project attachment cleanup date picker overlay is open.
+    /// 项目附件清理日期选择器浮层当前是否打开。
+    project_attachment_cleanup_date_picker_open: bool,
+    /// Attachment-kind selection currently used by the project-scoped cleanup tool.
+    /// 当前供项目级清理工具使用的附件类型选择状态。
+    project_attachment_cleanup_selection: AttachmentCleanupSelection,
+    /// Latest project-scoped cleanup preview built from the selected cutoff date and kind filters.
+    /// 根据当前截止日期与类型筛选构建出的最近一次项目级清理预览。
+    project_attachment_cleanup_preview: Option<AttachmentCleanupPreview>,
+    /// Latest successful project-scoped cleanup execution report shown inside the project settings modal.
+    /// 展示在项目设置弹窗中的最近一次成功项目级清理执行报告。
+    project_attachment_cleanup_last_report: Option<AttachmentCleanupReport>,
+    /// Modal-scoped notice rendered beside the project-scoped cleanup controls.
+    /// 展示在项目级清理控件旁边的弹窗局部提示信息。
+    project_attachment_cleanup_notice: String,
     /// Latest validated execution preparation snapshot built from the current runtime state.
     /// 根据当前运行时状态构建出的最近一次执行准备快照。
     last_execution_preparation: Option<ExecutionPreparation>,
@@ -3024,15 +3053,12 @@ enum Message {
     /// Opens the native file picker and appends one or more supported attachments into the composer.
     /// 打开原生文件选择器并向提示词输入框追加一个或多个受支持附件。
     AddComposerAttachments,
+    /// Smart-pastes clipboard contents into the composer by preferring file attachments, then in-memory images, and finally plain text.
+    /// 按“文件附件、内存图片、普通文本”的优先顺序，将剪贴板内容智能粘贴到提示词输入框。
+    PasteComposerClipboardContents,
     /// Pastes file or image attachments from the current clipboard into the composer.
     /// 将当前剪贴板中的文件或图片附件粘贴到提示词输入框。
     PasteComposerClipboardAttachments,
-    /// Applies one clipboard file-path snapshot loaded for composer attachment import.
-    /// 应用为提示词附件导入载入的一份剪贴板文件路径快照。
-    ComposerClipboardFilesLoaded(Result<std::sync::Arc<[PathBuf]>, clipboard::Error>),
-    /// Applies one clipboard image snapshot loaded for composer attachment import.
-    /// 应用为提示词附件导入载入的一份剪贴板图片快照。
-    ComposerClipboardImageLoaded(Result<clipboard::Image, clipboard::Error>),
     /// Removes one staged composer attachment identified by its canonical local path.
     /// 根据规范本地路径移除一条已暂存的提示词附件。
     RemoveComposerAttachment(String),
@@ -3276,6 +3302,30 @@ enum Message {
     /// Applies the finished result of one host-side LuaSkills management action.
     /// 应用单次宿主侧 LuaSkills 管理动作的完成结果。
     LuaSkillsManagementFinished(Result<LuaSkillsManagementReport, String>),
+    /// Opens the project settings modal for one task-tree project.
+    /// 为任务树中的某个项目打开项目设置弹窗。
+    OpenTaskProjectSettings(String),
+    /// Closes the project settings modal and its transient overlays.
+    /// 关闭项目设置弹窗及其临时浮层。
+    CloseTaskProjectSettings,
+    /// Opens the project attachment cleanup cutoff date picker.
+    /// 打开项目附件清理截止日期选择器。
+    OpenProjectAttachmentCleanupDatePicker,
+    /// Cancels the project attachment cleanup cutoff date picker without changing the date.
+    /// 取消项目附件清理截止日期选择器且不修改日期。
+    CancelProjectAttachmentCleanupDatePicker,
+    /// Applies one date selected by the project attachment cleanup date picker.
+    /// 应用项目附件清理日期选择器选中的日期。
+    ProjectAttachmentCleanupDateSelected(Date),
+    /// Toggles whether one attachment kind should participate in project-scoped cleanup preview and execution.
+    /// 切换某种附件类型是否参与项目级清理预览与执行。
+    ProjectAttachmentCleanupKindToggled(ConversationAttachmentKind, bool),
+    /// Builds one preview for the current project-scoped attachment cleanup selection.
+    /// 为当前项目级附件清理选择构建一份预览。
+    PreviewProjectAttachmentCleanup,
+    /// Executes one destructive project-scoped attachment cleanup using the current selection.
+    /// 使用当前选择执行一次破坏性的项目级附件清理。
+    ExecuteProjectAttachmentCleanup,
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
@@ -3933,6 +3983,15 @@ impl VulcanWorkbench {
             mcp_oauth_authorization_url: String::new(),
             mcp_oauth_pending_state: None,
             mcp_oauth_flow_in_flight: false,
+            project_settings_project_id: None,
+            project_attachment_cleanup_cutoff_date: Date::today(),
+            project_attachment_cleanup_date_picker_open: false,
+            project_attachment_cleanup_selection: AttachmentCleanupSelection::all_enabled(),
+            project_attachment_cleanup_preview: None,
+            project_attachment_cleanup_last_report: None,
+            project_attachment_cleanup_notice: String::from(
+                "选择截止日期后可先预览当前项目将被清理的历史附件缓存，再执行实际清理。",
+            ),
             last_execution_preparation: None,
             last_mcp_discovery_rows: Vec::new(),
             last_mcp_discovery_errors: Vec::new(),
@@ -4902,6 +4961,7 @@ impl VulcanWorkbench {
             }
             Message::MainDisplayPanelSelected(panel) => {
                 self.active_main_panel = panel;
+                self.composer_drag_hover_labels.clear();
                 self.status_message = match panel {
                     MainDisplayPanel::Main => {
                         String::from("已切换到工作台，当前聚焦任务抽屉与主工作区。")
@@ -5112,45 +5172,8 @@ impl VulcanWorkbench {
             Message::ComposerEditorAction(action) => self.apply_composer_editor_action(action),
             Message::ComposerUndo => self.restore_latest_composer_undo_snapshot(),
             Message::AddComposerAttachments => self.add_composer_attachments(),
-            Message::PasteComposerClipboardAttachments => {
-                self.composer_context_menu_open = false;
-                self.composer_context_clipboard_text = None;
-                clipboard::read_files().map(Message::ComposerClipboardFilesLoaded)
-            }
-            Message::ComposerClipboardFilesLoaded(result) => {
-                let files = result
-                    .ok()
-                    .map(|paths| paths.iter().cloned().collect::<Vec<_>>())
-                    .unwrap_or_default();
-                if files.is_empty() {
-                    return clipboard::read_image().map(Message::ComposerClipboardImageLoaded);
-                }
-                match stage_composer_attachment_paths(self.workspace_path.trim(), &files) {
-                    Ok(attachments) => {
-                        self.append_imported_composer_attachments(attachments, "剪贴板文件")
-                    }
-                    Err(error) => {
-                        self.status_message = format!("导入剪贴板文件失败：{error}");
-                        operation::focus(COMPOSER_EDITOR_ID)
-                    }
-                }
-            }
-            Message::ComposerClipboardImageLoaded(result) => match result {
-                Ok(image) => match self.stage_composer_clipboard_image_attachment(&image) {
-                    Ok(attachment) => {
-                        self.append_imported_composer_attachments(vec![attachment], "剪贴板图片")
-                    }
-                    Err(error) => {
-                        self.status_message = format!("导入剪贴板图片失败：{error}");
-                        operation::focus(COMPOSER_EDITOR_ID)
-                    }
-                },
-                Err(error) => {
-                    self.status_message =
-                        format!("当前剪贴板中没有可导入的文件或图片附件：{:?}。", error);
-                    operation::focus(COMPOSER_EDITOR_ID)
-                }
-            },
+            Message::PasteComposerClipboardContents => self.paste_composer_clipboard(false),
+            Message::PasteComposerClipboardAttachments => self.paste_composer_clipboard(true),
             Message::RemoveComposerAttachment(local_path) => {
                 self.remove_composer_attachment(&local_path)
             }
@@ -5180,14 +5203,16 @@ impl VulcanWorkbench {
                     );
                     return operation::focus(COMPOSER_EDITOR_ID);
                 }
+                let attachment_workspace_path = self.selected_attachment_workspace_path();
                 match stage_composer_attachment_paths(
-                    self.workspace_path.trim(),
+                    &attachment_workspace_path,
                     std::slice::from_ref(&path),
                 ) {
                     Ok(attachments) => {
                         self.append_imported_composer_attachments(attachments, "拖拽")
                     }
                     Err(error) => {
+                        maybe_show_unsupported_attachment_format_dialog(&error);
                         self.status_message = format!("处理拖拽附件失败：{error}");
                         operation::focus(COMPOSER_EDITOR_ID)
                     }
@@ -5960,6 +5985,188 @@ impl VulcanWorkbench {
                 }
                 self.mcp_oauth_status =
                     result.unwrap_or_else(|error| format!("状态读取失败：{error}"));
+                Task::none()
+            }
+            Message::OpenTaskProjectSettings(project_id) => {
+                let Some(project) = self.task_project_by_id(&project_id) else {
+                    self.status_message = String::from("无法打开项目设置：项目已经不存在。");
+                    return Task::none();
+                };
+                let project_title = project.title.clone();
+                self.project_settings_project_id = Some(project_id);
+                self.project_attachment_cleanup_date_picker_open = false;
+                self.project_attachment_cleanup_preview = None;
+                self.project_attachment_cleanup_last_report = None;
+                self.project_attachment_cleanup_notice =
+                    format!("正在管理项目 `{project_title}` 的历史附件缓存。");
+                Task::none()
+            }
+            Message::CloseTaskProjectSettings => {
+                self.project_settings_project_id = None;
+                self.project_attachment_cleanup_date_picker_open = false;
+                Task::none()
+            }
+            Message::OpenProjectAttachmentCleanupDatePicker => {
+                self.project_attachment_cleanup_date_picker_open = true;
+                Task::none()
+            }
+            Message::CancelProjectAttachmentCleanupDatePicker => {
+                self.project_attachment_cleanup_date_picker_open = false;
+                Task::none()
+            }
+            Message::ProjectAttachmentCleanupDateSelected(date) => {
+                self.project_attachment_cleanup_cutoff_date = date;
+                self.project_attachment_cleanup_date_picker_open = false;
+                self.project_attachment_cleanup_preview = None;
+                self.project_attachment_cleanup_notice =
+                    String::from("项目附件清理截止日期已更新，可先预览再执行实际清理。");
+                Task::none()
+            }
+            Message::ProjectAttachmentCleanupKindToggled(kind, enabled) => {
+                match kind {
+                    ConversationAttachmentKind::Image => {
+                        self.project_attachment_cleanup_selection.image = enabled;
+                    }
+                    ConversationAttachmentKind::Audio => {
+                        self.project_attachment_cleanup_selection.audio = enabled;
+                    }
+                    ConversationAttachmentKind::Video => {
+                        self.project_attachment_cleanup_selection.video = enabled;
+                    }
+                    ConversationAttachmentKind::Pdf => {
+                        self.project_attachment_cleanup_selection.pdf = enabled;
+                    }
+                }
+                self.project_attachment_cleanup_preview = None;
+                self.project_attachment_cleanup_notice = format!(
+                    "已更新{}清理开关，可先预览当前项目再执行。",
+                    kind.display_label()
+                );
+                Task::none()
+            }
+            Message::PreviewProjectAttachmentCleanup => {
+                let Some(project) = self.project_settings_task_project().cloned() else {
+                    self.project_attachment_cleanup_notice =
+                        String::from("无法预览清理范围：项目已经不存在。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                };
+                let cutoff_date = self.project_attachment_cleanup_cutoff_date.to_string();
+                match preview_attachment_cleanup(
+                    &project.path,
+                    &cutoff_date,
+                    self.project_attachment_cleanup_selection,
+                ) {
+                    Ok(preview) => {
+                        let preview_summary =
+                            self.format_attachment_cleanup_preview_summary(&preview);
+                        self.project_attachment_cleanup_preview = Some(preview);
+                        self.project_attachment_cleanup_last_report = None;
+                        self.project_attachment_cleanup_notice = format!(
+                            "已生成项目 `{}` 的附件清理预览：{preview_summary}",
+                            project.title
+                        );
+                        self.status_message = self.project_attachment_cleanup_notice.clone();
+                    }
+                    Err(error) => {
+                        self.project_attachment_cleanup_preview = None;
+                        self.project_attachment_cleanup_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ExecuteProjectAttachmentCleanup => {
+                let Some(project) = self.project_settings_task_project().cloned() else {
+                    self.project_attachment_cleanup_notice =
+                        String::from("无法执行清理：项目已经不存在。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                };
+                let cutoff_date = self.project_attachment_cleanup_cutoff_date.to_string();
+                let Some(preview) = self.project_attachment_cleanup_preview.clone() else {
+                    self.project_attachment_cleanup_notice =
+                        String::from("请先预览当前项目的附件清理范围，再执行实际清理。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                };
+                if preview.cutoff_date_text != cutoff_date {
+                    self.project_attachment_cleanup_preview = None;
+                    self.project_attachment_cleanup_notice =
+                        String::from("清理截止日期已经变化，请重新预览后再执行。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                }
+                if preview.matched_asset_count == 0 {
+                    self.project_attachment_cleanup_notice =
+                        String::from("当前预览没有匹配到可清理附件，无需执行清理。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                }
+                let current_preview = match preview_attachment_cleanup(
+                    &project.path,
+                    &cutoff_date,
+                    self.project_attachment_cleanup_selection,
+                ) {
+                    Ok(current_preview) => current_preview,
+                    Err(error) => {
+                        self.project_attachment_cleanup_notice = error.clone();
+                        self.status_message = error;
+                        return Task::none();
+                    }
+                };
+                if current_preview != preview {
+                    let preview_summary =
+                        self.format_attachment_cleanup_preview_summary(&current_preview);
+                    self.project_attachment_cleanup_preview = Some(current_preview);
+                    self.project_attachment_cleanup_notice = format!(
+                        "项目 `{}` 的附件清理范围已经变化，已刷新预览：{preview_summary}。请确认后再次执行。",
+                        project.title
+                    );
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                }
+                let preview_summary = self.format_attachment_cleanup_preview_summary(&preview);
+                let confirmation = rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title("确认清理项目附件缓存")
+                    .set_description(format!(
+                        "将清理项目 `{}` 的历史附件缓存：{}\n\n清理后，旧会话中的这些附件会撤销回放，不再发送给模型。是否继续？",
+                        project.title, preview_summary
+                    ))
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show();
+                if confirmation != rfd::MessageDialogResult::Yes {
+                    self.project_attachment_cleanup_notice =
+                        String::from("已取消项目附件缓存清理。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                }
+                match execute_attachment_cleanup(
+                    &project.path,
+                    &cutoff_date,
+                    self.project_attachment_cleanup_selection,
+                ) {
+                    Ok(report) => {
+                        let report_summary = self.format_attachment_cleanup_report_summary(&report);
+                        self.project_attachment_cleanup_last_report = Some(report);
+                        self.project_attachment_cleanup_preview = preview_attachment_cleanup(
+                            &project.path,
+                            &cutoff_date,
+                            self.project_attachment_cleanup_selection,
+                        )
+                        .ok();
+                        self.project_attachment_cleanup_notice = format!(
+                            "项目 `{}` 的历史附件缓存清理已完成：{report_summary}",
+                            project.title
+                        );
+                        self.status_message = self.project_attachment_cleanup_notice.clone();
+                    }
+                    Err(error) => {
+                        self.project_attachment_cleanup_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
                 Task::none()
             }
             Message::ThemeSelected(theme) => {
@@ -7937,7 +8144,75 @@ impl VulcanWorkbench {
         self.composer_context_clipboard_text = None;
     }
 
-    /// Returns the resolved capability snapshot of the currently active workbench model when available.
+    /// Formats one raw attachment-cleanup byte count into a compact human-readable label for the settings card.
+    /// 将原始附件清理字节数格式化为供设置卡片使用的紧凑可读标签。
+    fn format_attachment_cleanup_byte_len(byte_len: u64) -> String {
+        const KIB: f64 = 1024.0;
+        const MIB: f64 = KIB * 1024.0;
+        const GIB: f64 = MIB * 1024.0;
+        let byte_len_f64 = byte_len as f64;
+        if byte_len_f64 >= GIB {
+            format!("{:.2} GiB", byte_len_f64 / GIB)
+        } else if byte_len_f64 >= MIB {
+            format!("{:.2} MiB", byte_len_f64 / MIB)
+        } else if byte_len_f64 >= KIB {
+            format!("{:.2} KiB", byte_len_f64 / KIB)
+        } else {
+            format!("{byte_len} B")
+        }
+    }
+
+    /// Formats one cleanup preview into a concise one-line summary used by both the notice bar and the settings detail card.
+    /// 将清理预览格式化为一条紧凑单行摘要，供通知栏与设置详情卡片共同复用。
+    fn format_attachment_cleanup_preview_summary(
+        &self,
+        preview: &AttachmentCleanupPreview,
+    ) -> String {
+        let kind_summary = if preview.per_kind_counts.is_empty() {
+            String::from("未匹配任何类型")
+        } else {
+            preview
+                .per_kind_counts
+                .iter()
+                .map(|(kind, count)| format!("{kind}:{count}"))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        };
+        format!(
+            "截止 {cutoff} 将匹配 {count} 个附件、约 {byte_len}、影响 {sessions} 个会话（{kind_summary}）",
+            cutoff = preview.cutoff_date_text,
+            count = preview.matched_asset_count,
+            byte_len = Self::format_attachment_cleanup_byte_len(preview.matched_byte_len),
+            sessions = preview.impacted_session_count,
+        )
+    }
+
+    /// Formats one cleanup execution report into a concise one-line summary used by the settings card and status bar.
+    /// 将清理执行报告格式化为一条紧凑单行摘要，供设置卡片与状态栏共同复用。
+    fn format_attachment_cleanup_report_summary(&self, report: &AttachmentCleanupReport) -> String {
+        // Extra summary suffix shown when replay has been revoked but the file could not be removed from disk.
+        // 当回放已被撤销但文件无法从磁盘移除时展示的额外摘要后缀。
+        let failed_delete_suffix = if report.failed_delete_count == 0 {
+            String::new()
+        } else {
+            format!(
+                "，{} 个文件删除失败但已撤销回放",
+                report.failed_delete_count
+            )
+        };
+        format!(
+            "已按 {cutoff} 清理 {purged} 个附件，删除 {deleted} 个托管文件，{missing} 个文件已缺失，共释放约 {byte_len}，影响 {sessions} 个会话{failed_delete_suffix}",
+            cutoff = report.cutoff_date_text,
+            purged = report.purged_asset_count,
+            deleted = report.deleted_file_count,
+            missing = report.already_missing_file_count,
+            byte_len = Self::format_attachment_cleanup_byte_len(report.purged_byte_len),
+            sessions = report.impacted_session_count,
+            failed_delete_suffix = failed_delete_suffix,
+        )
+    }
+
+    /// Returns the resolved capability snapshot for the currently active workbench model when one is available.
     /// 返回当前激活工作台模型的已解析能力快照（如果存在）。
     fn active_workbench_model_capabilities_snapshot(
         &self,
@@ -7968,6 +8243,32 @@ impl VulcanWorkbench {
         ]
         .into_iter()
         .any(|kind| self.active_workbench_supports_attachment_kind(kind))
+    }
+
+    /// Returns the project currently bound to the project-settings modal.
+    /// 返回当前绑定到项目设置弹窗的项目。
+    fn project_settings_task_project(&self) -> Option<&TaskProjectSummary> {
+        let project_id = self.project_settings_project_id.as_deref()?;
+        self.task_project_by_id(project_id)
+    }
+
+    /// Resolves the project-space root that should own managed attachment assets for one session.
+    /// 解析单个会话的托管附件资产应归属的项目空间根目录。
+    fn attachment_workspace_path_for_session(&self, session_id: SessionId) -> String {
+        self.session_by_id(session_id)
+            .and_then(|session| session.project_id.as_deref())
+            .and_then(|project_id| self.task_project_by_id(project_id))
+            .map(|project| project.path.clone())
+            .unwrap_or_else(|| self.workspace_path.trim().to_string())
+    }
+
+    /// Resolves the current composer attachment staging root, preferring the selected session project over the global workspace field.
+    /// 解析当前提示词附件暂存根目录，优先使用选中会话所属项目而不是全局工作区输入框。
+    fn selected_attachment_workspace_path(&self) -> String {
+        self.selected_session()
+            .map(|session| session.id)
+            .map(|session_id| self.attachment_workspace_path_for_session(session_id))
+            .unwrap_or_else(|| self.workspace_path.trim().to_string())
     }
 
     /// Validates whether every staged attachment still matches the active model modality declaration.
@@ -8107,28 +8408,99 @@ impl VulcanWorkbench {
         operation::focus(COMPOSER_EDITOR_ID)
     }
 
-    /// Stages one clipboard image snapshot as a managed PNG attachment that can later survive provider replays even if the system clipboard changes.
-    /// 将一份剪贴板图片快照暂存为受管理的 PNG 附件，以便后续即使系统剪贴板变化也能稳定参与 Provider 回放。
-    fn stage_composer_clipboard_image_attachment(
+    /// Stages one arbitrary RGBA image snapshot as a managed PNG attachment reusable by both iced clipboard images and native clipboard fallbacks.
+    /// 将任意 RGBA 图片快照暂存为受管理的 PNG 附件，供 iced 剪贴板图片与原生剪贴板回退路径共同复用。
+    fn stage_composer_rgba_image_attachment(
         &self,
-        image: &clipboard::Image,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
     ) -> Result<ConversationAttachment, String> {
         let descriptor =
             crate::attachment_assets::attachment_descriptor_from_mime_type("image/png")
                 .ok_or_else(|| String::from("宿主暂不支持将剪贴板图片暂存为 PNG 附件。"))?;
-        let png_bytes = crate::attachment_assets::encode_rgba_image_to_png_bytes(
-            image.size.width,
-            image.size.height,
-            image.rgba.as_ref(),
-        )?;
+        let png_bytes =
+            crate::attachment_assets::encode_rgba_image_to_png_bytes(width, height, rgba)?;
 
+        let attachment_workspace_path = self.selected_attachment_workspace_path();
         crate::attachment_assets::stage_attachment_bytes(
-            self.workspace_path.trim(),
+            &attachment_workspace_path,
             &descriptor,
             "clipboard-image.png",
             None,
             &png_bytes,
         )
+    }
+
+    /// Pastes the highest-priority clipboard payload into the composer, optionally restricting the operation to attachment-only imports.
+    /// 将最高优先级的剪贴板载荷粘贴到提示词输入框，并可按需限制为仅导入附件。
+    fn paste_composer_clipboard(&mut self, attachments_only: bool) -> Task<Message> {
+        self.composer_context_menu_open = false;
+        self.composer_context_clipboard_text = None;
+
+        match read_composer_clipboard_payload() {
+            Ok(ComposerClipboardPayload::Files(files)) => {
+                let attachment_workspace_path = self.selected_attachment_workspace_path();
+                match stage_composer_attachment_paths(&attachment_workspace_path, &files) {
+                    Ok(attachments) => {
+                        self.append_imported_composer_attachments(attachments, "剪贴板文件")
+                    }
+                    Err(error) => {
+                        maybe_show_unsupported_attachment_format_dialog(&error);
+                        self.status_message = format!("粘贴剪贴板文件失败：{error}");
+                        operation::focus(COMPOSER_EDITOR_ID)
+                    }
+                }
+            }
+            Ok(ComposerClipboardPayload::Image {
+                width,
+                height,
+                rgba,
+            }) => match self.stage_composer_rgba_image_attachment(width, height, rgba.as_slice()) {
+                Ok(attachment) => {
+                    self.append_imported_composer_attachments(vec![attachment], "剪贴板图片")
+                }
+                Err(error) => {
+                    self.status_message = format!("粘贴剪贴板图片失败：{error}");
+                    operation::focus(COMPOSER_EDITOR_ID)
+                }
+            },
+            Ok(ComposerClipboardPayload::Text(text)) => {
+                if attachments_only {
+                    self.status_message =
+                        String::from("当前剪贴板中没有可导入的图片、音频、视频或 PDF 附件。");
+                    return operation::focus(COMPOSER_EDITOR_ID);
+                }
+
+                if !composer_clipboard_text_is_pastable(Some(&text)) {
+                    self.status_message = String::from("当前剪贴板中的文本为空，未执行粘贴。");
+                    return operation::focus(COMPOSER_EDITOR_ID);
+                }
+
+                let action_task = self.apply_composer_editor_action(text_editor::Action::Edit(
+                    text_editor::Edit::Paste(std::sync::Arc::new(text)),
+                ));
+                Task::batch([action_task, operation::focus(COMPOSER_EDITOR_ID)])
+            }
+            Ok(ComposerClipboardPayload::Empty) => {
+                self.status_message = if attachments_only {
+                    String::from("当前剪贴板中没有可导入的图片、音频、视频或 PDF 附件。")
+                } else {
+                    String::from(
+                        "当前剪贴板中没有可粘贴的文本，也没有可导入的图片、音频、视频或 PDF 附件。",
+                    )
+                };
+                operation::focus(COMPOSER_EDITOR_ID)
+            }
+            Err(error) => {
+                self.status_message = if attachments_only {
+                    format!("读取附件剪贴板失败：{error}")
+                } else {
+                    format!("读取剪贴板失败：{error}")
+                };
+                operation::focus(COMPOSER_EDITOR_ID)
+            }
+        }
     }
 
     /// Tracks one hovered file label so the floating composer panel can surface a drop hint before the user releases the pointer.
@@ -8158,7 +8530,8 @@ impl VulcanWorkbench {
             return Task::none();
         }
 
-        match pick_composer_attachments(self.workspace_path.trim()) {
+        let attachment_workspace_path = self.selected_attachment_workspace_path();
+        match pick_composer_attachments(&attachment_workspace_path) {
             Ok(Some(attachments)) => {
                 self.append_imported_composer_attachments(attachments, "文件选择")
             }
@@ -8167,6 +8540,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Err(error) => {
+                maybe_show_unsupported_attachment_format_dialog(&error);
                 self.status_message = format!("添加附件失败：{error}");
                 Task::none()
             }
@@ -10475,14 +10849,26 @@ impl VulcanWorkbench {
             current_unix_millis_text()
         );
         let updated_at = current_unix_millis_text();
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        append_user_text_message(
-            &mut runtime_state.conversation_state,
-            protocol_message_id,
-            canonical_text,
-            canonical_attachments,
-        );
-        runtime_state.updated_at = updated_at;
+        let referenced_attachments = canonical_attachments.clone();
+        {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            append_user_text_message(
+                &mut runtime_state.conversation_state,
+                protocol_message_id.clone(),
+                canonical_text,
+                canonical_attachments,
+            );
+            runtime_state.updated_at = updated_at;
+        }
+        let attachment_workspace_path = self.attachment_workspace_path_for_session(session_id);
+        if let Err(error) = crate::attachment_asset_index::record_attachment_references_for_message(
+            &attachment_workspace_path,
+            &session_id.to_string(),
+            &protocol_message_id,
+            &referenced_attachments,
+        ) {
+            self.status_message = format!("更新附件资产引用索引失败：{error}");
+        }
     }
 
     /// Mirrors selected hidden transcript records into the canonical conversation state so existing derived context remains effective.

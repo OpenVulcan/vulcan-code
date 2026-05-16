@@ -1080,24 +1080,39 @@ pub fn workbench_pending_prompt_drop_indicator_style(theme: &Theme) -> container
 /// Returns the rounded panel style used by the centered workbench composer surface.
 /// 返回居中工作台提示词面板使用的圆角样式。
 pub fn workbench_composer_panel_style(theme: &Theme) -> container::Style {
+    workbench_composer_panel_drag_target_style(theme, false)
+}
+
+/// Returns the rounded panel style used by the centered workbench composer surface, optionally emphasizing active drag-hover state.
+/// 返回居中工作台提示词面板使用的圆角样式，并可按需强调激活中的拖拽悬停状态。
+pub fn workbench_composer_panel_drag_target_style(
+    theme: &Theme,
+    drag_active: bool,
+) -> container::Style {
     let palette = theme.extended_palette();
 
     container::Style {
-        background: Some(Background::Color(
-            palette.background.weak.color.scale_alpha(0.96),
-        )),
+        background: Some(Background::Color(if drag_active {
+            palette.primary.weak.color.scale_alpha(0.22)
+        } else {
+            palette.background.weak.color.scale_alpha(0.96)
+        })),
         border: Border {
             radius: 20.0.into(),
             width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.30),
+            color: if drag_active {
+                palette.primary.strong.color.scale_alpha(0.72)
+            } else {
+                palette.background.strong.color.scale_alpha(0.30)
+            },
         },
         shadow: Shadow {
             color: Color {
-                a: 0.25,
+                a: if drag_active { 0.34 } else { 0.25 },
                 ..Color::BLACK
             },
             offset: Vector::new(8.0, 10.0),
-            blur_radius: 12.0,
+            blur_radius: if drag_active { 18.0 } else { 12.0 },
         },
         ..Default::default()
     }

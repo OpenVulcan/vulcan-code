@@ -358,6 +358,14 @@ fn estimate_core_message_tokens(message: &CoreConversationMessage) -> usize {
 fn estimate_conversation_attachment_tokens(
     attachment: &vulcan_core::types::ConversationAttachment,
 ) -> usize {
+    if matches!(
+        crate::attachment_asset_index::resolve_attachment_replay_status(attachment),
+        crate::attachment_asset_index::AttachmentReplayStatus::Purged
+            | crate::attachment_asset_index::AttachmentReplayStatus::Missing
+    ) {
+        return 0usize;
+    }
+
     let (kind_reserve, byte_divisor) = match attachment.kind {
         vulcan_core::types::ConversationAttachmentKind::Audio => (1_536usize, 768u64),
         vulcan_core::types::ConversationAttachmentKind::Image => (768usize, 1_024u64),
@@ -440,11 +448,59 @@ mod tests {
     use crate::provider_capabilities::ResolvedModelCapabilities;
     use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
     use serde_json::json;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
         ConversationAttachment, ConversationAttachmentKind, ConversationMessage,
         ConversationPayload, ProviderContinuation, ProviderRequestSnapshot,
         ProviderRequestToolSchema, ProviderUsageSnapshot,
     };
+
+    /// Owns one temporary attachment file so replay-aware budget tests exercise available attachments instead of missing placeholders.
+    /// 持有一个临时附件文件，使感知回放状态的预算测试覆盖可用附件，而不是缺失占位路径。
+    struct TemporaryAttachmentFile {
+        /// Absolute path to the temporary attachment file retained until drop.
+        /// 临时附件文件在释放前保留的绝对路径。
+        path: PathBuf,
+    }
+
+    impl TemporaryAttachmentFile {
+        /// Creates one temporary attachment file with the requested byte length.
+        /// 按请求的字节长度创建一个临时附件文件。
+        fn new(file_name: &str, byte_len: usize) -> Self {
+            let unique_id = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos();
+            let path =
+                std::env::temp_dir().join(format!("vulcan-context-budget-{unique_id}-{file_name}"));
+            std::fs::write(&path, vec![0_u8; byte_len])
+                .expect("temporary attachment file should write");
+            Self { path }
+        }
+
+        /// Builds one canonical attachment record pointing at the live temporary file.
+        /// 构建一条指向当前临时文件的规范附件记录。
+        fn to_attachment(&self, file_name: &str, byte_len: u64) -> ConversationAttachment {
+            ConversationAttachment {
+                kind: ConversationAttachmentKind::Pdf,
+                file_name: String::from(file_name),
+                local_path: self.path.to_string_lossy().into_owned(),
+                source_path: None,
+                asset_id: Some(format!("asset-{file_name}")),
+                byte_len: Some(byte_len),
+                mime_type: String::from("application/pdf"),
+            }
+        }
+    }
+
+    impl Drop for TemporaryAttachmentFile {
+        /// Removes the temporary attachment file when the test fixture leaves scope.
+        /// 当测试夹具离开作用域时移除临时附件文件。
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 
     /// Builds one minimal capability snapshot for budget tests.
     /// 为预算测试构建一份最小能力快照。
@@ -617,24 +673,10 @@ mod tests {
     #[test]
     fn request_context_budget_snapshot_accounts_for_attachment_byte_length() {
         let capabilities = test_capabilities();
-        let small_attachment = ConversationAttachment {
-            kind: ConversationAttachmentKind::Pdf,
-            file_name: String::from("small.pdf"),
-            local_path: String::from("managed/small.pdf"),
-            source_path: None,
-            asset_id: Some(String::from("asset-small")),
-            byte_len: Some(2_048),
-            mime_type: String::from("application/pdf"),
-        };
-        let large_attachment = ConversationAttachment {
-            kind: ConversationAttachmentKind::Pdf,
-            file_name: String::from("large.pdf"),
-            local_path: String::from("managed/large.pdf"),
-            source_path: None,
-            asset_id: Some(String::from("asset-large")),
-            byte_len: Some(2_048_000),
-            mime_type: String::from("application/pdf"),
-        };
+        let small_file = TemporaryAttachmentFile::new("small.pdf", 2_048);
+        let large_file = TemporaryAttachmentFile::new("large.pdf", 2_048_000);
+        let small_attachment = small_file.to_attachment("small.pdf", 2_048);
+        let large_attachment = large_file.to_attachment("large.pdf", 2_048_000);
         let small_snapshot = ProviderRequestSnapshot {
             provider_id: String::from("openai"),
             model_id: String::from("gpt-test"),

@@ -55,38 +55,37 @@ impl ProviderAttachmentPayload {
 /// 从磁盘读取一条已暂存会话附件，并准备好 Provider 可用的编码后载荷。
 pub(crate) fn read_provider_attachment(
     attachment: &ConversationAttachment,
-) -> Result<ProviderAttachmentPayload, VulcanCoreError> {
+) -> Result<Option<ProviderAttachmentPayload>, VulcanCoreError> {
     let Some(file_path) = crate::attachment_assets::resolve_attachment_replay_path(attachment)
     else {
-        return Err(VulcanCoreError::InvalidState {
-            message: format!(
-                "{}附件 `{}` 缺少可读回放路径。",
-                attachment.kind.display_label(),
-                attachment.file_name
-            ),
-        });
+        return Ok(None);
     };
 
-    let attachment_bytes =
-        std::fs::read(&file_path).map_err(|error| VulcanCoreError::InvalidState {
-            message: format!(
-                "读取{}附件 `{}` 失败：{}",
-                attachment.kind.display_label(),
-                attachment.file_name,
-                error
-            ),
-        })?;
+    let attachment_bytes = match std::fs::read(&file_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(VulcanCoreError::InvalidState {
+                message: format!(
+                    "读取{}附件 `{}` 失败：{}",
+                    attachment.kind.display_label(),
+                    attachment.file_name,
+                    error
+                ),
+            });
+        }
+    };
     let mime_type = resolve_attachment_mime_type(attachment, &file_path)?;
     let base64_data = BASE64_STANDARD.encode(attachment_bytes);
     let data_url = format!("data:{mime_type};base64,{base64_data}");
 
-    Ok(ProviderAttachmentPayload {
+    Ok(Some(ProviderAttachmentPayload {
         kind: attachment.kind.clone(),
         file_name: attachment.file_name.clone(),
         mime_type,
         base64_data,
         data_url,
-    })
+    }))
 }
 
 /// Builds one OpenCode-style fallback text that tells the model the current API path cannot read a staged attachment.
@@ -100,6 +99,15 @@ pub(crate) fn build_attachment_transport_error_text(
         attachment.file_name,
         scope.trim(),
         attachment.kind.modality_name()
+    )
+}
+
+/// Builds one provider-visible fallback text for an attachment whose managed replay file has already disappeared.
+/// 为托管回放文件已经消失的附件构建一条 Provider 可见的回退文本。
+pub(crate) fn build_missing_attachment_replay_text(attachment: &ConversationAttachment) -> String {
+    format!(
+        "ERROR: Attachment \"{}\" no longer exists. Please ignore it.",
+        attachment.file_name
     )
 }
 
@@ -198,6 +206,8 @@ mod tests {
         let payload =
             read_provider_attachment(&attachment).expect("attachment payload should build");
 
+        let payload = payload.expect("attachment payload should stay available");
+
         assert_eq!(payload.kind, ConversationAttachmentKind::Image);
         assert_eq!(payload.mime_type, "image/png");
         assert_eq!(payload.base64_data, "AAECAw==");
@@ -214,6 +224,7 @@ mod tests {
             build_test_attachment("mp3", ConversationAttachmentKind::Audio, "audio/mpeg");
         let payload =
             read_provider_attachment(&attachment).expect("attachment payload should build");
+        let payload = payload.expect("attachment payload should stay available");
 
         assert_eq!(payload.openai_compatible_audio_format(), Some("mp3"));
 
@@ -228,6 +239,7 @@ mod tests {
             build_test_attachment("pdf", ConversationAttachmentKind::Pdf, "application/pdf");
         let payload =
             read_provider_attachment(&attachment).expect("attachment payload should build");
+        let payload = payload.expect("attachment payload should stay available");
 
         assert!(payload.is_pdf_document());
         assert_eq!(payload.data_url, "data:application/pdf;base64,AAECAw==");
@@ -248,5 +260,19 @@ mod tests {
         assert!(text.contains("video input"));
 
         let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies missing managed attachments are revoked instead of failing the whole provider payload build.
+    /// 验证缺失的托管附件会被直接撤销，而不是让整个 Provider 载荷构建失败。
+    #[test]
+    fn read_provider_attachment_returns_none_when_replay_file_is_missing() {
+        let attachment =
+            build_test_attachment("png", ConversationAttachmentKind::Image, "image/png");
+        std::fs::remove_file(&attachment.local_path).expect("managed file should remove");
+
+        let payload =
+            read_provider_attachment(&attachment).expect("missing attachment should not fail");
+
+        assert!(payload.is_none());
     }
 }

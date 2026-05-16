@@ -5,6 +5,7 @@ use super::helpers::*;
 use super::*;
 use iced::widget::{column, pin, rich_text};
 use iced::{Background, Border, Color};
+use iced_aw::helpers::date_picker;
 
 /// Returns the active subagent dispatch list height needed for the current running task count.
 /// 返回当前运行中任务数量所需的活动子代理调度列表高度。
@@ -158,6 +159,12 @@ impl VulcanWorkbench {
             };
         let composed_surface: Element<'_, Message> =
             if let Some(overlay) = self.view_workspace_history_search_modal() {
+                stack([composed_surface, overlay]).into()
+            } else {
+                composed_surface
+            };
+        let composed_surface: Element<'_, Message> =
+            if let Some(overlay) = self.view_task_project_settings_modal() {
                 stack([composed_surface, overlay]).into()
             } else {
                 composed_surface
@@ -602,6 +609,81 @@ impl VulcanWorkbench {
             .style(style::startup_overlay_card_style);
         let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
             .on_press(Message::CloseWorkspaceHistorySearchPanel);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(modal_card)
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Builds the project settings modal opened from the task-tree project context menu.
+    /// 构建从任务树项目右键菜单打开的项目设置弹窗。
+    pub(super) fn view_task_project_settings_modal(&self) -> Option<Element<'_, Message>> {
+        let project = self.project_settings_task_project()?;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseTaskProjectSettings);
+        let attachment_root =
+            crate::attachment_assets::resolve_managed_attachment_root(&project.path);
+        let project_summary = container(
+            column![
+                text("项目空间").size(14),
+                text(format!("项目路径：{}", project.path)).size(12),
+                text(format!("附件缓存：{}", attachment_root.display())).size(12),
+            ]
+            .spacing(6),
+        )
+        .padding(12)
+        .style(container::bordered_box);
+        let modal_card = container(
+            column![
+                row![
+                    column![
+                        text(format!("项目设置：{}", project.title)).size(20),
+                        text("项目级配置与缓存清理只作用于当前项目空间。").size(12),
+                    ]
+                    .spacing(4)
+                    .width(Fill),
+                    close_button,
+                ]
+                .align_y(Center),
+                project_summary,
+                self.view_project_attachment_cleanup_card(project),
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(TASK_PROJECT_SETTINGS_MODAL_WIDTH)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseTaskProjectSettings);
 
         Some(
             stack([
@@ -1607,6 +1689,10 @@ impl VulcanWorkbench {
                     Message::RenameTaskProject(project.id.clone()),
                 ),
                 Self::view_main_task_tree_menu_button(
+                    "项目设置",
+                    Message::OpenTaskProjectSettings(project.id.clone()),
+                ),
+                Self::view_main_task_tree_menu_button(
                     "归档",
                     Message::ArchiveTaskProject(project.id.clone()),
                 ),
@@ -2485,7 +2571,7 @@ impl VulcanWorkbench {
             button
         };
         let tooltip_text = if supports_attachments {
-            "添加附件（也支持拖拽或粘贴）"
+            "添加附件（支持整块输入区拖拽、Ctrl+V 智能粘贴与 Ctrl+Shift+V 附件粘贴）"
         } else {
             "当前模型未声明可用附件输入模态"
         };
@@ -2572,10 +2658,13 @@ impl VulcanWorkbench {
         }
 
         let preview = if self.composer_drag_hover_labels.len() == 1 {
-            format!("释放以附加文件：{}", self.composer_drag_hover_labels[0])
+            format!(
+                "拖到整个输入区后释放以附加文件：{}",
+                self.composer_drag_hover_labels[0]
+            )
         } else {
             format!(
-                "释放以附加 {} 个文件：{}",
+                "拖到整个输入区后释放以附加 {} 个文件：{}",
                 self.composer_drag_hover_labels.len(),
                 self.composer_drag_hover_labels
                     .iter()
@@ -2713,11 +2802,21 @@ impl VulcanWorkbench {
                 keyboard::Key::Character("z") if key_press.modifiers.command() => {
                     Some(text_editor::Binding::Custom(Message::ComposerUndo))
                 }
-                keyboard::Key::Character("v")
+                keyboard::Key::Character("v") | keyboard::Key::Character("V")
                     if key_press.modifiers.command() && key_press.modifiers.shift() =>
                 {
                     Some(text_editor::Binding::Custom(
                         Message::PasteComposerClipboardAttachments,
+                    ))
+                }
+                keyboard::Key::Character("v") | keyboard::Key::Character("V")
+                    if key_press.modifiers.command()
+                        && !key_press.modifiers.shift()
+                        && !key_press.modifiers.alt()
+                        && !key_press.modifiers.logo() =>
+                {
+                    Some(text_editor::Binding::Custom(
+                        Message::PasteComposerClipboardContents,
                     ))
                 }
                 keyboard::Key::Named(keyboard::key::Named::Enter)
@@ -3224,10 +3323,13 @@ impl VulcanWorkbench {
             column![composer_editor_stack, composer_controls_row,]
                 .spacing(COMPOSER_PANEL_CONTROL_GAP)
         };
+        let composer_drag_active = !self.composer_drag_hover_labels.is_empty();
         let composer_panel = container(composer_body)
             .padding(COMPOSER_PANEL_EDGE_PADDING)
             .width(self.composer_panel_width())
-            .style(style::workbench_composer_panel_style);
+            .style(move |theme| {
+                style::workbench_composer_panel_drag_target_style(theme, composer_drag_active)
+            });
         let title_row: Element<'_, Message> =
             if let Some(state) = active_subagent_panel_state.as_ref() {
                 self.view_subagent_panel_title_row(state)
@@ -5189,20 +5291,12 @@ impl VulcanWorkbench {
                 modifiers,
                 repeat,
                 ..
-            }) if !repeat
-                && modifiers.control()
-                && !modifiers.shift()
-                && !modifiers.alt()
-                && !modifiers.logo() =>
-            {
+            }) if !repeat && modifiers.control() && !modifiers.alt() && !modifiers.logo() => {
                 match key.as_ref() {
-                    keyboard::Key::Character("f") | keyboard::Key::Character("F") => {
-                        Some(Message::OpenWorkspaceHistorySearchPanel)
-                    }
-                    keyboard::Key::Character("v") | keyboard::Key::Character("V")
-                        if modifiers.shift() =>
+                    keyboard::Key::Character("f") | keyboard::Key::Character("F")
+                        if !modifiers.shift() =>
                     {
-                        Some(Message::PasteComposerClipboardAttachments)
+                        Some(Message::OpenWorkspaceHistorySearchPanel)
                     }
                     _ => None,
                 }
@@ -6679,6 +6773,155 @@ impl VulcanWorkbench {
                 text(&self.mcp_notice).size(12),
                 column![text("服务器摘要").size(14), server_summary_list].spacing(8),
                 column![text("最近一次发现").size(14), latest_discovery_list].spacing(8),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Renders the project-scoped historical attachment cleanup card used inside the project settings modal.
+    /// 渲染项目设置弹窗内部使用的项目级历史附件清理卡片。
+    pub(super) fn view_project_attachment_cleanup_card<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        let preview_button = button("预览清理范围")
+            .style(button::secondary)
+            .on_press(Message::PreviewProjectAttachmentCleanup);
+        let cleanup_preview_can_execute = self
+            .project_attachment_cleanup_preview
+            .as_ref()
+            .is_some_and(|preview| {
+                preview.matched_asset_count > 0
+                    && preview.cutoff_date_text
+                        == self.project_attachment_cleanup_cutoff_date.to_string()
+            });
+        let execute_button = {
+            let execute_button = button("执行清理").style(button::primary);
+            if cleanup_preview_can_execute {
+                execute_button.on_press(Message::ExecuteProjectAttachmentCleanup)
+            } else {
+                execute_button
+            }
+        };
+        let date_button = button(
+            container(
+                row![
+                    text(format!(
+                        "截止日期：{}",
+                        self.project_attachment_cleanup_cutoff_date
+                    ))
+                    .size(13),
+                    space::horizontal(),
+                    codicon::calendar().size(14).line_height(1.0),
+                ]
+                .align_y(Center)
+                .spacing(8),
+            )
+            .width(Fill),
+        )
+        .padding([8, 12])
+        .style(button::secondary)
+        .on_press(Message::OpenProjectAttachmentCleanupDatePicker);
+        let date_picker_control: Element<'a, Message> = date_picker(
+            self.project_attachment_cleanup_date_picker_open,
+            self.project_attachment_cleanup_cutoff_date,
+            date_button,
+            Message::CancelProjectAttachmentCleanupDatePicker,
+            Message::ProjectAttachmentCleanupDateSelected,
+        )
+        .into();
+
+        let preview_summary: Element<'_, Message> =
+            if let Some(preview) = self.project_attachment_cleanup_preview.as_ref() {
+                let kind_summary = if preview.per_kind_counts.is_empty() {
+                    String::from("未匹配任何附件类型")
+                } else {
+                    preview
+                        .per_kind_counts
+                        .iter()
+                        .map(|(kind, count)| format!("{kind}:{count}"))
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                };
+                column![
+                    text("最近一次预览").size(13),
+                    text(self.format_attachment_cleanup_preview_summary(preview)).size(12),
+                    text(format!("类型分布：{kind_summary}")).size(12),
+                ]
+                .spacing(6)
+                .into()
+            } else {
+                text("尚未生成清理预览。").size(12).into()
+            };
+
+        let report_summary: Element<'_, Message> =
+            if let Some(report) = self.project_attachment_cleanup_last_report.as_ref() {
+                column![
+                    text("最近一次执行").size(13),
+                    text(self.format_attachment_cleanup_report_summary(report)).size(12),
+                ]
+                .spacing(6)
+                .into()
+            } else {
+                text("尚未执行历史附件缓存清理。").size(12).into()
+            };
+        let attachment_root =
+            crate::attachment_assets::resolve_managed_attachment_root(&project.path);
+
+        container(
+            column![
+                row![
+                    text("项目附件缓存清理").size(18),
+                    space::horizontal(),
+                    text("仅清理当前项目").size(12),
+                ]
+                .align_y(Center),
+                text(
+                    "选择截止日期后可先预览当前项目将被清理的托管附件范围。清理完成后，旧会话中的失效附件会自动撤销回放，不再阻断后续对话。",
+                )
+                .size(12),
+                text(format!("托管目录：{}", attachment_root.display())).size(12),
+                date_picker_control,
+                column![
+                    row![
+                        checkbox(self.project_attachment_cleanup_selection.image)
+                            .label("图片")
+                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                ConversationAttachmentKind::Image,
+                                enabled,
+                            )),
+                        checkbox(self.project_attachment_cleanup_selection.audio)
+                            .label("音频")
+                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                ConversationAttachmentKind::Audio,
+                                enabled,
+                            )),
+                    ]
+                    .spacing(12),
+                    row![
+                        checkbox(self.project_attachment_cleanup_selection.video)
+                            .label("视频")
+                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                ConversationAttachmentKind::Video,
+                                enabled,
+                            )),
+                        checkbox(self.project_attachment_cleanup_selection.pdf)
+                            .label("PDF")
+                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                ConversationAttachmentKind::Pdf,
+                                enabled,
+                            )),
+                    ]
+                    .spacing(12),
+                ]
+                .spacing(8),
+                row![preview_button, execute_button].spacing(10),
+                preview_summary,
+                report_summary,
+                text(&self.project_attachment_cleanup_notice).size(12),
             ]
             .spacing(12),
         )

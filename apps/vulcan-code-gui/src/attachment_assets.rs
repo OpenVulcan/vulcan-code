@@ -1,7 +1,12 @@
 //! Host-managed attachment staging helpers shared by the composer, persistence, and provider replay layers.
 //! 供提示词输入区、持久化与 Provider 回放层共享的宿主管理附件暂存辅助模块。
 
+use crate::attachment_asset_index::{
+    AttachmentReplayStatus, current_attachment_timestamp_parts, record_staged_attachment,
+    resolve_attachment_replay_status,
+};
 use crate::workspace_path::canonicalize_workspace_path;
+use filetime::{FileTime, set_file_times};
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -14,6 +19,22 @@ const WORKSPACE_ATTACHMENT_DIR_NAME: &str = ".vulcan-code";
 /// Stable leaf directory used below the host-managed attachment root.
 /// 宿主管理附件根目录下使用的稳定叶子目录名称。
 const MANAGED_ATTACHMENT_DIR_NAME: &str = "attachments";
+
+/// Stable image category directory name used below the managed attachment root.
+/// 宿主管理附件根目录下用于图片分类的稳定目录名称。
+const IMAGE_ATTACHMENT_DIR_NAME: &str = "images";
+
+/// Stable audio category directory name used below the managed attachment root.
+/// 宿主管理附件根目录下用于音频分类的稳定目录名称。
+const AUDIO_ATTACHMENT_DIR_NAME: &str = "audio";
+
+/// Stable video category directory name used below the managed attachment root.
+/// 宿主管理附件根目录下用于视频分类的稳定目录名称。
+const VIDEO_ATTACHMENT_DIR_NAME: &str = "video";
+
+/// Stable PDF category directory name used below the managed attachment root.
+/// 宿主管理附件根目录下用于 PDF 分类的稳定目录名称。
+const PDF_ATTACHMENT_DIR_NAME: &str = "pdf";
 
 /// Structured descriptor resolved from one supported attachment file path or MIME type.
 /// 从受支持附件文件路径或 MIME 类型解析得到的结构化描述信息。
@@ -197,11 +218,13 @@ pub fn stage_attachment_bytes(
     source_path: Option<&Path>,
     bytes: &[u8],
 ) -> Result<ConversationAttachment, String> {
+    let timestamp = current_attachment_timestamp_parts();
     let asset_root = resolve_managed_attachment_root(workspace_path);
-    fs::create_dir_all(&asset_root).map_err(|error| {
+    let category_directory = resolve_attachment_category_directory(&asset_root, &descriptor.kind);
+    fs::create_dir_all(&category_directory).map_err(|error| {
         format!(
-            "创建托管附件目录 `{}` 失败：{}。",
-            asset_root.display(),
+            "创建托管附件分类目录 `{}` 失败：{}。",
+            category_directory.display(),
             error
         )
     })?;
@@ -209,7 +232,10 @@ pub fn stage_attachment_bytes(
     let asset_id = Uuid::new_v4().to_string();
     let sanitized_file_name =
         sanitize_attachment_file_name(suggested_file_name, descriptor.extension);
-    let managed_file_path = asset_root.join(format!("{asset_id}-{}", sanitized_file_name));
+    let managed_file_path = category_directory.join(format!(
+        "{}-{asset_id}-{}",
+        timestamp.compact_prefix, sanitized_file_name
+    ));
     fs::write(&managed_file_path, bytes).map_err(|error| {
         format!(
             "写入托管附件 `{}` 失败：{}。",
@@ -218,7 +244,9 @@ pub fn stage_attachment_bytes(
         )
     })?;
 
-    Ok(ConversationAttachment {
+    set_managed_attachment_file_times(&managed_file_path, timestamp.unix_millis)?;
+
+    let attachment = ConversationAttachment {
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
         local_path: managed_file_path.to_string_lossy().into_owned(),
@@ -228,7 +256,9 @@ pub fn stage_attachment_bytes(
         asset_id: Some(asset_id),
         byte_len: Some(bytes.len() as u64),
         mime_type: descriptor.mime_type.to_string(),
-    })
+    };
+    record_staged_attachment(workspace_path, &attachment, &timestamp)?;
+    Ok(attachment)
 }
 
 /// Encodes one RGBA image payload into PNG bytes so clipboard images can enter the managed attachment store through the same staging pipeline.
@@ -265,6 +295,13 @@ pub fn encode_rgba_image_to_png_bytes(
 /// Returns the first readable replay path for one attachment by preferring the managed copy and then falling back to the original source path.
 /// 为单条附件返回第一条可读回放路径，优先使用托管副本，再回退到原始来源路径。
 pub fn resolve_attachment_replay_path(attachment: &ConversationAttachment) -> Option<PathBuf> {
+    if matches!(
+        resolve_attachment_replay_status(attachment),
+        AttachmentReplayStatus::Purged
+    ) {
+        return None;
+    }
+
     let managed_path = attachment.local_path.trim();
     if !managed_path.is_empty() {
         let managed_path = PathBuf::from(managed_path);
@@ -280,6 +317,98 @@ pub fn resolve_attachment_replay_path(attachment: &ConversationAttachment) -> Op
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .filter(|path| path.is_file())
+}
+
+/// Returns the stable category directory path used by the provided attachment kind below the managed attachment root.
+/// 返回在托管附件根目录下由给定附件类型使用的稳定分类目录路径。
+fn resolve_attachment_category_directory(
+    asset_root: &Path,
+    kind: &ConversationAttachmentKind,
+) -> PathBuf {
+    asset_root.join(attachment_kind_directory_name(kind))
+}
+
+/// Returns the stable directory name assigned to the provided attachment kind.
+/// 返回分配给给定附件类型的稳定目录名称。
+fn attachment_kind_directory_name(kind: &ConversationAttachmentKind) -> &'static str {
+    match kind {
+        ConversationAttachmentKind::Image => IMAGE_ATTACHMENT_DIR_NAME,
+        ConversationAttachmentKind::Audio => AUDIO_ATTACHMENT_DIR_NAME,
+        ConversationAttachmentKind::Video => VIDEO_ATTACHMENT_DIR_NAME,
+        ConversationAttachmentKind::Pdf => PDF_ATTACHMENT_DIR_NAME,
+    }
+}
+
+/// Applies the current staging timestamp to the managed file-system entry so later cleanup and manual inspection both see consistent times.
+/// 将当前暂存时间应用到托管文件系统条目上，从而让后续清理与人工排查都看到一致的时间。
+fn set_managed_attachment_file_times(
+    managed_file_path: &Path,
+    unix_millis: i64,
+) -> Result<(), String> {
+    let seconds = unix_millis.div_euclid(1_000);
+    let nanoseconds = (unix_millis.rem_euclid(1_000) * 1_000_000) as u32;
+    let timestamp = FileTime::from_unix_time(seconds, nanoseconds);
+    set_file_times(managed_file_path, timestamp, timestamp).map_err(|error| {
+        format!(
+            "更新托管附件 `{}` 的访问/修改时间失败：{}。",
+            managed_file_path.display(),
+            error
+        )
+    })?;
+    set_managed_attachment_creation_time(managed_file_path, unix_millis)?;
+    Ok(())
+}
+
+/// Applies the current staging timestamp to the managed file creation time when the host platform supports it.
+/// 当宿主平台支持时，将当前暂存时间应用到托管文件创建时间。
+#[cfg(windows)]
+fn set_managed_attachment_creation_time(
+    managed_file_path: &Path,
+    unix_millis: i64,
+) -> Result<(), String> {
+    use std::fs::FileTimes;
+    use std::os::windows::fs::FileTimesExt;
+
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(managed_file_path)
+        .map_err(|error| {
+            format!(
+                "打开托管附件 `{}` 以更新创建时间失败：{}。",
+                managed_file_path.display(),
+                error
+            )
+        })?;
+    let file_times = FileTimes::new().set_created(unix_millis_to_system_time(unix_millis));
+    file.set_times(file_times).map_err(|error| {
+        format!(
+            "更新托管附件 `{}` 的创建时间失败：{}。",
+            managed_file_path.display(),
+            error
+        )
+    })
+}
+
+/// Converts a Unix millisecond timestamp into a `SystemTime` value accepted by the safe filesystem timestamp API.
+/// 将 Unix 毫秒时间戳转换为安全文件系统时间戳 API 可接受的 `SystemTime` 值。
+#[cfg(windows)]
+fn unix_millis_to_system_time(unix_millis: i64) -> std::time::SystemTime {
+    let millis = std::time::Duration::from_millis(unix_millis.unsigned_abs());
+    if unix_millis >= 0 {
+        std::time::UNIX_EPOCH + millis
+    } else {
+        std::time::UNIX_EPOCH - millis
+    }
+}
+
+/// Skips explicit creation-time updates on non-Windows hosts because only access/modify times are portable there.
+/// 在非 Windows 宿主上跳过显式创建时间更新，因为只有访问/修改时间具备可移植性。
+#[cfg(not(windows))]
+fn set_managed_attachment_creation_time(
+    _managed_file_path: &Path,
+    _unix_millis: i64,
+) -> Result<(), String> {
+    Ok(())
 }
 
 /// Resolves one supported attachment descriptor from a normalized extension string.
@@ -416,6 +545,7 @@ mod tests {
         encode_rgba_image_to_png_bytes, resolve_attachment_replay_path,
         resolve_managed_attachment_root, stage_attachment_bytes, stage_attachment_file,
     };
+    use crate::workspace_path::canonicalize_workspace_path;
     use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::ConversationAttachmentKind;
 
@@ -429,36 +559,62 @@ mod tests {
         std::env::temp_dir().join(format!("vulcan-attachment-assets-{unique_id}.{extension}"))
     }
 
+    /// Builds one unique temporary workspace directory path so staging tests do not touch the shared home attachment cache.
+    /// 构建一条唯一的临时工作区目录路径，使暂存测试不会触碰共享家目录附件缓存。
+    fn unique_workspace_directory() -> std::path::PathBuf {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("vulcan-attachment-assets-workspace-{unique_id}"));
+        std::fs::create_dir_all(&directory).expect("temporary workspace directory should create");
+        directory
+    }
+
+    /// Removes one temporary workspace directory after a staging test has finished.
+    /// 在暂存测试结束后移除一条临时工作区目录。
+    fn cleanup_workspace_directory(directory: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     /// Verifies staging one source file copies it into the managed attachment directory while retaining the original source path.
     /// 验证暂存源文件时会把它复制到托管附件目录，并保留原始来源路径。
     #[test]
     fn stage_attachment_file_materializes_managed_copy() {
+        let workspace_directory = unique_workspace_directory();
         let source_path = unique_temp_file_path("png");
         std::fs::write(&source_path, [0_u8, 1, 2, 3]).expect("temporary source file should write");
 
         let attachment =
-            stage_attachment_file("", &source_path).expect("attachment should stage successfully");
+            stage_attachment_file(&workspace_directory.to_string_lossy(), &source_path)
+                .expect("attachment should stage successfully");
 
         assert_eq!(attachment.kind, ConversationAttachmentKind::Image);
         assert!(std::path::Path::new(&attachment.local_path).is_file());
         assert_eq!(
             attachment.source_path.as_deref(),
-            Some(source_path.to_string_lossy().as_ref())
+            Some(
+                canonicalize_workspace_path(&source_path)
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
         assert_eq!(attachment.byte_len, Some(4));
 
         let _ = std::fs::remove_file(&source_path);
-        let _ = std::fs::remove_file(&attachment.local_path);
+        cleanup_workspace_directory(&workspace_directory);
     }
 
     /// Verifies in-memory staging creates a managed copy even when no original source path exists.
     /// 验证内存载荷暂存时即使没有原始来源路径，也会创建托管副本。
     #[test]
     fn stage_attachment_bytes_without_source_path_creates_managed_copy() {
+        let workspace_directory = unique_workspace_directory();
         let descriptor = attachment_descriptor_from_mime_type("image/png")
             .expect("png mime type should stay supported");
         let attachment = stage_attachment_bytes(
-            "",
+            &workspace_directory.to_string_lossy(),
             &descriptor,
             "clipboard-image.png",
             None,
@@ -470,28 +626,31 @@ mod tests {
         assert!(attachment.source_path.is_none());
         assert!(std::path::Path::new(&attachment.local_path).is_file());
 
-        let _ = std::fs::remove_file(&attachment.local_path);
+        cleanup_workspace_directory(&workspace_directory);
     }
 
     /// Verifies replay-path resolution falls back to the original source file when the managed copy no longer exists.
     /// 验证当托管副本不存在时，回放路径解析会回退到原始源文件。
     #[test]
     fn resolve_attachment_replay_path_falls_back_to_original_source() {
+        let workspace_directory = unique_workspace_directory();
         let source_path = unique_temp_file_path("pdf");
         std::fs::write(&source_path, [0_u8, 1, 2, 3]).expect("temporary source file should write");
 
         let attachment =
-            stage_attachment_file("", &source_path).expect("attachment should stage successfully");
+            stage_attachment_file(&workspace_directory.to_string_lossy(), &source_path)
+                .expect("attachment should stage successfully");
         std::fs::remove_file(&attachment.local_path).expect("managed copy should remove");
 
         assert_eq!(
             resolve_attachment_replay_path(&attachment)
                 .as_deref()
                 .map(std::path::Path::new),
-            Some(source_path.as_path())
+            Some(canonicalize_workspace_path(&source_path).as_path())
         );
 
         let _ = std::fs::remove_file(&source_path);
+        cleanup_workspace_directory(&workspace_directory);
     }
 
     /// Verifies supported descriptors can be resolved from both file paths and MIME types.

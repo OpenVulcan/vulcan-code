@@ -18,6 +18,7 @@ async-stream = "0.3.6"
 arboard = "3.6.1"
 base64 = "0.22.1"
 dirs = "6.0.0"
+filetime = "0.2.26"
 futures-util = "0.3.31"
 png = "0.17.16"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
@@ -35,3 +36,7 @@ time = { version = "0.3.44", features = ["formatting", "local-offset", "macros"]
 tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util"] }
 unicode-segmentation = "1.12.0"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5.4.1"
+image = { version = "0.25.10", default-features = false, features = ["bmp"] }

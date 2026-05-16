@@ -2,6 +2,35 @@
 //! 从主应用模块中抽取的共享辅助函数。
 
 use super::*;
+use std::process::Command;
+
+/// Represents one best-effort clipboard payload routed into the composer smart-paste pipeline.
+/// 表示一条被路由到提示词智能粘贴链路中的最佳努力剪贴板载荷。
+pub(super) enum ComposerClipboardPayload {
+    /// A batch of filesystem paths currently exposed by the host clipboard.
+    /// 当前由宿主剪贴板暴露出的一批文件系统路径。
+    Files(Vec<PathBuf>),
+    /// One in-memory RGBA image snapshot currently exposed by the host clipboard.
+    /// 当前由宿主剪贴板暴露出的一份内存 RGBA 图片快照。
+    Image {
+        /// Width of the clipboard image in pixels.
+        /// 剪贴板图片的像素宽度。
+        width: u32,
+        /// Height of the clipboard image in pixels.
+        /// 剪贴板图片的像素高度。
+        height: u32,
+        /// Raw RGBA bytes copied from the clipboard image payload.
+        /// 从剪贴板图片载荷复制得到的原始 RGBA 字节。
+        rgba: Vec<u8>,
+    },
+    /// A plain-text payload currently exposed by the host clipboard.
+    /// 当前由宿主剪贴板暴露出的一段纯文本载荷。
+    Text(String),
+    /// No supported clipboard payload is currently available.
+    /// 当前没有可用的受支持剪贴板载荷。
+    Empty,
+}
+
 /// Builds the initial pane-grid configuration for the three-column workbench.
 /// 构建三栏工作台的初始分栏网格配置。
 pub(super) fn pane_layout() -> Configuration<PaneKind> {
@@ -569,7 +598,7 @@ pub(super) fn stage_composer_attachment_paths(
             crate::attachment_assets::attachment_descriptor_from_path(&selected_file)
         else {
             return Err(format!(
-                "文件 `{}` 不是受支持的附件格式。",
+                "文件 `{}` 不是受支持的附件格式；当前仅支持图片、音频、视频与 PDF。",
                 selected_file.display()
             ));
         };
@@ -580,6 +609,111 @@ pub(super) fn stage_composer_attachment_paths(
     }
 
     Ok(attachments)
+}
+
+/// Reads the current clipboard contents using the native host backend and returns the highest-priority payload usable by the composer.
+/// 使用宿主原生后端读取当前剪贴板内容，并返回提示词输入框可使用的最高优先级载荷。
+pub(super) fn read_composer_clipboard_payload() -> Result<ComposerClipboardPayload, String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| format!("访问系统剪贴板失败：{error}"))?;
+
+    if let Ok(file_list) = clipboard.get().file_list() {
+        let files = file_list.into_iter().collect::<Vec<_>>();
+        if !files.is_empty() {
+            return Ok(ComposerClipboardPayload::Files(files));
+        }
+    }
+
+    if let Ok(image) = clipboard.get().image() {
+        return Ok(ComposerClipboardPayload::Image {
+            width: image.width as u32,
+            height: image.height as u32,
+            rgba: image.bytes.into_owned(),
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(payload) = read_windows_clipboard_image_payload()? {
+        return Ok(payload);
+    }
+
+    if let Ok(text) = clipboard.get().text() {
+        return Ok(ComposerClipboardPayload::Text(text));
+    }
+
+    Ok(ComposerClipboardPayload::Empty)
+}
+
+/// Reads Windows clipboard bitmap formats that are commonly produced by screenshot tools but are not always exposed as PNG or CF_DIBV5.
+/// 读取 Windows 截图工具常见但不一定以 PNG 或 CF_DIBV5 暴露的剪贴板位图格式。
+#[cfg(target_os = "windows")]
+fn read_windows_clipboard_image_payload() -> Result<Option<ComposerClipboardPayload>, String> {
+    std::panic::catch_unwind(read_windows_clipboard_image_payload_inner)
+        .map_err(|_| String::from("读取 Windows 剪贴板图片时发生内部异常，已阻止程序崩溃。"))?
+}
+
+/// Reads Windows bitmap clipboard formats after the outer caller has installed a panic boundary.
+/// 在外层调用方已安装 panic 边界后读取 Windows 位图剪贴板格式。
+#[cfg(target_os = "windows")]
+fn read_windows_clipboard_image_payload_inner() -> Result<Option<ComposerClipboardPayload>, String>
+{
+    use clipboard_win::{Clipboard, Format, Getter, formats};
+    use std::io::Cursor;
+
+    let _clipboard = Clipboard::new_attempts(10)
+        .map_err(|error| format!("访问 Windows 剪贴板图片格式失败：{error}"))?;
+
+    if formats::RawData(formats::CF_DIB).is_format_avail() {
+        let mut dib_bytes = Vec::new();
+        formats::RawData(formats::CF_DIB)
+            .read_clipboard(&mut dib_bytes)
+            .map_err(|error| format!("读取 Windows 剪贴板 CF_DIB 图片失败：{error}"))?;
+        let decoder =
+            image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(dib_bytes))
+                .map_err(|error| format!("解析 Windows 剪贴板 CF_DIB 图片失败：{error}"))?;
+        let image = image::DynamicImage::from_decoder(decoder)
+            .map_err(|error| format!("转换 Windows 剪贴板 CF_DIB 图片失败：{error}"))?
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        return Ok(Some(ComposerClipboardPayload::Image {
+            width,
+            height,
+            rgba: image.into_raw(),
+        }));
+    }
+
+    if formats::Bitmap.is_format_avail() {
+        let mut bitmap_bytes = Vec::new();
+        formats::Bitmap
+            .read_clipboard(&mut bitmap_bytes)
+            .map_err(|error| format!("读取 Windows 剪贴板 CF_BITMAP 图片失败：{error}"))?;
+        let image = image::load_from_memory_with_format(&bitmap_bytes, image::ImageFormat::Bmp)
+            .map_err(|error| format!("解析 Windows 剪贴板 CF_BITMAP 图片失败：{error}"))?
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        return Ok(Some(ComposerClipboardPayload::Image {
+            width,
+            height,
+            rgba: image.into_raw(),
+        }));
+    }
+
+    Ok(None)
+}
+
+/// Shows one native warning dialog when the latest attachment import failure is caused by an unsupported file format.
+/// 当最近一次附件导入失败由不支持的文件格式引起时，显示一条原生警告弹窗。
+pub(super) fn maybe_show_unsupported_attachment_format_dialog(error: &str) {
+    if !error.contains("不是受支持的附件格式") {
+        return;
+    }
+
+    let _ = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("不支持的附件格式")
+        .set_description(error)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
 
 /// Normalizes one project path to a canonical form when the platform can resolve it.

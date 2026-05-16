@@ -2,7 +2,8 @@
 //! 宿主运行时自有的 Anthropic HTTP 与 SSE 直连传输模块。
 
 use crate::agent_runtime::provider_attachment::{
-    build_attachment_transport_error_text, read_provider_attachment,
+    build_attachment_transport_error_text, build_missing_attachment_replay_text,
+    read_provider_attachment,
 };
 use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropic_base_url;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
@@ -734,7 +735,16 @@ fn core_message_to_anthropic_message(
                 }));
             }
             for attachment in &normalized.attachments {
-                let attachment_payload = read_provider_attachment(attachment)?;
+                let attachment_payload = match read_provider_attachment(attachment)? {
+                    Some(payload) => payload,
+                    None => {
+                        content.push(json!({
+                            "type": "text",
+                            "text": build_missing_attachment_replay_text(attachment)
+                        }));
+                        continue;
+                    }
+                };
                 match attachment_payload.kind {
                     vulcan_core::types::ConversationAttachmentKind::Image => {
                         content.push(json!({
@@ -1295,6 +1305,59 @@ mod tests {
 
         let _ = std::fs::remove_file(&pdf_attachment.local_path);
         let _ = std::fs::remove_file(&video_attachment.local_path);
+    }
+
+    /// Verifies a pure attachment-only Anthropic user message remains provider-visible when its managed replay file is gone.
+    /// 验证纯附件 Anthropic 用户消息在托管回放文件缺失时仍会以文本提示形式传给 Provider。
+    #[test]
+    fn request_payload_replaces_missing_attachment_only_message_with_text_notice() {
+        let attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "lost-diagram.png",
+        );
+        std::fs::remove_file(&attachment.local_path).expect("managed attachment should remove");
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::new(),
+                prompt: String::new(),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::new(),
+                    attachments: vec![attachment],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("user content should be one block array");
+
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(
+            content[0]["text"],
+            json!("ERROR: Attachment \"lost-diagram.png\" no longer exists. Please ignore it.")
+        );
     }
 
     /// Verifies one stored Anthropic provider-message-state round-trips native thinking signatures and provider-visible tool metadata during future history replay.
