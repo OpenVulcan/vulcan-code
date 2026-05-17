@@ -2,6 +2,9 @@
 //! 供请求预览构建与真实传输分发共享的 Provider 运行时输入辅助逻辑。
 
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+use crate::agent_runtime::provider_native_tools::{
+    build_provider_native_ai_tool_additional_params, merge_ai_tool_patch_into_additional_params,
+};
 use crate::agent_runtime::provider_reasoning::merge_additional_params;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::provider_config::{PersistedProviderOptions, ProviderConfigurationFile};
@@ -19,9 +22,13 @@ pub(crate) fn resolve_provider_additional_params(
         .as_object()
         .filter(|object| !object.is_empty())
         .map(|object| Value::Object(object.clone()));
-    merge_additional_params(
+    let base = merge_additional_params(
         provider_defaults,
         blueprint.reasoning.additional_params.clone(),
+    );
+    merge_ai_tool_patch_into_additional_params(
+        base,
+        build_provider_native_ai_tool_additional_params(blueprint),
     )
 }
 

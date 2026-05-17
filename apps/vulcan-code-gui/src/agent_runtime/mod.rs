@@ -1,6 +1,7 @@
 //! Runtime foundation for provider transport, MCP runtime integration, and host-owned tool orchestration.
 //! 面向 Provider 传输、MCP 运行时集成与宿主自有工具编排的运行时基础模块。
 
+pub mod ai_tool_router;
 pub mod config;
 pub mod events;
 pub mod execution_models;
@@ -8,6 +9,7 @@ pub mod execution_preparation;
 pub mod executor;
 pub mod provider;
 pub mod provider_attachment;
+pub mod provider_native_tools;
 pub mod provider_prompt_loader;
 pub mod provider_protocol_anthropic_client;
 pub mod provider_protocol_anthropic_decoders;

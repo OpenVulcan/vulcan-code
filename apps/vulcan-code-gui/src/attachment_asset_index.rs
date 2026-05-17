@@ -90,6 +90,10 @@ pub struct AttachmentAssetRecord {
     /// 通过规范会话消息引用过该资产的消息标识集合。
     #[serde(default)]
     pub message_ids: Vec<String>,
+    /// Transient staging scopes that currently retain this managed asset before it becomes message history.
+    /// 在该托管资产成为消息历史前，当前保留它的瞬时暂存作用域集合。
+    #[serde(default)]
+    pub staging_refs: Vec<String>,
     /// Optional local timestamp text recorded when the managed copy was purged.
     /// 托管副本被清理时记录的可选本地时间戳文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -302,6 +306,7 @@ pub fn record_staged_attachment(
             source_path: attachment.source_path.clone(),
             session_ids: Vec::new(),
             message_ids: Vec::new(),
+            staging_refs: Vec::new(),
             purged_at_local_text: None,
             purged_at_unix_millis: None,
             purge_reason: None,
@@ -310,37 +315,57 @@ pub fn record_staged_attachment(
     save_attachment_asset_index_document(&asset_root, &document)
 }
 
-/// Records one canonical session/message reference for every managed attachment referenced by the new user message.
-/// 为新用户消息引用到的每一条托管附件记录一份规范会话/消息引用关系。
-pub fn record_attachment_references_for_message(
+/// Adds one transient staging reference scope to each provided managed attachment.
+/// 为每条给定托管附件增加一个瞬时暂存引用作用域。
+pub fn acquire_staged_attachment_ref(
+    workspace_path: &str,
+    scope: &str,
+    attachments: &[ConversationAttachment],
+) -> Result<bool, String> {
+    update_staged_attachment_refs(workspace_path, scope, attachments, true)
+}
+
+/// Removes one transient staging reference scope and deletes assets that become fully unreferenced.
+/// 移除一个瞬时暂存引用作用域，并删除因此变成完全未引用的资产。
+pub fn release_staged_attachment_ref(
+    workspace_path: &str,
+    scope: &str,
+    attachments: &[ConversationAttachment],
+) -> Result<bool, String> {
+    update_staged_attachment_refs(workspace_path, scope, attachments, false)
+}
+
+/// Promotes staged attachments into canonical message references and releases their transient staging scopes.
+/// 将已暂存附件提升为规范消息引用，并释放其瞬时暂存作用域。
+pub fn promote_staged_attachment_to_message_ref(
     workspace_path: &str,
     session_id: &str,
     message_id: &str,
     attachments: &[ConversationAttachment],
+    released_staging_scopes: &[String],
 ) -> Result<(), String> {
     if attachments.is_empty() {
         return Ok(());
     }
+    let released_staging_scopes = released_staging_scopes
+        .iter()
+        .map(|scope| scope.trim())
+        .filter(|scope| !scope.is_empty())
+        .collect::<BTreeSet<_>>();
+    let asset_ids = collect_attachment_asset_ids(attachments)?;
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
     let asset_root = resolve_managed_attachment_root(workspace_path);
     let mut document = load_attachment_asset_index_document(&asset_root)?;
+    ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "提升暂存附件引用")?;
     let mut changed = false;
 
-    for attachment in attachments {
-        let Some(asset_id) = attachment
-            .asset_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        let Some(record) = document
-            .assets
-            .iter_mut()
-            .find(|record| record.asset_id == asset_id)
-        else {
-            continue;
-        };
+    for record in document
+        .assets
+        .iter_mut()
+        .filter(|record| asset_ids.contains(&record.asset_id))
+    {
         if !record
             .session_ids
             .iter()
@@ -357,12 +382,228 @@ pub fn record_attachment_references_for_message(
             record.message_ids.push(message_id.to_string());
             changed = true;
         }
+        if !released_staging_scopes.is_empty() && !record.staging_refs.is_empty() {
+            let previous_len = record.staging_refs.len();
+            record
+                .staging_refs
+                .retain(|scope| !released_staging_scopes.contains(scope.as_str()));
+            if record.staging_refs.len() != previous_len {
+                changed = true;
+            }
+        }
     }
 
     if changed {
         save_attachment_asset_index_document(&asset_root, &document)?;
     }
     Ok(())
+}
+
+/// Removes one staged managed attachment that was never referenced by a persisted conversation message.
+/// 移除一条尚未被持久化会话消息引用过的已暂存托管附件。
+pub fn discard_unreferenced_staged_attachment(
+    workspace_path: &str,
+    attachment: &ConversationAttachment,
+) -> Result<bool, String> {
+    let Some(asset_id) = attachment
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    let mut document = load_attachment_asset_index_document(&asset_root)?;
+    let Some(index) = document
+        .assets
+        .iter()
+        .position(|record| record.asset_id == asset_id)
+    else {
+        return Ok(false);
+    };
+    if attachment_record_has_refs(&document.assets[index]) {
+        return Ok(false);
+    }
+
+    if let CleanupManagedPath::Existing(managed_path) =
+        validate_cleanup_managed_path(&asset_root, &document.assets[index])?
+    {
+        fs::remove_file(&managed_path).map_err(|error| {
+            format!(
+                "删除未引用托管附件 `{}` 失败：{}。",
+                managed_path.display(),
+                error
+            )
+        })?;
+    }
+
+    document.assets.remove(index);
+    save_attachment_asset_index_document(&asset_root, &document)?;
+    Ok(true)
+}
+
+/// Updates staging reference scopes for a batch of managed attachments.
+/// 批量更新托管附件的暂存引用作用域。
+fn update_staged_attachment_refs(
+    workspace_path: &str,
+    scope: &str,
+    attachments: &[ConversationAttachment],
+    acquire: bool,
+) -> Result<bool, String> {
+    let scope = scope.trim();
+    if scope.is_empty() || attachments.is_empty() {
+        return Ok(false);
+    }
+    let asset_root = resolve_managed_attachment_root(workspace_path);
+    let mut document = load_attachment_asset_index_document(&asset_root)?;
+    let mut changed = false;
+    let asset_ids = collect_attachment_asset_ids(attachments)?;
+    if asset_ids.is_empty() {
+        return Ok(false);
+    }
+    if acquire {
+        ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "记录暂存附件租约")?;
+    }
+
+    for record in document
+        .assets
+        .iter_mut()
+        .filter(|record| asset_ids.contains(&record.asset_id))
+    {
+        if acquire {
+            if !record.staging_refs.iter().any(|existing| existing == scope) {
+                record.staging_refs.push(scope.to_string());
+                changed = true;
+            }
+        } else {
+            let previous_len = record.staging_refs.len();
+            record.staging_refs.retain(|existing| existing != scope);
+            if record.staging_refs.len() != previous_len {
+                changed = true;
+            }
+        }
+    }
+
+    if !acquire {
+        let removable_indices = document
+            .assets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (asset_ids.contains(&record.asset_id) && !attachment_record_has_refs(record))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        for index in removable_indices.into_iter().rev() {
+            discard_attachment_record_at(&asset_root, &mut document, index)?;
+            changed = true;
+        }
+    }
+
+    if changed {
+        save_attachment_asset_index_document(&asset_root, &document)?;
+    }
+    Ok(changed)
+}
+
+/// Deletes one fully unreferenced asset record and its managed file when the file still exists.
+/// 删除一条完全未引用的资产记录，并在托管文件仍存在时同步删除该文件。
+fn discard_attachment_record_at(
+    asset_root: &Path,
+    document: &mut AttachmentAssetIndexDocument,
+    index: usize,
+) -> Result<(), String> {
+    if attachment_record_has_refs(&document.assets[index]) {
+        return Ok(());
+    }
+    if let CleanupManagedPath::Existing(managed_path) =
+        validate_cleanup_managed_path(asset_root, &document.assets[index])?
+    {
+        fs::remove_file(&managed_path).map_err(|error| {
+            format!(
+                "删除未引用托管附件 `{}` 失败：{}。",
+                managed_path.display(),
+                error
+            )
+        })?;
+    }
+    document.assets.remove(index);
+    Ok(())
+}
+
+/// Returns the stable asset id for one attachment when it can participate in the managed index.
+/// 当附件可参与托管索引时，返回它的稳定资产标识。
+fn attachment_asset_id(attachment: &ConversationAttachment) -> Option<String> {
+    attachment
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Collects managed asset identifiers from canonical attachment payloads and rejects malformed managed entries.
+/// 从规范附件载荷中收集托管资产标识，并拒绝缺少标识的异常托管条目。
+fn collect_attachment_asset_ids(
+    attachments: &[ConversationAttachment],
+) -> Result<BTreeSet<String>, String> {
+    let mut asset_ids = BTreeSet::new();
+    let mut missing_labels = Vec::new();
+    for attachment in attachments {
+        if let Some(asset_id) = attachment_asset_id(attachment) {
+            asset_ids.insert(asset_id);
+        } else {
+            missing_labels.push(attachment.file_name.clone());
+        }
+    }
+    if !missing_labels.is_empty() {
+        return Err(format!(
+            "附件 `{}` 缺少资产标识，请重新添加附件后再试。",
+            missing_labels.join("`, `")
+        ));
+    }
+    Ok(asset_ids)
+}
+
+/// Ensures every referenced managed asset id still has a persistent index record before mutating leases.
+/// 在变更租约前，确保每个被引用的托管资产标识仍存在持久索引记录。
+fn ensure_attachment_asset_ids_are_indexed(
+    document: &AttachmentAssetIndexDocument,
+    asset_ids: &BTreeSet<String>,
+    operation_label: &str,
+) -> Result<(), String> {
+    let indexed_ids = document
+        .assets
+        .iter()
+        .map(|record| record.asset_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing_ids = asset_ids
+        .iter()
+        .filter(|asset_id| !indexed_ids.contains(asset_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing_ids.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{operation_label}失败：附件资产索引缺少 `{}`，请重新添加附件后再试。",
+        missing_ids.join("`, `")
+    ))
+}
+
+/// Returns whether an indexed attachment is still retained by any durable or transient reference.
+/// 返回索引附件是否仍被任何持久或瞬时引用保留。
+fn attachment_record_has_refs(record: &AttachmentAssetRecord) -> bool {
+    !record.session_ids.is_empty()
+        || !record.message_ids.is_empty()
+        || !record.staging_refs.is_empty()
+}
+
+/// Returns whether an indexed attachment is still retained by a transient composer, queue, or undo owner.
+/// 返回索引附件是否仍被输入框、队列或撤销栈等瞬时所有者持有。
+fn attachment_record_has_transient_refs(record: &AttachmentAssetRecord) -> bool {
+    !record.staging_refs.is_empty()
 }
 
 /// Resolves the current replay status for one canonical conversation attachment by combining index metadata with file existence checks.
@@ -418,6 +659,7 @@ pub fn preview_attachment_cleanup(
 
     for record in document.assets.iter().filter(|record| {
         record.purged_at_unix_millis.is_none()
+            && !attachment_record_has_transient_refs(record)
             && selection.includes(record.kind.clone())
             && record.staged_date_text.as_str() < cutoff_text.as_str()
     }) {
@@ -458,6 +700,7 @@ pub fn execute_attachment_cleanup(
         .enumerate()
         .filter_map(|(index, record)| {
             (record.purged_at_unix_millis.is_none()
+                && !attachment_record_has_transient_refs(record)
                 && selection.includes(record.kind.clone())
                 && record.staged_date_text.as_str() < cutoff_text.as_str())
             .then_some(index)
@@ -800,11 +1043,12 @@ mod tests {
     //! 覆盖暂存记录、清理预览、清理执行与回放状态推导的附件资产索引回归测试。
 
     use super::{
-        AttachmentCleanupSelection, AttachmentReplayStatus, current_attachment_timestamp_parts,
+        AttachmentCleanupSelection, AttachmentReplayStatus, acquire_staged_attachment_ref,
+        current_attachment_timestamp_parts, discard_unreferenced_staged_attachment,
         execute_attachment_cleanup, load_attachment_asset_index_document,
         load_attachment_asset_record_for_attachment, parse_attachment_cleanup_cutoff_date,
-        preview_attachment_cleanup, record_attachment_references_for_message,
-        record_staged_attachment, resolve_attachment_replay_status,
+        preview_attachment_cleanup, promote_staged_attachment_to_message_ref,
+        record_staged_attachment, release_staged_attachment_ref, resolve_attachment_replay_status,
         save_attachment_asset_index_document,
     };
     use crate::attachment_assets::{
@@ -867,11 +1111,12 @@ mod tests {
             &timestamp,
         )
         .expect("staged attachment should record");
-        record_attachment_references_for_message(
+        promote_staged_attachment_to_message_ref(
             &workspace_directory.to_string_lossy(),
             "session-1",
             "message-1",
             std::slice::from_ref(&attachment),
+            &[],
         )
         .expect("attachment references should record");
 
@@ -884,6 +1129,169 @@ mod tests {
         assert_eq!(record.session_ids, vec![String::from("session-1")]);
         assert_eq!(record.message_ids, vec![String::from("message-1")]);
 
+        let _ = std::fs::remove_dir_all(&workspace_directory);
+    }
+
+    /// Verifies transient lease acquisition fails when a managed attachment no longer has an index record.
+    /// 验证当托管附件不再拥有索引记录时，瞬时租约获取会失败。
+    #[test]
+    fn acquire_staged_attachment_ref_rejects_missing_index_record() {
+        let workspace_directory = unique_workspace_directory();
+        let mut attachment = build_test_attachment(
+            &workspace_directory,
+            "diagram.png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+        );
+        attachment.asset_id = Some(String::from("missing-index-asset"));
+
+        let error = acquire_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "composer:test",
+            std::slice::from_ref(&attachment),
+        )
+        .expect_err("missing index record should reject lease acquisition");
+
+        assert!(error.contains("附件资产索引缺少"));
+        assert!(std::path::Path::new(&attachment.local_path).is_file());
+        let _ = std::fs::remove_dir_all(&workspace_directory);
+    }
+
+    /// Verifies durable message promotion fails when the managed asset index is missing.
+    /// 验证当托管资产索引缺失时，持久消息提升会失败。
+    #[test]
+    fn promote_staged_attachment_rejects_missing_index_record() {
+        let workspace_directory = unique_workspace_directory();
+        let mut attachment = build_test_attachment(
+            &workspace_directory,
+            "diagram.png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+        );
+        attachment.asset_id = Some(String::from("missing-index-asset"));
+
+        let error = promote_staged_attachment_to_message_ref(
+            &workspace_directory.to_string_lossy(),
+            "session-1",
+            "message-1",
+            std::slice::from_ref(&attachment),
+            &[],
+        )
+        .expect_err("missing index record should reject message promotion");
+
+        assert!(error.contains("附件资产索引缺少"));
+        assert!(std::path::Path::new(&attachment.local_path).is_file());
+        let _ = std::fs::remove_dir_all(&workspace_directory);
+    }
+
+    /// Verifies staging leases protect accepted composer assets until the final scope is released.
+    /// 验证暂存租约会保护已进入输入框的资产，直到最后一个作用域被释放。
+    #[test]
+    fn staging_refs_protect_assets_until_release() {
+        let workspace_directory = unique_workspace_directory();
+        let attachment = build_test_attachment(
+            &workspace_directory,
+            "diagram.png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+        );
+        let timestamp = current_attachment_timestamp_parts();
+        record_staged_attachment(
+            &workspace_directory.to_string_lossy(),
+            &attachment,
+            &timestamp,
+        )
+        .expect("staged attachment should record");
+
+        acquire_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "composer:test",
+            std::slice::from_ref(&attachment),
+        )
+        .expect("staging ref should acquire");
+        assert!(
+            !discard_unreferenced_staged_attachment(
+                &workspace_directory.to_string_lossy(),
+                &attachment,
+            )
+            .expect("leased attachment should not discard")
+        );
+        assert!(std::path::Path::new(&attachment.local_path).is_file());
+
+        release_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "composer:test",
+            std::slice::from_ref(&attachment),
+        )
+        .expect("staging ref should release");
+
+        assert!(load_attachment_asset_record_for_attachment(&attachment).is_none());
+        assert!(!std::path::Path::new(&attachment.local_path).exists());
+        let _ = std::fs::remove_dir_all(&workspace_directory);
+    }
+
+    /// Verifies promoting staged assets releases only the dispatch lease while preserving unrelated transient owners.
+    /// 验证提升暂存资产只释放派发租约，并保留无关瞬时所有者。
+    #[test]
+    fn promote_staged_attachment_releases_only_requested_staging_refs() {
+        let workspace_directory = unique_workspace_directory();
+        let attachment = build_test_attachment(
+            &workspace_directory,
+            "diagram.pdf",
+            ConversationAttachmentKind::Pdf,
+            "application/pdf",
+        );
+        let timestamp = current_attachment_timestamp_parts();
+        record_staged_attachment(
+            &workspace_directory.to_string_lossy(),
+            &attachment,
+            &timestamp,
+        )
+        .expect("staged attachment should record");
+        acquire_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "dispatch:test",
+            std::slice::from_ref(&attachment),
+        )
+        .expect("staging ref should acquire");
+        acquire_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "composer-undo:test",
+            std::slice::from_ref(&attachment),
+        )
+        .expect("unrelated staging ref should acquire");
+
+        promote_staged_attachment_to_message_ref(
+            &workspace_directory.to_string_lossy(),
+            "session-1",
+            "message-1",
+            std::slice::from_ref(&attachment),
+            &[String::from("dispatch:test")],
+        )
+        .expect("staged attachment should promote");
+
+        let record = load_attachment_asset_record_for_attachment(&attachment)
+            .expect("promoted asset record should remain");
+        assert_eq!(
+            record.staging_refs,
+            vec![String::from("composer-undo:test")]
+        );
+        assert_eq!(record.session_ids, vec![String::from("session-1")]);
+        assert_eq!(record.message_ids, vec![String::from("message-1")]);
+        release_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "composer-undo:test",
+            std::slice::from_ref(&attachment),
+        )
+        .expect("unrelated staging ref should release");
+        assert!(
+            !discard_unreferenced_staged_attachment(
+                &workspace_directory.to_string_lossy(),
+                &attachment,
+            )
+            .expect("message-referenced asset should not discard")
+        );
+        assert!(std::path::Path::new(&attachment.local_path).is_file());
         let _ = std::fs::remove_dir_all(&workspace_directory);
     }
 
@@ -915,6 +1323,83 @@ mod tests {
 
         assert_eq!(preview.matched_asset_count, 1);
         assert_eq!(preview.per_kind_counts.get("pdf"), Some(&1));
+
+        let _ = std::fs::remove_dir_all(&workspace_directory);
+    }
+
+    /// Verifies cleanup can purge durable history attachments while keeping transient staging leases protected.
+    /// 验证清理可以清除持久历史附件，同时继续保护瞬时暂存租约。
+    #[test]
+    fn cleanup_purges_durable_history_but_skips_transient_staging_refs() {
+        let workspace_directory = unique_workspace_directory();
+        let historical_attachment = build_test_attachment(
+            &workspace_directory,
+            "history.png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+        );
+        let staged_attachment = build_test_attachment(
+            &workspace_directory,
+            "composer.png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+        );
+        let timestamp = current_attachment_timestamp_parts();
+        record_staged_attachment(
+            &workspace_directory.to_string_lossy(),
+            &historical_attachment,
+            &timestamp,
+        )
+        .expect("historical attachment should record");
+        record_staged_attachment(
+            &workspace_directory.to_string_lossy(),
+            &staged_attachment,
+            &timestamp,
+        )
+        .expect("staged attachment should record");
+        promote_staged_attachment_to_message_ref(
+            &workspace_directory.to_string_lossy(),
+            "session-1",
+            "message-1",
+            std::slice::from_ref(&historical_attachment),
+            &[],
+        )
+        .expect("historical attachment references should record");
+        acquire_staged_attachment_ref(
+            &workspace_directory.to_string_lossy(),
+            "composer:test",
+            std::slice::from_ref(&staged_attachment),
+        )
+        .expect("composer staging ref should acquire");
+
+        let preview = preview_attachment_cleanup(
+            &workspace_directory.to_string_lossy(),
+            "9999-12-31",
+            AttachmentCleanupSelection::all_enabled(),
+        )
+        .expect("cleanup preview should build");
+        assert_eq!(preview.matched_asset_count, 1);
+        assert_eq!(preview.impacted_session_count, 1);
+
+        let report = execute_attachment_cleanup(
+            &workspace_directory.to_string_lossy(),
+            "9999-12-31",
+            AttachmentCleanupSelection::all_enabled(),
+        )
+        .expect("cleanup execution should succeed");
+
+        assert_eq!(report.purged_asset_count, 1);
+        assert_eq!(report.impacted_session_count, 1);
+        assert_eq!(
+            resolve_attachment_replay_status(&historical_attachment),
+            AttachmentReplayStatus::Purged
+        );
+        assert_eq!(
+            resolve_attachment_replay_status(&staged_attachment),
+            AttachmentReplayStatus::Available
+        );
+        assert!(!std::path::Path::new(&historical_attachment.local_path).exists());
+        assert!(std::path::Path::new(&staged_attachment.local_path).is_file());
 
         let _ = std::fs::remove_dir_all(&workspace_directory);
     }

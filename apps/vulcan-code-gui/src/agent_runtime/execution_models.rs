@@ -5,7 +5,7 @@ use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
-use crate::provider_config::ReasoningEffortLevel;
+use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
 use serde_json::Value;
 use vulcan_core::types::CoreEvent as CoreControllerEvent;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
@@ -38,6 +38,9 @@ pub struct ExecutionPreparationRequest {
     /// Shared reasoning-effort preset selected by the current workbench run controls.
     /// 当前工作台运行控制区选择的共享推理档位预设。
     pub reasoning_effort: ReasoningEffortLevel,
+    /// Effective AI-tool configuration snapshot locked for the current run.
+    /// 为当前运行锁定的生效 AI 工具配置快照。
+    pub ai_tool_configuration: PersistedAiToolConfiguration,
 }
 
 /// Prepared execution plan rendered by the GUI before real LLM execution begins.
@@ -181,6 +184,18 @@ impl ExecutionPreparation {
                 }
             ),
         ];
+        if !self.model_blueprint.capabilities.ai_tools.is_empty() {
+            rows.push(format!(
+                "AI 专用工具：{}",
+                self.model_blueprint
+                    .capabilities
+                    .ai_tools
+                    .iter()
+                    .map(|tool| format!("{}({:?})", tool.kind.key(), tool.policy))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ));
+        }
 
         if let Some(context_budget) = self.context_budget.as_ref() {
             rows.push(format!("预算：{}", context_budget.summary_note()));
@@ -223,6 +238,15 @@ impl ExecutionPreparation {
             .count();
         if mcp_tool_count > 0 {
             rows.push(format!("MCP 工具：{} 个", mcp_tool_count));
+        }
+
+        let ai_fallback_tool_count = self
+            .tool_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::AiFallback)
+            .count();
+        if ai_fallback_tool_count > 0 {
+            rows.push(format!("AI 专用回退工具：{} 个", ai_fallback_tool_count));
         }
 
         if !self.delegate_agents.is_empty() {

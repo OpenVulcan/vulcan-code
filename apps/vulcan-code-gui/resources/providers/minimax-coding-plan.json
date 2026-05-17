@@ -1,6 +1,6 @@
 {
   "id": "minimax-coding-plan",
-  "name": "MiniMax Coding Plan (minimax.io)",
+  "name": "MiniMax Token Plan (minimax.io)",
   "runtime": "anthropic",
   "credentialEnvKeys": [
     "MINIMAX_API_KEY"

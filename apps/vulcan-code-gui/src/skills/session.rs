@@ -2,6 +2,7 @@
 //! 工作台运行时使用的会话派生标题、探索、摘要与压缩技能。
 
 use crate::agent_runtime::ExecutionRunReport;
+use crate::context_budget::ContextCompactionPolicy;
 use crate::model::{
     SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRuntimeStateEntry, SessionTitleSource, TaskProjectSummary,
@@ -133,6 +134,9 @@ pub struct CompactionSkillInput<'a> {
     /// Runtime-state snapshot used to resolve the current context start point.
     /// 用于解析当前上下文起点的运行时状态快照。
     pub runtime_state: &'a SessionRuntimeStateEntry,
+    /// Policy controlling the retained tail and pruning behavior for this compaction pass.
+    /// 控制本次压缩保留尾部与剪枝行为的策略。
+    pub policy: ContextCompactionPolicy,
 }
 
 /// Output produced by the context compaction skill before the UI assigns the final summary message id.
@@ -283,6 +287,18 @@ impl SummarySkill {
 #[derive(Debug, Clone, Default)]
 struct CompactionSkill;
 
+/// Transcript-index segment representing one user turn plus following assistant-visible entries.
+/// 表示一个用户轮次及其后续助手可见条目的转录索引段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionTailSegment {
+    /// Inclusive segment start index.
+    /// 段起始索引，包含该位置。
+    start: usize,
+    /// Exclusive segment end index.
+    /// 段结束索引，不包含该位置。
+    end: usize,
+}
+
 impl CompactionSkill {
     /// Executes the compaction step and returns a hidden summary plus checkpoint metadata when compaction is needed.
     /// 执行压缩步骤，并在需要压缩时返回隐藏摘要与检查点元数据。
@@ -304,35 +320,16 @@ impl CompactionSkill {
             .cloned()
             .collect::<Vec<_>>();
 
-        let retained_tail_count = 4usize;
-        if context_candidates.len() <= retained_tail_count {
+        let retained_tail_start = recent_tail_start_index(&context_candidates, input.policy);
+        if retained_tail_start == 0 {
             return None;
         }
 
-        let compaction_source =
-            &context_candidates[..context_candidates.len() - retained_tail_count];
+        let compaction_source = &context_candidates[..retained_tail_start];
         let source_until_message_id = compaction_source.last().map(|message| message.id.clone());
         let summary_body = compaction_source
             .iter()
-            .map(|message| {
-                let label = match message.record_kind {
-                    SessionMessageRecordKind::Transcript => message.kind.label(),
-                    SessionMessageRecordKind::ThinkingOutput => "THINKING",
-                    SessionMessageRecordKind::AssistantOutput => "OUTPUT",
-                    SessionMessageRecordKind::ToolCallOutput => "TOOL_CALL",
-                    SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
-                    SessionMessageRecordKind::SummaryOutput => "SUMMARY",
-                    SessionMessageRecordKind::ExploreOutput => "EXPLORE",
-                    SessionMessageRecordKind::CompactionSummary => "COMPACTION",
-                    SessionMessageRecordKind::TitleOutput => "TITLE",
-                };
-                format!(
-                    "{} · {}：{}",
-                    label,
-                    message.title,
-                    truncate_preview_lines(&message.body, 1, 88)
-                )
-            })
+            .map(|message| compaction_summary_line_for_message(message, input.policy.prune))
             .collect::<Vec<_>>()
             .join("\n");
         let created_at = current_unix_millis_text();
@@ -352,6 +349,139 @@ impl CompactionSkill {
             created_at,
         })
     }
+}
+
+/// Selects the first context message that should remain verbatim after compaction.
+/// 选择压缩后应按原样保留的第一条上下文消息。
+fn recent_tail_start_index(
+    messages: &[SessionMessageEntry],
+    policy: ContextCompactionPolicy,
+) -> usize {
+    if messages.is_empty() {
+        return 0;
+    }
+
+    let target_turns = policy.tail_turns.max(1usize);
+    let segments = session_tail_segments(messages);
+    let mut retained_start = messages.len().saturating_sub(1);
+    let mut retained_tokens = 0usize;
+    let mut retained_turns = 0usize;
+
+    for segment in segments.iter().rev() {
+        if retained_turns >= target_turns {
+            break;
+        }
+        let segment_tokens = estimated_session_tail_tokens(&messages[segment.start..segment.end]);
+        if retained_turns == 0 || retained_tokens + segment_tokens <= policy.preserve_recent_tokens
+        {
+            retained_start = segment.start;
+            retained_tokens = retained_tokens.saturating_add(segment_tokens);
+            retained_turns += 1;
+        } else {
+            break;
+        }
+    }
+
+    retained_start
+}
+
+/// Builds transcript tail segments at user-turn boundaries.
+/// 按用户轮次边界构建转录尾部段。
+fn session_tail_segments(messages: &[SessionMessageEntry]) -> Vec<SessionTailSegment> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+
+    let mut user_starts = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| message_is_user_turn_boundary(message).then_some(index))
+        .collect::<Vec<_>>();
+    if user_starts.is_empty() {
+        return vec![SessionTailSegment {
+            start: 0,
+            end: messages.len(),
+        }];
+    }
+    if user_starts[0] != 0 {
+        user_starts.insert(0, 0);
+    }
+
+    user_starts
+        .iter()
+        .enumerate()
+        .map(|(position, start)| SessionTailSegment {
+            start: *start,
+            end: user_starts
+                .get(position + 1)
+                .copied()
+                .unwrap_or(messages.len()),
+        })
+        .collect()
+}
+
+/// Returns whether one transcript entry starts a user-authored turn.
+/// 返回一条转录项是否标记一个用户发起轮次的开始。
+fn message_is_user_turn_boundary(message: &SessionMessageEntry) -> bool {
+    message.kind == SessionMessageKind::User
+        && message.record_kind == SessionMessageRecordKind::Transcript
+}
+
+/// Estimates the approximate token footprint of retained transcript entries.
+/// 估算保留转录项的近似 Token 占用。
+fn estimated_session_tail_tokens(messages: &[SessionMessageEntry]) -> usize {
+    messages.iter().map(estimate_session_message_tokens).sum()
+}
+
+/// Estimates one transcript entry with a lightweight text heuristic.
+/// 使用轻量文本启发式估算一条转录项。
+fn estimate_session_message_tokens(message: &SessionMessageEntry) -> usize {
+    estimate_text_tokens(&message.title)
+        + estimate_text_tokens(&message.body)
+        + message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| serde_json::to_string(metadata).ok())
+            .map(|metadata| estimate_text_tokens(&metadata))
+            .unwrap_or_default()
+        + 16usize
+}
+
+/// Estimates plain text using the same character heuristic as the context budget path.
+/// 使用与上下文预算路径一致的字符启发式估算纯文本。
+fn estimate_text_tokens(text: &str) -> usize {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    ((trimmed.chars().count() + 3usize) / 4usize).max(1usize)
+}
+
+/// Builds one compaction summary line and optionally prunes old tool-output bodies.
+/// 构建单条压缩摘要行，并可选剪枝旧工具输出正文。
+fn compaction_summary_line_for_message(message: &SessionMessageEntry, prune_tools: bool) -> String {
+    let label = match message.record_kind {
+        SessionMessageRecordKind::Transcript => message.kind.label(),
+        SessionMessageRecordKind::ThinkingOutput => "THINKING",
+        SessionMessageRecordKind::AssistantOutput => "OUTPUT",
+        SessionMessageRecordKind::ToolCallOutput => "TOOL_CALL",
+        SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
+        SessionMessageRecordKind::SummaryOutput => "SUMMARY",
+        SessionMessageRecordKind::ExploreOutput => "EXPLORE",
+        SessionMessageRecordKind::CompactionSummary => "COMPACTION",
+        SessionMessageRecordKind::TitleOutput => "TITLE",
+    };
+    let preview = if prune_tools
+        && matches!(
+            message.record_kind,
+            SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+        ) {
+        String::from("Tool output was compacted into this placeholder.")
+    } else {
+        truncate_preview_lines(&message.body, 1, 88)
+    };
+
+    format!("{} · {}：{}", label, message.title, preview)
 }
 
 /// Builds a compact user-facing title from the latest prompt and drops surrounding decoration.
@@ -412,4 +542,133 @@ fn current_unix_millis_text() -> String {
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Session skill tests for compaction policy and pruning behavior.
+    //! 会话技能测试，覆盖压缩策略与剪枝行为。
+
+    use super::*;
+
+    /// Builds one compact transcript entry for compaction helper tests.
+    /// 为压缩辅助函数测试构建一条紧凑转录项。
+    fn test_message(
+        id: &str,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        body: &str,
+    ) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.to_string(),
+            kind,
+            record_kind,
+            visible: true,
+            title: id.to_string(),
+            body: body.to_string(),
+            metadata: None,
+            created_at: String::from("1"),
+        }
+    }
+
+    /// Verifies tail-turn retention keeps the requested recent user turn window.
+    /// 验证尾部轮次保留会保留指定的最近用户轮次窗口。
+    #[test]
+    fn recent_tail_start_index_respects_tail_turns() {
+        let messages = vec![
+            test_message(
+                "u1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "one",
+            ),
+            test_message(
+                "a1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "two",
+            ),
+            test_message(
+                "u2",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "three",
+            ),
+            test_message(
+                "a2",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "four",
+            ),
+        ];
+        let policy = ContextCompactionPolicy {
+            tail_turns: 1,
+            preserve_recent_tokens: 10_000,
+            ..ContextCompactionPolicy::default()
+        };
+
+        assert_eq!(recent_tail_start_index(&messages, policy), 2);
+    }
+
+    /// Verifies the retained transcript tail starts at a user turn instead of an assistant tool-result record.
+    /// 验证保留的转录尾部会从用户轮次开始，而不是从助手工具结果记录中间开始。
+    #[test]
+    fn recent_tail_start_index_does_not_split_tool_turn() {
+        let messages = vec![
+            test_message(
+                "u1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "旧问题",
+            ),
+            test_message(
+                "a1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "旧回答",
+            ),
+            test_message(
+                "u2",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "读取文件",
+            ),
+            test_message(
+                "call",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "调用 read_file",
+            ),
+            test_message(
+                "result",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolResultOutput,
+                &"很大的工具输出".repeat(120),
+            ),
+        ];
+        let policy = ContextCompactionPolicy {
+            tail_turns: 1,
+            preserve_recent_tokens: 8,
+            ..ContextCompactionPolicy::default()
+        };
+
+        assert_eq!(recent_tail_start_index(&messages, policy), 2);
+    }
+
+    /// Verifies old tool output bodies can be pruned into compact placeholders.
+    /// 验证旧工具输出正文可被剪枝为紧凑占位内容。
+    #[test]
+    fn compaction_summary_line_prunes_tool_outputs() {
+        let message = test_message(
+            "tool",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolResultOutput,
+            &"large tool output ".repeat(40),
+        );
+
+        let line = compaction_summary_line_for_message(&message, true);
+
+        assert!(line.contains("Tool output was compacted"));
+        assert!(!line.contains("large tool output large tool output"));
+    }
 }

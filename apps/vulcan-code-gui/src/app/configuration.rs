@@ -3,8 +3,10 @@
 
 use super::helpers::*;
 use super::*;
-use crate::context_budget::build_context_budget_fingerprint;
-use crate::provider_capabilities::{ResolvedModelCapabilities, resolve_model_capabilities};
+use crate::context_budget::{ContextCompactionPolicy, build_context_budget_fingerprint};
+use crate::provider_capabilities::{
+    ResolvedModelCapabilities, apply_ai_tool_runtime_configuration, resolve_model_capabilities,
+};
 
 impl VulcanWorkbench {
     /// Resolves the remembered initial workbench reasoning preference from persisted configuration and falls back to the shared medium preset when no prior selection exists.
@@ -282,7 +284,12 @@ impl VulcanWorkbench {
     ) -> Option<ResolvedModelCapabilities> {
         let definition = provider_config::supported_provider_by_id(&choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(choice);
-        Some(resolve_model_capabilities(definition, model.as_ref()))
+        let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
+        apply_ai_tool_runtime_configuration(
+            &mut capabilities,
+            &self.provider_configuration.ai_tools,
+        );
+        Some(capabilities)
     }
 
     /// Reconciles the visible temperature controls against the currently active workbench model capability set.
@@ -346,14 +353,18 @@ impl VulcanWorkbench {
             return None;
         };
         let previous_api_family = provider_config::supported_provider_by_id(previous_provider_id)
-            .map(|definition| definition.runtime.api_family())?;
+            .map(|definition| {
+            definition.effective_api_family_for_model(Some(previous_model_id))
+        })?;
         let next_api_family = provider_config::supported_provider_by_id(&choice.provider_id)
-            .map(|definition| definition.runtime.api_family())?;
+            .map(|definition| definition.effective_api_family_for_model(Some(&choice.model_id)))?;
         let visible_tool_count = self
             .last_execution_preparation
             .as_ref()
+            .filter(|preparation| preparation.session_id == session_id)
             .map(|preparation| preparation.tool_descriptors.len())
             .unwrap_or(0usize);
+        let compaction_policy = ContextCompactionPolicy::default();
         let previous_fingerprint = build_context_budget_fingerprint(
             previous_provider_id,
             previous_model_id,
@@ -361,6 +372,7 @@ impl VulcanWorkbench {
             &previous_capabilities,
             self.workbench_reasoning_effort,
             visible_tool_count,
+            Some(compaction_policy),
         );
         let next_fingerprint = build_context_budget_fingerprint(
             &choice.provider_id,
@@ -369,6 +381,7 @@ impl VulcanWorkbench {
             &next_capabilities,
             self.workbench_reasoning_effort,
             visible_tool_count,
+            Some(compaction_policy),
         );
         if previous_fingerprint == next_fingerprint {
             return None;
@@ -477,6 +490,181 @@ impl VulcanWorkbench {
         self.filtered_workbench_model_choices().get(index).cloned()
     }
 
+    /// Returns the full list of workbench-scoped web-search override choices shown beside the composer.
+    /// 返回显示在提示词编辑器旁侧的完整工作台网页搜索覆盖选项列表。
+    pub(super) fn configured_workbench_web_search_choices(&self) -> Vec<WorkbenchWebSearchChoice> {
+        let mut choices = vec![
+            WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::FollowGlobal,
+                provider_id: None,
+                label: String::from("智能搜索"),
+                detail: String::from("跟随全局 web-search 设置"),
+            },
+            WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::NativeOnly,
+                provider_id: None,
+                label: String::from("原生搜索"),
+                detail: String::from("仅声明模型原生搜索"),
+            },
+            WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::ThirdPartyOnly,
+                provider_id: None,
+                label: String::from("自定义搜索链"),
+                detail: String::from("仅使用第三方搜索链"),
+            },
+            WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::Disabled,
+                provider_id: None,
+                label: String::from("关闭搜索"),
+                detail: String::from("不启用统一 web-search"),
+            },
+        ];
+
+        let provider_choices = self
+            .provider_configuration
+            .ai_tools
+            .web_search
+            .providers
+            .iter()
+            .filter(|provider| provider.is_usable())
+            .map(|provider| WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::SpecificProvider,
+                provider_id: Some(provider.id.clone()),
+                label: format!("指定：{}", provider.name),
+                detail: provider.kind.label().to_string(),
+            })
+            .collect::<Vec<_>>();
+        choices.extend(provider_choices);
+        choices
+    }
+
+    /// Resolves the currently active workbench web-search override choice, falling back to the global-default entry when needed.
+    /// 解析当前激活的工作台网页搜索覆盖选项；必要时回退到全局默认条目。
+    pub(super) fn active_workbench_web_search_choice(&self) -> Option<WorkbenchWebSearchChoice> {
+        let configured_choices = self.configured_workbench_web_search_choices();
+        configured_choices
+            .iter()
+            .find(|choice| {
+                choice.override_mode == self.workbench_web_search_override
+                    && choice.provider_id == self.workbench_web_search_provider_id
+            })
+            .cloned()
+            .or_else(|| {
+                configured_choices
+                    .into_iter()
+                    .find(|choice| choice.override_mode == PendingPromptWebSearchOverride::FollowGlobal)
+            })
+    }
+
+    /// Builds one effective AI-tool configuration snapshot after applying the current workbench web-search override.
+    /// 在应用当前工作台网页搜索覆盖后构建一份生效 AI 工具配置快照。
+    pub(super) fn effective_ai_tool_configuration_for_runtime_options(
+        &self,
+        runtime_options: &PendingPromptRuntimeOptions,
+    ) -> PersistedAiToolConfiguration {
+        let mut configuration = self.provider_configuration.ai_tools.clone();
+
+        match runtime_options.web_search_override {
+            PendingPromptWebSearchOverride::FollowGlobal => {}
+            PendingPromptWebSearchOverride::NativeOnly => {
+                configuration.web_search.mode = WebSearchRoutingMode::NativeOnly;
+            }
+            PendingPromptWebSearchOverride::ThirdPartyOnly => {
+                configuration.web_search.mode = WebSearchRoutingMode::ThirdPartyOnly;
+            }
+            PendingPromptWebSearchOverride::Disabled => {
+                configuration.web_search.mode = WebSearchRoutingMode::Disabled;
+            }
+            PendingPromptWebSearchOverride::SpecificProvider => {
+                configuration.web_search.mode = WebSearchRoutingMode::ThirdPartyOnly;
+                if let Some(provider_id) = runtime_options.web_search_provider_id.as_deref() {
+                    configuration
+                        .web_search
+                        .providers
+                        .retain(|provider| provider.id == provider_id);
+                } else {
+                    configuration.web_search.providers.clear();
+                }
+            }
+        }
+
+        configuration
+    }
+
+    /// Captures the currently selected workbench provider/model pair for a queued prompt.
+    /// 为排队提示词捕获当前选中的工作台供应商与模型组合。
+    pub(super) fn current_pending_prompt_model_reference(
+        &self,
+    ) -> Option<PendingPromptModelReference> {
+        if let Some(choice) = self.active_workbench_model_choice() {
+            return Some(PendingPromptModelReference {
+                provider_id: choice.provider_id,
+                model_id: choice.model_id,
+                provider_label: choice.provider_label,
+                model_name: choice.model_name,
+            });
+        }
+
+        let (provider_id, model_id) = self
+            .provider_configuration
+            .model
+            .as_deref()
+            .and_then(provider_config::parse_active_model_reference)?;
+        Some(PendingPromptModelReference {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            provider_label: provider_config::provider_summary(provider_id),
+            model_name: provider_config::model_summary(
+                provider_id,
+                model_id,
+                &self.provider_configuration,
+            ),
+        })
+    }
+
+    /// Captures the currently selected workbench runtime controls for a queued prompt.
+    /// 为排队提示词捕获当前选中的工作台运行控制参数。
+    pub(super) fn current_pending_prompt_runtime_options(&self) -> PendingPromptRuntimeOptions {
+        PendingPromptRuntimeOptions {
+            reasoning_effort: self.workbench_reasoning_effort,
+            temperature: self.temperature_enabled.then_some(self.temperature),
+            web_search_override: self.workbench_web_search_override,
+            web_search_provider_id: self.workbench_web_search_provider_id.clone(),
+        }
+    }
+
+    /// Resolves the capability snapshot for a queued prompt's locked provider/model identity.
+    /// 根据排队提示词锁定的供应商与模型身份解析能力快照。
+    pub(super) fn resolve_pending_prompt_model_capabilities(
+        &self,
+        model_reference: &PendingPromptModelReference,
+    ) -> Option<ResolvedModelCapabilities> {
+        let definition = provider_config::supported_provider_by_id(&model_reference.provider_id)?;
+        let model = provider_config::effective_model_choices(
+            &model_reference.provider_id,
+            &self.provider_configuration,
+        )
+        .into_iter()
+        .find(|model| model.id == model_reference.model_id);
+        Some(resolve_model_capabilities(definition, model.as_ref()))
+    }
+
+    /// Clones the provider configuration and overrides only the active model for one queued prompt run.
+    /// 克隆供应商配置，并仅为单次排队提示词运行覆盖激活模型。
+    pub(super) fn provider_configuration_for_prompt_entry(
+        &self,
+        prompt_entry: &PendingSessionPromptEntry,
+    ) -> ProviderConfigurationFile {
+        let mut config = self.provider_configuration.clone();
+        if let Some(model_reference) = prompt_entry.model_reference.as_ref() {
+            config.model = Some(format!(
+                "{}/{}",
+                model_reference.provider_id, model_reference.model_id
+            ));
+        }
+        config
+    }
+
     /// Requests one workbench model switch, prompting first when staged attachments would be dropped by the target model.
     /// 请求一次工作台模型切换；当目标模型会丢弃已暂存附件时先弹窗确认。
     pub(super) fn request_workbench_model_choice(
@@ -516,10 +704,13 @@ impl VulcanWorkbench {
         &mut self,
         choice: WorkbenchModelChoice,
     ) -> Task<Message> {
+        let task = self.apply_workbench_model_choice(choice.clone());
+        if self.active_workbench_model_choice().as_ref() != Some(&choice) {
+            return task;
+        }
+
         let (removed_count, removed_kinds) =
             self.remove_unsupported_composer_attachments_for_model_choice(&choice);
-        let task = self.apply_workbench_model_choice(choice);
-
         if removed_count > 0 {
             let removed_labels = Self::format_attachment_kind_labels(&removed_kinds);
             self.status_message.push_str(&format!(
@@ -570,6 +761,7 @@ impl VulcanWorkbench {
             .map(|modal| modal.local_path.clone());
 
         self.push_composer_undo_snapshot();
+        let mut removed_attachments = Vec::new();
         self.composer_attachments.retain(|attachment| {
             if capabilities.supports_attachment_kind(attachment.kind.clone()) {
                 return true;
@@ -578,11 +770,33 @@ impl VulcanWorkbench {
             if !removed_kinds.contains(&attachment.kind) {
                 removed_kinds.push(attachment.kind.clone());
             }
+            removed_attachments.push(attachment.clone());
             false
         });
 
         if removed_count == 0 {
-            let _ = self.composer_undo_history.pop();
+            if let Some(snapshot) = self.composer_undo_history.pop() {
+                if let (Some(scope), Some(workspace_path)) = (
+                    snapshot.attachment_ref_scope.as_deref(),
+                    snapshot.attachment_workspace_path.as_deref(),
+                ) {
+                    self.release_staged_attachment_refs(
+                        workspace_path,
+                        scope,
+                        &snapshot.attachments,
+                        "输入框撤销",
+                    );
+                }
+            }
+        } else {
+            let workspace_path = self.selected_attachment_workspace_path();
+            let composer_scope = self.composer_attachment_ref_scope();
+            self.release_staged_attachment_refs(
+                &workspace_path,
+                &composer_scope,
+                &removed_attachments,
+                "输入框",
+            );
         }
 
         if preview_path.is_some_and(|path| {
@@ -617,20 +831,21 @@ impl VulcanWorkbench {
         &mut self,
         choice: WorkbenchModelChoice,
     ) -> Task<Message> {
-        self.provider_configuration.model =
-            Some(format!("{}/{}", choice.provider_id, choice.model_id));
+        let mut next_configuration = self.provider_configuration.clone();
+        next_configuration.model = Some(format!("{}/{}", choice.provider_id, choice.model_id));
+        if let Err(error) = provider_config::save_configuration_file(&next_configuration) {
+            self.provider_notice = error.clone();
+            self.status_message = error;
+            return Task::none();
+        }
+
+        self.provider_configuration = next_configuration;
         if let Some(provider_choice) = provider_config::supported_provider_choices()
             .into_iter()
             .find(|provider_choice| provider_choice.id == choice.provider_id)
         {
             self.selected_provider = provider_choice;
             self.reload_selected_provider_form();
-        }
-
-        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
-            self.provider_notice = error.clone();
-            self.status_message = error;
-            return Task::none();
         }
 
         self.refresh_runtime_foundation();
@@ -767,6 +982,124 @@ impl VulcanWorkbench {
         }
 
         provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
+    /// Persists API-native tool configuration and refreshes the runtime foundation.
+    /// 持久化 API 原生工具配置并刷新运行时基础架构。
+    pub(super) fn save_ai_tool_configuration(&mut self) -> Result<(), String> {
+        provider_config::save_configuration_file(&self.provider_configuration)?;
+        self.refresh_runtime_foundation();
+        Ok(())
+    }
+
+    /// Adds one web-search provider entry with a stable unique identifier.
+    /// 使用稳定唯一标识新增一个网页搜索供应商条目。
+    pub(super) fn add_web_search_provider(&mut self, kind: WebSearchProviderKind) {
+        let id = self.generate_web_search_provider_id(kind);
+        self.provider_configuration
+            .ai_tools
+            .web_search
+            .providers
+            .push(PersistedWebSearchProviderEntry::new(id, kind));
+    }
+
+    /// Removes one web-search provider entry by identifier.
+    /// 根据标识移除一个网页搜索供应商条目。
+    pub(super) fn remove_web_search_provider(&mut self, provider_id: &str) -> bool {
+        let before = self
+            .provider_configuration
+            .ai_tools
+            .web_search
+            .providers
+            .len();
+        self.provider_configuration
+            .ai_tools
+            .web_search
+            .providers
+            .retain(|provider| provider.id != provider_id);
+        before
+            != self
+                .provider_configuration
+                .ai_tools
+                .web_search
+                .providers
+                .len()
+    }
+
+    /// Moves one web-search provider entry up or down in the priority chain.
+    /// 在优先级链中向上或向下移动一个网页搜索供应商条目。
+    pub(super) fn move_web_search_provider(&mut self, provider_id: &str, offset: isize) -> bool {
+        let providers = &mut self.provider_configuration.ai_tools.web_search.providers;
+        let Some(index) = providers
+            .iter()
+            .position(|provider| provider.id == provider_id)
+        else {
+            return false;
+        };
+        let target_index = if offset.is_negative() {
+            index.saturating_sub(offset.unsigned_abs())
+        } else {
+            index
+                .saturating_add(offset as usize)
+                .min(providers.len().saturating_sub(1))
+        };
+        if target_index == index {
+            return false;
+        }
+        providers.swap(index, target_index);
+        true
+    }
+
+    /// Updates one web-search provider entry in place when it exists.
+    /// 当网页搜索供应商条目存在时原地更新该条目。
+    pub(super) fn update_web_search_provider<F>(&mut self, provider_id: &str, updater: F) -> bool
+    where
+        F: FnOnce(&mut PersistedWebSearchProviderEntry),
+    {
+        let Some(provider) = self
+            .provider_configuration
+            .ai_tools
+            .web_search
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+        else {
+            return false;
+        };
+        updater(provider);
+        true
+    }
+
+    /// Builds a unique web-search provider id from one provider kind.
+    /// 根据供应商类型构建唯一的网页搜索供应商标识。
+    pub(super) fn generate_web_search_provider_id(&self, kind: WebSearchProviderKind) -> String {
+        let base = kind.key().to_string();
+        if !self
+            .provider_configuration
+            .ai_tools
+            .web_search
+            .providers
+            .iter()
+            .any(|provider| provider.id == base)
+        {
+            return base;
+        }
+
+        let mut suffix = 2usize;
+        loop {
+            let candidate = format!("{base}-{suffix}");
+            if !self
+                .provider_configuration
+                .ai_tools
+                .web_search
+                .providers
+                .iter()
+                .any(|provider| provider.id == candidate)
+            {
+                return candidate;
+            }
+            suffix = suffix.saturating_add(1);
+        }
     }
 
     /// Persists the currently edited MCP server form back into the shared Vulcan configuration file.

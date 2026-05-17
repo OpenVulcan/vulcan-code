@@ -655,6 +655,12 @@ fn perform_luaskills_management_action_blocking(
         }
     };
 
+    // Force a post-action reload because LuaSkills update/install can finalize filesystem state after its internal pre-commit reload.
+    // 强制执行操作后重载，因为 LuaSkills 更新/安装可能会在其内部提交前重载之后才完成文件系统状态落定。
+    engine
+        .reload_from_roots(&handle.skill_roots)
+        .map_err(|error| format!("同步 LuaSkills 管理操作后的运行时入口失败：{error}"))?;
+
     let catalog = build_luaskills_catalog(handle, &engine)?;
     Ok(LuaSkillsManagementReport { message, catalog })
 }

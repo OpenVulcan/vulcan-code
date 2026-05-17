@@ -4,6 +4,7 @@
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config;
 use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
 use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
@@ -45,7 +46,12 @@ pub(crate) fn build_runtime_bootstrap_core(
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> RuntimeBootstrapCore {
     let system_preamble = build_runtime_system_preamble(preparation);
-    let core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
+    let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
+    core_snapshot.messages = core_messages_to_provider_visible_history_for_model(
+        &core_snapshot.messages,
+        Some(preparation.model_blueprint.api_family()),
+        Some(&preparation.model_blueprint.capabilities),
+    );
     let request_history = core_snapshot.messages.clone();
     let core_controller = VulcanCoreController::new(
         build_core_controller_config(

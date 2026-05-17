@@ -2,7 +2,8 @@
 //! 宿主运行时自有的 OpenAI 兼容 HTTP 与 SSE 直连传输模块。
 
 use crate::agent_runtime::provider_attachment::{
-    build_missing_attachment_replay_text, read_provider_attachment,
+    build_attachment_transport_error_text, build_missing_attachment_replay_text,
+    read_provider_attachment,
 };
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
@@ -607,35 +608,17 @@ fn core_message_to_openai_compatible_message(
                                 }
                             }));
                         }
-                        vulcan_core::types::ConversationAttachmentKind::Audio => {
-                            if let Some(format) =
-                                attachment_payload.openai_compatible_audio_format()
-                            {
-                                content.push(json!({
-                                    "type": "input_audio",
-                                    "input_audio": {
-                                        "data": attachment_payload.base64_data,
-                                        "format": format
-                                    }
-                                }));
-                            } else {
-                                content.push(json!({
-                                    "type": "file",
-                                    "file": {
-                                        "filename": attachment_payload.file_name,
-                                        "file_data": attachment_payload.data_url
-                                    }
-                                }));
-                            }
-                        }
-                        vulcan_core::types::ConversationAttachmentKind::Video
+                        // OpenAI-compatible Chat endpoints are not uniform beyond text/image parts.
+                        // OpenAI-Compatible Chat 端点在文本/图片以外的 Part 形态并不统一。
+                        vulcan_core::types::ConversationAttachmentKind::Audio
+                        | vulcan_core::types::ConversationAttachmentKind::Video
                         | vulcan_core::types::ConversationAttachmentKind::Pdf => {
                             content.push(json!({
-                                "type": "file",
-                                "file": {
-                                    "filename": attachment_payload.file_name,
-                                    "file_data": attachment_payload.data_url
-                                }
+                                "type": "text",
+                                "text": build_attachment_transport_error_text(
+                                    attachment,
+                                    "this API path"
+                                )
                             }));
                         }
                     }
@@ -1587,10 +1570,10 @@ mod tests {
         let _ = std::fs::remove_file(&attachment.local_path);
     }
 
-    /// Verifies OpenAI-compatible user messages carry staged MP3 attachments as `input_audio` parts.
-    /// 验证 OpenAI 兼容用户消息会把已暂存 MP3 附件编码为 `input_audio` Part。
+    /// Verifies strict OpenAI-compatible Chat payloads downgrade staged MP3 attachments to explicit text notices.
+    /// 验证严格 OpenAI 兼容 Chat 载荷会把已暂存 MP3 附件降级为显式文本提示。
     #[test]
-    fn request_payload_embeds_user_audio_attachments_as_input_audio_parts() {
+    fn request_payload_downgrades_user_audio_attachments_to_text_notice() {
         let attachment = build_test_attachment(
             "mp3",
             ConversationAttachmentKind::Audio,
@@ -1628,20 +1611,20 @@ mod tests {
             .as_array()
             .expect("messages should be an array");
         let content = messages[1]["content"]
-            .as_array()
-            .expect("user content should be one part array");
+            .as_str()
+            .expect("user content should downgrade to text");
 
-        assert_eq!(content[1]["type"], "input_audio");
-        assert_eq!(content[1]["input_audio"]["format"], "mp3");
-        assert_eq!(content[1]["input_audio"]["data"], "AAECAw==");
+        assert!(content.contains("请转写这段音频"));
+        assert!(content.contains("Cannot read \"sample.mp3\""));
+        assert!(content.contains("this API path"));
 
         let _ = std::fs::remove_file(&attachment.local_path);
     }
 
-    /// Verifies OpenAI-compatible user messages encode staged PDF and video attachments as `file` parts.
-    /// 验证 OpenAI 兼容用户消息会把已暂存 PDF 与视频附件编码为 `file` Part。
+    /// Verifies strict OpenAI-compatible Chat payloads downgrade staged PDF and video attachments to explicit text notices.
+    /// 验证严格 OpenAI 兼容 Chat 载荷会把已暂存 PDF 与视频附件降级为显式文本提示。
     #[test]
-    fn request_payload_embeds_user_file_like_attachments_as_file_parts() {
+    fn request_payload_downgrades_user_file_like_attachments_to_text_notice() {
         let pdf_attachment = build_test_attachment(
             "pdf",
             ConversationAttachmentKind::Pdf,
@@ -1685,21 +1668,13 @@ mod tests {
             .as_array()
             .expect("messages should be an array");
         let content = messages[1]["content"]
-            .as_array()
-            .expect("user content should be one part array");
+            .as_str()
+            .expect("user content should downgrade to text");
 
-        assert_eq!(content[1]["type"], "file");
-        assert_eq!(content[1]["file"]["filename"], "guide.pdf");
-        assert_eq!(
-            content[1]["file"]["file_data"],
-            json!("data:application/pdf;base64,AAECAw==")
-        );
-        assert_eq!(content[2]["type"], "file");
-        assert_eq!(content[2]["file"]["filename"], "clip.mp4");
-        assert_eq!(
-            content[2]["file"]["file_data"],
-            json!("data:video/mp4;base64,AAECAw==")
-        );
+        assert!(content.contains("请分析这些附件"));
+        assert!(content.contains("Cannot read \"guide.pdf\""));
+        assert!(content.contains("Cannot read \"clip.mp4\""));
+        assert!(content.contains("this API path"));
 
         let _ = std::fs::remove_file(&pdf_attachment.local_path);
         let _ = std::fs::remove_file(&video_attachment.local_path);
@@ -1746,15 +1721,18 @@ mod tests {
         let messages = payload["messages"]
             .as_array()
             .expect("messages should be an array");
-        let content = messages[0]["content"]
+        let content_text = messages[0]["content"]
             .as_array()
-            .expect("user content should be one part array");
+            .and_then(|content| content.first())
+            .and_then(|part| part.get("text"))
+            .and_then(|value| value.as_str())
+            .or_else(|| messages[0]["content"].as_str())
+            .expect("user content should expose one text notice");
 
         assert_eq!(messages[0]["role"], "user");
-        assert_eq!(content[0]["type"], "text");
         assert_eq!(
-            content[0]["text"],
-            json!("ERROR: Attachment \"lost-diagram.png\" no longer exists. Please ignore it.")
+            content_text,
+            "ERROR: Attachment \"lost-diagram.png\" no longer exists. Please ignore it."
         );
     }
 }

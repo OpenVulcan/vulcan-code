@@ -339,26 +339,55 @@ fn build_google_gemini_request_payload(
         );
     }
 
-    if !provider_tool_definitions.is_empty() {
-        payload = merge_json_values(
-            payload,
-            json!({
-                "tools": vec![GeminiTool {
-                    function_declarations: provider_tool_definitions
-                        .iter()
-                        .map(provider_tool_definition_to_gemini_function_declaration)
-                        .collect::<Vec<_>>()
-                }],
-                "toolConfig": GeminiToolConfig {
-                    function_calling_config: GeminiFunctionCallingConfig {
-                        mode: String::from("AUTO"),
-                    }
-                }
-            }),
-        );
-    }
+    append_gemini_function_tools(&mut payload, provider_tool_definitions)?;
 
     Ok(payload)
+}
+
+/// Appends Gemini function declarations without replacing provider-native AI tools already present in the payload.
+/// 追加 Gemini 函数声明，同时不替换载荷中已经存在的 Provider 原生 AI 工具。
+fn append_gemini_function_tools(
+    payload: &mut Value,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> Result<(), VulcanCoreError> {
+    if provider_tool_definitions.is_empty() {
+        return Ok(());
+    }
+
+    let Value::Object(object) = payload else {
+        return Err(VulcanCoreError::InvalidState {
+            message: String::from("Google Gemini 请求载荷不是对象，无法追加工具声明。"),
+        });
+    };
+    let function_tool = serde_json::to_value(GeminiTool {
+        function_declarations: provider_tool_definitions
+            .iter()
+            .map(provider_tool_definition_to_gemini_function_declaration)
+            .collect::<Vec<_>>(),
+    })
+    .map_err(|error| VulcanCoreError::InvalidState {
+        message: format!("Google Gemini 工具声明序列化失败：{error}"),
+    })?;
+
+    let tools = object
+        .entry(String::from("tools"))
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(tools) = tools.as_array_mut() else {
+        return Err(VulcanCoreError::InvalidState {
+            message: String::from("Google Gemini 请求载荷中的 tools 字段不是数组。"),
+        });
+    };
+    tools.push(function_tool);
+
+    object.entry(String::from("toolConfig")).or_insert_with(|| {
+        json!(GeminiToolConfig {
+            function_calling_config: GeminiFunctionCallingConfig {
+                mode: String::from("AUTO"),
+            }
+        })
+    });
+
+    Ok(())
 }
 
 /// Converts one canonical core message into one Gemini-native content item, preserving stored provider state whenever native replay fidelity is required.
@@ -881,6 +910,58 @@ mod tests {
         assert_eq!(
             payload["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             json!(2048)
+        );
+    }
+
+    /// Verifies Gemini preserves provider-native tools while appending function declarations.
+    /// 验证 Gemini 会保留 Provider 原生工具，并继续追加函数声明。
+    #[test]
+    fn gemini_request_payload_preserves_google_search_and_appends_function_tools() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-2.5-flash"),
+                system_prompt: String::new(),
+                prompt: String::from("搜索最新信息"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "tools": [{ "google_search": {} }]
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("搜索最新信息"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_google_gemini_request_payload(
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read file"),
+                parameters: json!({"type":"object"}),
+            }],
+        )
+        .expect("gemini request payload should build");
+
+        assert!(payload["tools"][0].get("google_search").is_some());
+        assert_eq!(
+            payload["tools"][1]["functionDeclarations"][0]["name"],
+            json!("read_file")
+        );
+        assert_eq!(
+            payload["toolConfig"]["functionCallingConfig"]["mode"],
+            json!("AUTO")
         );
     }
 

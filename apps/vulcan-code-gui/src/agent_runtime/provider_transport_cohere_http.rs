@@ -797,8 +797,8 @@ mod tests {
         assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
     }
 
-    /// Verifies Cohere request building rejects staged non-text attachments with one explicit modality-specific error.
-    /// 验证 Cohere 请求构建会用一条显式模态错误拒绝已暂存的非文本附件。
+    /// Verifies Cohere request building degrades staged non-text attachments with one explicit modality-specific error.
+    /// 验证 Cohere 请求构建会用一条显式模态错误降级已暂存的非文本附件。
     #[test]
     fn request_payload_rejects_non_text_attachments() {
         let attachment = build_test_attachment(
@@ -832,11 +832,16 @@ mod tests {
             interleaved_reasoning: None,
         };
 
-        let error = build_cohere_request_payload("command-a-reasoning-08-2025", request, &[])
-            .expect_err("cohere should reject non-text attachments");
-        let rendered = format!("{error}");
+        let payload = build_cohere_request_payload("command-a-reasoning-08-2025", request, &[])
+            .expect("cohere should degrade non-text attachments into text");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let rendered = messages[1]["content"][0]["text"]
+            .as_str()
+            .expect("degraded attachment should be visible as text");
 
-        assert!(rendered.contains("音频附件输入"));
+        assert!(rendered.contains("audio input"));
         assert!(rendered.contains("sample.mp3"));
 
         let _ = std::fs::remove_file(&attachment.local_path);

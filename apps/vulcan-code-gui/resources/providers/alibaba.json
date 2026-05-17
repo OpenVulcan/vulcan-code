@@ -25,6 +25,12 @@
   "modelDiscovery": {
     "kind": "openai-models"
   },
+  "modelRuntimeOverrides": {
+    "qwen3-max": "openai-responses-compatible",
+    "qwen3.5-plus": "openai-responses-compatible",
+    "qwen3.6-max-preview": "openai-responses-compatible",
+    "qwen3.6-plus": "openai-responses-compatible"
+  },
   "models": [
     {
       "id": "qvq-max",
@@ -603,6 +609,21 @@
       ],
       "outputModalities": [
         "text"
+      ],
+      "aiTools": [
+        {
+          "kind": "web_search",
+          "nativeProviderTool": true,
+          "nativeToolType": "web_search",
+          "nativeRequestPatch": {
+            "tools": [
+              {
+                "type": "web_search"
+              }
+            ]
+          },
+          "citationSupport": true
+        }
       ]
     },
     {
@@ -844,6 +865,21 @@
       ],
       "outputModalities": [
         "text"
+      ],
+      "aiTools": [
+        {
+          "kind": "web_search",
+          "nativeProviderTool": true,
+          "nativeToolType": "web_search",
+          "nativeRequestPatch": {
+            "tools": [
+              {
+                "type": "web_search"
+              }
+            ]
+          },
+          "citationSupport": true
+        }
       ]
     },
     {
@@ -904,6 +940,21 @@
       ],
       "outputModalities": [
         "text"
+      ],
+      "aiTools": [
+        {
+          "kind": "web_search",
+          "nativeProviderTool": true,
+          "nativeToolType": "web_search",
+          "nativeRequestPatch": {
+            "tools": [
+              {
+                "type": "web_search"
+              }
+            ]
+          },
+          "citationSupport": true
+        }
       ]
     },
     {
@@ -924,6 +975,21 @@
       ],
       "outputModalities": [
         "text"
+      ],
+      "aiTools": [
+        {
+          "kind": "web_search",
+          "nativeProviderTool": true,
+          "nativeToolType": "web_search",
+          "nativeRequestPatch": {
+            "tools": [
+              {
+                "type": "web_search"
+              }
+            ]
+          },
+          "citationSupport": true
+        }
       ]
     },
     {

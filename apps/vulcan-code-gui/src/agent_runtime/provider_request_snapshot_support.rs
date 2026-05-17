@@ -28,5 +28,6 @@ pub(crate) fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
         VulcanToolSourceKind::Native => "原生工具",
         VulcanToolSourceKind::LuaSkills => "LuaSkills",
         VulcanToolSourceKind::Mcp => "MCP",
+        VulcanToolSourceKind::AiFallback => "AI 专用回退",
     }
 }

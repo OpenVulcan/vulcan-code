@@ -1,14 +1,11 @@
 //! Canonical conversation protocol models shared by the GUI, persistence, and runtime bridge.
 //! 供图形界面、持久化层与运行时桥接共享的规范会话协议模型。
 
+use crate::context_budget::ContextCompactionPolicy;
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
-
-/// Number of latest canonical messages retained verbatim after one compaction rewrite.
-/// 一次压缩改写后按原样保留的最新规范消息条数。
-pub const PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT: usize = 4;
 
 /// Number of latest canonical records retained verbatim after one compaction rewrite.
 /// 一次压缩改写后按原样保留的最新规范记录条数。
@@ -17,6 +14,22 @@ pub const PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT: usize = 50;
 /// Maximum body length retained for old historical records after record-level compaction.
 /// 记录级压缩后为旧历史记录保留的最大正文长度。
 const PROTOCOL_RECORD_COMPACTED_BODY_CHARS: usize = 12 * 1024;
+
+/// Placeholder text used when a retained recent tool result is too large to keep verbatim after compaction.
+/// 压缩后最近工具结果过大而无法原样保留时使用的占位文本。
+const COMPACTED_TOOL_RESULT_PLACEHOLDER: &str = "Tool output omitted during context compaction to preserve provider protocol integrity. The full output remains available in the transcript.";
+
+/// Message-index segment representing one user turn plus its following assistant/tool responses.
+/// 表示一个用户轮次及其后续助手/工具响应的消息索引段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CanonicalTailSegment {
+    /// Inclusive start index of the retained segment.
+    /// 保留段的起始索引，包含该位置。
+    start: usize,
+    /// Exclusive end index of the retained segment.
+    /// 保留段的结束索引，不包含该位置。
+    end: usize,
+}
 
 /// Session-scoped canonical conversation state persisted independently from the visible transcript.
 /// 独立于可见转录流持久化保存的按会话归属规范会话状态。
@@ -230,12 +243,9 @@ pub fn compact_conversation_with_summary(
     summary_message_id: impl Into<String>,
     summary_body: impl Into<String>,
     updated_at: impl Into<String>,
+    policy: ContextCompactionPolicy,
 ) {
-    let retained_tail = if state.messages.len() > PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT {
-        state.messages[state.messages.len() - PROTOCOL_COMPACTION_RETAINED_TAIL_COUNT..].to_vec()
-    } else {
-        state.messages.clone()
-    };
+    let retained_tail = canonical_recent_tail_messages(&state.messages, policy);
     let mut compacted_messages = Vec::with_capacity(retained_tail.len() + 1);
     compacted_messages.push(SessionConversationMessage {
         id: summary_message_id.into(),
@@ -252,6 +262,184 @@ pub fn compact_conversation_with_summary(
     state.messages = compacted_messages;
     state.continuation.last_provider_message_id = None;
     state.continuation.updated_at = Some(updated_at.into());
+}
+
+/// Selects the canonical message tail retained after summary insertion without splitting tool-call turns.
+/// 在不切断工具调用轮次的前提下，选择摘要插入后保留的规范消息尾部。
+fn canonical_recent_tail_messages(
+    messages: &[SessionConversationMessage],
+    policy: ContextCompactionPolicy,
+) -> Vec<SessionConversationMessage> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+
+    let target_turns = policy.tail_turns.max(1usize);
+    let budget = policy.preserve_recent_tokens;
+    let segments = canonical_tail_segments(messages);
+    let mut retained_tail = Vec::new();
+    let mut retained_tokens = 0usize;
+    let mut retained_turns = 0usize;
+
+    for segment in segments.iter().rev() {
+        if retained_turns >= target_turns {
+            break;
+        }
+
+        let remaining_budget = budget.saturating_sub(retained_tokens);
+        let segment_messages = &messages[segment.start..segment.end];
+        let mut candidate = segment_messages.to_vec();
+        let candidate_tokens = canonical_tail_token_estimate(&candidate);
+        if candidate_tokens > remaining_budget {
+            candidate = canonical_messages_with_compacted_tool_results(segment_messages);
+        }
+        let candidate_tokens = canonical_tail_token_estimate(&candidate);
+        if retained_tail.is_empty() || retained_tokens + candidate_tokens <= budget {
+            retained_tokens = retained_tokens.saturating_add(candidate_tokens);
+            candidate.extend(retained_tail);
+            retained_tail = candidate;
+            retained_turns += 1;
+        } else {
+            break;
+        }
+    }
+
+    if retained_tail.is_empty() {
+        canonical_messages_with_compacted_tool_results(
+            &messages[messages.len().saturating_sub(1)..],
+        )
+    } else {
+        retained_tail
+    }
+}
+
+/// Builds safe tail segments at user-turn boundaries so tool calls and tool results stay together.
+/// 按用户轮次边界构建安全尾部段，确保工具调用与工具结果保持在同一组内。
+fn canonical_tail_segments(messages: &[SessionConversationMessage]) -> Vec<CanonicalTailSegment> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+
+    let mut user_starts = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(
+                &message.payload,
+                SessionConversationPayload::UserText { .. }
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if user_starts.is_empty() {
+        return vec![CanonicalTailSegment {
+            start: 0,
+            end: messages.len(),
+        }];
+    }
+    if user_starts[0] != 0 {
+        user_starts.insert(0, 0);
+    }
+
+    user_starts
+        .iter()
+        .enumerate()
+        .map(|(position, start)| CanonicalTailSegment {
+            start: *start,
+            end: user_starts
+                .get(position + 1)
+                .copied()
+                .unwrap_or(messages.len()),
+        })
+        .collect()
+}
+
+/// Returns a cloned message slice where tool results are compacted into protocol-safe placeholders.
+/// 返回一份克隆后的消息切片，其中工具结果被压缩为协议安全的占位文本。
+fn canonical_messages_with_compacted_tool_results(
+    messages: &[SessionConversationMessage],
+) -> Vec<SessionConversationMessage> {
+    messages
+        .iter()
+        .cloned()
+        .map(|mut message| {
+            if let SessionConversationPayload::ToolResult { text, .. } = &mut message.payload {
+                *text = COMPACTED_TOOL_RESULT_PLACEHOLDER.to_string();
+            }
+            message
+        })
+        .collect()
+}
+
+/// Estimates the canonical tail size with the same conservative shape used by compaction retention.
+/// 使用与压缩保留一致的保守形态估算规范尾部大小。
+fn canonical_tail_token_estimate(messages: &[SessionConversationMessage]) -> usize {
+    messages
+        .iter()
+        .map(canonical_message_token_estimate)
+        .sum::<usize>()
+}
+
+/// Estimates one canonical message without consulting provider-specific tokenizers.
+/// 在不依赖 Provider 专用 tokenizer 的情况下估算一条规范消息。
+fn canonical_message_token_estimate(message: &SessionConversationMessage) -> usize {
+    match &message.payload {
+        SessionConversationPayload::UserText { text, attachments } => {
+            estimate_compaction_text_tokens(text)
+                + attachments
+                    .iter()
+                    .map(canonical_attachment_token_estimate)
+                    .sum::<usize>()
+                + 12usize
+        }
+        SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            tool_calls,
+            ..
+        } => {
+            estimate_compaction_text_tokens(text)
+                + estimate_compaction_text_tokens(reasoning)
+                + tool_calls
+                    .iter()
+                    .map(|tool_call| {
+                        estimate_compaction_text_tokens(&tool_call.tool_name)
+                            + serde_json::to_string(&tool_call.arguments)
+                                .map(|arguments| estimate_compaction_text_tokens(&arguments))
+                                .unwrap_or_default()
+                            + 24usize
+                    })
+                    .sum::<usize>()
+                + 16usize
+        }
+        SessionConversationPayload::ToolResult { text, .. } => {
+            estimate_compaction_text_tokens(text) + 12usize
+        }
+    }
+}
+
+/// Estimates one attachment placeholder for compaction-retention decisions.
+/// 为压缩保留决策估算一个附件占位成本。
+fn canonical_attachment_token_estimate(attachment: &ConversationAttachment) -> usize {
+    let kind_reserve = match attachment.kind {
+        vulcan_core::types::ConversationAttachmentKind::Audio => 512usize,
+        vulcan_core::types::ConversationAttachmentKind::Image => 384usize,
+        vulcan_core::types::ConversationAttachmentKind::Video => 1024usize,
+        vulcan_core::types::ConversationAttachmentKind::Pdf => 768usize,
+    };
+    kind_reserve
+        + estimate_compaction_text_tokens(&attachment.file_name)
+        + estimate_compaction_text_tokens(&attachment.mime_type)
+}
+
+/// Estimates text tokens with the local lightweight compaction heuristic.
+/// 使用本地轻量压缩启发式估算文本 Token。
+fn estimate_compaction_text_tokens(text: &str) -> usize {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    ((trimmed.chars().count() + 3usize) / 4usize).max(1usize)
 }
 
 /// Rebuilds a canonical state from a bounded transcript window when only lazy-loaded rows are available.
@@ -284,15 +472,15 @@ pub fn conversation_state_from_session_messages(
 pub fn compact_conversation_records_after_summary(
     state: &mut SessionConversationState,
     summary_record_id: &str,
+    policy: ContextCompactionPolicy,
 ) {
-    if state.records.len() <= PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT {
+    let retained_tail_count = (policy.tail_turns.max(1usize) * 12usize)
+        .max(PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT);
+    if state.records.len() <= retained_tail_count {
         return;
     }
 
-    let tail_start = state
-        .records
-        .len()
-        .saturating_sub(PROTOCOL_RECORD_COMPACTION_RETAINED_TAIL_COUNT);
+    let tail_start = state.records.len().saturating_sub(retained_tail_count);
     let mut retained_records = Vec::new();
     let mut retained_ids = std::collections::BTreeSet::new();
 
@@ -307,7 +495,7 @@ pub fn compact_conversation_records_after_summary(
         let retained_record = if keep_recent_tail || keep_summary {
             record
         } else {
-            compact_historical_record(record)
+            compact_historical_record(record, policy.prune)
         };
         if retained_ids.insert(retained_record.id.clone()) {
             retained_records.push(retained_record);
@@ -431,8 +619,21 @@ fn historical_record_survives_compaction(record: &SessionConversationRecord) -> 
 
 /// Reduces an old surviving dialogue record to compact text and minimal metadata.
 /// 将一条保留下来的旧对话记录降级为紧凑正文与最小元数据。
-fn compact_historical_record(mut record: SessionConversationRecord) -> SessionConversationRecord {
-    record.body = truncate_compacted_record_body(&record.body);
+fn compact_historical_record(
+    mut record: SessionConversationRecord,
+    prune_tools: bool,
+) -> SessionConversationRecord {
+    record.body = if prune_tools
+        && matches!(
+            record.record_kind,
+            SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+        ) {
+        String::from(
+            "Tool output was compacted. Re-run or open the original session detail if needed.",
+        )
+    } else {
+        truncate_compacted_record_body(&record.body)
+    };
     record.metadata = None;
     record
 }
@@ -533,5 +734,88 @@ mod tests {
         let projected = conversation_state_to_session_messages(&state);
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].metadata, Some(metadata));
+    }
+
+    /// Verifies compaction keeps the newest tool-call turn structurally replayable even when the result is large.
+    /// 验证压缩在工具结果很大时仍会保持最新工具调用轮次的可回放结构。
+    #[test]
+    fn compact_conversation_keeps_tool_turn_intact_when_tail_is_large() {
+        let mut state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("old-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("旧问题"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("old-assistant"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("旧回答"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("recent-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("读取文件"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("recent-assistant"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: vec![SessionConversationToolCall {
+                            id: String::from("tool-call-local"),
+                            tool_call_id: Some(String::from("tool-call-provider")),
+                            tool_name: String::from("read_file"),
+                            arguments: json!({"path": "Cargo.toml"}),
+                        }],
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("recent-tool-result"),
+                    payload: SessionConversationPayload::ToolResult {
+                        tool_result_id: String::from("tool-result"),
+                        tool_call_id: Some(String::from("tool-call-provider")),
+                        text: "很大的工具输出".repeat(200),
+                    },
+                },
+            ],
+            records: Vec::new(),
+            continuation: SessionProviderContinuationState::default(),
+        };
+        let policy = ContextCompactionPolicy {
+            tail_turns: 1,
+            preserve_recent_tokens: 16,
+            ..ContextCompactionPolicy::default()
+        };
+
+        compact_conversation_with_summary(&mut state, "summary", "摘要", "2", policy);
+
+        assert_eq!(state.messages.len(), 4);
+        assert!(matches!(
+            &state.messages[1].payload,
+            SessionConversationPayload::UserText { text, .. } if text == "读取文件"
+        ));
+        assert!(matches!(
+            &state.messages[2].payload,
+            SessionConversationPayload::Assistant { tool_calls, .. } if tool_calls.len() == 1
+        ));
+        assert!(matches!(
+            &state.messages[3].payload,
+            SessionConversationPayload::ToolResult { text, .. }
+                if text == COMPACTED_TOOL_RESULT_PLACEHOLDER
+        ));
     }
 }

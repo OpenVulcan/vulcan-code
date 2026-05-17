@@ -1,7 +1,11 @@
 //! Host-side provider input normalization helpers aligned with the OpenCode unsupported-parts flow.
 //! 与 OpenCode unsupported-parts 流程对齐的宿主侧 Provider 输入归一化辅助模块。
 
-use crate::agent_runtime::provider_attachment::build_attachment_transport_error_text;
+use crate::agent_runtime::provider_attachment::{
+    build_attachment_transport_error_text, build_missing_attachment_replay_text,
+};
+use crate::attachment_asset_index::{AttachmentReplayStatus, resolve_attachment_replay_status};
+use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::ProviderApiFamily;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -27,17 +31,47 @@ pub fn normalize_provider_user_input(
     text: &str,
     attachments: &[ConversationAttachment],
 ) -> NormalizedProviderUserInput {
+    normalize_provider_user_input_for_model(api_family, None, text, attachments)
+}
+
+/// Normalizes one user text-plus-attachments payload for both provider-family and model modality compatibility.
+/// 根据 Provider 接口族与模型模态兼容性归一化一条用户文本加附件载荷。
+pub fn normalize_provider_user_input_for_model(
+    api_family: ProviderApiFamily,
+    capabilities: Option<&ResolvedModelCapabilities>,
+    text: &str,
+    attachments: &[ConversationAttachment],
+) -> NormalizedProviderUserInput {
     let mut supported_attachments = Vec::new();
     let mut downgraded_attachments = Vec::new();
     let mut error_lines = Vec::new();
 
     for attachment in attachments.iter().cloned() {
-        if provider_api_family_supports_attachment_kind(api_family, attachment.kind.clone()) {
+        let attachment_is_replayable = !matches!(
+            resolve_attachment_replay_status(&attachment),
+            AttachmentReplayStatus::Missing | AttachmentReplayStatus::Purged
+        );
+        let api_supports_attachment =
+            provider_api_family_supports_attachment_kind(api_family, attachment.kind.clone());
+        let model_supports_attachment = capabilities.is_none_or(|capabilities| {
+            capabilities.supports_attachment_kind(attachment.kind.clone())
+        });
+
+        if attachment_is_replayable && api_supports_attachment && model_supports_attachment {
             supported_attachments.push(attachment);
-        } else {
+        } else if !attachment_is_replayable {
+            error_lines.push(build_missing_attachment_replay_text(&attachment));
+            downgraded_attachments.push(attachment);
+        } else if !api_supports_attachment {
             error_lines.push(build_attachment_transport_error_text(
                 &attachment,
                 provider_api_family_scope_label(api_family),
+            ));
+            downgraded_attachments.push(attachment);
+        } else {
+            error_lines.push(build_attachment_transport_error_text(
+                &attachment,
+                "the selected model",
             ));
             downgraded_attachments.push(attachment);
         }
@@ -65,7 +99,10 @@ pub fn provider_api_family_supports_attachment_kind(
     kind: ConversationAttachmentKind,
 ) -> bool {
     match api_family {
-        ProviderApiFamily::OpenAiResponses | ProviderApiFamily::OpenAiChatCompatible => true,
+        ProviderApiFamily::OpenAiResponses => true,
+        ProviderApiFamily::OpenAiChatCompatible => {
+            matches!(kind, ConversationAttachmentKind::Image)
+        }
         ProviderApiFamily::AnthropicMessages => {
             matches!(
                 kind,
@@ -95,7 +132,8 @@ mod tests {
     //! Provider-input normalization regression tests covering unsupported attachment degradation.
     //! 覆盖不受支持附件降级行为的 Provider 输入归一化回归测试。
 
-    use super::normalize_provider_user_input;
+    use super::{normalize_provider_user_input, normalize_provider_user_input_for_model};
+    use crate::provider_capabilities::ResolvedModelCapabilities;
     use crate::provider_config::ProviderApiFamily;
     use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -109,7 +147,11 @@ mod tests {
         ConversationAttachment {
             kind,
             file_name: file_name.to_string(),
-            local_path: format!("managed/{file_name}"),
+            local_path: std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("Cargo.toml")
+                .to_string_lossy()
+                .to_string(),
             source_path: Some(format!("source/{file_name}")),
             asset_id: Some(format!("asset-{file_name}")),
             byte_len: Some(4),
@@ -137,5 +179,55 @@ mod tests {
         assert_eq!(normalized.attachments.len(), 1);
         assert_eq!(normalized.downgraded_attachments.len(), 1);
         assert!(normalized.text.contains("Cannot read \"demo.mp4\""));
+    }
+
+    /// Degrades API-supported attachments when the selected model does not declare the matching input modality.
+    /// 当选中模型未声明对应输入模态时，即使 API 支持该附件也会降级。
+    #[test]
+    fn normalize_provider_user_input_degrades_model_unsupported_attachments() {
+        let capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text")],
+            ..ResolvedModelCapabilities::default()
+        };
+        let normalized = normalize_provider_user_input_for_model(
+            ProviderApiFamily::OpenAiChatCompatible,
+            Some(&capabilities),
+            "请看图",
+            &[test_attachment(
+                ConversationAttachmentKind::Image,
+                "demo.png",
+                "image/png",
+            )],
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert!(normalized.text.contains("selected model"));
+    }
+
+    /// Degrades non-image attachments for strict OpenAI-compatible Chat endpoints.
+    /// 为严格 OpenAI 兼容 Chat 端点降级非图片附件。
+    #[test]
+    fn normalize_provider_user_input_degrades_openai_chat_non_image_attachments() {
+        let normalized = normalize_provider_user_input(
+            ProviderApiFamily::OpenAiChatCompatible,
+            "请分析这些附件",
+            &[
+                test_attachment(ConversationAttachmentKind::Audio, "demo.mp3", "audio/mpeg"),
+                test_attachment(
+                    ConversationAttachmentKind::Pdf,
+                    "demo.pdf",
+                    "application/pdf",
+                ),
+                test_attachment(ConversationAttachmentKind::Video, "demo.mp4", "video/mp4"),
+            ],
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 3);
+        assert!(normalized.text.contains("this API path"));
+        assert!(normalized.text.contains("demo.mp3"));
+        assert!(normalized.text.contains("demo.pdf"));
+        assert!(normalized.text.contains("demo.mp4"));
     }
 }

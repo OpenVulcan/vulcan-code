@@ -29,6 +29,7 @@ mod theme;
 mod tool_result_format;
 mod tooling;
 mod vulcan_tools_bridge;
+mod web_search_compat;
 mod wheel_passthrough;
 mod workspace_path;
 mod workspace_store;

@@ -2,7 +2,6 @@
 //! 供执行准备、诊断与压缩触发共享的上下文预算估算辅助模块。
 
 use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
-use crate::model::SessionMessageEntry;
 use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
 use crate::provider_usage::{calibrated_input_token_estimate, provider_usage_label};
@@ -23,6 +22,41 @@ pub const CONTEXT_BUDGET_WARNING_RATIO: f32 = 0.70;
 /// Ratio above which the host should treat the session as effectively overflowed.
 /// 超过该占用比例后，宿主应将当前会话视为实际上已经溢出。
 pub const CONTEXT_BUDGET_OVERFLOW_RATIO: f32 = 0.97;
+
+/// OpenCode-style policy that controls automatic compaction and retained history shape.
+/// 控制自动压缩与历史保留形态的 OpenCode 风格策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextCompactionPolicy {
+    /// Whether the host may automatically compact history after a budget check.
+    /// 宿主是否允许在预算检查后自动压缩历史。
+    pub auto: bool,
+    /// Whether old tool outputs should be pruned into compact placeholders during compaction.
+    /// 压缩期间是否应将旧工具输出剪枝为紧凑占位内容。
+    pub prune: bool,
+    /// Number of recent user turns retained verbatim after compaction.
+    /// 压缩后按原样保留的最近用户轮次数。
+    pub tail_turns: usize,
+    /// Maximum approximate token budget retained for the recent tail.
+    /// 为最近尾部保留的近似 Token 上限。
+    pub preserve_recent_tokens: usize,
+    /// Input-token reserve kept free for compaction summaries and the next user turn.
+    /// 为压缩摘要与下一轮用户输入预留的输入 Token 缓冲。
+    pub reserved: usize,
+}
+
+impl Default for ContextCompactionPolicy {
+    /// Builds the default compaction policy used until project-level settings expose overrides.
+    /// 构建默认压缩策略，直到项目级设置暴露覆盖项。
+    fn default() -> Self {
+        Self {
+            auto: true,
+            prune: true,
+            tail_turns: 4,
+            preserve_recent_tokens: 8_192,
+            reserved: 2_048,
+        }
+    }
+}
 
 /// Resolved context-budget severity used by UI and compaction decisions.
 /// 供界面与压缩决策使用的已解析上下文预算严重级别。
@@ -69,6 +103,12 @@ pub struct ContextBudgetSnapshot {
     /// Additional reserve held for explicit reasoning or thinking payloads.
     /// 为显式推理或思考载荷保留的附加预算。
     pub reserved_reasoning_tokens: usize,
+    /// Additional input reserve held for automatic compaction and the next user turn.
+    /// 为自动压缩与下一轮用户输入保留的附加输入预算。
+    pub reserved_compaction_tokens: usize,
+    /// Whether this snapshot allows automatic compaction when the severity crosses the threshold.
+    /// 当严重级别越过阈值时，该快照是否允许自动压缩。
+    pub compaction_auto_enabled: bool,
     /// Estimated system-prompt token cost.
     /// 系统提示词的估算 Token 成本。
     pub estimated_system_tokens: usize,
@@ -108,6 +148,9 @@ impl ContextBudgetSnapshot {
     /// Returns whether the host should compact visible history before or immediately after the next execution.
     /// 返回宿主是否应在下一次执行前或执行后立即压缩可见历史。
     pub fn should_compact(&self) -> bool {
+        if !self.compaction_auto_enabled {
+            return false;
+        }
         matches!(
             self.severity,
             ContextBudgetSeverity::CompactSoon | ContextBudgetSeverity::Overflow
@@ -138,7 +181,7 @@ impl ContextBudgetSnapshot {
             .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("未声明"));
         format!(
-            "{severity_label} · 上下文窗 {} · 输入 {} · 系统 {} / 历史 {} / 当前 {} / 工具 {} · 总占用 {} · 输出预留 {} · 推理预留 {}{}",
+            "{severity_label} · 上下文窗 {} · 输入 {} · 系统 {} / 历史 {} / 当前 {} / 工具 {} · 总占用 {} · 输出预留 {} · 推理预留 {} · 压缩预留 {}{}",
             context_limit_label,
             self.usage_label(),
             self.estimated_system_tokens,
@@ -148,6 +191,7 @@ impl ContextBudgetSnapshot {
             self.estimated_total_tokens,
             self.reserved_output_tokens,
             self.reserved_reasoning_tokens,
+            self.reserved_compaction_tokens,
             self.observed_usage
                 .as_ref()
                 .map(|usage| format!(" · {}", provider_usage_label(usage)))
@@ -169,6 +213,7 @@ pub fn build_request_context_budget_snapshot(
 ) -> ContextBudgetSnapshot {
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning.requested_effort);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
+    let reserved_compaction_tokens = 0usize;
     let estimated_system_tokens = estimate_text_tokens(&request_snapshot.system_prompt);
     let estimated_history_tokens = request_snapshot
         .history
@@ -187,8 +232,10 @@ pub fn build_request_context_budget_snapshot(
         + estimated_tool_tokens;
     let calibrated_input_tokens =
         calibrated_input_token_estimate(estimated_input_tokens, observed_usage);
-    let estimated_total_tokens =
-        calibrated_input_tokens + reserved_reasoning_tokens + reserved_output_tokens;
+    let estimated_total_tokens = calibrated_input_tokens
+        + reserved_reasoning_tokens
+        + reserved_output_tokens
+        + reserved_compaction_tokens;
     let effective_input_limit = capabilities.effective_input_limit();
     let usage_ratio = effective_input_limit
         .map(|limit| calibrated_input_tokens as f32 / limit.max(1) as f32)
@@ -202,11 +249,14 @@ pub fn build_request_context_budget_snapshot(
             capabilities,
             reasoning.requested_effort,
             request_snapshot.tool_schemas.len(),
+            None,
         ),
         context_limit: capabilities.context_limit,
         effective_input_limit,
         reserved_output_tokens,
         reserved_reasoning_tokens,
+        reserved_compaction_tokens,
+        compaction_auto_enabled: false,
         estimated_system_tokens,
         estimated_history_tokens,
         estimated_prompt_tokens,
@@ -219,24 +269,25 @@ pub fn build_request_context_budget_snapshot(
     }
 }
 
-/// Builds one approximate compaction-facing budget snapshot from visible session context history.
-/// 根据可见会话上下文历史构建一份近似面向压缩判断的预算快照。
-pub fn build_session_context_budget_snapshot(
+/// Builds one compaction-facing budget snapshot from already projected provider-visible core messages.
+/// 根据已经投影完成的 Provider 可见 core 消息构建一份面向压缩判断的预算快照。
+pub fn build_projected_session_context_budget_snapshot(
     provider_id: &str,
     model_id: &str,
     api_family: ProviderApiFamily,
     capabilities: &ResolvedModelCapabilities,
     reasoning_effort: ReasoningEffortLevel,
-    messages: &[SessionMessageEntry],
+    compaction_policy: ContextCompactionPolicy,
+    projected_messages: &[CoreConversationMessage],
     visible_tool_count: usize,
     observed_usage: Option<&ProviderUsageSnapshot>,
 ) -> ContextBudgetSnapshot {
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning_effort);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
-    let estimated_history_tokens = messages
+    let reserved_compaction_tokens = compaction_policy.reserved;
+    let estimated_history_tokens = projected_messages
         .iter()
-        .filter(|message| message.contributes_to_context())
-        .map(|message| estimate_text_tokens(&message.body) + estimate_text_tokens(&message.title))
+        .map(estimate_core_message_tokens)
         .sum();
     let estimated_tool_tokens = visible_tool_count * 96usize;
     let estimated_system_tokens = 384usize;
@@ -245,9 +296,13 @@ pub fn build_session_context_budget_snapshot(
         estimated_system_tokens + estimated_history_tokens + estimated_tool_tokens;
     let calibrated_input_tokens =
         calibrated_input_token_estimate(estimated_input_tokens, observed_usage);
-    let estimated_total_tokens =
-        calibrated_input_tokens + reserved_reasoning_tokens + reserved_output_tokens;
-    let effective_input_limit = capabilities.effective_input_limit();
+    let estimated_total_tokens = calibrated_input_tokens
+        + reserved_reasoning_tokens
+        + reserved_output_tokens
+        + reserved_compaction_tokens;
+    let effective_input_limit = capabilities
+        .effective_input_limit()
+        .map(|limit| limit.saturating_sub(reserved_compaction_tokens).max(1usize));
     let usage_ratio = effective_input_limit
         .map(|limit| calibrated_input_tokens as f32 / limit.max(1) as f32)
         .unwrap_or(0.0);
@@ -260,11 +315,14 @@ pub fn build_session_context_budget_snapshot(
             capabilities,
             reasoning_effort,
             visible_tool_count,
+            Some(compaction_policy),
         ),
         context_limit: capabilities.context_limit,
         effective_input_limit,
         reserved_output_tokens,
         reserved_reasoning_tokens,
+        reserved_compaction_tokens,
+        compaction_auto_enabled: compaction_policy.auto,
         estimated_system_tokens,
         estimated_history_tokens,
         estimated_prompt_tokens,
@@ -286,9 +344,35 @@ pub fn build_context_budget_fingerprint(
     capabilities: &ResolvedModelCapabilities,
     reasoning_effort: ReasoningEffortLevel,
     visible_tool_count: usize,
+    compaction_policy: Option<ContextCompactionPolicy>,
 ) -> String {
+    let compaction_policy_label = compaction_policy
+        .map(|policy| {
+            format!(
+                "auto={}|prune={}|tail={}|preserve={}|reserved={}",
+                policy.auto,
+                policy.prune,
+                policy.tail_turns,
+                policy.preserve_recent_tokens,
+                policy.reserved
+            )
+        })
+        .unwrap_or_else(|| String::from("none"));
+    let ai_tools_label = capabilities
+        .ai_tools
+        .iter()
+        .map(|tool| {
+            format!(
+                "{}:{:?}:{}",
+                tool.kind.key(),
+                tool.policy,
+                tool.native_tool_type.as_deref().unwrap_or("none")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{}|{}|{}|ctx={:?}|in={:?}|out={:?}|tool={}|temp={}|attach={}|reason={}|it={}|ot={}|tools={}",
+        "{}|{}|{}|ctx={:?}|in={:?}|out={:?}|tool={}|temp={}|attach={}|reason={}|it={}|ot={}|tools={}|ai={}|compact={}",
         provider_id,
         model_id,
         api_family.key(),
@@ -302,6 +386,8 @@ pub fn build_context_budget_fingerprint(
         capabilities.input_modalities.join(","),
         capabilities.output_modalities.join(","),
         visible_tool_count,
+        ai_tools_label,
+        compaction_policy_label,
     )
 }
 
@@ -440,11 +526,11 @@ mod tests {
     //! 覆盖精确请求估算与压缩阈值的上下文预算回归测试。
 
     use super::{
-        CONTEXT_BUDGET_COMPACTION_RATIO, ContextBudgetSeverity, build_context_budget_fingerprint,
-        build_request_context_budget_snapshot, build_session_context_budget_snapshot,
+        CONTEXT_BUDGET_COMPACTION_RATIO, ContextBudgetSeverity, ContextCompactionPolicy,
+        build_context_budget_fingerprint, build_projected_session_context_budget_snapshot,
+        build_request_context_budget_snapshot,
     };
     use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
-    use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use crate::provider_capabilities::ResolvedModelCapabilities;
     use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
     use serde_json::json;
@@ -613,29 +699,83 @@ mod tests {
             output_limit: Some(512),
             ..ResolvedModelCapabilities::default()
         };
-        let messages = vec![SessionMessageEntry {
+        let messages = vec![ConversationMessage {
             id: String::from("message-1"),
-            kind: SessionMessageKind::Assistant,
-            record_kind: SessionMessageRecordKind::AssistantOutput,
-            visible: true,
-            title: String::from("输出"),
-            body: "A".repeat(4_500),
-            metadata: None,
-            created_at: String::from("1"),
+            payload: ConversationPayload::Assistant {
+                text: "A".repeat(4_500),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
         }];
 
-        let snapshot = build_session_context_budget_snapshot(
+        let snapshot = build_projected_session_context_budget_snapshot(
             "deepseek",
             "deepseek-v4-pro",
             ProviderApiFamily::OpenAiChatCompatible,
             &capabilities,
             ReasoningEffortLevel::Off,
+            ContextCompactionPolicy::default(),
             &messages,
             0usize,
             None,
         );
 
         assert!(snapshot.usage_ratio >= CONTEXT_BUDGET_COMPACTION_RATIO);
+        assert!(matches!(
+            snapshot.severity,
+            ContextBudgetSeverity::CompactSoon | ContextBudgetSeverity::Overflow
+        ));
+    }
+
+    /// Verifies compaction policy auto and reserved-budget fields affect session-level compaction decisions.
+    /// 验证压缩策略的自动开关与预留预算会影响会话级压缩决策。
+    #[test]
+    fn session_context_budget_snapshot_respects_compaction_policy() {
+        let capabilities = ResolvedModelCapabilities {
+            context_limit: Some(4_000),
+            input_limit: Some(1_000),
+            output_limit: Some(512),
+            ..ResolvedModelCapabilities::default()
+        };
+        let messages = vec![ConversationMessage {
+            id: String::from("message-1"),
+            payload: ConversationPayload::Assistant {
+                text: "A".repeat(4_500),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        }];
+        let policy = ContextCompactionPolicy {
+            auto: false,
+            reserved: 200,
+            ..ContextCompactionPolicy::default()
+        };
+
+        let snapshot = build_projected_session_context_budget_snapshot(
+            "deepseek",
+            "deepseek-v4-pro",
+            ProviderApiFamily::OpenAiChatCompatible,
+            &capabilities,
+            ReasoningEffortLevel::Off,
+            policy,
+            &messages,
+            0usize,
+            None,
+        );
+
+        assert_eq!(snapshot.effective_input_limit, Some(800));
+        assert_eq!(snapshot.reserved_compaction_tokens, 200);
+        assert!(
+            snapshot.estimated_total_tokens
+                >= snapshot.estimated_input_tokens + snapshot.reserved_compaction_tokens
+        );
+        assert!(!snapshot.should_compact());
         assert!(matches!(
             snapshot.severity,
             ContextBudgetSeverity::CompactSoon | ContextBudgetSeverity::Overflow
@@ -655,6 +795,7 @@ mod tests {
             &capabilities,
             ReasoningEffortLevel::Medium,
             3usize,
+            None,
         );
         let right = build_context_budget_fingerprint(
             "openai",
@@ -663,6 +804,7 @@ mod tests {
             &capabilities,
             ReasoningEffortLevel::Medium,
             3usize,
+            None,
         );
 
         assert_eq!(left, right);

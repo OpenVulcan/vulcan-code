@@ -2,7 +2,10 @@
 //! 供运行时、诊断与后续界面防护共用的 Provider 能力解析辅助模块。
 
 use crate::provider_config::{
-    ModelChoice, ModelInterleavedCapability, PersistedProviderOptions, SupportedProviderDefinition,
+    AiToolDeclaration, AiToolKind, AiToolPolicy, ModelChoice, ModelInterleavedCapability,
+    PersistedAiToolConfiguration, PersistedProviderOptions, PersistedWebSearchConfiguration,
+    ProviderApiFamily, SupportedProviderDefinition, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
+    WebSearchRoutingMode,
 };
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachmentKind;
@@ -53,6 +56,45 @@ pub struct ResolvedModelCapabilities {
     /// Normalized output modalities declared by the selected model.
     /// 当前选中模型声明的规范化输出模态集合。
     pub output_modalities: Vec<String>,
+    /// Resolved AI-specialized tool capabilities available to the selected provider/model pair.
+    /// 当前供应商/模型组合可用的已解析 AI 专用工具能力集合。
+    pub ai_tools: Vec<ResolvedAiToolCapability>,
+}
+
+/// Resolved AI-specialized tool capability consumed by the runtime router.
+/// 供运行时路由器消费的已解析 AI 专用工具能力。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAiToolCapability {
+    /// Stable semantic tool kind.
+    /// 稳定语义工具类型。
+    pub kind: AiToolKind,
+    /// Effective routing policy.
+    /// 生效路由策略。
+    pub policy: AiToolPolicy,
+    /// Whether provider-native execution is available.
+    /// 是否可用 Provider 原生执行。
+    pub native_provider_tool: bool,
+    /// Provider-native tool type used by the target API family.
+    /// 目标接口族使用的 Provider 原生工具类型。
+    pub native_tool_type: Option<String>,
+    /// Optional request payload patch used to enable provider-native hosted tools.
+    /// 用于启用 Provider 原生 Hosted Tool 的可选请求载荷补丁。
+    pub native_request_patch: Option<serde_json::Value>,
+    /// Optional host fallback tool identifier.
+    /// 可选宿主回退工具标识。
+    pub fallback_tool_id: Option<String>,
+    /// Whether explicit approval is required.
+    /// 是否需要显式批准。
+    pub requires_approval: bool,
+    /// Normalized result modalities.
+    /// 规范化结果模态集合。
+    pub result_modalities: Vec<String>,
+    /// Whether structured citations are supported.
+    /// 是否支持结构化引用。
+    pub citation_support: bool,
+    /// Human-readable source label used by diagnostics.
+    /// 诊断界面使用的人类可读来源标签。
+    pub source_label: String,
 }
 
 impl ResolvedModelCapabilities {
@@ -149,6 +191,253 @@ pub fn resolve_model_capabilities(
         output_modalities: model
             .map(|entry| normalize_modality_list(&entry.output_modalities))
             .unwrap_or_default(),
+        ai_tools: resolve_ai_tool_capabilities(definition, model),
+    }
+}
+
+/// Applies user-level API-native tool routing configuration to one resolved capability snapshot.
+/// 将用户级 API 原生工具路由配置应用到一份已解析能力快照。
+pub fn apply_ai_tool_runtime_configuration(
+    capabilities: &mut ResolvedModelCapabilities,
+    configuration: &PersistedAiToolConfiguration,
+) {
+    apply_web_search_runtime_configuration(&mut capabilities.ai_tools, &configuration.web_search);
+    capabilities.ai_tools.sort_by_key(|tool| tool.kind);
+}
+
+/// Applies web-search routing preferences without merging unrelated MCP or LuaSkills tools.
+/// 应用网页搜索路由偏好，同时不融合无关的 MCP 或 LuaSkills 工具。
+fn apply_web_search_runtime_configuration(
+    ai_tools: &mut Vec<ResolvedAiToolCapability>,
+    configuration: &PersistedWebSearchConfiguration,
+) {
+    let provider_chain_available = configuration.has_usable_provider_chain();
+    let existing_index = ai_tools
+        .iter()
+        .position(|tool| tool.kind == AiToolKind::WebSearch);
+    let mut capability = existing_index
+        .and_then(|index| ai_tools.get(index).cloned())
+        .unwrap_or_else(default_configured_web_search_capability);
+
+    match configuration.mode {
+        WebSearchRoutingMode::Disabled => {
+            capability.policy = AiToolPolicy::Disabled;
+            capability.fallback_tool_id = None;
+        }
+        WebSearchRoutingMode::NativeOnly => {
+            if existing_index.is_none() {
+                return;
+            }
+            capability.policy = AiToolPolicy::ForceNative;
+            capability.fallback_tool_id = None;
+        }
+        WebSearchRoutingMode::NativeFirst => {
+            if existing_index.is_none() && !provider_chain_available {
+                return;
+            }
+            capability.policy = if capability.native_provider_tool {
+                AiToolPolicy::Auto
+            } else {
+                AiToolPolicy::ForceHost
+            };
+            capability.fallback_tool_id =
+                provider_chain_available.then(|| WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string());
+        }
+        WebSearchRoutingMode::ThirdPartyFirst => {
+            if provider_chain_available {
+                capability.policy = AiToolPolicy::ForceHost;
+                capability.fallback_tool_id = Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string());
+            } else if existing_index.is_some() {
+                capability.policy = AiToolPolicy::ForceNative;
+                capability.fallback_tool_id = None;
+            } else {
+                return;
+            }
+        }
+        WebSearchRoutingMode::ThirdPartyOnly => {
+            if provider_chain_available {
+                capability.policy = AiToolPolicy::ForceHost;
+                capability.fallback_tool_id = Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string());
+            } else if existing_index.is_some() {
+                capability.policy = AiToolPolicy::Disabled;
+                capability.fallback_tool_id = None;
+            } else {
+                return;
+            }
+        }
+    }
+
+    capability.source_label = format!("{} · 用户策略", capability.source_label);
+    if let Some(index) = existing_index {
+        ai_tools[index] = capability;
+    } else {
+        ai_tools.push(capability);
+    }
+}
+
+/// Builds a host-only configured web-search capability used when a model lacks native search support.
+/// 构建模型缺少原生搜索支持时使用的宿主侧配置化网页搜索能力。
+fn default_configured_web_search_capability() -> ResolvedAiToolCapability {
+    ResolvedAiToolCapability {
+        kind: AiToolKind::WebSearch,
+        policy: AiToolPolicy::ForceHost,
+        native_provider_tool: false,
+        native_tool_type: None,
+        native_request_patch: None,
+        fallback_tool_id: Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string()),
+        requires_approval: false,
+        result_modalities: vec![String::from("text")],
+        citation_support: true,
+        source_label: String::from("用户配置"),
+    }
+}
+
+/// Resolves provider/model AI-tool declarations into one stable capability list.
+/// 将供应商/模型 AI 工具声明解析为一组稳定能力列表。
+fn resolve_ai_tool_capabilities(
+    definition: &SupportedProviderDefinition,
+    model: Option<&ModelChoice>,
+) -> Vec<ResolvedAiToolCapability> {
+    let mut declarations = inferred_provider_ai_tool_declarations(definition, model)
+        .into_iter()
+        .map(|declaration| (declaration.kind, declaration, String::from("接口默认")))
+        .collect::<Vec<_>>();
+
+    declarations.extend(
+        definition
+            .ai_tools
+            .iter()
+            .cloned()
+            .map(|declaration| (declaration.kind, declaration, String::from("供应商声明"))),
+    );
+
+    if let Some(model) = model {
+        declarations.extend(
+            model
+                .ai_tools
+                .iter()
+                .cloned()
+                .map(|declaration| (declaration.kind, declaration, String::from("模型声明"))),
+        );
+    }
+
+    let mut resolved = Vec::<ResolvedAiToolCapability>::new();
+    for (kind, declaration, source_label) in declarations {
+        let capability = resolved_ai_tool_capability_from_declaration(
+            kind,
+            declaration,
+            source_label,
+            definition.effective_api_family_for_model(model.map(|model| model.id.as_str())),
+        );
+        if let Some(index) = resolved.iter().position(|tool| tool.kind == kind) {
+            resolved[index] = capability;
+        } else {
+            resolved.push(capability);
+        }
+    }
+
+    resolved.sort_by_key(|tool| tool.kind);
+    resolved
+}
+
+/// Infers conservative provider-native AI-tool defaults from the canonical API family.
+/// 根据规范接口族推导保守的 Provider 原生 AI 工具默认值。
+fn inferred_provider_ai_tool_declarations(
+    definition: &SupportedProviderDefinition,
+    model: Option<&ModelChoice>,
+) -> Vec<AiToolDeclaration> {
+    let model_accepts_text = model.is_none_or(|model| {
+        model.output_modalities.is_empty()
+            || model
+                .output_modalities
+                .iter()
+                .any(|modality| modality.trim().eq_ignore_ascii_case("text"))
+    });
+    if !model_accepts_text {
+        return Vec::new();
+    }
+    let model_accepts_tools = model.is_none_or(|model| model.tool_call.unwrap_or(true));
+    if !model_accepts_tools {
+        return Vec::new();
+    }
+
+    let api_family =
+        definition.effective_api_family_for_model(model.map(|model| model.id.as_str()));
+
+    match (definition.id.as_str(), api_family) {
+        ("openai", ProviderApiFamily::OpenAiResponses) => vec![AiToolDeclaration::provider_native(
+            AiToolKind::WebSearch,
+            "web_search_preview",
+        )],
+        ("google", ProviderApiFamily::GoogleGeminiGenerateContent) => {
+            vec![AiToolDeclaration::provider_native(
+                AiToolKind::WebSearch,
+                "google_search",
+            )]
+        }
+        ("anthropic", ProviderApiFamily::AnthropicMessages) => {
+            vec![AiToolDeclaration::provider_native(
+                AiToolKind::WebSearch,
+                "web_search_20250305",
+            )]
+        }
+        (_, _) => Vec::new(),
+    }
+}
+
+/// Converts one declaration into the runtime capability shape.
+/// 将单条声明转换为运行时能力形状。
+fn resolved_ai_tool_capability_from_declaration(
+    kind: AiToolKind,
+    declaration: AiToolDeclaration,
+    source_label: String,
+    api_family: ProviderApiFamily,
+) -> ResolvedAiToolCapability {
+    let native_tool_type = declaration
+        .native_tool_type
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| default_native_ai_tool_type(api_family, kind).map(ToOwned::to_owned));
+    let native_provider_tool = declaration.native_provider_tool.unwrap_or_else(|| {
+        native_tool_type
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || declaration.native_request_patch.is_some()
+    });
+
+    ResolvedAiToolCapability {
+        kind,
+        policy: declaration.policy,
+        native_provider_tool,
+        native_tool_type,
+        native_request_patch: declaration.native_request_patch,
+        fallback_tool_id: declaration
+            .fallback_tool_id
+            .filter(|value| !value.trim().is_empty()),
+        requires_approval: declaration.requires_approval,
+        result_modalities: normalize_modality_list(&declaration.result_modalities),
+        citation_support: declaration.citation_support.unwrap_or(matches!(
+            kind,
+            AiToolKind::WebSearch | AiToolKind::FileSearch
+        )),
+        source_label,
+    }
+}
+
+/// Returns the default provider-native tool type for one API family and semantic kind.
+/// 返回指定接口族与语义类型对应的默认 Provider 原生工具类型。
+fn default_native_ai_tool_type(
+    api_family: ProviderApiFamily,
+    kind: AiToolKind,
+) -> Option<&'static str> {
+    match (api_family, kind) {
+        (ProviderApiFamily::OpenAiResponses, AiToolKind::WebSearch) => Some("web_search_preview"),
+        (ProviderApiFamily::GoogleGeminiGenerateContent, AiToolKind::WebSearch) => {
+            Some("google_search")
+        }
+        (ProviderApiFamily::AnthropicMessages, AiToolKind::WebSearch) => {
+            Some("web_search_20250305")
+        }
+        _ => None,
     }
 }
 
@@ -318,13 +607,16 @@ mod tests {
     //! 覆盖凭据回退与模型字段规范化的能力解析回归测试。
 
     use super::{
-        ResolvedModelCapabilities, resolve_credential_source_summary, resolve_model_capabilities,
-        resolve_provider_api_key, resolve_provider_api_key_with_lookup,
+        ResolvedModelCapabilities, apply_ai_tool_runtime_configuration,
+        resolve_credential_source_summary, resolve_model_capabilities, resolve_provider_api_key,
+        resolve_provider_api_key_with_lookup,
     };
     use crate::provider_config::{
-        ModelChoice, PersistedProviderOptions, ProviderBaseUrlConfig, ProviderBaseUrlKind,
-        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-        SupportedProviderDefinition,
+        AiToolKind, AiToolPolicy, ModelChoice, PersistedAiToolConfiguration,
+        PersistedProviderOptions, PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
+        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderModelDiscoveryConfig,
+        ProviderModelDiscoveryKind, ProviderRuntimeKind, SupportedProviderDefinition,
+        WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchProviderKind, WebSearchRoutingMode,
     };
     use std::collections::BTreeMap;
 
@@ -339,7 +631,9 @@ mod tests {
             credential_env_keys: vec![String::from("DEEPSEEK_API_KEY")],
             extra_headers: BTreeMap::new(),
             extra_body: serde_json::Map::new(),
+            model_runtime_overrides: BTreeMap::new(),
             reasoning_profile: None,
+            ai_tools: Vec::new(),
             fields: Vec::new(),
             base_url: ProviderBaseUrlConfig {
                 kind: ProviderBaseUrlKind::Fixed,
@@ -375,6 +669,7 @@ mod tests {
             attachment: Some(true),
             interleaved: None,
             reasoning_profile: None,
+            ai_tools: Vec::new(),
             input_modalities: vec![
                 String::from("Text"),
                 String::from(" Image "),
@@ -421,6 +716,7 @@ mod tests {
             attachment: Some(false),
             interleaved: None,
             reasoning_profile: None,
+            ai_tools: Vec::new(),
             input_modalities: vec![
                 String::from("text"),
                 String::from("image"),
@@ -477,5 +773,111 @@ mod tests {
         let summary = resolve_credential_source_summary(&options, &capabilities);
 
         assert!(summary.contains("DEEPSEEK_API_KEY"));
+    }
+
+    /// Infers provider-native web search for APIs that expose dedicated server-side search tools.
+    /// 会为具备专用服务端搜索工具的接口族推导 Provider 原生网页搜索能力。
+    #[test]
+    fn resolve_model_capabilities_infers_native_web_search_for_openai_responses() {
+        let mut definition = test_provider_definition();
+        definition.id = String::from("openai");
+        definition.runtime = ProviderRuntimeKind::OpenAi;
+
+        let capabilities = resolve_model_capabilities(&definition, None);
+        let web_search = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::WebSearch)
+            .expect("OpenAI Responses should infer web search");
+
+        assert!(web_search.native_provider_tool);
+        assert_eq!(
+            web_search.native_tool_type.as_deref(),
+            Some("web_search_preview")
+        );
+    }
+
+    /// Does not infer provider-native hosted tools for third-party compatible providers without explicit catalog declarations.
+    /// 对未显式声明目录能力的三方兼容供应商，不会自动推导 Provider 原生 Hosted Tool。
+    #[test]
+    fn resolve_model_capabilities_does_not_infer_native_web_search_for_compatible_proxy() {
+        let mut definition = test_provider_definition();
+        definition.id = String::from("vivgrid");
+        definition.runtime = ProviderRuntimeKind::OpenAi;
+
+        let capabilities = resolve_model_capabilities(&definition, None);
+
+        assert!(
+            capabilities
+                .ai_tools
+                .iter()
+                .all(|tool| tool.kind != AiToolKind::WebSearch)
+        );
+    }
+
+    /// Configures host web-search fallback when the active model lacks provider-native search.
+    /// 当激活模型缺少 Provider 原生搜索时，配置宿主侧网页搜索回退。
+    #[test]
+    fn ai_tool_configuration_adds_host_web_search_for_provider_chain() {
+        let definition = test_provider_definition();
+        let mut capabilities = resolve_model_capabilities(&definition, None);
+        let configuration = PersistedAiToolConfiguration {
+            web_search: PersistedWebSearchConfiguration {
+                mode: WebSearchRoutingMode::ThirdPartyOnly,
+                providers: vec![PersistedWebSearchProviderEntry {
+                    id: String::from("brave"),
+                    name: String::from("Brave Search"),
+                    kind: WebSearchProviderKind::Brave,
+                    enabled: true,
+                    api_key: String::from("token"),
+                    base_url: String::new(),
+                    model: String::new(),
+                    region: String::new(),
+                    max_results: 5,
+                }],
+                dispatch_mode: crate::provider_config::WebSearchProviderDispatchMode::default(),
+            },
+        };
+
+        apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
+
+        let web_search = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::WebSearch)
+            .expect("configured provider chain should expose host web search");
+        assert_eq!(web_search.policy, AiToolPolicy::ForceHost);
+        assert_eq!(
+            web_search.fallback_tool_id.as_deref(),
+            Some(WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID)
+        );
+        assert!(!web_search.native_provider_tool);
+    }
+
+    /// Keeps provider-native search as the fallback when provider-first mode has no usable external provider.
+    /// 当外部供应商链不可用时，在外部优先模式下保留 Provider 原生搜索作为兜底。
+    #[test]
+    fn ai_tool_configuration_uses_native_fallback_when_provider_chain_is_missing() {
+        let mut definition = test_provider_definition();
+        definition.id = String::from("openai");
+        definition.runtime = ProviderRuntimeKind::OpenAi;
+        let mut capabilities = resolve_model_capabilities(&definition, None);
+        let configuration = PersistedAiToolConfiguration {
+            web_search: PersistedWebSearchConfiguration {
+                mode: WebSearchRoutingMode::ThirdPartyFirst,
+                providers: Vec::new(),
+                dispatch_mode: crate::provider_config::WebSearchProviderDispatchMode::default(),
+            },
+        };
+
+        apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
+
+        let web_search = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::WebSearch)
+            .expect("native web search should still be available");
+        assert_eq!(web_search.policy, AiToolPolicy::ForceNative);
+        assert!(web_search.fallback_tool_id.is_none());
     }
 }

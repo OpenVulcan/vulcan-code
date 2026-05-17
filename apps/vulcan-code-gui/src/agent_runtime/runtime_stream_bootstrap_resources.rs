@@ -7,7 +7,8 @@ use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::vulcan_tools_bridge::build_vulcan_tools_manager;
+use crate::provider_config::PersistedAiToolConfiguration;
+use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use std::path::PathBuf;
 use std::sync::Arc;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
@@ -46,6 +47,7 @@ pub(crate) struct RuntimeBootstrapResources {
 pub(crate) fn resolve_runtime_bootstrap_resources(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    ai_tool_configuration: PersistedAiToolConfiguration,
     preparation: &ExecutionPreparation,
 ) -> RuntimeBootstrapResources {
     let active_agent = foundation.active_agent_definition().cloned();
@@ -63,6 +65,8 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
         foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
+        ai_tool_configuration,
+        resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),
     );
     let resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)

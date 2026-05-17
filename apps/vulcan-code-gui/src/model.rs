@@ -2,6 +2,7 @@
 //! AI 编程桌面骨架的领域模型定义。
 
 use crate::conversation_protocol::SessionConversationState;
+use crate::provider_config::ReasoningEffortLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -658,6 +659,88 @@ pub enum PendingSessionPromptSource {
     DelegateCompletion,
 }
 
+/// Runtime controls captured when a queued prompt is authored or inserted.
+/// 在排队提示词创建或插入时捕获的运行控制参数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PendingPromptWebSearchOverride {
+    /// Follow the globally configured web-search routing mode.
+    /// 跟随全局配置的网页搜索路由模式。
+    FollowGlobal,
+    /// Force provider-native web search only.
+    /// 强制仅使用模型原生网页搜索。
+    NativeOnly,
+    /// Force the configured third-party search chain only.
+    /// 强制仅使用已配置的第三方搜索链。
+    ThirdPartyOnly,
+    /// Disable unified web search for this queued prompt.
+    /// 为当前排队提示词关闭统一网页搜索。
+    Disabled,
+    /// Force one specific third-party provider entry.
+    /// 强制使用单个指定的第三方搜索条目。
+    SpecificProvider,
+}
+
+impl Default for PendingPromptWebSearchOverride {
+    /// Returns the default queued web-search override behavior.
+    /// 返回排队提示词默认使用的网页搜索覆盖行为。
+    fn default() -> Self {
+        Self::FollowGlobal
+    }
+}
+
+/// Runtime controls captured when a queued prompt is authored or inserted.
+/// 在排队提示词创建或插入时捕获的运行控制参数。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingPromptRuntimeOptions {
+    /// Shared reasoning-effort preset that must travel with the queued prompt.
+    /// 必须随排队提示词一起传递的共享推理档位预设。
+    pub reasoning_effort: ReasoningEffortLevel,
+    /// Optional sampling temperature override captured from the workbench controls.
+    /// 从工作台控制区捕获的可选采样温度覆盖值。
+    pub temperature: Option<f32>,
+    /// Queued web-search override mode captured from the workbench controls.
+    /// 从工作台控制区捕获的排队网页搜索覆盖模式。
+    #[serde(default)]
+    pub web_search_override: PendingPromptWebSearchOverride,
+    /// Optional third-party provider id captured when one specific search entry is selected.
+    /// 当选中单个指定搜索条目时捕获的可选第三方供应商标识。
+    #[serde(default)]
+    pub web_search_provider_id: Option<String>,
+}
+
+impl Default for PendingPromptRuntimeOptions {
+    /// Returns the neutral runtime option snapshot used when persisted queue entries predate explicit snapshots.
+    /// 返回早于显式快照的持久化队列项所使用的中性运行参数快照。
+    fn default() -> Self {
+        Self {
+            reasoning_effort: ReasoningEffortLevel::Medium,
+            temperature: None,
+            web_search_override: PendingPromptWebSearchOverride::default(),
+            web_search_provider_id: None,
+        }
+    }
+}
+
+/// Provider/model identity captured when a queued prompt is authored or inserted.
+/// 在排队提示词创建或插入时捕获的供应商与模型身份。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingPromptModelReference {
+    /// Stable provider identifier used to resolve credentials and transport configuration.
+    /// 用于解析凭据与传输配置的稳定供应商标识。
+    pub provider_id: String,
+    /// Stable model identifier used by the provider request.
+    /// Provider 请求使用的稳定模型标识。
+    pub model_id: String,
+    /// Human-readable provider label retained for queue diagnostics.
+    /// 为队列诊断保留的人类可读供应商标签。
+    #[serde(default)]
+    pub provider_label: String,
+    /// Human-readable model label retained for queue diagnostics.
+    /// 为队列诊断保留的人类可读模型标签。
+    #[serde(default)]
+    pub model_name: String,
+}
+
 /// One persisted pending session prompt retained for queued follow-ups and delegated-task callbacks.
 /// 为排队跟进与委派任务回调保留的一条持久化待发送会话提示词。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -675,6 +758,14 @@ pub struct PendingSessionPromptEntry {
     /// 应与排队提示词文本一起回放的结构化附件集合。
     #[serde(default)]
     pub attachments: Vec<ConversationAttachment>,
+    /// Optional provider/model identity locked when the prompt entered a queue.
+    /// 提示词进入队列时锁定的可选供应商与模型身份。
+    #[serde(default)]
+    pub model_reference: Option<PendingPromptModelReference>,
+    /// Runtime controls locked when the prompt entered a queue.
+    /// 提示词进入队列时锁定的运行控制参数。
+    #[serde(default)]
+    pub runtime_options: PendingPromptRuntimeOptions,
     /// Stable source kind attached to the queued prompt.
     /// 附着在该排队提示词上的稳定来源类型。
     pub source: PendingSessionPromptSource,
@@ -728,6 +819,14 @@ pub struct PendingPromptPanelEntry {
     /// 在该行被插入或移除前一直保留的结构化附件集合。
     #[serde(default)]
     pub attachments: Vec<ConversationAttachment>,
+    /// Optional provider/model identity locked when the row entered the visible queue.
+    /// 可见队列项进入队列时锁定的可选供应商与模型身份。
+    #[serde(default)]
+    pub model_reference: Option<PendingPromptModelReference>,
+    /// Runtime controls locked when the row entered the visible queue.
+    /// 可见队列项进入队列时锁定的运行控制参数。
+    #[serde(default)]
+    pub runtime_options: PendingPromptRuntimeOptions,
     /// Stable insertion state used to hide controls after the prompt has entered the internal system queue.
     /// 提示词进入内部系统队列后用于隐藏控制按钮的稳定插入状态。
     #[serde(default)]
@@ -753,6 +852,16 @@ pub struct SessionTranscriptUiState {
     /// 随会话一起持久化保存的可见提示词面板队列，使用户分批插入项可以独立于内部系统队列跨重载保留。
     #[serde(default)]
     pub pending_prompt_panel_queue: Vec<PendingPromptPanelEntry>,
+}
+
+impl SessionTranscriptUiState {
+    /// Returns whether the transcript UI state carries no persisted user-visible state.
+    /// 返回该转录界面状态是否不包含任何需要持久化的用户可见状态。
+    pub fn is_empty(&self) -> bool {
+        self.collapsed_message_ids.is_empty()
+            && self.pending_prompt_queue.is_empty()
+            && self.pending_prompt_panel_queue.is_empty()
+    }
 }
 
 /// Session-scoped runtime state required for context reconstruction and agent tracing.

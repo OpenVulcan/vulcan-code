@@ -5,12 +5,13 @@ use crate::agent_runtime::provider_reasoning::{
     ProviderRuntimeReasoningResolution, resolve_provider_runtime_reasoning,
 };
 use crate::provider_capabilities::{
-    ResolvedModelCapabilities, resolve_credential_source_summary, resolve_model_capabilities,
-    resolve_provider_api_key,
+    ResolvedModelCapabilities, apply_ai_tool_runtime_configuration,
+    resolve_credential_source_summary, resolve_model_capabilities, resolve_provider_api_key,
 };
 use crate::provider_config::{
-    self, ModelInterleavedCapability, PersistedProviderOptions, ProviderApiFamily,
-    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
+    self, ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
+    ProviderApiFamily, ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind,
+    ReasoningEffortLevel,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -91,6 +92,7 @@ impl ProviderRuntimeBlueprint {
         match self.runtime_kind {
             ProviderRuntimeKind::OpenAiCompatible => "openai-compatible",
             ProviderRuntimeKind::OpenAi => "openai",
+            ProviderRuntimeKind::OpenAiResponsesCompatible => "openai-responses-compatible",
             ProviderRuntimeKind::Anthropic => "anthropic",
             ProviderRuntimeKind::AzureOpenAi => "azure-openai",
             ProviderRuntimeKind::GoogleGemini => "google-gemini",
@@ -125,11 +127,12 @@ impl ProviderRuntimeBlueprint {
     }
 }
 
-/// Resolves the active provider/model pair into one validated runtime blueprint.
-/// 将当前激活的 Provider/Model 对解析为一份通过校验的运行时蓝图。
-pub fn resolve_active_provider_blueprint(
+/// Resolves the active provider/model pair into one validated runtime blueprint using one explicit AI-tool configuration snapshot.
+/// 使用一份显式 AI 工具配置快照，将当前激活的 Provider/Model 对解析为一份通过校验的运行时蓝图。
+pub fn resolve_active_provider_blueprint_with_ai_tools(
     config: &ProviderConfigurationFile,
     requested_reasoning_effort: ReasoningEffortLevel,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
 ) -> Result<ProviderRuntimeBlueprint, String> {
     let active_model = config
         .model
@@ -150,7 +153,9 @@ pub fn resolve_active_provider_blueprint(
     let selected_model = provider_config::effective_model_choices(provider_id, config)
         .into_iter()
         .find(|model| model.id == model_id);
-    let capabilities = resolve_model_capabilities(definition, selected_model.as_ref());
+    let effective_runtime = definition.effective_runtime_for_model(model_id);
+    let mut capabilities = resolve_model_capabilities(definition, selected_model.as_ref());
+    apply_ai_tool_runtime_configuration(&mut capabilities, ai_tool_configuration);
     validate_required_provider_fields(
         definition.input_fields().as_slice(),
         options,
@@ -169,7 +174,7 @@ pub fn resolve_active_provider_blueprint(
     let credential_source = resolve_credential_source_summary(options, &capabilities);
     let provider_reasoning_profile = definition.reasoning_profile.clone();
     let reasoning = resolve_provider_runtime_reasoning(
-        definition.runtime,
+        effective_runtime,
         provider_id,
         model_id,
         model_supports_reasoning,
@@ -181,8 +186,8 @@ pub fn resolve_active_provider_blueprint(
     Ok(ProviderRuntimeBlueprint {
         provider_id: provider_id.to_string(),
         provider_name: definition.name.clone(),
-        runtime_kind: definition.runtime,
-        runtime_label: definition.runtime.label().to_string(),
+        runtime_kind: effective_runtime,
+        runtime_label: effective_runtime.label().to_string(),
         model_id: model_id.to_string(),
         model_name,
         base_url: definition.resolved_base_url(options),
@@ -231,7 +236,7 @@ fn validate_required_provider_fields(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_active_provider_blueprint;
+    use super::resolve_active_provider_blueprint_with_ai_tools;
     use crate::provider_config::{
         ModelInterleavedCapability, PersistedProviderEntry, PersistedProviderOptions,
         ProviderConfigurationFile, ReasoningEffortLevel,
@@ -260,8 +265,12 @@ mod tests {
             ..ProviderConfigurationFile::default()
         };
 
-        let blueprint = resolve_active_provider_blueprint(&config, ReasoningEffortLevel::Off)
-            .expect("provider blueprint should resolve");
+        let blueprint = resolve_active_provider_blueprint_with_ai_tools(
+            &config,
+            ReasoningEffortLevel::Off,
+            &config.ai_tools,
+        )
+        .expect("provider blueprint should resolve");
 
         match blueprint.interleaved_reasoning {
             Some(ModelInterleavedCapability::Field(field)) => {

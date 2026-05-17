@@ -969,6 +969,53 @@ mod tests {
         assert_eq!(payload["tools"][0]["parameters"]["required"][0], "path");
     }
 
+    /// Verifies OpenAI Responses preserves provider-native tools while appending host function tools.
+    /// 验证 OpenAI Responses 会保留 Provider 原生工具，并继续追加宿主函数工具。
+    #[test]
+    fn request_payload_preserves_native_tools_and_appends_function_tools() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-5"),
+                system_prompt: String::new(),
+                prompt: String::from("搜索最新信息"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "tools": [{ "type": "web_search_preview" }]
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("搜索最新信息"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_responses_request_payload(
+            "gpt-5",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({ "type": "object", "properties": {} }),
+            }],
+        )
+        .expect("payload should build");
+
+        assert_eq!(payload["tools"][0]["type"], "web_search_preview");
+        assert_eq!(payload["tools"][1]["type"], "function");
+        assert_eq!(payload["tools"][1]["name"], "read_file");
+    }
+
     /// Verifies OpenAI Responses user input items carry staged image attachments as `input_image` parts.
     /// 验证 OpenAI Responses 用户输入项会把已暂存图片附件编码为 `input_image` Part。
     #[test]

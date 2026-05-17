@@ -1,6 +1,7 @@
 //! Provider request preview Markdown renderer used by the execution runtime.
 //! 供执行运行时使用的 Provider 请求预览 Markdown 渲染模块。
 
+use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_runtime_dispatch::DEFAULT_RUNTIME_MAX_TURNS_LIMIT;
 use serde_json::{Value, json};
@@ -38,6 +39,7 @@ pub(crate) fn build_provider_request_preview_markdown(
         .unwrap_or_else(|| String::from("（无附加请求头）"));
     let continuation_markdown =
         render_provider_continuation_markdown(&request_snapshot.continuation);
+    let ai_tool_plan_markdown = render_ai_tool_plan_markdown(preparation);
     let context_budget_label = preparation
         .context_budget
         .as_ref()
@@ -88,6 +90,8 @@ pub(crate) fn build_provider_request_preview_markdown(
             "{}\n\n",
             "## Effective Outgoing Prompt\n",
             "{}\n\n",
+            "## AI Specialized Tools\n",
+            "{}\n\n",
             "## Tool Schemas\n",
             "{}\n\n",
             "## Request Headers\n",
@@ -119,6 +123,7 @@ pub(crate) fn build_provider_request_preview_markdown(
         continuation_markdown,
         outgoing_history_markdown,
         render_text_code_fence(&request_snapshot.prompt),
+        ai_tool_plan_markdown,
         tool_rows,
         request_headers_markdown,
         extra_body_markdown,
@@ -289,12 +294,83 @@ fn render_json_code_fence(value: &Value) -> String {
     format!("````json\n{}\n````", pretty)
 }
 
+/// Renders the AI-specialized tool routing plan for the active provider/model pair.
+/// 渲染当前供应商/模型组合的 AI 专用工具路由计划。
+fn render_ai_tool_plan_markdown(preparation: &ExecutionPreparation) -> String {
+    let plan = resolve_ai_tool_plan(&preparation.model_blueprint);
+    if plan.is_empty() {
+        return String::from("（当前模型未解析到 AI 专用工具能力）");
+    }
+
+    plan.decisions
+        .iter()
+        .map(|decision| {
+            let route_label = match decision.route {
+                AiToolRouteKind::ProviderNative => "Provider 原生",
+                AiToolRouteKind::HostFallback => "宿主 fallback",
+                AiToolRouteKind::Disabled => "禁用",
+            };
+            let native_label = decision
+                .native_tool_type
+                .as_deref()
+                .map(|value| format!("`{value}`"))
+                .unwrap_or_else(|| String::from("（无）"));
+            let native_patch_label = if decision.native_request_patch.is_some() {
+                "已声明"
+            } else {
+                "未声明"
+            };
+            let fallback_label = decision
+                .fallback_tool_id
+                .as_deref()
+                .map(|value| format!("`{value}`"))
+                .unwrap_or_else(|| String::from("（无）"));
+            let approval_label = if decision.requires_approval {
+                "需要确认"
+            } else {
+                "无需额外确认"
+            };
+            let citation_label = if decision.citation_support {
+                "支持引用"
+            } else {
+                "未声明引用"
+            };
+
+            format!(
+                concat!(
+                    "### `{}` · {}\n",
+                    "- 路由：{}\n",
+                    "- 原生类型：{}\n",
+                    "- 原生请求补丁：{}\n",
+                    "- fallback：{}\n",
+                    "- 权限：{}\n",
+                    "- 引用：{}\n",
+                    "- 来源：{}\n",
+                    "- 原因：{}"
+                ),
+                decision.kind.key(),
+                decision.kind.label(),
+                route_label,
+                native_label,
+                native_patch_label,
+                fallback_label,
+                approval_label,
+                citation_label,
+                decision.source_label,
+                decision.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_provider_request_preview_markdown;
     use crate::agent_runtime::execution_models::ExecutionPreparation;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
-    use crate::provider_config::ProviderRuntimeKind;
+    use crate::provider_capabilities::{ResolvedAiToolCapability, ResolvedModelCapabilities};
+    use crate::provider_config::{AiToolKind, AiToolPolicy, ProviderRuntimeKind};
     use serde_json::Value;
     use std::collections::BTreeMap;
     use uuid::Uuid;
@@ -327,7 +403,21 @@ mod tests {
                 extra_headers: BTreeMap::new(),
                 extra_body: Value::Object(Default::default()),
                 reasoning: Default::default(),
-                capabilities: Default::default(),
+                capabilities: ResolvedModelCapabilities {
+                    ai_tools: vec![ResolvedAiToolCapability {
+                        kind: AiToolKind::WebSearch,
+                        policy: AiToolPolicy::Auto,
+                        native_provider_tool: true,
+                        native_tool_type: Some(String::from("web_search_20250305")),
+                        native_request_patch: None,
+                        fallback_tool_id: None,
+                        requires_approval: false,
+                        result_modalities: vec![String::from("text")],
+                        citation_support: true,
+                        source_label: String::from("接口类型默认"),
+                    }],
+                    ..Default::default()
+                },
                 interleaved_reasoning: None,
             },
             prompt_preview: String::from("检查请求预览"),
@@ -362,5 +452,8 @@ mod tests {
 
         assert!(markdown.contains("- 运行时：`Anthropic` · kind=`anthropic`"));
         assert!(markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages`"));
+        assert!(markdown.contains("## AI Specialized Tools"));
+        assert!(markdown.contains("### `web_search` · 网页搜索"));
+        assert!(markdown.contains("- 路由：Provider 原生"));
     }
 }

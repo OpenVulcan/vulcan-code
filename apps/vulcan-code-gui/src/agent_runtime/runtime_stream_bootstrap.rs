@@ -13,6 +13,7 @@ use crate::agent_runtime::runtime_stream_bootstrap_resources::{
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
+use crate::provider_config::PersistedAiToolConfiguration;
 use std::sync::Arc;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
@@ -70,6 +71,7 @@ pub(crate) struct RuntimeStreamBootstrap {
 pub(crate) async fn bootstrap_runtime_stream(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    ai_tool_configuration: PersistedAiToolConfiguration,
     request: &ExecutionPreparationRequest,
     mut preparation: ExecutionPreparation,
 ) -> RuntimeStreamBootstrap {
@@ -82,7 +84,12 @@ pub(crate) async fn bootstrap_runtime_stream(
         discovery_rows,
         discovery_errors,
         mut warnings,
-    } = resolve_runtime_bootstrap_resources(foundation, luaskills_runtime, &preparation);
+    } = resolve_runtime_bootstrap_resources(
+        foundation,
+        luaskills_runtime,
+        ai_tool_configuration,
+        &preparation,
+    );
     let RuntimeBootstrapCore {
         system_preamble,
         request_history,

@@ -32,7 +32,9 @@ use crate::composer_parts::{
     build_composer_input_parts, composer_parts_have_submittable_content, composer_parts_label_text,
     composer_parts_preview_text, composer_parts_to_user_payload, composer_parts_transcript_body,
 };
-use crate::context_budget::{ContextBudgetSnapshot, build_session_context_budget_snapshot};
+use crate::context_budget::{
+    ContextBudgetSnapshot, ContextCompactionPolicy, build_projected_session_context_budget_snapshot,
+};
 use crate::conversation_protocol::{
     SessionConversationRecord, SessionConversationState, append_assistant_text_message,
     append_record, append_record_body_delta, append_user_text_message,
@@ -48,19 +50,25 @@ use crate::luaskills_runtime::{
 };
 use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingPromptPanelEntry,
-    PendingPromptPanelEntryState, PendingSessionPromptEntry, PendingSessionPromptSource,
+    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingPromptModelReference,
+    PendingPromptPanelEntry, PendingPromptPanelEntryState, PendingPromptRuntimeOptions,
+    PendingPromptWebSearchOverride, PendingSessionPromptEntry, PendingSessionPromptSource,
     SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
-use crate::provider_capabilities::resolve_model_capabilities;
+use crate::provider_capabilities::{
+    apply_ai_tool_runtime_configuration, resolve_model_capabilities,
+};
 use crate::provider_config::{
-    self, ModelChoice, PersistedControllerConfiguration, PersistedMcpOAuthConfig,
-    PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedProviderEntry,
-    PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
-    ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
+    self, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
+    PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
+    PersistedProviderEntry,
+    PersistedProviderOptions, PersistedWebSearchProviderEntry, ProviderChoice,
+    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
+    ReasoningSelectionOption, WebSearchProviderDispatchMode, WebSearchProviderKind,
+    WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
@@ -524,6 +532,10 @@ const WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH: f32 = 66.0;
 /// Shared fixed width used by the inline workbench model trigger surface.
 /// 工作台内联模型触发表面使用的共享固定宽度。
 const WORKBENCH_MODEL_SELECTOR_WIDTH: f32 = 244.0;
+
+/// Shared fixed width used by the compact workbench web-search selector placed beside the model trigger.
+/// 放置在模型触发器旁侧的紧凑工作台网页搜索选择器使用的共享固定宽度。
+const WORKBENCH_WEB_SEARCH_SELECTOR_WIDTH: f32 = 164.0;
 
 /// Shared fixed width used by the compact reasoning-effort selector placed before the send button.
 /// 放置在发送按钮之前的紧凑推理级别选择器使用的共享固定宽度。
@@ -1416,6 +1428,12 @@ struct ComposerUndoSnapshot {
     /// Internal scroll offset mirrored from the composer editor at capture time.
     /// 捕获快照时从提示词编辑器镜像得到的内部滚动偏移量。
     scroll_offset: f32,
+    /// Optional attachment lease scope retained by this undo snapshot.
+    /// 该撤销快照持有的可选附件租约作用域。
+    attachment_ref_scope: Option<String>,
+    /// Optional workspace path that owns the retained attachment lease scope.
+    /// 持有所保留附件租约作用域的可选工作区路径。
+    attachment_workspace_path: Option<String>,
 }
 
 /// Confirm action carried by the reusable blocking notice modal.
@@ -1947,6 +1965,9 @@ pub struct VulcanWorkbench {
     /// Optional provider-configuration feedback message shown near the configuration widgets.
     /// 展示在配置控件附近的供应商配置反馈消息。
     provider_notice: String,
+    /// Optional API-native tool configuration feedback message shown near the AI-tool settings widgets.
+    /// 展示在 API 原生工具设置控件附近的反馈消息。
+    ai_tool_notice: String,
     /// Optional MCP-configuration feedback message shown near the MCP settings widgets.
     /// 展示在 MCP 设置控件附近的 MCP 配置反馈消息。
     mcp_notice: String,
@@ -2012,6 +2033,12 @@ pub struct VulcanWorkbench {
     /// Effective workbench reasoning effort currently supported by the active model and sent to execution requests.
     /// 当前被激活模型真实支持并会写入执行请求的工作台生效思考档位。
     workbench_reasoning_effort: WorkbenchReasoningEffort,
+    /// Workbench-scoped web-search override mode applied to newly queued prompts and direct sends.
+    /// 应用于新建排队提示词与直接发送的工作台网页搜索覆盖模式。
+    workbench_web_search_override: PendingPromptWebSearchOverride,
+    /// Optional third-party provider identifier used when one specific web-search entry is selected in the workbench.
+    /// 当工作台选中单个指定网页搜索条目时使用的可选第三方供应商标识。
+    workbench_web_search_provider_id: Option<String>,
     /// Whether the in-app workbench model-picker modal is currently visible.
     /// 工作台内嵌模型选择弹窗当前是否可见。
     workbench_model_picker_open: bool,
@@ -2682,6 +2709,32 @@ impl std::fmt::Display for WorkbenchModelChoice {
     }
 }
 
+/// Workbench-scoped web-search override choice shown beside the composer controls.
+/// 显示在提示词控制区旁侧的工作台网页搜索覆盖选项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkbenchWebSearchChoice {
+    /// Queued override mode represented by the current option.
+    /// 当前选项对应的排队覆盖模式。
+    override_mode: PendingPromptWebSearchOverride,
+    /// Optional third-party provider identifier used when the option targets one specific search entry.
+    /// 当选项指向单个搜索条目时使用的可选第三方供应商标识。
+    provider_id: Option<String>,
+    /// Human-readable visible label rendered inside the compact picker surface.
+    /// 渲染在紧凑选择器界面中的人类可读可见标签。
+    label: String,
+    /// Human-readable compact detail text used by the view layer for helper copy.
+    /// 供视图层展示辅助说明的人类可读紧凑详情文本。
+    detail: String,
+}
+
+impl std::fmt::Display for WorkbenchWebSearchChoice {
+    /// Renders the visible label shown inside the workbench web-search selector.
+    /// 渲染显示在工作台网页搜索选择器内部的可见标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
 /// Shared workbench reasoning-effort alias reused by the application state and compact picker surfaces.
 /// 供应用状态与紧凑选择器界面复用的共享工作台推理档位别名。
 type WorkbenchReasoningEffort = ReasoningEffortLevel;
@@ -3334,6 +3387,51 @@ enum Message {
     /// Selects the active global model from the current provider model list.
     /// 从当前供应商模型列表中选择全局激活模型。
     ActiveModelSelected(ModelChoice),
+    /// Selects the global web-search routing mode.
+    /// 选择全局网页搜索路由模式。
+    WebSearchRoutingModeSelected(WebSearchRoutingMode),
+    /// Selects the third-party web-search dispatch mode.
+    /// 选择第三方网页搜索调度模式。
+    WebSearchDispatchModeSelected(WebSearchProviderDispatchMode),
+    /// Adds one external web-search provider to the configured fallback chain.
+    /// 向已配置回退链新增一个外部网页搜索供应商。
+    AddWebSearchProvider(WebSearchProviderKind),
+    /// Removes one external web-search provider from the configured fallback chain.
+    /// 从已配置回退链移除一个外部网页搜索供应商。
+    RemoveWebSearchProvider(String),
+    /// Moves one external web-search provider upward in priority.
+    /// 将一个外部网页搜索供应商向上移动以提高优先级。
+    MoveWebSearchProviderUp(String),
+    /// Moves one external web-search provider downward in priority.
+    /// 将一个外部网页搜索供应商向下移动以降低优先级。
+    MoveWebSearchProviderDown(String),
+    /// Toggles one external web-search provider entry.
+    /// 切换单个外部网页搜索供应商条目的启用状态。
+    WebSearchProviderEnabledToggled(String, bool),
+    /// Updates one external web-search provider display name.
+    /// 更新单个外部网页搜索供应商显示名称。
+    WebSearchProviderNameChanged(String, String),
+    /// Updates one external web-search provider API key.
+    /// 更新单个外部网页搜索供应商 API Key。
+    WebSearchProviderApiKeyChanged(String, String),
+    /// Updates one external web-search provider base URL.
+    /// 更新单个外部网页搜索供应商接口地址。
+    WebSearchProviderBaseUrlChanged(String, String),
+    /// Updates one external web-search provider model field.
+    /// 更新单个外部网页搜索供应商模型字段。
+    WebSearchProviderModelChanged(String, String),
+    /// Updates one external web-search provider region field.
+    /// 更新单个外部网页搜索供应商区域字段。
+    WebSearchProviderRegionChanged(String, String),
+    /// Updates one external web-search provider max-results field.
+    /// 更新单个外部网页搜索供应商最大结果数量字段。
+    WebSearchProviderMaxResultsChanged(String, String),
+    /// Persists API-native tool configuration.
+    /// 持久化 API 原生工具配置。
+    SaveAiToolConfiguration,
+    /// Selects one workbench-scoped web-search override option for direct sends and queued prompts.
+    /// 为直接发送与排队提示词选择一个工作台作用域网页搜索覆盖选项。
+    WorkbenchWebSearchSelected(WorkbenchWebSearchChoice),
     /// Selects one globally configured model from the in-app workbench model picker.
     /// 从工作台内嵌模型选择器中选中一个全局已配置模型。
     WorkbenchModelSelected(WorkbenchModelChoice),
@@ -4180,6 +4278,9 @@ impl VulcanWorkbench {
             selected_provider,
             provider_form,
             provider_notice,
+            ai_tool_notice: String::from(
+                "API 原生工具配置已载入；当前已统一 web-search 的原生能力与第三方搜索链调度。",
+            ),
             mcp_notice: if selected_mcp_server_id.is_some() {
                 String::from("已载入 MCP 服务器配置。")
             } else {
@@ -4207,6 +4308,8 @@ impl VulcanWorkbench {
             execution_mode: initial_execution_mode,
             workbench_reasoning_effort_preference: initial_workbench_reasoning_effort,
             workbench_reasoning_effort: initial_workbench_reasoning_effort,
+            workbench_web_search_override: PendingPromptWebSearchOverride::FollowGlobal,
+            workbench_web_search_provider_id: None,
             workbench_model_picker_open: false,
             workbench_model_picker_filter: String::new(),
             workbench_model_picker_highlighted_index: None,
@@ -4236,14 +4339,183 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Builds the transient lease scope used by the currently selected composer attachment strip.
+    /// 构建当前选中输入框附件条使用的瞬时租约作用域。
+    fn composer_attachment_ref_scope(&self) -> String {
+        self.selected_session()
+            .map(|session| format!("composer:{}", session.id))
+            .unwrap_or_else(|| String::from("composer:workspace"))
+    }
+
+    /// Builds one unique transient lease scope for a composer undo snapshot.
+    /// 为输入框撤销快照构建一个唯一瞬时租约作用域。
+    fn composer_undo_attachment_ref_scope() -> String {
+        format!(
+            "composer-undo:{}:{}",
+            current_unix_millis_text(),
+            Uuid::new_v4()
+        )
+    }
+
+    /// Builds the transient lease scope for one visible pending-prompt panel entry.
+    /// 构建一条可见待发送面板项的瞬时租约作用域。
+    fn pending_panel_attachment_ref_scope(session_id: SessionId, entry_id: &str) -> String {
+        format!("pending-panel:{session_id}:{entry_id}")
+    }
+
+    /// Builds the transient lease scope for one internal pending-prompt queue entry.
+    /// 构建一条内部待发送队列项的瞬时租约作用域。
+    fn pending_internal_attachment_ref_scope(session_id: SessionId, entry_id: &str) -> String {
+        format!("pending-internal:{session_id}:{entry_id}")
+    }
+
+    /// Builds the transient lease scope for one prompt entry that is being dispatched immediately.
+    /// 构建一条正在立即派发的提示词项的瞬时租约作用域。
+    fn prompt_dispatch_attachment_ref_scope(session_id: SessionId, entry_id: &str) -> String {
+        format!("dispatch:{session_id}:{entry_id}")
+    }
+
+    /// Adds one staging lease scope for a batch of attachments before the caller mutates UI ownership.
+    /// 在调用方改变界面所有权前，为一批附件增加一个暂存租约作用域。
+    fn acquire_staged_attachment_refs(
+        &mut self,
+        workspace_path: &str,
+        scope: &str,
+        attachments: &[ConversationAttachment],
+        label: &str,
+    ) -> Result<(), String> {
+        if attachments.is_empty() {
+            return Ok(());
+        }
+        crate::attachment_asset_index::acquire_staged_attachment_ref(
+            workspace_path,
+            scope,
+            attachments,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            let message = format!("{label} 附件租约 `{scope}` 记录失败：{error}");
+            self.push_activity(ActivityLevel::Warning, "附件租约记录失败", message.clone());
+            message
+        })
+    }
+
+    /// Releases one staging lease scope for a batch of attachments and reports best-effort failures.
+    /// 为一批附件释放一个暂存租约作用域，并以尽力方式上报失败。
+    fn release_staged_attachment_refs(
+        &mut self,
+        workspace_path: &str,
+        scope: &str,
+        attachments: &[ConversationAttachment],
+        label: &str,
+    ) {
+        if attachments.is_empty() {
+            return;
+        }
+        if let Err(error) = crate::attachment_asset_index::release_staged_attachment_ref(
+            workspace_path,
+            scope,
+            attachments,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "附件租约释放失败",
+                format!("{label} 附件租约 `{scope}` 释放失败：{error}"),
+            );
+        }
+    }
+
+    /// Builds a stable key used to compare staged attachment lease ownership across composer replacements.
+    /// 构建用于在输入框替换期间比较已暂存附件租约归属的稳定键。
+    fn staged_attachment_lease_key(attachment: &ConversationAttachment) -> String {
+        if let Some(asset_id) = attachment
+            .asset_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return format!("asset|{asset_id}");
+        }
+        format!(
+            "identity|{}",
+            Self::composer_attachment_identity_key(attachment)
+        )
+    }
+
+    /// Returns only attachments whose current scope can be released because the replacement set no longer retains them.
+    /// 仅返回可释放当前作用域的附件，因为替换后的集合已经不再持有它们。
+    fn staged_attachments_released_after_replacement(
+        release_candidates: &[ConversationAttachment],
+        retained_attachments: &[ConversationAttachment],
+    ) -> Vec<ConversationAttachment> {
+        let retained_keys = retained_attachments
+            .iter()
+            .map(Self::staged_attachment_lease_key)
+            .collect::<BTreeSet<_>>();
+        release_candidates
+            .iter()
+            .filter(|attachment| {
+                !retained_keys.contains(&Self::staged_attachment_lease_key(attachment))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Releases all undo snapshot attachment leases retained by the composer history.
+    /// 释放输入框撤销历史持有的全部附件租约。
+    fn release_all_composer_undo_attachment_refs(&mut self) {
+        let snapshots = self.composer_undo_history.drain(..).collect::<Vec<_>>();
+        for snapshot in snapshots {
+            if let (Some(scope), Some(workspace_path)) = (
+                snapshot.attachment_ref_scope.as_deref(),
+                snapshot.attachment_workspace_path.as_deref(),
+            ) {
+                self.release_staged_attachment_refs(
+                    workspace_path,
+                    scope,
+                    &snapshot.attachments,
+                    "输入框撤销",
+                );
+            }
+        }
+    }
+
+    /// Releases transient dispatch/internal queue leases for one prompt entry.
+    /// 释放一条提示词项的瞬时派发与内部队列租约。
+    fn release_prompt_entry_transient_attachment_refs(
+        &mut self,
+        session_id: SessionId,
+        prompt_entry: &PendingSessionPromptEntry,
+    ) {
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        let internal_scope =
+            Self::pending_internal_attachment_ref_scope(session_id, &prompt_entry.id);
+        let dispatch_scope =
+            Self::prompt_dispatch_attachment_ref_scope(session_id, &prompt_entry.id);
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &internal_scope,
+            &prompt_entry.attachments,
+            "内部待发送队列",
+        );
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &dispatch_scope,
+            &prompt_entry.attachments,
+            "提示词派发",
+        );
+    }
+
     /// Captures the current composer contents into one undo snapshot before a mutating action.
     /// 在某个会修改提示词内容的动作之前，将当前提示词内容捕获为一条撤销快照。
     fn push_composer_undo_snapshot(&mut self) {
-        let snapshot = ComposerUndoSnapshot {
+        let mut snapshot = ComposerUndoSnapshot {
             text: self.composer_buffer.text(),
             attachments: self.composer_attachments.clone(),
             cursor: self.composer_buffer.cursor(),
             scroll_offset: self.composer_scroll_offset,
+            attachment_ref_scope: None,
+            attachment_workspace_path: None,
         };
 
         if self.composer_undo_history.last().is_some_and(|last| {
@@ -4254,11 +4526,46 @@ impl VulcanWorkbench {
             return;
         }
 
+        if !snapshot.attachments.is_empty() {
+            let workspace_path = self.selected_attachment_workspace_path();
+            let scope = Self::composer_undo_attachment_ref_scope();
+            if self
+                .acquire_staged_attachment_refs(
+                    &workspace_path,
+                    &scope,
+                    &snapshot.attachments,
+                    "输入框撤销",
+                )
+                .is_ok()
+            {
+                snapshot.attachment_ref_scope = Some(scope);
+                snapshot.attachment_workspace_path = Some(workspace_path);
+            } else {
+                snapshot.attachments.clear();
+            }
+        }
+
         self.composer_undo_history.push(snapshot);
 
         if self.composer_undo_history.len() > COMPOSER_UNDO_HISTORY_LIMIT {
             let overflow = self.composer_undo_history.len() - COMPOSER_UNDO_HISTORY_LIMIT;
-            self.composer_undo_history.drain(0..overflow);
+            let removed_snapshots = self
+                .composer_undo_history
+                .drain(0..overflow)
+                .collect::<Vec<_>>();
+            for removed_snapshot in removed_snapshots {
+                if let (Some(scope), Some(workspace_path)) = (
+                    removed_snapshot.attachment_ref_scope.as_deref(),
+                    removed_snapshot.attachment_workspace_path.as_deref(),
+                ) {
+                    self.release_staged_attachment_refs(
+                        workspace_path,
+                        scope,
+                        &removed_snapshot.attachments,
+                        "输入框撤销",
+                    );
+                }
+            }
         }
     }
 
@@ -4268,6 +4575,79 @@ impl VulcanWorkbench {
         let Some(snapshot) = self.composer_undo_history.pop() else {
             return Task::none();
         };
+
+        let workspace_path = self.selected_attachment_workspace_path();
+        let composer_scope = self.composer_attachment_ref_scope();
+        let previous_attachments = self.composer_attachments.clone();
+        let snapshot_workspace_path = snapshot
+            .attachment_workspace_path
+            .clone()
+            .unwrap_or_else(|| workspace_path.clone());
+        if !snapshot.attachments.is_empty() && snapshot_workspace_path != workspace_path {
+            if let Some(scope) = snapshot.attachment_ref_scope.as_deref() {
+                self.release_staged_attachment_refs(
+                    &snapshot_workspace_path,
+                    scope,
+                    &snapshot.attachments,
+                    "输入框撤销",
+                );
+            }
+            let message =
+                String::from("撤销快照属于另一个项目，已丢弃该附件撤销记录以避免跨项目引用错误。");
+            self.show_workbench_notice_modal("无法恢复跨项目附件", message.clone());
+            self.status_message = message;
+            return Task::none();
+        }
+        if let Err(error) = self.validate_staged_attachments(&snapshot.attachments) {
+            if let Some(scope) = snapshot.attachment_ref_scope.as_deref() {
+                self.release_staged_attachment_refs(
+                    &snapshot_workspace_path,
+                    scope,
+                    &snapshot.attachments,
+                    "输入框撤销",
+                );
+            }
+            let message = format!("撤销快照中的附件已不符合当前模型能力：{error}");
+            self.show_workbench_notice_modal("附件无法恢复", message.clone());
+            self.status_message = message;
+            return Task::none();
+        }
+        if let Err(error) = self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &composer_scope,
+            &snapshot.attachments,
+            "输入框",
+        ) {
+            if let Some(scope) = snapshot.attachment_ref_scope.as_deref() {
+                self.release_staged_attachment_refs(
+                    &snapshot_workspace_path,
+                    scope,
+                    &snapshot.attachments,
+                    "输入框撤销",
+                );
+            }
+            self.show_workbench_notice_modal("附件无法恢复", error.clone());
+            self.status_message = error;
+            return Task::none();
+        }
+        let released_previous_attachments = Self::staged_attachments_released_after_replacement(
+            &previous_attachments,
+            &snapshot.attachments,
+        );
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &composer_scope,
+            &released_previous_attachments,
+            "输入框",
+        );
+        if let Some(scope) = snapshot.attachment_ref_scope.as_deref() {
+            self.release_staged_attachment_refs(
+                &snapshot_workspace_path,
+                scope,
+                &snapshot.attachments,
+                "输入框撤销",
+            );
+        }
 
         let mut restored_buffer = text_editor::Content::with_text(&snapshot.text);
         restored_buffer.move_to(snapshot.cursor);
@@ -5753,6 +6133,147 @@ impl VulcanWorkbench {
                 self.status_message = reasoning_note.map_or_else(
                     || format!("当前激活模型已切换为 `{}`。", model),
                     |note| format!("当前激活模型已切换为 `{}`。{}", model, note),
+                );
+                Task::none()
+            }
+            Message::WebSearchRoutingModeSelected(mode) => {
+                self.provider_configuration.ai_tools.web_search.mode = mode;
+                self.ai_tool_notice = format!(
+                    "web-search 路由已切换为「{}」，保存后会写入配置文件。",
+                    mode.label()
+                );
+                self.status_message = self.ai_tool_notice.clone();
+                Task::none()
+            }
+            Message::WebSearchDispatchModeSelected(mode) => {
+                self.provider_configuration.ai_tools.web_search.dispatch_mode = mode;
+                self.ai_tool_notice = format!(
+                    "第三方搜索调度方式已切换为「{}」，保存后会写入配置文件。",
+                    mode.label()
+                );
+                self.status_message = self.ai_tool_notice.clone();
+                Task::none()
+            }
+            Message::AddWebSearchProvider(kind) => {
+                self.add_web_search_provider(kind);
+                self.ai_tool_notice = if kind.requires_api_key() {
+                    format!("已新增 `{}` 搜索供应商，请填写 API Key 后保存。", kind.label())
+                } else {
+                    format!("已新增 `{}` 搜索供应商，请补充所需配置后保存。", kind.label())
+                };
+                self.status_message = self.ai_tool_notice.clone();
+                Task::none()
+            }
+            Message::RemoveWebSearchProvider(provider_id) => {
+                if self.remove_web_search_provider(&provider_id) {
+                    self.ai_tool_notice = String::from("已移除搜索供应商，保存后生效。");
+                } else {
+                    self.ai_tool_notice = String::from("未找到要移除的搜索供应商。");
+                }
+                self.status_message = self.ai_tool_notice.clone();
+                Task::none()
+            }
+            Message::MoveWebSearchProviderUp(provider_id) => {
+                if self.move_web_search_provider(&provider_id, -1) {
+                    self.ai_tool_notice = String::from("已提高该搜索供应商优先级。");
+                }
+                Task::none()
+            }
+            Message::MoveWebSearchProviderDown(provider_id) => {
+                if self.move_web_search_provider(&provider_id, 1) {
+                    self.ai_tool_notice = String::from("已降低该搜索供应商优先级。");
+                }
+                Task::none()
+            }
+            Message::WebSearchProviderEnabledToggled(provider_id, enabled) => {
+                self.update_web_search_provider(&provider_id, |provider| {
+                    provider.enabled = enabled;
+                });
+                self.ai_tool_notice = if enabled {
+                    String::from("已启用该搜索供应商，保存后生效。")
+                } else {
+                    String::from("已禁用该搜索供应商，保存后生效。")
+                };
+                Task::none()
+            }
+            Message::WebSearchProviderNameChanged(provider_id, value) => {
+                self.update_web_search_provider(&provider_id, |provider| {
+                    provider.name = value;
+                });
+                Task::none()
+            }
+            Message::WebSearchProviderApiKeyChanged(provider_id, value) => {
+                self.update_web_search_provider(&provider_id, |provider| {
+                    provider.api_key = value;
+                });
+                Task::none()
+            }
+            Message::WebSearchProviderBaseUrlChanged(provider_id, value) => {
+                self.update_web_search_provider(&provider_id, |provider| {
+                    provider.base_url = value;
+                });
+                Task::none()
+            }
+            Message::WebSearchProviderModelChanged(provider_id, value) => {
+                self.update_web_search_provider(&provider_id, |provider| {
+                    provider.model = value;
+                });
+                Task::none()
+            }
+            Message::WebSearchProviderRegionChanged(provider_id, value) => {
+                self.update_web_search_provider(&provider_id, |provider| {
+                    provider.region = value;
+                });
+                Task::none()
+            }
+            Message::WebSearchProviderMaxResultsChanged(provider_id, value) => {
+                match value.trim().parse::<usize>() {
+                    Ok(max_results) => {
+                        let limit = self
+                            .provider_configuration
+                            .ai_tools
+                            .web_search
+                            .providers
+                            .iter()
+                            .find(|provider| provider.id == provider_id)
+                            .map(|provider| provider.kind.max_results_limit())
+                            .unwrap_or(20);
+                        if (1..=limit).contains(&max_results) {
+                            self.update_web_search_provider(&provider_id, |provider| {
+                                provider.max_results = max_results;
+                            });
+                            self.ai_tool_notice =
+                                String::from("已更新搜索结果数量，保存后生效。");
+                        } else {
+                            self.ai_tool_notice =
+                                format!("搜索结果数量必须是 1 到 {limit} 的整数。");
+                        }
+                    }
+                    Err(_) => {
+                        self.ai_tool_notice = String::from("搜索结果数量必须是有效整数。");
+                    }
+                }
+                Task::none()
+            }
+            Message::SaveAiToolConfiguration => {
+                match self.save_ai_tool_configuration() {
+                    Ok(()) => {
+                        self.ai_tool_notice = String::from("API 原生工具配置已保存并刷新运行时。");
+                        self.status_message = self.ai_tool_notice.clone();
+                    }
+                    Err(error) => {
+                        self.ai_tool_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::WorkbenchWebSearchSelected(choice) => {
+                self.workbench_web_search_override = choice.override_mode;
+                self.workbench_web_search_provider_id = choice.provider_id.clone();
+                self.status_message = format!(
+                    "当前发送链路的搜索方式已切换为 `{}`。",
+                    choice.label
                 );
                 Task::none()
             }
@@ -8084,6 +8605,8 @@ impl VulcanWorkbench {
             preview: preview.unwrap_or_else(|| pending_prompt_preview_text(&prompt, &attachments)),
             prompt,
             attachments,
+            model_reference: self.current_pending_prompt_model_reference(),
+            runtime_options: self.current_pending_prompt_runtime_options(),
             source,
             task_id: task_id.map(|value| value.to_string()),
             panel_entry_id,
@@ -8104,6 +8627,8 @@ impl VulcanWorkbench {
             preview: pending_prompt_preview_text(&prompt, &attachments),
             prompt,
             attachments,
+            model_reference: self.current_pending_prompt_model_reference(),
+            runtime_options: self.current_pending_prompt_runtime_options(),
             state: PendingPromptPanelEntryState::Ready,
             created_at,
         }
@@ -8120,40 +8645,74 @@ impl VulcanWorkbench {
         let queue_full_error =
             String::from("待发送消息队列已满，最多保留 10 条，请等待前面的消息完成后再继续追加。");
         let now = current_unix_millis_text();
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        let queue = &mut runtime_state.ui_state.pending_prompt_queue;
+        let entry_id = entry.id.clone();
+        let entry_attachments = entry.attachments.clone();
+        let removed_delegate_index = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_queue;
 
-        if entry.source == PendingSessionPromptSource::DelegateCompletion
-            && entry.task_id.as_ref().is_some_and(|task_id| {
-                queue.iter().any(|existing| {
-                    existing.source == PendingSessionPromptSource::DelegateCompletion
-                        && existing.task_id.as_ref() == Some(task_id)
+            if entry.source == PendingSessionPromptSource::DelegateCompletion
+                && entry.task_id.as_ref().is_some_and(|task_id| {
+                    queue.iter().any(|existing| {
+                        existing.source == PendingSessionPromptSource::DelegateCompletion
+                            && existing.task_id.as_ref() == Some(task_id)
+                    })
                 })
-            })
-        {
-            return Ok(());
-        }
+            {
+                return Ok(());
+            }
 
-        if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
-            if entry.source == PendingSessionPromptSource::DelegateCompletion {
-                if let Some(index) = queue.iter().position(|existing| {
-                    existing.source == PendingSessionPromptSource::DelegateCompletion
-                }) {
-                    queue.remove(index);
+            if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
+                if entry.source == PendingSessionPromptSource::DelegateCompletion {
+                    if let Some(index) = queue.iter().position(|existing| {
+                        existing.source == PendingSessionPromptSource::DelegateCompletion
+                    }) {
+                        Some(index)
+                    } else {
+                        return Err(queue_full_error);
+                    }
                 } else {
                     return Err(queue_full_error);
                 }
             } else {
-                return Err(queue_full_error);
+                None
             }
-        }
+        };
 
-        if insert_front {
-            queue.insert(0, entry);
-        } else {
-            queue.push(entry);
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        let entry_scope = Self::pending_internal_attachment_ref_scope(session_id, &entry_id);
+        self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &entry_scope,
+            &entry_attachments,
+            "内部待发送队列",
+        )?;
+
+        let removed_for_capacity = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_queue;
+            let removed_for_capacity = removed_delegate_index
+                .and_then(|index| (index < queue.len()).then(|| queue.remove(index)));
+
+            if insert_front {
+                queue.insert(0, entry);
+            } else {
+                queue.push(entry);
+            }
+            runtime_state.updated_at = now;
+            removed_for_capacity
+        };
+
+        if let Some(removed_entry) = removed_for_capacity {
+            let removed_scope =
+                Self::pending_internal_attachment_ref_scope(session_id, &removed_entry.id);
+            self.release_staged_attachment_refs(
+                &workspace_path,
+                &removed_scope,
+                &removed_entry.attachments,
+                "内部待发送队列",
+            );
         }
-        runtime_state.updated_at = now;
         self.refresh_session_queued_steps(session_id);
         Ok(())
     }
@@ -8199,13 +8758,43 @@ impl VulcanWorkbench {
         let queue_full_error =
             String::from("待插入消息队列已满，最多保留 10 条，请先处理前面的消息。");
         let now = current_unix_millis_text();
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
-        if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
+        let entry_id = entry.id.clone();
+        let entry_attachments = entry.attachments.clone();
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        let scope = Self::pending_panel_attachment_ref_scope(session_id, &entry_id);
+        {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &runtime_state.ui_state.pending_prompt_panel_queue;
+            if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
+                return Err(queue_full_error);
+            }
+        }
+        self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &scope,
+            &entry_attachments,
+            "可见待发送队列",
+        )?;
+        let queue_was_full_after_acquire = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
+            if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
+                true
+            } else {
+                queue.push(entry);
+                runtime_state.updated_at = now;
+                false
+            }
+        };
+        if queue_was_full_after_acquire {
+            self.release_staged_attachment_refs(
+                &workspace_path,
+                &scope,
+                &entry_attachments,
+                "可见待发送队列",
+            );
             return Err(queue_full_error);
         }
-        queue.push(entry);
-        runtime_state.updated_at = now;
         Ok(())
     }
 
@@ -8250,6 +8839,16 @@ impl VulcanWorkbench {
             runtime_state.updated_at = now;
             Some(removed)
         };
+        if let Some(entry) = removed_entry.as_ref() {
+            let workspace_path = self.attachment_workspace_path_for_session(session_id);
+            let scope = Self::pending_panel_attachment_ref_scope(session_id, &entry.id);
+            self.release_staged_attachment_refs(
+                &workspace_path,
+                &scope,
+                &entry.attachments,
+                "可见待发送队列",
+            );
+        }
         removed_entry
     }
 
@@ -8320,6 +8919,16 @@ impl VulcanWorkbench {
             drained
         };
         self.refresh_session_queued_steps(session_id);
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        for cleared_entry in &cleared_entries {
+            let scope = Self::pending_internal_attachment_ref_scope(session_id, &cleared_entry.id);
+            self.release_staged_attachment_refs(
+                &workspace_path,
+                &scope,
+                &cleared_entry.attachments,
+                "内部待发送队列",
+            );
+        }
         if restore_panel_entries {
             for panel_entry_id in cleared_entries
                 .iter()
@@ -8405,8 +9014,27 @@ impl VulcanWorkbench {
         &mut self,
         prompt: String,
         attachments: Vec<ConversationAttachment>,
-    ) -> Task<Message> {
+    ) -> Result<Task<Message>, String> {
+        let workspace_path = self.selected_attachment_workspace_path();
+        let composer_scope = self.composer_attachment_ref_scope();
+        let previous_attachments = self.composer_attachments.clone();
+        self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &composer_scope,
+            &attachments,
+            "输入框",
+        )?;
         self.push_composer_undo_snapshot();
+        let released_previous_attachments = Self::staged_attachments_released_after_replacement(
+            &previous_attachments,
+            &attachments,
+        );
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &composer_scope,
+            &released_previous_attachments,
+            "输入框",
+        );
         self.composer = prompt.clone();
         self.composer_buffer = text_editor::Content::with_text(&prompt);
         self.composer_attachments = attachments;
@@ -8416,17 +9044,26 @@ impl VulcanWorkbench {
         self.composer_scrollbar_drag_grab_offset = None;
         self.composer_context_menu_open = false;
         self.composer_context_clipboard_text = None;
-        operation::focus(COMPOSER_EDITOR_ID)
+        Ok(operation::focus(COMPOSER_EDITOR_ID))
     }
 
     /// Clears the floating composer input surface after one successful submit, queue, or interrupt action.
     /// 在一次成功的发送、排队或插队动作后清空浮动提示词输入表面。
     fn clear_composer_input(&mut self) {
+        let workspace_path = self.selected_attachment_workspace_path();
+        let composer_scope = self.composer_attachment_ref_scope();
+        let previous_attachments = self.composer_attachments.clone();
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &composer_scope,
+            &previous_attachments,
+            "输入框",
+        );
+        self.release_all_composer_undo_attachment_refs();
         self.composer.clear();
         self.composer_buffer = text_editor::Content::with_text("");
         self.composer_attachments.clear();
         self.composer_drag_hover_labels.clear();
-        self.composer_undo_history.clear();
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
@@ -8510,7 +9147,12 @@ impl VulcanWorkbench {
         let active_choice = self.active_workbench_model_choice()?;
         let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(&active_choice);
-        Some(resolve_model_capabilities(definition, model.as_ref()))
+        let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
+        apply_ai_tool_runtime_configuration(
+            &mut capabilities,
+            &self.provider_configuration.ai_tools,
+        );
+        Some(capabilities)
     }
 
     /// Returns whether the currently active workbench model should accept one staged attachment kind according to declared input modalities.
@@ -8920,6 +9562,25 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Best-effort discards one newly staged attachment that was rejected before it entered the composer.
+    /// 尽力丢弃一条在进入提示词输入框前被拒绝的新暂存附件。
+    fn discard_rejected_staged_composer_attachment(&mut self, attachment: &ConversationAttachment) {
+        let attachment_workspace_path = self.selected_attachment_workspace_path();
+        if let Err(error) = crate::attachment_asset_index::discard_unreferenced_staged_attachment(
+            &attachment_workspace_path,
+            attachment,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "附件暂存清理失败",
+                format!(
+                    "附件 `{}` 未加入输入框，但清理其暂存文件失败：{error}",
+                    attachment.file_name
+                ),
+            );
+        }
+    }
+
     /// Appends one imported attachment batch into the composer while enforcing model modality gates, deduplicating repeated file imports, and refreshing focus.
     /// 在强制模型模态门控、去重重复文件导入并刷新焦点的前提下，将一批导入附件追加到提示词输入框。
     fn append_imported_composer_attachments(
@@ -8952,6 +9613,7 @@ impl VulcanWorkbench {
                     attachment.kind.display_label(),
                     attachment.file_name
                 ));
+                self.discard_rejected_staged_composer_attachment(&attachment);
                 continue;
             }
 
@@ -8962,6 +9624,7 @@ impl VulcanWorkbench {
                     attachment.kind.display_label(),
                     attachment.file_name
                 ));
+                self.discard_rejected_staged_composer_attachment(&attachment);
                 continue;
             }
 
@@ -8971,6 +9634,7 @@ impl VulcanWorkbench {
                     attachment.kind.display_label(),
                     attachment.file_name
                 ));
+                self.discard_rejected_staged_composer_attachment(&attachment);
                 continue;
             }
 
@@ -8978,6 +9642,21 @@ impl VulcanWorkbench {
         }
 
         if !additions.is_empty() {
+            let workspace_path = self.selected_attachment_workspace_path();
+            let composer_scope = self.composer_attachment_ref_scope();
+            if let Err(error) = self.acquire_staged_attachment_refs(
+                &workspace_path,
+                &composer_scope,
+                &additions,
+                "输入框",
+            ) {
+                for attachment in &additions {
+                    self.discard_rejected_staged_composer_attachment(attachment);
+                }
+                self.show_workbench_notice_modal("附件无法添加", error.clone());
+                self.status_message = error;
+                return operation::focus(COMPOSER_EDITOR_ID);
+            }
             self.push_composer_undo_snapshot();
             self.composer_attachments.extend(additions.clone());
             if skipped_labels.is_empty() && limit_labels.is_empty() {
@@ -9209,6 +9888,14 @@ impl VulcanWorkbench {
 
         self.push_composer_undo_snapshot();
         let removed = self.composer_attachments.remove(index);
+        let workspace_path = self.selected_attachment_workspace_path();
+        let composer_scope = self.composer_attachment_ref_scope();
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &composer_scope,
+            std::slice::from_ref(&removed),
+            "输入框",
+        );
         if self
             .workbench_image_preview_modal
             .as_ref()
@@ -9233,6 +9920,42 @@ impl VulcanWorkbench {
         if prompt_entry.attachments.is_empty() {
             return Ok(());
         }
+        if prompt_entry.attachments.len() > MAX_COMPOSER_ATTACHMENTS {
+            return Err(format!(
+                "当前提示词最多支持 {MAX_COMPOSER_ATTACHMENTS} 个附件，请移除多余附件后再发送。"
+            ));
+        }
+
+        let capabilities = prompt_entry
+            .model_reference
+            .as_ref()
+            .and_then(|model_reference| {
+                self.resolve_pending_prompt_model_capabilities(model_reference)
+            });
+        if let Some(capabilities) = capabilities {
+            for attachment in &prompt_entry.attachments {
+                if !capabilities.supports_attachment_kind(attachment.kind.clone()) {
+                    let model_label = prompt_entry
+                        .model_reference
+                        .as_ref()
+                        .map(|model_reference| {
+                            if model_reference.model_name.trim().is_empty() {
+                                model_reference.model_id.clone()
+                            } else {
+                                model_reference.model_name.clone()
+                            }
+                        })
+                        .unwrap_or_else(|| String::from("锁定模型"));
+                    return Err(format!(
+                        "待发送消息锁定的模型 `{model_label}` 未声明支持{}附件 `{}`；请编辑该队列项后重新发送。",
+                        attachment.kind.display_label(),
+                        attachment.file_name
+                    ));
+                }
+            }
+            return Ok(());
+        }
+
         self.validate_staged_attachments(&prompt_entry.attachments)
     }
 
@@ -9252,7 +9975,7 @@ impl VulcanWorkbench {
                 String::from("该消息已经进入系统会话队列，请等待主流程继续处理。");
             return Task::none();
         }
-        let prompt_entry = self.build_pending_prompt_entry(
+        let mut prompt_entry = self.build_pending_prompt_entry(
             panel_entry.prompt.clone(),
             panel_entry.attachments.clone(),
             PendingSessionPromptSource::UserFollowup,
@@ -9260,6 +9983,8 @@ impl VulcanWorkbench {
             Some(panel_entry.preview.clone()),
             Some(panel_entry.id.clone()),
         );
+        prompt_entry.model_reference = panel_entry.model_reference.clone();
+        prompt_entry.runtime_options = panel_entry.runtime_options.clone();
         if let Err(error) = self.enqueue_session_pending_prompt(session_id, prompt_entry, true) {
             self.status_message = error;
             return Task::none();
@@ -9291,17 +10016,62 @@ impl VulcanWorkbench {
             self.status_message = String::from("当前没有可编辑队列的会话。");
             return Task::none();
         };
-        let Some(prompt_entry) = self.remove_session_pending_prompt_entry(session_id, entry_id)
-        else {
+        let Some(prompt_entry) = self.pending_prompt_panel_entry(session_id, entry_id) else {
             self.status_message = String::from("未找到要编辑的待发送消息。");
             return Task::none();
         };
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        let edit_scope = format!("pending-edit:{session_id}:{}", prompt_entry.id);
+        if let Err(error) = self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &edit_scope,
+            &prompt_entry.attachments,
+            "待发送编辑",
+        ) {
+            self.show_workbench_notice_modal("附件无法编辑", error.clone());
+            self.status_message = error;
+            return Task::none();
+        }
+        let restored_prompt = prompt_entry.prompt.clone();
+        let restored_attachments = prompt_entry.attachments.clone();
+        let restore_task = match self
+            .restore_prompt_into_composer(restored_prompt, restored_attachments.clone())
+        {
+            Ok(task) => task,
+            Err(error) => {
+                self.release_staged_attachment_refs(
+                    &workspace_path,
+                    &edit_scope,
+                    &restored_attachments,
+                    "待发送编辑",
+                );
+                self.show_workbench_notice_modal("附件无法编辑", error.clone());
+                self.status_message = error;
+                return Task::none();
+            }
+        };
+        if self
+            .remove_session_pending_prompt_entry(session_id, entry_id)
+            .is_none()
+        {
+            self.release_staged_attachment_refs(
+                &workspace_path,
+                &edit_scope,
+                &prompt_entry.attachments,
+                "待发送编辑",
+            );
+            self.status_message = String::from("未找到要编辑的待发送消息。");
+            return self.persist_workspace_snapshot_task();
+        }
         self.clear_pending_prompt_drag_state();
         self.status_message = String::from("已将待发送消息恢复到输入框，可继续修改。");
-        Task::batch([
-            self.persist_workspace_snapshot_task(),
-            self.restore_prompt_into_composer(prompt_entry.prompt, prompt_entry.attachments),
-        ])
+        self.release_staged_attachment_refs(
+            &workspace_path,
+            &edit_scope,
+            &restored_attachments,
+            "待发送编辑",
+        );
+        Task::batch([self.persist_workspace_snapshot_task(), restore_task])
     }
 
     /// Removes one queued prompt entry without dispatching it and persists the updated queue order.
@@ -9334,12 +10104,57 @@ impl VulcanWorkbench {
         if !composer_input_has_submittable_content(&prompt_entry.prompt, &prompt_entry.attachments)
         {
             self.status_message = String::from("请输入任务指令后再启动执行。");
+            self.release_prompt_entry_transient_attachment_refs(session_id, &prompt_entry);
+            return Task::none();
+        }
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        let dispatch_scope =
+            Self::prompt_dispatch_attachment_ref_scope(session_id, &prompt_entry.id);
+        if let Err(error) = self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &dispatch_scope,
+            &prompt_entry.attachments,
+            "提示词派发",
+        ) {
+            if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
+                let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
+            }
+            self.release_prompt_entry_transient_attachment_refs(session_id, &prompt_entry);
+            self.show_workbench_notice_modal("附件无法发送", error.clone());
+            self.status_message = error;
             return Task::none();
         }
         if let Err(error) = self.validate_prompt_entry_attachments(&prompt_entry) {
             if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
                 let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
             }
+            self.release_prompt_entry_transient_attachment_refs(session_id, &prompt_entry);
+            self.show_workbench_notice_modal("附件无法发送", error.clone());
+            self.status_message = error;
+            return Task::none();
+        }
+        self.ensure_session_conversation_state_loaded(session_id);
+
+        let execution_mode = if self.selected_agent_requires_plan_mode() {
+            ExecutionMode::Plan
+        } else {
+            self.execution_mode
+        };
+        self.execution_mode = execution_mode;
+
+        if let Err(error) = self.append_user_prompt_to_session_conversation(
+            session_id,
+            prompt_entry.prompt.clone(),
+            prompt_entry.attachments.clone(),
+            vec![
+                Self::pending_internal_attachment_ref_scope(session_id, &prompt_entry.id),
+                Self::prompt_dispatch_attachment_ref_scope(session_id, &prompt_entry.id),
+            ],
+        ) {
+            if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
+                let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
+            }
+            self.release_prompt_entry_transient_attachment_refs(session_id, &prompt_entry);
             self.show_workbench_notice_modal("附件无法发送", error.clone());
             self.status_message = error;
             return Task::none();
@@ -9350,15 +10165,6 @@ impl VulcanWorkbench {
                 self.clear_pending_prompt_drag_state();
             }
         }
-
-        self.ensure_session_conversation_state_loaded(session_id);
-
-        let execution_mode = if self.selected_agent_requires_plan_mode() {
-            ExecutionMode::Plan
-        } else {
-            self.execution_mode
-        };
-        self.execution_mode = execution_mode;
 
         if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
             self.push_session_message(
@@ -9375,11 +10181,10 @@ impl VulcanWorkbench {
             }
             self.materialize_session_after_first_user_turn(session_id);
         }
-        self.append_user_prompt_to_session_conversation(
-            session_id,
-            prompt_entry.prompt.clone(),
-            prompt_entry.attachments.clone(),
-        );
+        let config_for_run = self.provider_configuration_for_prompt_entry(&prompt_entry);
+        let runtime_options = prompt_entry.runtime_options;
+        let ai_tool_configuration =
+            self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
 
         let request = ExecutionPreparationRequest {
             session_id,
@@ -9390,8 +10195,9 @@ impl VulcanWorkbench {
             prompt: prompt_entry.prompt,
             conversation_state: self.session_conversation_state(session_id),
             execution_mode: execution_mode.to_string(),
-            temperature: self.temperature_enabled.then_some(self.temperature),
-            reasoning_effort: self.workbench_reasoning_effort,
+            temperature: runtime_options.temperature,
+            reasoning_effort: runtime_options.reasoning_effort,
+            ai_tool_configuration,
         };
 
         self.replace_session_runtime_events(session_id, Vec::new());
@@ -9413,7 +10219,6 @@ impl VulcanWorkbench {
         let run_id = self.next_run_id;
         self.next_run_id = self.next_run_id.saturating_add(1);
         let request_for_run = request.clone();
-        let config_for_run = self.provider_configuration.clone();
         let (run_task, run_handle) = Task::run(
             stream_runtime_run(
                 config_for_run,
@@ -9473,14 +10278,17 @@ impl VulcanWorkbench {
         {
             prompt_entry
         } else if let Some(panel_entry) = self.first_ready_pending_prompt_panel_entry(session_id) {
-            self.build_pending_prompt_entry(
+            let mut prompt_entry = self.build_pending_prompt_entry(
                 panel_entry.prompt,
                 panel_entry.attachments,
                 PendingSessionPromptSource::UserFollowup,
                 None,
                 Some(panel_entry.preview),
                 Some(panel_entry.id),
-            )
+            );
+            prompt_entry.model_reference = panel_entry.model_reference;
+            prompt_entry.runtime_options = panel_entry.runtime_options;
+            prompt_entry
         } else {
             return Task::none();
         };
@@ -9672,6 +10480,19 @@ impl VulcanWorkbench {
             None,
             None,
         );
+        let workspace_path = self.attachment_workspace_path_for_session(session_id);
+        let dispatch_scope =
+            Self::prompt_dispatch_attachment_ref_scope(session_id, &prompt_entry.id);
+        if let Err(error) = self.acquire_staged_attachment_refs(
+            &workspace_path,
+            &dispatch_scope,
+            &prompt_entry.attachments,
+            "提示词派发",
+        ) {
+            self.show_workbench_notice_modal("附件无法发送", error.clone());
+            self.status_message = error;
+            return Task::none();
+        }
         self.clear_composer_input();
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }
@@ -11497,7 +12318,8 @@ impl VulcanWorkbench {
         session_id: SessionId,
         prompt: String,
         attachments: Vec<ConversationAttachment>,
-    ) {
+        promoted_staging_scopes: Vec<String>,
+    ) -> Result<(), String> {
         self.ensure_session_conversation_state_loaded(session_id);
         let parts = build_composer_input_parts(&prompt, &attachments);
         let (canonical_text, canonical_attachments) = composer_parts_to_user_payload(&parts);
@@ -11507,6 +12329,15 @@ impl VulcanWorkbench {
         );
         let updated_at = current_unix_millis_text();
         let referenced_attachments = canonical_attachments.clone();
+        let attachment_workspace_path = self.attachment_workspace_path_for_session(session_id);
+        crate::attachment_asset_index::promote_staged_attachment_to_message_ref(
+            &attachment_workspace_path,
+            &session_id.to_string(),
+            &protocol_message_id,
+            &referenced_attachments,
+            &promoted_staging_scopes,
+        )
+        .map_err(|error| format!("更新附件资产引用索引失败：{error}"))?;
         {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
             append_user_text_message(
@@ -11517,15 +12348,7 @@ impl VulcanWorkbench {
             );
             runtime_state.updated_at = updated_at;
         }
-        let attachment_workspace_path = self.attachment_workspace_path_for_session(session_id);
-        if let Err(error) = crate::attachment_asset_index::record_attachment_references_for_message(
-            &attachment_workspace_path,
-            &session_id.to_string(),
-            &protocol_message_id,
-            &referenced_attachments,
-        ) {
-            self.status_message = format!("更新附件资产引用索引失败：{error}");
-        }
+        Ok(())
     }
 
     /// Mirrors selected hidden transcript records into the canonical conversation state so existing derived context remains effective.
@@ -11572,10 +12395,12 @@ impl VulcanWorkbench {
             summary_message_id.to_string(),
             summary_body.to_string(),
             created_at.to_string(),
+            ContextCompactionPolicy::default(),
         );
         compact_conversation_records_after_summary(
             &mut runtime_state.conversation_state,
             summary_message_id,
+            ContextCompactionPolicy::default(),
         );
         runtime_state.updated_at = created_at.to_string();
     }
@@ -11694,7 +12519,7 @@ impl VulcanWorkbench {
         &self,
         session_id: SessionId,
         runtime_state_snapshot: &SessionRuntimeStateEntry,
-        messages: &[SessionMessageEntry],
+        _messages: &[SessionMessageEntry],
     ) -> Option<ContextBudgetSnapshot> {
         let (provider_id, model_id, api_family, capabilities) = if let (
             Some(provider_id),
@@ -11708,21 +12533,31 @@ impl VulcanWorkbench {
                 provider_config::effective_model_choices(provider_id, &self.provider_configuration)
                     .into_iter()
                     .find(|entry| entry.id == model_id);
+            let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
+            apply_ai_tool_runtime_configuration(
+                &mut capabilities,
+                &self.provider_configuration.ai_tools,
+            );
             (
                 provider_id.to_string(),
                 model_id.to_string(),
-                definition.runtime.api_family(),
-                resolve_model_capabilities(definition, model.as_ref()),
+                definition.effective_api_family_for_model(Some(model_id)),
+                capabilities,
             )
         } else {
             let active_choice = self.active_workbench_model_choice()?;
             let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
             let model = self.resolve_workbench_model_entry(&active_choice);
+            let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
+            apply_ai_tool_runtime_configuration(
+                &mut capabilities,
+                &self.provider_configuration.ai_tools,
+            );
             (
                 active_choice.provider_id.clone(),
                 active_choice.model_id.clone(),
-                definition.runtime.api_family(),
-                resolve_model_capabilities(definition, model.as_ref()),
+                definition.effective_api_family_for_model(Some(&active_choice.model_id)),
+                capabilities,
             )
         };
         let visible_tool_count = self
@@ -11736,13 +12571,25 @@ impl VulcanWorkbench {
             .map(|preparation| preparation.tool_descriptors.len())
             .unwrap_or(0usize);
 
-        Some(build_session_context_budget_snapshot(
+        let mut core_snapshot =
+            crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
+                &runtime_state_snapshot.conversation_state,
+            );
+        core_snapshot.messages =
+            crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model(
+                &core_snapshot.messages,
+                Some(api_family),
+                Some(&capabilities),
+            );
+
+        Some(build_projected_session_context_budget_snapshot(
             &provider_id,
             &model_id,
             api_family,
             &capabilities,
             self.workbench_reasoning_effort,
-            messages,
+            ContextCompactionPolicy::default(),
+            &core_snapshot.messages,
             visible_tool_count,
             runtime_state_snapshot.last_provider_usage.as_ref(),
         ))
@@ -11952,6 +12799,7 @@ impl VulcanWorkbench {
                     session_id,
                     messages: &messages,
                     runtime_state: &runtime_state_snapshot,
+                    policy: ContextCompactionPolicy::default(),
                 })
         else {
             self.sync_context_usage_from_session_budget(session_id);
@@ -13951,8 +14799,9 @@ mod tests {
         prune_session_messages_to_limit, task_session_payload_from_tool_metadata,
     };
     use crate::model::{
-        PendingSessionPromptEntry, PendingSessionPromptSource, SessionId, SessionMessageEntry,
-        SessionMessageKind, SessionMessageRecordKind, SessionState, SessionSummary,
+        PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
+        SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionState,
+        SessionSummary,
     };
     use iced::widget::text_editor;
     use serde_json::{Value, json};
@@ -13983,6 +14832,8 @@ mod tests {
             prompt: prompt.to_string(),
             preview: prompt.to_string(),
             attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
             source,
             task_id: (source == PendingSessionPromptSource::DelegateCompletion)
                 .then(|| format!("task-{prompt}")),

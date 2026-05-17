@@ -584,8 +584,6 @@ pub(super) fn stage_composer_attachment_paths(
     workspace_path: &str,
     selected_files: &[PathBuf],
 ) -> Result<Vec<ConversationAttachment>, String> {
-    let mut attachments = Vec::with_capacity(selected_files.len());
-
     for selected_file in selected_files {
         if !selected_file.is_file() {
             return Err(format!(
@@ -594,18 +592,29 @@ pub(super) fn stage_composer_attachment_paths(
             ));
         }
 
-        let Some(_descriptor) =
-            crate::attachment_assets::attachment_descriptor_from_path(&selected_file)
-        else {
+        if crate::attachment_assets::attachment_descriptor_from_path(selected_file).is_none() {
             return Err(format!(
                 "文件 `{}` 不是受支持的附件格式；当前仅支持图片、音频、视频与 PDF。",
                 selected_file.display()
             ));
-        };
-        attachments.push(crate::attachment_assets::stage_attachment_file(
-            workspace_path,
-            &selected_file,
-        )?);
+        }
+    }
+
+    let mut attachments = Vec::with_capacity(selected_files.len());
+
+    for selected_file in selected_files {
+        match crate::attachment_assets::stage_attachment_file(workspace_path, selected_file) {
+            Ok(attachment) => attachments.push(attachment),
+            Err(error) => {
+                for attachment in &attachments {
+                    let _ = crate::attachment_asset_index::discard_unreferenced_staged_attachment(
+                        workspace_path,
+                        attachment,
+                    );
+                }
+                return Err(error);
+            }
+        }
     }
 
     Ok(attachments)

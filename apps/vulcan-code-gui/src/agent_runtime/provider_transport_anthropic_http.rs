@@ -133,6 +133,21 @@ enum AnthropicContentBlock {
         #[serde(rename = "data")]
         _data: String,
     },
+    /// Provider-native server-side tool use such as Anthropic web search.
+    /// Provider 原生服务端工具使用，例如 Anthropic 网页搜索。
+    ServerToolUse {
+        id: String,
+        name: String,
+        #[serde(default)]
+        input: Value,
+    },
+    /// Provider-native web-search result block returned by Anthropic.
+    /// Anthropic 返回的 Provider 原生网页搜索结果块。
+    WebSearchToolResult {
+        tool_use_id: String,
+        #[serde(default)]
+        content: Value,
+    },
 }
 
 /// Minimal Anthropic content delta used by the host-owned direct transport.
@@ -232,6 +247,21 @@ struct PendingAnthropicToolUse {
     input_json: String,
 }
 
+/// Pending provider-native server-side tool-use block assembled across stream events.
+/// 跨流事件累计组装的待定 Provider 原生服务端工具使用块。
+#[derive(Debug, Default)]
+struct PendingAnthropicServerToolUse {
+    /// Stable server-tool-use identifier emitted by the provider.
+    /// Provider 发出的稳定服务端工具使用标识。
+    id: String,
+    /// Stable server-tool name emitted by the provider.
+    /// Provider 发出的稳定服务端工具名称。
+    name: String,
+    /// Accumulated partial JSON payload for server-tool input.
+    /// 为服务端工具输入累计的部分 JSON 载荷。
+    input_json: String,
+}
+
 /// Pending thinking block assembled across multiple Anthropic stream events.
 /// 跨多条 Anthropic 流事件累计组装的待定思考块。
 #[derive(Debug, Default)]
@@ -310,6 +340,7 @@ where
     let mut assistant_reasoning_blocks = Vec::new();
     let mut finalized_provider_content_blocks = Vec::new();
     let mut pending_tool_use = None::<PendingAnthropicToolUse>;
+    let mut pending_server_tool_use = None::<PendingAnthropicServerToolUse>;
     let mut pending_thinking = None::<PendingAnthropicThinking>;
     let mut pending_text = None::<String>;
     let mut finalized_tool_calls = Vec::new();
@@ -351,6 +382,28 @@ where
                         },
                     });
                 }
+                AnthropicContentBlock::ServerToolUse { id, name, input } => {
+                    pending_server_tool_use = Some(PendingAnthropicServerToolUse {
+                        id,
+                        name,
+                        input_json: if input.is_null() || input == json!({}) {
+                            String::new()
+                        } else {
+                            serde_json::to_string(&input).unwrap_or_else(|_| input.to_string())
+                        },
+                    });
+                }
+                AnthropicContentBlock::WebSearchToolResult {
+                    tool_use_id,
+                    content,
+                } => {
+                    finalized_provider_content_blocks.push(
+                        AnthropicContentBlock::WebSearchToolResult {
+                            tool_use_id,
+                            content,
+                        },
+                    );
+                }
                 AnthropicContentBlock::Thinking {
                     thinking,
                     signature,
@@ -388,10 +441,14 @@ where
                     );
                 }
                 AnthropicContentDelta::InputJsonDelta { partial_json } => {
-                    pending_tool_use
-                        .get_or_insert_with(PendingAnthropicToolUse::default)
-                        .input_json
-                        .push_str(&partial_json);
+                    if let Some(server_tool_use) = pending_server_tool_use.as_mut() {
+                        server_tool_use.input_json.push_str(&partial_json);
+                    } else {
+                        pending_tool_use
+                            .get_or_insert_with(PendingAnthropicToolUse::default)
+                            .input_json
+                            .push_str(&partial_json);
+                    }
                 }
                 AnthropicContentDelta::ThinkingDelta { thinking } => {
                     pending_thinking
@@ -425,6 +482,11 @@ where
                         provider_tool_definitions,
                     )?);
                 }
+                if let Some(server_tool_use) = pending_server_tool_use.take() {
+                    finalized_provider_content_blocks.push(
+                        anthropic_content_block_from_pending_server_tool_use(&server_tool_use),
+                    );
+                }
                 if let Some(thinking) = pending_thinking.take()
                     && !thinking.thinking.is_empty()
                 {
@@ -446,6 +508,11 @@ where
                             provider_tool_definitions,
                         )?);
                     }
+                    if let Some(server_tool_use) = pending_server_tool_use.take() {
+                        finalized_provider_content_blocks.push(
+                            anthropic_content_block_from_pending_server_tool_use(&server_tool_use),
+                        );
+                    }
                 }
             }
             AnthropicStreamingEvent::MessageStop
@@ -461,6 +528,11 @@ where
             tool_use,
             provider_tool_definitions,
         )?);
+    }
+    if let Some(server_tool_use) = pending_server_tool_use.take() {
+        finalized_provider_content_blocks.push(
+            anthropic_content_block_from_pending_server_tool_use(&server_tool_use),
+        );
     }
     if let Some(text) = pending_text.take()
         && !text.is_empty()
@@ -675,22 +747,38 @@ fn build_anthropic_request_payload(
         )),
     );
 
-    if !provider_tool_definitions.is_empty() {
-        payload.insert(
-            String::from("tools"),
-            Value::Array(
-                provider_tool_definitions
-                    .iter()
-                    .map(provider_tool_definition_to_anthropic_tool)
-                    .collect(),
-            ),
-        );
-        payload.entry(String::from("tool_choice")).or_insert(json!({
-            "type": "auto"
-        }));
-    }
+    append_anthropic_function_tools(&mut payload, provider_tool_definitions)?;
 
     Ok(Value::Object(payload))
+}
+
+/// Appends Anthropic function tools without replacing provider-native server tools already present in the payload.
+/// 追加 Anthropic 函数工具，同时不替换载荷中已经存在的 Provider 原生服务端工具。
+fn append_anthropic_function_tools(
+    payload: &mut JsonMap<String, Value>,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> Result<(), VulcanCoreError> {
+    if provider_tool_definitions.is_empty() {
+        return Ok(());
+    }
+
+    let tools = payload
+        .entry(String::from("tools"))
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(tools) = tools.as_array_mut() else {
+        return Err(VulcanCoreError::InvalidState {
+            message: String::from("Anthropic 请求载荷中的 tools 字段不是数组。"),
+        });
+    };
+    tools.extend(
+        provider_tool_definitions
+            .iter()
+            .map(provider_tool_definition_to_anthropic_tool),
+    );
+    payload.entry(String::from("tool_choice")).or_insert(json!({
+        "type": "auto"
+    }));
+    Ok(())
 }
 
 /// Extracts one Anthropic-compatible `max_tokens` value from the payload or falls back to a model-aware default.
@@ -893,6 +981,42 @@ fn anthropic_content_block_from_pending_tool_use(
     })
 }
 
+/// Converts one pending Anthropic server-side tool-use assembly into a replayable provider-native content block.
+/// 将一条待定 Anthropic 服务端工具使用累计结果转换为可回放的 Provider 原生内容块。
+fn anthropic_content_block_from_pending_server_tool_use(
+    tool_use: &PendingAnthropicServerToolUse,
+) -> AnthropicContentBlock {
+    let input = if tool_use.input_json.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str::<Value>(&tool_use.input_json).unwrap_or_else(|_| json!({}))
+    };
+    AnthropicContentBlock::ServerToolUse {
+        id: replayable_anthropic_server_tool_use_id(&tool_use.id, &tool_use.name, &input),
+        name: tool_use.name.clone(),
+        input,
+    }
+}
+
+/// Builds one replayable Anthropic server-tool identifier with a deterministic local fallback.
+/// 构建一条可回放的 Anthropic 服务端工具标识，并提供确定性的本地回退值。
+fn replayable_anthropic_server_tool_use_id(
+    provider_visible_id: &str,
+    tool_name: &str,
+    input_json: &Value,
+) -> String {
+    let provider_visible_id = provider_visible_id.trim();
+    if !provider_visible_id.is_empty() {
+        return provider_visible_id.to_string();
+    }
+
+    format!(
+        "server:{}:{}",
+        tool_name,
+        serde_json::to_string(input_json).unwrap_or_else(|_| input_json.to_string())
+    )
+}
+
 /// Builds one replayable Anthropic tool-use identifier, preferring the upstream visible id and falling back to a deterministic local surrogate when the provider emitted blanks.
 /// 构建一条可回放的 Anthropic tool-use 标识；优先使用上游可见 id，若 Provider 发来空白值则回退到确定性的本地代理标识。
 fn replayable_anthropic_tool_use_id(
@@ -1058,7 +1182,8 @@ fn forward_anthropic_delta<S>(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnthropicContentBlock, PendingAnthropicToolUse,
+        AnthropicContentBlock, PendingAnthropicServerToolUse, PendingAnthropicToolUse,
+        anthropic_content_block_from_pending_server_tool_use,
         anthropic_content_block_from_pending_tool_use, build_anthropic_provider_message_state,
         build_anthropic_provider_tool_name, build_anthropic_request_payload,
         finalize_pending_anthropic_tool_use,
@@ -1297,9 +1422,9 @@ mod tests {
         assert_eq!(content[1]["source"]["media_type"], "application/pdf");
         assert_eq!(content[1]["source"]["data"], "AAECAw==");
         assert_eq!(
-            content[2]["text"],
+            content[0]["text"],
             json!(
-                "ERROR: Cannot read \"clip.mp4\" (this API path does not support video input). Inform the user."
+                "分析附件\n\nERROR: Cannot read \"clip.mp4\" (this API path does not support video input). Inform the user."
             )
         );
 
@@ -1975,6 +2100,89 @@ mod tests {
             .expect("messages should be an array");
         assert_eq!(messages[0]["content"][1]["name"], provider_tool_name);
         assert_eq!(payload["tools"][0]["name"], provider_tool_name);
+    }
+
+    /// Verifies Anthropic request payloads preserve provider-native server tools while appending host function tools.
+    /// 验证 Anthropic 请求载荷会保留 Provider 原生服务端工具，同时追加宿主函数工具。
+    #[test]
+    fn request_payload_preserves_native_web_search_and_appends_function_tools() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude-sonnet-4-6"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("search and read"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "tools": [{
+                        "type": "web_search_20250305",
+                        "name": "web_search"
+                    }]
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("search and read"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+
+        let tools = payload["tools"]
+            .as_array()
+            .expect("tools should be an array");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["type"], "web_search_20250305");
+        assert_eq!(tools[0]["name"], "web_search");
+        assert_eq!(tools[1]["name"], "read_file");
+        assert_eq!(tools[1]["description"], "Read one file");
+        assert_eq!(payload["tool_choice"]["type"], "auto");
+    }
+
+    /// Verifies Anthropic server-side tool-use state stores replayable native content without becoming a host tool call.
+    /// 验证 Anthropic 服务端工具使用状态会保存为可回放原生内容，而不会变成宿主工具调用。
+    #[test]
+    fn anthropic_provider_state_stores_replayable_server_tool_use() {
+        let block =
+            anthropic_content_block_from_pending_server_tool_use(&PendingAnthropicServerToolUse {
+                id: String::new(),
+                name: String::from("web_search"),
+                input_json: String::from("{\"query\":\"vulcan\"}"),
+            });
+
+        match block {
+            AnthropicContentBlock::ServerToolUse { id, name, input } => {
+                assert_eq!(id, "server:web_search:{\"query\":\"vulcan\"}");
+                assert_eq!(name, "web_search");
+                assert_eq!(input, json!({ "query": "vulcan" }));
+            }
+            other => panic!("unexpected content block: {other:?}"),
+        }
     }
 
     /// Verifies Anthropic tool-use finalization restores the original host tool identifier after the provider uses one sanitized tool name.

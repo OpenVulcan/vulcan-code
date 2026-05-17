@@ -4333,7 +4333,7 @@ fn parse_session_continuation_from_json(value: &str) -> Option<SessionProviderCo
 /// Serializes one typed transcript UI-state structure into the persisted JSON payload when needed.
 /// 在需要时将一条带类型的转录界面状态结构序列化为持久化 JSON 载荷。
 fn serialize_session_ui_state_to_json(state: &SessionTranscriptUiState) -> Option<String> {
-    if state.collapsed_message_ids.is_empty() && state.pending_prompt_queue.is_empty() {
+    if state.is_empty() {
         None
     } else {
         serde_json::to_string(state).ok()
@@ -4521,6 +4521,7 @@ fn truncate_preview_lines(value: &str, max_lines: usize, max_chars: usize) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState};
     use serde_json::json;
 
     /// Verifies that transcript metadata keeps display fields while sanitizing oversized host payloads.
@@ -5059,6 +5060,33 @@ mod tests {
         assert!(!statement.to_ascii_uppercase().contains("SELECT"));
     }
 
+    /// Verifies that visible pending prompt-panel rows keep the transcript UI state persistable across restarts.
+    /// 验证可见待发送提示词面板行会让转录界面状态跨重启保持可持久化。
+    #[test]
+    fn session_ui_state_json_preserves_pending_prompt_panel_queue() {
+        let state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![PendingPromptPanelEntry {
+                id: String::from("panel-1"),
+                prompt: String::from("继续排队消息"),
+                preview: String::from("继续排队消息"),
+                attachments: Vec::new(),
+                model_reference: None,
+                runtime_options: crate::model::PendingPromptRuntimeOptions::default(),
+                state: PendingPromptPanelEntryState::Ready,
+                created_at: String::from("1"),
+            }],
+            ..SessionTranscriptUiState::default()
+        };
+
+        let json_payload = serialize_session_ui_state_to_json(&state)
+            .expect("pending panel queue should make UI state persistable");
+        let parsed = parse_session_ui_state_from_json(&json_payload)
+            .expect("pending panel queue UI state should parse");
+
+        assert_eq!(parsed.pending_prompt_panel_queue.len(), 1);
+        assert_eq!(parsed.pending_prompt_panel_queue[0].prompt, "继续排队消息");
+    }
+
     /// Verifies that lightweight runtime persistence keeps continuation separate from large records.
     /// 验证轻量运行时持久化会将 continuation 与大型记录分离保存。
     #[test]
@@ -5104,8 +5132,8 @@ mod tests {
         push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
 
         assert_eq!(rows.len(), 1);
-        assert!(matches!(rows[0][7], ControllerSqliteValue::Null));
-        let continuation_json = match &rows[0][8] {
+        assert!(matches!(rows[0][8], ControllerSqliteValue::Null));
+        let continuation_json = match &rows[0][9] {
             ControllerSqliteValue::String(value) => value,
             other => panic!("expected continuation JSON string, got {other:?}"),
         };

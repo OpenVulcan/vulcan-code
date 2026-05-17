@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config;
 use crate::agent_runtime::provider_request_snapshot_adapter::PreviewSnapshotProviderAdapter;
@@ -34,6 +35,12 @@ pub(crate) async fn build_core_provider_request_snapshot(
         .iter()
         .map(resolved_tool_definition_to_core_tool_schema)
         .collect::<Vec<_>>();
+    let mut core_snapshot = build_core_conversation_snapshot(conversation_state);
+    core_snapshot.messages = core_messages_to_provider_visible_history_for_model(
+        &core_snapshot.messages,
+        Some(preparation.model_blueprint.api_family()),
+        Some(&preparation.model_blueprint.capabilities),
+    );
     let mut controller = vulcan_core::controller::VulcanCoreController::new(
         build_core_controller_config(
             preparation,
@@ -41,7 +48,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
             max_turns_override,
             additional_params.clone(),
         ),
-        build_core_conversation_snapshot(conversation_state),
+        core_snapshot,
     );
     let adapter = PreviewSnapshotProviderAdapter::new(
         preparation.model_blueprint.provider_id.clone(),

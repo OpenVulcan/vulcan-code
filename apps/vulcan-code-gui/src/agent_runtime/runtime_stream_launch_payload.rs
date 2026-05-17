@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::conversation_protocol::SessionConversationState;
-    use crate::provider_config::ProviderRuntimeKind;
+    use crate::provider_config::{PersistedAiToolConfiguration, ProviderRuntimeKind};
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -163,6 +163,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
+            ai_tool_configuration: PersistedAiToolConfiguration::default(),
         }
     }
 

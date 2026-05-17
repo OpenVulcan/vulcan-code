@@ -2803,6 +2803,23 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Builds the compact web-search override selector shown beside the workbench model trigger.
+    /// 构建显示在工作台模型触发器旁侧的紧凑网页搜索覆盖选择器。
+    pub(super) fn view_workbench_web_search_selector(&self) -> Element<'_, Message> {
+        let choices = self.configured_workbench_web_search_choices();
+        let selected_choice = self.active_workbench_web_search_choice();
+
+        pick_list(choices, selected_choice, Message::WorkbenchWebSearchSelected)
+            .width(WORKBENCH_WEB_SEARCH_SELECTOR_WIDTH)
+            .placeholder("搜索")
+            .padding([8, 10])
+            .text_size(13)
+            .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
+            .style(style::workbench_compact_pick_list_style)
+            .menu_style(style::workbench_compact_pick_list_menu_style)
+            .into()
+    }
+
     /// Builds the compact reasoning-effort selector shown before the trailing send button.
     /// 构建显示在尾部发送按钮之前的紧凑推理级别选择器。
     pub(super) fn view_workbench_reasoning_effort_selector(&self) -> Element<'_, Message> {
@@ -3662,6 +3679,7 @@ impl VulcanWorkbench {
         let composer_primary_controls = row![
             execution_mode_selector,
             self.view_workbench_model_selector(),
+            self.view_workbench_web_search_selector(),
             self.view_composer_attachment_button(),
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)
@@ -6571,12 +6589,20 @@ impl VulcanWorkbench {
             let selected_definition = self.selected_provider_definition();
             let provider_metadata: Element<'_, Message> =
                 if let Some(definition) = selected_definition {
+                    let selected_model_id = self
+                        .active_workbench_model_choice()
+                        .filter(|choice| choice.provider_id == self.selected_provider.id)
+                        .map(|choice| choice.model_id);
+                    let effective_runtime = selected_model_id
+                        .as_deref()
+                        .map(|model_id| definition.effective_runtime_for_model(model_id))
+                        .unwrap_or(definition.runtime);
                     column![
-                        text(format!("运行时：{}", definition.runtime.label())).size(12),
+                        text(format!("运行时：{}", effective_runtime.label())).size(12),
                         text(format!(
                             "接口族：{} · {}",
-                            definition.runtime.api_family().label(),
-                            definition.runtime.api_family().key()
+                            effective_runtime.api_family().label(),
+                            effective_runtime.api_family().key()
                         ))
                         .size(12),
                         text(format!(
@@ -6816,12 +6842,14 @@ impl VulcanWorkbench {
         .style(container::bordered_box);
 
         let runtime_execution = self.view_runtime_execution_card();
+        let ai_tool_configuration = self.view_ai_tool_configuration_card();
         let mcp_configuration = self.view_mcp_configuration_card();
 
         scrollable(
             column![
                 provider_controls,
                 selectors,
+                ai_tool_configuration,
                 runtime_execution,
                 mcp_configuration,
                 policies,
@@ -6832,6 +6860,338 @@ impl VulcanWorkbench {
         )
         .height(Fill)
         .spacing(8)
+        .into()
+    }
+
+    /// Renders the API-native tool configuration card focused on unified web-search routing.
+    /// 渲染聚焦统一网页搜索路由的 API 原生工具配置卡片。
+    pub(super) fn view_ai_tool_configuration_card(&self) -> Element<'_, Message> {
+        let web_search = &self.provider_configuration.ai_tools.web_search;
+        let usable_provider_count = web_search
+            .providers
+            .iter()
+            .filter(|provider| provider.is_usable())
+            .count();
+        let provider_status = if web_search.providers.is_empty() {
+            String::from("尚未配置第三方搜索供应商")
+        } else {
+            format!(
+                "第三方搜索供应商：{} 个配置项，{} 个可用",
+                web_search.providers.len(),
+                usable_provider_count
+            )
+        };
+        let mode_picker = pick_list(
+            WebSearchRoutingMode::ALL.to_vec(),
+            Some(web_search.mode),
+            Message::WebSearchRoutingModeSelected,
+        )
+        .width(Fill)
+        .placeholder("选择 web-search 路由策略");
+        let dispatch_picker = pick_list(
+            WebSearchProviderDispatchMode::ALL.to_vec(),
+            Some(web_search.dispatch_mode),
+            Message::WebSearchDispatchModeSelected,
+        )
+        .width(Fill)
+        .placeholder("选择第三方搜索调度模式");
+
+        let provider_entries: Element<'_, Message> = if web_search.providers.is_empty() {
+            container(
+                column![
+                    text("还没有第三方搜索供应商。").size(13),
+                    text("如果选择“仅使用供应商原生”，这里可以保持为空；如果要启用第三方搜索链，请至少添加一个可用条目。")
+                        .size(12),
+                ]
+                .spacing(6),
+            )
+            .padding(10)
+            .style(container::bordered_box)
+            .into()
+        } else {
+            web_search
+                .providers
+                .iter()
+                .enumerate()
+                .fold(column![].spacing(10), |list, (index, provider)| {
+                    let provider_id = provider.id.clone();
+                    let provider_id_for_enabled = provider_id.clone();
+                    let provider_id_for_name = provider_id.clone();
+                    let provider_id_for_key = provider_id.clone();
+                    let provider_id_for_url = provider_id.clone();
+                    let provider_id_for_model = provider_id.clone();
+                    let provider_id_for_region = provider_id.clone();
+                    let provider_id_for_results = provider_id.clone();
+                    let provider_id_for_up = provider_id.clone();
+                    let provider_id_for_down = provider_id.clone();
+                    let provider_id_for_remove = provider_id.clone();
+                    let max_results_text = provider.max_results.to_string();
+                    let kind = provider.kind;
+                    let credential_column: Element<'_, Message> = if kind.requires_api_key()
+                        || kind.api_key_optional()
+                    {
+                        column![
+                            text(kind.api_key_label()).size(12),
+                            text_input(kind.api_key_placeholder(), &provider.api_key)
+                                .on_input(move |value| {
+                                    Message::WebSearchProviderApiKeyChanged(
+                                        provider_id_for_key.clone(),
+                                        value,
+                                    )
+                                })
+                                .secure(true)
+                                .padding(8)
+                                .width(Fill),
+                        ]
+                        .spacing(5)
+                        .width(FillPortion(3))
+                        .into()
+                    } else {
+                        container(
+                            text("该供应商无需 API Key。")
+                                .size(12)
+                                .color(
+                                    self.app_theme
+                                        .extended_palette()
+                                        .background
+                                        .base
+                                        .text
+                                        .scale_alpha(0.56),
+                                ),
+                        )
+                        .padding([24, 10])
+                        .width(FillPortion(3))
+                        .into()
+                    };
+                    let extra_fields: Element<'_, Message> =
+                        if kind.supports_model_field() || kind.supports_region_field() {
+                            let mut row_builder = row![].spacing(10);
+
+                            if kind.supports_model_field() {
+                                row_builder = row_builder.push(
+                                    column![
+                                        text(kind.model_label()).size(12),
+                                        text_input(kind.model_placeholder(), &provider.model)
+                                            .on_input(move |value| {
+                                                Message::WebSearchProviderModelChanged(
+                                                    provider_id_for_model.clone(),
+                                                    value,
+                                                )
+                                            })
+                                            .padding(8)
+                                            .width(Fill),
+                                    ]
+                                    .spacing(5)
+                                    .width(FillPortion(3)),
+                                );
+                            }
+
+                            if kind.supports_region_field() {
+                                row_builder = row_builder.push(
+                                    column![
+                                        text(kind.region_label()).size(12),
+                                        text_input(kind.region_placeholder(), &provider.region)
+                                            .on_input(move |value| {
+                                                Message::WebSearchProviderRegionChanged(
+                                                    provider_id_for_region.clone(),
+                                                    value,
+                                                )
+                                            })
+                                            .padding(8)
+                                            .width(Fill),
+                                    ]
+                                    .spacing(5)
+                                    .width(FillPortion(2)),
+                                );
+                            }
+
+                            row_builder.into()
+                        } else {
+                            container(space::vertical().height(0)).into()
+                        };
+                    let provider_note: Element<'_, Message> =
+                        if let Some(note) = kind.configuration_note() {
+                            text(note)
+                                .size(12)
+                                .color(
+                                    self.app_theme
+                                        .extended_palette()
+                                        .background
+                                        .base
+                                        .text
+                                        .scale_alpha(0.62),
+                                )
+                                .into()
+                        } else {
+                            container(space::vertical().height(0)).into()
+                        };
+
+                    list.push(
+                        container(
+                            column![
+                                row![
+                                    checkbox(provider.enabled)
+                                        .label(format!(
+                                            "{}. {} · {}",
+                                            index + 1,
+                                            provider.name,
+                                            provider.kind.label()
+                                        ))
+                                        .on_toggle(move |enabled| {
+                                            Message::WebSearchProviderEnabledToggled(
+                                                provider_id_for_enabled.clone(),
+                                                enabled,
+                                            )
+                                        }),
+                                    space::horizontal(),
+                                    button("上移").style(button::secondary).on_press(
+                                        Message::MoveWebSearchProviderUp(provider_id_for_up)
+                                    ),
+                                    button("下移").style(button::secondary).on_press(
+                                        Message::MoveWebSearchProviderDown(provider_id_for_down)
+                                    ),
+                                    button("删除").style(button::secondary).on_press(
+                                        Message::RemoveWebSearchProvider(provider_id_for_remove)
+                                    ),
+                                ]
+                                .align_y(Center)
+                                .spacing(8),
+                                row![
+                                    column![
+                                        text("名称").size(12),
+                                        text_input("显示名称", &provider.name)
+                                            .on_input(move |value| {
+                                                Message::WebSearchProviderNameChanged(
+                                                    provider_id_for_name.clone(),
+                                                    value,
+                                                )
+                                            })
+                                            .padding(8)
+                                            .width(Fill),
+                                    ]
+                                    .spacing(5)
+                                    .width(FillPortion(2)),
+                                    credential_column,
+                                ]
+                                .spacing(10),
+                                row![
+                                    column![
+                                        text("Base URL / Endpoint（可留空使用默认）").size(12),
+                                        text_input(
+                                            provider.kind.default_base_url(),
+                                            &provider.base_url
+                                        )
+                                        .on_input(move |value| {
+                                            Message::WebSearchProviderBaseUrlChanged(
+                                                provider_id_for_url.clone(),
+                                                value,
+                                            )
+                                        })
+                                        .padding(8)
+                                        .width(Fill),
+                                    ]
+                                    .spacing(5)
+                                    .width(FillPortion(4)),
+                                    column![
+                                        text(format!(
+                                            "结果数 1-{}",
+                                            provider.kind.max_results_limit()
+                                        ))
+                                        .size(12),
+                                        text_input("5", &max_results_text)
+                                            .on_input(move |value| {
+                                                Message::WebSearchProviderMaxResultsChanged(
+                                                    provider_id_for_results.clone(),
+                                                    value,
+                                                )
+                                            })
+                                            .padding(8)
+                                            .width(Fill),
+                                    ]
+                                    .spacing(5)
+                                    .width(FillPortion(1)),
+                                ]
+                                .spacing(10),
+                                extra_fields,
+                                provider_note,
+                            ]
+                            .spacing(10),
+                        )
+                        .padding(12)
+                        .style(container::bordered_box),
+                    )
+                })
+                .into()
+        };
+
+        let add_provider_rows = vec![
+            vec![
+                WebSearchProviderKind::DuckDuckGo,
+                WebSearchProviderKind::Brave,
+                WebSearchProviderKind::Exa,
+                WebSearchProviderKind::Firecrawl,
+            ],
+            vec![
+                WebSearchProviderKind::Gemini,
+                WebSearchProviderKind::Grok,
+                WebSearchProviderKind::Kimi,
+                WebSearchProviderKind::MiniMax,
+            ],
+            vec![
+                WebSearchProviderKind::Ollama,
+                WebSearchProviderKind::Perplexity,
+                WebSearchProviderKind::Searxng,
+                WebSearchProviderKind::Tavily,
+            ],
+            vec![WebSearchProviderKind::SerpApi],
+        ];
+        let add_provider_buttons = add_provider_rows.into_iter().fold(
+            column![].spacing(8).width(Fill),
+            |column, kinds| {
+                let row_buttons = kinds.into_iter().fold(
+                    row![].spacing(8).width(Fill),
+                    |buttons, kind| {
+                        buttons.push(
+                            button(text(format!("新增 {}", kind.label())))
+                                .style(button::secondary)
+                                .on_press(Message::AddWebSearchProvider(kind)),
+                        )
+                    },
+                );
+                column.push(row_buttons)
+            },
+        );
+
+        container(
+            column![
+                row![
+                    text("API 原生工具配置").size(18),
+                    space::horizontal(),
+                    text("web-search").size(12),
+                ]
+                .align_y(Center),
+                text("只融合模型内建 Hosted Search 与第三方搜索供应商；MCP 工具保持独立名称、独立分类，不参与融合。")
+                    .size(12),
+                mode_picker,
+                text(web_search.mode.description()).size(12),
+                dispatch_picker,
+                text(web_search.dispatch_mode.description()).size(12),
+                text(provider_status).size(12),
+                provider_entries,
+                add_provider_buttons,
+                row![
+                    button("保存 API 工具配置")
+                        .style(button::primary)
+                        .on_press(Message::SaveAiToolConfiguration),
+                    text(&self.ai_tool_notice).size(12),
+                ]
+                .align_y(Center)
+                .spacing(10),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
         .into()
     }
 

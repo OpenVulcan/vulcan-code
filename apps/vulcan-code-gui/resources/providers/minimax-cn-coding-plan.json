@@ -1,6 +1,6 @@
 {
   "id": "minimax-cn-coding-plan",
-  "name": "MiniMax Coding Plan (minimaxi.com)",
+  "name": "MiniMax Token Plan (minimaxi.com)",
   "runtime": "anthropic",
   "credentialEnvKeys": [
     "MINIMAX_API_KEY"

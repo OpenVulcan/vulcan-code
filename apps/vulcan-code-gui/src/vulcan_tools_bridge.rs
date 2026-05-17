@@ -1,6 +1,8 @@
 //! GUI-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
 //! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的 GUI 侧桥接层。
 
+use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
+use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_tool_candidate};
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
@@ -8,9 +10,16 @@ use crate::luaskills_runtime::{
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
+use crate::provider_config::{
+    AiToolKind, PersistedAiToolConfiguration, PersistedWebSearchConfiguration,
+    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
+};
 use crate::tooling::{
     NativeToolCatalog, NativeToolDescriptor, allocate_unique_public_tool_name,
     build_direct_public_tool_name, build_prefixed_public_tool_name,
+};
+use crate::web_search_compat::{
+    configured_web_search_parameters_schema, execute_configured_web_search,
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
@@ -23,6 +32,38 @@ use vulcan_tools_manager::{
     VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
 
+/// One semantic AI-tool fallback alias requested by the provider/model router.
+/// Provider/Model 路由器请求的一条语义 AI 工具回退别名。
+#[derive(Debug, Clone)]
+pub struct AiToolFallbackAlias {
+    /// Stable semantic AI-specialized tool kind exposed to the model.
+    /// 暴露给模型的稳定 AI 专用语义工具类型。
+    pub kind: AiToolKind,
+    /// Concrete host tool identifier that should back the semantic alias.
+    /// 承载该语义别名的具体宿主工具标识。
+    pub fallback_tool_id: String,
+}
+
+/// Resolves semantic fallback aliases from one provider/model blueprint.
+/// 从单个 Provider/Model 蓝图解析语义回退别名。
+pub fn resolve_ai_tool_fallback_aliases(
+    blueprint: &ProviderRuntimeBlueprint,
+) -> Vec<AiToolFallbackAlias> {
+    resolve_ai_tool_plan(blueprint)
+        .decisions
+        .into_iter()
+        .filter(|decision| decision.route == AiToolRouteKind::HostFallback)
+        .filter_map(|decision| {
+            decision
+                .fallback_tool_id
+                .map(|fallback_tool_id| AiToolFallbackAlias {
+                    kind: decision.kind,
+                    fallback_tool_id,
+                })
+        })
+        .collect()
+}
+
 /// Builds one standalone host-owned tools manager from the current GUI runtime surfaces.
 /// 根据当前 GUI 运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
@@ -33,6 +74,8 @@ pub fn build_vulcan_tools_manager(
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
+    ai_tool_configuration: PersistedAiToolConfiguration,
+    ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
@@ -167,7 +210,55 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
+    append_configured_ai_tool_backing_candidates(&mut candidates, ai_tool_configuration);
+    append_ai_tool_fallback_aliases(&mut candidates, ai_tool_fallback_aliases);
+
     VulcanToolsManager::new(candidates)
+}
+
+/// Appends host-owned backing candidates for configured API-native compatibility tools.
+/// 为已配置的 API 原生兼容工具追加宿主侧承载候选项。
+fn append_configured_ai_tool_backing_candidates(
+    candidates: &mut Vec<VulcanToolCandidate>,
+    configuration: PersistedAiToolConfiguration,
+) {
+    if let Some(candidate) = configured_web_search_candidate(configuration.web_search) {
+        candidates.push(candidate);
+    }
+}
+
+/// Builds the hidden backing tool used by the semantic `web_search` fallback alias.
+/// 构建语义 `web_search` 回退别名使用的隐藏承载工具。
+fn configured_web_search_candidate(
+    configuration: PersistedWebSearchConfiguration,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_provider_chain() {
+        return None;
+    }
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: String::from(
+                "按用户配置的外部搜索供应商链执行网页搜索，失败时自动尝试下一个供应商。",
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_web_search_parameters_schema(),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "web search browse internet search news docs",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            Box::pin(async move {
+                execute_configured_web_search(args, configuration)
+                    .await
+                    .map(VulcanToolInvocationResult::from_model_output)
+            })
+        }),
+    })
 }
 
 /// Converts one native tool descriptor into the unified host-facing tool descriptor.
@@ -235,6 +326,81 @@ fn entry_declares_luaskill_sid(entry: &RuntimeEntryDescriptor) -> bool {
         .any(|parameter| parameter.name == LUASKILL_SID_PARAMETER_NAME)
 }
 
+/// Appends semantic AI fallback aliases and removes their concrete backing tool from direct model exposure.
+/// 追加语义 AI 回退别名，并移除其具体承载工具的直接暴露，避免模型同时看到两套等价工具。
+fn append_ai_tool_fallback_aliases(
+    candidates: &mut Vec<VulcanToolCandidate>,
+    aliases: Vec<AiToolFallbackAlias>,
+) {
+    for alias in aliases {
+        let fallback_tool_id = alias.fallback_tool_id.trim();
+        if fallback_tool_id.is_empty() {
+            continue;
+        }
+
+        let Some(target_index) = candidates
+            .iter()
+            .position(|candidate| candidate_matches_ai_fallback_id(candidate, fallback_tool_id))
+        else {
+            continue;
+        };
+        let target = candidates.remove(target_index);
+        candidates.push(build_ai_tool_fallback_candidate(alias.kind, target));
+    }
+}
+
+/// Builds one semantic AI fallback candidate backed by an already registered host tool candidate.
+/// 根据一条已注册宿主工具候选项构建一条语义 AI 回退候选项。
+fn build_ai_tool_fallback_candidate(
+    kind: AiToolKind,
+    target: VulcanToolCandidate,
+) -> VulcanToolCandidate {
+    let semantic_tool_name = kind.key().to_string();
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: semantic_tool_name.clone(),
+            name: semantic_tool_name.clone(),
+            description: format!(
+                "{}；由宿主工具 `{}` 回退执行。",
+                kind.label(),
+                target.descriptor.name
+            ),
+            source: VulcanToolSourceKind::AiFallback,
+        },
+        parameters_schema: target.parameters_schema,
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(format!(
+            "{} {} {}",
+            semantic_tool_name, target.descriptor.name, target.descriptor.description
+        )),
+        invoke: target.invoke,
+    }
+}
+
+/// Returns whether one host candidate can satisfy the configured fallback tool identifier.
+/// 返回单条宿主候选工具是否可以匹配配置中的回退工具标识。
+fn candidate_matches_ai_fallback_id(
+    candidate: &VulcanToolCandidate,
+    fallback_tool_id: &str,
+) -> bool {
+    let fallback_public_id = build_direct_public_tool_name(fallback_tool_id);
+    let direct_id = build_direct_public_tool_name(&candidate.descriptor.id);
+    let direct_name = build_direct_public_tool_name(&candidate.descriptor.name);
+    let mcp_id = build_prefixed_public_tool_name("mcp", &[&candidate.descriptor.id]);
+    let mcp_name = build_prefixed_public_tool_name("mcp", &[&candidate.descriptor.name]);
+
+    fallback_tool_id == candidate.descriptor.id
+        || fallback_tool_id == candidate.descriptor.name
+        || fallback_tool_id == direct_id
+        || fallback_tool_id == direct_name
+        || fallback_public_id == direct_id
+        || fallback_public_id == direct_name
+        || fallback_tool_id == mcp_id
+        || fallback_tool_id == mcp_name
+        || fallback_public_id == mcp_id
+        || fallback_public_id == mcp_name
+}
+
 /// Inject one host-managed LuaSkills SID when the entry declares it and the caller did not provide it.
 /// 当入口声明该字段且调用方未提供时，注入一份宿主管理 LuaSkills SID。
 fn inject_host_managed_luaskill_sid_if_needed(
@@ -270,4 +436,71 @@ fn inject_host_managed_luaskill_sid_if_needed(
     }
 
     Ok(Value::Object(object))
+}
+
+#[cfg(test)]
+mod tests {
+    //! GUI bridge tests for semantic AI fallback aliasing.
+    //! 面向语义 AI 回退别名的 GUI 桥接层测试。
+
+    use super::{AiToolFallbackAlias, append_ai_tool_fallback_aliases};
+    use crate::provider_config::AiToolKind;
+    use serde_json::json;
+    use std::sync::Arc;
+    use vulcan_tools_manager::{
+        VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
+        VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
+    };
+
+    /// Builds one inert host-tool candidate used by fallback alias tests.
+    /// 构建一条供回退别名测试使用的惰性宿主工具候选项。
+    fn test_candidate(id: &str, source: VulcanToolSourceKind) -> VulcanToolCandidate {
+        VulcanToolCandidate {
+            descriptor: VulcanToolDescriptor {
+                id: id.to_string(),
+                name: id.to_string(),
+                description: String::from("Search the web"),
+                source,
+            },
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ai_visible: true,
+            plan_policy: VulcanPlanToolPolicy::Visible,
+            invoke: Arc::new(|_args, _session_id| {
+                Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!("ok"))) })
+            }),
+        }
+    }
+
+    /// Verifies a configured host fallback is exposed as the semantic AI tool and the backing tool is not duplicated.
+    /// 验证已配置的宿主回退会以语义 AI 工具暴露，并且不会重复暴露底层承载工具。
+    #[test]
+    fn ai_tool_fallback_alias_exposes_semantic_name_without_backing_duplicate() {
+        let mut candidates = vec![test_candidate("brave-search", VulcanToolSourceKind::Mcp)];
+
+        append_ai_tool_fallback_aliases(
+            &mut candidates,
+            vec![AiToolFallbackAlias {
+                kind: AiToolKind::WebSearch,
+                fallback_tool_id: String::from("mcp_brave_search"),
+            }],
+        );
+
+        let resolved = VulcanToolsManager::new(candidates).resolve_for_execution_mode("Build");
+        assert_eq!(resolved.descriptors.len(), 1);
+        assert_eq!(resolved.descriptors[0].id, "web_search");
+        assert_eq!(
+            resolved.descriptors[0].source,
+            VulcanToolSourceKind::AiFallback
+        );
+        assert_eq!(
+            resolved.definitions[0].parameters_schema["properties"]["query"]["type"],
+            "string"
+        );
+    }
 }

@@ -30,19 +30,6 @@ pub(crate) struct ProviderAttachmentPayload {
 }
 
 impl ProviderAttachmentPayload {
-    /// Returns the OpenAI-compatible audio format when the attachment can be replayed through `input_audio`.
-    /// 返回当前附件在可通过 `input_audio` 回放时对应的 OpenAI 兼容音频格式。
-    pub(crate) fn openai_compatible_audio_format(&self) -> Option<&'static str> {
-        if self.kind != ConversationAttachmentKind::Audio {
-            return None;
-        }
-        match self.mime_type.as_str() {
-            "audio/mpeg" => Some("mp3"),
-            "audio/wav" | "audio/x-wav" => Some("wav"),
-            _ => None,
-        }
-    }
-
     /// Returns whether the current attachment should be treated as one PDF document by transports that support document blocks.
     /// 返回对支持文档块的传输而言，当前附件是否应被视为一份 PDF 文档。
     pub(crate) fn is_pdf_document(&self) -> bool {
@@ -212,21 +199,6 @@ mod tests {
         assert_eq!(payload.mime_type, "image/png");
         assert_eq!(payload.base64_data, "AAECAw==");
         assert_eq!(payload.data_url, "data:image/png;base64,AAECAw==");
-
-        let _ = std::fs::remove_file(&attachment.local_path);
-    }
-
-    /// Verifies audio attachments expose the expected OpenAI-compatible `input_audio` format mapping.
-    /// 验证音频附件会暴露期望的 OpenAI 兼容 `input_audio` 格式映射。
-    #[test]
-    fn read_provider_attachment_resolves_audio_format_mapping() {
-        let attachment =
-            build_test_attachment("mp3", ConversationAttachmentKind::Audio, "audio/mpeg");
-        let payload =
-            read_provider_attachment(&attachment).expect("attachment payload should build");
-        let payload = payload.expect("attachment payload should stay available");
-
-        assert_eq!(payload.openai_compatible_audio_format(), Some("mp3"));
 
         let _ = std::fs::remove_file(&attachment.local_path);
     }

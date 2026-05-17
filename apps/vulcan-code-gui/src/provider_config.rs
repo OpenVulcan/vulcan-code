@@ -89,6 +89,10 @@ pub enum ProviderRuntimeKind {
     /// 原生 OpenAI 运行时。
     #[serde(rename = "openai")]
     OpenAi,
+    /// OpenAI Responses-compatible HTTP runtime.
+    /// OpenAI Responses 兼容 HTTP 运行时。
+    #[serde(rename = "openai-responses-compatible")]
+    OpenAiResponsesCompatible,
     /// Native Anthropic runtime.
     /// 原生 Anthropic 运行时。
     #[serde(rename = "anthropic")]
@@ -191,6 +195,7 @@ impl ProviderRuntimeKind {
         match self {
             Self::OpenAiCompatible => "OpenAI-Compatible",
             Self::OpenAi => "OpenAI",
+            Self::OpenAiResponsesCompatible => "OpenAI Responses-Compatible",
             Self::Anthropic => "Anthropic",
             Self::AzureOpenAi => "Azure OpenAI",
             Self::GoogleGemini => "Google Gemini",
@@ -208,7 +213,7 @@ impl ProviderRuntimeKind {
     /// 返回当前运行时类型背后的规范 Provider 接口族。
     pub const fn api_family(self) -> ProviderApiFamily {
         match self {
-            Self::OpenAi => ProviderApiFamily::OpenAiResponses,
+            Self::OpenAi | Self::OpenAiResponsesCompatible => ProviderApiFamily::OpenAiResponses,
             Self::OpenAiCompatible
             | Self::AzureOpenAi
             | Self::XAi
@@ -342,6 +347,732 @@ pub enum ReasoningCapabilityKind {
     /// Proxy-level tiered controls whose downstream effect may collapse into fewer effective levels.
     /// 代理层支持分档但下游实际效果可能塌缩的推理控制。
     ProxyTiered,
+}
+
+/// Stable semantic kind for AI-specialized provider or host tools.
+/// AI 专用 Provider 或宿主工具使用的稳定语义类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiToolKind {
+    /// Web search and browsing-grounded retrieval.
+    /// 网页搜索与联网检索增强能力。
+    WebSearch,
+    /// File or knowledge-base search.
+    /// 文件或知识库检索能力。
+    FileSearch,
+    /// Sandboxed code execution.
+    /// 沙盒代码执行能力。
+    CodeInterpreter,
+    /// Image generation or editing.
+    /// 图片生成或编辑能力。
+    ImageGeneration,
+    /// Browser or desktop computer-use control.
+    /// 浏览器或桌面计算机控制能力。
+    ComputerUse,
+    /// Video generation.
+    /// 视频生成能力。
+    VideoGeneration,
+    /// Audio generation.
+    /// 音频生成能力。
+    AudioGeneration,
+}
+
+/// Host-owned fallback tool id used by the configured web-search provider chain.
+/// 宿主侧配置化网页搜索供应商链使用的回退工具标识。
+pub const WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_web_search_chain";
+
+impl AiToolKind {
+    /// Returns the stable public semantic key used by diagnostics and configuration.
+    /// 返回诊断与配置使用的稳定公开语义键。
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::WebSearch => "web_search",
+            Self::FileSearch => "file_search",
+            Self::CodeInterpreter => "code_interpreter",
+            Self::ImageGeneration => "image_generation",
+            Self::ComputerUse => "computer_use",
+            Self::VideoGeneration => "video_generation",
+            Self::AudioGeneration => "audio_generation",
+        }
+    }
+
+    /// Returns the compact Chinese label used by request-preview diagnostics.
+    /// 返回请求预览诊断使用的紧凑中文标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::WebSearch => "网页搜索",
+            Self::FileSearch => "文件检索",
+            Self::CodeInterpreter => "代码解释器",
+            Self::ImageGeneration => "图片生成",
+            Self::ComputerUse => "计算机控制",
+            Self::VideoGeneration => "视频生成",
+            Self::AudioGeneration => "音频生成",
+        }
+    }
+}
+
+/// User-selected routing mode for the unified web-search capability.
+/// 用户为统一网页搜索能力选择的路由模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebSearchRoutingMode {
+    /// Only expose provider-native web search; unsupported providers keep the tool inactive.
+    /// 仅暴露供应商原生网页搜索；不支持时保持工具未激活。
+    NativeOnly,
+    /// Prefer provider-native web search, then use the configured host provider chain.
+    /// 优先使用供应商原生网页搜索，不支持时使用已配置的宿主供应商链。
+    NativeFirst,
+    /// Prefer the configured host provider chain, then fall back to provider-native search when no host chain is available.
+    /// 优先使用已配置的第三方搜索链；当第三方链不可用时回退到供应商原生搜索。
+    #[serde(alias = "provider-first")]
+    ThirdPartyFirst,
+    /// Only expose the configured host provider chain.
+    /// 仅暴露已配置的第三方搜索链。
+    #[serde(alias = "provider-only")]
+    ThirdPartyOnly,
+    /// Disable unified web search completely.
+    /// 完全关闭统一网页搜索。
+    Disabled,
+}
+
+impl WebSearchRoutingMode {
+    /// All routing modes shown by the settings picker in stable order.
+    /// 设置选择器中按稳定顺序展示的全部路由模式。
+    pub const ALL: [Self; 5] = [
+        Self::NativeOnly,
+        Self::NativeFirst,
+        Self::ThirdPartyFirst,
+        Self::ThirdPartyOnly,
+        Self::Disabled,
+    ];
+
+    /// Returns the compact settings label for this routing mode.
+    /// 返回当前路由模式在设置界面使用的紧凑标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NativeOnly => "仅使用供应商原生",
+            Self::NativeFirst => "原生优先，第三方兜底",
+            Self::ThirdPartyFirst => "第三方优先，原生兜底",
+            Self::ThirdPartyOnly => "仅使用第三方搜索",
+            Self::Disabled => "彻底关闭 web-search",
+        }
+    }
+
+    /// Returns one explanatory sentence for settings and diagnostics surfaces.
+    /// 返回用于设置与诊断界面的一句解释说明。
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::NativeOnly => {
+                "仅当当前模型声明支持 Provider Hosted Search 时，才在请求中声明启用。"
+            }
+            Self::NativeFirst => {
+                "能用模型原生 Hosted Search 就声明启用；否则使用下方第三方搜索链。"
+            }
+            Self::ThirdPartyFirst => {
+                "优先暴露宿主 web_search；第三方链未配置或不可用时才声明模型原生搜索。"
+            }
+            Self::ThirdPartyOnly => {
+                "只暴露宿主 web_search；第三方搜索未配置时不会启用搜索。"
+            }
+            Self::Disabled => {
+                "不注入统一 web_search，也不声明模型内建搜索；用户可自行通过 Skill 或 MCP 暴露搜索工具。"
+            }
+        }
+    }
+}
+
+impl Default for WebSearchRoutingMode {
+    /// Returns the conservative default that preserves provider-native behavior.
+    /// 返回保守默认值，以保留供应商原生行为。
+    fn default() -> Self {
+        Self::NativeOnly
+    }
+}
+
+impl fmt::Display for WebSearchRoutingMode {
+    /// Formats one routing mode as a user-facing label.
+    /// 将单个路由模式格式化为面向用户的标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+/// Supported external web-search provider families for the host fallback chain.
+/// 宿主回退链支持的第三方网页搜索供应商类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebSearchProviderDispatchMode {
+    /// Try configured providers in order and stop on the first successful response.
+    /// 按配置顺序依次尝试供应商，并在首次成功响应后停止。
+    PriorityFailover,
+    /// Rotate the starting provider across runs while still allowing per-run fallback to the rest of the chain.
+    /// 在多次调用之间轮换起始供应商，同时允许单次调用继续回退到链上其他条目。
+    Balanced,
+}
+
+impl WebSearchProviderDispatchMode {
+    /// All dispatch modes shown by the settings page in stable order.
+    /// 设置页面按稳定顺序展示的全部调度模式。
+    pub const ALL: [Self; 2] = [Self::PriorityFailover, Self::Balanced];
+
+    /// Returns the compact settings label for the dispatch mode.
+    /// 返回当前调度模式在设置界面显示的紧凑标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PriorityFailover => "顺序优先，失败兜底",
+            Self::Balanced => "均衡轮询，失败兜底",
+        }
+    }
+
+    /// Returns one explanatory sentence for settings and diagnostics surfaces.
+    /// 返回用于设置与诊断界面的一句解释说明。
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::PriorityFailover => {
+                "始终从列表顶部开始尝试；当前供应商失败后自动切换到下一个。"
+            }
+            Self::Balanced => {
+                "在多次调用之间轮换起始供应商；单次失败时仍继续尝试链上的其他供应商。"
+            }
+        }
+    }
+}
+
+impl Default for WebSearchProviderDispatchMode {
+    /// Returns the conservative default dispatch mode.
+    /// 返回保守的默认调度模式。
+    fn default() -> Self {
+        Self::PriorityFailover
+    }
+}
+
+impl fmt::Display for WebSearchProviderDispatchMode {
+    /// Formats one dispatch mode as a user-facing label.
+    /// 将单个调度模式格式化为面向用户的标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+/// Supported third-party web-search provider families for the host fallback chain.
+/// 宿主回退链支持的第三方网页搜索供应商类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebSearchProviderKind {
+    /// DuckDuckGo HTML search without an API key.
+    /// 无需 API Key 的 DuckDuckGo HTML 搜索。
+    DuckDuckGo,
+    /// Brave Search API.
+    /// Brave Search API。
+    Brave,
+    /// Tavily Search API.
+    /// Tavily Search API。
+    Tavily,
+    /// Exa Search API.
+    /// Exa Search API。
+    Exa,
+    /// Firecrawl Search API.
+    /// Firecrawl Search API。
+    Firecrawl,
+    /// Gemini grounding search via Google Gemini API.
+    /// 通过 Google Gemini API 调用的 Gemini 搜索。
+    Gemini,
+    /// Grok web-grounded search via xAI.
+    /// 通过 xAI 调用的 Grok 联网搜索。
+    Grok,
+    /// Kimi web search via Moonshot chat-completions.
+    /// 通过 Moonshot chat-completions 调用的 Kimi 联网搜索。
+    Kimi,
+    /// MiniMax search endpoint backed by the Token Plan key and credits system.
+    /// 由 Token Plan Key 与 Credits 体系承载的 MiniMax 搜索端点。
+    MiniMax,
+    /// Ollama web search endpoint exposed by the local or cloud host.
+    /// 由本地或云端 Ollama 宿主暴露的联网搜索端点。
+    Ollama,
+    /// Perplexity structured search endpoint.
+    /// Perplexity 结构化搜索端点。
+    Perplexity,
+    /// SearXNG self-hosted meta search.
+    /// SearXNG 自托管聚合搜索。
+    Searxng,
+    /// SerpAPI Google search endpoint.
+    /// SerpAPI Google 搜索端点。
+    SerpApi,
+}
+
+impl WebSearchProviderKind {
+    /// Returns the stable provider kind key used for generated ids.
+    /// 返回生成标识使用的稳定供应商类型键。
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Brave => "brave",
+            Self::Tavily => "tavily",
+            Self::Exa => "exa",
+            Self::Firecrawl => "firecrawl",
+            Self::Gemini => "gemini",
+            Self::Grok => "grok",
+            Self::Kimi => "kimi",
+            Self::MiniMax => "minimax",
+            Self::Ollama => "ollama",
+            Self::Perplexity => "perplexity",
+            Self::Searxng => "searxng",
+            Self::SerpApi => "serpapi",
+        }
+    }
+
+    /// Returns the user-facing provider name.
+    /// 返回面向用户的供应商名称。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "DuckDuckGo Search",
+            Self::Brave => "Brave Search",
+            Self::Tavily => "Tavily",
+            Self::Exa => "Exa",
+            Self::Firecrawl => "Firecrawl Search",
+            Self::Gemini => "Gemini (Google Search)",
+            Self::Grok => "Grok (xAI)",
+            Self::Kimi => "Kimi (Moonshot)",
+            Self::MiniMax => "MiniMax Search",
+            Self::Ollama => "Ollama Web Search",
+            Self::Perplexity => "Perplexity Search",
+            Self::Searxng => "SearXNG Search",
+            Self::SerpApi => "SerpAPI",
+        }
+    }
+
+    /// Returns the default base URL used when the user leaves the field empty.
+    /// 返回用户留空接口地址时使用的默认基址。
+    pub const fn default_base_url(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "https://html.duckduckgo.com/html",
+            Self::Brave => "https://api.search.brave.com/res/v1/web/search",
+            Self::Tavily => "https://api.tavily.com/search",
+            Self::Exa => "https://api.exa.ai/search",
+            Self::Firecrawl => "https://api.firecrawl.dev/v2/search",
+            Self::Gemini => "https://generativelanguage.googleapis.com/v1beta",
+            Self::Grok => "https://api.x.ai/v1/responses",
+            Self::Kimi => "https://api.moonshot.cn/v1/chat/completions",
+            Self::MiniMax => "https://api.minimax.io/v1/coding_plan/search",
+            Self::Ollama => "http://127.0.0.1:11434",
+            Self::Perplexity => "https://api.perplexity.ai/search",
+            Self::Searxng => "http://127.0.0.1:8080",
+            Self::SerpApi => "https://serpapi.com/search.json",
+        }
+    }
+
+    /// Returns whether the provider requires a non-empty API key before it can be used.
+    /// 返回当前供应商在使用前是否要求填写非空 API Key。
+    pub const fn requires_api_key(self) -> bool {
+        !matches!(
+            self,
+            Self::DuckDuckGo | Self::Ollama | Self::Searxng
+        )
+    }
+
+    /// Returns whether the provider can optionally use an API key even when it is not mandatory.
+    /// 返回当前供应商是否允许在非强制前提下可选填写 API Key。
+    pub const fn api_key_optional(self) -> bool {
+        matches!(self, Self::Ollama)
+    }
+
+    /// Returns whether the provider exposes one configurable model field.
+    /// 返回当前供应商是否暴露可配置模型字段。
+    pub const fn supports_model_field(self) -> bool {
+        matches!(
+            self,
+            Self::Gemini | Self::Grok | Self::Kimi | Self::Perplexity
+        )
+    }
+
+    /// Returns whether the provider exposes one configurable region-like field.
+    /// 返回当前供应商是否暴露可配置区域类字段。
+    pub const fn supports_region_field(self) -> bool {
+        matches!(self, Self::DuckDuckGo | Self::MiniMax)
+    }
+
+    /// Returns the user-facing label shown above the API key field.
+    /// 返回显示在 API Key 字段上方的面向用户标签。
+    pub const fn api_key_label(self) -> &'static str {
+        match self {
+            Self::MiniMax => "Token Plan Key / {env:MINIMAX_API_KEY}",
+            _ if self.api_key_optional() => "API Key / {env:NAME}（可选）",
+            _ => "API Key / {env:NAME}",
+        }
+    }
+
+    /// Returns the placeholder shown inside the API key field.
+    /// 返回显示在 API Key 字段内的占位提示。
+    pub const fn api_key_placeholder(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo | Self::Searxng => "",
+            Self::Brave => "{env:BRAVE_SEARCH_API_KEY}",
+            Self::Tavily => "{env:TAVILY_API_KEY}",
+            Self::Exa => "{env:EXA_API_KEY}",
+            Self::Firecrawl => "{env:FIRECRAWL_API_KEY}",
+            Self::Gemini => "{env:GEMINI_API_KEY}",
+            Self::Grok => "{env:XAI_API_KEY}",
+            Self::Kimi => "{env:MOONSHOT_API_KEY}",
+            Self::MiniMax => "{env:MINIMAX_API_KEY}",
+            Self::Ollama => "{env:OLLAMA_API_KEY}",
+            Self::Perplexity => "{env:PERPLEXITY_API_KEY}",
+            Self::SerpApi => "{env:SERPAPI_API_KEY}",
+        }
+    }
+
+    /// Returns the default model id suggested for model-capable providers.
+    /// 返回为支持模型字段的供应商建议的默认模型标识。
+    pub const fn default_model(self) -> &'static str {
+        match self {
+            Self::Gemini => "gemini-2.5-flash",
+            Self::Grok => "grok-4-1-fast",
+            Self::Kimi => "kimi-k2.5",
+            Self::Perplexity => "perplexity/sonar-pro",
+            _ => "",
+        }
+    }
+
+    /// Returns the placeholder shown inside the model field.
+    /// 返回显示在模型字段内的占位提示。
+    pub const fn model_placeholder(self) -> &'static str {
+        match self {
+            Self::Gemini | Self::Grok | Self::Kimi | Self::Perplexity => self.default_model(),
+            _ => "",
+        }
+    }
+
+    /// Returns the label shown above the model field.
+    /// 返回显示在模型字段上方的标签。
+    pub const fn model_label(self) -> &'static str {
+        match self {
+            Self::Gemini => "Gemini 模型",
+            Self::Grok => "Grok 模型",
+            Self::Kimi => "Kimi 模型",
+            Self::Perplexity => "Perplexity 模型",
+            _ => "模型",
+        }
+    }
+
+    /// Returns the default region or locale hint for region-aware providers.
+    /// 返回支持区域字段的供应商使用的默认区域或地区提示。
+    pub const fn default_region(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "us-en",
+            Self::MiniMax => "global",
+            _ => "",
+        }
+    }
+
+    /// Returns the placeholder shown inside the region field.
+    /// 返回显示在区域字段内的占位提示。
+    pub const fn region_placeholder(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "例如：us-en / uk-en / de-de",
+            Self::MiniMax => "global 或 cn（Token Plan 区域）",
+            _ => "",
+        }
+    }
+
+    /// Returns the label shown above the region field.
+    /// 返回显示在区域字段上方的标签。
+    pub const fn region_label(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "地区 / SafeSearch 区域",
+            Self::MiniMax => "Token Plan 区域",
+            _ => "区域",
+        }
+    }
+
+    /// Returns one provider-specific configuration hint shown in the settings UI when extra clarification is helpful.
+    /// 返回在设置界面需要额外澄清时展示的供应商专属配置提示。
+    pub const fn configuration_note(self) -> Option<&'static str> {
+        match self {
+            Self::MiniMax => Some(
+                "当前使用 MiniMax Search 接口；官方 CLI 使用 MINIMAX_API_KEY。同一把 Token Plan Key 同时覆盖订阅额度与 Credits，若两者同时存在则优先消耗额度，再自动回退到 Credits。当前官方路径仍是 /v1/coding_plan/search，这不是普通文本模型 API 的内建联网搜索。",
+            ),
+            _ => None,
+        }
+    }
+
+    /// Returns the per-provider hard result-count ceiling.
+    /// 返回当前供应商允许的结果数量硬上限。
+    pub const fn max_results_limit(self) -> usize {
+        match self {
+            Self::DuckDuckGo | Self::Ollama | Self::Searxng => 10,
+            _ => 20,
+        }
+    }
+}
+
+impl fmt::Display for WebSearchProviderKind {
+    /// Formats one provider kind as a user-facing name.
+    /// 将单个供应商类型格式化为面向用户的名称。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+/// One configured external web-search provider entry in the fallback chain.
+/// 回退链中的单个外部网页搜索供应商配置项。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedWebSearchProviderEntry {
+    /// Stable entry id used by the settings UI.
+    /// 设置界面使用的稳定条目标识。
+    pub id: String,
+    /// User-facing display name.
+    /// 面向用户展示的显示名称。
+    pub name: String,
+    /// Provider implementation kind.
+    /// 供应商实现类型。
+    pub kind: WebSearchProviderKind,
+    /// Whether this entry participates in the runtime chain.
+    /// 当前条目是否参与运行时搜索链。
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+    /// API key or `{env:NAME}` placeholder.
+    /// API Key 或 `{env:NAME}` 环境变量占位符。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    /// Optional endpoint override.
+    /// 可选的接口地址覆盖。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_url: String,
+    /// Optional provider-specific model override.
+    /// 可选的供应商专属模型覆盖。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    /// Optional provider-specific region or locale override.
+    /// 可选的供应商专属区域或地区覆盖。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub region: String,
+    /// Maximum result count requested from this provider.
+    /// 向当前供应商请求的最大结果数量。
+    #[serde(default = "default_web_search_max_results")]
+    pub max_results: usize,
+}
+
+impl PersistedWebSearchProviderEntry {
+    /// Builds one default provider entry with a unique id supplied by the caller.
+    /// 使用调用方提供的唯一标识构建默认供应商条目。
+    pub fn new(id: impl Into<String>, kind: WebSearchProviderKind) -> Self {
+        Self {
+            id: id.into(),
+            name: kind.label().to_string(),
+            kind,
+            enabled: true,
+            api_key: String::new(),
+            base_url: String::new(),
+            model: kind.default_model().to_string(),
+            region: kind.default_region().to_string(),
+            max_results: default_web_search_max_results(),
+        }
+    }
+
+    /// Returns the resolved endpoint, falling back to the provider default.
+    /// 返回解析后的接口地址，留空时回退到供应商默认地址。
+    pub fn resolved_base_url(&self) -> String {
+        let trimmed = self.base_url.trim();
+        if trimmed.is_empty() {
+            self.kind.default_base_url().to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    /// Returns whether this entry is currently usable by the runtime chain.
+    /// 返回当前条目是否可被运行时搜索链使用。
+    pub fn is_usable(&self) -> bool {
+        self.enabled
+            && (!self.kind.requires_api_key() || !self.api_key.trim().is_empty())
+            && match self.kind {
+                WebSearchProviderKind::Searxng | WebSearchProviderKind::Ollama => {
+                    !self.resolved_base_url().trim().is_empty()
+                }
+                _ => true,
+            }
+    }
+
+    /// Returns the resolved provider model, falling back to the provider default when available.
+    /// 返回解析后的供应商模型；若存在默认模型则在留空时自动回退。
+    pub fn resolved_model(&self) -> String {
+        let trimmed = self.model.trim();
+        if trimmed.is_empty() {
+            self.kind.default_model().to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    /// Returns the resolved provider region or locale, falling back to the provider default when available.
+    /// 返回解析后的供应商区域或地区；若存在默认值则在留空时自动回退。
+    pub fn resolved_region(&self) -> String {
+        let trimmed = self.region.trim();
+        if trimmed.is_empty() {
+            self.kind.default_region().to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+}
+
+/// Persisted configuration for the unified web-search capability.
+/// 统一网页搜索能力的持久化配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedWebSearchConfiguration {
+    /// User-selected web-search routing mode.
+    /// 用户选择的网页搜索路由模式。
+    #[serde(default)]
+    pub mode: WebSearchRoutingMode,
+    /// Ordered external provider fallback chain.
+    /// 按顺序排列的第三方供应商回退链。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<PersistedWebSearchProviderEntry>,
+    /// Dispatch mode used inside the third-party provider chain.
+    /// 第三方供应商链内部使用的调度模式。
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub dispatch_mode: WebSearchProviderDispatchMode,
+}
+
+impl Default for PersistedWebSearchConfiguration {
+    /// Builds the default web-search configuration.
+    /// 构建默认网页搜索配置。
+    fn default() -> Self {
+        Self {
+            mode: WebSearchRoutingMode::default(),
+            providers: Vec::new(),
+            dispatch_mode: WebSearchProviderDispatchMode::default(),
+        }
+    }
+}
+
+impl PersistedWebSearchConfiguration {
+    /// Returns whether the web-search configuration still equals the built-in default.
+    /// 返回网页搜索配置是否仍等于内置默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Returns whether at least one configured provider can be used.
+    /// 返回是否至少存在一个可用的已配置供应商。
+    pub fn has_usable_provider_chain(&self) -> bool {
+        self.providers
+            .iter()
+            .any(PersistedWebSearchProviderEntry::is_usable)
+    }
+}
+
+/// Root persisted API-native tool configuration.
+/// 根级持久化 API 原生工具配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedAiToolConfiguration {
+    /// Unified web-search configuration.
+    /// 统一网页搜索配置。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedWebSearchConfiguration::is_default"
+    )]
+    pub web_search: PersistedWebSearchConfiguration,
+}
+
+impl PersistedAiToolConfiguration {
+    /// Returns whether all API-native tool settings are still defaults.
+    /// 返回全部 API 原生工具设置是否仍为默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Routing policy used when one AI-specialized tool has both provider-native and host fallback options.
+/// 当单个 AI 专用工具同时存在 Provider 原生与宿主回退选项时使用的路由策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiToolPolicy {
+    /// Prefer provider-native tools and fall back to host tools when configured.
+    /// 优先使用 Provider 原生工具，并在已配置时回退到宿主工具。
+    Auto,
+    /// Require provider-native support.
+    /// 强制要求 Provider 原生支持。
+    ForceNative,
+    /// Require a host fallback tool.
+    /// 强制使用宿主回退工具。
+    ForceHost,
+    /// Do not expose the tool.
+    /// 不暴露该工具。
+    Disabled,
+}
+
+impl Default for AiToolPolicy {
+    /// Returns the safe default AI-tool policy.
+    /// 返回安全的默认 AI 工具策略。
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Declarative AI-tool capability or override attached to one provider or model catalog entry.
+/// 附着在单个供应商或模型目录条目上的声明式 AI 工具能力或覆盖配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolDeclaration {
+    /// Stable semantic tool kind.
+    /// 稳定语义工具类型。
+    pub kind: AiToolKind,
+    /// Routing policy used by the AI-tool router.
+    /// AI 工具路由器使用的路由策略。
+    #[serde(default, skip_serializing_if = "is_default_ai_tool_policy")]
+    pub policy: AiToolPolicy,
+    /// Whether provider-native execution is available for this tool.
+    /// 当前工具是否可使用 Provider 原生执行。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_provider_tool: Option<bool>,
+    /// Provider-native tool type such as `web_search_preview` or `google_search`.
+    /// Provider 原生工具类型，例如 `web_search_preview` 或 `google_search`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tool_type: Option<String>,
+    /// Optional provider-native request patch appended to the outgoing payload when this hosted tool is enabled.
+    /// 启用当前 Hosted Tool 时追加到出站请求载荷中的可选 Provider 原生请求补丁。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_request_patch: Option<Value>,
+    /// Optional host fallback tool identifier used when native support is unavailable or disabled.
+    /// 当原生支持不可用或被禁用时使用的可选宿主回退工具标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_tool_id: Option<String>,
+    /// Whether this tool requires explicit user approval before execution.
+    /// 当前工具执行前是否需要用户显式批准。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_approval: bool,
+    /// Modalities that may be returned by this tool.
+    /// 当前工具可能返回的模态集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_modalities: Vec<String>,
+    /// Whether the tool can return structured citations.
+    /// 当前工具是否可以返回结构化引用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub citation_support: Option<bool>,
+}
+
+impl AiToolDeclaration {
+    /// Builds one provider-native declaration for a semantic AI tool.
+    /// 为单个语义 AI 工具构建 Provider 原生声明。
+    pub fn provider_native(kind: AiToolKind, native_tool_type: impl Into<String>) -> Self {
+        Self {
+            kind,
+            policy: AiToolPolicy::Auto,
+            native_provider_tool: Some(true),
+            native_tool_type: Some(native_tool_type.into()),
+            native_request_patch: None,
+            fallback_tool_id: None,
+            requires_approval: false,
+            result_modalities: vec![String::from("text")],
+            citation_support: Some(matches!(
+                kind,
+                AiToolKind::WebSearch | AiToolKind::FileSearch
+            )),
+        }
+    }
 }
 
 /// Structured JSON patch set that maps the shared reasoning-effort presets onto one provider- or model-specific request payload.
@@ -577,6 +1308,10 @@ pub struct ModelChoice {
     /// 可选的模型级推理档位覆盖配置，可为当前精确模型替换供应商默认策略。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_profile: Option<ReasoningProfileConfig>,
+    /// Optional AI-specialized tool declarations attached to this exact model.
+    /// 附着在当前精确模型上的可选 AI 专用工具声明集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_tools: Vec<AiToolDeclaration>,
     /// Optional input modality list.
     /// 可选的输入模态列表。
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -651,10 +1386,18 @@ pub struct SupportedProviderDefinition {
     /// 由兼容运行时合并进供应商请求体中的附加 JSON Body 参数。
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra_body: serde_json::Map<String, serde_json::Value>,
+    /// Optional per-model runtime overrides for providers whose individual models use different compatible protocols.
+    /// 当同一供应商下不同模型使用不同兼容协议时采用的可选模型级运行时覆盖。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_runtime_overrides: BTreeMap<String, ProviderRuntimeKind>,
     /// Optional provider-scoped reasoning profile used when the current runtime family needs non-standard or provider-tuned controls.
     /// 当当前运行时家族需要非标准或供应商特调控制时使用的可选供应商级推理档位配置。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_profile: Option<ReasoningProfileConfig>,
+    /// Optional provider-scoped AI-specialized tool declarations used as model defaults.
+    /// 作为模型默认值使用的可选供应商级 AI 专用工具声明集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_tools: Vec<AiToolDeclaration>,
     /// Ordered field list exposed by the provider form.
     /// 供应商表单暴露的有序字段列表。
     #[serde(default)]
@@ -672,6 +1415,24 @@ pub struct SupportedProviderDefinition {
 }
 
 impl SupportedProviderDefinition {
+    /// Returns the effective runtime for one concrete model under this provider.
+    /// 返回当前供应商下某个具体模型的生效运行时。
+    pub fn effective_runtime_for_model(&self, model_id: &str) -> ProviderRuntimeKind {
+        self.model_runtime_overrides
+            .get(model_id)
+            .copied()
+            .unwrap_or(self.runtime)
+    }
+
+    /// Returns the effective API family for one concrete model under this provider.
+    /// 返回当前供应商下某个具体模型的生效 API 接口族。
+    pub fn effective_api_family_for_model(&self, model_id: Option<&str>) -> ProviderApiFamily {
+        model_id
+            .map(|id| self.effective_runtime_for_model(id))
+            .unwrap_or(self.runtime)
+            .api_family()
+    }
+
     /// Returns the effective ordered field list used by the configuration form.
     /// 返回配置表单使用的生效有序字段列表。
     pub fn input_fields(&self) -> Vec<ProviderFieldKey> {
@@ -1105,6 +1866,10 @@ pub struct PersistedModelEntry {
     /// 可选的模型级推理档位配置。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_profile: Option<ReasoningProfileConfig>,
+    /// Optional cached AI-specialized tool declarations.
+    /// 可选的缓存 AI 专用工具声明集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_tools: Vec<AiToolDeclaration>,
     /// Optional input modalities.
     /// 可选的输入模态集合。
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -1557,6 +2322,14 @@ pub struct ProviderConfigurationFile {
     /// 以稳定策略标识为键保存的工具策略定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_policies: BTreeMap<String, PersistedToolPolicyEntry>,
+    /// Persisted API-native tool routing and compatibility configuration.
+    /// 持久化的 API 原生工具路由与兼容配置。
+    #[serde(
+        default,
+        rename = "aiTools",
+        skip_serializing_if = "PersistedAiToolConfiguration::is_default"
+    )]
+    pub ai_tools: PersistedAiToolConfiguration,
     /// Persisted MCP server configuration block.
     /// 持久化的 MCP 服务器配置块。
     #[serde(default, skip_serializing_if = "PersistedMcpConfiguration::is_empty")]
@@ -1687,6 +2460,7 @@ pub fn effective_model_choices(
                     attachment: model.attachment,
                     interleaved: model.interleaved.clone(),
                     reasoning_profile: model.reasoning_profile.clone(),
+                    ai_tools: model.ai_tools.clone(),
                     input_modalities: model.input_modalities.clone(),
                     output_modalities: model.output_modalities.clone(),
                 })
@@ -1771,6 +2545,7 @@ pub fn persist_remote_models(models: &[ModelChoice]) -> BTreeMap<String, Persist
                     attachment: model.attachment,
                     interleaved: model.interleaved.clone(),
                     reasoning_profile: model.reasoning_profile.clone(),
+                    ai_tools: model.ai_tools.clone(),
                     input_modalities: model.input_modalities.clone(),
                     output_modalities: model.output_modalities.clone(),
                 },
@@ -1972,6 +2747,39 @@ fn default_true() -> bool {
     true
 }
 
+/// Returns the default number of search results requested from external web-search providers.
+/// 返回外部网页搜索供应商默认请求的搜索结果数量。
+fn default_web_search_max_results() -> usize {
+    5
+}
+
+/// Returns whether one value still equals its type default for compact serialization.
+/// 返回某个值是否仍等于其类型默认值，以便紧凑序列化。
+fn is_default<T>(value: &T) -> bool
+where
+    T: Default + PartialEq,
+{
+    *value == T::default()
+}
+
+/// Returns whether one boolean value is false for compact serialization.
+/// 返回单个布尔值是否为 false，以便紧凑序列化。
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Returns whether one boolean value is true for compact serialization.
+/// 返回单个布尔值是否为 true，以便紧凑序列化。
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+/// Returns whether one AI-tool policy is the default automatic policy.
+/// 返回单个 AI 工具策略是否为默认自动策略。
+fn is_default_ai_tool_policy(policy: &AiToolPolicy) -> bool {
+    *policy == AiToolPolicy::Auto
+}
+
 /// Returns the default minimum uptime used by the shared controller configuration.
 /// 返回共享控制器配置使用的默认最小存活时长。
 fn default_controller_minimum_uptime_secs() -> u64 {
@@ -2036,6 +2844,7 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                     attachment: None,
                     interleaved: None,
                     reasoning_profile: None,
+                    ai_tools: Vec::new(),
                     input_modalities: Vec::new(),
                     output_modalities: Vec::new(),
                 });
@@ -2079,6 +2888,7 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                     object,
                     &["reasoningProfile", "reasoning_profile"],
                 ),
+                ai_tools: dynamic_model_ai_tools(object, &["aiTools", "ai_tools"]),
                 input_modalities,
                 output_modalities,
             })
@@ -2125,6 +2935,11 @@ fn merge_embedded_model_metadata(
                 reasoning_profile: model
                     .reasoning_profile
                     .or_else(|| embedded.reasoning_profile.clone()),
+                ai_tools: if model.ai_tools.is_empty() {
+                    embedded.ai_tools.clone()
+                } else {
+                    model.ai_tools
+                },
                 input_modalities: if model.input_modalities.is_empty() {
                     embedded.input_modalities.clone()
                 } else {
@@ -2212,6 +3027,17 @@ fn dynamic_model_reasoning_profile(
         .and_then(|value| serde_json::from_value::<ReasoningProfileConfig>(value.clone()).ok())
 }
 
+/// Parses dynamic AI-tool declarations from the loosely shaped remote `/models` payload.
+/// 从宽松形状的远端 `/models` 载荷中解析动态 AI 工具声明集合。
+fn dynamic_model_ai_tools(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Vec<AiToolDeclaration> {
+    dynamic_model_value(object, keys)
+        .and_then(|value| serde_json::from_value::<Vec<AiToolDeclaration>>(value.clone()).ok())
+        .unwrap_or_default()
+}
+
 /// Parses one ordered dynamic modality list while tolerating both flat and nested payload shapes.
 /// 在兼容扁平与嵌套载荷形状的前提下解析一组有序动态模态列表。
 fn dynamic_model_modalities(
@@ -2268,13 +3094,17 @@ fn dynamic_model_string_array(
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelChoice, ModelInterleavedCapability, ModelInterleavedField, ProviderApiFamily,
-        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
-        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-        SupportedProviderDefinition, extract_models_from_array, merge_embedded_model_metadata,
+        AiToolDeclaration, AiToolKind, ModelChoice, ModelInterleavedCapability,
+        ModelInterleavedField, PersistedAiToolConfiguration, PersistedWebSearchConfiguration,
+        PersistedWebSearchProviderEntry, ProviderApiFamily, ProviderBaseUrlConfig,
+        ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
+        ProviderModelDiscoveryKind, ProviderRuntimeKind, ReasoningCapabilityKind,
+        ReasoningEffortLevel, ReasoningProfileConfig, SupportedProviderDefinition,
+        WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
+        extract_models_from_array, merge_embedded_model_metadata,
     };
     use serde_json::{Map as JsonMap, json};
+    use std::collections::BTreeMap;
 
     /// Builds one minimal supported-provider definition used by the reasoning-selection tests.
     /// 构建供思考选择测试复用的最小受支持 Provider 定义。
@@ -2291,7 +3121,9 @@ mod tests {
             credential_env_keys: Vec::new(),
             extra_headers: Default::default(),
             extra_body: JsonMap::new(),
+            model_runtime_overrides: BTreeMap::new(),
             reasoning_profile,
+            ai_tools: Vec::new(),
             fields: Vec::new(),
             base_url: ProviderBaseUrlConfig {
                 kind: ProviderBaseUrlKind::Native,
@@ -2329,6 +3161,7 @@ mod tests {
             attachment: None,
             interleaved: None,
             reasoning_profile,
+            ai_tools: Vec::new(),
             input_modalities: Vec::new(),
             output_modalities: Vec::new(),
         }
@@ -2340,6 +3173,10 @@ mod tests {
     fn runtime_kind_maps_into_expected_api_family() {
         assert_eq!(
             ProviderRuntimeKind::OpenAi.api_family(),
+            ProviderApiFamily::OpenAiResponses
+        );
+        assert_eq!(
+            ProviderRuntimeKind::OpenAiResponsesCompatible.api_family(),
             ProviderApiFamily::OpenAiResponses
         );
         assert_eq!(
@@ -2469,6 +3306,83 @@ mod tests {
         );
     }
 
+    /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.
+    /// 验证 API 原生工具配置在序列化过程中保持稳定的根级 `aiTools.webSearch` 形状。
+    #[test]
+    fn provider_configuration_round_trips_web_search_routing_configuration() {
+        let config = ProviderConfigurationFile {
+            ai_tools: PersistedAiToolConfiguration {
+                web_search: PersistedWebSearchConfiguration {
+                    mode: WebSearchRoutingMode::ThirdPartyFirst,
+                    providers: vec![PersistedWebSearchProviderEntry {
+                        id: String::from("brave"),
+                        name: String::from("Brave Search"),
+                        kind: WebSearchProviderKind::Brave,
+                        enabled: true,
+                        api_key: String::from("{env:BRAVE_SEARCH_API_KEY}"),
+                        base_url: String::new(),
+                        model: String::new(),
+                        region: String::new(),
+                        max_results: 8,
+                    }],
+                    dispatch_mode: WebSearchProviderDispatchMode::Balanced,
+                },
+            },
+            ..ProviderConfigurationFile::default()
+        };
+
+        let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+        assert_eq!(
+            value["aiTools"]["webSearch"]["mode"],
+            json!("third-party-first")
+        );
+        assert_eq!(
+            value["aiTools"]["webSearch"]["dispatchMode"],
+            json!("balanced")
+        );
+        assert_eq!(
+            value["aiTools"]["webSearch"]["providers"][0]["kind"],
+            json!("brave")
+        );
+
+        let restored: ProviderConfigurationFile =
+            serde_json::from_value(value).expect("provider configuration must deserialize");
+        assert_eq!(
+            restored.ai_tools.web_search.mode,
+            WebSearchRoutingMode::ThirdPartyFirst
+        );
+        assert_eq!(
+            restored.ai_tools.web_search.dispatch_mode,
+            WebSearchProviderDispatchMode::Balanced
+        );
+        assert_eq!(restored.ai_tools.web_search.providers.len(), 1);
+        assert!(restored.ai_tools.web_search.providers[0].enabled);
+    }
+
+    /// Verifies MiniMax web-search hints stay aligned with the official Token Plan CLI naming.
+    /// 验证 MiniMax 网页搜索提示与官方 Token Plan CLI 命名保持一致。
+    #[test]
+    fn minimax_web_search_configuration_hints_match_token_plan_cli() {
+        assert_eq!(
+            WebSearchProviderKind::MiniMax.label(),
+            "MiniMax Search"
+        );
+        assert_eq!(
+            WebSearchProviderKind::MiniMax.api_key_label(),
+            "Token Plan Key / {env:MINIMAX_API_KEY}"
+        );
+        assert_eq!(
+            WebSearchProviderKind::MiniMax.api_key_placeholder(),
+            "{env:MINIMAX_API_KEY}"
+        );
+        assert!(
+            WebSearchProviderKind::MiniMax
+                .configuration_note()
+                .expect("MiniMax note must exist")
+                .contains("Credits")
+        );
+    }
+
     /// Verifies remote model extraction preserves declared flat capability metadata and field-mapped interleaved settings.
     /// 验证远端模型提取会保留已声明的扁平能力元数据与字段映射型交错设置。
     #[test]
@@ -2492,6 +3406,14 @@ mod tests {
                 "off": { "thinking": false },
                 "low": { "thinking": true }
             },
+            "aiTools": [
+                {
+                    "kind": "web_search",
+                    "nativeProviderTool": true,
+                    "nativeToolType": "web_search_preview",
+                    "citationSupport": true
+                }
+            ],
             "inputModalities": ["text", "image"],
             "outputModalities": ["text"]
         })]);
@@ -2519,6 +3441,8 @@ mod tests {
         assert_eq!(model.input_modalities, vec!["text", "image"]);
         assert_eq!(model.output_modalities, vec!["text"]);
         assert!(model.reasoning_profile.is_some());
+        assert_eq!(model.ai_tools.len(), 1);
+        assert_eq!(model.ai_tools[0].kind, AiToolKind::WebSearch);
     }
 
     /// Verifies remote model extraction accepts nested modality declarations when the provider returns a `modalities` object instead of flat arrays.
@@ -2557,6 +3481,7 @@ mod tests {
             attachment: Some(false),
             interleaved: Some(ModelInterleavedCapability::Enabled(true)),
             reasoning_profile: None,
+            ai_tools: Vec::new(),
             input_modalities: vec![String::from("text"), String::from("image")],
             output_modalities: Vec::new(),
         }];
@@ -2582,6 +3507,10 @@ mod tests {
                 low: Some(json!({ "thinking": true })),
                 ..ReasoningProfileConfig::default()
             }),
+            ai_tools: vec![AiToolDeclaration::provider_native(
+                AiToolKind::WebSearch,
+                "web_search_preview",
+            )],
             input_modalities: vec![
                 String::from("text"),
                 String::from("image"),
@@ -2612,5 +3541,6 @@ mod tests {
         assert!(model.reasoning_profile.is_some());
         assert_eq!(model.input_modalities, vec!["text", "image"]);
         assert_eq!(model.output_modalities, vec!["text"]);
+        assert_eq!(model.ai_tools.len(), 1);
     }
 }
