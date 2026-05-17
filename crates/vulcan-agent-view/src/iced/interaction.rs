@@ -8,7 +8,7 @@ use super::scene::{
 };
 use super::{
     RendererParagraph, SelectableTranscriptDragAutoScroll,
-    SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptState,
+    SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptState, TranscriptMediaTarget,
 };
 use iced::advanced::text::Paragraph as _;
 use iced::{Point, Rectangle, Size};
@@ -155,6 +155,7 @@ pub(super) fn hit_test_rendered_document(
                 position,
             )
         }
+        LaidOutFlowNode::MediaCard(_) => None,
         LaidOutFlowNode::Rule(_) => None,
     }
 }
@@ -365,6 +366,7 @@ fn projected_hit_test_rendered_document(
                 projected_position,
             )
         }
+        LaidOutFlowNode::MediaCard(_) => None,
         LaidOutFlowNode::Rule(_) => None,
     }
 }
@@ -491,8 +493,52 @@ pub(super) fn background_action_link_at_position(
                 .then(|| paragraph_node.background_action_link.clone())
                 .flatten()
         }
+        LaidOutFlowNode::MediaCard(layout_node) => {
+            let RenderedTranscriptNode::MediaCard(media_card_node) =
+                &document.nodes[layout_node.node_index]
+            else {
+                return None;
+            };
+            layout_node
+                .outer_bounds
+                .contains(position)
+                .then(|| media_card_node.action_link.clone())
+                .flatten()
+        }
         LaidOutFlowNode::Table(_) | LaidOutFlowNode::Rule(_) => None,
     }
+}
+
+/// Resolves the generated-media target under the provided pointer position, if any.
+/// 解析给定指针位置下方命中的生成媒体目标（如果存在）。
+pub(super) fn media_target_at_position(
+    document: &RenderedTranscriptDocument,
+    state: &SelectableTranscriptState,
+    position: Point,
+) -> Option<TranscriptMediaTarget> {
+    let render_cache = &state.render_cache;
+    let flow_layout_index = flow_layout_index_at_local_y(&render_cache.flow_layouts, position.y)?;
+    let LaidOutFlowNode::MediaCard(layout_node) =
+        render_cache.flow_layouts.get(flow_layout_index)?
+    else {
+        return None;
+    };
+    if !layout_node.outer_bounds.contains(position) {
+        return None;
+    }
+
+    let RenderedTranscriptNode::MediaCard(media_card_node) =
+        &document.nodes[layout_node.node_index]
+    else {
+        return None;
+    };
+
+    Some(TranscriptMediaTarget {
+        kind: media_card_node.kind,
+        file_name: media_card_node.file_name.clone(),
+        local_path: media_card_node.local_path.clone(),
+        is_active: media_card_node.is_active,
+    })
 }
 
 /// Applies one wheel-scroll delta to the collapsible semantic block body below the provided pointer position.

@@ -505,6 +505,7 @@ impl SessionMessageRecordKind {
             self,
             Self::TitleOutput
                 | Self::ThinkingOutput
+                | Self::SummaryOutput
                 | Self::ToolCallOutput
                 | Self::ToolResultOutput
         )

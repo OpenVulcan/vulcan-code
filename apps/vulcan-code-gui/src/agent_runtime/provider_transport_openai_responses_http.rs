@@ -250,6 +250,18 @@ where
     futures_util::pin_mut!(events);
 
     let mut completed_response = None;
+    // Best-effort response identifier captured from non-terminal events for terminal fallback synthesis.
+    // 从非终态事件捕获的一份尽力响应标识，用于终态兜底合成。
+    let mut fallback_response_id = None;
+    // Collected output items emitted by `response.output_item.done` for terminal fallback synthesis.
+    // 从 `response.output_item.done` 收集的输出项集合，用于终态兜底合成。
+    let mut fallback_output = Vec::new();
+    // Collected visible assistant-text deltas used only when no structured message item arrives.
+    // 仅在没有结构化消息项到达时使用的可见助手文本增量累计值。
+    let mut fallback_assistant_text = String::new();
+    // Collected reasoning-summary deltas used only when no structured reasoning item arrives.
+    // 仅在没有结构化思考项到达时使用的思考摘要增量累计值。
+    let mut fallback_reasoning_text = String::new();
 
     while let Some(event_result) = events.next().await {
         let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
@@ -269,10 +281,16 @@ where
         })?;
 
         match value.get("type").and_then(Value::as_str) {
+            Some("response.created") | Some("response.in_progress") => {
+                if fallback_response_id.is_none() {
+                    fallback_response_id = extract_openai_responses_stream_response_id(&value);
+                }
+            }
             Some("response.output_text.delta") | Some("response.refusal.delta") => {
                 if let Some(delta) = value.get("delta").and_then(Value::as_str)
                     && !delta.is_empty()
                 {
+                    fallback_assistant_text.push_str(delta);
                     forward_openai_responses_delta(
                         live_sender,
                         sink,
@@ -286,6 +304,7 @@ where
                 if let Some(delta) = value.get("delta").and_then(Value::as_str)
                     && !delta.is_empty()
                 {
+                    fallback_reasoning_text.push_str(delta);
                     forward_openai_responses_delta(
                         live_sender,
                         sink,
@@ -293,6 +312,15 @@ where
                             delta: delta.to_string(),
                         },
                     );
+                }
+            }
+            Some("response.output_item.done") => {
+                if let Some(output_item) = value
+                    .get("item")
+                    .cloned()
+                    .and_then(|item| serde_json::from_value::<OpenAiResponsesOutputItem>(item).ok())
+                {
+                    fallback_output.push(output_item);
                 }
             }
             Some("response.completed") => {
@@ -357,6 +385,15 @@ where
             _ => {}
         }
     }
+
+    let completed_response = completed_response.or_else(|| {
+        synthesize_openai_responses_fallback_response(
+            fallback_response_id,
+            fallback_output,
+            fallback_assistant_text,
+            fallback_reasoning_text,
+        )
+    });
 
     let Some(completed_response) = completed_response else {
         return Err(VulcanCoreError::ProviderFailure {
@@ -766,6 +803,81 @@ fn build_openai_responses_turn_response(
     ))
 }
 
+/// Extracts one best-effort response identifier from one non-terminal OpenAI Responses SSE event payload.
+/// 从一份非终态 OpenAI Responses SSE 事件载荷中提取一条尽力响应标识。
+fn extract_openai_responses_stream_response_id(value: &Value) -> Option<String> {
+    value
+        .get("response")
+        .and_then(|response| response.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|response_id| !response_id.is_empty())
+        .map(ToString::to_string)
+}
+
+/// Synthesizes one terminal OpenAI Responses payload from collected stream items when `response.completed` never arrives.
+/// 当 `response.completed` 始终未到达时，根据已收集的流式输出项合成一份终态 OpenAI Responses 载荷。
+fn synthesize_openai_responses_fallback_response(
+    response_id: Option<String>,
+    mut output: Vec<OpenAiResponsesOutputItem>,
+    assistant_text: String,
+    reasoning_text: String,
+) -> Option<OpenAiResponsesCompletedResponse> {
+    let response_id = response_id?;
+
+    let has_visible_message = output.iter().any(|item| match item {
+        OpenAiResponsesOutputItem::Message(message) => message.content.iter().any(|content| {
+            matches!(
+                content,
+                OpenAiResponsesAssistantContentItem::OutputText { text }
+                    if !text.is_empty()
+            ) || matches!(
+                content,
+                OpenAiResponsesAssistantContentItem::Refusal { refusal }
+                    if !refusal.is_empty()
+            )
+        }),
+        _ => false,
+    });
+    if !has_visible_message && !assistant_text.is_empty() {
+        output.push(OpenAiResponsesOutputItem::Message(
+            OpenAiResponsesOutputMessage {
+                content: vec![OpenAiResponsesAssistantContentItem::OutputText {
+                    text: assistant_text,
+                }],
+            },
+        ));
+    }
+
+    let has_reasoning = output.iter().any(|item| match item {
+        OpenAiResponsesOutputItem::Reasoning {
+            summary,
+            encrypted_content,
+        } => !summary.is_empty() || encrypted_content.is_some(),
+        _ => false,
+    });
+    if !has_reasoning && !reasoning_text.is_empty() {
+        output.push(OpenAiResponsesOutputItem::Reasoning {
+            summary: vec![OpenAiResponsesReasoningSummary::SummaryText {
+                text: reasoning_text,
+            }],
+            encrypted_content: None,
+        });
+    }
+
+    if output.is_empty() {
+        return None;
+    }
+
+    Some(OpenAiResponsesCompletedResponse {
+        id: response_id,
+        output,
+        error: None,
+        incomplete_details: None,
+        usage: None,
+    })
+}
+
 /// Converts one raw OpenAI Responses usage payload into the shared normalized usage snapshot.
 /// 将一份原始 OpenAI Responses 用量载荷转换为共享规范化用量快照。
 fn openai_responses_usage_to_snapshot(
@@ -839,7 +951,7 @@ where
 mod tests {
     use super::{
         build_openai_responses_request_payload, build_openai_responses_turn_response,
-        sanitize_openai_responses_schema,
+        sanitize_openai_responses_schema, synthesize_openai_responses_fallback_response,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -1245,6 +1357,77 @@ mod tests {
                 .as_ref()
                 .and_then(|continuation| continuation.last_provider_message_id.as_deref()),
             Some("resp_done")
+        );
+    }
+
+    /// Verifies fallback stream synthesis preserves structured output items when the provider omits `response.completed`.
+    /// 验证 Provider 缺失 `response.completed` 时，流式兜底合成会保留结构化输出项。
+    #[test]
+    fn fallback_response_preserves_structured_output_items() {
+        let output = vec![
+            serde_json::from_value(json!({
+                "type": "message",
+                "content": [
+                    { "type": "output_text", "text": "已拿到搜索结果。" }
+                ]
+            }))
+            .expect("message item should deserialize"),
+            serde_json::from_value(json!({
+                "type": "function_call",
+                "id": "fc_search",
+                "call_id": "call_search",
+                "name": "web_lookup",
+                "arguments": "{\"q\":\"AMD AI MAX 395\"}"
+            }))
+            .expect("function call item should deserialize"),
+        ];
+        let response = synthesize_openai_responses_fallback_response(
+            Some(String::from("resp_stream")),
+            output,
+            String::from("会被结构化消息覆盖"),
+            String::new(),
+        )
+        .expect("fallback response should synthesize");
+
+        let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
+            .expect("turn response should build");
+
+        assert_eq!(
+            turn_response.provider_message_id.as_deref(),
+            Some("resp_stream")
+        );
+        assert_eq!(turn_response.assistant_text, "已拿到搜索结果。");
+        assert_eq!(turn_response.tool_calls.len(), 1);
+        assert_eq!(turn_response.tool_calls[0].tool_name, "web_lookup");
+    }
+
+    /// Verifies fallback stream synthesis can rebuild text and reasoning from deltas when no structured output item arrives.
+    /// 验证在没有结构化输出项到达时，流式兜底合成仍可依据增量重建文本与思考。
+    #[test]
+    fn fallback_response_rebuilds_delta_only_output() {
+        let response = synthesize_openai_responses_fallback_response(
+            Some(String::from("resp_delta_only")),
+            Vec::new(),
+            String::from("已完成联网搜索。"),
+            String::from("先检索，再归纳。"),
+        )
+        .expect("fallback response should synthesize");
+
+        let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
+            .expect("turn response should build");
+
+        assert_eq!(
+            turn_response.provider_message_id.as_deref(),
+            Some("resp_delta_only")
+        );
+        assert_eq!(turn_response.assistant_text, "已完成联网搜索。");
+        assert_eq!(turn_response.assistant_reasoning, "先检索，再归纳。");
+        assert_eq!(
+            turn_response
+                .continuation
+                .as_ref()
+                .and_then(|continuation| continuation.last_provider_message_id.as_deref()),
+            Some("resp_delta_only")
         );
     }
 

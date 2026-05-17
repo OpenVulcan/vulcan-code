@@ -548,15 +548,16 @@ fn build_openai_compatible_request_payload(
     }
 
     if !provider_tool_definitions.is_empty() {
-        payload.insert(
-            String::from("tools"),
-            Value::Array(
-                provider_tool_definitions
-                    .iter()
-                    .map(provider_tool_definition_to_openai_compatible_tool)
-                    .collect(),
-            ),
+        let mut tools = payload
+            .remove("tools")
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        tools.extend(
+            provider_tool_definitions
+                .iter()
+                .map(provider_tool_definition_to_openai_compatible_tool),
         );
+        payload.insert(String::from("tools"), Value::Array(tools));
     }
 
     Ok(Value::Object(payload))
@@ -1123,6 +1124,67 @@ mod tests {
         assert_eq!(payload["stream"], true);
         assert_eq!(payload["reasoning"]["effort"], "high");
         assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
+    }
+
+    /// Verifies OpenAI-compatible request payloads append host function tools after provider-native tool patches instead of overwriting them.
+    /// 验证 OpenAI 兼容请求载荷会在 Provider 原生工具补丁之后追加宿主函数工具，而不是将其覆盖。
+    #[test]
+    fn request_payload_appends_function_tools_after_existing_native_tools() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("alibaba-coding-plan-cn"),
+                model_id: String::from("qwen3.6-plus"),
+                system_prompt: String::new(),
+                prompt: String::from("请搜索最新资料"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "enable_search": true,
+                    "tools": [
+                        { "type": "web_search" }
+                    ]
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("请搜索最新资料"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload(
+            "qwen3.6-plus",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+            true,
+        )
+        .expect("payload should build");
+
+        let tools = payload["tools"]
+            .as_array()
+            .expect("tools should be an array");
+        assert_eq!(tools[0]["type"], "web_search");
+        assert_eq!(tools[1]["function"]["name"], "read_file");
+        assert_eq!(payload["enable_search"], true);
+        assert!(payload.get("search_options").is_none());
     }
 
     /// Verifies OpenAI-compatible transports keep parallel tool results as separate `tool` messages instead of borrowing Anthropic-only coalescing behavior.

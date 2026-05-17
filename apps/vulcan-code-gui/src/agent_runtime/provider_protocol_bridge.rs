@@ -207,6 +207,10 @@ pub(crate) fn build_tool_result_runtime_metadata(
     );
 
     if let Some(Value::Object(object)) = host_metadata {
+        metadata.insert(
+            String::from("host_result"),
+            Value::Object(object.clone()),
+        );
         metadata.extend(object.clone());
     } else if let Some(other) = host_metadata {
         metadata.insert(String::from("host_metadata"), other.clone());
@@ -238,4 +242,56 @@ fn current_unix_millis_text() -> String {
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_tool_result_runtime_metadata;
+    use serde_json::json;
+
+    /// Verifies completed tool-result runtime metadata preserves one nested `host_result` snapshot while still exposing the flattened host fields for existing task-card callers.
+    /// 验证完成态工具结果运行时元数据会保留一份嵌套 `host_result` 快照，同时继续暴露扁平化宿主字段以兼容既有 task 卡片调用方。
+    #[test]
+    fn tool_result_runtime_metadata_keeps_nested_host_result_snapshot() {
+        let metadata = build_tool_result_runtime_metadata(
+            "call-1",
+            "tool-result-call-1",
+            Some(&json!({
+                "kind": "generated_attachments",
+                "payload": {
+                    "outputs": [{
+                        "kind": "image",
+                        "file_name": "demo.png",
+                        "local_path": "C:/demo.png",
+                    }],
+                },
+            })),
+        )
+        .expect("metadata should exist");
+
+        assert_eq!(
+            metadata.get("tool_call_id").and_then(|value| value.as_str()),
+            Some("call-1")
+        );
+        assert_eq!(
+            metadata.get("kind").and_then(|value| value.as_str()),
+            Some("generated_attachments")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|value| value.get("kind"))
+                .and_then(|value| value.as_str()),
+            Some("generated_attachments")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("outputs"))
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
+            Some(1)
+        );
+    }
 }

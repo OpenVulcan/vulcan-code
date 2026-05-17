@@ -803,16 +803,19 @@ pub async fn load_session_hydration_snapshot(
     .await?;
     let mut message_rows = message_rows;
     message_rows.sort_by_key(|row| row.ordinal);
-    let earliest_ordinal = message_rows.first().map(|row| row.ordinal);
+    let loaded_turn_count = loaded_message_turn_count(&message_rows);
     let latest_turn_index = message_rows.last().map(|row| row.turn_index);
-    let has_more_history = loaded_message_turn_count(&message_rows) >= effective_limit
+    let generated_media_rows =
+        query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
+            .await?;
+    let earliest_ordinal = merge_generated_media_rows_into_transcript_window(
+        &mut message_rows,
+        generated_media_rows,
+    );
+    let has_more_history = loaded_turn_count >= effective_limit
         && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
-    let message_body_chunks =
-        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
-    let messages = message_rows
-        .into_iter()
-        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
-        .collect::<Vec<_>>();
+    let messages =
+        hydrate_transcript_window_messages(&controller, session_id, message_rows).await?;
     let compactions = query_session_compaction_rows_for_session(&controller, session_id)
         .await?
         .into_iter()
@@ -861,15 +864,18 @@ pub async fn load_session_history_page(
     .await?;
     let mut message_rows = message_rows;
     message_rows.sort_by_key(|row| row.ordinal);
-    let earliest_ordinal = message_rows.first().map(|row| row.ordinal);
-    let has_more_history = loaded_message_turn_count(&message_rows) >= effective_limit
+    let loaded_turn_count = loaded_message_turn_count(&message_rows);
+    let generated_media_rows =
+        query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
+            .await?;
+    let earliest_ordinal = merge_generated_media_rows_into_transcript_window(
+        &mut message_rows,
+        generated_media_rows,
+    );
+    let has_more_history = loaded_turn_count >= effective_limit
         && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
-    let message_body_chunks =
-        query_session_message_body_chunks_for_rows(&controller, session_id, &message_rows).await?;
-    let messages = message_rows
-        .into_iter()
-        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
-        .collect::<Vec<_>>();
+    let messages =
+        hydrate_transcript_window_messages(&controller, session_id, message_rows).await?;
 
     Ok(SessionHistoryPage {
         session_id,
@@ -2220,6 +2226,115 @@ LIMIT ?3;
         .map_err(|error| format!("查询会话工具明细窗口失败：{error}"))?;
 
     decode_query_rows::<StoredSessionMessageRow>(&result.json_data)
+}
+
+/// Queries generated-media tool-result rows for all turns already present in one transcript window.
+/// 为一个已加载转录窗口中的全部轮次查询生成媒体工具结果行。
+async fn query_generated_media_tool_result_rows_for_turns(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    transcript_rows: &[StoredSessionMessageRow],
+) -> Result<Vec<StoredSessionMessageRow>, String> {
+    let turn_indices = transcript_rows
+        .iter()
+        .map(|row| row.turn_index)
+        .collect::<BTreeSet<_>>();
+    if turn_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let session_id_text = session_id.to_string();
+    let turn_indices = turn_indices.into_iter().collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for chunk in turn_indices.chunks(SESSION_TRANSCRIPT_WINDOW_LIMIT) {
+        let placeholders = (2..=chunk.len() + 1)
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let statement = format!(
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, '' AS content, m.meta_json, m.created_at
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND m.visible != 0
+  AND m.turn_index IN ({placeholders})
+  AND m.kind = 'tool-result-output'
+  AND m.meta_json IS NOT NULL
+  AND m.meta_json LIKE '%generated_attachments%'
+ORDER BY m.ordinal ASC;
+"#
+        );
+        let mut params = Vec::with_capacity(chunk.len() + 1);
+        params.push(ControllerSqliteValue::String(session_id_text.clone()));
+        params.extend(
+            chunk
+                .iter()
+                .copied()
+                .map(ControllerSqliteValue::Int64),
+        );
+        let result = controller
+            .client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                app_sqlite_binding_id(controller),
+                statement,
+                params,
+            )
+            .await
+            .map_err(|error| format!("查询会话生成媒体工具结果窗口失败：{error}"))?;
+        rows.extend(
+            decode_query_rows::<StoredSessionMessageRow>(&result.json_data)?
+                .into_iter()
+                .filter(stored_session_message_row_contains_generated_attachment_host_result),
+        );
+    }
+
+    Ok(rows)
+}
+
+/// Merges generated-media tool-result rows into one visible transcript window while keeping row ordering stable.
+/// 将生成媒体工具结果行合并进一个可见转录窗口，同时保持行顺序稳定。
+fn merge_generated_media_rows_into_transcript_window(
+    transcript_rows: &mut Vec<StoredSessionMessageRow>,
+    generated_media_rows: Vec<StoredSessionMessageRow>,
+) -> Option<i64> {
+    let existing_ids = transcript_rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<BTreeSet<_>>();
+    transcript_rows.extend(
+        generated_media_rows
+            .into_iter()
+            .filter(|row| !existing_ids.contains(&row.id)),
+    );
+    transcript_rows.sort_by_key(|row| row.ordinal);
+    transcript_rows.first().map(|row| row.ordinal)
+}
+
+/// Hydrates one transcript window into display entries while avoiding chunk fetches for synthetic media-only tool-result rows.
+/// 将一个转录窗口水合为展示消息，同时避免为合成的仅媒体工具结果行加载正文分片。
+async fn hydrate_transcript_window_messages(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    message_rows: Vec<StoredSessionMessageRow>,
+) -> Result<Vec<SessionMessageEntry>, String> {
+    if message_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let body_backed_rows = message_rows
+        .iter()
+        .filter(|row| !row.content.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let message_body_chunks =
+        query_session_message_body_chunks_for_rows(controller, session_id, &body_backed_rows)
+            .await?;
+
+    Ok(message_rows
+        .into_iter()
+        .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
+        .collect())
 }
 
 /// Returns whether one controller error looks like tonic's protobuf message-size guard.
@@ -4105,6 +4220,36 @@ fn parse_session_message_meta_from_json(meta_json: &str) -> Option<StoredSession
     serde_json::from_str(meta_json).ok()
 }
 
+/// Returns whether one persisted message row still carries the generated-media host-result metadata needed for transcript recovery.
+/// 返回单条持久化消息行是否仍携带转录恢复所需的生成媒体宿主结果元数据。
+fn stored_session_message_row_contains_generated_attachment_host_result(
+    row: &StoredSessionMessageRow,
+) -> bool {
+    row.meta_json
+        .as_deref()
+        .and_then(parse_session_message_meta_from_json)
+        .and_then(|meta| meta.metadata)
+        .as_ref()
+        .and_then(resolve_generated_attachment_host_result_from_metadata)
+        .is_some()
+}
+
+/// Resolves one generated-media host-result payload from persisted transcript metadata, accepting nested and flattened shapes.
+/// 从持久化转录元数据中解析一份生成媒体宿主结果载荷，同时兼容嵌套与扁平两种形状。
+fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> Option<&Value> {
+    let nested_host_result = metadata
+        .get("host_result")
+        .filter(|value| value.is_object())
+        .filter(|value| {
+            value.get("kind").and_then(Value::as_str) == Some("generated_attachments")
+        });
+    nested_host_result.or_else(|| {
+        (metadata.get("kind").and_then(Value::as_str) == Some("generated_attachments")
+            && metadata.get("payload").is_some())
+            .then_some(metadata)
+    })
+}
+
 /// Serializes one transcript-message entry into the optional SQLite metadata JSON payload.
 /// 将单条转录消息项序列化为可选的 SQLite 元数据 JSON 载荷。
 fn serialize_session_message_meta_to_json(message: &SessionMessageEntry) -> Option<String> {
@@ -4122,7 +4267,51 @@ fn serialize_session_message_meta_to_json(message: &SessionMessageEntry) -> Opti
 /// Normalizes a user-provided session-history search query before it reaches SQLite.
 /// 在用户提供的会话历史搜索词进入 SQLite 前进行规范化。
 fn normalize_session_history_search_query(query: &str) -> String {
-    query.split_whitespace().collect::<Vec<_>>().join(" ")
+    normalize_sqlite_fts_literal_terms(query).join(" ")
+}
+
+/// Collects literal SQLite FTS terms while discarding parser punctuation and operators.
+/// 收集字面量 SQLite FTS 词项，同时丢弃解析器标点与操作符。
+fn normalize_sqlite_fts_literal_terms(query: &str) -> Vec<String> {
+    // Keep only tokenizer-friendly literal characters so pasted text like `50 TOPS (NPU)` cannot trip FTS syntax parsing.
+    // 仅保留分词器友好的字面字符，这样 `50 TOPS (NPU)` 一类粘贴文本就不会触发 FTS 语法解析。
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    for ch in query.chars() {
+        if sqlite_fts_query_char_is_literal(ch) {
+            current.push(ch);
+        } else {
+            push_normalized_sqlite_fts_literal_term(&mut terms, &mut current);
+        }
+    }
+    push_normalized_sqlite_fts_literal_term(&mut terms, &mut current);
+    terms
+}
+
+/// Pushes one completed literal SQLite FTS term after downgrading reserved operators to plain text.
+/// 在将保留操作符降级为普通文本后推入一条完整的字面量 SQLite FTS 词项。
+fn push_normalized_sqlite_fts_literal_term(terms: &mut Vec<String>, current: &mut String) {
+    if current.is_empty() {
+        return;
+    }
+    let normalized_term = normalize_sqlite_fts_reserved_term(current);
+    terms.push(normalized_term);
+    current.clear();
+}
+
+/// Rewrites reserved SQLite FTS operator keywords into lowercase literals so user text stays searchable.
+/// 将 SQLite FTS 保留操作符关键字改写为小写字面量，确保用户文本仍可被检索。
+fn normalize_sqlite_fts_reserved_term(term: &str) -> String {
+    match term {
+        "AND" | "OR" | "NOT" | "NEAR" => term.to_ascii_lowercase(),
+        _ => term.to_string(),
+    }
+}
+
+/// Returns whether one character may stay inside a literal SQLite FTS token.
+/// 返回某个字符是否可以保留在字面量 SQLite FTS 词元内部。
+fn sqlite_fts_query_char_is_literal(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 /// Builds an escaped SQLite LIKE pattern for a normalized session-history query.
@@ -4213,6 +4402,10 @@ fn sanitize_session_message_metadata_for_persistence(metadata: Option<Value>) ->
 /// Removes known large host-result and argument payload fields while preserving display metadata.
 /// 移除已知的大型宿主结果与参数载荷字段，同时保留展示所需元数据。
 fn strip_large_metadata_fields(value: Value) -> Value {
+    if let Some(preserved) = preserve_generated_attachment_host_result(&value) {
+        return preserved;
+    }
+
     match value {
         Value::Object(mut object) => {
             for key in [
@@ -4225,14 +4418,14 @@ fn strip_large_metadata_fields(value: Value) -> Value {
                 "provider_message_state",
             ] {
                 if let Some(value) = object.get_mut(key) {
-                    *value = compact_large_metadata_field(key, value.clone());
+                    *value = preserve_or_compact_large_metadata_field(key, value.clone());
                 }
             }
             for key in ["arguments", "input", "request", "response"] {
                 if let Some(value) = object.get_mut(key) {
                     if estimate_json_value_bytes(value) > SESSION_MESSAGE_METADATA_BUDGET_BYTES / 4
                     {
-                        *value = compact_large_metadata_field(key, value.clone());
+                        *value = preserve_or_compact_large_metadata_field(key, value.clone());
                     }
                 }
             }
@@ -4251,6 +4444,102 @@ fn strip_large_metadata_fields(value: Value) -> Value {
         ),
         other => other,
     }
+}
+
+/// Preserves compact generated-media host payloads whenever they are needed for later transcript reconstruction.
+/// 在后续转录重建确有需要时保留紧凑生成媒体宿主载荷。
+fn preserve_or_compact_large_metadata_field(key: &str, value: Value) -> Value {
+    preserve_generated_attachment_host_result(&value)
+        .filter(|_| key == "host_result")
+        .unwrap_or_else(|| compact_large_metadata_field(key, value))
+}
+
+/// Preserves the minimal generated-attachments host-result shape required to rebuild inline media cards after restart.
+/// 保留重启后重建内联媒体卡片所需的最小 generated-attachments 宿主结果结构。
+fn preserve_generated_attachment_host_result(value: &Value) -> Option<Value> {
+    let host_result = value.as_object()?;
+    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
+        return None;
+    }
+
+    let outputs = host_result
+        .get("payload")
+        .and_then(|payload| payload.get("outputs"))
+        .and_then(Value::as_array)?;
+    let compact_outputs = outputs
+        .iter()
+        .filter_map(compact_generated_attachment_output)
+        .collect::<Vec<_>>();
+    if compact_outputs.is_empty() {
+        return None;
+    }
+
+    Some(serde_json::json!({
+        "kind": "generated_attachments",
+        "payload": {
+            "outputs": compact_outputs,
+        },
+    }))
+}
+
+/// Compacts one generated attachment output down to the fields required by transcript rendering and direct host actions.
+/// 将单条生成附件输出压缩到转录渲染与直接宿主动作所需的字段集合。
+fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
+    let output_object = output.as_object()?;
+    let kind = output_object
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let file_name = output_object
+        .get("file_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let local_path = output_object
+        .get("local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    let mut compact = serde_json::Map::new();
+    compact.insert(String::from("kind"), Value::String(kind.to_string()));
+    compact.insert(
+        String::from("file_name"),
+        Value::String(file_name.to_string()),
+    );
+    compact.insert(
+        String::from("local_path"),
+        Value::String(local_path.to_string()),
+    );
+
+    if let Some(mime_type) = output_object
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact.insert(
+            String::from("mime_type"),
+            Value::String(mime_type.to_string()),
+        );
+    }
+    if let Some(byte_len) = output_object.get("byte_len").cloned() {
+        compact.insert(String::from("byte_len"), byte_len);
+    }
+    if let Some(asset_id) = output_object
+        .get("asset_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact.insert(
+            String::from("asset_id"),
+            Value::String(asset_id.to_string()),
+        );
+    }
+
+    Some(Value::Object(compact))
 }
 
 /// Compacts one oversized metadata field into a small audit-friendly placeholder.
@@ -4298,6 +4587,12 @@ fn compact_metadata_to_essential_fields(metadata: &Value) -> Option<Value> {
         if let Some(value) = object.get(key) {
             compact.insert(key.to_string(), value.clone());
         }
+    }
+    if let Some(host_result) = object
+        .get("host_result")
+        .and_then(preserve_generated_attachment_host_result)
+    {
+        compact.insert(String::from("host_result"), host_result);
     }
     if compact.is_empty() {
         None
@@ -4577,6 +4872,175 @@ mod tests {
             .unwrap_or_default();
         assert!(preview.contains("change_set"));
         assert!(preview.contains("src/main.rs"));
+    }
+
+    /// Verifies generated-media host payloads keep the minimal fields required to rebuild inline media cards after restart.
+    /// 验证生成媒体宿主载荷会保留重启后重建内联媒体卡片所需的最小字段。
+    #[test]
+    fn session_message_meta_json_preserves_generated_attachment_host_result() {
+        let message = SessionMessageEntry {
+            id: String::from("message-2"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回"),
+            body: String::from("已生成图片与音频。"),
+            metadata: Some(json!({
+                "tool_name": "image_generation",
+                "host_result": {
+                    "kind": "generated_attachments",
+                    "payload": {
+                        "outputs": [{
+                            "kind": "image",
+                            "file_name": "demo.png",
+                            "local_path": "D:/demo.png",
+                            "mime_type": "image/png",
+                            "byte_len": 1024,
+                            "asset_id": "asset-demo",
+                        }],
+                    },
+                },
+            })),
+            created_at: String::from("2"),
+        };
+
+        let json_payload = serialize_session_message_meta_to_json(&message)
+            .expect("expected generated attachment metadata payload");
+        let parsed = parse_session_message_meta_from_json(&json_payload)
+            .expect("expected generated attachment metadata to parse");
+        let metadata = parsed.metadata.expect("expected generated attachment metadata");
+        let host_result = metadata
+            .get("host_result")
+            .and_then(Value::as_object)
+            .expect("expected preserved host_result object");
+
+        assert_eq!(
+            host_result.get("kind").and_then(Value::as_str),
+            Some("generated_attachments")
+        );
+        assert_eq!(
+            host_result
+                .get("payload")
+                .and_then(|value| value.get("outputs"))
+                .and_then(Value::as_array)
+                .and_then(|outputs| outputs.first())
+                .and_then(|output| output.get("local_path"))
+                .and_then(Value::as_str),
+            Some("D:/demo.png")
+        );
+    }
+
+    /// Verifies persisted generated-media metadata can still be detected from stored session rows during lazy hydration.
+    /// 验证懒加载阶段仍可从持久化会话行中识别生成媒体元数据。
+    #[test]
+    fn stored_session_message_row_detects_generated_attachment_host_result() {
+        let meta_json = serde_json::to_string(&StoredSessionMessageMeta {
+            title: Some(String::from("工具返回")),
+            metadata: Some(json!({
+                "tool_call_id": "call-media-1",
+                "host_result": {
+                    "kind": "generated_attachments",
+                    "payload": {
+                        "outputs": [{
+                            "kind": "audio",
+                            "file_name": "demo.mp3",
+                            "local_path": "D:/demo.mp3",
+                            "mime_type": "audio/mpeg",
+                        }],
+                    },
+                },
+            })),
+        })
+        .expect("expected test metadata json");
+        let row = StoredSessionMessageRow {
+            id: String::from("message-media-1"),
+            ordinal: 18,
+            role: String::from("assistant"),
+            kind: String::from("tool-result-output"),
+            visible: 1,
+            turn_index: 3,
+            content: String::new(),
+            meta_json: Some(meta_json),
+            created_at: String::from("18"),
+        };
+
+        assert!(stored_session_message_row_contains_generated_attachment_host_result(&row));
+    }
+
+    /// Verifies generated-media tool-result rows are merged back into transcript windows ahead of later visible rows from the same turn.
+    /// 验证生成媒体工具结果行会被重新并入转录窗口，并排在同轮次后续可见消息之前。
+    #[test]
+    fn merge_generated_media_rows_into_transcript_window_preserves_media_ordinals() {
+        let mut transcript_rows = vec![
+            StoredSessionMessageRow {
+                id: String::from("message-user"),
+                ordinal: 20,
+                role: String::from("user"),
+                kind: String::from("transcript"),
+                visible: 1,
+                turn_index: 5,
+                content: String::from("生成一个图片"),
+                meta_json: None,
+                created_at: String::from("20"),
+            },
+            StoredSessionMessageRow {
+                id: String::from("message-assistant"),
+                ordinal: 24,
+                role: String::from("assistant"),
+                kind: String::from("assistant-output"),
+                visible: 1,
+                turn_index: 5,
+                content: String::from("图片已生成"),
+                meta_json: None,
+                created_at: String::from("24"),
+            },
+        ];
+        let generated_media_rows = vec![StoredSessionMessageRow {
+            id: String::from("message-tool-result"),
+            ordinal: 22,
+            role: String::from("assistant"),
+            kind: String::from("tool-result-output"),
+            visible: 1,
+            turn_index: 5,
+            content: String::new(),
+            meta_json: Some(
+                serde_json::to_string(&StoredSessionMessageMeta {
+                    title: Some(String::from("已生成图片")),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-media-2",
+                        "host_result": {
+                            "kind": "generated_attachments",
+                            "payload": {
+                                "outputs": [{
+                                    "kind": "image",
+                                    "file_name": "demo.png",
+                                    "local_path": "D:/demo.png",
+                                    "mime_type": "image/png",
+                                }],
+                            },
+                        },
+                    })),
+                })
+                .expect("expected generated media metadata"),
+            ),
+            created_at: String::from("22"),
+        }];
+
+        let earliest =
+            merge_generated_media_rows_into_transcript_window(&mut transcript_rows, generated_media_rows);
+
+        assert_eq!(earliest, Some(20));
+        assert_eq!(
+            transcript_rows
+                .into_iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            vec![
+                String::from("message-user"),
+                String::from("message-tool-result"),
+                String::from("message-assistant"),
+            ]
+        );
     }
 
     /// Verifies that oversized transcript bodies are split without losing UTF-8 content.
@@ -4898,6 +5362,30 @@ mod tests {
         assert_eq!(
             session_history_search_like_pattern(r"src\foo_%"),
             r"%src\\foo\_\%%"
+        );
+    }
+
+    /// Verifies that punctuation-heavy pasted text is normalized into safe literal FTS terms.
+    /// 验证带有大量标点的粘贴文本会被规范化为安全的字面量 FTS 词项。
+    #[test]
+    fn normalize_session_history_search_query_strips_fts_syntax_punctuation() {
+        assert_eq!(
+            normalize_session_history_search_query("50 TOPS (NPU)"),
+            "50 TOPS NPU"
+        );
+        assert_eq!(
+            normalize_session_history_search_query("  MiniMax / NPU : search  "),
+            "MiniMax NPU search"
+        );
+    }
+
+    /// Verifies that reserved SQLite FTS operators are downgraded to searchable literals.
+    /// 验证 SQLite FTS 保留操作符会被降级为可检索的普通字面量。
+    #[test]
+    fn normalize_session_history_search_query_downgrades_reserved_operators() {
+        assert_eq!(
+            normalize_session_history_search_query("AND (GPU) NEAR NPU OR"),
+            "and GPU near NPU or"
         );
     }
 

@@ -8,7 +8,7 @@ use super::context_menu::{
 use super::interaction::{
     background_action_link_at_position, current_selection_for_state,
     drag_auto_scroll_request_for_position, drag_selection_head_char, effective_selection,
-    hit_test_rendered_document, scroll_collapsible_body_at_position,
+    hit_test_rendered_document, media_target_at_position, scroll_collapsible_body_at_position,
 };
 use super::layout_engine::{localize_point, localize_rectangle};
 use super::{
@@ -62,7 +62,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
             );
         }
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-            handle_right_button_pressed(state, widget_bounds, cursor, shell);
+            handle_right_button_pressed(document, state, widget_bounds, cursor, shell);
         }
         Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
             handle_drag_cursor_moved(
@@ -144,11 +144,13 @@ pub(super) fn transcript_mouse_interaction(
     };
     let local_position = localize_point(position, widget_bounds.position());
 
-    if let Some(menu_state) = state.context_menu {
-        let menu_actions =
-            transcript_context_menu_actions(current_selection_for_state(state).is_some());
+    if let Some(menu_state) = state.context_menu.as_ref() {
+        let menu_actions = transcript_context_menu_actions(
+            menu_state.media_target.as_ref(),
+            current_selection_for_state(state).is_some(),
+        );
         let menu_bounds =
-            transcript_context_menu_bounds(widget_bounds, menu_state, menu_actions.len());
+            transcript_context_menu_bounds(widget_bounds, menu_state.clone(), menu_actions.len());
         if menu_bounds.contains(position) {
             return mouse::Interaction::Pointer;
         }
@@ -187,6 +189,15 @@ fn handle_left_button_pressed<Message>(
             shell.request_redraw();
             publish_drag_auto_scroll_request(state, None, on_drag_auto_scroll, shell);
             shell.capture_event();
+        } else if background_action_link_at_position(document, state, local_position).is_some() {
+            state.focused = true;
+            state.dragging = true;
+            state.drag_moved = false;
+            state.anchor_char = 0;
+            state.head_char = 0;
+            shell.request_redraw();
+            publish_drag_auto_scroll_request(state, None, on_drag_auto_scroll, shell);
+            shell.capture_event();
         } else {
             state.focused = false;
             shell.request_redraw();
@@ -202,6 +213,7 @@ fn handle_left_button_pressed<Message>(
 /// Handles a secondary-button press by opening or dismissing the transcript context menu.
 /// 处理一次次按钮按下事件，以打开或关闭转录右键菜单。
 fn handle_right_button_pressed<Message>(
+    document: &RenderedTranscriptDocument,
     state: &mut SelectableTranscriptState,
     widget_bounds: Rectangle,
     cursor: mouse::Cursor,
@@ -209,8 +221,10 @@ fn handle_right_button_pressed<Message>(
 ) {
     if let Some(position) = cursor.position_over(widget_bounds) {
         state.focused = true;
+        let local_position = localize_point(position, widget_bounds.position());
         state.context_menu = Some(TranscriptContextMenuState {
             anchor_position: position,
+            media_target: media_target_at_position(document, state, local_position),
         });
         shell.request_redraw();
         shell.capture_event();
@@ -339,6 +353,36 @@ fn dispatch_clicked_link_target<Message>(
             RenderedTranscriptLinkAction::OpenToolModal(block_id) => {
                 shell.publish(on_interaction(
                     SelectableTranscriptInteraction::OpenToolModal(block_id.clone()),
+                ));
+                record_link_click(state, link_target);
+            }
+            RenderedTranscriptLinkAction::OpenImagePreview {
+                file_name,
+                local_path,
+            } => {
+                shell.publish(on_interaction(
+                    SelectableTranscriptInteraction::OpenImagePreview {
+                        file_name: file_name.clone(),
+                        local_path: local_path.clone(),
+                    },
+                ));
+                record_link_click(state, link_target);
+            }
+            RenderedTranscriptLinkAction::ToggleAudioPlayback {
+                file_name,
+                local_path,
+            } => {
+                shell.publish(on_interaction(
+                    SelectableTranscriptInteraction::ToggleAudioPlayback {
+                        file_name: file_name.clone(),
+                        local_path: local_path.clone(),
+                    },
+                ));
+                record_link_click(state, link_target);
+            }
+            RenderedTranscriptLinkAction::OpenMediaWithDefaultApp(local_path) => {
+                shell.publish(on_interaction(
+                    SelectableTranscriptInteraction::OpenMediaWithDefaultApp(local_path.clone()),
                 ));
                 record_link_click(state, link_target);
             }

@@ -2,8 +2,8 @@
 //! 由用户配置的第三方供应商驱动的宿主侧网页搜索兼容工具。
 
 use crate::provider_config::{
-    PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
-    WebSearchProviderDispatchMode, WebSearchProviderKind,
+    PersistedAiToolConfiguration, PersistedWebSearchProviderEntry, WebSearchProviderDispatchMode,
+    WebSearchProviderKind,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde_json::{Value, json};
@@ -18,6 +18,9 @@ static WEB_SEARCH_BALANCED_CURSOR: AtomicUsize = AtomicUsize::new(0);
 /// 语义 `web_search` 工具接受的已解析调用参数。
 #[derive(Debug, Clone)]
 struct WebSearchInvocation {
+    /// Optional semantic target selector such as `auto` or `instance/target`.
+    /// 可选的语义目标选择器，例如 `auto` 或 `实例/目标`。
+    target: Option<String>,
     /// Search query text.
     /// 搜索查询文本。
     query: String,
@@ -76,11 +79,11 @@ enum WebSearchProviderResponse {
 /// 按配置化调度顺序尝试可用供应商来执行配置化网页搜索。
 pub async fn execute_configured_web_search(
     args: Value,
-    configuration: PersistedWebSearchConfiguration,
+    configuration: PersistedAiToolConfiguration,
 ) -> Result<Value, String> {
     let invocation = parse_web_search_invocation(args)?;
     let providers = configuration
-        .providers
+        .projected_web_search_providers()
         .into_iter()
         .filter(PersistedWebSearchProviderEntry::is_usable)
         .collect::<Vec<_>>();
@@ -91,15 +94,50 @@ pub async fn execute_configured_web_search(
         ));
     }
 
+    let available_targets = providers
+        .iter()
+        .map(PersistedWebSearchProviderEntry::qualified_target)
+        .collect::<Vec<_>>();
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| format!("创建 web_search HTTP 客户端失败：{error}"))?;
     let mut failures = Vec::new();
 
+    if let Some(explicit_target) = invocation
+        .target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty() && !target.eq_ignore_ascii_case("auto"))
+    {
+        let provider = providers
+            .iter()
+            .find(|provider| provider.matches_target(explicit_target))
+            .ok_or_else(|| {
+                format!(
+                    "web_search 指定的 target `{explicit_target}` 当前不存在或不可用。可用目标：{}。",
+                    available_targets.join("、")
+                )
+            })?;
+
+        return match execute_single_provider_search(&client, provider, &invocation).await {
+            Ok(WebSearchProviderResponse::ResultList(results)) => Ok(Value::String(
+                render_web_search_results(provider, &invocation, &results),
+            )),
+            Ok(WebSearchProviderResponse::Narrative { content, citations }) => Ok(Value::String(
+                render_web_search_narrative(provider, &invocation, &content, &citations),
+            )),
+            Err(error) => Err(format!(
+                "web_search 指定目标 `{}` 调用失败：{error}",
+                provider.qualified_target()
+            )),
+        };
+    }
+
     for provider_index in resolve_provider_attempt_order_indices(
         providers.len(),
-        configuration.dispatch_mode,
+        configuration.web_search.dispatch_mode,
     ) {
         let provider = &providers[provider_index];
         match execute_single_provider_search(&client, provider, &invocation).await {
@@ -165,6 +203,14 @@ fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvocation, Strin
     let object = args
         .as_object()
         .ok_or_else(|| String::from("web_search 参数必须是 JSON 对象。"))?;
+    let target = object
+        .get("target")
+        .or_else(|| object.get("provider"))
+        .or_else(|| object.get("provider_target"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let query = object
         .get("query")
         .or_else(|| object.get("q"))
@@ -181,7 +227,11 @@ fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvocation, Strin
         .and_then(parse_positive_usize)
         .map(|value| value.clamp(1, 20));
 
-    Ok(WebSearchInvocation { query, max_results })
+    Ok(WebSearchInvocation {
+        target,
+        query,
+        max_results,
+    })
 }
 
 /// Parses a positive usize from a permissive JSON value.
@@ -214,62 +264,90 @@ async fn execute_single_provider_search(
             execute_duckduckgo_search(client, provider, invocation, max_results).await
         }
         WebSearchProviderKind::Brave => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_brave_search(client, provider, invocation, &api_key, max_results).await
         }
         WebSearchProviderKind::Tavily => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_tavily_search(client, provider, invocation, &api_key, max_results).await
         }
         WebSearchProviderKind::Exa => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_exa_search(client, provider, invocation, &api_key, max_results).await
         }
         WebSearchProviderKind::Firecrawl => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_firecrawl_search(client, provider, invocation, &api_key, max_results).await
         }
         WebSearchProviderKind::Gemini => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_gemini_search(client, provider, invocation, &api_key).await
         }
         WebSearchProviderKind::Grok => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_grok_search(client, provider, invocation, &api_key).await
         }
         WebSearchProviderKind::Kimi => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_kimi_search(client, provider, invocation, &api_key).await
         }
         WebSearchProviderKind::MiniMax => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_minimax_search(client, provider, invocation, &api_key, max_results).await
         }
         WebSearchProviderKind::Ollama => {
-            let api_key =
-                resolve_optional_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
-            execute_ollama_search(client, provider, invocation, api_key.as_deref(), max_results)
-                .await
+            let api_key = resolve_optional_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
+            execute_ollama_search(
+                client,
+                provider,
+                invocation,
+                api_key.as_deref(),
+                max_results,
+            )
+            .await
         }
         WebSearchProviderKind::Perplexity => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_perplexity_search(client, provider, invocation, &api_key, max_results).await
         }
         WebSearchProviderKind::Searxng => {
             execute_searxng_search(client, provider, invocation, max_results).await
         }
         WebSearchProviderKind::SerpApi => {
-            let api_key =
-                resolve_required_secret_value(&provider.api_key, &format!("{} API Key", provider.name))?;
+            let api_key = resolve_required_secret_value(
+                &provider.api_key,
+                &format!("{} API Key", provider.name),
+            )?;
             execute_serpapi_search(client, provider, invocation, &api_key, max_results).await
         }
     }
@@ -609,7 +687,8 @@ async fn execute_kimi_search(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let message = choice.get("message").cloned().unwrap_or_else(|| json!({}));
-        let content = extract_kimi_message_text(&message).unwrap_or_else(|| String::from("No response"));
+        let content =
+            extract_kimi_message_text(&message).unwrap_or_else(|| String::from("No response"));
         let tool_calls = message
             .get("tool_calls")
             .and_then(Value::as_array)
@@ -713,7 +792,10 @@ async fn execute_minimax_search(
     )
     .await?;
 
-    if let Some(status_code) = payload.pointer("/base_resp/status_code").and_then(Value::as_i64) {
+    if let Some(status_code) = payload
+        .pointer("/base_resp/status_code")
+        .and_then(Value::as_i64)
+    {
         if status_code != 0 {
             let message = payload
                 .pointer("/base_resp/status_msg")
@@ -733,7 +815,8 @@ async fn execute_minimax_search(
                 .filter_map(|item| {
                     let title = first_string(item, &["title"])?;
                     let url = first_string(item, &["link", "url"])?;
-                    let snippet = first_string(item, &["snippet", "description"]).unwrap_or_default();
+                    let snippet =
+                        first_string(item, &["snippet", "description"]).unwrap_or_default();
                     Some(WebSearchResult {
                         title,
                         url,
@@ -778,7 +861,9 @@ async fn execute_ollama_search(
             continue;
         }
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            failures.push(format!("{endpoint}：认证失败，请先执行 `ollama signin` 或检查 API Key。"));
+            failures.push(format!(
+                "{endpoint}：认证失败，请先执行 `ollama signin` 或检查 API Key。"
+            ));
             continue;
         }
         if status == reqwest::StatusCode::FORBIDDEN {
@@ -803,7 +888,10 @@ async fn execute_ollama_search(
         return Ok(WebSearchProviderResponse::ResultList(results));
     }
 
-    Err(format!("Ollama 搜索端点均不可用：{}。", failures.join("；")))
+    Err(format!(
+        "Ollama 搜索端点均不可用：{}。",
+        failures.join("；")
+    ))
 }
 
 /// Executes a Perplexity structured search request or chat-completions fallback according to the configured endpoint.
@@ -885,10 +973,7 @@ async fn execute_searxng_search(
         client
             .get(endpoint)
             .header(ACCEPT, "application/json")
-            .query(&[
-                ("q", invocation.query.as_str()),
-                ("format", "json"),
-            ]),
+            .query(&[("q", invocation.query.as_str()), ("format", "json")]),
     )
     .await?;
 
@@ -947,7 +1032,8 @@ async fn execute_serpapi_search(
 /// Parses one common structured result array into normalized result entries.
 /// 将通用结构化结果数组解析为规范化结果条目。
 fn parse_structured_results_array(items: &[Value]) -> Vec<WebSearchResult> {
-    items.iter()
+    items
+        .iter()
         .filter_map(|item| {
             let title = first_string(item, &["title", "name"])
                 .unwrap_or_else(|| String::from("未命名结果"));
@@ -965,7 +1051,9 @@ fn parse_structured_results_array(items: &[Value]) -> Vec<WebSearchResult> {
 
 /// Sends one HTTP request and returns the status code together with the response body text.
 /// 发送单个 HTTP 请求，并返回状态码与响应正文文本。
-async fn send_request(builder: reqwest::RequestBuilder) -> Result<(reqwest::StatusCode, String), String> {
+async fn send_request(
+    builder: reqwest::RequestBuilder,
+) -> Result<(reqwest::StatusCode, String), String> {
     let response = builder
         .send()
         .await
@@ -1076,7 +1164,8 @@ fn first_array_string(value: &Value, key: &str) -> Option<String> {
 /// Extracts one string array from the given JSON field.
 /// 从给定 JSON 字段中提取字符串数组。
 fn extract_string_array(value: &Value, key: &str) -> Vec<String> {
-    value.get(key)
+    value
+        .get(key)
         .and_then(Value::as_array)
         .map(|items| {
             items
@@ -1098,7 +1187,10 @@ fn resolve_gemini_endpoint(provider: &PersistedWebSearchProviderEntry) -> String
         return base_url;
     }
     let base_url = base_url.trim_end_matches('/');
-    format!("{base_url}/models/{}:generateContent", provider.resolved_model())
+    format!(
+        "{base_url}/models/{}:generateContent",
+        provider.resolved_model()
+    )
 }
 
 /// Resolves the xAI Responses endpoint from the configured base URL.
@@ -1123,12 +1215,12 @@ fn resolve_chat_completions_endpoint(provider: &PersistedWebSearchProviderEntry)
 
 /// Resolves the MiniMax Search endpoint by combining base URL overrides with region defaults while rejecting obvious regular text-API endpoints.
 /// 在拒绝明显普通文本接口地址的前提下，结合基址覆盖与区域默认值解析 MiniMax Search 端点。
-fn resolve_minimax_endpoint(
-    provider: &PersistedWebSearchProviderEntry,
-) -> Result<String, String> {
+fn resolve_minimax_endpoint(provider: &PersistedWebSearchProviderEntry) -> Result<String, String> {
     if provider.base_url.trim().is_empty() {
         return if provider.resolved_region().eq_ignore_ascii_case("cn") {
-            Ok(String::from("https://api.minimaxi.com/v1/coding_plan/search"))
+            Ok(String::from(
+                "https://api.minimaxi.com/v1/coding_plan/search",
+            ))
         } else {
             Ok(provider.resolved_base_url())
         };
@@ -1201,9 +1293,7 @@ fn is_probably_perplexity_search_endpoint(base_url: &str) -> bool {
 /// 解析 Perplexity 直连 chat 端点使用的请求模型。
 fn resolve_perplexity_request_model(provider: &PersistedWebSearchProviderEntry) -> String {
     let model = provider.resolved_model();
-    if provider
-        .resolved_base_url()
-        .contains("api.perplexity.ai")
+    if provider.resolved_base_url().contains("api.perplexity.ai")
         && model.starts_with("perplexity/")
     {
         model.trim_start_matches("perplexity/").to_string()
@@ -1334,7 +1424,9 @@ fn extract_kimi_citation_urls(payload: &Value) -> Vec<String> {
         .cloned()
         .unwrap_or_default();
     for tool_call in tool_calls {
-        let Some(raw_arguments) = tool_call.pointer("/function/arguments").and_then(Value::as_str)
+        let Some(raw_arguments) = tool_call
+            .pointer("/function/arguments")
+            .and_then(Value::as_str)
         else {
             continue;
         };
@@ -1476,7 +1568,9 @@ fn parse_duckduckgo_html(html: &str) -> Vec<WebSearchResult> {
         let raw_url = read_href_attribute(raw_attributes).unwrap_or_default();
 
         let trailing_html = &html[tag_end..];
-        let next_result_index = trailing_html.find("result__a").unwrap_or(trailing_html.len());
+        let next_result_index = trailing_html
+            .find("result__a")
+            .unwrap_or(trailing_html.len());
         let scoped_trailing_html = &trailing_html[..next_result_index];
         let snippet = extract_duckduckgo_snippet(scoped_trailing_html).unwrap_or_default();
 
@@ -1597,10 +1691,21 @@ fn truncate_error_text(text: &str, max_chars: usize) -> String {
 
 /// Builds the JSON schema used by the configured web-search fallback tool.
 /// 构建配置化网页搜索回退工具使用的 JSON Schema。
-pub fn configured_web_search_parameters_schema() -> Value {
+pub fn configured_web_search_parameters_schema(
+    configuration: &PersistedAiToolConfiguration,
+) -> Value {
+    let target_enum = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(crate::provider_config::AiToolKind::WebSearch))
+        .collect::<Vec<_>>();
     json!({
         "type": "object",
         "properties": {
+            "target": {
+                "type": "string",
+                "enum": target_enum,
+                "default": "auto",
+                "description": "Search target selector. Use `auto` to follow the configured default order, or choose one explicit instance/target pair."
+            },
             "query": {
                 "type": "string",
                 "description": "Search query text."
@@ -1635,11 +1740,13 @@ mod tests {
     #[test]
     fn parse_web_search_invocation_accepts_common_argument_shapes() {
         let invocation = parse_web_search_invocation(json!({
+            "target": "minimax/minimax",
             "query": "vulcan code",
             "maxResults": "8"
         }))
         .expect("arguments should parse");
 
+        assert_eq!(invocation.target.as_deref(), Some("minimax/minimax"));
         assert_eq!(invocation.query, "vulcan code");
         assert_eq!(invocation.max_results, Some(8));
     }
@@ -1648,10 +1755,38 @@ mod tests {
     /// 暴露一份要求稳定 `query` 字段的严格参数 Schema。
     #[test]
     fn configured_web_search_schema_requires_query() {
-        let schema = configured_web_search_parameters_schema();
+        let configuration = crate::provider_config::PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("duckduckgo"),
+                vendor_id: String::from("duckduckgo"),
+                name: String::from("DuckDuckGo"),
+                enabled: true,
+                api_key: String::new(),
+                base_url: String::new(),
+                region: String::new(),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        crate::provider_config::AiToolKind::WebSearch,
+                        "duckduckgo",
+                        "duckduckgo",
+                    ),
+                ],
+            }],
+            web_search: crate::provider_config::PersistedWebSearchConfiguration {
+                target_order: vec![String::from("duckduckgo/duckduckgo")],
+                ..crate::provider_config::PersistedWebSearchConfiguration::default()
+            },
+            ..crate::provider_config::PersistedAiToolConfiguration::default()
+        };
+        let schema = configured_web_search_parameters_schema(&configuration);
 
         assert_eq!(schema["required"][0], "query");
         assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["target"]["enum"][0], "auto");
+        assert_eq!(
+            schema["properties"]["target"]["enum"][1],
+            "duckduckgo/duckduckgo"
+        );
     }
 
     /// Rotates provider indices from the requested start position without losing any candidate.
@@ -1697,10 +1832,12 @@ mod tests {
     /// 使用供应商头部与编号条目渲染结构化结果列表。
     #[test]
     fn render_web_search_results_includes_provider_name_and_items() {
-        let provider = PersistedWebSearchProviderEntry::new("duckduckgo", WebSearchProviderKind::DuckDuckGo);
+        let provider =
+            PersistedWebSearchProviderEntry::new("duckduckgo", WebSearchProviderKind::DuckDuckGo);
         let markdown = render_web_search_results(
             &provider,
             &super::WebSearchInvocation {
+                target: None,
                 query: String::from("vulcan"),
                 max_results: Some(5),
             },

@@ -1,0 +1,13 @@
+{
+  "id": "exa",
+  "name": "Exa",
+  "capabilityKind": "web_search",
+  "targetAlias": "exa",
+  "addButtonGroup": 0,
+  "addButtonOrder": 2,
+  "defaultBaseUrl": "https://api.exa.ai/search",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "API Key / {env:NAME}",
+  "apiKeyPlaceholder": "{env:EXA_API_KEY}",
+  "maxResultsLimit": 20
+}

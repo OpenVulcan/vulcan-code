@@ -1,0 +1,18 @@
+{
+  "id": "minimax",
+  "name": "MiniMax Hailuo 2.3",
+  "capabilityKind": "video_generation",
+  "targetAlias": "MiniMax-Hailuo-2.3",
+  "addButtonGroup": 1,
+  "addButtonOrder": 1,
+  "defaultBaseUrl": "https://api.minimax.io/v1/video_generation",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "MiniMax Key / {env:MINIMAX_API_KEY}",
+  "apiKeyPlaceholder": "{env:MINIMAX_API_KEY}",
+  "defaultModel": "MiniMax-Hailuo-2.3",
+  "supportsRegionField": true,
+  "regionLabel": "MiniMax 区域",
+  "regionPlaceholder": "global 或 cn",
+  "defaultRegion": "global",
+  "configurationNote": "MiniMax 文生视频 / 图生视频标准模型。"
+}

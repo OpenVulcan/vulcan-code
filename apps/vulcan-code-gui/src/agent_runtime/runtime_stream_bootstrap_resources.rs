@@ -62,6 +62,7 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         luaskills_runtime,
         (!preparation.workspace_path.is_empty())
             .then(|| PathBuf::from(preparation.workspace_path.clone())),
+        preparation.conversation_attachments.clone(),
         foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
         foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),

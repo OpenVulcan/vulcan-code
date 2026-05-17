@@ -5,6 +5,7 @@ use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPrep
 use crate::agent_runtime::provider::resolve_active_provider_blueprint_with_ai_tools;
 use crate::agent_runtime::provider_stream_projection::truncate_preview;
 use crate::agent_runtime::runtime::RuntimeFoundation;
+use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::provider_config::ProviderConfigurationFile;
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
@@ -37,12 +38,14 @@ pub(crate) fn prepare_execution(
     )?;
     let mut warnings = Vec::new();
     let workspace_path = normalize_workspace_path_text(&request.workspace_path);
+    let conversation_attachments = collect_host_visible_attachments(&request.conversation_state);
     let ai_tool_fallback_aliases = resolve_ai_tool_fallback_aliases(&model_blueprint);
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
+        conversation_attachments.clone(),
         foundation.resolved_native_tools_for_agent(&active_agent.id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
         foundation.resolved_mcp_tools_for_agent(&active_agent.id),
@@ -106,6 +109,7 @@ pub(crate) fn prepare_execution(
         model_blueprint,
         prompt_preview: truncate_preview(request.prompt.trim(), 180),
         workspace_path,
+        conversation_attachments,
         context_history_count: request.conversation_state.messages.len(),
         execution_mode: request.execution_mode.clone(),
         temperature,

@@ -3,7 +3,8 @@
 
 use super::helpers::*;
 use super::*;
-use iced::widget::{column, pin, rich_text};
+use crate::provider_config::ResolvedAiCapabilityRouteTarget;
+use iced::widget::{column, opaque, pin, rich_text};
 use iced::{Background, Border, Color};
 use iced_aw::helpers::date_picker;
 
@@ -65,6 +66,26 @@ fn workspace_history_search_preview_segments(
     segments
 }
 
+/// Resolves one bounded image preview size that preserves the intrinsic aspect ratio while capping the preview height.
+/// 解析一个保留原始宽高比且限制最大高度的图片预览尺寸。
+fn bounded_image_preview_size(
+    aspect_ratio: Option<f32>,
+    max_height: f32,
+    max_width: f32,
+) -> iced::Size {
+    let safe_aspect_ratio = aspect_ratio
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+        .unwrap_or(16.0 / 10.0);
+    let resolved_max_height = max_height.max(1.0);
+    let resolved_max_width = max_width.max(1.0);
+    let unconstrained_width = resolved_max_height * safe_aspect_ratio;
+    let resolved_width = unconstrained_width.min(resolved_max_width).max(1.0);
+    let resolved_height = (resolved_width / safe_aspect_ratio)
+        .min(resolved_max_height)
+        .max(1.0);
+    iced::Size::new(resolved_width, resolved_height)
+}
+
 /// Builds the rich-text preview widget used by workspace-history search hits, preserving controller-provided highlight tags.
 /// 构建工作台历史搜索命中使用的富文本预览部件，保留控制器提供的高亮标记效果。
 fn workspace_history_search_preview_rich_text<'a>(
@@ -102,6 +123,50 @@ fn workspace_history_search_preview_rich_text<'a>(
             .collect::<Vec<_>>();
 
     rich_text(spans).size(12).width(Fill).into()
+}
+
+/// Maps one selectable transcript interaction into the corresponding workbench message while letting each caller supply its own thinking and tool modal routes.
+/// 将一条可选择转录交互映射为对应的工作台消息，同时允许各调用方提供自己的思考与工具弹层路由。
+fn map_selectable_transcript_interaction(
+    interaction: SelectableTranscriptInteraction,
+    open_thinking: impl Fn(String) -> Message,
+    open_tool: impl Fn(String) -> Message,
+) -> Message {
+    match interaction {
+        SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+        SelectableTranscriptInteraction::OpenThinkingModal(block_id) => open_thinking(block_id),
+        SelectableTranscriptInteraction::OpenToolModal(block_id) => open_tool(block_id),
+        SelectableTranscriptInteraction::OpenImagePreview {
+            file_name,
+            local_path,
+        } => Message::OpenComposerImageAttachmentPreview {
+            file_name,
+            local_path,
+        },
+        SelectableTranscriptInteraction::ToggleAudioPlayback {
+            file_name,
+            local_path,
+        } => Message::ToggleGeneratedAudioPlayback {
+            file_name,
+            local_path,
+        },
+        SelectableTranscriptInteraction::OpenMediaWithDefaultApp(local_path) => {
+            Message::OpenGeneratedAttachmentWithDefaultApp(local_path)
+        }
+        SelectableTranscriptInteraction::RevealMediaInFolder(local_path) => {
+            Message::RevealGeneratedAttachmentInFolder(local_path)
+        }
+        SelectableTranscriptInteraction::CopyMediaPath(local_path) => {
+            Message::CopyGeneratedAttachmentPath(local_path)
+        }
+        SelectableTranscriptInteraction::CopyImageToClipboard {
+            file_name,
+            local_path,
+        } => Message::CopyGeneratedImageToClipboard {
+            file_name,
+            local_path,
+        },
+    }
 }
 
 impl VulcanWorkbench {
@@ -145,50 +210,41 @@ impl VulcanWorkbench {
         .spacing(0)
         .into();
 
-        let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_workbench_model_picker_modal() {
-                stack([main_surface, overlay]).into()
-            } else {
-                main_surface
-            };
-        let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_composer_context_menu_overlay() {
-                stack([composed_surface, overlay]).into()
-            } else {
-                composed_surface
-            };
-        let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_workspace_history_search_modal() {
-                stack([composed_surface, overlay]).into()
-            } else {
-                composed_surface
-            };
-        let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_task_project_settings_modal() {
-                stack([composed_surface, overlay]).into()
-            } else {
-                composed_surface
-            };
-        let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_startup_overlay() {
-                stack([composed_surface, overlay]).into()
-            } else {
-                composed_surface
-            };
-        let composed_surface = self.wrap_with_window_resize_handles(window_id, composed_surface);
+        let base_surface = self.wrap_with_window_resize_handles(window_id, main_surface);
+        let mut layered_surfaces: Vec<Element<'_, Message>> = vec![base_surface];
 
-        let composed_surface: Element<'_, Message> =
-            if let Some(overlay) = self.view_workbench_notice_modal() {
-                stack([composed_surface, overlay]).into()
-            } else {
-                composed_surface
-            };
-
-        if let Some(overlay) = self.view_workbench_image_preview_modal() {
-            stack([composed_surface, overlay]).into()
-        } else {
-            composed_surface
+        if let Some(overlay) = self.view_workbench_model_picker_modal() {
+            layered_surfaces.push(overlay);
         }
+        if let Some(overlay) = self.view_ai_capability_vendor_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_ai_capability_vendor_editor_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_ai_capability_target_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_composer_context_menu_overlay() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_workspace_history_search_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_task_project_settings_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_startup_overlay() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_workbench_notice_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_workbench_image_preview_modal() {
+            layered_surfaces.push(overlay);
+        }
+
+        stack(layered_surfaces).into()
     }
 
     /// Builds the framed main display region with dedicated top, left, and bottom separators.
@@ -434,7 +490,7 @@ impl VulcanWorkbench {
                     .height(Fill)
                     .style(style::startup_overlay_backdrop_style)
                     .into(),
-                container(modal_card)
+                container(mouse_area(modal_card).on_press(Message::Noop))
                     .width(Fill)
                     .height(Fill)
                     .center(Fill)
@@ -932,7 +988,7 @@ impl VulcanWorkbench {
                     .height(Fill)
                     .style(style::startup_overlay_backdrop_style)
                     .into(),
-                container(modal_card)
+                container(mouse_area(modal_card).on_press(Message::Noop))
                     .width(Fill)
                     .height(Fill)
                     .center(Fill)
@@ -1007,7 +1063,7 @@ impl VulcanWorkbench {
                     .height(Fill)
                     .style(style::startup_overlay_backdrop_style)
                     .into(),
-                container(modal_card)
+                container(mouse_area(modal_card).on_press(Message::Noop))
                     .width(Fill)
                     .height(Fill)
                     .center(Fill)
@@ -2809,15 +2865,19 @@ impl VulcanWorkbench {
         let choices = self.configured_workbench_web_search_choices();
         let selected_choice = self.active_workbench_web_search_choice();
 
-        pick_list(choices, selected_choice, Message::WorkbenchWebSearchSelected)
-            .width(WORKBENCH_WEB_SEARCH_SELECTOR_WIDTH)
-            .placeholder("搜索")
-            .padding([8, 10])
-            .text_size(13)
-            .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
-            .style(style::workbench_compact_pick_list_style)
-            .menu_style(style::workbench_compact_pick_list_menu_style)
-            .into()
+        pick_list(
+            choices,
+            selected_choice,
+            Message::WorkbenchWebSearchSelected,
+        )
+        .width(WORKBENCH_WEB_SEARCH_SELECTOR_WIDTH)
+        .placeholder("搜索")
+        .padding([8, 10])
+        .text_size(13)
+        .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
+        .style(style::workbench_compact_pick_list_style)
+        .menu_style(style::workbench_compact_pick_list_menu_style)
+        .into()
     }
 
     /// Builds the compact reasoning-effort selector shown before the trailing send button.
@@ -3942,15 +4002,11 @@ impl VulcanWorkbench {
                         session_id,
                         request,
                     },
-                    |interaction| match interaction {
-                        SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
-                            Message::OpenSelectedSessionThinkingModal(block_id)
-                        }
-                        SelectableTranscriptInteraction::OpenToolModal(block_id) => {
-                            Message::OpenSelectedSessionToolModal(block_id)
-                        }
-                        SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
-                    },
+                    |interaction| map_selectable_transcript_interaction(
+                        interaction,
+                        Message::OpenSelectedSessionThinkingModal,
+                        Message::OpenSelectedSessionToolModal,
+                    ),
                 ),
                 space::vertical().height(24),
             ]
@@ -4154,15 +4210,11 @@ impl VulcanWorkbench {
                     session_id,
                     request,
                 },
-                |interaction| match interaction {
-                    SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
-                        Message::OpenSelectedSessionThinkingModal(block_id)
-                    }
-                    SelectableTranscriptInteraction::OpenToolModal(block_id) => {
-                        Message::OpenSelectedSessionToolModal(block_id)
-                    }
-                    SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
-                },
+                |interaction| map_selectable_transcript_interaction(
+                    interaction,
+                    Message::OpenSelectedSessionThinkingModal,
+                    Message::OpenSelectedSessionToolModal,
+                ),
             ),
             space::vertical().height(self.transcript_bottom_spacer_height()),
         ]
@@ -4353,14 +4405,12 @@ impl VulcanWorkbench {
                 session_id,
                 request,
             },
-            |interaction| match interaction {
-                SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
-                    Message::OpenSelectedSessionThinkingModal(block_id)
-                }
-                SelectableTranscriptInteraction::OpenToolModal(block_id) => {
-                    Message::OpenSelectedSessionToolModal(block_id)
-                }
-                SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+            |interaction| {
+                map_selectable_transcript_interaction(
+                    interaction,
+                    Message::OpenSelectedSessionThinkingModal,
+                    Message::OpenSelectedSessionToolModal,
+                )
             },
             move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
                 session_id,
@@ -4381,6 +4431,9 @@ impl VulcanWorkbench {
             .as_ref()
             .filter(|modal_state| modal_state.session_id == session_id)?;
         let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
+        if !modal_state.payload.generated_attachments.is_empty() {
+            return Some(self.view_generated_tool_modal_surface(session_id, modal_state, progress));
+        }
         Some(view_thinking_modal_surface(
             modal_state.payload.title.clone(),
             modal_state.payload.helper_text.clone(),
@@ -4388,26 +4441,290 @@ impl VulcanWorkbench {
             modal_state.payload.document_signature,
             &self.app_theme,
             progress,
-            thinking_overlay_scrollable_id(session_id),
-            move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
-                session_id,
-                request,
+            tool_modal_scrollable_id(session_id),
+            |_| Message::Noop,
+            |interaction| {
+                map_selectable_transcript_interaction(
+                    interaction,
+                    Message::OpenSelectedSessionThinkingModal,
+                    Message::OpenSelectedSessionToolModal,
+                )
             },
-            |interaction| match interaction {
-                SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
-                    Message::OpenSelectedSessionThinkingModal(block_id)
-                }
-                SelectableTranscriptInteraction::OpenToolModal(block_id) => {
-                    Message::OpenSelectedSessionToolModal(block_id)
-                }
-                SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
-            },
-            move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
-                session_id,
-                viewport,
-            },
+            |_| Message::Noop,
             Message::CloseSelectedSessionToolModal,
         ))
+    }
+
+    /// Builds the richer generated-media tool modal that keeps preview cards and the raw transcript detail inside one shared centered surface.
+    /// 构建更丰富的生成媒体工具弹层，在统一居中表面中同时保留预览卡片与原始转录详情。
+    fn view_generated_tool_modal_surface(
+        &self,
+        session_id: SessionId,
+        modal_state: &ToolModalState,
+        progress: f32,
+    ) -> Element<'_, Message> {
+        let reveal_progress = progress.clamp(0.0, 1.0);
+        let vertical_inset = 22.0 + (1.0 - reveal_progress) * 6.0;
+        let header_secondary = self
+            .app_theme
+            .palette()
+            .background
+            .base
+            .text
+            .scale_alpha(0.54 + reveal_progress * 0.24);
+        let generated_cards =
+            self.view_generated_tool_modal_cards(&modal_state.payload.generated_attachments);
+        let transcript_body = view_selectable_rendered_transcript::<Message>(
+            &modal_state.payload.document,
+            &self.app_theme,
+            |_| Message::Noop,
+            |interaction| {
+                map_selectable_transcript_interaction(
+                    interaction,
+                    Message::OpenSelectedSessionThinkingModal,
+                    Message::OpenSelectedSessionToolModal,
+                )
+            },
+        );
+        let modal_body = scrollable(
+            column![
+                generated_cards,
+                rule::horizontal(1),
+                text("原始工具返回").size(12),
+                transcript_body,
+            ]
+            .spacing(14)
+            .width(Fill),
+        )
+        .id(tool_modal_scrollable_id(session_id))
+        .height(Fill);
+        let modal_panel = container(
+            column![
+                row![
+                    column![
+                        text(modal_state.payload.title.clone()).size(18),
+                        text(modal_state.payload.helper_text.clone())
+                            .size(12)
+                            .style(move |_theme: &Theme| iced::widget::text::Style {
+                                color: Some(header_secondary),
+                            }),
+                    ]
+                    .spacing(4),
+                    space::horizontal(),
+                    button(text("✕").size(14))
+                        .padding([4, 8])
+                        .style(button::text)
+                        .on_press(Message::CloseSelectedSessionToolModal),
+                ]
+                .align_y(Center),
+                rule::horizontal(1),
+                container(modal_body).padding([4, 0]).height(Fill),
+            ]
+            .spacing(12),
+        )
+        .padding([16, 18])
+        .width(Fill)
+        .height(Fill)
+        .style(move |theme| vulcan_agent_view::thinking_modal_card_style(theme, progress));
+        let backdrop = mouse_area(
+            container(space())
+                .width(Fill)
+                .height(Fill)
+                .style(move |theme| {
+                    vulcan_agent_view::thinking_modal_backdrop_style(theme, progress)
+                }),
+        )
+        .on_press(Message::CloseSelectedSessionToolModal);
+        let centered_modal = column![
+            space::vertical().height(FillPortion(15)),
+            row![
+                space::horizontal().width(FillPortion(15)),
+                opaque(
+                    container(modal_panel)
+                        .width(FillPortion(70))
+                        .height(FillPortion(70))
+                ),
+                space::horizontal().width(FillPortion(15)),
+            ]
+            .width(Fill)
+            .height(FillPortion(70)),
+            space::vertical().height(FillPortion(15)),
+        ]
+        .width(Fill)
+        .height(Fill)
+        .padding([vertical_inset, 20.0]);
+
+        opaque(
+            stack([
+                Element::from(backdrop),
+                Element::from(container(centered_modal).width(Fill).height(Fill)),
+            ])
+            .width(Fill)
+            .height(Fill),
+        )
+        .into()
+    }
+
+    /// Builds the generated-media preview section shown above tool transcript details inside the richer tool modal.
+    /// 构建显示在更丰富工具弹层中、位于工具转录详情上方的生成媒体预览区。
+    fn view_generated_tool_modal_cards(
+        &self,
+        attachments: &[ConversationAttachment],
+    ) -> Element<'_, Message> {
+        let cards = attachments.iter().fold(
+            column![text("生成结果").size(12)].spacing(12),
+            |column, attachment| column.push(self.view_generated_tool_modal_card(attachment)),
+        );
+        container(cards).padding([4, 0]).width(Fill).into()
+    }
+
+    /// Builds one generated-media preview card that exposes direct preview/open/copy/reveal actions without forcing the user to read raw file paths.
+    /// 构建单个生成媒体预览卡片，直接暴露预览、打开、复制与定位动作，而不再强迫用户阅读原始文件路径。
+    fn view_generated_tool_modal_card(
+        &self,
+        attachment: &ConversationAttachment,
+    ) -> Element<'_, Message> {
+        let preview: Element<'_, Message> = match attachment.kind {
+            ConversationAttachmentKind::Image if Path::new(&attachment.local_path).is_file() => {
+                let preview_size = bounded_image_preview_size(
+                    local_raster_image_aspect_ratio(&attachment.local_path),
+                    220.0,
+                    520.0,
+                );
+                container(
+                    button(
+                        iced_image(attachment.local_path.clone())
+                            .width(preview_size.width)
+                            .height(preview_size.height)
+                            .content_fit(ContentFit::Contain),
+                    )
+                    .padding(0)
+                    .style(style::workbench_composer_attachment_preview_button_style)
+                    .on_press(Message::OpenComposerImageAttachmentPreview {
+                        file_name: attachment.file_name.clone(),
+                        local_path: attachment.local_path.clone(),
+                    }),
+                )
+                .width(Fill)
+                .align_x(iced::Alignment::Start)
+                .into()
+            }
+            ConversationAttachmentKind::Image => self.view_generated_tool_modal_icon_preview(
+                lucide::image().size(28).line_height(1.0).into(),
+                "图片文件已生成，可使用下方操作继续查看。",
+            ),
+            ConversationAttachmentKind::Audio => self.view_generated_tool_modal_icon_preview(
+                lucide::volume_two().size(28).line_height(1.0).into(),
+                "点击下方播放按钮即可直接播放当前音频，再次点击会停止。",
+            ),
+            ConversationAttachmentKind::Video => self.view_generated_tool_modal_icon_preview(
+                lucide::video().size(28).line_height(1.0).into(),
+                "当前视频可使用系统默认播放器打开，或直接定位到文件位置。",
+            ),
+            ConversationAttachmentKind::Pdf => self.view_generated_tool_modal_icon_preview(
+                lucide::file_text().size(28).line_height(1.0).into(),
+                "当前文档可直接打开，或定位到文件位置。",
+            ),
+        };
+        let open_label = match attachment.kind {
+            ConversationAttachmentKind::Image => "预览图片",
+            ConversationAttachmentKind::Audio => {
+                if self.is_generated_audio_playing_local_path(&attachment.local_path) {
+                    "停止播放"
+                } else {
+                    "播放音频"
+                }
+            }
+            ConversationAttachmentKind::Video => "打开视频",
+            ConversationAttachmentKind::Pdf => "打开文档",
+        };
+        let meta_line = match attachment.byte_len {
+            Some(byte_len) => format!(
+                "{} · {}",
+                attachment.mime_type,
+                Self::format_attachment_cleanup_byte_len(byte_len)
+            ),
+            None => attachment.mime_type.clone(),
+        };
+        let primary_action = match attachment.kind {
+            ConversationAttachmentKind::Image => Message::OpenComposerImageAttachmentPreview {
+                file_name: attachment.file_name.clone(),
+                local_path: attachment.local_path.clone(),
+            },
+            ConversationAttachmentKind::Audio => Message::ToggleGeneratedAudioPlayback {
+                file_name: attachment.file_name.clone(),
+                local_path: attachment.local_path.clone(),
+            },
+            _ => Message::OpenGeneratedAttachmentWithDefaultApp(attachment.local_path.clone()),
+        };
+        let secondary_copy_button: Element<'_, Message> = match attachment.kind {
+            ConversationAttachmentKind::Image => button(text("复制图片").size(12))
+                .padding([6, 10])
+                .style(style::subtle_panel_button_style)
+                .on_press(Message::CopyGeneratedImageToClipboard {
+                    file_name: attachment.file_name.clone(),
+                    local_path: attachment.local_path.clone(),
+                })
+                .into(),
+            _ => button(text("复制路径").size(12))
+                .padding([6, 10])
+                .style(style::subtle_panel_button_style)
+                .on_press(Message::CopyGeneratedAttachmentPath(
+                    attachment.local_path.clone(),
+                ))
+                .into(),
+        };
+
+        container(
+            column![
+                preview,
+                column![
+                    text(attachment.file_name.clone()).size(14),
+                    text(meta_line).size(12),
+                ]
+                .spacing(4)
+                .width(Fill),
+                row![
+                    button(text(open_label).size(12))
+                        .padding([6, 10])
+                        .style(style::subtle_panel_button_style)
+                        .on_press(primary_action),
+                    secondary_copy_button,
+                    button(text("定位文件").size(12))
+                        .padding([6, 10])
+                        .style(style::subtle_panel_button_style)
+                        .on_press(Message::RevealGeneratedAttachmentInFolder(
+                            attachment.local_path.clone()
+                        )),
+                ]
+                .spacing(8),
+            ]
+            .spacing(12)
+            .width(Fill),
+        )
+        .padding(14)
+        .style(style::workbench_composer_panel_style)
+        .width(Fill)
+        .into()
+    }
+
+    /// Builds one icon-based generated-media preview placeholder for non-image outputs.
+    /// 为非图片输出构建基于图标的生成媒体预览占位卡片。
+    fn view_generated_tool_modal_icon_preview<'a>(
+        &self,
+        icon: Element<'a, Message>,
+        helper_text: &'a str,
+    ) -> Element<'a, Message> {
+        container(
+            column![icon, text(helper_text).size(12)]
+                .spacing(10)
+                .width(Fill)
+                .align_x(Center),
+        )
+        .padding([20, 16])
+        .width(Fill)
+        .style(style::workbench_composer_attachment_icon_tile_style)
+        .into()
     }
 
     /// Builds the floating streaming-thinking overlay shown while one active thinking message is still in progress.
@@ -4442,14 +4759,12 @@ impl VulcanWorkbench {
                     session_id,
                     request,
                 },
-                |interaction| match interaction {
-                    SelectableTranscriptInteraction::OpenThinkingModal(block_id) => {
-                        Message::OpenSelectedSessionThinkingModal(block_id)
-                    }
-                    SelectableTranscriptInteraction::OpenToolModal(block_id) => {
-                        Message::OpenSelectedSessionToolModal(block_id)
-                    }
-                    SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+                |interaction| {
+                    map_selectable_transcript_interaction(
+                        interaction,
+                        Message::OpenSelectedSessionThinkingModal,
+                        Message::OpenSelectedSessionToolModal,
+                    )
                 },
                 move |viewport| Message::SelectedSessionThinkingOverlayScrolled {
                     session_id,
@@ -5187,14 +5502,170 @@ impl VulcanWorkbench {
             .spacing(4),
         )
         .padding([4, 2]);
+        let section_header = container(
+            column![
+                text(self.selected_settings_section.title()).size(20),
+                text(self.selected_settings_section.description()).size(12),
+            ]
+            .spacing(4),
+        )
+        .padding([4, 2]);
+        let section_body: Element<'_, Message> = match self.selected_settings_section {
+            SettingsSection::ModelProviders => column![
+                self.view_provider_configuration_card(),
+                self.view_runtime_selector_settings_card(),
+            ]
+            .spacing(12)
+            .into(),
+            SettingsSection::RuntimeDiagnostics => self.view_inspector(),
+            SettingsSection::AiCapabilityVendors => self.view_ai_tool_configuration_card(),
+            SettingsSection::AiCapabilityWebSearch => {
+                self.view_ai_capability_settings_page(AiToolKind::WebSearch)
+            }
+            SettingsSection::AiCapabilityUnderstandImage => {
+                self.view_ai_capability_settings_page(AiToolKind::UnderstandImage)
+            }
+            SettingsSection::AiCapabilityImageGeneration => {
+                self.view_ai_capability_settings_page(AiToolKind::ImageGeneration)
+            }
+            SettingsSection::AiCapabilityVideoGeneration => {
+                self.view_ai_capability_settings_page(AiToolKind::VideoGeneration)
+            }
+            SettingsSection::AiCapabilitySpeechSynthesis => {
+                self.view_ai_capability_settings_page(AiToolKind::SpeechSynthesis)
+            }
+            SettingsSection::AiCapabilityMusicGeneration => {
+                self.view_ai_capability_settings_page(AiToolKind::MusicGeneration)
+            }
+            SettingsSection::AiCapabilityMusicCover => {
+                self.view_ai_capability_settings_page(AiToolKind::MusicCover)
+            }
+            SettingsSection::McpServers => self.view_mcp_configuration_card(),
+            SettingsSection::ArchivedRestore => self.view_archived_restore_card(),
+        };
+        let content_panel = container(
+            scrollable(column![section_header, section_body].spacing(12))
+                .height(Fill)
+                .spacing(8),
+        )
+        .padding(16)
+        .width(Fill)
+        .height(Fill)
+        .style(container::bordered_box);
 
         column![
             panel_header,
-            self.view_inspector(),
-            self.view_archived_restore_card()
+            row![self.view_settings_navigation_tree(), content_panel,]
+                .spacing(12)
+                .height(Fill)
         ]
         .spacing(12)
         .height(Fill)
+        .into()
+    }
+
+    /// Builds the collapsible left navigation tree used by the dedicated settings workspace.
+    /// 构建独立设置工作区使用的可折叠左侧导航树。
+    pub(super) fn view_settings_navigation_tree(&self) -> Element<'_, Message> {
+        let ai_tree_icon: Element<'_, Message> = if self.settings_ai_capability_tree_expanded {
+            codicon::chevron_down().size(14).line_height(1.0).into()
+        } else {
+            codicon::chevron_right().size(14).line_height(1.0).into()
+        };
+        let ai_tree_button = button(
+            row![
+                container(ai_tree_icon).width(16).center_y(Shrink),
+                text("AI 能力").size(14),
+                space::horizontal(),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        )
+        .width(Fill)
+        .padding([8, 10])
+        .style(button::secondary)
+        .on_press(Message::ToggleAiCapabilitySettingsTree);
+        let mut navigation = column![
+            text("设置目录").size(15),
+            self.view_settings_navigation_button(SettingsSection::ModelProviders, 0.0),
+            self.view_settings_navigation_button(SettingsSection::RuntimeDiagnostics, 0.0),
+            ai_tree_button,
+        ]
+        .spacing(8);
+        if self.settings_ai_capability_tree_expanded {
+            navigation =
+                navigation
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityVendors,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityWebSearch,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityUnderstandImage,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityImageGeneration,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityVideoGeneration,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilitySpeechSynthesis,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityMusicGeneration,
+                        20.0,
+                    ))
+                    .push(self.view_settings_navigation_button(
+                        SettingsSection::AiCapabilityMusicCover,
+                        20.0,
+                    ));
+        }
+        navigation = navigation
+            .push(self.view_settings_navigation_button(SettingsSection::McpServers, 0.0))
+            .push(self.view_settings_navigation_button(SettingsSection::ArchivedRestore, 0.0));
+
+        container(navigation)
+            .padding(14)
+            .width(260)
+            .height(Fill)
+            .style(container::bordered_box)
+            .into()
+    }
+
+    /// Builds one row button inside the left settings navigation tree.
+    /// 构建左侧设置导航树中的单行按钮。
+    pub(super) fn view_settings_navigation_button(
+        &self,
+        section: SettingsSection,
+        indent: f32,
+    ) -> Element<'_, Message> {
+        let is_selected = self.selected_settings_section == section;
+        button(
+            container(text(section.label()).size(if indent > 0.0 { 13 } else { 14 })).padding(
+                iced::Padding {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: indent,
+                },
+            ),
+        )
+        .width(Fill)
+        .padding([8, 10])
+        .style(if is_selected {
+            button::primary
+        } else {
+            button::secondary
+        })
+        .on_press(Message::SettingsSectionSelected(section))
         .into()
     }
 
@@ -6577,163 +7048,160 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Renders the inspector pane with runtime controls, guidance, and logs.
-    /// 渲染包含运行控制、指引与日志的检查面板。
-    pub(super) fn view_inspector(&self) -> Element<'_, Message> {
-        // Build the provider configuration card so the settings page mirrors the OpenCode-style provider workflow.
-        // 构建供应商配置卡片，让设置页面尽量镜像 OpenCode 风格的供应商工作流。
-        let provider_controls = {
-            let provider_choices = provider_config::supported_provider_choices();
-            let selected_provider = Some(self.selected_provider.clone());
-            let configured_providers = self.configured_provider_choices();
-            let selected_definition = self.selected_provider_definition();
-            let provider_metadata: Element<'_, Message> =
-                if let Some(definition) = selected_definition {
-                    let selected_model_id = self
-                        .active_workbench_model_choice()
-                        .filter(|choice| choice.provider_id == self.selected_provider.id)
-                        .map(|choice| choice.model_id);
-                    let effective_runtime = selected_model_id
-                        .as_deref()
-                        .map(|model_id| definition.effective_runtime_for_model(model_id))
-                        .unwrap_or(definition.runtime);
-                    column![
-                        text(format!("运行时：{}", effective_runtime.label())).size(12),
-                        text(format!(
-                            "接口族：{} · {}",
-                            effective_runtime.api_family().label(),
-                            effective_runtime.api_family().key()
-                        ))
-                        .size(12),
-                        text(format!(
-                            "接口地址：{}",
-                            self.selected_provider_endpoint_summary()
-                        ))
-                        .size(12),
-                        text(format!(
-                            "模型目录：{}",
-                            self.selected_provider_model_source_summary()
-                        ))
-                        .size(12),
-                    ]
-                    .spacing(4)
-                    .into()
-                } else {
-                    container(column![]).into()
-                };
+    /// Renders the standalone provider-configuration card used by the dedicated settings workspace.
+    /// 渲染独立设置工作区使用的供应商配置卡片。
+    pub(super) fn view_provider_configuration_card(&self) -> Element<'_, Message> {
+        let provider_choices = provider_config::supported_provider_choices();
+        let selected_provider = Some(self.selected_provider.clone());
+        let configured_providers = self.configured_provider_choices();
+        let selected_definition = self.selected_provider_definition();
+        let provider_metadata: Element<'_, Message> = if let Some(definition) = selected_definition
+        {
+            let selected_model_id = self
+                .active_workbench_model_choice()
+                .filter(|choice| choice.provider_id == self.selected_provider.id)
+                .map(|choice| choice.model_id);
+            let effective_runtime = selected_model_id
+                .as_deref()
+                .map(|model_id| definition.effective_runtime_for_model(model_id))
+                .unwrap_or(definition.runtime);
+            column![
+                text(format!("运行时：{}", effective_runtime.label())).size(12),
+                text(format!(
+                    "接口族：{} · {}",
+                    effective_runtime.api_family().label(),
+                    effective_runtime.api_family().key()
+                ))
+                .size(12),
+                text(format!(
+                    "接口地址：{}",
+                    self.selected_provider_endpoint_summary()
+                ))
+                .size(12),
+                text(format!(
+                    "模型目录：{}",
+                    self.selected_provider_model_source_summary()
+                ))
+                .size(12),
+            ]
+            .spacing(4)
+            .into()
+        } else {
+            container(column![]).into()
+        };
+        let provider_field_list = selected_definition.map_or_else(
+            || column![text("当前没有可用的供应商定义。").size(13)].spacing(8),
+            |definition| {
+                let fields = definition.input_fields();
 
-            let provider_field_list = selected_definition.map_or_else(
-                || column![text("当前没有可用的供应商定义。").size(13)].spacing(8),
-                |definition| {
-                    let fields = definition.input_fields();
-
-                    fields
-                        .into_iter()
-                        .fold(column![].spacing(10), |form, field| {
-                            let label = definition.field_label(field);
-                            let placeholder = definition.field_placeholder(field);
-                            let input = text_input(&placeholder, self.provider_form.get(field))
-                                .on_input(move |value| Message::ProviderFieldChanged(field, value))
-                                .padding(10)
-                                .width(Fill);
-                            let input = if field.is_secret() {
-                                input.secure(true)
-                            } else {
-                                input
-                            };
-
-                            form.push(column![text(label).size(13), input].spacing(6).width(Fill))
-                        })
-                },
-            );
-
-            let configured_provider_list = if configured_providers.is_empty() {
-                column![text("尚未保存任何供应商配置。").size(12)]
-            } else {
-                configured_providers
+                fields
                     .into_iter()
-                    .fold(column![].spacing(8), |list, provider| {
-                        list.push(
-                            button(
-                                row![
-                                    text(provider.name.clone()).size(13),
-                                    space::horizontal(),
-                                    text(self.configured_provider_model_summary(&provider.id))
-                                        .size(12),
-                                ]
-                                .align_y(Center)
-                                .width(Fill),
-                            )
-                            .padding([8, 10])
-                            .width(Fill)
-                            .style(if provider.id == self.selected_provider.id {
-                                button::primary
-                            } else {
-                                button::secondary
-                            })
-                            .on_press(Message::ConfiguredProviderSelected(provider.id)),
-                        )
-                    })
-            };
+                    .fold(column![].spacing(10), |form, field| {
+                        let label = definition.field_label(field);
+                        let placeholder = definition.field_placeholder(field);
+                        let input = text_input(&placeholder, self.provider_form.get(field))
+                            .on_input(move |value| Message::ProviderFieldChanged(field, value))
+                            .padding(10)
+                            .width(Fill);
+                        let input = if field.is_secret() {
+                            input.secure(true)
+                        } else {
+                            input
+                        };
 
-            container(
-                column![
-                    row![
-                        text("模型供应商配置").size(18),
-                        space::horizontal(),
-                        text("~/.vulcan/vulcan-code.json").size(12),
-                    ]
-                    .align_y(Center),
-                    pick_list(
-                        provider_choices,
-                        selected_provider,
-                        Message::ProviderCatalogSelected
+                        form.push(column![text(label).size(13), input].spacing(6).width(Fill))
+                    })
+            },
+        );
+        let configured_provider_list: Element<'_, Message> = if configured_providers.is_empty() {
+            column![text("尚未保存任何供应商配置。").size(12)].into()
+        } else {
+            configured_providers
+                .into_iter()
+                .fold(column![].spacing(8), |list, provider| {
+                    list.push(
+                        button(
+                            row![
+                                text(provider.name.clone()).size(13),
+                                space::horizontal(),
+                                text(self.configured_provider_model_summary(&provider.id)).size(12),
+                            ]
+                            .align_y(Center)
+                            .width(Fill),
+                        )
+                        .padding([8, 10])
+                        .width(Fill)
+                        .style(if provider.id == self.selected_provider.id {
+                            button::primary
+                        } else {
+                            button::secondary
+                        })
+                        .on_press(Message::ConfiguredProviderSelected(provider.id)),
                     )
-                    .width(Fill)
-                    .placeholder("选择供应商"),
-                    provider_metadata,
-                    provider_field_list,
-                    row![
-                        button("保存配置")
-                            .style(button::primary)
-                            .on_press(Message::SaveProviderConfiguration),
-                        button("移除配置")
-                            .style(button::secondary)
-                            .on_press(Message::RemoveProviderConfiguration),
-                        selected_definition.map_or_else(
-                            || button("尝试拉取模型").style(button::secondary),
-                            |definition| {
-                                let action = if definition.supports_remote_model_refresh() {
-                                    Some(Message::RefreshProviderModels)
-                                } else {
-                                    None
-                                };
-                                let mut button_widget =
-                                    button(if definition.supports_remote_model_refresh() {
-                                        "尝试拉取模型"
-                                    } else {
-                                        "仅使用静态模型目录"
-                                    })
-                                    .style(button::secondary);
-                                if let Some(message) = action {
-                                    button_widget = button_widget.on_press(message);
-                                }
-                                button_widget
-                            }
-                        ),
-                    ]
-                    .spacing(10),
-                    text(&self.provider_notice).size(12),
-                    column![text("已保存的供应商").size(14), configured_provider_list,].spacing(8),
-                ]
-                .spacing(12),
-            )
-            .padding(16)
-            .style(container::bordered_box)
+                })
+                .into()
         };
 
-        // Build the model and theme selector card to centralize active-model switching and runtime tuning.
-        // 构建模型与主题选择卡片，以集中管理激活模型切换与运行参数。
+        container(
+            column![
+                row![
+                    text("模型供应商配置").size(18),
+                    space::horizontal(),
+                    text("~/.vulcan/vulcan-code.json").size(12),
+                ]
+                .align_y(Center),
+                pick_list(
+                    provider_choices,
+                    selected_provider,
+                    Message::ProviderCatalogSelected
+                )
+                .width(Fill)
+                .placeholder("选择供应商"),
+                provider_metadata,
+                provider_field_list,
+                row![
+                    button("保存配置")
+                        .style(button::primary)
+                        .on_press(Message::SaveProviderConfiguration),
+                    button("移除配置")
+                        .style(button::secondary)
+                        .on_press(Message::RemoveProviderConfiguration),
+                    selected_definition.map_or_else(
+                        || button("尝试拉取模型").style(button::secondary),
+                        |definition| {
+                            let action = if definition.supports_remote_model_refresh() {
+                                Some(Message::RefreshProviderModels)
+                            } else {
+                                None
+                            };
+                            let mut button_widget =
+                                button(if definition.supports_remote_model_refresh() {
+                                    "尝试拉取模型"
+                                } else {
+                                    "仅使用静态模型目录"
+                                })
+                                .style(button::secondary);
+                            if let Some(message) = action {
+                                button_widget = button_widget.on_press(message);
+                            }
+                            button_widget
+                        }
+                    ),
+                ]
+                .spacing(10),
+                text(&self.provider_notice).size(12),
+                column![text("已保存的供应商").size(14), configured_provider_list].spacing(8),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Renders the runtime selector card used by both the provider page and the runtime diagnostics page.
+    /// 渲染供供应商页与运行诊断页复用的运行参数选择卡片。
+    pub(super) fn view_runtime_selector_settings_card(&self) -> Element<'_, Message> {
         let available_models = self.current_provider_model_choices();
         let selected_model = self.active_model_choice_for_selected_provider();
         let model_selector: Element<'_, Message> = if available_models.is_empty() {
@@ -6761,7 +7229,7 @@ impl VulcanWorkbench {
                 .into()
         };
 
-        let selectors = container(
+        container(
             column![
                 text("运行参数").size(18),
                 model_selector,
@@ -6785,11 +7253,14 @@ impl VulcanWorkbench {
             .spacing(12),
         )
         .padding(16)
-        .style(container::bordered_box);
+        .style(container::bordered_box)
+        .into()
+    }
 
-        // Build the policy controls card to surface engineering guardrails.
-        // 构建策略控制卡片，以显式展示工程约束与防护开关。
-        let policies = container(
+    /// Renders the engineering policy control card.
+    /// 渲染工程策略控制卡片。
+    pub(super) fn view_policy_controls_card(&self) -> Element<'_, Message> {
+        container(
             column![
                 text("工程策略").size(18),
                 checkbox(self.generate_plan)
@@ -6808,11 +7279,14 @@ impl VulcanWorkbench {
             .spacing(12),
         )
         .padding(16)
-        .style(container::bordered_box);
+        .style(container::bordered_box)
+        .into()
+    }
 
-        // Build the markdown guide card to demonstrate structured documentation rendering.
-        // 构建 Markdown 指引卡片，用于展示结构化文档渲染能力。
-        let guide = container(
+    /// Renders the integration guide card shown in runtime diagnostics.
+    /// 渲染显示在运行诊断页中的集成指引卡片。
+    pub(super) fn view_integration_guide_card(&self) -> Element<'_, Message> {
+        container(
             column![
                 text("集成指引").size(18),
                 self.view_workbench_markdown_body(
@@ -6824,11 +7298,14 @@ impl VulcanWorkbench {
             .spacing(12),
         )
         .padding(16)
-        .style(container::bordered_box);
+        .style(container::bordered_box)
+        .into()
+    }
 
-        // Build the activity log card to visualize system feedback and execution breadcrumbs.
-        // 构建活动日志卡片，以可视化系统反馈与执行轨迹。
-        let activity_log = container(
+    /// Renders the activity-log card shown in runtime diagnostics.
+    /// 渲染显示在运行诊断页中的活动日志卡片。
+    pub(super) fn view_activity_log_card(&self) -> Element<'_, Message> {
+        container(
             self.activities.iter().enumerate().fold(
                 column![
                     text("运行日志").size(18),
@@ -6839,281 +7316,133 @@ impl VulcanWorkbench {
             ),
         )
         .padding(16)
-        .style(container::bordered_box);
-
-        let runtime_execution = self.view_runtime_execution_card();
-        let ai_tool_configuration = self.view_ai_tool_configuration_card();
-        let mcp_configuration = self.view_mcp_configuration_card();
-
-        scrollable(
-            column![
-                provider_controls,
-                selectors,
-                ai_tool_configuration,
-                runtime_execution,
-                mcp_configuration,
-                policies,
-                guide,
-                activity_log
-            ]
-            .spacing(14),
-        )
-        .height(Fill)
-        .spacing(8)
+        .style(container::bordered_box)
         .into()
     }
 
-    /// Renders the API-native tool configuration card focused on unified web-search routing.
-    /// 渲染聚焦统一网页搜索路由的 API 原生工具配置卡片。
+    /// Renders the runtime diagnostics page with execution status, policy controls, and engineering breadcrumbs.
+    /// 渲染包含执行状态、策略控制与工程轨迹的运行诊断页面。
+    pub(super) fn view_inspector(&self) -> Element<'_, Message> {
+        column![
+            self.view_runtime_selector_settings_card(),
+            self.view_runtime_execution_card(),
+            self.view_policy_controls_card(),
+            self.view_integration_guide_card(),
+            self.view_activity_log_card(),
+        ]
+        .spacing(14)
+        .into()
+    }
+
+    /// Renders the shared AI capability vendor page where one provider instance is configured only once and later reused by multiple capability tabs.
+    /// 渲染共享 AI 能力供应商页面，使同一供应商实例只配置一次并复用于多个能力分页。
     pub(super) fn view_ai_tool_configuration_card(&self) -> Element<'_, Message> {
-        let web_search = &self.provider_configuration.ai_tools.web_search;
-        let usable_provider_count = web_search
-            .providers
+        let total_enabled_targets = self
+            .ai_tool_configuration
+            .vendors
             .iter()
-            .filter(|provider| provider.is_usable())
+            .flat_map(|vendor| vendor.targets.iter())
+            .filter(|binding| binding.enabled)
             .count();
-        let provider_status = if web_search.providers.is_empty() {
-            String::from("尚未配置第三方搜索供应商")
+        let vendor_status = if self.ai_tool_configuration.vendors.is_empty() {
+            String::from("尚未配置共享 AI 能力供应商")
         } else {
             format!(
-                "第三方搜索供应商：{} 个配置项，{} 个可用",
-                web_search.providers.len(),
-                usable_provider_count
+                "已配置 {} 个供应商 · 已启用 {} 个目标",
+                self.ai_tool_configuration.vendors.len(),
+                total_enabled_targets,
             )
         };
-        let mode_picker = pick_list(
-            WebSearchRoutingMode::ALL.to_vec(),
-            Some(web_search.mode),
-            Message::WebSearchRoutingModeSelected,
-        )
-        .width(Fill)
-        .placeholder("选择 web-search 路由策略");
-        let dispatch_picker = pick_list(
-            WebSearchProviderDispatchMode::ALL.to_vec(),
-            Some(web_search.dispatch_mode),
-            Message::WebSearchDispatchModeSelected,
-        )
-        .width(Fill)
-        .placeholder("选择第三方搜索调度模式");
-
-        let provider_entries: Element<'_, Message> = if web_search.providers.is_empty() {
+        let vendor_entries: Element<'_, Message> = if self.ai_tool_configuration.vendors.is_empty()
+        {
             container(
                 column![
-                    text("还没有第三方搜索供应商。").size(13),
-                    text("如果选择“仅使用供应商原生”，这里可以保持为空；如果要启用第三方搜索链，请至少添加一个可用条目。")
+                    text("还没有共享 AI 能力供应商。").size(13),
+                    text("先点击下方“添加供应商”，从目录里选择一个供应商并填写 API Key。若该供应商需要区域，会在独立配置弹窗中提供区域下拉框或输入框。")
                         .size(12),
                 ]
                 .spacing(6),
             )
-            .padding(10)
+            .padding(12)
             .style(container::bordered_box)
             .into()
         } else {
-            web_search
-                .providers
+            self.ai_tool_configuration
+                .vendors
                 .iter()
-                .enumerate()
-                .fold(column![].spacing(10), |list, (index, provider)| {
-                    let provider_id = provider.id.clone();
-                    let provider_id_for_enabled = provider_id.clone();
-                    let provider_id_for_name = provider_id.clone();
-                    let provider_id_for_key = provider_id.clone();
-                    let provider_id_for_url = provider_id.clone();
-                    let provider_id_for_model = provider_id.clone();
-                    let provider_id_for_region = provider_id.clone();
-                    let provider_id_for_results = provider_id.clone();
-                    let provider_id_for_up = provider_id.clone();
-                    let provider_id_for_down = provider_id.clone();
-                    let provider_id_for_remove = provider_id.clone();
-                    let max_results_text = provider.max_results.to_string();
-                    let kind = provider.kind;
-                    let credential_column: Element<'_, Message> = if kind.requires_api_key()
-                        || kind.api_key_optional()
-                    {
-                        column![
-                            text(kind.api_key_label()).size(12),
-                            text_input(kind.api_key_placeholder(), &provider.api_key)
-                                .on_input(move |value| {
-                                    Message::WebSearchProviderApiKeyChanged(
-                                        provider_id_for_key.clone(),
-                                        value,
-                                    )
-                                })
-                                .secure(true)
-                                .padding(8)
-                                .width(Fill),
-                        ]
-                        .spacing(5)
-                        .width(FillPortion(3))
-                        .into()
+                .fold(column![].spacing(10), |list, vendor| {
+                    let vendor_definitions =
+                        crate::ai_capability_provider_catalog::ai_capability_provider_definitions_for_vendor(
+                            &vendor.vendor_id,
+                        );
+                    let capability_summary = vendor_definitions
+                        .iter()
+                        .map(|definition| definition.capability_kind.label())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    let region_summary = if vendor.region.trim().is_empty() {
+                        String::from("未设置区域")
                     } else {
-                        container(
-                            text("该供应商无需 API Key。")
-                                .size(12)
-                                .color(
-                                    self.app_theme
-                                        .extended_palette()
-                                        .background
-                                        .base
-                                        .text
-                                        .scale_alpha(0.56),
-                                ),
-                        )
-                        .padding([24, 10])
-                        .width(FillPortion(3))
-                        .into()
+                        format!("区域：{}", vendor.region.trim())
                     };
-                    let extra_fields: Element<'_, Message> =
-                        if kind.supports_model_field() || kind.supports_region_field() {
-                            let mut row_builder = row![].spacing(10);
-
-                            if kind.supports_model_field() {
-                                row_builder = row_builder.push(
-                                    column![
-                                        text(kind.model_label()).size(12),
-                                        text_input(kind.model_placeholder(), &provider.model)
-                                            .on_input(move |value| {
-                                                Message::WebSearchProviderModelChanged(
-                                                    provider_id_for_model.clone(),
-                                                    value,
-                                                )
-                                            })
-                                            .padding(8)
-                                            .width(Fill),
-                                    ]
-                                    .spacing(5)
-                                    .width(FillPortion(3)),
-                                );
-                            }
-
-                            if kind.supports_region_field() {
-                                row_builder = row_builder.push(
-                                    column![
-                                        text(kind.region_label()).size(12),
-                                        text_input(kind.region_placeholder(), &provider.region)
-                                            .on_input(move |value| {
-                                                Message::WebSearchProviderRegionChanged(
-                                                    provider_id_for_region.clone(),
-                                                    value,
-                                                )
-                                            })
-                                            .padding(8)
-                                            .width(Fill),
-                                    ]
-                                    .spacing(5)
-                                    .width(FillPortion(2)),
-                                );
-                            }
-
-                            row_builder.into()
-                        } else {
-                            container(space::vertical().height(0)).into()
-                        };
-                    let provider_note: Element<'_, Message> =
-                        if let Some(note) = kind.configuration_note() {
-                            text(note)
-                                .size(12)
-                                .color(
-                                    self.app_theme
-                                        .extended_palette()
-                                        .background
-                                        .base
-                                        .text
-                                        .scale_alpha(0.62),
-                                )
-                                .into()
-                        } else {
-                            container(space::vertical().height(0)).into()
-                        };
+                    let api_key_summary = if vendor.api_key.trim().is_empty() {
+                        String::from("API Key：未填写")
+                    } else {
+                        String::from("API Key：已填写")
+                    };
+                    let enabled_target_count =
+                        vendor.targets.iter().filter(|binding| binding.enabled).count();
+                    let remove_vendor_id = vendor.vendor_id.clone();
+                    let edit_vendor_id = vendor.vendor_id.clone();
 
                     list.push(
                         container(
                             column![
                                 row![
-                                    checkbox(provider.enabled)
-                                        .label(format!(
-                                            "{}. {} · {}",
-                                            index + 1,
-                                            provider.name,
-                                            provider.kind.label()
+                                    column![
+                                        text(&vendor.name).size(16),
+                                        text(format!(
+                                            "{} · {} · 支持能力：{}",
+                                            api_key_summary,
+                                            region_summary,
+                                            if capability_summary.is_empty() {
+                                                "暂无".to_string()
+                                            } else {
+                                                capability_summary
+                                            }
                                         ))
-                                        .on_toggle(move |enabled| {
-                                            Message::WebSearchProviderEnabledToggled(
-                                                provider_id_for_enabled.clone(),
-                                                enabled,
-                                            )
-                                        }),
+                                        .size(12)
+                                        .color(
+                                            self.app_theme
+                                                .extended_palette()
+                                                .background
+                                                .base
+                                                .text
+                                                .scale_alpha(0.62),
+                                        ),
+                                    ]
+                                    .spacing(6),
                                     space::horizontal(),
-                                    button("上移").style(button::secondary).on_press(
-                                        Message::MoveWebSearchProviderUp(provider_id_for_up)
-                                    ),
-                                    button("下移").style(button::secondary).on_press(
-                                        Message::MoveWebSearchProviderDown(provider_id_for_down)
-                                    ),
-                                    button("删除").style(button::secondary).on_press(
-                                        Message::RemoveWebSearchProvider(provider_id_for_remove)
-                                    ),
+                                    button("编辑")
+                                        .style(button::secondary)
+                                        .on_press(Message::OpenAiCapabilityVendorEditor(
+                                            edit_vendor_id,
+                                        )),
+                                    button("删除")
+                                        .style(button::secondary)
+                                        .on_press(Message::RemoveAiCapabilityVendor(
+                                            remove_vendor_id,
+                                        )),
                                 ]
                                 .align_y(Center)
-                                .spacing(8),
-                                row![
-                                    column![
-                                        text("名称").size(12),
-                                        text_input("显示名称", &provider.name)
-                                            .on_input(move |value| {
-                                                Message::WebSearchProviderNameChanged(
-                                                    provider_id_for_name.clone(),
-                                                    value,
-                                                )
-                                            })
-                                            .padding(8)
-                                            .width(Fill),
-                                    ]
-                                    .spacing(5)
-                                    .width(FillPortion(2)),
-                                    credential_column,
-                                ]
                                 .spacing(10),
-                                row![
-                                    column![
-                                        text("Base URL / Endpoint（可留空使用默认）").size(12),
-                                        text_input(
-                                            provider.kind.default_base_url(),
-                                            &provider.base_url
-                                        )
-                                        .on_input(move |value| {
-                                            Message::WebSearchProviderBaseUrlChanged(
-                                                provider_id_for_url.clone(),
-                                                value,
-                                            )
-                                        })
-                                        .padding(8)
-                                        .width(Fill),
-                                    ]
-                                    .spacing(5)
-                                    .width(FillPortion(4)),
-                                    column![
-                                        text(format!(
-                                            "结果数 1-{}",
-                                            provider.kind.max_results_limit()
-                                        ))
-                                        .size(12),
-                                        text_input("5", &max_results_text)
-                                            .on_input(move |value| {
-                                                Message::WebSearchProviderMaxResultsChanged(
-                                                    provider_id_for_results.clone(),
-                                                    value,
-                                                )
-                                            })
-                                            .padding(8)
-                                            .width(Fill),
-                                    ]
-                                    .spacing(5)
-                                    .width(FillPortion(1)),
-                                ]
-                                .spacing(10),
-                                extra_fields,
-                                provider_note,
+                                text(format!(
+                                    "当前已启用 {} 个目标。具体模型和功能请到下方各能力分页里统一勾选与排序。",
+                                    enabled_target_count
+                                ))
+                                .size(12),
                             ]
                             .spacing(10),
                         )
@@ -7124,75 +7453,864 @@ impl VulcanWorkbench {
                 .into()
         };
 
-        let add_provider_rows = vec![
-            vec![
-                WebSearchProviderKind::DuckDuckGo,
-                WebSearchProviderKind::Brave,
-                WebSearchProviderKind::Exa,
-                WebSearchProviderKind::Firecrawl,
-            ],
-            vec![
-                WebSearchProviderKind::Gemini,
-                WebSearchProviderKind::Grok,
-                WebSearchProviderKind::Kimi,
-                WebSearchProviderKind::MiniMax,
-            ],
-            vec![
-                WebSearchProviderKind::Ollama,
-                WebSearchProviderKind::Perplexity,
-                WebSearchProviderKind::Searxng,
-                WebSearchProviderKind::Tavily,
-            ],
-            vec![WebSearchProviderKind::SerpApi],
-        ];
-        let add_provider_buttons = add_provider_rows.into_iter().fold(
-            column![].spacing(8).width(Fill),
-            |column, kinds| {
-                let row_buttons = kinds.into_iter().fold(
-                    row![].spacing(8).width(Fill),
-                    |buttons, kind| {
-                        buttons.push(
-                            button(text(format!("新增 {}", kind.label())))
-                                .style(button::secondary)
-                                .on_press(Message::AddWebSearchProvider(kind)),
-                        )
-                    },
-                );
-                column.push(row_buttons)
-            },
-        );
-
         container(
             column![
+                text("AI 能力工具配置").size(18),
+                text("这里先按“供应商”集中配置共享凭据。一个供应商只允许配置一次，不支持同供应商多 Key 轮询，也不暴露 Base URL 手动修改。后续各能力分页只负责勾选该供应商下要启用的模型或功能目标，改动会自动保存。")
+                    .size(12),
                 row![
-                    text("API 原生工具配置").size(18),
+                    text("共享 AI 能力供应商").size(16),
                     space::horizontal(),
-                    text("web-search").size(12),
+                    text(vendor_status).size(12),
                 ]
                 .align_y(Center),
-                text("只融合模型内建 Hosted Search 与第三方搜索供应商；MCP 工具保持独立名称、独立分类，不参与融合。")
+                text("当前已接通 web-search、understand_image，以及 MiniMax 的 image_generation、video_generation、speech_synthesis、music_generation、music_cover。能力页中的 `auto` 会按各分页保存的目标顺序执行。")
                     .size(12),
-                mode_picker,
-                text(web_search.mode.description()).size(12),
-                dispatch_picker,
-                text(web_search.dispatch_mode.description()).size(12),
-                text(provider_status).size(12),
-                provider_entries,
-                add_provider_buttons,
+                vendor_entries,
                 row![
-                    button("保存 API 工具配置")
+                    button("添加供应商")
+                        .style(button::secondary)
+                        .on_press(Message::OpenAiCapabilityVendorPicker),
+                    space::horizontal(),
+                    button("重新写入配置")
                         .style(button::primary)
                         .on_press(Message::SaveAiToolConfiguration),
-                    text(&self.ai_tool_notice).size(12),
                 ]
                 .align_y(Center)
                 .spacing(10),
+                text(&self.ai_tool_notice).size(12),
             ]
             .spacing(12),
         )
         .padding(16)
         .style(container::bordered_box)
         .into()
+    }
+
+    /// Builds the insertion indicator shown before one enabled AI capability route row while reordering.
+    /// 构建 AI 能力已启用路由行重排期间显示在某条目标行之前的插入指示器。
+    pub(super) fn view_ai_capability_route_drop_indicator(
+        &self,
+        is_visible: bool,
+    ) -> Element<'_, Message> {
+        let height = if is_visible {
+            AI_CAPABILITY_ROUTE_DROP_INDICATOR_HEIGHT
+        } else {
+            0.0
+        };
+        let indicator = if is_visible {
+            container(space())
+                .width(Fill)
+                .height(2.0)
+                .style(style::workbench_pending_prompt_drop_indicator_style)
+        } else {
+            container(space()).width(Fill).height(0.0)
+        };
+        container(indicator)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 2.0,
+                bottom: if is_visible { 2.0 } else { 0.0 },
+                left: 2.0,
+            })
+            .height(height)
+            .width(Fill)
+            .into()
+    }
+
+    /// Builds one draggable enabled AI capability route row rendered inside one capability settings page.
+    /// 构建渲染在单个能力设置页中的单条可拖拽已启用 AI 能力路由行。
+    pub(super) fn view_ai_capability_route_row(
+        &self,
+        capability_kind: AiToolKind,
+        index: usize,
+        entry: ResolvedAiCapabilityRouteTarget,
+    ) -> Element<'_, Message> {
+        let is_drag_source = self.dragging_ai_capability_route_target.as_deref()
+            == Some(entry.target_selector.as_str());
+        let drag_handle = mouse_area(
+            container(
+                text("⋮⋮")
+                    .size(12)
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            )
+            .width(18)
+            .center(Fill),
+        )
+        .interaction(if self.dragging_ai_capability_route_target.is_some() {
+            iced::mouse::Interaction::Move
+        } else {
+            iced::mouse::Interaction::Grab
+        })
+        .on_press(Message::StartAiCapabilityRouteDrag {
+            capability_kind,
+            target_selector: entry.target_selector.clone(),
+        })
+        .on_move({
+            let target_selector = entry.target_selector.clone();
+            move |position| Message::AiCapabilityRouteDropPreviewMoved {
+                capability_kind,
+                target_selector: target_selector.clone(),
+                position,
+            }
+        });
+        let remove_message = Message::RemoveAiCapabilityRouteTarget {
+            capability_kind,
+            target_selector: entry.target_selector.clone(),
+        };
+
+        container(
+            row![
+                container(text(format!("{}", index + 1)).size(12))
+                    .width(28)
+                    .center_y(Fill),
+                drag_handle,
+                container(
+                    column![
+                        text(entry.display_label()).size(14),
+                        text(format!(
+                            "供应商：{} · Target：{}/{} · 请求模型：{}",
+                            entry.vendor_name, entry.vendor_id, entry.target_alias, entry.model_id
+                        ))
+                        .size(12)
+                        .color(
+                            self.app_theme
+                                .extended_palette()
+                                .background
+                                .base
+                                .text
+                                .scale_alpha(0.62),
+                        ),
+                    ]
+                    .spacing(6),
+                )
+                .width(Fill)
+                .center_y(Fill),
+                button("移除")
+                    .style(button::secondary)
+                    .on_press(remove_message),
+            ]
+            .spacing(10)
+            .align_y(Center),
+        )
+        .padding([8, 12])
+        .width(Fill)
+        .height(AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT)
+        .style(move |theme| style::workbench_pending_prompt_queue_row_style(theme, is_drag_source))
+        .into()
+    }
+
+    /// Builds the tail drop zone shown after one enabled AI capability route list so drag reordering can land at the end.
+    /// 构建显示在已启用 AI 能力路由列表末尾的尾部落点，以便拖拽重排落到最后。
+    pub(super) fn view_ai_capability_route_tail_drop_zone(
+        &self,
+        capability_kind: AiToolKind,
+    ) -> Element<'_, Message> {
+        let Some(pending_drag) = self.pending_ai_capability_route_drag.as_ref() else {
+            return space::vertical().height(0.0).into();
+        };
+        if pending_drag.capability_kind != capability_kind
+            || self.dragging_ai_capability_route_target.is_none()
+        {
+            return space::vertical().height(0.0).into();
+        }
+        let shows_drop_tail = matches!(
+            self.active_ai_capability_route_drop_target.as_ref(),
+            Some(AiCapabilityRouteDropTarget::End)
+        );
+        mouse_area(
+            container(if shows_drop_tail {
+                container(space())
+                    .width(Fill)
+                    .height(2.0)
+                    .style(style::workbench_pending_prompt_drop_indicator_style)
+            } else {
+                container(space()).width(Fill).height(0.0)
+            })
+            .padding(iced::Padding {
+                top: 2.0,
+                right: 2.0,
+                bottom: 0.0,
+                left: 2.0,
+            })
+            .height(AI_CAPABILITY_ROUTE_DROP_INDICATOR_HEIGHT)
+            .width(Fill),
+        )
+        .interaction(iced::mouse::Interaction::Move)
+        .on_enter(Message::AiCapabilityRouteTailHovered {
+            capability_kind,
+            is_hovered: true,
+        })
+        .on_exit(Message::AiCapabilityRouteTailHovered {
+            capability_kind,
+            is_hovered: false,
+        })
+        .into()
+    }
+
+    /// Renders one dedicated AI capability page that manages enabled targets and their execution order for a single semantic tool.
+    /// 渲染管理单个语义工具启用目标与执行顺序的独立 AI 能力页面。
+    pub(super) fn view_ai_capability_settings_page(
+        &self,
+        capability_kind: AiToolKind,
+    ) -> Element<'_, Message> {
+        let available_vendor_ids = self
+            .ai_tool_configuration
+            .vendors
+            .iter()
+            .filter(|vendor| {
+                provider_config::ai_capability_vendor_target_choices(&vendor.vendor_id)
+                    .into_iter()
+                    .any(|choice| choice.capability_kind == capability_kind)
+            })
+            .map(|vendor| vendor.vendor_id.clone())
+            .collect::<Vec<_>>();
+        let enabled_targets = self
+            .ai_tool_configuration
+            .resolved_route_targets_for_kind(capability_kind);
+        let description = match capability_kind {
+            AiToolKind::WebSearch => {
+                "统一 web-search 只有一个语义工具名，`target=auto` 会按这里保存的顺序尝试。点“添加目标”后，可在弹层中按供应商勾选要暴露给模型的搜索目标。"
+            }
+            AiToolKind::UnderstandImage => {
+                "当当前对话模型不支持图片理解时，这里配置的目标会作为 `understand_image` 工具补位。建议只勾选真正想让模型使用的视觉目标。"
+            }
+            AiToolKind::ImageGeneration => {
+                "这里决定对话模型可调用哪些图片生成目标，以及 `target=auto` 时的默认顺序。每个目标都以“供应商 / 模型”的方式暴露给模型。"
+            }
+            AiToolKind::VideoGeneration => {
+                "这里决定对话模型可调用哪些视频生成目标，以及自动模式下的默认优先级。通常建议把速度更快的目标放在前面。"
+            }
+            AiToolKind::SpeechSynthesis => {
+                "这里决定文本转语音与语音合成工具暴露哪些目标。若某供应商支持多个音色或模型，可在弹层中分别勾选。"
+            }
+            AiToolKind::MusicGeneration => {
+                "这里决定音乐生成工具暴露哪些目标，以及自动模式下的默认顺序。"
+            }
+            AiToolKind::MusicCover => {
+                "这里决定音乐翻唱工具暴露哪些目标，并控制自动模式的默认顺序。"
+            }
+            _ => "这里决定当前语义能力暴露哪些目标，以及自动模式的默认顺序。",
+        };
+        let mut content = column![
+            text(description).size(12),
+            row![
+                text(format!(
+                    "已配置供应商：{} 个 · 当前启用目标：{} 个",
+                    available_vendor_ids.len(),
+                    enabled_targets.len()
+                ))
+                .size(12),
+                space::horizontal(),
+                button("配置目标")
+                    .style(button::primary)
+                    .on_press(Message::OpenAiCapabilityTargetPicker(capability_kind)),
+            ]
+            .align_y(Center),
+        ]
+        .spacing(12);
+        if capability_kind == AiToolKind::WebSearch {
+            content = content
+                .push(text("路由策略").size(13))
+                .push(
+                    pick_list(
+                        WebSearchRoutingMode::ALL.to_vec(),
+                        Some(self.ai_tool_configuration.web_search.mode),
+                        Message::WebSearchRoutingModeSelected,
+                    )
+                    .width(Fill)
+                    .placeholder("选择 web-search 路由策略"),
+                )
+                .push(text(self.ai_tool_configuration.web_search.mode.description()).size(12));
+        }
+        if available_vendor_ids.is_empty() {
+            content = content.push(
+                container(
+                    column![
+                        text("当前还没有可用于这个能力的共享供应商。").size(13),
+                        button("前往供应商配置").style(button::secondary).on_press(
+                            Message::SettingsSectionSelected(SettingsSection::AiCapabilityVendors,)
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .padding(12)
+                .style(container::bordered_box),
+            );
+        } else if enabled_targets.is_empty() {
+            content = content.push(
+                container(
+                    text(
+                        "当前还没有启用任何目标。点击右上角“配置目标”后，可在弹层中按供应商勾选。",
+                    )
+                    .size(13),
+                )
+                .padding(12)
+                .style(container::bordered_box),
+            );
+        } else {
+            let enabled_list = enabled_targets.into_iter().enumerate().fold(
+                column![].spacing(0).width(Fill),
+                |list, (index, entry)| {
+                    let shows_drop_before = matches!(
+                        self.active_ai_capability_route_drop_target.as_ref(),
+                        Some(AiCapabilityRouteDropTarget::Before(target_selector))
+                            if target_selector == &entry.target_selector
+                    );
+                    list.push(self.view_ai_capability_route_drop_indicator(shows_drop_before))
+                        .push(self.view_ai_capability_route_row(capability_kind, index, entry))
+                },
+            );
+            content = content
+                .push(text("当前启用列表").size(14))
+                .push(
+                    enabled_list
+                        .push(self.view_ai_capability_route_tail_drop_zone(capability_kind)),
+                )
+                .push(
+                    text("拖动左侧把手即可调整默认顺序；改动会自动保存，`target=auto` 会严格按这里的排列尝试。")
+                        .size(12),
+                );
+        }
+
+        container(content)
+            .padding(16)
+            .style(container::bordered_box)
+            .into()
+    }
+
+    /// Builds the blocking AI capability vendor-picker modal used by the supplier page before one new shared vendor is created.
+    /// 构建供应商页在创建新的共享 AI 能力供应商前使用的阻塞式供应商选择弹窗。
+    pub(super) fn view_ai_capability_vendor_picker_modal(&self) -> Option<Element<'_, Message>> {
+        let picker = self.ai_capability_vendor_picker.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let configured_vendor_ids = self
+            .ai_tool_configuration
+            .vendors
+            .iter()
+            .map(|vendor| vendor.vendor_id.clone())
+            .collect::<Vec<_>>();
+        let filter = picker.filter.trim().to_ascii_lowercase();
+        let available_vendor_ids =
+            crate::ai_capability_provider_catalog::supported_ai_capability_vendor_ids()
+                .into_iter()
+                .filter(|vendor_id| {
+                    !configured_vendor_ids
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(vendor_id))
+                })
+                .filter(|vendor_id| {
+                    if filter.is_empty() {
+                        return true;
+                    }
+                    let display_name =
+                        provider_config::ai_capability_vendor_display_name(vendor_id)
+                            .to_ascii_lowercase();
+                    let capability_summary =
+                        provider_config::ai_capability_vendor_target_choices(vendor_id)
+                            .into_iter()
+                            .map(|choice| choice.capability_kind.label().to_ascii_lowercase())
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                    vendor_id.to_ascii_lowercase().contains(&filter)
+                        || display_name.contains(&filter)
+                        || capability_summary.contains(&filter)
+                })
+                .collect::<Vec<_>>();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseAiCapabilityVendorPicker);
+        let vendor_list: Element<'_, Message> = if available_vendor_ids.is_empty() {
+            container(text("当前没有可新增的供应商，或者过滤后没有匹配结果。").size(13))
+                .width(Fill)
+                .height(320)
+                .center(Fill)
+                .into()
+        } else {
+            scrollable(available_vendor_ids.into_iter().fold(
+                column![].spacing(8),
+                |list, vendor_id| {
+                    let display_name =
+                        provider_config::ai_capability_vendor_display_name(&vendor_id);
+                    let capability_summary =
+                        provider_config::ai_capability_vendor_target_choices(&vendor_id)
+                            .into_iter()
+                            .map(|choice| choice.capability_kind.label())
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                            .join("、");
+                    list.push(
+                        button(
+                            column![
+                                text(display_name).size(14),
+                                text(format!(
+                                    "{} · 支持：{}",
+                                    vendor_id,
+                                    if capability_summary.is_empty() {
+                                        "暂无".to_string()
+                                    } else {
+                                        capability_summary
+                                    }
+                                ))
+                                .size(12)
+                                .color(
+                                    self.app_theme
+                                        .extended_palette()
+                                        .background
+                                        .base
+                                        .text
+                                        .scale_alpha(0.62),
+                                ),
+                            ]
+                            .spacing(4),
+                        )
+                        .width(Fill)
+                        .padding([10, 12])
+                        .style(button::secondary)
+                        .on_press(Message::AiCapabilityVendorPickerVendorSelected(vendor_id)),
+                    )
+                },
+            ))
+            .height(320)
+            .into()
+        };
+        let modal_card = container(
+            column![
+                row![
+                    text("添加共享供应商").size(20),
+                    space::horizontal(),
+                    close_button,
+                ]
+                .align_y(Center),
+                text("输入关键字过滤供应商。一个供应商只能配置一次，选择后会进入独立配置弹窗。")
+                    .size(12),
+                text_input("搜索供应商或能力关键字", &picker.filter)
+                    .on_input(Message::AiCapabilityVendorPickerFilterChanged)
+                    .padding(10)
+                    .width(Fill),
+                vendor_list,
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(720)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseAiCapabilityVendorPicker);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(mouse_area(modal_card).on_press(Message::Noop))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Builds the blocking AI capability vendor-editor modal used to edit one shared supplier credential entry.
+    /// 构建用于编辑单条共享供应商凭据的阻塞式 AI 能力供应商编辑弹窗。
+    pub(super) fn view_ai_capability_vendor_editor_modal(&self) -> Option<Element<'_, Message>> {
+        let editor = self.ai_capability_vendor_editor.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let definitions =
+            crate::ai_capability_provider_catalog::ai_capability_provider_definitions_for_vendor(
+                &editor.vendor_id,
+            );
+        let supports_region_field = definitions
+            .iter()
+            .any(|definition| definition.supports_region_field)
+            || !editor.region_options.is_empty();
+        let api_key_label = definitions
+            .iter()
+            .find_map(|definition| {
+                (!definition.api_key_label.trim().is_empty())
+                    .then_some(definition.api_key_label.as_str())
+            })
+            .unwrap_or("API Key / Token");
+        let api_key_placeholder = definitions
+            .iter()
+            .find_map(|definition| {
+                (!definition.api_key_placeholder.trim().is_empty())
+                    .then_some(definition.api_key_placeholder.as_str())
+            })
+            .unwrap_or("请输入 API Key / Token");
+        let region_label = definitions
+            .iter()
+            .find_map(|definition| {
+                (!definition.region_label.trim().is_empty())
+                    .then_some(definition.region_label.as_str())
+            })
+            .unwrap_or("区域");
+        let region_placeholder = definitions
+            .iter()
+            .find_map(|definition| {
+                (!definition.region_placeholder.trim().is_empty())
+                    .then_some(definition.region_placeholder.as_str())
+            })
+            .unwrap_or("请输入区域");
+        let configuration_note = definitions
+            .iter()
+            .filter_map(|definition| definition.configuration_note.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseAiCapabilityVendorEditor);
+        let region_field: Element<'_, Message> = if !supports_region_field {
+            space().into()
+        } else if editor.region_options.is_empty() {
+            column![
+                text(region_label).size(12),
+                text_input(region_placeholder, &editor.region)
+                    .on_input(Message::AiCapabilityVendorEditorRegionChanged)
+                    .padding(8)
+                    .width(Fill),
+            ]
+            .spacing(5)
+            .into()
+        } else {
+            let selected_region = editor
+                .region_options
+                .iter()
+                .find(|option| option.eq_ignore_ascii_case(editor.region.trim()))
+                .cloned();
+            column![
+                text(region_label).size(12),
+                pick_list(
+                    editor.region_options.clone(),
+                    selected_region,
+                    Message::AiCapabilityVendorEditorRegionChanged,
+                )
+                .width(Fill)
+                .placeholder("选择区域"),
+            ]
+            .spacing(5)
+            .into()
+        };
+        let note_block: Element<'_, Message> = if configuration_note.trim().is_empty() {
+            space().into()
+        } else {
+            container(text(configuration_note).size(12))
+                .padding(10)
+                .style(container::bordered_box)
+                .into()
+        };
+        let modal_card = container(
+            column![
+                row![
+                    text(if editor.is_new {
+                        format!("新增 {}", editor.display_name)
+                    } else {
+                        format!("编辑 {}", editor.display_name)
+                    })
+                    .size(20),
+                    space::horizontal(),
+                    close_button,
+                ]
+                .align_y(Center),
+                text("这里只配置共享凭据。供应商名称固定，Base URL 不对外开放，后续各能力分页直接复用这里的 API Key 与区域。")
+                    .size(12),
+                note_block,
+                column![
+                    text(api_key_label).size(12),
+                    text_input(api_key_placeholder, &editor.api_key)
+                        .on_input(Message::AiCapabilityVendorEditorApiKeyChanged)
+                        .secure(true)
+                        .padding(8)
+                        .width(Fill),
+                ]
+                .spacing(5),
+                region_field,
+                row![
+                    space::horizontal(),
+                    button("取消")
+                        .style(button::secondary)
+                        .on_press(Message::CloseAiCapabilityVendorEditor),
+                    button("保存")
+                        .style(button::primary)
+                        .on_press(Message::SaveAiCapabilityVendorEditor),
+                ]
+                .align_y(Center)
+                .spacing(10),
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(680)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseAiCapabilityVendorEditor);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(mouse_area(modal_card).on_press(Message::Noop))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Builds the blocking AI capability target-picker modal used by capability pages to choose targets from configured vendors.
+    /// 构建供能力页从已配置供应商中选择目标的阻塞式 AI 能力目标选择弹窗。
+    pub(super) fn view_ai_capability_target_picker_modal(&self) -> Option<Element<'_, Message>> {
+        let picker = self.ai_capability_target_picker.as_ref()?;
+        let capability_kind = picker.capability_kind;
+        let palette = self.app_theme.extended_palette();
+        let vendor_ids = self
+            .ai_tool_configuration
+            .vendors
+            .iter()
+            .filter(|vendor| {
+                provider_config::ai_capability_vendor_target_choices(&vendor.vendor_id)
+                    .into_iter()
+                    .any(|choice| choice.capability_kind == capability_kind)
+            })
+            .map(|vendor| vendor.vendor_id.clone())
+            .collect::<Vec<_>>();
+        let selected_vendor_id = picker
+            .selected_vendor_id
+            .clone()
+            .or_else(|| vendor_ids.first().cloned());
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseAiCapabilityTargetPicker);
+        let vendor_list = scrollable(vendor_ids.iter().fold(
+            column![].spacing(8),
+            |list, vendor_id| {
+                let vendor = self.ai_tool_configuration.vendor_by_id(vendor_id);
+                let vendor_name = vendor
+                    .map(|vendor| vendor.name.clone())
+                    .unwrap_or_else(|| vendor_id.clone());
+                let selected_count = picker
+                    .selections
+                    .get(vendor_id)
+                    .map(BTreeMap::len)
+                    .unwrap_or(0);
+                let is_selected = selected_vendor_id.as_deref() == Some(vendor_id.as_str());
+                list.push(
+                    button(
+                        row![
+                            text(vendor_name).size(14),
+                            space::horizontal(),
+                            text(format!("{} 项", selected_count)).size(12),
+                        ]
+                        .align_y(Center),
+                    )
+                    .width(Fill)
+                    .padding([8, 10])
+                    .style(if is_selected {
+                        button::primary
+                    } else {
+                        button::secondary
+                    })
+                    .on_press(Message::AiCapabilityTargetPickerVendorSelected(
+                        vendor_id.clone(),
+                    )),
+                )
+            },
+        ))
+        .height(280);
+        let right_panel: Element<'_, Message> = if let Some(vendor_id) = selected_vendor_id {
+            let target_choices = provider_config::ai_capability_vendor_target_choices(&vendor_id)
+                .into_iter()
+                .filter(|choice| choice.capability_kind == capability_kind)
+                .collect::<Vec<_>>();
+            let selected_targets = picker.selections.get(&vendor_id);
+            let target_list = if target_choices.is_empty() {
+                column![text("当前供应商没有可用目标。").size(13)].spacing(8)
+            } else {
+                target_choices
+                    .into_iter()
+                    .fold(column![].spacing(10), |list, choice| {
+                        let is_checked = selected_targets
+                            .and_then(|targets| targets.get(&choice.target_alias))
+                            .is_some();
+                        let current_model = selected_targets
+                            .and_then(|targets| targets.get(&choice.target_alias))
+                            .cloned()
+                            .unwrap_or_else(|| choice.default_model_id.clone());
+                        let vendor_id_for_toggle = vendor_id.clone();
+                        let vendor_id_for_model = vendor_id.clone();
+                        let target_alias_for_toggle = choice.target_alias.clone();
+                        let target_alias_for_model = choice.target_alias.clone();
+                        let model_editor: Element<'_, Message> =
+                            if choice.supports_model_override && is_checked {
+                                column![
+                                    text("请求模型").size(12),
+                                    text_input("模型 ID", &current_model)
+                                        .on_input(move |value| {
+                                            Message::AiCapabilityTargetPickerTargetModelChanged {
+                                                vendor_id: vendor_id_for_model.clone(),
+                                                target_alias: target_alias_for_model.clone(),
+                                                model_id: value,
+                                            }
+                                        })
+                                        .padding(8)
+                                        .width(Fill),
+                                ]
+                                .spacing(5)
+                                .into()
+                            } else {
+                                text(format!("Target：{}/{}", vendor_id, choice.target_alias))
+                                    .size(12)
+                                    .color(
+                                        self.app_theme
+                                            .extended_palette()
+                                            .background
+                                            .base
+                                            .text
+                                            .scale_alpha(0.62),
+                                    )
+                                    .into()
+                            };
+                        list.push(
+                            container(
+                                column![
+                                    checkbox(is_checked).label(choice.label.clone()).on_toggle(
+                                        move |enabled| {
+                                            Message::AiCapabilityTargetPickerTargetToggled {
+                                                vendor_id: vendor_id_for_toggle.clone(),
+                                                target_alias: target_alias_for_toggle.clone(),
+                                                enabled,
+                                            }
+                                        }
+                                    ),
+                                    model_editor,
+                                ]
+                                .spacing(6),
+                            )
+                            .padding(10)
+                            .style(container::bordered_box),
+                        )
+                    })
+            };
+            scrollable(column![target_list].spacing(10))
+                .height(280)
+                .into()
+        } else {
+            container(text("当前没有可供选择的供应商。").size(13))
+                .width(Fill)
+                .height(280)
+                .center(Fill)
+                .into()
+        };
+        let modal_card = container(
+            column![
+                row![
+                    text(format!("添加 {}", capability_kind.label())).size(20),
+                    space::horizontal(),
+                    text(format!("已勾选 {} 项", picker.total_selected_count())).size(12),
+                    close_button,
+                ]
+                .align_y(Center),
+                text("左侧选择供应商，右侧勾选要启用的目标模型。已启用目标会自动勾选，点击保存后会立即写回当前能力页并自动持久化。")
+                    .size(12),
+                row![
+                    container(column![text("供应商").size(13), vendor_list].spacing(8))
+                        .width(FillPortion(2)),
+                    container(column![text("目标模型").size(13), right_panel].spacing(8))
+                        .width(FillPortion(5)),
+                ]
+                .spacing(12)
+                .height(320),
+                row![
+                    text("保存后会同步更新当前能力页的已启用列表、顺序，并立即写入独立 AI 能力配置。").size(12),
+                    space::horizontal(),
+                    button("保存")
+                        .style(button::primary)
+                        .on_press(Message::SaveAiCapabilityTargetPicker),
+                ]
+                .align_y(Center),
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(860)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseAiCapabilityTargetPicker);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(mouse_area(modal_card).on_press(Message::Noop))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
     }
 
     /// Renders the execution runtime card that exposes active-agent selection and the latest preparation snapshot.

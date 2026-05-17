@@ -1,0 +1,18 @@
+{
+  "id": "minimax",
+  "name": "MiniMax Speech 02",
+  "capabilityKind": "speech_synthesis",
+  "targetAlias": "speech-02",
+  "addButtonGroup": 1,
+  "addButtonOrder": 1,
+  "defaultBaseUrl": "https://api.minimax.io/v1/t2a_v2",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "MiniMax Key / {env:MINIMAX_API_KEY}",
+  "apiKeyPlaceholder": "{env:MINIMAX_API_KEY}",
+  "defaultModel": "speech-02",
+  "supportsRegionField": true,
+  "regionLabel": "MiniMax 区域",
+  "regionPlaceholder": "global 或 cn",
+  "defaultRegion": "global",
+  "configurationNote": "MiniMax 同步语音合成轻量模型。"
+}

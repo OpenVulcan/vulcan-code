@@ -251,16 +251,7 @@ impl SummarySkill {
                 .as_deref()
                 .map(|output| truncate_preview_lines(output, 3, 220))
                 .unwrap_or_else(|| String::from("模型本轮未返回可见文本输出。"));
-            format!(
-                "本轮执行成功完成。准备摘要：{}。输出摘要：{}",
-                input
-                    .report
-                    .preparation
-                    .as_ref()
-                    .map(|preparation| preparation.summary_rows().join("；"))
-                    .unwrap_or_else(|| String::from("无")),
-                output_preview
-            )
+            format!("本轮执行成功完成。输出摘要：{output_preview}")
         } else {
             format!(
                 "本轮执行失败。错误摘要：{}",
@@ -670,5 +661,31 @@ mod tests {
 
         assert!(line.contains("Tool output was compacted"));
         assert!(!line.contains("large tool output large tool output"));
+    }
+
+    /// Verifies that success summaries keep only a short output preview and never inline preparation diagnostics.
+    /// 验证成功摘要只保留简短输出预览，且绝不会内联准备阶段诊断明细。
+    #[test]
+    fn summary_skill_success_output_omits_preparation_diagnostics() {
+        let skill = SummarySkill;
+        let report = ExecutionRunReport {
+            session_id: SessionId::default(),
+            preparation: None,
+            assistant_output: Some(String::from("这是给用户的最终输出。")),
+            thinking_output: None,
+            conversation_state: None,
+            mcp_discovery_rows: Vec::new(),
+            mcp_discovery_errors: Vec::new(),
+            warnings: Vec::new(),
+            error: None,
+            controller_events: Vec::new(),
+        };
+
+        let record = skill.execute(SummarySkillInput { report: &report });
+
+        assert_eq!(record.record_kind, SessionMessageRecordKind::SummaryOutput);
+        assert!(record.body.contains("输出摘要：这是给用户的最终输出。"));
+        assert!(!record.body.contains("准备摘要"));
+        assert!(!record.body.contains("会话：#"));
     }
 }

@@ -1,0 +1,13 @@
+{
+  "id": "ollama",
+  "name": "Ollama Web Search",
+  "capabilityKind": "web_search",
+  "targetAlias": "ollama",
+  "addButtonGroup": 2,
+  "addButtonOrder": 0,
+  "defaultBaseUrl": "http://127.0.0.1:11434",
+  "apiKeyRequirement": "optional",
+  "apiKeyLabel": "API Key / {env:NAME}（可选）",
+  "apiKeyPlaceholder": "{env:OLLAMA_API_KEY}",
+  "maxResultsLimit": 10
+}

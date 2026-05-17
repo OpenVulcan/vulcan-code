@@ -1,0 +1,18 @@
+{
+  "id": "minimax",
+  "name": "MiniMax Music 2.6",
+  "capabilityKind": "music_generation",
+  "targetAlias": "music-2.6",
+  "addButtonGroup": 1,
+  "addButtonOrder": 1,
+  "defaultBaseUrl": "https://api.minimax.io/v1/music_generation",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "MiniMax Key / {env:MINIMAX_API_KEY}",
+  "apiKeyPlaceholder": "{env:MINIMAX_API_KEY}",
+  "defaultModel": "music-2.6",
+  "supportsRegionField": true,
+  "regionLabel": "MiniMax 区域",
+  "regionPlaceholder": "global 或 cn",
+  "defaultRegion": "global",
+  "configurationNote": "MiniMax 音乐生成主力模型。"
+}

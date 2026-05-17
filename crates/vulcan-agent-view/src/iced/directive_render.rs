@@ -11,8 +11,8 @@ use super::markdown_source::{
 };
 use super::scene::{
     PlainParagraphStyle, PlainTextRenderKind, RenderContext, RenderedCollapsibleDirectiveNode,
-    RenderedPanelAccentRule, RenderedParagraphBackground, RenderedParagraphHorizontalPlacement,
-    RenderedTranscriptLinkAction, RenderedTranscriptNode,
+    RenderedMediaKind, RenderedPanelAccentRule, RenderedParagraphBackground,
+    RenderedParagraphHorizontalPlacement, RenderedTranscriptLinkAction, RenderedTranscriptNode,
 };
 use super::text_routing::build_agent_view_plain_text_spans;
 use crate::iced_theme as theme;
@@ -22,6 +22,7 @@ use iced::font;
 use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Background, Border, Color, Font, Padding, Pixels, Theme};
+use std::path::Path;
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -417,6 +418,11 @@ fn render_compact_tool_modal_directive_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
+    if block.attributes.get("tool-visual-kind").map(String::as_str) == Some("generated-media") {
+        render_generated_media_directive_card(builder, block, app_theme);
+        return;
+    }
+
     let block_id = block
         .attributes
         .get("ui-block-id")
@@ -461,6 +467,141 @@ fn render_compact_tool_modal_directive_block(
         .nodes
         .push(RenderedTranscriptNode::Paragraph(summary_node));
     builder.pending_separator = Some("\n");
+}
+
+/// Renders one generated-media tool result as a dedicated inline media card instead of a plain tool row.
+/// 将一个生成媒体工具结果渲染为专用内联媒体卡片，而不是普通工具行。
+fn render_generated_media_directive_card(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    app_theme: &Theme,
+) {
+    let Some(kind) = generated_media_kind_from_attributes(&block.attributes) else {
+        return;
+    };
+    let Some(file_name) = block
+        .attributes
+        .get("generated-media-file-name")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(local_path) = block
+        .attributes
+        .get("generated-media-local-path")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let output_count = block
+        .attributes
+        .get("generated-media-count")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
+    let is_active = block
+        .attributes
+        .get("ui-generated-media-playing")
+        .is_some_and(|value| value == "true");
+    let palette = app_theme.palette();
+    let (title, accent_color, background) = match kind {
+        RenderedMediaKind::Image => (
+            String::new(),
+            palette.primary.strong.color,
+            directive_background(
+                palette.primary.weak.color.scale_alpha(0.08),
+                palette.primary.strong.color.scale_alpha(0.18),
+            ),
+        ),
+        RenderedMediaKind::Audio => (
+            String::new(),
+            palette.success.strong.color,
+            directive_background(
+                palette.success.weak.color.scale_alpha(0.08),
+                palette.success.strong.color.scale_alpha(0.18),
+            ),
+        ),
+        RenderedMediaKind::Video => (
+            String::from("视频生成结果"),
+            palette.warning.strong.color,
+            directive_background(
+                palette.warning.weak.color.scale_alpha(0.08),
+                palette.warning.strong.color.scale_alpha(0.18),
+            ),
+        ),
+        RenderedMediaKind::Pdf => (
+            String::from("文档输出结果"),
+            palette.secondary.strong.color,
+            directive_background(
+                palette.secondary.weak.color.scale_alpha(0.08),
+                palette.secondary.strong.color.scale_alpha(0.18),
+            ),
+        ),
+    };
+    let action_link_target = format!("vulcan-agent-view://generated-media/{local_path}");
+    let action = match kind {
+        RenderedMediaKind::Image => RenderedTranscriptLinkAction::OpenImagePreview {
+            file_name: file_name.to_string(),
+            local_path: local_path.to_string(),
+        },
+        RenderedMediaKind::Audio => RenderedTranscriptLinkAction::ToggleAudioPlayback {
+            file_name: file_name.to_string(),
+            local_path: local_path.to_string(),
+        },
+        RenderedMediaKind::Video | RenderedMediaKind::Pdf => {
+            RenderedTranscriptLinkAction::OpenMediaWithDefaultApp(local_path.to_string())
+        }
+    };
+    builder.register_link_action(action_link_target.clone(), action);
+    let image_aspect_ratio = match kind {
+        RenderedMediaKind::Image => local_image_aspect_ratio(local_path),
+        _ => None,
+    };
+    builder.push_media_card(
+        kind,
+        title,
+        file_name.to_string(),
+        local_path.to_string(),
+        image_aspect_ratio,
+        output_count,
+        false,
+        is_active,
+        background,
+        accent_color,
+        Some(action_link_target),
+    );
+}
+
+/// Resolves the rendered media kind declared by one generated-media directive attribute map.
+/// 解析某个生成媒体指令属性映射声明的渲染媒体种类。
+fn generated_media_kind_from_attributes(
+    attributes: &crate::AgentViewAttributes,
+) -> Option<RenderedMediaKind> {
+    match attributes
+        .get("generated-media-kind")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("image") => Some(RenderedMediaKind::Image),
+        Some("audio") => Some(RenderedMediaKind::Audio),
+        Some("video") => Some(RenderedMediaKind::Video),
+        Some("pdf") | Some("document") => Some(RenderedMediaKind::Pdf),
+        _ => None,
+    }
+}
+
+/// Reads the intrinsic width-height ratio of one local raster image file when the file is present and decodable.
+/// 当本地光栅图片文件存在且可解码时，读取其原始宽高比。
+fn local_image_aspect_ratio(local_path: &str) -> Option<f32> {
+    if !Path::new(local_path).is_file() {
+        return None;
+    }
+    let (width, height) = image::image_dimensions(local_path).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(width as f32 / height as f32)
 }
 
 #[allow(dead_code)]
@@ -1155,7 +1296,10 @@ mod tests {
     //! Targeted rendering tests for tool-summary visual states.
     //! 面向工具摘要视觉状态的定向渲染测试。
 
-    use super::build_tool_summary_spans;
+    use super::{build_tool_summary_spans, render_directive_block};
+    use crate::iced::builder::RenderedTranscriptBuilder;
+    use crate::iced::scene::{RenderedMediaKind, RenderedTranscriptNode};
+    use crate::iced_theme as theme;
     use crate::{AgentViewAttributes, AgentViewDirectiveBlock};
     use iced::{Theme, color};
 
@@ -1205,5 +1349,44 @@ mod tests {
                 .iter()
                 .all(|span| span.color == Some(color!(0xD7F6E6)))
         );
+    }
+
+    /// Verifies generated-media tool cards suppress transcript-side captions and surface the active playback state through the rendered media node.
+    /// 验证生成媒体工具卡会隐藏转录侧说明文字，并通过渲染媒体节点暴露当前播放激活状态。
+    #[test]
+    fn generated_media_tool_card_uses_minimal_chrome_and_playback_state() {
+        let mut builder =
+            RenderedTranscriptBuilder::new(color!(0x4477AA), color!(0xE8EEF7));
+        let mut attributes = AgentViewAttributes::new();
+        attributes.insert(String::from("tool-visual-kind"), String::from("generated-media"));
+        attributes.insert(String::from("generated-media-kind"), String::from("audio"));
+        attributes.insert(
+            String::from("generated-media-file-name"),
+            String::from("demo.mp3"),
+        );
+        attributes.insert(
+            String::from("generated-media-local-path"),
+            String::from("D:/demo.mp3"),
+        );
+        attributes.insert(String::from("generated-media-count"), String::from("1"));
+        attributes.insert(
+            String::from("ui-generated-media-playing"),
+            String::from("true"),
+        );
+        let block = AgentViewDirectiveBlock::tool_call("{}", false, attributes);
+
+        render_directive_block(
+            &mut builder,
+            &block,
+            theme::markdown_settings(&Theme::Dark),
+            &Theme::Dark,
+        );
+
+        let Some(RenderedTranscriptNode::MediaCard(node)) = builder.nodes.first() else {
+            panic!("expected one media card node");
+        };
+        assert_eq!(node.kind, RenderedMediaKind::Audio);
+        assert!(!node.show_caption);
+        assert!(node.is_active);
     }
 }

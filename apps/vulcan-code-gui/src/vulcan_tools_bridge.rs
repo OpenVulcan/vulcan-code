@@ -4,15 +4,27 @@
 use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_tool_candidate};
+use crate::image_understanding_compat::{
+    configured_understand_image_parameters_schema, execute_configured_understand_image,
+};
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
     build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
+use crate::media_generation_compat::{
+    configured_image_generation_parameters_schema, configured_music_cover_parameters_schema,
+    configured_music_generation_parameters_schema, configured_speech_synthesis_parameters_schema,
+    configured_video_generation_parameters_schema, execute_configured_image_generation,
+    execute_configured_music_cover, execute_configured_music_generation,
+    execute_configured_speech_synthesis, execute_configured_video_generation,
+};
 use crate::provider_config::{
-    AiToolKind, PersistedAiToolConfiguration, PersistedWebSearchConfiguration,
-    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
+    AiToolKind, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID, MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID,
+    MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, PersistedAiToolConfiguration,
+    SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+    VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
 };
 use crate::tooling::{
     NativeToolCatalog, NativeToolDescriptor, allocate_unique_public_tool_name,
@@ -27,6 +39,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
+use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
@@ -71,6 +84,7 @@ pub fn build_vulcan_tools_manager(
     native_catalog: NativeToolCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
+    conversation_attachments: Vec<ConversationAttachment>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
@@ -210,7 +224,12 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
-    append_configured_ai_tool_backing_candidates(&mut candidates, ai_tool_configuration);
+    append_configured_ai_tool_backing_candidates(
+        &mut candidates,
+        ai_tool_configuration,
+        workspace_root,
+        conversation_attachments,
+    );
     append_ai_tool_fallback_aliases(&mut candidates, ai_tool_fallback_aliases);
 
     VulcanToolsManager::new(candidates)
@@ -221,8 +240,45 @@ pub fn build_vulcan_tools_manager(
 fn append_configured_ai_tool_backing_candidates(
     candidates: &mut Vec<VulcanToolCandidate>,
     configuration: PersistedAiToolConfiguration,
+    workspace_root: Option<PathBuf>,
+    conversation_attachments: Vec<ConversationAttachment>,
 ) {
-    if let Some(candidate) = configured_web_search_candidate(configuration.web_search) {
+    if let Some(candidate) = configured_web_search_candidate(configuration.clone()) {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) = configured_understand_image_candidate(
+        configuration.clone(),
+        conversation_attachments.clone(),
+    ) {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) = configured_image_generation_candidate(
+        configuration.clone(),
+        workspace_root.clone(),
+        conversation_attachments.clone(),
+    ) {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) = configured_video_generation_candidate(
+        configuration.clone(),
+        workspace_root.clone(),
+        conversation_attachments.clone(),
+    ) {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) =
+        configured_speech_synthesis_candidate(configuration.clone(), workspace_root.clone())
+    {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) =
+        configured_music_generation_candidate(configuration.clone(), workspace_root.clone())
+    {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) =
+        configured_music_cover_candidate(configuration, workspace_root, conversation_attachments)
+    {
         candidates.push(candidate);
     }
 }
@@ -230,22 +286,28 @@ fn append_configured_ai_tool_backing_candidates(
 /// Builds the hidden backing tool used by the semantic `web_search` fallback alias.
 /// 构建语义 `web_search` 回退别名使用的隐藏承载工具。
 fn configured_web_search_candidate(
-    configuration: PersistedWebSearchConfiguration,
+    configuration: PersistedAiToolConfiguration,
 ) -> Option<VulcanToolCandidate> {
-    if !configuration.has_usable_provider_chain() {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::WebSearch) {
         return None;
     }
+
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::WebSearch))
+        .collect::<Vec<_>>()
+        .join("、");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: String::from(
-                "按用户配置的外部搜索供应商链执行网页搜索，失败时自动尝试下一个供应商。",
+            description: format!(
+                "按用户配置的外部搜索目标链执行网页搜索。可用 target：{}。传入 `auto` 时按当前默认顺序尝试。",
+                target_summary
             ),
             source: VulcanToolSourceKind::Native,
         },
-        parameters_schema: configured_web_search_parameters_schema(),
+        parameters_schema: configured_web_search_parameters_schema(&configuration),
         ai_visible: false,
         plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
             "web search browse internet search news docs",
@@ -256,6 +318,304 @@ fn configured_web_search_candidate(
                 execute_configured_web_search(args, configuration)
                     .await
                     .map(VulcanToolInvocationResult::from_model_output)
+            })
+        }),
+    })
+}
+
+/// Builds the hidden backing tool used by the semantic `understand_image` fallback alias.
+/// 构建语义 `understand_image` 回退别名使用的隐藏承载工具。
+fn configured_understand_image_candidate(
+    configuration: PersistedAiToolConfiguration,
+    conversation_attachments: Vec<ConversationAttachment>,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::UnderstandImage) {
+        return None;
+    }
+
+    let image_attachments = conversation_attachments
+        .into_iter()
+        .filter(|attachment| attachment.kind == ConversationAttachmentKind::Image)
+        .collect::<Vec<_>>();
+    if image_attachments.is_empty() {
+        return None;
+    }
+
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::UnderstandImage))
+        .collect::<Vec<_>>()
+        .join("、");
+    let image_summary = image_attachments
+        .iter()
+        .map(|attachment| attachment.file_name.clone())
+        .collect::<Vec<_>>()
+        .join("、");
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: format!(
+                "按用户配置的图片理解目标链读取当前会话图片附件。可用 target：{}。可用图片：{}。",
+                target_summary, image_summary
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_understand_image_parameters_schema(
+            &configuration,
+            &image_attachments,
+        ),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "understand image inspect screenshot analyze visual content OCR",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            let conversation_attachments = image_attachments.clone();
+            Box::pin(async move {
+                execute_configured_understand_image(args, configuration, conversation_attachments)
+                    .await
+                    .map(VulcanToolInvocationResult::from_model_output)
+            })
+        }),
+    })
+}
+
+/// Builds the hidden backing tool used by the semantic `image_generation` fallback alias.
+/// 构建语义 `image_generation` 回退别名使用的隐藏承载工具。
+fn configured_image_generation_candidate(
+    configuration: PersistedAiToolConfiguration,
+    workspace_root: Option<PathBuf>,
+    conversation_attachments: Vec<ConversationAttachment>,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::ImageGeneration) {
+        return None;
+    }
+    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::ImageGeneration))
+        .collect::<Vec<_>>()
+        .join("、");
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: format!(
+                "按用户配置的图片生成目标链执行图片生成。可用 target：{}。",
+                target_summary
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_image_generation_parameters_schema(
+            &configuration,
+            &conversation_attachments,
+        ),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "generate image create illustration render picture",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            let workspace_path = workspace_path.clone();
+            let conversation_attachments = conversation_attachments.clone();
+            Box::pin(async move {
+                execute_configured_image_generation(
+                    args,
+                    configuration,
+                    workspace_path,
+                    conversation_attachments,
+                )
+                .await
+            })
+        }),
+    })
+}
+
+/// Builds the hidden backing tool used by the semantic `video_generation` fallback alias.
+/// 构建语义 `video_generation` 回退别名使用的隐藏承载工具。
+fn configured_video_generation_candidate(
+    configuration: PersistedAiToolConfiguration,
+    workspace_root: Option<PathBuf>,
+    conversation_attachments: Vec<ConversationAttachment>,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::VideoGeneration) {
+        return None;
+    }
+    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::VideoGeneration))
+        .collect::<Vec<_>>()
+        .join("、");
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: format!(
+                "按用户配置的视频生成目标链执行视频生成。可用 target：{}。",
+                target_summary
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_video_generation_parameters_schema(
+            &configuration,
+            &conversation_attachments,
+        ),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "generate video animate clip movie image to video",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            let workspace_path = workspace_path.clone();
+            let conversation_attachments = conversation_attachments.clone();
+            Box::pin(async move {
+                execute_configured_video_generation(
+                    args,
+                    configuration,
+                    workspace_path,
+                    conversation_attachments,
+                )
+                .await
+            })
+        }),
+    })
+}
+
+/// Builds the hidden backing tool used by the semantic `speech_synthesis` fallback alias.
+/// 构建语义 `speech_synthesis` 回退别名使用的隐藏承载工具。
+fn configured_speech_synthesis_candidate(
+    configuration: PersistedAiToolConfiguration,
+    workspace_root: Option<PathBuf>,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::SpeechSynthesis) {
+        return None;
+    }
+    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::SpeechSynthesis))
+        .collect::<Vec<_>>()
+        .join("、");
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: format!(
+                "按用户配置的语音合成目标链执行文本转语音。可用 target：{}。",
+                target_summary
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_speech_synthesis_parameters_schema(&configuration),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "speech synthesize text to speech voice audio narration",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            let workspace_path = workspace_path.clone();
+            Box::pin(async move {
+                execute_configured_speech_synthesis(args, configuration, workspace_path).await
+            })
+        }),
+    })
+}
+
+/// Builds the hidden backing tool used by the semantic `music_generation` fallback alias.
+/// 构建语义 `music_generation` 回退别名使用的隐藏承载工具。
+fn configured_music_generation_candidate(
+    configuration: PersistedAiToolConfiguration,
+    workspace_root: Option<PathBuf>,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::MusicGeneration) {
+        return None;
+    }
+    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::MusicGeneration))
+        .collect::<Vec<_>>()
+        .join("、");
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: format!(
+                "按用户配置的音乐生成目标链执行歌曲或纯音乐生成。可用 target：{}。",
+                target_summary
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_music_generation_parameters_schema(&configuration),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "generate music song bgm lyrics instrumental",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            let workspace_path = workspace_path.clone();
+            Box::pin(async move {
+                execute_configured_music_generation(args, configuration, workspace_path).await
+            })
+        }),
+    })
+}
+
+/// Builds the hidden backing tool used by the semantic `music_cover` fallback alias.
+/// 构建语义 `music_cover` 回退别名使用的隐藏承载工具。
+fn configured_music_cover_candidate(
+    configuration: PersistedAiToolConfiguration,
+    workspace_root: Option<PathBuf>,
+    conversation_attachments: Vec<ConversationAttachment>,
+) -> Option<VulcanToolCandidate> {
+    if !configuration.has_usable_targets_for_kind(AiToolKind::MusicCover) {
+        return None;
+    }
+    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let audio_attachments = conversation_attachments
+        .into_iter()
+        .filter(|attachment| attachment.kind == ConversationAttachmentKind::Audio)
+        .collect::<Vec<_>>();
+    if audio_attachments.is_empty() {
+        return None;
+    }
+    let target_summary = std::iter::once(String::from("auto"))
+        .chain(configuration.usable_targets_for_kind(AiToolKind::MusicCover))
+        .collect::<Vec<_>>()
+        .join("、");
+
+    Some(VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            name: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
+            description: format!(
+                "按用户配置的音乐翻唱目标链执行参考音频翻唱。可用 target：{}。",
+                target_summary
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: configured_music_cover_parameters_schema(
+            &configuration,
+            &audio_attachments,
+        ),
+        ai_visible: false,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "music cover remix rearrange reference audio song",
+        )),
+        invoke: std::sync::Arc::new(move |args, _session_id| {
+            let configuration = configuration.clone();
+            let workspace_path = workspace_path.clone();
+            let conversation_attachments = audio_attachments.clone();
+            Box::pin(async move {
+                execute_configured_music_cover(
+                    args,
+                    configuration,
+                    workspace_path,
+                    conversation_attachments,
+                )
+                .await
             })
         }),
     })

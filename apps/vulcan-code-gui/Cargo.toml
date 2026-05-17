@@ -23,6 +23,7 @@ futures-util = "0.3.31"
 png = "0.17.16"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.15.4"
+rodio = "0.20.1"
 vulcan-agent-view.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true
@@ -36,7 +37,7 @@ time = { version = "0.3.44", features = ["formatting", "local-offset", "macros"]
 tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util"] }
 unicode-segmentation = "1.12.0"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5.4.1"
-image = { version = "0.25.10", default-features = false, features = ["bmp"] }

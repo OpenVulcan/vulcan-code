@@ -249,6 +249,14 @@ else {
     Write-Host "==> No app provider catalog directory found"
 }
 
+if (Test-Path (Join-Path $AppResourcesRoot "ai-capability-providers")) {
+    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "ai-capability-providers") -Destination (Join-Path $ResourcesOut "ai-capability-providers") | Out-Null
+    Write-Host "==> AI capability provider catalog synced to $(Join-Path $ResourcesOut 'ai-capability-providers')\"
+}
+else {
+    Write-Host "==> No app AI capability provider catalog directory found"
+}
+
 if (Test-Path (Join-Path $AppResourcesRoot "agent-prompts")) {
     Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "agent-prompts") -Destination (Join-Path $ResourcesOut "agent-prompts") | Out-Null
     Write-Host "==> Agent prompt catalog synced to $(Join-Path $ResourcesOut 'agent-prompts')\"

@@ -6,6 +6,7 @@ use crate::agent_runtime::provider_attachment::{
 };
 use crate::attachment_asset_index::{AttachmentReplayStatus, resolve_attachment_replay_status};
 use crate::provider_capabilities::ResolvedModelCapabilities;
+use crate::provider_config::AiToolKind;
 use crate::provider_config::ProviderApiFamily;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -68,6 +69,14 @@ pub fn normalize_provider_user_input_for_model(
                 provider_api_family_scope_label(api_family),
             ));
             downgraded_attachments.push(attachment);
+        } else if let Some(tool_hints) = capabilities.and_then(|capabilities| {
+            bridgeable_ai_tool_hints_for_attachment(capabilities, &attachment)
+        }) {
+            error_lines.push(build_attachment_ai_tool_bridge_text(
+                &attachment,
+                &tool_hints,
+            ));
+            downgraded_attachments.push(attachment);
         } else {
             error_lines.push(build_attachment_transport_error_text(
                 &attachment,
@@ -125,6 +134,59 @@ fn provider_api_family_scope_label(api_family: ProviderApiFamily) -> &'static st
         ProviderApiFamily::CohereChat => "this API path",
         ProviderApiFamily::BedrockConverse => "this API path",
     }
+}
+
+/// Builds one provider-visible bridge hint for an attachment that should be handled through a host AI tool instead of direct upstream multimodal encoding.
+/// 为应通过宿主 AI 工具而非直接上游多模态编码处理的附件构建一条 Provider 可见桥接提示。
+fn build_attachment_ai_tool_bridge_text(
+    attachment: &ConversationAttachment,
+    tool_hints: &[(&str, &str)],
+) -> String {
+    let tool_summary = tool_hints
+        .iter()
+        .map(|(tool_name, parameter_name)| {
+            format!(
+                "`{tool_name}`（传 `{parameter_name}=\"{}\"`）",
+                attachment.file_name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    format!(
+        "INFO: Attachment \"{}\" is available through host AI tools: {}.",
+        attachment.file_name, tool_summary,
+    )
+}
+
+/// Resolves the host AI tools that can still consume one downgraded attachment kind.
+/// 解析在附件被降级后仍可消费该附件类型的宿主 AI 工具集合。
+fn bridgeable_ai_tool_hints_for_attachment<'a>(
+    capabilities: &'a ResolvedModelCapabilities,
+    attachment: &ConversationAttachment,
+) -> Option<Vec<(&'a str, &'a str)>> {
+    let mut hints = Vec::new();
+
+    match attachment.kind {
+        ConversationAttachmentKind::Image => {
+            if capabilities.has_enabled_ai_tool(AiToolKind::UnderstandImage) {
+                hints.push(("understand_image", "image"));
+            }
+            if capabilities.has_enabled_ai_tool(AiToolKind::ImageGeneration) {
+                hints.push(("image_generation", "subject_image"));
+            }
+            if capabilities.has_enabled_ai_tool(AiToolKind::VideoGeneration) {
+                hints.push(("video_generation", "first_image"));
+            }
+        }
+        ConversationAttachmentKind::Audio => {
+            if capabilities.has_enabled_ai_tool(AiToolKind::MusicCover) {
+                hints.push(("music_cover", "audio"));
+            }
+        }
+        ConversationAttachmentKind::Video | ConversationAttachmentKind::Pdf => {}
+    }
+
+    (!hints.is_empty()).then_some(hints)
 }
 
 #[cfg(test)]
@@ -203,6 +265,43 @@ mod tests {
         assert!(normalized.attachments.is_empty());
         assert_eq!(normalized.downgraded_attachments.len(), 1);
         assert!(normalized.text.contains("selected model"));
+    }
+
+    /// Bridges image attachments into the host `understand_image` tool when the API path supports images but the selected model does not.
+    /// 当接口路径支持图片但所选模型不支持时，将图片附件桥接到宿主 `understand_image` 工具。
+    #[test]
+    fn normalize_provider_user_input_bridges_image_to_understand_image_tool() {
+        let capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text")],
+            ai_tools: vec![crate::provider_capabilities::ResolvedAiToolCapability {
+                kind: crate::provider_config::AiToolKind::UnderstandImage,
+                policy: crate::provider_config::AiToolPolicy::ForceHost,
+                native_provider_tool: false,
+                native_tool_type: None,
+                native_request_patch: None,
+                fallback_tool_id: Some(String::from("vulcan_understand_image_chain")),
+                requires_approval: false,
+                result_modalities: vec![String::from("text")],
+                citation_support: false,
+                source_label: String::from("用户配置"),
+            }],
+            ..ResolvedModelCapabilities::default()
+        };
+        let normalized = normalize_provider_user_input_for_model(
+            ProviderApiFamily::OpenAiChatCompatible,
+            Some(&capabilities),
+            "请看图",
+            &[test_attachment(
+                ConversationAttachmentKind::Image,
+                "demo.png",
+                "image/png",
+            )],
+        );
+
+        assert!(normalized.attachments.is_empty());
+        assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert!(normalized.text.contains("understand_image"));
+        assert!(normalized.text.contains("image=\"demo.png\""));
     }
 
     /// Degrades non-image attachments for strict OpenAI-compatible Chat endpoints.

@@ -137,6 +137,7 @@ mod tests {
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from("D:/workspace"),
+            conversation_attachments: Vec::new(),
             context_history_count: 1,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),

@@ -5,6 +5,7 @@ use crate::context_budget::ContextCompactionPolicy;
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 
 /// Number of latest canonical records retained verbatim after one compaction rewrite.
@@ -219,6 +220,48 @@ pub fn append_assistant_text_message(
 /// 追加一条后续将驱动可见转录投影的规范会话记录。
 pub fn append_record(state: &mut SessionConversationState, record: SessionConversationRecord) {
     state.records.push(record);
+}
+
+/// Collects one latest-first unique attachment list from the canonical conversation window for host-side capability tools.
+/// 从规范会话窗口中收集一份按最新优先去重后的附件列表，供宿主侧能力工具使用。
+pub fn collect_host_visible_attachments(
+    state: &SessionConversationState,
+) -> Vec<ConversationAttachment> {
+    let mut seen_keys = BTreeSet::new();
+    let mut attachments = Vec::new();
+
+    for message in state.messages.iter().rev() {
+        let SessionConversationPayload::UserText {
+            attachments: message_attachments,
+            ..
+        } = &message.payload
+        else {
+            continue;
+        };
+
+        for attachment in message_attachments.iter().rev() {
+            let identity_key = attachment
+                .asset_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    format!(
+                        "{}|{}|{}",
+                        attachment.kind.modality_name(),
+                        attachment.file_name,
+                        attachment.local_path
+                    )
+                });
+            if !seen_keys.insert(identity_key) {
+                continue;
+            }
+            attachments.push(attachment.clone());
+        }
+    }
+
+    attachments
 }
 
 /// Appends one streamed body delta to the matching canonical session record and returns the updated body when found.
@@ -598,7 +641,6 @@ fn assistant_record_can_seed_protocol(record_kind: &SessionMessageRecordKind) ->
     matches!(
         record_kind,
         SessionMessageRecordKind::AssistantOutput
-            | SessionMessageRecordKind::SummaryOutput
             | SessionMessageRecordKind::ExploreOutput
             | SessionMessageRecordKind::CompactionSummary
             | SessionMessageRecordKind::Transcript
@@ -611,10 +653,9 @@ fn historical_record_survives_compaction(record: &SessionConversationRecord) -> 
     matches!(record.kind, SessionMessageKind::User)
         || matches!(
             record.record_kind,
-            SessionMessageRecordKind::AssistantOutput
-                | SessionMessageRecordKind::SummaryOutput
-                | SessionMessageRecordKind::CompactionSummary
+            SessionMessageRecordKind::AssistantOutput | SessionMessageRecordKind::CompactionSummary
         )
+        || generated_attachment_tool_result_should_survive_compaction(record)
 }
 
 /// Reduces an old surviving dialogue record to compact text and minimal metadata.
@@ -623,6 +664,11 @@ fn compact_historical_record(
     mut record: SessionConversationRecord,
     prune_tools: bool,
 ) -> SessionConversationRecord {
+    if generated_attachment_tool_result_should_survive_compaction(&record) {
+        record.body.clear();
+        record.metadata = compact_generated_attachment_tool_result_metadata(record.metadata.take());
+        return record;
+    }
     record.body = if prune_tools
         && matches!(
             record.record_kind,
@@ -636,6 +682,133 @@ fn compact_historical_record(
     };
     record.metadata = None;
     record
+}
+
+/// Returns whether one canonical tool-result record carries generated-media metadata that must remain transcript-visible after compaction.
+/// 返回一条规范工具结果记录是否携带必须在压缩后继续保留为转录可见的生成媒体元数据。
+fn generated_attachment_tool_result_should_survive_compaction(
+    record: &SessionConversationRecord,
+) -> bool {
+    matches!(record.record_kind, SessionMessageRecordKind::ToolResultOutput)
+        && record
+            .metadata
+            .as_ref()
+            .and_then(resolve_generated_attachment_host_result_from_metadata)
+            .is_some()
+}
+
+/// Resolves the generated-attachments host-result payload from transcript metadata, accepting nested and flattened shapes.
+/// 从转录元数据中解析 generated-attachments 宿主结果载荷，同时兼容嵌套与扁平两种结构。
+fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> Option<&Value> {
+    let nested_host_result = metadata
+        .get("host_result")
+        .filter(|value| value.is_object())
+        .filter(|value| {
+            value.get("kind").and_then(Value::as_str) == Some("generated_attachments")
+        });
+    nested_host_result.or_else(|| {
+        (metadata.get("kind").and_then(Value::as_str) == Some("generated_attachments")
+            && metadata.get("payload").is_some())
+        .then_some(metadata)
+    })
+}
+
+/// Compacts one generated-media tool-result metadata object down to the minimum host payload required to rebuild inline transcript cards later.
+/// 将一份生成媒体工具结果元数据压缩到后续重建内联转录卡片所需的最小宿主载荷。
+fn compact_generated_attachment_tool_result_metadata(metadata: Option<Value>) -> Option<Value> {
+    let metadata = metadata?;
+    let host_result = resolve_generated_attachment_host_result_from_metadata(&metadata)?;
+    let compact_host_result = compact_generated_attachment_host_result(host_result)?;
+    let mut metadata_object = serde_json::Map::new();
+    metadata_object.insert(String::from("host_result"), compact_host_result);
+    Some(Value::Object(metadata_object))
+}
+
+/// Compacts one generated-attachments host-result payload to the minimal structure required by transcript media rendering and host actions.
+/// 将一份 generated-attachments 宿主结果载荷压缩到转录媒体渲染与宿主动作所需的最小结构。
+fn compact_generated_attachment_host_result(host_result: &Value) -> Option<Value> {
+    let outputs = host_result
+        .get("payload")
+        .and_then(|payload| payload.get("outputs"))
+        .and_then(Value::as_array)?;
+    let compact_outputs = outputs
+        .iter()
+        .filter_map(compact_generated_attachment_output)
+        .collect::<Vec<_>>();
+    if compact_outputs.is_empty() {
+        return None;
+    }
+
+    let mut payload_object = serde_json::Map::new();
+    payload_object.insert(String::from("outputs"), Value::Array(compact_outputs));
+
+    let mut host_result_object = serde_json::Map::new();
+    host_result_object.insert(
+        String::from("kind"),
+        Value::String(String::from("generated_attachments")),
+    );
+    host_result_object.insert(String::from("payload"), Value::Object(payload_object));
+    Some(Value::Object(host_result_object))
+}
+
+/// Compacts one generated attachment output to the fields required by transcript restoration, previews, and file actions.
+/// 将单条生成附件输出压缩到转录恢复、预览显示与文件动作所需的字段集合。
+fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
+    let output_object = output.as_object()?;
+    let kind = output_object
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let file_name = output_object
+        .get("file_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let local_path = output_object
+        .get("local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    let mut compact_output = serde_json::Map::new();
+    compact_output.insert(String::from("kind"), Value::String(kind.to_string()));
+    compact_output.insert(
+        String::from("file_name"),
+        Value::String(file_name.to_string()),
+    );
+    compact_output.insert(
+        String::from("local_path"),
+        Value::String(local_path.to_string()),
+    );
+
+    if let Some(mime_type) = output_object
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact_output.insert(
+            String::from("mime_type"),
+            Value::String(mime_type.to_string()),
+        );
+    }
+    if let Some(byte_len) = output_object.get("byte_len").cloned() {
+        compact_output.insert(String::from("byte_len"), byte_len);
+    }
+    if let Some(asset_id) = output_object
+        .get("asset_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact_output.insert(
+            String::from("asset_id"),
+            Value::String(asset_id.to_string()),
+        );
+    }
+
+    Some(Value::Object(compact_output))
 }
 
 /// Truncates one old record body to keep reconstructed history useful but bounded.
@@ -817,5 +990,131 @@ mod tests {
             SessionConversationPayload::ToolResult { text, .. }
                 if text == COMPACTED_TOOL_RESULT_PLACEHOLDER
         ));
+    }
+
+    /// Verifies that hidden execution summaries no longer replay into provider-visible context.
+    /// 验证隐藏执行摘要不再回放进 Provider 可见上下文。
+    #[test]
+    fn summary_output_is_excluded_from_context_and_protocol_replay() {
+        let message = SessionMessageEntry {
+            id: String::from("summary-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::SummaryOutput,
+            visible: false,
+            title: String::from("Summary 输出"),
+            body: String::from("本轮执行成功完成。输出摘要：测试。"),
+            metadata: None,
+            created_at: String::from("1"),
+        };
+        let state = SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: message.id.clone(),
+                kind: message.kind,
+                record_kind: message.record_kind,
+                visible: message.visible,
+                title: message.title.clone(),
+                body: message.body.clone(),
+                metadata: None,
+                created_at: message.created_at.clone(),
+            }],
+            continuation: SessionProviderContinuationState::default(),
+        };
+
+        assert!(!message.contributes_to_context());
+        assert!(session_message_to_protocol_message(&message).is_none());
+        assert!(conversation_state_to_context_records(&state, None).is_empty());
+    }
+
+    /// Verifies record-level compaction keeps generated-media tool results visible with the minimal host metadata needed to rebuild inline cards later.
+    /// 验证记录级压缩会保留生成媒体工具结果的可见性，并保留后续重建内联卡片所需的最小宿主元数据。
+    #[test]
+    fn record_compaction_preserves_generated_media_tool_result_metadata() {
+        let mut records = vec![SessionConversationRecord {
+            id: String::from("tool-result-media-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("调用 image_generation 工具"),
+            body: String::from("## 工具返回\n\n媒体已生成。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-media-1",
+                "tool_result_id": "tool-result-call-media-1",
+                "host_result": {
+                    "kind": "generated_attachments",
+                    "payload": {
+                        "outputs": [{
+                            "kind": "image",
+                            "file_name": "demo.jpg",
+                            "local_path": "D:/demo.jpg",
+                            "mime_type": "image/jpeg",
+                            "byte_len": 1024,
+                            "asset_id": "asset-1",
+                            "ignored": "drop-me"
+                        }]
+                    }
+                },
+                "noise": {
+                    "large": "drop-me-too"
+                }
+            })),
+            created_at: String::from("1"),
+        }];
+        for index in 0..50 {
+            records.push(SessionConversationRecord {
+                id: format!("recent-{index}"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::new(),
+                body: format!("最近消息 {index}"),
+                metadata: None,
+                created_at: (index + 2).to_string(),
+            });
+        }
+
+        let mut state = SessionConversationState {
+            messages: Vec::new(),
+            records,
+            continuation: SessionProviderContinuationState::default(),
+        };
+        compact_conversation_records_after_summary(
+            &mut state,
+            "missing-summary",
+            ContextCompactionPolicy {
+                tail_turns: 1,
+                ..ContextCompactionPolicy::default()
+            },
+        );
+
+        assert_eq!(state.records.len(), 51);
+        let preserved_record = state
+            .records
+            .iter()
+            .find(|record| record.id == "tool-result-media-1")
+            .expect("generated-media tool result should survive compaction");
+        assert!(preserved_record.body.is_empty());
+        let metadata = preserved_record
+            .metadata
+            .as_ref()
+            .expect("generated-media tool result should preserve metadata");
+        let outputs = metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("payload"))
+            .and_then(|payload| payload.get("outputs"))
+            .and_then(Value::as_array)
+            .expect("generated-media outputs should remain available");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].get("kind").and_then(Value::as_str), Some("image"));
+        assert_eq!(
+            outputs[0].get("file_name").and_then(Value::as_str),
+            Some("demo.jpg")
+        );
+        assert_eq!(
+            outputs[0].get("local_path").and_then(Value::as_str),
+            Some("D:/demo.jpg")
+        );
+        assert!(outputs[0].get("ignored").is_none());
+        assert!(metadata.get("noise").is_none());
     }
 }

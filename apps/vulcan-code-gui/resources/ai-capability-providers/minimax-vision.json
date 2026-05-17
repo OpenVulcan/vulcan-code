@@ -1,0 +1,17 @@
+{
+  "id": "minimax",
+  "name": "MiniMax Vision",
+  "capabilityKind": "understand_image",
+  "targetAlias": "minimax",
+  "addButtonGroup": 1,
+  "addButtonOrder": 1,
+  "defaultBaseUrl": "https://api.minimax.io/v1/coding_plan/vlm",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "MiniMax Key / {env:MINIMAX_API_KEY}",
+  "apiKeyPlaceholder": "{env:MINIMAX_API_KEY}",
+  "supportsRegionField": true,
+  "regionLabel": "MiniMax 区域",
+  "regionPlaceholder": "global 或 cn",
+  "defaultRegion": "global",
+  "configurationNote": "当前通过 MiniMax VLM 独立图片理解端点执行；官方 CLI 使用 MINIMAX_API_KEY，并向 /v1/coding_plan/vlm 发送 prompt + image_url。"
+}

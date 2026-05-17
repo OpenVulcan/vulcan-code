@@ -23,6 +23,7 @@ use crate::agent_view::{
     agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_document_raw_source,
     build_agent_view_document,
 };
+use crate::ai_tool_configuration::{self, AiToolConfigurationLoadSource};
 use crate::attachment_asset_index::{
     AttachmentCleanupPreview, AttachmentCleanupReport, AttachmentCleanupSelection,
     execute_attachment_cleanup, preview_attachment_cleanup,
@@ -62,12 +63,10 @@ use crate::provider_capabilities::{
     apply_ai_tool_runtime_configuration, resolve_model_capabilities,
 };
 use crate::provider_config::{
-    self, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
+    self, AiToolKind, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
     PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
-    PersistedProviderEntry,
-    PersistedProviderOptions, PersistedWebSearchProviderEntry, ProviderChoice,
-    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
-    ReasoningSelectionOption, WebSearchProviderDispatchMode, WebSearchProviderKind,
+    PersistedProviderEntry, PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile,
+    ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
     WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
@@ -101,11 +100,13 @@ use iced::{
 };
 use iced_aw::{ContextMenu, date_picker::Date};
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
+use rodio::{Decoder, OutputStream, Sink};
 use serde_json::{Value, json};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -504,6 +505,14 @@ const COMPOSER_PENDING_QUEUE_ROW_GAP: f32 = 6.0;
 /// Shared indicator height shown while one pending-prompt queue row is being reordered.
 /// 当某条待发送队列行正在重排时显示的共享插入指示高度。
 const COMPOSER_PENDING_QUEUE_DROP_INDICATOR_HEIGHT: f32 = 8.0;
+
+/// Shared fixed row height used by each enabled AI capability target row inside settings pages.
+/// 设置页中每一条已启用 AI 能力目标行使用的共享固定行高。
+const AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT: f32 = 68.0;
+
+/// Shared indicator height shown while one enabled AI capability target row is being reordered.
+/// 当某条已启用 AI 能力目标行正在重排时显示的共享插入指示高度。
+const AI_CAPABILITY_ROUTE_DROP_INDICATOR_HEIGHT: f32 = 8.0;
 
 /// Shared square size used by the fixed send-or-stop button beside the main prompt composer.
 /// 主提示词编辑器右侧固定发送或停止按钮使用的共享方形尺寸。
@@ -1173,12 +1182,125 @@ fn tool_display_message_is_task_session(message: &SessionMessageEntry) -> bool {
     })
 }
 
+/// Parses the generated-attachments host payload attached to one tool-display metadata object into managed conversation attachments.
+/// 将附着在工具显示元数据对象上的 generated-attachments 宿主载荷解析为托管会话附件集合。
+fn generated_attachments_from_tool_metadata(metadata: &Value) -> Vec<ConversationAttachment> {
+    let Some(host_result) = resolved_host_result_from_tool_metadata(metadata) else {
+        return Vec::new();
+    };
+    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
+        return Vec::new();
+    }
+    host_result
+        .get("payload")
+        .and_then(|payload| payload.get("outputs"))
+        .and_then(Value::as_array)
+        .map(|outputs| {
+            outputs
+                .iter()
+                .filter_map(parse_generated_attachment_output)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolves the structured host-result payload stored on one tool-display metadata object, accepting both nested and flattened runtime-event shapes.
+/// 解析单份工具显示元数据对象上保存的结构化宿主结果载荷，同时兼容嵌套与扁平两种运行时事件形状。
+fn resolved_host_result_from_tool_metadata(metadata: &Value) -> Option<&Value> {
+    metadata
+        .get("host_result")
+        .filter(|value| value.is_object())
+        .or_else(|| {
+            (metadata.get("kind").is_some() && metadata.get("payload").is_some())
+                .then_some(metadata)
+        })
+}
+
+/// Parses one serialized generated-attachment output object back into the local attachment structure used by the GUI.
+/// 将单条序列化生成附件输出对象解析回图形界面使用的本地附件结构。
+fn parse_generated_attachment_output(output: &Value) -> Option<ConversationAttachment> {
+    let kind = parse_generated_attachment_kind(
+        output
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?,
+    )?;
+    let file_name = output
+        .get("file_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let local_path = output
+        .get("local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let mime_type = output
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+
+    Some(ConversationAttachment {
+        kind,
+        file_name,
+        local_path,
+        source_path: None,
+        asset_id: output
+            .get("asset_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        byte_len: output.get("byte_len").and_then(Value::as_u64),
+        mime_type,
+    })
+}
+
+/// Maps one serialized generated-attachment modality name back to the local attachment-kind enum.
+/// 将序列化生成附件模态名称映射回本地附件类型枚举。
+fn parse_generated_attachment_kind(value: &str) -> Option<ConversationAttachmentKind> {
+    match value {
+        "image" => Some(ConversationAttachmentKind::Image),
+        "audio" => Some(ConversationAttachmentKind::Audio),
+        "video" => Some(ConversationAttachmentKind::Video),
+        "pdf" => Some(ConversationAttachmentKind::Pdf),
+        _ => None,
+    }
+}
+
+/// Builds one human-facing generated-media title from the host-produced attachment list stored on a tool card.
+/// 根据工具卡片上保存的宿主生成附件列表构建一条面向用户的人类可读标题。
+fn generated_attachment_tool_display_title(metadata: &Value) -> Option<String> {
+    let attachments = generated_attachments_from_tool_metadata(metadata);
+    let first_kind = attachments
+        .first()
+        .map(|attachment| attachment.kind.clone())?;
+    let base_label = match first_kind {
+        ConversationAttachmentKind::Image => "已生成图片",
+        ConversationAttachmentKind::Audio => "已生成音频",
+        ConversationAttachmentKind::Video => "已生成视频",
+        ConversationAttachmentKind::Pdf => "已生成文档",
+    };
+    if attachments.len() <= 1 {
+        Some(base_label.to_string())
+    } else {
+        Some(format!("{base_label}（共 {} 个）", attachments.len()))
+    }
+}
+
 /// Normalizes one tool display message into the unified transcript-card title expected by the merged human-facing view.
 /// 将单条工具显示消息规范化为合并后面向人类视图所需的统一转录卡片标题。
 fn normalize_tool_display_message(mut message: SessionMessageEntry) -> SessionMessageEntry {
     if let Some(metadata) = message.metadata.as_ref() {
         if let Some(task_title) = task_session_tool_display_title(message.record_kind, metadata) {
             message.title = task_title;
+        } else if let Some(generated_title) = generated_attachment_tool_display_title(metadata) {
+            message.title = generated_title;
         } else if let Some(tool_name) = metadata
             .get("tool_name")
             .and_then(Value::as_str)
@@ -1497,6 +1619,20 @@ struct WorkbenchImagePreviewModalState {
     scroll_offset: scrollable::AbsoluteOffset,
 }
 
+/// Host-side generated-audio playback state retained while one inline audio strip is actively playing.
+/// 当某条内联音频条正在播放时保留的宿主侧生成音频播放状态。
+struct GeneratedAudioPlaybackState {
+    /// Local absolute path of the currently playing audio file.
+    /// 当前正在播放的音频文件本地绝对路径。
+    local_path: String,
+    /// Output stream kept alive for the lifetime of the active sink.
+    /// 为当前激活播放 sink 保活的输出流。
+    _stream: OutputStream,
+    /// Active sink responsible for decoding and playing the generated audio file.
+    /// 负责解码并播放生成音频文件的激活 sink。
+    sink: Sink,
+}
+
 /// Live scrollbar geometry derived from the current composer editor content and viewport.
 /// 根据当前提示词编辑器内容与视口推导出的实时滚动条几何信息。
 #[derive(Debug, Clone, Copy)]
@@ -1616,6 +1752,9 @@ pub struct VulcanWorkbench {
     /// Blocking image preview modal currently opened from one staged composer attachment.
     /// 当前从某个已暂存提示词附件打开的阻塞式图片预览弹窗。
     workbench_image_preview_modal: Option<WorkbenchImagePreviewModalState>,
+    /// Host-side generated-audio playback state used by transcript media strips and tool-modal preview cards.
+    /// 供转录媒体条与工具弹层预览卡片使用的宿主侧生成音频播放状态。
+    generated_audio_playback: Option<GeneratedAudioPlaybackState>,
     /// Human-readable file labels currently hovering over the main workbench window as potential composer drops.
     /// 当前悬停在主工作台窗口上、可作为提示词拖拽导入候选项的人类可读文件标签集合。
     composer_drag_hover_labels: Vec<String>,
@@ -1712,6 +1851,15 @@ pub struct VulcanWorkbench {
     /// Queue entry identifier currently being reordered through drag interaction.
     /// 当前正在通过拖拽交互调整顺序的待发送队列项标识。
     dragging_pending_prompt_entry_id: Option<String>,
+    /// Current drop target preview shown while one enabled AI capability target is being reordered.
+    /// 当前在已启用 AI 能力目标重排期间展示的插入目标预览。
+    active_ai_capability_route_drop_target: Option<AiCapabilityRouteDropTarget>,
+    /// Pending click-or-drag interaction captured from one AI capability target drag handle press.
+    /// 从某次 AI 能力目标拖拽柄按下动作中捕获的待判定点击或拖拽交互状态。
+    pending_ai_capability_route_drag: Option<PendingAiCapabilityRouteDrag>,
+    /// Fully qualified capability target selector currently being reordered through drag interaction.
+    /// 当前正在通过拖拽交互调整顺序的完整能力目标选择器。
+    dragging_ai_capability_route_target: Option<String>,
     /// Currently selected session identifier.
     /// 当前被选中的会话标识。
     selected_session: SessionId,
@@ -1932,6 +2080,9 @@ pub struct VulcanWorkbench {
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
+    /// Standalone AI capability tool configuration loaded from the dedicated Vulcan AI capability file.
+    /// 从独立 Vulcan AI 能力配置文件载入的独立 AI 能力工具配置。
+    ai_tool_configuration: PersistedAiToolConfiguration,
     /// User-visible agent profile catalog loaded from the dedicated user directory and state file.
     /// 从独立用户目录与状态文件载入的面向用户 Agent 配置目录。
     agent_profile_catalog: AgentProfileCatalog,
@@ -1956,6 +2107,21 @@ pub struct VulcanWorkbench {
     /// Currently selected top-level panel shown in the main display region.
     /// 当前显示在主显示区域中的顶层面板类型。
     active_main_panel: MainDisplayPanel,
+    /// Currently selected section inside the dedicated settings workspace.
+    /// 当前在独立设置工作区中选中的分区。
+    selected_settings_section: SettingsSection,
+    /// Whether the left settings tree should keep the AI capability subtree expanded.
+    /// 左侧设置树是否保持 AI 能力子树展开。
+    settings_ai_capability_tree_expanded: bool,
+    /// Optional blocking vendor picker modal used by the supplier page before one new shared AI capability vendor is created.
+    /// 供应商页在创建新的共享 AI 能力供应商前使用的可选阻塞式供应商选择弹窗。
+    ai_capability_vendor_picker: Option<AiCapabilityVendorPickerState>,
+    /// Optional blocking vendor editor modal used when one shared AI capability vendor is added or edited.
+    /// 新增或编辑共享 AI 能力供应商时使用的可选阻塞式供应商编辑弹窗。
+    ai_capability_vendor_editor: Option<AiCapabilityVendorEditorState>,
+    /// Optional blocking picker modal used by capability pages to batch-select vendor targets before saving them into one capability route.
+    /// 供能力页在保存前批量选择供应商目标使用的可选阻塞式选择器弹窗。
+    ai_capability_target_picker: Option<AiCapabilityTargetPickerState>,
     /// Currently selected provider entry inside the configuration page.
     /// 当前在配置页面中选中的供应商条目。
     selected_provider: ProviderChoice,
@@ -1965,8 +2131,8 @@ pub struct VulcanWorkbench {
     /// Optional provider-configuration feedback message shown near the configuration widgets.
     /// 展示在配置控件附近的供应商配置反馈消息。
     provider_notice: String,
-    /// Optional API-native tool configuration feedback message shown near the AI-tool settings widgets.
-    /// 展示在 API 原生工具设置控件附近的反馈消息。
+    /// Optional standalone AI capability configuration feedback message shown near the AI-tool settings widgets.
+    /// 展示在独立 AI 能力设置控件附近的反馈消息。
     ai_tool_notice: String,
     /// Optional MCP-configuration feedback message shown near the MCP settings widgets.
     /// 展示在 MCP 设置控件附近的 MCP 配置反馈消息。
@@ -2197,6 +2363,21 @@ struct PendingPendingPromptDrag {
     origin: iced::Point,
 }
 
+/// Pending drag candidate captured from one AI capability route handle press.
+/// 从某次 AI 能力路由拖拽柄按下动作中捕获的待确认拖拽候选状态。
+#[derive(Debug, Clone)]
+struct PendingAiCapabilityRouteDrag {
+    /// Semantic capability owning the route currently being reordered.
+    /// 当前正在重排路由所属的语义能力。
+    capability_kind: AiToolKind,
+    /// Fully qualified `vendor/target` selector that may become the active drag source.
+    /// 可能升级为激活拖拽源的完整 `供应商/目标` 选择器。
+    target_selector: String,
+    /// Cursor origin captured when the drag candidate was pressed.
+    /// 按下拖拽候选时捕获到的鼠标起始位置。
+    origin: iced::Point,
+}
+
 /// Stable scope selection used by the left-panel workspace-history search.
 /// 左侧面板工作台历史搜索使用的稳定范围选择。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2314,6 +2495,9 @@ struct ModalSurfacePayload {
     /// Snapshot document rendered inside the modal body.
     /// 渲染在弹层正文中的快照文档。
     document: vulcan_agent_view::AgentViewDocument,
+    /// Generated media attachments extracted from host-only tool metadata for richer modal rendering.
+    /// 从宿主专用工具元数据中提取出的生成媒体附件，用于更丰富的弹层渲染。
+    generated_attachments: Vec<ConversationAttachment>,
     /// Stable hash used by lazy body rendering so heavy transcript content only rebuilds when payload really changes.
     /// 供惰性正文渲染使用的稳定哈希，使重型转录内容仅在载荷真正变化时重建。
     document_signature: u64,
@@ -2513,6 +2697,18 @@ enum PendingPromptDropTarget {
     Before(String),
     /// Inserts the dragged queue entry at the tail of the current queue.
     /// 将正在拖拽的队列项插入到当前队列尾部。
+    End,
+}
+
+/// Drop-target previews used while enabled AI capability targets are being reordered.
+/// 已启用 AI 能力目标重排期间使用的插入目标预览类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AiCapabilityRouteDropTarget {
+    /// Inserts the dragged capability target before one concrete enabled row.
+    /// 将正在拖拽的能力目标插入到某个具体已启用行之前。
+    Before(String),
+    /// Inserts the dragged capability target at the end of the current capability route.
+    /// 将正在拖拽的能力目标插入到当前能力路由尾部。
     End,
 }
 
@@ -3132,6 +3328,166 @@ impl MainDisplayPanel {
     }
 }
 
+/// Settings navigation sections rendered in the left tree of the settings workspace.
+/// 渲染在设置工作区左侧树导航中的设置分区。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    /// Chat-provider credentials and active-model configuration.
+    /// 对话模型供应商凭据与激活模型配置。
+    ModelProviders,
+    /// Runtime tuning, execution diagnostics, and engineering guardrails.
+    /// 运行调优、执行诊断与工程约束设置。
+    RuntimeDiagnostics,
+    /// Shared AI capability vendor credentials reused by multiple semantic tools.
+    /// 被多个语义工具复用的共享 AI 能力供应商凭据。
+    AiCapabilityVendors,
+    /// Unified hosted or third-party web-search capability routing.
+    /// 统一原生或第三方网页搜索能力路由。
+    AiCapabilityWebSearch,
+    /// Image-understanding capability routing delegated to external vision vendors.
+    /// 委派给外部视觉供应商的图片理解能力路由。
+    AiCapabilityUnderstandImage,
+    /// Image-generation capability routing.
+    /// 图片生成能力路由。
+    AiCapabilityImageGeneration,
+    /// Video-generation capability routing.
+    /// 视频生成能力路由。
+    AiCapabilityVideoGeneration,
+    /// Speech-synthesis capability routing.
+    /// 语音合成能力路由。
+    AiCapabilitySpeechSynthesis,
+    /// Music-generation capability routing.
+    /// 音乐生成能力路由。
+    AiCapabilityMusicGeneration,
+    /// Music-cover capability routing.
+    /// 音乐翻唱能力路由。
+    AiCapabilityMusicCover,
+    /// MCP server configuration and OAuth management.
+    /// MCP 服务器配置与 OAuth 管理。
+    McpServers,
+    /// Archived session and project restoration surface.
+    /// 归档会话与归档项目恢复界面。
+    ArchivedRestore,
+}
+
+impl SettingsSection {
+    /// Returns the compact tree label rendered in the left settings navigation.
+    /// 返回渲染在左侧设置导航中的紧凑树标签。
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ModelProviders => "模型供应商",
+            Self::RuntimeDiagnostics => "运行与诊断",
+            Self::AiCapabilityVendors => "供应商配置",
+            Self::AiCapabilityWebSearch => "联网搜索",
+            Self::AiCapabilityUnderstandImage => "图像理解",
+            Self::AiCapabilityImageGeneration => "图像生成",
+            Self::AiCapabilityVideoGeneration => "视频生成",
+            Self::AiCapabilitySpeechSynthesis => "语音合成",
+            Self::AiCapabilityMusicGeneration => "音乐生成",
+            Self::AiCapabilityMusicCover => "音乐翻唱",
+            Self::McpServers => "MCP 配置",
+            Self::ArchivedRestore => "归档恢复",
+        }
+    }
+
+    /// Returns the settings-page title rendered above the selected section content.
+    /// 返回渲染在所选分区内容上方的设置页标题。
+    const fn title(self) -> &'static str {
+        self.label()
+    }
+
+    /// Returns one concise description for the selected settings section.
+    /// 返回所选设置分区的一句简洁说明。
+    const fn description(self) -> &'static str {
+        match self {
+            Self::ModelProviders => "配置对话模型供应商、激活模型与基础凭据。",
+            Self::RuntimeDiagnostics => "集中查看执行运行时、工程策略、指引与日志。",
+            Self::AiCapabilityVendors => "先在这里配置共享供应商凭据，后续各能力页直接复用。",
+            Self::AiCapabilityWebSearch => "管理统一 web-search 的默认链路、启用目标与顺序。",
+            Self::AiCapabilityUnderstandImage => "为不具备原生视觉的模型补齐图片理解能力。",
+            Self::AiCapabilityImageGeneration => "配置可供对话模型调用的图片生成目标与顺序。",
+            Self::AiCapabilityVideoGeneration => "配置可供对话模型调用的视频生成目标与顺序。",
+            Self::AiCapabilitySpeechSynthesis => "配置文本转语音与语音合成目标与顺序。",
+            Self::AiCapabilityMusicGeneration => "配置音乐生成目标与默认顺序。",
+            Self::AiCapabilityMusicCover => "配置音乐翻唱目标与默认顺序。",
+            Self::McpServers => "管理 MCP Server、OAuth 授权与连接参数。",
+            Self::ArchivedRestore => "在设置页恢复已经归档的项目与会话。",
+        }
+    }
+
+    /// Returns whether the current section belongs to the collapsible AI capability subtree.
+    /// 返回当前分区是否属于可折叠的 AI 能力子树。
+    const fn belongs_to_ai_capabilities(self) -> bool {
+        matches!(
+            self,
+            Self::AiCapabilityVendors
+                | Self::AiCapabilityWebSearch
+                | Self::AiCapabilityUnderstandImage
+                | Self::AiCapabilityImageGeneration
+                | Self::AiCapabilityVideoGeneration
+                | Self::AiCapabilitySpeechSynthesis
+                | Self::AiCapabilityMusicGeneration
+                | Self::AiCapabilityMusicCover
+        )
+    }
+}
+
+/// Temporary in-memory picker state used by one capability page when the user selects targets from configured vendors.
+/// 某个能力页在用户从已配置供应商中选择目标时使用的临时内存选择器状态。
+#[derive(Debug, Clone)]
+struct AiCapabilityTargetPickerState {
+    /// Semantic capability currently being configured by the picker.
+    /// 当前由选择器配置的语义能力。
+    capability_kind: AiToolKind,
+    /// Vendor currently highlighted in the left-side picker list.
+    /// 当前在选择器左侧列表中高亮的供应商。
+    selected_vendor_id: Option<String>,
+    /// Per-vendor selected target map keyed by `target_alias` with its requested model override.
+    /// 以 `target_alias` 为键、以请求模型覆盖值为值的按供应商分组已选目标映射。
+    selections: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl AiCapabilityTargetPickerState {
+    /// Returns the total number of checked targets currently staged inside the picker.
+    /// 返回当前在选择器中暂存勾选的目标总数。
+    fn total_selected_count(&self) -> usize {
+        self.selections.values().map(BTreeMap::len).sum()
+    }
+}
+
+/// Blocking vendor picker state used by the supplier page before one new shared AI capability vendor instance is created.
+/// 供应商页在创建新的共享 AI 能力供应商实例前使用的阻塞式供应商选择器状态。
+#[derive(Debug, Clone, Default)]
+struct AiCapabilityVendorPickerState {
+    /// Live keyword filter applied to the vendor catalog list.
+    /// 应用于供应商目录列表的实时关键字过滤值。
+    filter: String,
+}
+
+/// Blocking vendor editor state used when one shared AI capability vendor instance is added or updated.
+/// 新增或更新共享 AI 能力供应商实例时使用的阻塞式供应商编辑器状态。
+#[derive(Debug, Clone)]
+struct AiCapabilityVendorEditorState {
+    /// Stable shared vendor identifier currently being edited.
+    /// 当前正在编辑的稳定共享供应商标识。
+    vendor_id: String,
+    /// Shared vendor display name shown in the modal header.
+    /// 显示在弹窗标题中的共享供应商名称。
+    display_name: String,
+    /// Shared API key or token staged in the editor.
+    /// 在编辑器中暂存的共享 API Key 或 Token。
+    api_key: String,
+    /// Shared region or locale staged in the editor.
+    /// 在编辑器中暂存的共享区域或地区值。
+    region: String,
+    /// Optional fixed region choices rendered as a dropdown when the provider only supports a known finite set.
+    /// 当提供方只支持已知有限集合时渲染为下拉框的可选固定区域列表。
+    region_options: Vec<String>,
+    /// Whether the current editor session is creating a brand-new vendor entry instead of updating an existing one.
+    /// 当前编辑会话是否正在创建全新供应商条目，而不是更新已有条目。
+    is_new: bool,
+}
+
 /// Returns the inline monochrome SVG bytes used by one left activity-bar panel switcher icon.
 /// 返回左侧活动条某个面板切换图标使用的内联单色 SVG 字节。
 fn main_display_panel_icon_svg_bytes(panel: MainDisplayPanel) -> &'static [u8] {
@@ -3288,6 +3644,35 @@ enum Message {
         /// 由图片预览弹窗渲染的本地图片路径。
         local_path: String,
     },
+    /// Opens one generated media file with the host operating system default application.
+    /// 使用宿主操作系统默认应用打开某个生成媒体文件。
+    OpenGeneratedAttachmentWithDefaultApp(String),
+    /// Reveals one generated media file in the host operating system file manager.
+    /// 在宿主操作系统文件管理器中定位某个生成媒体文件。
+    RevealGeneratedAttachmentInFolder(String),
+    /// Copies one generated media file path into the system clipboard.
+    /// 将某个生成媒体文件路径复制到系统剪贴板。
+    CopyGeneratedAttachmentPath(String),
+    /// Toggles host-side playback for one generated audio file.
+    /// 为某个生成音频文件切换宿主侧播放状态。
+    ToggleGeneratedAudioPlayback {
+        /// Human-readable file name used by status text and notices.
+        /// 用于状态文本与提示弹窗的人类可读文件名。
+        file_name: String,
+        /// Local absolute path of the generated audio file.
+        /// 生成音频文件的本地绝对路径。
+        local_path: String,
+    },
+    /// Copies one generated image file into the system clipboard as bitmap content.
+    /// 将某个生成图片文件以位图内容形式复制到系统剪贴板。
+    CopyGeneratedImageToClipboard {
+        /// Human-readable file name used by status text and notices.
+        /// 用于状态文本与提示弹窗的人类可读文件名。
+        file_name: String,
+        /// Local absolute path of the generated image file.
+        /// 生成图片文件的本地绝对路径。
+        local_path: String,
+    },
     /// Closes the currently visible image preview modal.
     /// 关闭当前可见的图片预览弹窗。
     CloseWorkbenchImagePreviewModal,
@@ -3366,6 +3751,12 @@ enum Message {
     /// Supported provider selected from the provider catalog picker.
     /// 从供应商目录选择框中选中了某个受支持供应商。
     ProviderCatalogSelected(ProviderChoice),
+    /// Selects one dedicated section inside the settings workspace.
+    /// 选中设置工作区中的某个独立分区。
+    SettingsSectionSelected(SettingsSection),
+    /// Toggles whether the AI capability subtree stays expanded in the left settings tree.
+    /// 切换左侧设置树中的 AI 能力子树是否保持展开。
+    ToggleAiCapabilitySettingsTree,
     /// One provider form field changed in the configuration page.
     /// 配置页面中的某个供应商表单字段发生变化。
     ProviderFieldChanged(ProviderFieldKey, String),
@@ -3390,44 +3781,119 @@ enum Message {
     /// Selects the global web-search routing mode.
     /// 选择全局网页搜索路由模式。
     WebSearchRoutingModeSelected(WebSearchRoutingMode),
-    /// Selects the third-party web-search dispatch mode.
-    /// 选择第三方网页搜索调度模式。
-    WebSearchDispatchModeSelected(WebSearchProviderDispatchMode),
-    /// Adds one external web-search provider to the configured fallback chain.
-    /// 向已配置回退链新增一个外部网页搜索供应商。
-    AddWebSearchProvider(WebSearchProviderKind),
-    /// Removes one external web-search provider from the configured fallback chain.
-    /// 从已配置回退链移除一个外部网页搜索供应商。
-    RemoveWebSearchProvider(String),
-    /// Moves one external web-search provider upward in priority.
-    /// 将一个外部网页搜索供应商向上移动以提高优先级。
-    MoveWebSearchProviderUp(String),
-    /// Moves one external web-search provider downward in priority.
-    /// 将一个外部网页搜索供应商向下移动以降低优先级。
-    MoveWebSearchProviderDown(String),
-    /// Toggles one external web-search provider entry.
-    /// 切换单个外部网页搜索供应商条目的启用状态。
-    WebSearchProviderEnabledToggled(String, bool),
-    /// Updates one external web-search provider display name.
-    /// 更新单个外部网页搜索供应商显示名称。
-    WebSearchProviderNameChanged(String, String),
-    /// Updates one external web-search provider API key.
-    /// 更新单个外部网页搜索供应商 API Key。
-    WebSearchProviderApiKeyChanged(String, String),
-    /// Updates one external web-search provider base URL.
-    /// 更新单个外部网页搜索供应商接口地址。
-    WebSearchProviderBaseUrlChanged(String, String),
-    /// Updates one external web-search provider model field.
-    /// 更新单个外部网页搜索供应商模型字段。
-    WebSearchProviderModelChanged(String, String),
-    /// Updates one external web-search provider region field.
-    /// 更新单个外部网页搜索供应商区域字段。
-    WebSearchProviderRegionChanged(String, String),
-    /// Updates one external web-search provider max-results field.
-    /// 更新单个外部网页搜索供应商最大结果数量字段。
-    WebSearchProviderMaxResultsChanged(String, String),
-    /// Persists API-native tool configuration.
-    /// 持久化 API 原生工具配置。
+    /// Removes one shared AI capability vendor instance.
+    /// 移除一条共享 AI 能力供应商实例。
+    RemoveAiCapabilityVendor(String),
+    /// Opens the vendor picker used by the supplier page before one new shared AI capability vendor is added.
+    /// 打开供应商页在新增共享 AI 能力供应商前使用的供应商选择器。
+    OpenAiCapabilityVendorPicker,
+    /// Closes the currently visible AI capability vendor picker without creating any vendor.
+    /// 关闭当前可见的 AI 能力供应商选择器，且不创建任何供应商。
+    CloseAiCapabilityVendorPicker,
+    /// Updates the live keyword filter shown inside the AI capability vendor picker.
+    /// 更新 AI 能力供应商选择器中展示的实时关键字过滤值。
+    AiCapabilityVendorPickerFilterChanged(String),
+    /// Chooses one vendor from the AI capability vendor picker and opens the dedicated vendor editor.
+    /// 从 AI 能力供应商选择器中选中一个供应商并打开独立供应商编辑器。
+    AiCapabilityVendorPickerVendorSelected(String),
+    /// Opens the dedicated editor for one already configured shared AI capability vendor.
+    /// 为一个已配置的共享 AI 能力供应商打开独立编辑器。
+    OpenAiCapabilityVendorEditor(String),
+    /// Closes the currently visible shared AI capability vendor editor without saving staged changes.
+    /// 关闭当前可见的共享 AI 能力供应商编辑器且不保存暂存改动。
+    CloseAiCapabilityVendorEditor,
+    /// Updates the staged API key value inside the currently visible shared AI capability vendor editor.
+    /// 更新当前可见共享 AI 能力供应商编辑器中的暂存 API Key 值。
+    AiCapabilityVendorEditorApiKeyChanged(String),
+    /// Updates the staged region value inside the currently visible shared AI capability vendor editor.
+    /// 更新当前可见共享 AI 能力供应商编辑器中的暂存区域值。
+    AiCapabilityVendorEditorRegionChanged(String),
+    /// Persists the staged shared AI capability vendor editor values back into the dedicated vendor list.
+    /// 将暂存的共享 AI 能力供应商编辑器内容持久化回独立供应商列表。
+    SaveAiCapabilityVendorEditor,
+    /// Opens the batch target-picker modal for one semantic AI capability page.
+    /// 为某个语义 AI 能力页打开批量目标选择弹窗。
+    OpenAiCapabilityTargetPicker(AiToolKind),
+    /// Closes the currently visible AI capability target-picker modal without saving staged changes.
+    /// 在不保存暂存改动的前提下关闭当前可见的 AI 能力目标选择弹窗。
+    CloseAiCapabilityTargetPicker,
+    /// Selects one vendor row inside the AI capability target-picker modal.
+    /// 在 AI 能力目标选择弹窗中选中某一条供应商行。
+    AiCapabilityTargetPickerVendorSelected(String),
+    /// Toggles one staged target checkbox inside the AI capability target-picker modal.
+    /// 在 AI 能力目标选择弹窗中切换某个暂存目标勾选框。
+    AiCapabilityTargetPickerTargetToggled {
+        /// Stable vendor identifier owning the staged target.
+        /// 拥有该暂存目标的稳定供应商标识。
+        vendor_id: String,
+        /// Stable target alias being toggled.
+        /// 当前切换的稳定目标别名。
+        target_alias: String,
+        /// Whether the staged target should stay selected.
+        /// 当前暂存目标是否应保持选中。
+        enabled: bool,
+    },
+    /// Updates the staged request model attached to one selected target inside the AI capability target-picker modal.
+    /// 更新 AI 能力目标选择弹窗中某个已选目标绑定的暂存请求模型。
+    AiCapabilityTargetPickerTargetModelChanged {
+        /// Stable vendor identifier owning the staged target.
+        /// 拥有该暂存目标的稳定供应商标识。
+        vendor_id: String,
+        /// Stable target alias whose model is being edited.
+        /// 当前正在编辑模型的稳定目标别名。
+        target_alias: String,
+        /// Updated staged provider request model identifier.
+        /// 更新后的暂存 Provider 请求模型标识。
+        model_id: String,
+    },
+    /// Persists the current staged capability target selections back into the shared vendor-centric AI capability configuration.
+    /// 将当前暂存的能力目标选择持久化回共享供应商中心 AI 能力配置。
+    SaveAiCapabilityTargetPicker,
+    /// Starts one drag interaction from an enabled AI capability target row handle.
+    /// 从某条已启用 AI 能力目标行的拖拽柄启动一次拖拽交互。
+    StartAiCapabilityRouteDrag {
+        /// Semantic capability owning the route row.
+        /// 拥有该路由行的语义能力。
+        capability_kind: AiToolKind,
+        /// Fully qualified `vendor/target` selector that may become the active drag source.
+        /// 可能升级为激活拖拽源的完整 `供应商/目标` 选择器。
+        target_selector: String,
+    },
+    /// Updates the drop-preview target while one AI capability route row is being dragged.
+    /// 在拖拽某条 AI 能力路由行期间更新插入目标预览。
+    AiCapabilityRouteDropPreviewMoved {
+        /// Semantic capability owning the route row under the cursor.
+        /// 当前光标所在路由行所属的语义能力。
+        capability_kind: AiToolKind,
+        /// Fully qualified `vendor/target` selector represented by the hovered row.
+        /// 当前悬停行代表的完整 `供应商/目标` 选择器。
+        target_selector: String,
+        /// Latest local pointer position inside the hovered row.
+        /// 当前悬停行内部最近一次局部鼠标位置。
+        position: iced::Point,
+    },
+    /// Updates the tail drop-preview state while dragging inside one AI capability route list.
+    /// 在单个 AI 能力路由列表内部拖拽时更新尾部落点预览状态。
+    AiCapabilityRouteTailHovered {
+        /// Semantic capability owning the tail drop zone.
+        /// 拥有该尾部落点的语义能力。
+        capability_kind: AiToolKind,
+        /// Whether the cursor is currently hovering the tail drop zone.
+        /// 当前鼠标是否正悬停在尾部落点之上。
+        is_hovered: bool,
+    },
+    /// Removes one enabled capability target from its semantic capability page.
+    /// 从其语义能力页中移除单条已启用能力目标。
+    RemoveAiCapabilityRouteTarget {
+        /// Semantic capability owning the route order.
+        /// 拥有该路由顺序的语义能力。
+        capability_kind: AiToolKind,
+        /// Fully qualified `vendor/target` selector to remove.
+        /// 需要移除的完整 `供应商/目标` 选择器。
+        target_selector: String,
+    },
+    /// Persists standalone AI capability configuration.
+    /// 持久化独立 AI 能力配置。
     SaveAiToolConfiguration,
     /// Selects one workbench-scoped web-search override option for direct sends and queued prompts.
     /// 为直接发送与排队提示词选择一个工作台作用域网页搜索覆盖选项。
@@ -4051,7 +4517,85 @@ impl VulcanWorkbench {
                 false
             }
         };
-        if runtime_defaults_changed || legacy_agent_migrated {
+        let (
+            ai_tool_configuration,
+            ai_tool_notice,
+            ai_tool_configuration_migrated,
+            ai_tool_configuration_normalized,
+        ) = match ai_tool_configuration::load_ai_tool_configuration_file(&provider_configuration) {
+            Ok(loaded) => match loaded.source {
+                AiToolConfigurationLoadSource::DedicatedFile => {
+                    let mut notice = String::from(
+                        "已从 `~/.vulcan/vulcan-ai-capabilities.json` 载入独立 AI 能力配置。",
+                    );
+                    if loaded.normalized {
+                        match ai_tool_configuration::save_ai_tool_configuration_file(
+                            &loaded.configuration,
+                        ) {
+                            Ok(()) => notice.push_str(" 已自动归一化旧版重复 AI 能力提供方配置。"),
+                            Err(error) => notice.push_str(&format!(
+                                " 但自动归一化旧版重复 AI 能力提供方配置时写回失败：{error}"
+                            )),
+                        }
+                    }
+                    (loaded.configuration, notice, false, loaded.normalized)
+                }
+                AiToolConfigurationLoadSource::LegacyProviderFile => {
+                    match ai_tool_configuration::save_ai_tool_configuration_file(
+                        &loaded.configuration,
+                    ) {
+                        Ok(()) => {
+                            provider_configuration.ai_tools =
+                                PersistedAiToolConfiguration::default();
+                            provider_notice
+                                .push_str(" 已将旧版内嵌 AI 能力配置迁移到独立配置文件。");
+                            (
+                                loaded.configuration,
+                                String::from(
+                                    "已将旧版供应商内嵌 AI 能力配置迁移到 `~/.vulcan/vulcan-ai-capabilities.json`。",
+                                ),
+                                true,
+                                loaded.normalized,
+                            )
+                        }
+                        Err(error) => (
+                            loaded.configuration,
+                            format!("独立 AI 能力配置迁移失败，当前仍使用旧版内嵌配置：{error}"),
+                            false,
+                            loaded.normalized,
+                        ),
+                    }
+                }
+                AiToolConfigurationLoadSource::Default => (
+                    loaded.configuration,
+                    String::from("尚未检测到独立 AI 能力配置，当前使用默认能力层设置。"),
+                    false,
+                    false,
+                ),
+            },
+            Err(error) => {
+                if provider_configuration.ai_tools.is_default() {
+                    (
+                        PersistedAiToolConfiguration::default(),
+                        format!("独立 AI 能力配置载入失败，当前回退到默认能力层设置：{error}"),
+                        false,
+                        false,
+                    )
+                } else {
+                    (
+                        provider_configuration.ai_tools.clone(),
+                        format!("独立 AI 能力配置载入失败，当前回退到旧版内嵌能力层配置：{error}"),
+                        false,
+                        false,
+                    )
+                }
+            }
+        };
+        if runtime_defaults_changed
+            || legacy_agent_migrated
+            || ai_tool_configuration_migrated
+            || ai_tool_configuration_normalized
+        {
             match provider_config::save_configuration_file(&provider_configuration) {
                 Ok(()) => {
                     if runtime_defaults_changed {
@@ -4060,6 +4604,14 @@ impl VulcanWorkbench {
                     }
                     if legacy_agent_migrated {
                         provider_notice.push_str(" 旧版 Provider Agent 字段已从主配置文件中清退。");
+                    }
+                    if ai_tool_configuration_migrated {
+                        provider_notice
+                            .push_str(" 旧版 Provider AI 能力字段已从主配置文件中清退。");
+                    }
+                    if ai_tool_configuration_normalized {
+                        provider_notice
+                            .push_str(" 独立 AI 能力配置中的重复提供方条目已被自动归一化。");
                     }
                 }
                 Err(error) => {
@@ -4158,6 +4710,7 @@ impl VulcanWorkbench {
             composer_attachments: Vec::new(),
             workbench_notice_modal: None,
             workbench_image_preview_modal: None,
+            generated_audio_playback: None,
             composer_drag_hover_labels: Vec::new(),
             composer_undo_history: Vec::new(),
             composer_scroll_offset: 0.0,
@@ -4190,6 +4743,9 @@ impl VulcanWorkbench {
             active_pending_prompt_drop_target: None,
             pending_pending_prompt_drag: None,
             dragging_pending_prompt_entry_id: None,
+            active_ai_capability_route_drop_target: None,
+            pending_ai_capability_route_drag: None,
+            dragging_ai_capability_route_target: None,
             selected_session: SessionId::nil(),
             activities,
             activity_raw_buffers,
@@ -4265,6 +4821,7 @@ impl VulcanWorkbench {
             luaskills_install_source: String::new(),
             luaskills_operation_in_flight: false,
             provider_configuration,
+            ai_tool_configuration,
             agent_profile_catalog,
             selected_user_agent_profile_id,
             agent_profile_form,
@@ -4275,12 +4832,15 @@ impl VulcanWorkbench {
             runtime_foundation,
             session_skill_chain: SessionDerivedSkillChain::default(),
             active_main_panel: MainDisplayPanel::Main,
+            selected_settings_section: SettingsSection::ModelProviders,
+            settings_ai_capability_tree_expanded: true,
+            ai_capability_vendor_picker: None,
+            ai_capability_vendor_editor: None,
+            ai_capability_target_picker: None,
             selected_provider,
             provider_form,
             provider_notice,
-            ai_tool_notice: String::from(
-                "API 原生工具配置已载入；当前已统一 web-search 的原生能力与第三方搜索链调度。",
-            ),
+            ai_tool_notice,
             mcp_notice: if selected_mcp_server_id.is_some() {
                 String::from("已载入 MCP 服务器配置。")
             } else {
@@ -5683,6 +6243,22 @@ impl VulcanWorkbench {
                                 ));
                         }
                     }
+                    if let Some(pending_route_drag) = self.pending_ai_capability_route_drag.as_ref()
+                    {
+                        if self.dragging_ai_capability_route_target.is_none()
+                            && ((position.x - pending_route_drag.origin.x).abs()
+                                >= WINDOW_TITLE_BAR_DRAG_THRESHOLD
+                                || (position.y - pending_route_drag.origin.y).abs()
+                                    >= WINDOW_TITLE_BAR_DRAG_THRESHOLD)
+                        {
+                            self.dragging_ai_capability_route_target =
+                                Some(pending_route_drag.target_selector.clone());
+                            self.active_ai_capability_route_drop_target =
+                                Some(AiCapabilityRouteDropTarget::Before(
+                                    pending_route_drag.target_selector.clone(),
+                                ));
+                        }
+                    }
                 }
                 Task::none()
             }
@@ -5743,6 +6319,30 @@ impl VulcanWorkbench {
                     self.dragging_pending_prompt_entry_id = None;
                     self.active_pending_prompt_drop_target = None;
 
+                    let committed_ai_capability_route_drop = self
+                        .pending_ai_capability_route_drag
+                        .as_ref()
+                        .map(|drag| drag.capability_kind)
+                        .zip(self.dragging_ai_capability_route_target.clone())
+                        .zip(self.active_ai_capability_route_drop_target.clone())
+                        .map(
+                            |((capability_kind, dragged_target_selector), drop_target)| {
+                                (capability_kind, dragged_target_selector, drop_target)
+                            },
+                        );
+                    self.pending_ai_capability_route_drag = None;
+                    if let Some((capability_kind, dragged_target_selector, drop_target)) =
+                        committed_ai_capability_route_drop
+                    {
+                        let _ = self.apply_ai_capability_route_drop_target(
+                            capability_kind,
+                            &dragged_target_selector,
+                            &drop_target,
+                        );
+                    }
+                    self.dragging_ai_capability_route_target = None;
+                    self.active_ai_capability_route_drop_target = None;
+
                     if let Some(project_id) = toggled_project_id {
                         self.toggle_task_project_expanded(&project_id);
                     }
@@ -5784,6 +6384,42 @@ impl VulcanWorkbench {
                 file_name,
                 local_path,
             } => self.open_composer_image_attachment_preview(file_name, local_path),
+            Message::OpenGeneratedAttachmentWithDefaultApp(local_path) => {
+                match open_path_with_system_default_application(&local_path) {
+                    Ok(()) => {
+                        self.status_message = String::from("已使用系统默认应用打开生成媒体。");
+                    }
+                    Err(error) => {
+                        self.show_workbench_notice_modal("无法打开生成媒体", error.clone());
+                        self.status_message = format!("打开生成媒体失败：{error}");
+                    }
+                }
+                Task::none()
+            }
+            Message::RevealGeneratedAttachmentInFolder(local_path) => {
+                match reveal_path_in_system_file_manager(&local_path) {
+                    Ok(()) => {
+                        self.status_message = String::from("已在文件管理器中定位生成媒体。");
+                    }
+                    Err(error) => {
+                        self.show_workbench_notice_modal("无法定位生成媒体", error.clone());
+                        self.status_message = format!("定位生成媒体失败：{error}");
+                    }
+                }
+                Task::none()
+            }
+            Message::CopyGeneratedAttachmentPath(local_path) => {
+                self.status_message = String::from("已复制生成媒体路径。");
+                clipboard::write(local_path).discard()
+            }
+            Message::ToggleGeneratedAudioPlayback {
+                file_name,
+                local_path,
+            } => self.toggle_generated_audio_playback(file_name, local_path),
+            Message::CopyGeneratedImageToClipboard {
+                file_name,
+                local_path,
+            } => self.copy_generated_image_to_clipboard(file_name, local_path),
             Message::CloseWorkbenchImagePreviewModal => {
                 self.workbench_image_preview_modal = None;
                 Task::none()
@@ -5818,6 +6454,15 @@ impl VulcanWorkbench {
                 if self.workbench_image_preview_modal.take().is_some() {
                     return Task::none();
                 }
+                if self.ai_capability_vendor_editor.take().is_some() {
+                    return Task::none();
+                }
+                if self.ai_capability_vendor_picker.take().is_some() {
+                    return Task::none();
+                }
+                if self.ai_capability_target_picker.take().is_some() {
+                    return Task::none();
+                }
                 if self.workbench_notice_modal.take().is_some() {
                     return Task::none();
                 }
@@ -5834,6 +6479,15 @@ impl VulcanWorkbench {
             Message::ConfirmTopLevelOverlay => {
                 if self.workbench_image_preview_modal.is_some() {
                     return Task::none();
+                }
+                if self.ai_capability_vendor_editor.is_some() {
+                    return self.save_ai_capability_vendor_editor();
+                }
+                if self.ai_capability_vendor_picker.is_some() {
+                    return Task::none();
+                }
+                if self.ai_capability_target_picker.is_some() {
+                    return self.apply_ai_capability_target_picker_selections();
                 }
                 if self.workbench_notice_modal.is_some() {
                     return self.confirm_workbench_notice_modal();
@@ -5988,6 +6642,19 @@ impl VulcanWorkbench {
                 self.editor_content.perform(action);
                 Task::none()
             }
+            Message::SettingsSectionSelected(section) => {
+                self.selected_settings_section = section;
+                if section.belongs_to_ai_capabilities() {
+                    self.settings_ai_capability_tree_expanded = true;
+                }
+                self.status_message = format!("当前设置分区已切换到“{}”。", section.title());
+                Task::none()
+            }
+            Message::ToggleAiCapabilitySettingsTree => {
+                self.settings_ai_capability_tree_expanded =
+                    !self.settings_ai_capability_tree_expanded;
+                Task::none()
+            }
             Message::ProviderCatalogSelected(provider) => {
                 self.selected_provider = provider;
                 self.reload_selected_provider_form();
@@ -6137,128 +6804,196 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WebSearchRoutingModeSelected(mode) => {
-                self.provider_configuration.ai_tools.web_search.mode = mode;
-                self.ai_tool_notice = format!(
-                    "web-search 路由已切换为「{}」，保存后会写入配置文件。",
+                self.ai_tool_configuration.web_search.mode = mode;
+                self.persist_ai_tool_configuration_change(format!(
+                    "web-search 路由已切换为「{}」并自动保存。",
                     mode.label()
-                );
-                self.status_message = self.ai_tool_notice.clone();
+                ));
                 Task::none()
             }
-            Message::WebSearchDispatchModeSelected(mode) => {
-                self.provider_configuration.ai_tools.web_search.dispatch_mode = mode;
-                self.ai_tool_notice = format!(
-                    "第三方搜索调度方式已切换为「{}」，保存后会写入配置文件。",
-                    mode.label()
-                );
-                self.status_message = self.ai_tool_notice.clone();
-                Task::none()
-            }
-            Message::AddWebSearchProvider(kind) => {
-                self.add_web_search_provider(kind);
-                self.ai_tool_notice = if kind.requires_api_key() {
-                    format!("已新增 `{}` 搜索供应商，请填写 API Key 后保存。", kind.label())
+            Message::RemoveAiCapabilityVendor(vendor_id) => {
+                if self.remove_ai_capability_vendor(&vendor_id) {
+                    self.persist_ai_tool_configuration_change(String::from(
+                        "已移除共享 AI 能力供应商并自动保存。",
+                    ));
                 } else {
-                    format!("已新增 `{}` 搜索供应商，请补充所需配置后保存。", kind.label())
+                    self.ai_tool_notice = String::from("未找到要移除的共享 AI 能力供应商。");
+                    self.status_message = self.ai_tool_notice.clone();
+                }
+                Task::none()
+            }
+            Message::OpenAiCapabilityVendorPicker => {
+                self.ai_capability_vendor_picker = Some(AiCapabilityVendorPickerState::default());
+                Task::none()
+            }
+            Message::CloseAiCapabilityVendorPicker => {
+                self.ai_capability_vendor_picker = None;
+                Task::none()
+            }
+            Message::AiCapabilityVendorPickerFilterChanged(value) => {
+                if let Some(state) = self.ai_capability_vendor_picker.as_mut() {
+                    state.filter = value;
+                }
+                Task::none()
+            }
+            Message::AiCapabilityVendorPickerVendorSelected(vendor_id) => {
+                self.ai_capability_vendor_picker = None;
+                self.open_ai_capability_vendor_editor(&vendor_id, true);
+                Task::none()
+            }
+            Message::OpenAiCapabilityVendorEditor(vendor_id) => {
+                self.open_ai_capability_vendor_editor(&vendor_id, false);
+                Task::none()
+            }
+            Message::CloseAiCapabilityVendorEditor => {
+                self.ai_capability_vendor_editor = None;
+                Task::none()
+            }
+            Message::AiCapabilityVendorEditorApiKeyChanged(value) => {
+                if let Some(editor) = self.ai_capability_vendor_editor.as_mut() {
+                    editor.api_key = value;
+                }
+                Task::none()
+            }
+            Message::AiCapabilityVendorEditorRegionChanged(value) => {
+                if let Some(editor) = self.ai_capability_vendor_editor.as_mut() {
+                    editor.region = value;
+                }
+                Task::none()
+            }
+            Message::SaveAiCapabilityVendorEditor => self.save_ai_capability_vendor_editor(),
+            Message::OpenAiCapabilityTargetPicker(capability_kind) => {
+                self.open_ai_capability_target_picker(capability_kind)
+            }
+            Message::CloseAiCapabilityTargetPicker => {
+                self.ai_capability_target_picker = None;
+                Task::none()
+            }
+            Message::AiCapabilityTargetPickerVendorSelected(vendor_id) => {
+                if let Some(picker) = self.ai_capability_target_picker.as_mut() {
+                    picker.selected_vendor_id = Some(vendor_id);
+                }
+                Task::none()
+            }
+            Message::AiCapabilityTargetPickerTargetToggled {
+                vendor_id,
+                target_alias,
+                enabled,
+            } => {
+                self.stage_ai_capability_target_picker_toggle(&vendor_id, &target_alias, enabled);
+                Task::none()
+            }
+            Message::AiCapabilityTargetPickerTargetModelChanged {
+                vendor_id,
+                target_alias,
+                model_id,
+            } => {
+                self.stage_ai_capability_target_picker_model(&vendor_id, &target_alias, model_id);
+                Task::none()
+            }
+            Message::SaveAiCapabilityTargetPicker => {
+                self.apply_ai_capability_target_picker_selections()
+            }
+            Message::StartAiCapabilityRouteDrag {
+                capability_kind,
+                target_selector,
+            } => {
+                if let Some(position) = self.main_window_cursor_position {
+                    self.pending_ai_capability_route_drag = Some(PendingAiCapabilityRouteDrag {
+                        capability_kind,
+                        target_selector,
+                        origin: position,
+                    });
+                }
+                Task::none()
+            }
+            Message::AiCapabilityRouteDropPreviewMoved {
+                capability_kind,
+                target_selector,
+                position,
+            } => {
+                let Some(dragged_target_selector) =
+                    self.dragging_ai_capability_route_target.as_ref()
+                else {
+                    return Task::none();
                 };
-                self.status_message = self.ai_tool_notice.clone();
-                Task::none()
-            }
-            Message::RemoveWebSearchProvider(provider_id) => {
-                if self.remove_web_search_provider(&provider_id) {
-                    self.ai_tool_notice = String::from("已移除搜索供应商，保存后生效。");
-                } else {
-                    self.ai_tool_notice = String::from("未找到要移除的搜索供应商。");
-                }
-                self.status_message = self.ai_tool_notice.clone();
-                Task::none()
-            }
-            Message::MoveWebSearchProviderUp(provider_id) => {
-                if self.move_web_search_provider(&provider_id, -1) {
-                    self.ai_tool_notice = String::from("已提高该搜索供应商优先级。");
-                }
-                Task::none()
-            }
-            Message::MoveWebSearchProviderDown(provider_id) => {
-                if self.move_web_search_provider(&provider_id, 1) {
-                    self.ai_tool_notice = String::from("已降低该搜索供应商优先级。");
-                }
-                Task::none()
-            }
-            Message::WebSearchProviderEnabledToggled(provider_id, enabled) => {
-                self.update_web_search_provider(&provider_id, |provider| {
-                    provider.enabled = enabled;
-                });
-                self.ai_tool_notice = if enabled {
-                    String::from("已启用该搜索供应商，保存后生效。")
-                } else {
-                    String::from("已禁用该搜索供应商，保存后生效。")
+                let Some(pending_drag) = self.pending_ai_capability_route_drag.as_ref() else {
+                    return Task::none();
                 };
-                Task::none()
-            }
-            Message::WebSearchProviderNameChanged(provider_id, value) => {
-                self.update_web_search_provider(&provider_id, |provider| {
-                    provider.name = value;
-                });
-                Task::none()
-            }
-            Message::WebSearchProviderApiKeyChanged(provider_id, value) => {
-                self.update_web_search_provider(&provider_id, |provider| {
-                    provider.api_key = value;
-                });
-                Task::none()
-            }
-            Message::WebSearchProviderBaseUrlChanged(provider_id, value) => {
-                self.update_web_search_provider(&provider_id, |provider| {
-                    provider.base_url = value;
-                });
-                Task::none()
-            }
-            Message::WebSearchProviderModelChanged(provider_id, value) => {
-                self.update_web_search_provider(&provider_id, |provider| {
-                    provider.model = value;
-                });
-                Task::none()
-            }
-            Message::WebSearchProviderRegionChanged(provider_id, value) => {
-                self.update_web_search_provider(&provider_id, |provider| {
-                    provider.region = value;
-                });
-                Task::none()
-            }
-            Message::WebSearchProviderMaxResultsChanged(provider_id, value) => {
-                match value.trim().parse::<usize>() {
-                    Ok(max_results) => {
-                        let limit = self
-                            .provider_configuration
-                            .ai_tools
-                            .web_search
-                            .providers
+                if pending_drag.capability_kind != capability_kind {
+                    return Task::none();
+                }
+                if dragged_target_selector == &target_selector {
+                    self.active_ai_capability_route_drop_target =
+                        Some(AiCapabilityRouteDropTarget::Before(target_selector));
+                    return Task::none();
+                }
+                let route_entries = self
+                    .ai_tool_configuration
+                    .resolved_route_targets_for_kind(capability_kind);
+                self.active_ai_capability_route_drop_target = Some(
+                    if position.y <= AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT / 2.0 {
+                        AiCapabilityRouteDropTarget::Before(target_selector)
+                    } else {
+                        let target_index = route_entries
                             .iter()
-                            .find(|provider| provider.id == provider_id)
-                            .map(|provider| provider.kind.max_results_limit())
-                            .unwrap_or(20);
-                        if (1..=limit).contains(&max_results) {
-                            self.update_web_search_provider(&provider_id, |provider| {
-                                provider.max_results = max_results;
-                            });
-                            self.ai_tool_notice =
-                                String::from("已更新搜索结果数量，保存后生效。");
+                            .position(|entry| entry.target_selector == target_selector)
+                            .unwrap_or(route_entries.len());
+                        let next_target_selector = route_entries
+                            .get(target_index.saturating_add(1))
+                            .map(|entry| entry.target_selector.clone());
+                        if let Some(next_target_selector) = next_target_selector {
+                            if next_target_selector == *dragged_target_selector {
+                                AiCapabilityRouteDropTarget::Before(target_selector)
+                            } else {
+                                AiCapabilityRouteDropTarget::Before(next_target_selector)
+                            }
                         } else {
-                            self.ai_tool_notice =
-                                format!("搜索结果数量必须是 1 到 {limit} 的整数。");
+                            AiCapabilityRouteDropTarget::End
                         }
+                    },
+                );
+                Task::none()
+            }
+            Message::AiCapabilityRouteTailHovered {
+                capability_kind,
+                is_hovered,
+            } => {
+                if !is_hovered {
+                    if self.dragging_ai_capability_route_target.is_none() {
+                        self.active_ai_capability_route_drop_target = None;
                     }
-                    Err(_) => {
-                        self.ai_tool_notice = String::from("搜索结果数量必须是有效整数。");
-                    }
+                    return Task::none();
+                }
+                if self.dragging_ai_capability_route_target.is_some()
+                    && self
+                        .pending_ai_capability_route_drag
+                        .as_ref()
+                        .is_some_and(|drag| drag.capability_kind == capability_kind)
+                {
+                    self.active_ai_capability_route_drop_target =
+                        Some(AiCapabilityRouteDropTarget::End);
+                }
+                Task::none()
+            }
+            Message::RemoveAiCapabilityRouteTarget {
+                capability_kind,
+                target_selector,
+            } => {
+                if self.remove_ai_capability_route_target(capability_kind, &target_selector) {
+                    self.persist_ai_tool_configuration_change(format!(
+                        "已从“{}”中移除 `{}` 并自动保存。",
+                        capability_kind.label(),
+                        target_selector
+                    ));
                 }
                 Task::none()
             }
             Message::SaveAiToolConfiguration => {
                 match self.save_ai_tool_configuration() {
                     Ok(()) => {
-                        self.ai_tool_notice = String::from("API 原生工具配置已保存并刷新运行时。");
+                        self.ai_tool_notice =
+                            String::from("独立 AI 能力配置已重新写入并刷新运行时。");
                         self.status_message = self.ai_tool_notice.clone();
                     }
                     Err(error) => {
@@ -6271,10 +7006,8 @@ impl VulcanWorkbench {
             Message::WorkbenchWebSearchSelected(choice) => {
                 self.workbench_web_search_override = choice.override_mode;
                 self.workbench_web_search_provider_id = choice.provider_id.clone();
-                self.status_message = format!(
-                    "当前发送链路的搜索方式已切换为 `{}`。",
-                    choice.label
-                );
+                self.status_message =
+                    format!("当前发送链路的搜索方式已切换为 `{}`。", choice.label);
                 Task::none()
             }
             Message::WorkbenchModelSelected(choice) => self.request_workbench_model_choice(choice),
@@ -7082,8 +7815,6 @@ impl VulcanWorkbench {
                 self.clear_pending_prompt_drag_state();
                 self.sync_workspace_path_with_selected_session();
                 self.clear_transcript_drag_auto_scrolls();
-                self.active_thinking_modal = None;
-                self.active_tool_modal = None;
                 self.active_subagent_panel = None;
                 self.rebuild_subagent_task_cache_for_session(session_id);
                 self.refresh_session_agent_view_buffers(session_id);
@@ -8982,6 +9713,32 @@ impl VulcanWorkbench {
         did_move
     }
 
+    /// Applies one drag-drop target to reorder the enabled route list of the provided semantic AI capability.
+    /// 将一次拖拽落点应用到给定语义 AI 能力的已启用路由列表，以完成重排。
+    fn apply_ai_capability_route_drop_target(
+        &mut self,
+        capability_kind: AiToolKind,
+        dragged_target_selector: &str,
+        drop_target: &AiCapabilityRouteDropTarget,
+    ) -> bool {
+        let before_target = match drop_target {
+            AiCapabilityRouteDropTarget::Before(target_selector) => Some(target_selector.as_str()),
+            AiCapabilityRouteDropTarget::End => None,
+        };
+        let did_move = self.ai_tool_configuration.reorder_target_for_kind(
+            capability_kind,
+            dragged_target_selector,
+            before_target,
+        );
+        if did_move {
+            self.persist_ai_tool_configuration_change(format!(
+                "已更新“{}”的目标顺序并自动保存。",
+                capability_kind.label()
+            ));
+        }
+        did_move
+    }
+
     /// Clears all transient drag state retained for the pending-prompt queue overlay.
     /// 清除为待发送队列覆盖层保留的全部瞬时拖拽状态。
     fn clear_pending_prompt_drag_state(&mut self) {
@@ -9148,10 +9905,7 @@ impl VulcanWorkbench {
         let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(&active_choice);
         let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-        apply_ai_tool_runtime_configuration(
-            &mut capabilities,
-            &self.provider_configuration.ai_tools,
-        );
+        apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
         Some(capabilities)
     }
 
@@ -9161,7 +9915,7 @@ impl VulcanWorkbench {
         let Some(capabilities) = self.active_workbench_model_capabilities_snapshot() else {
             return false;
         };
-        capabilities.supports_attachment_kind(kind)
+        capabilities.allows_staged_attachment_kind(kind)
     }
 
     /// Returns whether the currently active workbench model should expose the generic attachment picker.
@@ -9272,6 +10026,109 @@ impl VulcanWorkbench {
             scroll_offset: scrollable::AbsoluteOffset::default(),
         });
         Task::none()
+    }
+
+    /// Toggles host-side playback for one generated audio file while ensuring at most one generated clip plays at a time.
+    /// 为某个生成音频文件切换宿主侧播放状态，并确保任意时刻最多只播放一条生成音频。
+    fn toggle_generated_audio_playback(
+        &mut self,
+        file_name: String,
+        local_path: String,
+    ) -> Task<Message> {
+        if let Some(playback) = self.generated_audio_playback.as_ref() {
+            if playback.local_path == local_path && !playback.sink.empty() {
+                self.stop_generated_audio_playback();
+                self.status_message = format!("已停止播放 `{file_name}`。");
+                if let Some(session_id) = self.selected_session().map(|session| session.id) {
+                    self.refresh_session_agent_view_buffers(session_id);
+                }
+                return Task::none();
+            }
+        }
+
+        if !Path::new(&local_path).is_file() {
+            let notice = format!("音频文件 `{file_name}` 的本地缓存已不存在，无法播放。");
+            self.show_workbench_notice_modal("音频无法播放", notice.clone());
+            self.status_message = notice;
+            return Task::none();
+        }
+
+        self.stop_generated_audio_playback();
+        match Self::build_generated_audio_playback_state(&local_path) {
+            Ok(playback) => {
+                self.generated_audio_playback = Some(playback);
+                self.status_message = format!("正在播放 `{file_name}`。");
+            }
+            Err(error) => {
+                self.show_workbench_notice_modal("音频无法播放", error.clone());
+                self.status_message = format!("播放音频失败：{error}");
+            }
+        }
+        if let Some(session_id) = self.selected_session().map(|session| session.id) {
+            self.refresh_session_agent_view_buffers(session_id);
+        }
+        Task::none()
+    }
+
+    /// Copies one generated image into the system clipboard as bitmap data after validating the managed file still exists.
+    /// 在确认受管文件仍然存在后，将某个生成图片以位图数据形式复制到系统剪贴板。
+    fn copy_generated_image_to_clipboard(
+        &mut self,
+        file_name: String,
+        local_path: String,
+    ) -> Task<Message> {
+        if !Path::new(&local_path).is_file() {
+            let notice = format!("图片文件 `{file_name}` 的本地缓存已不存在，无法复制。");
+            self.show_workbench_notice_modal("图片无法复制", notice.clone());
+            self.status_message = notice;
+            return Task::none();
+        }
+
+        match copy_image_file_to_system_clipboard(&local_path) {
+            Ok(()) => {
+                self.status_message = format!("已复制图片 `{file_name}`。");
+            }
+            Err(error) => {
+                self.show_workbench_notice_modal("图片无法复制", error.clone());
+                self.status_message = format!("复制图片失败：{error}");
+            }
+        }
+        Task::none()
+    }
+
+    /// Stops the active generated-audio playback sink, if any, and clears the retained playback state.
+    /// 停止当前激活的生成音频播放 sink（如果存在），并清空保留的播放状态。
+    fn stop_generated_audio_playback(&mut self) {
+        if let Some(playback) = self.generated_audio_playback.take() {
+            playback.sink.stop();
+        }
+        if let Some(session_id) = self.selected_session().map(|session| session.id) {
+            self.refresh_session_agent_view_buffers(session_id);
+        }
+    }
+
+    /// Builds one host-side generated-audio playback state by opening, decoding, and enqueueing the target audio file.
+    /// 通过打开、解码并入队目标音频文件来构建一份宿主侧生成音频播放状态。
+    fn build_generated_audio_playback_state(
+        local_path: &str,
+    ) -> Result<GeneratedAudioPlaybackState, String> {
+        let file = fs::File::open(local_path)
+            .map_err(|error| format!("无法打开音频文件 `{local_path}`：{error}"))?;
+        let reader = BufReader::new(file);
+        let source = Decoder::new(reader)
+            .map_err(|error| format!("无法解码音频文件 `{local_path}`：{error}"))?;
+        let (stream, stream_handle) = OutputStream::try_default()
+            .map_err(|error| format!("无法初始化音频输出设备：{error}"))?;
+        let sink = Sink::try_new(&stream_handle)
+            .map_err(|error| format!("无法创建音频播放通道：{error}"))?;
+        sink.append(source);
+        sink.play();
+
+        Ok(GeneratedAudioPlaybackState {
+            local_path: local_path.to_string(),
+            _stream: stream,
+            sink,
+        })
     }
 
     /// Computes the modal card size used by the current image preview overlay from the live main-window size.
@@ -9934,7 +10791,7 @@ impl VulcanWorkbench {
             });
         if let Some(capabilities) = capabilities {
             for attachment in &prompt_entry.attachments {
-                if !capabilities.supports_attachment_kind(attachment.kind.clone()) {
+                if !capabilities.allows_staged_attachment_kind(attachment.kind.clone()) {
                     let model_label = prompt_entry
                         .model_reference
                         .as_ref()
@@ -12360,10 +13217,7 @@ impl VulcanWorkbench {
         message_id: &str,
         body: &str,
     ) {
-        let should_mirror = matches!(
-            record_kind,
-            SessionMessageRecordKind::ExploreOutput | SessionMessageRecordKind::SummaryOutput
-        );
+        let should_mirror = matches!(record_kind, SessionMessageRecordKind::ExploreOutput);
         if !should_mirror {
             return;
         }
@@ -12534,10 +13388,7 @@ impl VulcanWorkbench {
                     .into_iter()
                     .find(|entry| entry.id == model_id);
             let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-            apply_ai_tool_runtime_configuration(
-                &mut capabilities,
-                &self.provider_configuration.ai_tools,
-            );
+            apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
             (
                 provider_id.to_string(),
                 model_id.to_string(),
@@ -12549,10 +13400,7 @@ impl VulcanWorkbench {
             let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
             let model = self.resolve_workbench_model_entry(&active_choice);
             let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-            apply_ai_tool_runtime_configuration(
-                &mut capabilities,
-                &self.provider_configuration.ai_tools,
-            );
+            apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
             (
                 active_choice.provider_id.clone(),
                 active_choice.model_id.clone(),
@@ -14271,6 +15119,19 @@ impl VulcanWorkbench {
             .attributes
             .insert(String::from("ui-block-id"), block_id.to_string());
 
+        if let Some(local_path) = directive
+            .attributes
+            .get("generated-media-local-path")
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            directive.attributes.insert(
+                String::from("ui-generated-media-playing"),
+                self.is_generated_audio_playing_local_path(local_path)
+                    .to_string(),
+            );
+        }
+
         if directive.kind == vulcan_agent_view::AgentViewDirectiveKind::Thinking {
             directive
                 .attributes
@@ -14345,6 +15206,14 @@ impl VulcanWorkbench {
             })?;
 
         Some(finished_at.saturating_sub(started_at))
+    }
+
+    /// Returns whether the provided generated-media local path currently matches the active inline audio playback entry.
+    /// 返回给定生成媒体本地路径当前是否匹配活动中的内联音频播放条目。
+    fn is_generated_audio_playing_local_path(&self, local_path: &str) -> bool {
+        self.generated_audio_playback
+            .as_ref()
+            .is_some_and(|playback| playback.local_path == local_path && !playback.sink.empty())
     }
 
     /// Returns the selectable transcript projection for the currently selected session when it is already cached.
@@ -14568,6 +15437,7 @@ impl VulcanWorkbench {
             title,
             String::from("点击会话内思考标题可再次打开这里查看完整内容。"),
             document,
+            Vec::new(),
         ))
     }
 
@@ -14578,6 +15448,11 @@ impl VulcanWorkbench {
         session_id: SessionId,
         block_id: &str,
     ) -> Option<ModalSurfacePayload> {
+        let generated_attachments = self
+            .resolve_rendered_tool_message_entry(session_id, block_id)
+            .and_then(|message| message.metadata.as_ref())
+            .map(generated_attachments_from_tool_metadata)
+            .unwrap_or_default();
         if let Some(message) = self.resolve_rendered_tool_message_entry(session_id, block_id)
             && tool_display_message_is_task_session(message)
             && let Some(metadata) = message.metadata.as_ref()
@@ -14597,6 +15472,7 @@ impl VulcanWorkbench {
                     "当前子代理实时会话已不可恢复，这里展示最后一次持久化的 Markdown 返回摘要。",
                 ),
                 parse_agent_view_document(&markdown_body),
+                generated_attachments,
             ));
         }
 
@@ -14605,8 +15481,9 @@ impl VulcanWorkbench {
 
         Some(self.build_modal_surface_payload(
             title,
-            String::from("这里会显示完整的工具调用参数与返回结果。"),
+            String::from("这里会显示完整的工具调用参数、返回结果与宿主生成媒体。"),
             document,
+            generated_attachments,
         ))
     }
 
@@ -14617,10 +15494,12 @@ impl VulcanWorkbench {
         title: String,
         helper_text: String,
         document: vulcan_agent_view::AgentViewDocument,
+        generated_attachments: Vec<ConversationAttachment>,
     ) -> ModalSurfacePayload {
         ModalSurfacePayload {
             title,
             helper_text,
+            generated_attachments,
             document_signature: self.hash_agent_view_document(&document),
             document,
         }
@@ -14788,6 +15667,227 @@ impl VulcanWorkbench {
             }
         }
     }
+
+    /// Opens the batch target-picker modal for one semantic AI capability by preloading the current enabled selections from configured vendors.
+    /// 通过从已配置供应商中预载当前启用选择，打开某个语义 AI 能力的批量目标选择弹窗。
+    fn open_ai_capability_target_picker(&mut self, capability_kind: AiToolKind) -> Task<Message> {
+        let vendor_ids = self
+            .ai_tool_configuration
+            .vendors
+            .iter()
+            .filter(|vendor| {
+                provider_config::ai_capability_vendor_target_choices(&vendor.vendor_id)
+                    .into_iter()
+                    .any(|choice| choice.capability_kind == capability_kind)
+            })
+            .map(|vendor| vendor.vendor_id.clone())
+            .collect::<Vec<_>>();
+        if vendor_ids.is_empty() {
+            self.ai_tool_notice = format!(
+                "当前还没有可用于“{}”的共享供应商，请先到“供应商配置”页新增并填写凭据。",
+                capability_kind.label()
+            );
+            self.status_message = self.ai_tool_notice.clone();
+            self.selected_settings_section = SettingsSection::AiCapabilityVendors;
+            self.settings_ai_capability_tree_expanded = true;
+            return Task::none();
+        }
+
+        let mut selections = BTreeMap::new();
+        for vendor_id in &vendor_ids {
+            let Some(vendor) = self.ai_tool_configuration.vendor_by_id(vendor_id) else {
+                continue;
+            };
+            let selected_targets = vendor
+                .targets
+                .iter()
+                .filter(|binding| binding.enabled && binding.capability_kind == capability_kind)
+                .map(|binding| {
+                    (
+                        binding.target_alias().to_string(),
+                        binding.model_id().to_string(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            selections.insert(vendor_id.clone(), selected_targets);
+        }
+
+        self.ai_capability_target_picker = Some(AiCapabilityTargetPickerState {
+            capability_kind,
+            selected_vendor_id: vendor_ids.first().cloned(),
+            selections,
+        });
+        Task::none()
+    }
+
+    /// Updates one staged target checkbox inside the currently visible AI capability picker without mutating persisted configuration yet.
+    /// 在当前可见 AI 能力选择器中更新某个暂存目标勾选状态，但暂不修改持久化配置。
+    fn stage_ai_capability_target_picker_toggle(
+        &mut self,
+        vendor_id: &str,
+        target_alias: &str,
+        enabled: bool,
+    ) {
+        let Some(picker) = self.ai_capability_target_picker.as_mut() else {
+            return;
+        };
+        let choices = provider_config::ai_capability_vendor_target_choices(vendor_id);
+        let Some(choice) = choices.into_iter().find(|choice| {
+            choice.capability_kind == picker.capability_kind
+                && choice.target_alias.eq_ignore_ascii_case(target_alias)
+        }) else {
+            return;
+        };
+        let vendor_entry = picker
+            .selections
+            .entry(vendor_id.to_ascii_lowercase())
+            .or_default();
+        if enabled {
+            vendor_entry
+                .entry(choice.target_alias.clone())
+                .or_insert(choice.default_model_id);
+        } else {
+            vendor_entry.remove(choice.target_alias.as_str());
+        }
+    }
+
+    /// Updates one staged request model inside the currently visible AI capability picker.
+    /// 更新当前可见 AI 能力选择器中的某个暂存请求模型。
+    fn stage_ai_capability_target_picker_model(
+        &mut self,
+        vendor_id: &str,
+        target_alias: &str,
+        model_id: String,
+    ) {
+        let Some(picker) = self.ai_capability_target_picker.as_mut() else {
+            return;
+        };
+        let vendor_entry = picker
+            .selections
+            .entry(vendor_id.to_ascii_lowercase())
+            .or_default();
+        if let Some(current) = vendor_entry.get_mut(target_alias) {
+            *current = model_id;
+        }
+    }
+
+    /// Applies the staged target selections from the picker modal back into the shared vendor-centric AI capability configuration.
+    /// 将选择器弹窗中的暂存目标选择应用回共享供应商中心 AI 能力配置。
+    fn apply_ai_capability_target_picker_selections(&mut self) -> Task<Message> {
+        let Some(picker) = self.ai_capability_target_picker.take() else {
+            return Task::none();
+        };
+
+        let vendor_ids = self
+            .ai_tool_configuration
+            .vendors
+            .iter()
+            .filter(|vendor| {
+                provider_config::ai_capability_vendor_target_choices(&vendor.vendor_id)
+                    .into_iter()
+                    .any(|choice| choice.capability_kind == picker.capability_kind)
+            })
+            .map(|vendor| vendor.vendor_id.clone())
+            .collect::<Vec<_>>();
+
+        for vendor_id in vendor_ids {
+            let selected_targets = picker
+                .selections
+                .get(&vendor_id)
+                .map(|targets| {
+                    targets
+                        .iter()
+                        .map(|(target_alias, model_id)| (target_alias.clone(), model_id.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            self.replace_ai_capability_vendor_targets_for_kind(
+                &vendor_id,
+                picker.capability_kind,
+                selected_targets,
+            );
+        }
+
+        self.persist_ai_tool_configuration_change(format!(
+            "已更新“{}”的启用目标并自动保存。",
+            picker.capability_kind.label()
+        ));
+        Task::none()
+    }
+
+    /// Opens the shared AI capability vendor editor either for one brand-new vendor or for one already configured vendor instance.
+    /// 为全新供应商或已有供应商实例打开共享 AI 能力供应商编辑器。
+    fn open_ai_capability_vendor_editor(&mut self, vendor_id: &str, is_new: bool) {
+        let normalized_vendor_id = vendor_id.trim().to_ascii_lowercase();
+        let existing_vendor = self
+            .ai_tool_configuration
+            .vendor_by_id(&normalized_vendor_id);
+        let display_name =
+            provider_config::ai_capability_vendor_display_name(&normalized_vendor_id);
+        let region_options =
+            crate::ai_capability_provider_catalog::ai_capability_vendor_region_options(
+                &normalized_vendor_id,
+            );
+        let region = existing_vendor
+            .map(|vendor| vendor.region.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| region_options.first().cloned())
+            .unwrap_or_default();
+        self.ai_capability_vendor_editor = Some(AiCapabilityVendorEditorState {
+            vendor_id: normalized_vendor_id,
+            display_name,
+            api_key: existing_vendor
+                .map(|vendor| vendor.api_key.clone())
+                .unwrap_or_default(),
+            region,
+            region_options,
+            is_new,
+        });
+    }
+
+    /// Persists the staged shared AI capability vendor editor back into the vendor list, creating the vendor first when needed.
+    /// 将暂存的共享 AI 能力供应商编辑器内容持久化回供应商列表，并在需要时先创建该供应商。
+    fn save_ai_capability_vendor_editor(&mut self) -> Task<Message> {
+        let Some(editor) = self.ai_capability_vendor_editor.take() else {
+            return Task::none();
+        };
+        if editor.is_new && !self.add_ai_capability_vendor(&editor.vendor_id) {
+            self.ai_tool_notice = format!("共享 AI 能力供应商 `{}` 已存在。", editor.display_name);
+            self.status_message = self.ai_tool_notice.clone();
+            return Task::none();
+        }
+        let vendor_id = editor.vendor_id.clone();
+        let display_name = editor.display_name.clone();
+        self.update_ai_capability_vendor(&vendor_id, |vendor| {
+            vendor.name = provider_config::ai_capability_vendor_display_name(&vendor_id);
+            vendor.enabled = true;
+            vendor.api_key = editor.api_key.trim().to_string();
+            vendor.base_url.clear();
+            vendor.region = editor.region.trim().to_string();
+        });
+        let success_notice = if editor.is_new {
+            format!("已新增共享 AI 能力供应商 `{display_name}` 并自动保存。")
+        } else {
+            format!("已更新共享 AI 能力供应商 `{display_name}` 并自动保存。")
+        };
+        self.persist_ai_tool_configuration_change(success_notice);
+        Task::none()
+    }
+
+    /// Persists the current standalone AI capability configuration immediately after one successful in-memory mutation and updates the shared status notices.
+    /// 在一次成功的内存配置变更之后立即持久化当前独立 AI 能力配置，并更新共享状态提示。
+    fn persist_ai_tool_configuration_change(&mut self, success_notice: String) {
+        match self.save_ai_tool_configuration() {
+            Ok(()) => {
+                self.ai_tool_notice = success_notice;
+                self.status_message = self.ai_tool_notice.clone();
+            }
+            Err(error) => {
+                self.ai_tool_notice = error.clone();
+                self.status_message = error;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -14795,7 +15895,8 @@ mod tests {
     use super::{
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
         composer_text_has_submittable_content, composer_visible_line_count,
-        merge_tool_display_messages, pending_prompt_dispatch_index,
+        generated_attachments_from_tool_metadata, merge_tool_display_messages,
+        pending_prompt_dispatch_index,
         prune_session_messages_to_limit, task_session_payload_from_tool_metadata,
     };
     use crate::model::{
@@ -14805,6 +15906,7 @@ mod tests {
     };
     use iced::widget::text_editor;
     use serde_json::{Value, json};
+    use vulcan_core::types::ConversationAttachmentKind;
 
     /// Builds a compact session summary for queue-related unit tests.
     /// 为队列相关单元测试构建一条紧凑会话摘要。
@@ -15150,6 +16252,32 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("completed")
         );
+    }
+
+    /// Verifies generated attachments can be recovered from flattened runtime-event metadata so inline media cards and tool modals work immediately after one successful capability call.
+    /// 验证可以从扁平化运行时事件元数据中恢复生成附件，从而让内联媒体卡片与工具弹层在能力调用成功后立即生效。
+    #[test]
+    fn generated_attachments_are_parsed_from_flattened_runtime_metadata() {
+        let attachments = generated_attachments_from_tool_metadata(&json!({
+            "tool_call_id": "call-media-1",
+            "tool_result_id": "tool-result-call-media-1",
+            "kind": "generated_attachments",
+            "payload": {
+                "outputs": [{
+                    "kind": "audio",
+                    "file_name": "demo.mp3",
+                    "local_path": "D:/demo.mp3",
+                    "mime_type": "audio/mpeg",
+                    "asset_id": "asset-1",
+                    "byte_len": 2048,
+                }],
+            },
+        }));
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, ConversationAttachmentKind::Audio);
+        assert_eq!(attachments[0].file_name, "demo.mp3");
+        assert_eq!(attachments[0].local_path, "D:/demo.mp3");
     }
 
     #[test]

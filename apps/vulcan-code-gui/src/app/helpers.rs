@@ -2,6 +2,7 @@
 //! 从主应用模块中抽取的共享辅助函数。
 
 use super::*;
+use std::borrow::Cow;
 use std::process::Command;
 
 /// Represents one best-effort clipboard payload routed into the composer smart-paste pipeline.
@@ -121,6 +122,12 @@ pub(super) fn compact_relative_label(value: &str) -> String {
 /// 为单个会话转录表面在全部展示模式下构建稳定滚动容器标识。
 pub(super) fn transcript_scrollable_id(session_id: SessionId) -> iced::widget::Id {
     iced::widget::Id::from(format!("session-{session_id}-agent-transcript-scrollable"))
+}
+
+/// Builds the stable scrollable identifier used by one centered tool modal.
+/// 为单个居中工具弹层构建稳定滚动容器标识。
+pub(super) fn tool_modal_scrollable_id(session_id: SessionId) -> iced::widget::Id {
+    iced::widget::Id::from(format!("session-{session_id}-tool-modal-scrollable"))
 }
 
 /// Returns whether one transcript viewport should still be treated as pinned to the newest tail content.
@@ -860,7 +867,10 @@ mod tests {
     //! MCP OAuth helper regression tests covering scope parsing.
     //! 覆盖 scope 解析的 MCP OAuth 辅助回归测试。
 
-    use super::parse_mcp_server_oauth_scopes;
+    use super::{
+        parse_mcp_server_oauth_scopes, tool_modal_scrollable_id, transcript_scrollable_id,
+    };
+    use crate::model::SessionId;
 
     /// Parses mixed-delimiter OAuth scopes into a stable ordered scope list.
     /// 将混合分隔符的 OAuth scopes 解析为稳定有序的 scope 列表。
@@ -873,6 +883,18 @@ mod tests {
                 String::from("write"),
                 String::from("offline_access")
             ]
+        );
+    }
+
+    /// Verifies the dedicated tool modal never reuses the transcript scrollable identifier.
+    /// 验证独立工具弹层绝不会复用主转录滚动容器标识。
+    #[test]
+    fn tool_modal_scrollable_id_differs_from_transcript_surface() {
+        let session_id = SessionId::default();
+
+        assert_ne!(
+            tool_modal_scrollable_id(session_id),
+            transcript_scrollable_id(session_id)
         );
     }
 }
@@ -907,6 +929,106 @@ pub(super) fn open_path_in_system_file_manager(path: &str) -> Result<(), String>
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// Opens one filesystem path with the host operating system default application.
+/// 使用宿主操作系统的默认应用打开某个文件系统路径。
+pub(super) fn open_path_with_system_default_application(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", path]);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Reveals one filesystem item in the host operating system file manager and selects the file when the platform supports it.
+/// 在宿主操作系统文件管理器中定位某个文件系统条目，并在平台支持时选中该文件。
+pub(super) fn reveal_path_in_system_file_manager(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.args(["/select,", path]);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.args(["-R", path]);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        let target = std::path::Path::new(path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(path));
+        command.arg(target);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Copies one local raster image file into the system clipboard as real RGBA pixel data.
+/// 将一个本地光栅图片文件作为真实 RGBA 像素数据复制到系统剪贴板。
+pub(super) fn copy_image_file_to_system_clipboard(path: &str) -> Result<(), String> {
+    let image_reader =
+        image::ImageReader::open(path).map_err(|error| format!("打开图片文件失败：{error}"))?;
+    let decoded_image = image_reader
+        .decode()
+        .map_err(|error| format!("解码图片内容失败：{error}"))?;
+    let rgba_image = decoded_image.to_rgba8();
+    let (width, height) = rgba_image.dimensions();
+    let pixels = rgba_image.into_raw();
+
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| format!("初始化系统剪贴板失败：{error}"))?;
+    clipboard
+        .set_image(arboard::ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(pixels),
+        })
+        .map_err(|error| format!("写入系统剪贴板图片失败：{error}"))
+}
+
+/// Returns the intrinsic width-height ratio of one managed local raster image file when the file still exists and its header can be decoded.
+/// 当受管本地图像文件仍然存在且其头信息可被解码时，返回该图像的原始宽高比。
+pub(super) fn local_raster_image_aspect_ratio(path: &str) -> Option<f32> {
+    let resolved_path = Path::new(path);
+    if !resolved_path.is_file() {
+        return None;
+    }
+    let (width, height) = image::image_dimensions(resolved_path).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(width as f32 / height as f32)
 }
 
 /// Returns the native settings used when opening the main workbench window.

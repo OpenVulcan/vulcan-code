@@ -3,9 +3,13 @@
 
 use super::helpers::*;
 use super::*;
+use crate::ai_tool_configuration;
 use crate::context_budget::{ContextCompactionPolicy, build_context_budget_fingerprint};
 use crate::provider_capabilities::{
     ResolvedModelCapabilities, apply_ai_tool_runtime_configuration, resolve_model_capabilities,
+};
+use crate::provider_config::{
+    AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
 };
 
 impl VulcanWorkbench {
@@ -285,11 +289,30 @@ impl VulcanWorkbench {
         let definition = provider_config::supported_provider_by_id(&choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(choice);
         let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-        apply_ai_tool_runtime_configuration(
-            &mut capabilities,
-            &self.provider_configuration.ai_tools,
-        );
+        apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
         Some(capabilities)
+    }
+
+    /// Resolves the provider-declared base capability snapshot for the currently active workbench model without applying user routing overrides.
+    /// 在不应用用户路由覆盖的前提下解析当前激活工作台模型的供应商声明基础能力快照。
+    fn active_workbench_base_model_capabilities(&self) -> Option<ResolvedModelCapabilities> {
+        let active_choice = self.active_workbench_model_choice()?;
+        let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
+        let model = self.resolve_workbench_model_entry(&active_choice);
+        Some(resolve_model_capabilities(definition, model.as_ref()))
+    }
+
+    /// Returns whether the currently active workbench model declares one native web-search capability regardless of the current user routing preference.
+    /// 返回当前激活工作台模型是否声明了原生网页搜索能力，并且不受当前用户路由偏好的影响。
+    fn active_workbench_has_native_web_search(&self) -> bool {
+        self.active_workbench_base_model_capabilities()
+            .is_some_and(|capabilities| {
+                capabilities.ai_tools.iter().any(|tool| {
+                    tool.kind == crate::provider_config::AiToolKind::WebSearch
+                        && tool.native_provider_tool
+                        && tool.policy != crate::provider_config::AiToolPolicy::Disabled
+                })
+            })
     }
 
     /// Reconciles the visible temperature controls against the currently active workbench model capability set.
@@ -493,48 +516,79 @@ impl VulcanWorkbench {
     /// Returns the full list of workbench-scoped web-search override choices shown beside the composer.
     /// 返回显示在提示词编辑器旁侧的完整工作台网页搜索覆盖选项列表。
     pub(super) fn configured_workbench_web_search_choices(&self) -> Vec<WorkbenchWebSearchChoice> {
-        let mut choices = vec![
-            WorkbenchWebSearchChoice {
+        let native_available = self.active_workbench_has_native_web_search();
+        let provider_targets = self
+            .ai_tool_configuration
+            .usable_targets_for_kind(crate::provider_config::AiToolKind::WebSearch);
+        let provider_chain_available = !provider_targets.is_empty();
+        let mut choices = Vec::new();
+
+        if native_available && provider_chain_available {
+            choices.push(WorkbenchWebSearchChoice {
                 override_mode: PendingPromptWebSearchOverride::FollowGlobal,
                 provider_id: None,
                 label: String::from("智能搜索"),
                 detail: String::from("跟随全局 web-search 设置"),
-            },
-            WorkbenchWebSearchChoice {
+            });
+            choices.push(WorkbenchWebSearchChoice {
                 override_mode: PendingPromptWebSearchOverride::NativeOnly,
                 provider_id: None,
                 label: String::from("原生搜索"),
                 detail: String::from("仅声明模型原生搜索"),
-            },
-            WorkbenchWebSearchChoice {
+            });
+            choices.push(WorkbenchWebSearchChoice {
                 override_mode: PendingPromptWebSearchOverride::ThirdPartyOnly,
                 provider_id: None,
                 label: String::from("自定义搜索链"),
                 detail: String::from("仅使用第三方搜索链"),
-            },
-            WorkbenchWebSearchChoice {
+            });
+        } else if native_available {
+            choices.push(WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::NativeOnly,
+                provider_id: None,
+                label: String::from("原生搜索"),
+                detail: String::from("当前模型仅支持原生搜索"),
+            });
+            return choices;
+        } else if provider_chain_available {
+            choices.push(WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::FollowGlobal,
+                provider_id: None,
+                label: String::from("智能搜索"),
+                detail: String::from("跟随全局 web-search 设置"),
+            });
+            choices.push(WorkbenchWebSearchChoice {
+                override_mode: PendingPromptWebSearchOverride::ThirdPartyOnly,
+                provider_id: None,
+                label: String::from("自定义搜索链"),
+                detail: String::from("仅使用第三方搜索链"),
+            });
+        } else {
+            choices.push(WorkbenchWebSearchChoice {
                 override_mode: PendingPromptWebSearchOverride::Disabled,
                 provider_id: None,
                 label: String::from("关闭搜索"),
-                detail: String::from("不启用统一 web-search"),
-            },
-        ];
+                detail: String::from("当前模型与扩展都未提供统一搜索能力"),
+            });
+            return choices;
+        }
 
-        let provider_choices = self
-            .provider_configuration
-            .ai_tools
-            .web_search
-            .providers
+        let provider_choices = provider_targets
             .iter()
-            .filter(|provider| provider.is_usable())
-            .map(|provider| WorkbenchWebSearchChoice {
+            .map(|target| WorkbenchWebSearchChoice {
                 override_mode: PendingPromptWebSearchOverride::SpecificProvider,
-                provider_id: Some(provider.id.clone()),
-                label: format!("指定：{}", provider.name),
-                detail: provider.kind.label().to_string(),
+                provider_id: Some(target.clone()),
+                label: format!("指定：{}", target),
+                detail: String::from("显式目标"),
             })
             .collect::<Vec<_>>();
         choices.extend(provider_choices);
+        choices.push(WorkbenchWebSearchChoice {
+            override_mode: PendingPromptWebSearchOverride::Disabled,
+            provider_id: None,
+            label: String::from("关闭搜索"),
+            detail: String::from("不启用统一 web-search"),
+        });
         choices
     }
 
@@ -551,8 +605,29 @@ impl VulcanWorkbench {
             .cloned()
             .or_else(|| {
                 configured_choices
-                    .into_iter()
-                    .find(|choice| choice.override_mode == PendingPromptWebSearchOverride::FollowGlobal)
+                    .iter()
+                    .find(|choice| {
+                        choice.override_mode == PendingPromptWebSearchOverride::FollowGlobal
+                    })
+                    .cloned()
+                    .or_else(|| {
+                        configured_choices
+                            .iter()
+                            .find(|choice| {
+                                choice.override_mode == PendingPromptWebSearchOverride::NativeOnly
+                            })
+                            .cloned()
+                    })
+                    .or_else(|| {
+                        configured_choices
+                            .iter()
+                            .find(|choice| {
+                                choice.override_mode
+                                    == PendingPromptWebSearchOverride::ThirdPartyOnly
+                            })
+                            .cloned()
+                    })
+                    .or_else(|| configured_choices.into_iter().next())
             })
     }
 
@@ -562,9 +637,51 @@ impl VulcanWorkbench {
         &self,
         runtime_options: &PendingPromptRuntimeOptions,
     ) -> PersistedAiToolConfiguration {
-        let mut configuration = self.provider_configuration.ai_tools.clone();
+        let mut configuration = self.ai_tool_configuration.clone();
+        let native_available = self.active_workbench_has_native_web_search();
+        let provider_targets =
+            configuration.usable_targets_for_kind(crate::provider_config::AiToolKind::WebSearch);
+        let provider_chain_available = !provider_targets.is_empty();
+        let specific_target = runtime_options
+            .web_search_provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let normalized_override = match runtime_options.web_search_override {
+            PendingPromptWebSearchOverride::SpecificProvider => {
+                if specific_target.as_ref().is_some_and(|target| {
+                    provider_targets
+                        .iter()
+                        .any(|candidate| candidate.eq_ignore_ascii_case(target))
+                }) {
+                    PendingPromptWebSearchOverride::SpecificProvider
+                } else if provider_chain_available {
+                    PendingPromptWebSearchOverride::ThirdPartyOnly
+                } else if native_available {
+                    PendingPromptWebSearchOverride::NativeOnly
+                } else {
+                    PendingPromptWebSearchOverride::Disabled
+                }
+            }
+            PendingPromptWebSearchOverride::NativeOnly if !native_available => {
+                if provider_chain_available {
+                    PendingPromptWebSearchOverride::ThirdPartyOnly
+                } else {
+                    PendingPromptWebSearchOverride::Disabled
+                }
+            }
+            PendingPromptWebSearchOverride::ThirdPartyOnly if !provider_chain_available => {
+                if native_available {
+                    PendingPromptWebSearchOverride::NativeOnly
+                } else {
+                    PendingPromptWebSearchOverride::Disabled
+                }
+            }
+            override_mode => override_mode,
+        };
 
-        match runtime_options.web_search_override {
+        match normalized_override {
             PendingPromptWebSearchOverride::FollowGlobal => {}
             PendingPromptWebSearchOverride::NativeOnly => {
                 configuration.web_search.mode = WebSearchRoutingMode::NativeOnly;
@@ -577,13 +694,10 @@ impl VulcanWorkbench {
             }
             PendingPromptWebSearchOverride::SpecificProvider => {
                 configuration.web_search.mode = WebSearchRoutingMode::ThirdPartyOnly;
-                if let Some(provider_id) = runtime_options.web_search_provider_id.as_deref() {
-                    configuration
-                        .web_search
-                        .providers
-                        .retain(|provider| provider.id == provider_id);
+                if let Some(target) = specific_target.as_deref() {
+                    configuration.web_search.target_order = vec![target.to_string()];
                 } else {
-                    configuration.web_search.providers.clear();
+                    configuration.web_search.target_order.clear();
                 }
             }
         }
@@ -732,7 +846,7 @@ impl VulcanWorkbench {
         let mut unsupported_count = 0usize;
 
         for attachment in &self.composer_attachments {
-            if capabilities.supports_attachment_kind(attachment.kind.clone()) {
+            if capabilities.allows_staged_attachment_kind(attachment.kind.clone()) {
                 continue;
             }
             unsupported_count += 1;
@@ -763,7 +877,7 @@ impl VulcanWorkbench {
         self.push_composer_undo_snapshot();
         let mut removed_attachments = Vec::new();
         self.composer_attachments.retain(|attachment| {
-            if capabilities.supports_attachment_kind(attachment.kind.clone()) {
+            if capabilities.allows_staged_attachment_kind(attachment.kind.clone()) {
                 return true;
             }
             removed_count += 1;
@@ -984,122 +1098,158 @@ impl VulcanWorkbench {
         provider_config::save_configuration_file(&self.provider_configuration)
     }
 
-    /// Persists API-native tool configuration and refreshes the runtime foundation.
-    /// 持久化 API 原生工具配置并刷新运行时基础架构。
+    /// Persists standalone AI capability configuration and refreshes the runtime foundation.
+    /// 持久化独立 AI 能力配置并刷新运行时基础架构。
     pub(super) fn save_ai_tool_configuration(&mut self) -> Result<(), String> {
-        provider_config::save_configuration_file(&self.provider_configuration)?;
+        ai_tool_configuration::save_ai_tool_configuration_file(&self.ai_tool_configuration)?;
+        if !self.provider_configuration.ai_tools.is_default() {
+            self.provider_configuration.ai_tools = PersistedAiToolConfiguration::default();
+            provider_config::save_configuration_file(&self.provider_configuration)?;
+        }
         self.refresh_runtime_foundation();
         Ok(())
     }
 
-    /// Adds one web-search provider entry with a stable unique identifier.
-    /// 使用稳定唯一标识新增一个网页搜索供应商条目。
-    pub(super) fn add_web_search_provider(&mut self, kind: WebSearchProviderKind) {
-        let id = self.generate_web_search_provider_id(kind);
-        self.provider_configuration
-            .ai_tools
-            .web_search
-            .providers
-            .push(PersistedWebSearchProviderEntry::new(id, kind));
-    }
-
-    /// Removes one web-search provider entry by identifier.
-    /// 根据标识移除一个网页搜索供应商条目。
-    pub(super) fn remove_web_search_provider(&mut self, provider_id: &str) -> bool {
-        let before = self
-            .provider_configuration
-            .ai_tools
-            .web_search
-            .providers
-            .len();
-        self.provider_configuration
-            .ai_tools
-            .web_search
-            .providers
-            .retain(|provider| provider.id != provider_id);
-        before
-            != self
-                .provider_configuration
-                .ai_tools
-                .web_search
-                .providers
-                .len()
-    }
-
-    /// Moves one web-search provider entry up or down in the priority chain.
-    /// 在优先级链中向上或向下移动一个网页搜索供应商条目。
-    pub(super) fn move_web_search_provider(&mut self, provider_id: &str, offset: isize) -> bool {
-        let providers = &mut self.provider_configuration.ai_tools.web_search.providers;
-        let Some(index) = providers
-            .iter()
-            .position(|provider| provider.id == provider_id)
-        else {
-            return false;
-        };
-        let target_index = if offset.is_negative() {
-            index.saturating_sub(offset.unsigned_abs())
-        } else {
-            index
-                .saturating_add(offset as usize)
-                .min(providers.len().saturating_sub(1))
-        };
-        if target_index == index {
+    /// Adds one shared AI capability vendor instance when it does not already exist.
+    /// 当共享 AI 能力供应商实例尚不存在时新增该实例。
+    pub(super) fn add_ai_capability_vendor(&mut self, vendor_id: &str) -> bool {
+        let normalized_vendor_id = vendor_id.trim().to_ascii_lowercase();
+        if normalized_vendor_id.is_empty() {
             return false;
         }
-        providers.swap(index, target_index);
-        true
-    }
-
-    /// Updates one web-search provider entry in place when it exists.
-    /// 当网页搜索供应商条目存在时原地更新该条目。
-    pub(super) fn update_web_search_provider<F>(&mut self, provider_id: &str, updater: F) -> bool
-    where
-        F: FnOnce(&mut PersistedWebSearchProviderEntry),
-    {
-        let Some(provider) = self
-            .provider_configuration
-            .ai_tools
-            .web_search
-            .providers
-            .iter_mut()
-            .find(|provider| provider.id == provider_id)
-        else {
-            return false;
-        };
-        updater(provider);
-        true
-    }
-
-    /// Builds a unique web-search provider id from one provider kind.
-    /// 根据供应商类型构建唯一的网页搜索供应商标识。
-    pub(super) fn generate_web_search_provider_id(&self, kind: WebSearchProviderKind) -> String {
-        let base = kind.key().to_string();
-        if !self
-            .provider_configuration
-            .ai_tools
-            .web_search
-            .providers
+        if self
+            .ai_tool_configuration
+            .vendors
             .iter()
-            .any(|provider| provider.id == base)
+            .any(|vendor| vendor.vendor_id == normalized_vendor_id)
         {
-            return base;
+            return false;
+        }
+        self.ai_tool_configuration
+            .vendors
+            .push(PersistedAiCapabilityVendorEntry::new(normalized_vendor_id));
+        self.ai_tool_configuration.normalize();
+        true
+    }
+
+    /// Removes one shared AI capability vendor instance by identifier.
+    /// 根据标识移除一条共享 AI 能力供应商实例。
+    pub(super) fn remove_ai_capability_vendor(&mut self, vendor_id: &str) -> bool {
+        let before = self.ai_tool_configuration.vendors.len();
+        self.ai_tool_configuration
+            .vendors
+            .retain(|vendor| vendor.vendor_id != vendor_id.trim().to_ascii_lowercase());
+        let changed = before != self.ai_tool_configuration.vendors.len();
+        if changed {
+            self.ai_tool_configuration.normalize();
+        }
+        changed
+    }
+
+    /// Updates one shared AI capability vendor instance in-place when it exists.
+    /// 当共享 AI 能力供应商实例存在时原地更新该实例。
+    pub(super) fn update_ai_capability_vendor<F>(&mut self, vendor_id: &str, updater: F) -> bool
+    where
+        F: FnOnce(&mut PersistedAiCapabilityVendorEntry),
+    {
+        let Some(vendor) = self
+            .ai_tool_configuration
+            .vendors
+            .iter_mut()
+            .find(|vendor| vendor.vendor_id == vendor_id.trim().to_ascii_lowercase())
+        else {
+            return false;
+        };
+        updater(vendor);
+        self.ai_tool_configuration.normalize();
+        true
+    }
+
+    /// Replaces all enabled targets of one semantic capability beneath the selected vendor instance using the provided temporary picker selections.
+    /// 使用提供的临时选择器结果替换选中供应商实例下某个语义能力的全部启用目标。
+    pub(super) fn replace_ai_capability_vendor_targets_for_kind(
+        &mut self,
+        vendor_id: &str,
+        capability_kind: AiToolKind,
+        selected_targets: Vec<(String, String)>,
+    ) -> bool {
+        let Some(vendor) = self
+            .ai_tool_configuration
+            .vendors
+            .iter_mut()
+            .find(|vendor| vendor.vendor_id == vendor_id.trim().to_ascii_lowercase())
+        else {
+            return false;
+        };
+
+        let supported_choices =
+            provider_config::ai_capability_vendor_target_choices(&vendor.vendor_id)
+                .into_iter()
+                .filter(|choice| choice.capability_kind == capability_kind)
+                .collect::<Vec<_>>();
+        if supported_choices.is_empty() {
+            return false;
         }
 
-        let mut suffix = 2usize;
-        loop {
-            let candidate = format!("{base}-{suffix}");
-            if !self
-                .provider_configuration
-                .ai_tools
-                .web_search
-                .providers
-                .iter()
-                .any(|provider| provider.id == candidate)
-            {
-                return candidate;
-            }
-            suffix = suffix.saturating_add(1);
+        vendor
+            .targets
+            .retain(|binding| binding.capability_kind != capability_kind);
+
+        for (target_alias, model_id) in selected_targets {
+            let Some(choice) = supported_choices.iter().find(|choice| {
+                choice
+                    .target_alias
+                    .eq_ignore_ascii_case(target_alias.as_str())
+            }) else {
+                continue;
+            };
+            let resolved_model_id = if model_id.trim().is_empty() {
+                choice.default_model_id.clone()
+            } else {
+                model_id.trim().to_string()
+            };
+            vendor.targets.push(PersistedAiCapabilityTargetBinding::new(
+                capability_kind,
+                choice.target_alias.clone(),
+                resolved_model_id,
+            ));
         }
+
+        self.ai_tool_configuration.normalize();
+        true
+    }
+
+    /// Removes one enabled semantic capability target from both the vendor binding list and the persisted route order.
+    /// 从供应商绑定列表与持久化路由顺序中同时移除单条已启用语义能力目标。
+    pub(super) fn remove_ai_capability_route_target(
+        &mut self,
+        capability_kind: AiToolKind,
+        target_selector: &str,
+    ) -> bool {
+        let normalized_selector = target_selector.trim();
+        let Some((vendor_id, target_alias)) = normalized_selector.split_once('/') else {
+            return false;
+        };
+        let Some(vendor) = self
+            .ai_tool_configuration
+            .vendors
+            .iter_mut()
+            .find(|vendor| vendor.vendor_id == vendor_id.trim().to_ascii_lowercase())
+        else {
+            return false;
+        };
+        let before_len = vendor.targets.len();
+        vendor.targets.retain(|binding| {
+            !(binding.capability_kind == capability_kind
+                && binding
+                    .target_alias()
+                    .eq_ignore_ascii_case(target_alias.trim()))
+        });
+        let changed = before_len != vendor.targets.len();
+        if changed {
+            self.ai_tool_configuration.normalize();
+        }
+        changed
     }
 
     /// Persists the currently edited MCP server form back into the shared Vulcan configuration file.

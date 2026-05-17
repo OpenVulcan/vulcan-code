@@ -1,0 +1,13 @@
+{
+  "id": "serpapi",
+  "name": "SerpAPI",
+  "capabilityKind": "web_search",
+  "targetAlias": "serpapi",
+  "addButtonGroup": 3,
+  "addButtonOrder": 0,
+  "defaultBaseUrl": "https://serpapi.com/search.json",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "API Key / {env:NAME}",
+  "apiKeyPlaceholder": "{env:SERPAPI_API_KEY}",
+  "maxResultsLimit": 20
+}

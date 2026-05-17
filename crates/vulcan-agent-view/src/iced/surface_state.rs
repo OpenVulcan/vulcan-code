@@ -2,6 +2,7 @@
 //! 由可选择转录外壳及其辅助模块共享的表面状态与交互类型。
 
 use super::render_cache::TranscriptRenderCache;
+use super::scene::RenderedMediaKind;
 use iced::Point;
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -43,6 +44,45 @@ pub enum SelectableTranscriptInteraction {
     /// Opens one tool block in the dedicated centered modal surface.
     /// 在专用居中弹层中打开某个工具区块。
     OpenToolModal(String),
+    /// Opens one generated image preview through the host application.
+    /// 通过宿主应用打开一张生成图片的预览。
+    OpenImagePreview {
+        /// Human-readable image file name shown by the host preview header.
+        /// 由宿主预览标题栏显示的人类可读图片文件名。
+        file_name: String,
+        /// Local absolute path of the image file to preview.
+        /// 待预览图片文件的本地绝对路径。
+        local_path: String,
+    },
+    /// Toggles host-side audio playback for one generated voice-strip card.
+    /// 为某张生成语音条卡片切换宿主侧音频播放状态。
+    ToggleAudioPlayback {
+        /// Human-readable audio file name used by host status text.
+        /// 宿主状态文案使用的人类可读音频文件名。
+        file_name: String,
+        /// Local absolute path of the audio file to play.
+        /// 待播放音频文件的本地绝对路径。
+        local_path: String,
+    },
+    /// Opens one generated media file with the system default application.
+    /// 使用系统默认应用打开一个生成媒体文件。
+    OpenMediaWithDefaultApp(String),
+    /// Reveals one generated media file inside the system file manager.
+    /// 在系统文件管理器中定位一个生成媒体文件。
+    RevealMediaInFolder(String),
+    /// Copies one generated media path through the host application.
+    /// 通过宿主应用复制一条生成媒体路径。
+    CopyMediaPath(String),
+    /// Copies one generated image as bitmap data through the host application.
+    /// 通过宿主应用以位图数据形式复制一张生成图片。
+    CopyImageToClipboard {
+        /// Human-readable image file name used by host status text.
+        /// 宿主状态文案使用的人类可读图片文件名。
+        file_name: String,
+        /// Local absolute path of the image file to copy.
+        /// 待复制图片文件的本地绝对路径。
+        local_path: String,
+    },
 }
 
 /// Enumerates the lightweight context-menu actions exposed by the selectable transcript.
@@ -55,15 +95,54 @@ pub(super) enum TranscriptContextMenuAction {
     /// Expands the current selection to cover the whole rendered transcript.
     /// 将当前选区扩展为覆盖整个渲染转录。
     SelectAll,
+    /// Opens the hovered generated image preview.
+    /// 打开当前悬停生成图片的预览。
+    PreviewImage,
+    /// Toggles playback for the hovered generated audio strip.
+    /// 为当前悬停生成语音条切换播放状态。
+    ToggleAudioPlayback,
+    /// Opens the hovered generated media file with the default application.
+    /// 使用默认应用打开当前悬停的生成媒体文件。
+    OpenMedia,
+    /// Copies the hovered generated media path.
+    /// 复制当前悬停生成媒体的路径。
+    CopyMediaPath,
+    /// Reveals the hovered generated media file in the system file manager.
+    /// 在系统文件管理器中定位当前悬停的生成媒体文件。
+    RevealMedia,
+    /// Copies the hovered generated image into the system clipboard.
+    /// 将当前悬停的生成图片复制到系统剪贴板。
+    CopyImage,
+}
+
+/// Host-side media target resolved from one inline generated-media card.
+/// 从单个内联生成媒体卡片解析出的宿主侧媒体目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TranscriptMediaTarget {
+    /// Media modality represented by the target card.
+    /// 目标卡片表示的媒体模态。
+    pub(super) kind: RenderedMediaKind,
+    /// Human-readable file name displayed by the card.
+    /// 卡片显示的人类可读文件名。
+    pub(super) file_name: String,
+    /// Local absolute path of the generated media file.
+    /// 生成媒体文件的本地绝对路径。
+    pub(super) local_path: String,
+    /// Whether the target currently represents the active playing audio strip.
+    /// 目标当前是否代表正在播放的音频条。
+    pub(super) is_active: bool,
 }
 
 /// Captures one open transcript context-menu request anchored to a widget-space pointer position.
 /// 记录一个锚定到组件空间指针位置的转录右键菜单打开请求。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct TranscriptContextMenuState {
     /// Pointer position used to anchor the top-left corner of the context menu after clamping.
     /// 在钳制之后用于锚定右键菜单左上角的指针位置。
     pub(super) anchor_position: Point,
+    /// Optional generated-media target hovered when the menu was opened.
+    /// 打开菜单时命中的可选生成媒体目标。
+    pub(super) media_target: Option<TranscriptMediaTarget>,
 }
 
 /// Runtime state retained by the selectable transcript widget.

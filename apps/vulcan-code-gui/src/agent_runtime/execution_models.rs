@@ -7,6 +7,7 @@ use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
 use serde_json::Value;
+use vulcan_core::types::ConversationAttachment;
 use vulcan_core::types::CoreEvent as CoreControllerEvent;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 
@@ -71,6 +72,9 @@ pub struct ExecutionPreparation {
     /// Workspace path captured for the run.
     /// 为本次运行捕获的工作区路径。
     pub workspace_path: String,
+    /// Latest host-visible attachment catalog captured from the canonical conversation window for this run.
+    /// 为本次运行从规范会话窗口捕获的最新宿主可见附件目录。
+    pub conversation_attachments: Vec<ConversationAttachment>,
     /// Number of history rows that will be forwarded into the real model call.
     /// 将被转发到真实模型调用中的历史行数量。
     pub context_history_count: usize,

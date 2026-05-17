@@ -1,0 +1,18 @@
+{
+  "id": "minimax",
+  "name": "MiniMax S2V 01",
+  "capabilityKind": "video_generation",
+  "targetAlias": "S2V-01",
+  "addButtonGroup": 1,
+  "addButtonOrder": 1,
+  "defaultBaseUrl": "https://api.minimax.io/v1/video_generation",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "MiniMax Key / {env:MINIMAX_API_KEY}",
+  "apiKeyPlaceholder": "{env:MINIMAX_API_KEY}",
+  "defaultModel": "S2V-01",
+  "supportsRegionField": true,
+  "regionLabel": "MiniMax 区域",
+  "regionPlaceholder": "global 或 cn",
+  "defaultRegion": "global",
+  "configurationNote": "MiniMax 角色一致性视频模型，需要提供 subject_image。"
+}

@@ -4,8 +4,9 @@
 use super::RendererParagraph;
 use super::SelectableTranscriptState;
 use super::scene::{
-    CachedTableLayout, LaidOutFlowNode, LaidOutPanelNode, MeasuredRenderedCollapsibleDirectiveNode,
-    MeasuredRenderedTableNode, RenderedCollapsibleDirectiveNode, RenderedPanelNode,
+    CachedTableLayout, LaidOutFlowNode, LaidOutMediaCardNode, LaidOutPanelNode,
+    MeasuredRenderedCollapsibleDirectiveNode, MeasuredRenderedTableNode,
+    RenderedCollapsibleDirectiveNode, RenderedMediaCardNode, RenderedMediaKind, RenderedPanelNode,
     RenderedParagraphNode, RenderedTableNode, RenderedTranscriptDocument, RenderedTranscriptNode,
     SelectableTableAlignment,
 };
@@ -29,6 +30,7 @@ pub(super) fn count_rendered_paragraph_slots(document: &RenderedTranscriptDocume
                 1 + usize::from(collapsible_node.body.is_some())
             }
             RenderedTranscriptNode::Paragraph(_) => 1,
+            RenderedTranscriptNode::MediaCard(_) => 0,
             RenderedTranscriptNode::Table(table_node) => table_node.cells.len(),
             RenderedTranscriptNode::Rule(_) => 0,
         })
@@ -159,6 +161,18 @@ pub(super) fn rebuild_layout_cache(
                 current_y = flow_end_y;
                 paragraph_index += 1;
             }
+            RenderedTranscriptNode::MediaCard(media_card_node) => {
+                let measured_media_card = measure_rendered_media_card_node(
+                    node_index,
+                    media_card_node,
+                    local_widget_bounds,
+                    current_y,
+                );
+                render_cache
+                    .flow_layouts
+                    .push(LaidOutFlowNode::MediaCard(measured_media_card));
+                current_y = measured_media_card.flow_end_y;
+            }
             RenderedTranscriptNode::Table(table_node) => {
                 let (table_layout, _) = layout_rendered_table_node(
                     table_node,
@@ -235,6 +249,230 @@ pub(super) fn rebuild_layout_cache(
     render_cache.cached_height = current_y.max(1.0);
 
     render_cache.cached_height
+}
+
+/// Measures one inline generated-media card using fixed modality-specific chrome metrics.
+/// 使用固定的模态专属外框指标测量单个内联生成媒体卡片。
+fn measure_rendered_media_card_node(
+    node_index: usize,
+    media_card_node: &RenderedMediaCardNode,
+    widget_bounds: Rectangle,
+    current_y: f32,
+) -> LaidOutMediaCardNode {
+    let available_width = widget_bounds.width.max(1.0);
+    let outer_x = widget_bounds.x;
+    let outer_y = current_y + media_card_node.gap_before;
+    let capped_width = (available_width * media_card_node.max_width_ratio)
+        .clamp(media_card_kind_min_width(media_card_node.kind), media_card_kind_max_width(media_card_node.kind))
+        .min(available_width);
+    let (outer_bounds, preview_bounds, title_bounds, meta_bounds) =
+        media_card_layout_bounds(media_card_node, outer_x, outer_y, capped_width);
+    let flow_end_y = outer_bounds.y + outer_bounds.height + media_card_node.gap_after;
+
+    LaidOutMediaCardNode {
+        node_index,
+        outer_bounds,
+        preview_bounds,
+        title_bounds,
+        meta_bounds,
+        flow_end_y,
+    }
+}
+
+/// Returns the width floor used by the provided generated-media modality so narrow portrait assets still keep a stable hit target.
+/// 返回给定生成媒体模态使用的宽度下限，使较窄的竖图仍保持稳定点击区域。
+fn media_card_kind_min_width(kind: RenderedMediaKind) -> f32 {
+    match kind {
+        RenderedMediaKind::Image => 140.0,
+        RenderedMediaKind::Audio => 220.0,
+        RenderedMediaKind::Video => 220.0,
+        RenderedMediaKind::Pdf => 220.0,
+    }
+}
+
+/// Returns the width cap used by the provided generated-media modality.
+/// 返回给定生成媒体模态使用的宽度上限。
+fn media_card_kind_max_width(kind: RenderedMediaKind) -> f32 {
+    match kind {
+        RenderedMediaKind::Image => 420.0,
+        RenderedMediaKind::Audio => 320.0,
+        RenderedMediaKind::Video => 360.0,
+        RenderedMediaKind::Pdf => 320.0,
+    }
+}
+
+/// Resolves the full outer, preview, title, and metadata rectangles used by one media card.
+/// 解析单个媒体卡片使用的完整外框、预览区、标题区和元信息区矩形。
+fn media_card_layout_bounds(
+    media_card_node: &RenderedMediaCardNode,
+    outer_x: f32,
+    outer_y: f32,
+    capped_width: f32,
+) -> (Rectangle, Rectangle, Rectangle, Rectangle) {
+    match (media_card_node.kind, media_card_node.show_caption) {
+        (RenderedMediaKind::Image, show_caption) => {
+            let horizontal_inset = if show_caption { 12.0 } else { 10.0 };
+            let top_inset = if show_caption { 12.0 } else { 10.0 };
+            let bottom_inset = if show_caption { 62.0 } else { 10.0 };
+            let preview_max_height = if show_caption { 204.0 } else { 208.0 };
+            let preview_max_width = (capped_width - horizontal_inset * 2.0).max(1.0);
+            let aspect_ratio = media_card_node
+                .image_aspect_ratio
+                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+                .unwrap_or(16.0 / 10.0);
+            let unconstrained_preview_width = preview_max_height * aspect_ratio;
+            let preview_width = unconstrained_preview_width
+                .min(preview_max_width)
+                .max(preview_max_width.min(96.0));
+            let preview_height = (preview_width / aspect_ratio)
+                .min(preview_max_height)
+                .max(1.0);
+            let outer_width = preview_width + horizontal_inset * 2.0;
+            let outer_height = top_inset + preview_height + bottom_inset;
+            let outer_bounds = Rectangle::new(
+                Point::new(outer_x, outer_y),
+                Size::new(outer_width, outer_height),
+            );
+            let preview_bounds = Rectangle::new(
+                Point::new(outer_bounds.x + horizontal_inset, outer_bounds.y + top_inset),
+                Size::new(preview_width, preview_height),
+            );
+            let title_bounds = if show_caption {
+                Rectangle::new(
+                    Point::new(outer_bounds.x + 14.0, preview_bounds.y + preview_bounds.height + 12.0),
+                    Size::new((outer_bounds.width - 28.0).max(1.0), 20.0),
+                )
+            } else {
+                Rectangle::new(
+                    Point::new(outer_bounds.x, outer_bounds.y + outer_bounds.height),
+                    Size::new(0.0, 0.0),
+                )
+            };
+            let meta_bounds = if show_caption {
+                Rectangle::new(
+                    Point::new(outer_bounds.x + 14.0, preview_bounds.y + preview_bounds.height + 34.0),
+                    Size::new((outer_bounds.width - 28.0).max(1.0), 16.0),
+                )
+            } else {
+                Rectangle::new(
+                    Point::new(outer_bounds.x, outer_bounds.y + outer_bounds.height),
+                    Size::new(0.0, 0.0),
+                )
+            };
+            (outer_bounds, preview_bounds, title_bounds, meta_bounds)
+        }
+        (kind, show_caption) => {
+            let outer_height = media_card_kind_outer_height(kind, show_caption);
+            let outer_bounds = Rectangle::new(
+                Point::new(outer_x, outer_y),
+                Size::new(capped_width, outer_height),
+            );
+            let preview_bounds = media_card_preview_bounds(kind, outer_bounds, show_caption);
+            let title_bounds = media_card_title_bounds(kind, outer_bounds);
+            let meta_bounds = media_card_meta_bounds(kind, outer_bounds);
+            (outer_bounds, preview_bounds, title_bounds, meta_bounds)
+        }
+    }
+}
+
+/// Returns the outer card height reserved by the provided generated-media modality.
+/// 返回给定生成媒体模态预留的外层卡片高度。
+fn media_card_kind_outer_height(kind: RenderedMediaKind, show_caption: bool) -> f32 {
+    match (kind, show_caption) {
+        (RenderedMediaKind::Image, true) => 278.0,
+        (RenderedMediaKind::Image, false) => 228.0,
+        (RenderedMediaKind::Audio, true) => 82.0,
+        (RenderedMediaKind::Audio, false) => 70.0,
+        (RenderedMediaKind::Video, true) => 226.0,
+        (RenderedMediaKind::Video, false) => 176.0,
+        (RenderedMediaKind::Pdf, true) => 88.0,
+        (RenderedMediaKind::Pdf, false) => 70.0,
+    }
+}
+
+/// Returns the inner preview bounds reserved by the provided generated-media modality.
+/// 返回给定生成媒体模态预留的内部预览区域边界。
+fn media_card_preview_bounds(
+    kind: RenderedMediaKind,
+    outer_bounds: Rectangle,
+    show_caption: bool,
+) -> Rectangle {
+    match (kind, show_caption) {
+        (RenderedMediaKind::Image, true) => Rectangle::new(
+            Point::new(outer_bounds.x + 12.0, outer_bounds.y + 12.0),
+            Size::new((outer_bounds.width - 24.0).max(1.0), 204.0),
+        ),
+        (RenderedMediaKind::Image, false) => Rectangle::new(
+            Point::new(outer_bounds.x + 10.0, outer_bounds.y + 10.0),
+            Size::new((outer_bounds.width - 20.0).max(1.0), 208.0),
+        ),
+        (RenderedMediaKind::Audio, true) => Rectangle::new(
+            Point::new(outer_bounds.x + 14.0, outer_bounds.y + 14.0),
+            Size::new((outer_bounds.width - 28.0).max(1.0), 50.0),
+        ),
+        (RenderedMediaKind::Audio, false) => Rectangle::new(
+            Point::new(outer_bounds.x + 10.0, outer_bounds.y + 10.0),
+            Size::new((outer_bounds.width - 20.0).max(1.0), 50.0),
+        ),
+        (RenderedMediaKind::Video, true) => Rectangle::new(
+            Point::new(outer_bounds.x + 12.0, outer_bounds.y + 12.0),
+            Size::new((outer_bounds.width - 24.0).max(1.0), 152.0),
+        ),
+        (RenderedMediaKind::Video, false) => Rectangle::new(
+            Point::new(outer_bounds.x + 10.0, outer_bounds.y + 10.0),
+            Size::new((outer_bounds.width - 20.0).max(1.0), 156.0),
+        ),
+        (RenderedMediaKind::Pdf, true) => Rectangle::new(
+            Point::new(outer_bounds.x + 14.0, outer_bounds.y + 14.0),
+            Size::new((outer_bounds.width - 28.0).max(1.0), 56.0),
+        ),
+        (RenderedMediaKind::Pdf, false) => Rectangle::new(
+            Point::new(outer_bounds.x + 10.0, outer_bounds.y + 10.0),
+            Size::new((outer_bounds.width - 20.0).max(1.0), 50.0),
+        ),
+    }
+}
+
+/// Returns the title row bounds of one media card after reserving modality-specific preview chrome.
+/// 在预留模态专属预览区域后，返回媒体卡片标题行的边界。
+fn media_card_title_bounds(kind: RenderedMediaKind, outer_bounds: Rectangle) -> Rectangle {
+    match kind {
+        RenderedMediaKind::Image | RenderedMediaKind::Video => Rectangle::new(
+            Point::new(
+                outer_bounds.x + 14.0,
+                outer_bounds.y + outer_bounds.height - 48.0,
+            ),
+            Size::new((outer_bounds.width - 28.0).max(1.0), 18.0),
+        ),
+        RenderedMediaKind::Audio | RenderedMediaKind::Pdf => Rectangle::new(
+            Point::new(
+                outer_bounds.x + 14.0,
+                outer_bounds.y + outer_bounds.height - 40.0,
+            ),
+            Size::new((outer_bounds.width - 28.0).max(1.0), 18.0),
+        ),
+    }
+}
+
+/// Returns the metadata row bounds of one media card after reserving modality-specific preview chrome.
+/// 在预留模态专属预览区域后，返回媒体卡片元信息行的边界。
+fn media_card_meta_bounds(kind: RenderedMediaKind, outer_bounds: Rectangle) -> Rectangle {
+    match kind {
+        RenderedMediaKind::Image | RenderedMediaKind::Video => Rectangle::new(
+            Point::new(
+                outer_bounds.x + 14.0,
+                outer_bounds.y + outer_bounds.height - 28.0,
+            ),
+            Size::new((outer_bounds.width - 28.0).max(1.0), 14.0),
+        ),
+        RenderedMediaKind::Audio | RenderedMediaKind::Pdf => Rectangle::new(
+            Point::new(
+                outer_bounds.x + 14.0,
+                outer_bounds.y + outer_bounds.height - 20.0,
+            ),
+            Size::new((outer_bounds.width - 28.0).max(1.0), 14.0),
+        ),
+    }
 }
 
 /// Builds one renderer paragraph from a rendered paragraph node and the provided text bounds.

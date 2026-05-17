@@ -2,10 +2,10 @@
 //! 将语义转录内容投影为场景节点的构建器。
 
 use super::scene::{
-    ParsedMarkdownTable, PlainParagraphStyle, PlainTextRenderKind, RenderedPanelAccentRule,
-    RenderedParagraphBackground, RenderedParagraphHorizontalPlacement, RenderedParagraphNode,
-    RenderedTableCellNode, RenderedTableStyle, RenderedTranscriptLinkAction,
-    RenderedTranscriptNode,
+    ParsedMarkdownTable, PlainParagraphStyle, PlainTextRenderKind, RenderedMediaCardNode,
+    RenderedMediaKind, RenderedPanelAccentRule, RenderedParagraphBackground,
+    RenderedParagraphHorizontalPlacement, RenderedParagraphNode, RenderedTableCellNode,
+    RenderedTableStyle, RenderedTranscriptLinkAction, RenderedTranscriptNode,
 };
 use super::text_routing::build_agent_view_plain_text_spans;
 use crate::iced_theme as theme;
@@ -285,6 +285,42 @@ impl RenderedTranscriptBuilder {
                 left_accent_rule,
             }),
         );
+    }
+
+    /// Pushes one inline generated-media card node without projecting it into the selectable text buffer.
+    /// 推入一个不会投影到可选择文本缓冲区中的内联生成媒体卡片节点。
+    pub(super) fn push_media_card(
+        &mut self,
+        kind: RenderedMediaKind,
+        title: impl Into<String>,
+        file_name: impl Into<String>,
+        local_path: impl Into<String>,
+        image_aspect_ratio: Option<f32>,
+        output_count: usize,
+        show_caption: bool,
+        is_active: bool,
+        background: RenderedParagraphBackground,
+        accent_color: Color,
+        action_link: Option<String>,
+    ) {
+        self.nodes
+            .push(RenderedTranscriptNode::MediaCard(RenderedMediaCardNode {
+                kind,
+                title: title.into(),
+                file_name: file_name.into(),
+                local_path: local_path.into(),
+                image_aspect_ratio,
+                output_count,
+                show_caption,
+                is_active,
+                gap_before: 4.0,
+                gap_after: 10.0,
+                max_width_ratio: 0.78,
+                background,
+                accent_color,
+                action_link,
+            }));
+        self.pending_separator = Some("\n");
     }
 
     /// Pushes one real table node while projecting its selectable text as tab-separated rows.

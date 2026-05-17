@@ -1,0 +1,19 @@
+{
+  "id": "minimax",
+  "name": "MiniMax Search",
+  "capabilityKind": "web_search",
+  "targetAlias": "minimax",
+  "addButtonGroup": 1,
+  "addButtonOrder": 3,
+  "defaultBaseUrl": "https://api.minimax.io/v1/coding_plan/search",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "Token Plan Key / {env:MINIMAX_API_KEY}",
+  "apiKeyPlaceholder": "{env:MINIMAX_API_KEY}",
+  "supportsRegionField": true,
+  "regionLabel": "Token Plan 区域",
+  "regionPlaceholder": "global 或 cn（Token Plan 区域）",
+  "defaultRegion": "global",
+  "regionOptions": ["global", "cn"],
+  "maxResultsLimit": 20,
+  "configurationNote": "当前使用 MiniMax Search 接口；官方 CLI 使用 MINIMAX_API_KEY。同一把 Token Plan Key 同时覆盖订阅额度与 Credits，若两者同时存在则优先消耗额度，再自动回退到 Credits。当前官方路径仍是 /v1/coding_plan/search，这不是普通文本模型 API 的内建联网搜索。"
+}

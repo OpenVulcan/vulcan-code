@@ -70,6 +70,7 @@ impl RenderedTranscriptDocument {
                         return Some(link_url);
                     }
                 }
+                RenderedTranscriptNode::MediaCard(_) => {}
                 RenderedTranscriptNode::Table(table_node) => {
                     for cell_node in &table_node.cells {
                         if let Some(link_url) =
@@ -113,6 +114,29 @@ pub(super) enum RenderedTranscriptLinkAction {
     /// Opens one tool block in a dedicated centered modal surface.
     /// 在专用居中弹层表面中打开某个工具区块。
     OpenToolModal(String),
+    /// Opens one image preview modal for one generated-media card.
+    /// 为某个生成媒体卡片打开一条图片预览弹窗。
+    OpenImagePreview {
+        /// Human-readable file name rendered by the host preview header.
+        /// 显示在宿主预览标题栏中的人类可读文件名。
+        file_name: String,
+        /// Local absolute path consumed by the host image preview modal.
+        /// 供宿主图片预览弹窗使用的本地绝对路径。
+        local_path: String,
+    },
+    /// Toggles inline audio playback for one generated-media card.
+    /// 为某个生成媒体卡片切换内联音频播放状态。
+    ToggleAudioPlayback {
+        /// Human-readable file name used by host status text.
+        /// 宿主状态文案使用的人类可读文件名。
+        file_name: String,
+        /// Local absolute path consumed by the host audio player.
+        /// 供宿主音频播放器使用的本地绝对路径。
+        local_path: String,
+    },
+    /// Opens one generated-media path with the system default application.
+    /// 使用系统默认应用打开一条生成媒体路径。
+    OpenMediaWithDefaultApp(String),
 }
 
 /// Extracts one character-based slice from a string without panicking when the range exceeds bounds.
@@ -172,6 +196,9 @@ pub(super) enum RenderedTranscriptNode {
     /// Text-bearing paragraph node that can participate in selection and copy.
     /// 参与选择与复制的带文本段落节点。
     Paragraph(RenderedParagraphNode),
+    /// Rich media summary card rendered inline for host-generated attachments.
+    /// 为宿主生成附件在转录中内联渲染的富媒体摘要卡片。
+    MediaCard(RenderedMediaCardNode),
     /// Structured table node rendered with real cell borders and selectable cell content.
     /// 使用真实单元格边框和可选单元格内容渲染的结构化表格节点。
     Table(RenderedTableNode),
@@ -298,6 +325,72 @@ pub(super) struct RenderedParagraphNode {
     /// Optional quote bar depth used to draw nested quotation guides.
     /// 用于绘制嵌套引用导线的可选引用深度。
     pub(super) quote_depth: usize,
+}
+
+/// Media modality rendered by one inline generated-media card.
+/// 单个内联生成媒体卡片渲染的媒体模态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RenderedMediaKind {
+    /// Raster image preview card.
+    /// 光栅图片预览卡片。
+    Image,
+    /// Audio voice-strip card.
+    /// 音频语音条卡片。
+    Audio,
+    /// Video preview-placeholder card.
+    /// 视频预览占位卡片。
+    Video,
+    /// Document placeholder card.
+    /// 文档占位卡片。
+    Pdf,
+}
+
+/// One inline generated-media summary card rendered inside the transcript flow.
+/// 在转录流中渲染的单个内联生成媒体摘要卡片。
+#[derive(Debug, Clone)]
+pub(super) struct RenderedMediaCardNode {
+    /// Media modality represented by the current card.
+    /// 当前卡片表示的媒体模态。
+    pub(super) kind: RenderedMediaKind,
+    /// Human-readable title shown above or beside the preview body.
+    /// 显示在预览主体上方或旁侧的人类可读标题。
+    pub(super) title: String,
+    /// Human-readable file name shown as secondary metadata.
+    /// 作为次级元信息显示的人类可读文件名。
+    pub(super) file_name: String,
+    /// Local absolute path used by host-side preview, playback, or file-manager actions.
+    /// 供宿主侧预览、播放或文件管理器动作使用的本地绝对路径。
+    pub(super) local_path: String,
+    /// Optional intrinsic image aspect ratio captured from the local file so image cards can size themselves proportionally.
+    /// 从本地文件中捕获的可选原始图片宽高比，供图片卡片按比例自适应尺寸。
+    pub(super) image_aspect_ratio: Option<f32>,
+    /// Total number of generated outputs represented by the current card.
+    /// 当前卡片代表的生成输出总数量。
+    pub(super) output_count: usize,
+    /// Whether the card should suppress transcript-side title and metadata chrome so the media itself becomes the primary visual.
+    /// 卡片是否应隐藏转录侧标题与元信息外框，从而让媒体自身成为主视觉。
+    pub(super) show_caption: bool,
+    /// Whether the card currently represents the actively playing generated-audio clip.
+    /// 卡片当前是否代表正在播放的生成音频片段。
+    pub(super) is_active: bool,
+    /// Top flow gap placed before the card.
+    /// 卡片前方放置的顶部流式间距。
+    pub(super) gap_before: f32,
+    /// Bottom flow gap placed after the card.
+    /// 卡片后方放置的底部流式间距。
+    pub(super) gap_after: f32,
+    /// Maximum transcript-width ratio consumed by the card before clamping to the modality-specific width cap.
+    /// 在钳制到模态专属宽度上限前，卡片可占用的最大转录宽度比例。
+    pub(super) max_width_ratio: f32,
+    /// Background treatment painted behind the whole card.
+    /// 绘制在整张卡片背后的背景样式。
+    pub(super) background: RenderedParagraphBackground,
+    /// Accent color used by icons, wave bars, and emphasis chrome.
+    /// 图标、波形条和强调外框使用的强调色。
+    pub(super) accent_color: Color,
+    /// Optional synthetic action link triggered when the card body is left-clicked.
+    /// 左键点击卡片主体时触发的可选合成动作链接。
+    pub(super) action_link: Option<String>,
 }
 
 /// One horizontal rule node in the rendered transcript flow.
@@ -610,6 +703,30 @@ pub(super) struct MeasuredRenderedTableNode {
     pub(super) cell_text_origins: Vec<Point>,
 }
 
+/// Cached local layout metrics for one inline generated-media card flow node.
+/// 单个内联生成媒体卡片流式节点的本地布局指标缓存。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LaidOutMediaCardNode {
+    /// Source document node index owning the current flow layout entry.
+    /// 拥有当前流式布局项的源文档节点索引。
+    pub(super) node_index: usize,
+    /// Local outer bounds of the full media card.
+    /// 完整媒体卡片的本地外部边界。
+    pub(super) outer_bounds: Rectangle,
+    /// Local preview region used by image, audio, or video affordances.
+    /// 供图片、音频或视频外观使用的本地预览区域。
+    pub(super) preview_bounds: Rectangle,
+    /// Local title row bounds used when the card keeps transcript-side captions visible.
+    /// 当卡片保留转录侧标题时使用的本地标题行边界。
+    pub(super) title_bounds: Rectangle,
+    /// Local metadata row bounds used when the card keeps transcript-side file labels visible.
+    /// 当卡片保留转录侧文件标签时使用的本地元信息行边界。
+    pub(super) meta_bounds: Rectangle,
+    /// Local bottom edge after the card and its trailing gap.
+    /// 包含卡片及其尾部间距的本地底边。
+    pub(super) flow_end_y: f32,
+}
+
 /// Cached local layout metrics for one background panel node derived from already measured flow children.
 /// 根据已测量流式子节点推导得到的单个背景面板节点本地布局指标缓存。
 #[derive(Debug, Clone, Copy)]
@@ -632,6 +749,9 @@ pub(super) enum LaidOutFlowNode {
     /// Cached layout entry for one standalone paragraph.
     /// 一个独立段落对应的缓存布局项。
     Paragraph(LaidOutParagraphNode),
+    /// Cached layout entry for one inline generated-media card.
+    /// 一个内联生成媒体卡片对应的缓存布局项。
+    MediaCard(LaidOutMediaCardNode),
     /// Cached layout entry for one rendered table.
     /// 一张渲染表格对应的缓存布局项。
     Table(LaidOutTableNode),
@@ -725,6 +845,7 @@ impl LaidOutFlowNode {
         match self {
             Self::Collapsible(node) => node.node_index,
             Self::Paragraph(node) => node.node_index,
+            Self::MediaCard(node) => node.node_index,
             Self::Table(node) => node.node_index,
             Self::Rule(node) => node.node_index,
         }
@@ -736,6 +857,7 @@ impl LaidOutFlowNode {
         match self {
             Self::Collapsible(node) => node.summary_outer_bounds.y,
             Self::Paragraph(node) => node.outer_bounds.y,
+            Self::MediaCard(node) => node.outer_bounds.y,
             Self::Table(node) => node.measured_table.outer_bounds.y,
             Self::Rule(node) => node.outer_bounds.y,
         }
@@ -747,6 +869,7 @@ impl LaidOutFlowNode {
         match self {
             Self::Collapsible(node) => node.flow_end_y,
             Self::Paragraph(node) => node.flow_end_y,
+            Self::MediaCard(node) => node.flow_end_y,
             Self::Table(node) => node.flow_end_y,
             Self::Rule(node) => node.flow_end_y,
         }

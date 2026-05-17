@@ -240,7 +240,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
-        let menu_state = state.context_menu?;
+        let menu_state = state.context_menu.clone()?;
         let translated_bounds = Rectangle::new(
             Point::new(
                 layout.bounds().x + translation.x,
@@ -254,6 +254,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             &self.document,
             translated_bounds,
             menu_state,
+            self.on_interaction.as_ref(),
         ))
     }
 }

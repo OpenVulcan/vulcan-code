@@ -2,10 +2,12 @@
 //! 供运行时、诊断与后续界面防护共用的 Provider 能力解析辅助模块。
 
 use crate::provider_config::{
-    AiToolDeclaration, AiToolKind, AiToolPolicy, ModelChoice, ModelInterleavedCapability,
-    PersistedAiToolConfiguration, PersistedProviderOptions, PersistedWebSearchConfiguration,
-    ProviderApiFamily, SupportedProviderDefinition, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
-    WebSearchRoutingMode,
+    AiToolDeclaration, AiToolKind, AiToolPolicy, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+    MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID, MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, ModelChoice,
+    ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
+    ProviderApiFamily, SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID, SupportedProviderDefinition,
+    UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID, VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
 };
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachmentKind;
@@ -145,6 +147,38 @@ impl ResolvedModelCapabilities {
         self.supports_input_modality(kind.modality_name())
     }
 
+    /// Returns whether the current capability set exposes one enabled semantic AI tool.
+    /// 返回当前能力集合是否暴露某个已启用的语义 AI 工具。
+    pub fn has_enabled_ai_tool(&self, kind: AiToolKind) -> bool {
+        self.ai_tools.iter().any(|tool| {
+            tool.kind == kind
+                && tool.policy != AiToolPolicy::Disabled
+                && (tool.native_provider_tool
+                    || tool
+                        .fallback_tool_id
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty()))
+        })
+    }
+
+    /// Returns whether the current capability set should still allow one staged attachment kind through host-side bridge tooling.
+    /// 返回当前能力集合是否应通过宿主桥接工具仍允许某种已暂存附件类型进入输入框。
+    pub fn allows_staged_attachment_kind(&self, kind: ConversationAttachmentKind) -> bool {
+        if self.supports_attachment_kind(kind.clone()) {
+            return true;
+        }
+
+        match kind {
+            ConversationAttachmentKind::Image => {
+                self.has_enabled_ai_tool(AiToolKind::UnderstandImage)
+                    || self.has_enabled_ai_tool(AiToolKind::ImageGeneration)
+                    || self.has_enabled_ai_tool(AiToolKind::VideoGeneration)
+            }
+            ConversationAttachmentKind::Audio => self.has_enabled_ai_tool(AiToolKind::MusicCover),
+            ConversationAttachmentKind::Video | ConversationAttachmentKind::Pdf => false,
+        }
+    }
+
     /// Builds one compact lifecycle summary string for diagnostics surfaces.
     /// 为诊断表面构建一条紧凑生命周期摘要字符串。
     pub fn lifecycle_summary(&self) -> String {
@@ -201,7 +235,48 @@ pub fn apply_ai_tool_runtime_configuration(
     capabilities: &mut ResolvedModelCapabilities,
     configuration: &PersistedAiToolConfiguration,
 ) {
-    apply_web_search_runtime_configuration(&mut capabilities.ai_tools, &configuration.web_search);
+    let model_supports_native_image = capabilities.supports_input_modality("image");
+    apply_web_search_runtime_configuration(&mut capabilities.ai_tools, configuration);
+    apply_understand_image_runtime_configuration(
+        model_supports_native_image,
+        &mut capabilities.ai_tools,
+        configuration,
+    );
+    apply_generic_host_only_ai_tool_runtime_configuration(
+        &mut capabilities.ai_tools,
+        configuration,
+        AiToolKind::ImageGeneration,
+        IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+        &["image"],
+    );
+    apply_generic_host_only_ai_tool_runtime_configuration(
+        &mut capabilities.ai_tools,
+        configuration,
+        AiToolKind::VideoGeneration,
+        VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+        &["video"],
+    );
+    apply_generic_host_only_ai_tool_runtime_configuration(
+        &mut capabilities.ai_tools,
+        configuration,
+        AiToolKind::SpeechSynthesis,
+        SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID,
+        &["audio"],
+    );
+    apply_generic_host_only_ai_tool_runtime_configuration(
+        &mut capabilities.ai_tools,
+        configuration,
+        AiToolKind::MusicGeneration,
+        MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+        &["audio"],
+    );
+    apply_generic_host_only_ai_tool_runtime_configuration(
+        &mut capabilities.ai_tools,
+        configuration,
+        AiToolKind::MusicCover,
+        MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID,
+        &["audio"],
+    );
     capabilities.ai_tools.sort_by_key(|tool| tool.kind);
 }
 
@@ -209,9 +284,10 @@ pub fn apply_ai_tool_runtime_configuration(
 /// 应用网页搜索路由偏好，同时不融合无关的 MCP 或 LuaSkills 工具。
 fn apply_web_search_runtime_configuration(
     ai_tools: &mut Vec<ResolvedAiToolCapability>,
-    configuration: &PersistedWebSearchConfiguration,
+    root_configuration: &PersistedAiToolConfiguration,
 ) {
-    let provider_chain_available = configuration.has_usable_provider_chain();
+    let provider_chain_available =
+        root_configuration.has_usable_targets_for_kind(AiToolKind::WebSearch);
     let existing_index = ai_tools
         .iter()
         .position(|tool| tool.kind == AiToolKind::WebSearch);
@@ -219,7 +295,7 @@ fn apply_web_search_runtime_configuration(
         .and_then(|index| ai_tools.get(index).cloned())
         .unwrap_or_else(default_configured_web_search_capability);
 
-    match configuration.mode {
+    match root_configuration.web_search.mode {
         WebSearchRoutingMode::Disabled => {
             capability.policy = AiToolPolicy::Disabled;
             capability.fallback_tool_id = None;
@@ -275,6 +351,90 @@ fn apply_web_search_runtime_configuration(
     }
 }
 
+/// Applies standalone image-understanding preferences without exposing the tool when the selected model already supports native image input.
+/// 应用独立图片理解偏好，同时避免在当前模型已原生支持图片输入时额外暴露该工具。
+fn apply_understand_image_runtime_configuration(
+    model_supports_native_image: bool,
+    ai_tools: &mut Vec<ResolvedAiToolCapability>,
+    root_configuration: &PersistedAiToolConfiguration,
+) {
+    let existing_index = ai_tools
+        .iter()
+        .position(|tool| tool.kind == AiToolKind::UnderstandImage);
+
+    if model_supports_native_image {
+        if let Some(index) = existing_index {
+            ai_tools.remove(index);
+        }
+        return;
+    }
+
+    if !root_configuration.has_usable_targets_for_kind(AiToolKind::UnderstandImage) {
+        if let Some(index) = existing_index {
+            ai_tools.remove(index);
+        }
+        return;
+    }
+
+    let mut capability = existing_index
+        .and_then(|index| ai_tools.get(index).cloned())
+        .unwrap_or_else(default_configured_understand_image_capability);
+    capability.policy = AiToolPolicy::ForceHost;
+    capability.native_provider_tool = false;
+    capability.native_tool_type = None;
+    capability.native_request_patch = None;
+    capability.fallback_tool_id = Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string());
+    capability.source_label = format!("{} · 用户策略", capability.source_label);
+
+    if let Some(index) = existing_index {
+        ai_tools[index] = capability;
+    } else {
+        ai_tools.push(capability);
+    }
+}
+
+/// Applies one generic host-only capability whenever the user has enabled at least one target for that semantic tool.
+/// 当用户至少为某个语义工具启用了一条目标时，应用一条通用宿主侧能力配置。
+fn apply_generic_host_only_ai_tool_runtime_configuration(
+    ai_tools: &mut Vec<ResolvedAiToolCapability>,
+    configuration: &PersistedAiToolConfiguration,
+    capability_kind: AiToolKind,
+    fallback_tool_id: &str,
+    result_modalities: &[&str],
+) {
+    let existing_index = ai_tools
+        .iter()
+        .position(|tool| tool.kind == capability_kind);
+    if !configuration.has_usable_targets_for_kind(capability_kind) {
+        if let Some(index) = existing_index {
+            ai_tools.remove(index);
+        }
+        return;
+    }
+
+    let capability = ResolvedAiToolCapability {
+        kind: capability_kind,
+        policy: AiToolPolicy::ForceHost,
+        native_provider_tool: false,
+        native_tool_type: None,
+        native_request_patch: None,
+        fallback_tool_id: Some(fallback_tool_id.to_string()),
+        requires_approval: false,
+        result_modalities: result_modalities
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
+        citation_support: false,
+        source_label: String::from("用户配置"),
+    };
+
+    if let Some(index) = existing_index {
+        ai_tools[index] = capability;
+    } else {
+        ai_tools.push(capability);
+    }
+}
+
 /// Builds a host-only configured web-search capability used when a model lacks native search support.
 /// 构建模型缺少原生搜索支持时使用的宿主侧配置化网页搜索能力。
 fn default_configured_web_search_capability() -> ResolvedAiToolCapability {
@@ -288,6 +448,23 @@ fn default_configured_web_search_capability() -> ResolvedAiToolCapability {
         requires_approval: false,
         result_modalities: vec![String::from("text")],
         citation_support: true,
+        source_label: String::from("用户配置"),
+    }
+}
+
+/// Builds a host-only configured image-understanding capability used when a model lacks native image input support.
+/// 构建模型缺少原生图片输入支持时使用的宿主侧配置化图片理解能力。
+fn default_configured_understand_image_capability() -> ResolvedAiToolCapability {
+    ResolvedAiToolCapability {
+        kind: AiToolKind::UnderstandImage,
+        policy: AiToolPolicy::ForceHost,
+        native_provider_tool: false,
+        native_tool_type: None,
+        native_request_patch: None,
+        fallback_tool_id: Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string()),
+        requires_approval: false,
+        result_modalities: vec![String::from("text")],
+        citation_support: false,
         source_label: String::from("用户配置"),
     }
 }
@@ -613,10 +790,11 @@ mod tests {
     };
     use crate::provider_config::{
         AiToolKind, AiToolPolicy, ModelChoice, PersistedAiToolConfiguration,
-        PersistedProviderOptions, PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
-        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderModelDiscoveryConfig,
-        ProviderModelDiscoveryKind, ProviderRuntimeKind, SupportedProviderDefinition,
-        WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchProviderKind, WebSearchRoutingMode,
+        PersistedProviderOptions, PersistedUnderstandImageConfiguration,
+        PersistedWebSearchConfiguration, ProviderBaseUrlConfig, ProviderBaseUrlKind,
+        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
+        SupportedProviderDefinition, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+        WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
     };
     use std::collections::BTreeMap;
 
@@ -822,21 +1000,30 @@ mod tests {
         let definition = test_provider_definition();
         let mut capabilities = resolve_model_capabilities(&definition, None);
         let configuration = PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("brave"),
+                vendor_id: String::from("brave"),
+                name: String::from("Brave Search"),
+                enabled: true,
+                api_key: String::from("token"),
+                base_url: String::new(),
+                region: String::new(),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::WebSearch,
+                        "brave",
+                        "brave",
+                    ),
+                ],
+            }],
             web_search: PersistedWebSearchConfiguration {
                 mode: WebSearchRoutingMode::ThirdPartyOnly,
-                providers: vec![PersistedWebSearchProviderEntry {
-                    id: String::from("brave"),
-                    name: String::from("Brave Search"),
-                    kind: WebSearchProviderKind::Brave,
-                    enabled: true,
-                    api_key: String::from("token"),
-                    base_url: String::new(),
-                    model: String::new(),
-                    region: String::new(),
-                    max_results: 5,
-                }],
+                target_order: vec![String::from("brave/brave")],
                 dispatch_mode: crate::provider_config::WebSearchProviderDispatchMode::default(),
+                max_results: 5,
+                providers: Vec::new(),
             },
+            ..PersistedAiToolConfiguration::default()
         };
 
         apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
@@ -865,9 +1052,12 @@ mod tests {
         let configuration = PersistedAiToolConfiguration {
             web_search: PersistedWebSearchConfiguration {
                 mode: WebSearchRoutingMode::ThirdPartyFirst,
+                target_order: Vec::new(),
                 providers: Vec::new(),
                 dispatch_mode: crate::provider_config::WebSearchProviderDispatchMode::default(),
+                max_results: 5,
             },
+            ..PersistedAiToolConfiguration::default()
         };
 
         apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
@@ -879,5 +1069,200 @@ mod tests {
             .expect("native web search should still be available");
         assert_eq!(web_search.policy, AiToolPolicy::ForceNative);
         assert!(web_search.fallback_tool_id.is_none());
+    }
+
+    /// Adds host image-understanding fallback when the selected model lacks native image input but the standalone capability layer is configured.
+    /// 当所选模型缺少原生图片输入且已配置独立能力层时，添加宿主侧图片理解回退。
+    #[test]
+    fn ai_tool_configuration_adds_host_understand_image_for_provider_chain() {
+        let definition = test_provider_definition();
+        let mut capabilities = resolve_model_capabilities(&definition, None);
+        let configuration = PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::UnderstandImage,
+                        "minimax",
+                        "minimax",
+                    ),
+                ],
+            }],
+            understand_image: PersistedUnderstandImageConfiguration {
+                target_order: vec![String::from("minimax/minimax")],
+                providers: Vec::new(),
+            },
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
+
+        let understand_image = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::UnderstandImage)
+            .expect("configured provider chain should expose host image understanding");
+        assert_eq!(understand_image.policy, AiToolPolicy::ForceHost);
+        assert_eq!(
+            understand_image.fallback_tool_id.as_deref(),
+            Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID)
+        );
+        assert!(!understand_image.native_provider_tool);
+        assert!(
+            capabilities.allows_staged_attachment_kind(
+                vulcan_core::types::ConversationAttachmentKind::Image
+            )
+        );
+    }
+
+    /// Removes host image-understanding fallback when the active model already supports native image input.
+    /// 当当前模型已经支持原生图片输入时，移除宿主侧图片理解回退。
+    #[test]
+    fn ai_tool_configuration_omits_understand_image_for_native_vision_models() {
+        let definition = test_provider_definition();
+        let model = ModelChoice {
+            id: String::from("vision-model"),
+            name: String::from("Vision Model"),
+            input_modalities: vec![String::from("text"), String::from("image")],
+            output_modalities: vec![String::from("text")],
+            status: None,
+            family: None,
+            release_date: None,
+            context_limit: None,
+            input_limit: None,
+            output_limit: None,
+            reasoning: Some(true),
+            tool_call: Some(true),
+            temperature: Some(true),
+            attachment: Some(true),
+            interleaved: None,
+            reasoning_profile: None,
+            ai_tools: Vec::new(),
+        };
+        let mut capabilities = resolve_model_capabilities(&definition, Some(&model));
+        let configuration = PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::UnderstandImage,
+                        "minimax",
+                        "minimax",
+                    ),
+                ],
+            }],
+            understand_image: PersistedUnderstandImageConfiguration {
+                target_order: vec![String::from("minimax/minimax")],
+                providers: Vec::new(),
+            },
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
+
+        assert!(
+            capabilities
+                .ai_tools
+                .iter()
+                .all(|tool| tool.kind != AiToolKind::UnderstandImage)
+        );
+        assert!(
+            capabilities
+                .supports_attachment_kind(vulcan_core::types::ConversationAttachmentKind::Image)
+        );
+    }
+
+    /// Adds host-only MiniMax generation capabilities and unlocks bridgeable image/audio attachments for the matching semantic tools.
+    /// 添加宿主侧 MiniMax 生成类能力，并为对应语义工具放开可桥接的图片与音频附件。
+    #[test]
+    fn ai_tool_configuration_adds_host_generation_capabilities_for_configured_targets() {
+        let definition = test_provider_definition();
+        let mut capabilities = resolve_model_capabilities(&definition, None);
+        let configuration = PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::ImageGeneration,
+                        "image-01",
+                        "image-01",
+                    ),
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::VideoGeneration,
+                        "MiniMax-Hailuo-2.3",
+                        "MiniMax-Hailuo-2.3",
+                    ),
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::SpeechSynthesis,
+                        "speech-2.8-hd",
+                        "speech-2.8-hd",
+                    ),
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::MusicGeneration,
+                        "music-2.6",
+                        "music-2.6",
+                    ),
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::MusicCover,
+                        "music-cover",
+                        "music-cover",
+                    ),
+                ],
+            }],
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
+
+        let image_generation = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::ImageGeneration)
+            .expect("configured image generation should be exposed");
+        assert_eq!(image_generation.policy, AiToolPolicy::ForceHost);
+        assert_eq!(
+            image_generation.fallback_tool_id.as_deref(),
+            Some(crate::provider_config::IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID)
+        );
+
+        let music_cover = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::MusicCover)
+            .expect("configured music cover should be exposed");
+        assert_eq!(music_cover.policy, AiToolPolicy::ForceHost);
+        assert_eq!(
+            music_cover.fallback_tool_id.as_deref(),
+            Some(crate::provider_config::MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID)
+        );
+
+        assert!(
+            capabilities.allows_staged_attachment_kind(
+                vulcan_core::types::ConversationAttachmentKind::Image
+            )
+        );
+        assert!(
+            capabilities.allows_staged_attachment_kind(
+                vulcan_core::types::ConversationAttachmentKind::Audio
+            )
+        );
     }
 }

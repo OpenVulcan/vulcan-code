@@ -1,0 +1,17 @@
+{
+  "id": "duckduckgo",
+  "name": "DuckDuckGo Search",
+  "capabilityKind": "web_search",
+  "targetAlias": "duckduckgo",
+  "addButtonGroup": 0,
+  "addButtonOrder": 0,
+  "defaultBaseUrl": "https://html.duckduckgo.com/html",
+  "apiKeyRequirement": "none",
+  "apiKeyLabel": "API Key / {env:NAME}",
+  "apiKeyPlaceholder": "",
+  "supportsRegionField": true,
+  "regionLabel": "地区 / SafeSearch 区域",
+  "regionPlaceholder": "例如：us-en / uk-en / de-de",
+  "defaultRegion": "us-en",
+  "maxResultsLimit": 10
+}

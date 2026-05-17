@@ -19,6 +19,10 @@ const CONFIG_DIR_NAME: &str = "config";
 /// 位于打包资源根目录下的相对供应商目录名称。
 const PROVIDERS_DIR_NAME: &str = "providers";
 
+/// Relative AI capability provider catalog directory name nested below the packaged resources root.
+/// 位于打包资源根目录下的相对 AI 能力提供方目录名称。
+const AI_CAPABILITY_PROVIDERS_DIR_NAME: &str = "ai-capability-providers";
+
 /// Relative Lua runtime packages directory name bundled into the output root.
 /// 打包到 output 根目录中的 Lua 运行时包目录名称。
 const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
@@ -46,6 +50,12 @@ pub fn source_config_directory() -> PathBuf {
 /// 返回当前进程使用的生效供应商目录路径。
 pub fn resolve_provider_catalog_directory() -> PathBuf {
     resolve_app_resources_directory().join(PROVIDERS_DIR_NAME)
+}
+
+/// Returns the effective AI capability provider catalog directory for the current process.
+/// 返回当前进程使用的生效 AI 能力提供方目录路径。
+pub fn resolve_ai_capability_provider_catalog_directory() -> PathBuf {
+    resolve_app_resources_directory().join(AI_CAPABILITY_PROVIDERS_DIR_NAME)
 }
 
 /// Returns the effective application resource directory for the current process.

@@ -16,11 +16,7 @@
   "modelDiscovery": {
     "kind": "none"
   },
-  "modelRuntimeOverrides": {
-    "qwen3-max-2026-01-23": "openai-responses-compatible",
-    "qwen3.5-plus": "openai-responses-compatible",
-    "qwen3.6-plus": "openai-responses-compatible"
-  },
+  "modelRuntimeOverrides": {},
   "models": [
     {
       "id": "glm-4.7",
@@ -159,21 +155,6 @@
       ],
       "outputModalities": [
         "text"
-      ],
-      "aiTools": [
-        {
-          "kind": "web_search",
-          "nativeProviderTool": true,
-          "nativeToolType": "web_search",
-          "nativeRequestPatch": {
-            "tools": [
-              {
-                "type": "web_search"
-              }
-            ]
-          },
-          "citationSupport": true
-        }
       ]
     },
     {
@@ -193,21 +174,6 @@
       ],
       "outputModalities": [
         "text"
-      ],
-      "aiTools": [
-        {
-          "kind": "web_search",
-          "nativeProviderTool": true,
-          "nativeToolType": "web_search",
-          "nativeRequestPatch": {
-            "tools": [
-              {
-                "type": "web_search"
-              }
-            ]
-          },
-          "citationSupport": true
-        }
       ]
     },
     {
@@ -228,21 +194,6 @@
       ],
       "outputModalities": [
         "text"
-      ],
-      "aiTools": [
-        {
-          "kind": "web_search",
-          "nativeProviderTool": true,
-          "nativeToolType": "web_search",
-          "nativeRequestPatch": {
-            "tools": [
-              {
-                "type": "web_search"
-              }
-            ]
-          },
-          "citationSupport": true
-        }
       ]
     }
   ]

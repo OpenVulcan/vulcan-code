@@ -1,0 +1,17 @@
+{
+  "id": "kimi",
+  "name": "Kimi (Moonshot)",
+  "capabilityKind": "web_search",
+  "targetAlias": "kimi",
+  "addButtonGroup": 1,
+  "addButtonOrder": 2,
+  "defaultBaseUrl": "https://api.moonshot.cn/v1/chat/completions",
+  "apiKeyRequirement": "required",
+  "apiKeyLabel": "API Key / {env:NAME}",
+  "apiKeyPlaceholder": "{env:MOONSHOT_API_KEY}",
+  "supportsModelField": true,
+  "modelLabel": "Kimi 模型",
+  "modelPlaceholder": "kimi-k2.5",
+  "defaultModel": "kimi-k2.5",
+  "maxResultsLimit": 20
+}

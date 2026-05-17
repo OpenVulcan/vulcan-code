@@ -6,10 +6,11 @@ use super::SelectableTranscriptState;
 use super::layout_engine::translate_rectangle;
 use super::render_cache::TranscriptRenderCache;
 use super::scene::{
-    CachedTableLayout, LaidOutCollapsibleNode, LaidOutFlowNode, LaidOutPanelNode,
-    LaidOutParagraphNode, LaidOutRuleNode, LaidOutTableNode, RenderedCollapsibleDirectiveNode,
-    RenderedPanelNode, RenderedParagraphNode, RenderedRuleNode, RenderedTableNode,
-    RenderedTranscriptDocument, RenderedTranscriptNode,
+    CachedTableLayout, LaidOutCollapsibleNode, LaidOutFlowNode, LaidOutMediaCardNode,
+    LaidOutPanelNode, LaidOutParagraphNode, LaidOutRuleNode, LaidOutTableNode,
+    RenderedCollapsibleDirectiveNode, RenderedMediaCardNode, RenderedPanelNode,
+    RenderedParagraphNode, RenderedRuleNode, RenderedTableNode, RenderedTranscriptDocument,
+    RenderedTranscriptNode,
 };
 use super::viewport_materialization::materialize_transcript_viewport;
 use iced::advanced::mouse;
@@ -196,6 +197,20 @@ impl<'a> MaterializedTranscriptScene<'a> {
             return None;
         };
         Some(table_node)
+    }
+
+    /// Returns the rendered media-card node paired with one visible media-card flow layout.
+    /// 返回与某个可见媒体卡片流式布局配对的渲染媒体卡片节点。
+    pub(super) fn media_card_node(
+        &'a self,
+        layout_node: &LaidOutMediaCardNode,
+    ) -> Option<&'a RenderedMediaCardNode> {
+        let RenderedTranscriptNode::MediaCard(media_card_node) =
+            self.document.nodes.get(layout_node.node_index)?
+        else {
+            return None;
+        };
+        Some(media_card_node)
     }
 
     /// Returns the rendered rule node paired with one visible rule flow layout.

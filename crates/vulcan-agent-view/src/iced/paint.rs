@@ -9,14 +9,17 @@ use super::layout_engine::{
     paragraph_local_origin, translate_measured_table_node, translate_rectangle,
 };
 use super::scene::{
-    LaidOutFlowNode, MeasuredRenderedTableNode, RenderedParagraphNode, RenderedTableNode,
-    RenderedTranscriptDocument,
+    LaidOutFlowNode, LaidOutMediaCardNode, MeasuredRenderedTableNode, RenderedMediaCardNode,
+    RenderedMediaKind, RenderedParagraphNode, RenderedTableNode, RenderedTranscriptDocument,
 };
 use super::viewport_scene::MaterializedTranscriptScene;
 use iced::advanced::Renderer as _;
+use iced::advanced::image::{self, Renderer as _};
 use iced::advanced::renderer;
+use iced::advanced::text;
 use iced::advanced::text::Paragraph as _;
 use iced::advanced::text::Renderer as _;
+use iced::widget::image::Handle as ImageHandle;
 use iced::{Background, Border, Color, Point, Rectangle, Renderer, Size};
 
 /// Draws the active selection portion intersecting one paragraph node.
@@ -182,6 +185,354 @@ pub(super) fn draw_rendered_table_node(
             );
         }
     }
+}
+
+/// Draws one inline generated-media card, including the preview chrome and host-facing metadata rows.
+/// 绘制一个内联生成媒体卡片，包含预览外框与面向宿主的元信息行。
+fn draw_rendered_media_card_node(
+    renderer: &mut Renderer,
+    defaults: &renderer::Style,
+    media_card_node: &RenderedMediaCardNode,
+    layout_node: &LaidOutMediaCardNode,
+    scene: &MaterializedTranscriptScene<'_>,
+) {
+    let outer_bounds = translate_rectangle(layout_node.outer_bounds, scene.widget_origin);
+    let preview_bounds = translate_rectangle(layout_node.preview_bounds, scene.widget_origin);
+    let accent_background = media_card_node.accent_color.scale_alpha(0.16);
+    let card_radius = 14.0;
+
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: outer_bounds,
+            border: Border {
+                color: media_card_node.accent_color.scale_alpha(0.24),
+                width: 1.0,
+                radius: card_radius.into(),
+            },
+            ..renderer::Quad::default()
+        },
+        media_card_node.background.background,
+    );
+
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: preview_bounds,
+            border: Border {
+                color: media_card_node.accent_color.scale_alpha(0.18),
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            ..renderer::Quad::default()
+        },
+        Background::Color(accent_background),
+    );
+
+    match media_card_node.kind {
+        RenderedMediaKind::Image => {
+            renderer.draw_image(
+                image::Image::new(ImageHandle::from_path(media_card_node.local_path.clone())),
+                preview_bounds,
+                scene.viewport,
+            );
+        }
+        RenderedMediaKind::Audio => {
+            draw_audio_media_preview(renderer, media_card_node, preview_bounds);
+        }
+        RenderedMediaKind::Video => {
+            draw_video_media_preview(renderer, media_card_node, preview_bounds);
+        }
+        RenderedMediaKind::Pdf => {
+            draw_document_media_preview(renderer, media_card_node, preview_bounds);
+        }
+    }
+
+    if media_card_node.show_caption {
+        let title_bounds = translate_rectangle(layout_node.title_bounds, scene.widget_origin);
+        let meta_bounds = translate_rectangle(layout_node.meta_bounds, scene.widget_origin);
+        let secondary_color = defaults.text_color.scale_alpha(0.68);
+        let meta_text = if media_card_node.output_count > 1 {
+            format!(
+                "{} · {} 项输出",
+                media_card_node.file_name, media_card_node.output_count
+            )
+        } else {
+            media_card_node.file_name.clone()
+        };
+
+        renderer.fill_text(
+            text::Text {
+                content: media_card_node.title.clone(),
+                bounds: title_bounds.size(),
+                size: iced::Pixels(15.0),
+                line_height: text::LineHeight::default(),
+                font: iced::Font {
+                    weight: iced::font::Weight::Semibold,
+                    ..crate::iced_theme::ui_font()
+                },
+                align_x: text::Alignment::Left,
+                align_y: iced::alignment::Vertical::Center,
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::Word,
+                ellipsis: text::Ellipsis::default(),
+                hint_factor: None,
+            },
+            title_bounds.position(),
+            defaults.text_color,
+            scene.viewport,
+        );
+        renderer.fill_text(
+            text::Text {
+                content: meta_text,
+                bounds: meta_bounds.size(),
+                size: iced::Pixels(12.0),
+                line_height: text::LineHeight::default(),
+                font: crate::iced_theme::ui_font(),
+                align_x: text::Alignment::Left,
+                align_y: iced::alignment::Vertical::Center,
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::Word,
+                ellipsis: text::Ellipsis::default(),
+                hint_factor: None,
+            },
+            meta_bounds.position(),
+            secondary_color,
+            scene.viewport,
+        );
+    }
+}
+
+/// Draws one audio-strip preview using a play pill and deterministic waveform bars.
+/// 使用播放胶囊和确定性波形条绘制一个语音条预览。
+fn draw_audio_media_preview(
+    renderer: &mut Renderer,
+    media_card_node: &RenderedMediaCardNode,
+    preview_bounds: Rectangle,
+) {
+    let play_pill_bounds = Rectangle::new(
+        Point::new(preview_bounds.x + 10.0, preview_bounds.y + 10.0),
+        Size::new(42.0, (preview_bounds.height - 20.0).max(22.0)),
+    );
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: play_pill_bounds,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: (play_pill_bounds.height / 2.0).into(),
+            },
+            ..renderer::Quad::default()
+        },
+        Background::Color(media_card_node.accent_color.scale_alpha(0.92)),
+    );
+
+    if media_card_node.is_active {
+        let stop_size = 13.0;
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(
+                    Point::new(
+                        play_pill_bounds.x + play_pill_bounds.width / 2.0 - stop_size / 2.0,
+                        play_pill_bounds.y + play_pill_bounds.height / 2.0 - stop_size / 2.0,
+                    ),
+                    Size::new(stop_size, stop_size),
+                ),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 3.0.into(),
+                },
+                ..renderer::Quad::default()
+            },
+            Background::Color(Color::WHITE.scale_alpha(0.96)),
+        );
+    } else {
+        draw_right_pointing_play_glyph(
+            renderer,
+            play_pill_bounds,
+            12.0,
+            Color::WHITE.scale_alpha(0.97),
+        );
+    }
+
+    let bar_count = 22usize;
+    let bars_left = play_pill_bounds.x + play_pill_bounds.width + 14.0;
+    let bars_right = preview_bounds.x + preview_bounds.width - 14.0;
+    let bar_spacing = ((bars_right - bars_left) / bar_count as f32).max(4.0);
+    for index in 0..bar_count {
+        let normalized = ((index * 17 + 11) % 29) as f32 / 28.0;
+        let bar_height = (preview_bounds.height * (0.20 + normalized * 0.46)).max(8.0);
+        let bar_x = bars_left + index as f32 * bar_spacing;
+        let bar_y = preview_bounds.y + (preview_bounds.height - bar_height) / 2.0;
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(Point::new(bar_x, bar_y), Size::new(3.0, bar_height)),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 2.0.into(),
+                },
+                ..renderer::Quad::default()
+            },
+            Background::Color(media_card_node.accent_color.scale_alpha(0.76)),
+        );
+    }
+}
+
+/// Draws one video preview placeholder with a centered play glyph.
+/// 绘制一个带居中播放图标的视频预览占位卡片。
+fn draw_video_media_preview(
+    renderer: &mut Renderer,
+    media_card_node: &RenderedMediaCardNode,
+    preview_bounds: Rectangle,
+) {
+    let badge_bounds = Rectangle::new(
+        Point::new(preview_bounds.x + 12.0, preview_bounds.y + 12.0),
+        Size::new(54.0, 22.0),
+    );
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: badge_bounds,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 11.0.into(),
+            },
+            ..renderer::Quad::default()
+        },
+        Background::Color(Color::BLACK.scale_alpha(0.24)),
+    );
+    renderer.fill_text(
+        text::Text {
+            content: String::from("VIDEO"),
+            bounds: badge_bounds.size(),
+            size: iced::Pixels(11.0),
+            line_height: text::LineHeight::default(),
+            font: crate::iced_theme::code_font(),
+            align_x: text::Alignment::Center,
+            align_y: iced::alignment::Vertical::Center,
+            shaping: text::Shaping::Advanced,
+            wrapping: text::Wrapping::None,
+            ellipsis: text::Ellipsis::None,
+            hint_factor: None,
+        },
+        badge_bounds.position(),
+        Color::WHITE.scale_alpha(0.92),
+        preview_bounds,
+    );
+
+    let play_bounds = Rectangle::new(
+        Point::new(
+            preview_bounds.x + preview_bounds.width / 2.0 - 28.0,
+            preview_bounds.y + preview_bounds.height / 2.0 - 28.0,
+        ),
+        Size::new(56.0, 56.0),
+    );
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: play_bounds,
+            border: Border {
+                color: media_card_node.accent_color.scale_alpha(0.20),
+                width: 1.0,
+                radius: 28.0.into(),
+            },
+            ..renderer::Quad::default()
+        },
+        Background::Color(Color::BLACK.scale_alpha(0.24)),
+    );
+    draw_right_pointing_play_glyph(
+        renderer,
+        play_bounds,
+        24.0,
+        Color::WHITE.scale_alpha(0.95),
+    );
+}
+
+/// Draws one right-pointing play glyph using a symmetric stepped geometry so play and stop states share the same visual baseline.
+/// 使用对称阶梯几何绘制一个朝右的播放图标，使播放与停止状态共享同一视觉基线。
+fn draw_right_pointing_play_glyph(
+    renderer: &mut Renderer,
+    bounds: Rectangle,
+    height: f32,
+    color: Color,
+) {
+    let clamped_height = height.max(6.0);
+    let column_width = (clamped_height / 6.0).clamp(2.0, 4.0);
+    let total_width = column_width * 5.0;
+    let origin = Point::new(
+        bounds.x + bounds.width / 2.0 - total_width / 2.0,
+        bounds.y + bounds.height / 2.0 - clamped_height / 2.0,
+    );
+    let triangle_columns = [
+        (0.0, clamped_height),
+        (column_width, clamped_height * 0.82),
+        (column_width * 2.0, clamped_height * 0.64),
+        (column_width * 3.0, clamped_height * 0.46),
+        (column_width * 4.0, clamped_height * 0.28),
+    ];
+
+    for (offset_x, column_height) in triangle_columns {
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle::new(
+                    Point::new(
+                        origin.x + offset_x,
+                        origin.y + (clamped_height - column_height) / 2.0,
+                    ),
+                    Size::new(column_width, column_height.max(2.0)),
+                ),
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 1.0.into(),
+                },
+                ..renderer::Quad::default()
+            },
+            Background::Color(color),
+        );
+    }
+}
+
+/// Draws one document-style placeholder preview for PDF-like generated outputs.
+/// 为 PDF 类生成输出绘制一个文档风格的占位预览。
+fn draw_document_media_preview(
+    renderer: &mut Renderer,
+    media_card_node: &RenderedMediaCardNode,
+    preview_bounds: Rectangle,
+) {
+    let icon_bounds = Rectangle::new(
+        Point::new(preview_bounds.x + 12.0, preview_bounds.y + 8.0),
+        Size::new(42.0, 40.0),
+    );
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: icon_bounds,
+            border: Border {
+                color: media_card_node.accent_color.scale_alpha(0.20),
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..renderer::Quad::default()
+        },
+        Background::Color(media_card_node.accent_color.scale_alpha(0.24)),
+    );
+    renderer.fill_text(
+        text::Text {
+            content: String::from("PDF"),
+            bounds: icon_bounds.size(),
+            size: iced::Pixels(13.0),
+            line_height: text::LineHeight::default(),
+            font: crate::iced_theme::code_font(),
+            align_x: text::Alignment::Center,
+            align_y: iced::alignment::Vertical::Center,
+            shaping: text::Shaping::Advanced,
+            wrapping: text::Wrapping::None,
+            ellipsis: text::Ellipsis::None,
+            hint_factor: None,
+        },
+        icon_bounds.position(),
+        media_card_node.accent_color,
+        preview_bounds,
+    );
 }
 
 /// Draws panel backgrounds and all visible flow nodes for one transcript viewport.
@@ -465,6 +816,18 @@ pub(super) fn draw_visible_transcript_content(
                     table_paragraphs,
                     &measured_table,
                     &scene.viewport,
+                );
+            }
+            LaidOutFlowNode::MediaCard(layout_node) => {
+                let Some(media_card_node) = scene.media_card_node(layout_node) else {
+                    continue;
+                };
+                draw_rendered_media_card_node(
+                    renderer,
+                    defaults,
+                    media_card_node,
+                    layout_node,
+                    scene,
                 );
             }
             LaidOutFlowNode::Rule(layout_node) => {

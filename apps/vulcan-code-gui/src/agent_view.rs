@@ -251,9 +251,97 @@ fn build_tool_record_block(
             task_execution_status.to_string(),
         );
     }
+    if let Some(metadata) = message.metadata.as_ref() {
+        attach_generated_media_attributes(&mut attributes, metadata);
+    }
     let raw_source = render_directive_source(&kind, &attributes, &message.body);
 
     AgentViewDirectiveBlock::new(kind, attributes, message.body.clone(), raw_source, false)
+}
+
+/// Attaches one generated-media descriptor to tool-block attributes so the transcript renderer can build inline preview cards.
+/// 向工具区块属性附着一份生成媒体描述符，供转录渲染器构建内联预览卡片。
+fn attach_generated_media_attributes(attributes: &mut AgentViewAttributes, metadata: &Value) {
+    let Some(host_result) = resolved_host_result_from_tool_metadata(metadata) else {
+        return;
+    };
+    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
+        return;
+    }
+    let Some(outputs) = host_result
+        .get("payload")
+        .and_then(|payload| payload.get("outputs"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    let Some(first_output) = outputs.first() else {
+        return;
+    };
+    let Some(kind) = first_output
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(file_name) = first_output
+        .get("file_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(local_path) = first_output
+        .get("local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    attributes.insert(
+        String::from("tool-visual-kind"),
+        String::from("generated-media"),
+    );
+    attributes.insert(String::from("generated-media-kind"), kind.to_string());
+    attributes.insert(
+        String::from("generated-media-file-name"),
+        file_name.to_string(),
+    );
+    attributes.insert(
+        String::from("generated-media-local-path"),
+        local_path.to_string(),
+    );
+    attributes.insert(
+        String::from("generated-media-count"),
+        outputs.len().to_string(),
+    );
+    if let Some(mime_type) = first_output
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        attributes.insert(
+            String::from("generated-media-mime-type"),
+        mime_type.to_string(),
+    );
+}
+
+/// Resolves the structured host-result payload stored on one tool transcript metadata object, accepting both nested and flattened runtime-event shapes.
+/// 解析单条工具转录元数据中保存的结构化宿主结果载荷，同时兼容嵌套与扁平两种运行时事件形状。
+fn resolved_host_result_from_tool_metadata(metadata: &Value) -> Option<&Value> {
+    metadata
+        .get("host_result")
+        .filter(|value| value.is_object())
+        .or_else(|| {
+            (metadata.get("kind").is_some() && metadata.get("payload").is_some())
+                .then_some(metadata)
+        })
+}
 }
 
 /// Builds one error notice directive block from the visible session message.
@@ -583,6 +671,53 @@ mod tests {
                         .attributes
                         .get("task-session-execution-status")
                         .is_some_and(|value| value == "completed")
+        ));
+    }
+
+    /// Verifies generated-media tool cards can be built from flattened tool-result metadata emitted by the runtime stream executor.
+    /// 验证可以基于流式运行时执行器发出的扁平化工具结果元数据构建生成媒体工具卡片。
+    #[test]
+    fn generated_media_tool_card_exposes_visual_attributes_from_flat_metadata() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("tool-result-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("已生成图片"),
+            body: String::from("## 工具返回\n\n成功生成图片。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-media-1",
+                "tool_display_state": "completed",
+                "kind": "generated_attachments",
+                "payload": {
+                    "outputs": [{
+                        "kind": "image",
+                        "file_name": "demo.png",
+                        "local_path": "D:/demo.png",
+                        "mime_type": "image/png",
+                    }],
+                },
+            })),
+            created_at: String::from("2"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::ToolCall
+                    && block
+                        .attributes
+                        .get("tool-visual-kind")
+                        .is_some_and(|value| value == "generated-media")
+                    && block
+                        .attributes
+                        .get("generated-media-kind")
+                        .is_some_and(|value| value == "image")
+                    && block
+                        .attributes
+                        .get("generated-media-local-path")
+                        .is_some_and(|value| value == "D:/demo.png")
         ));
     }
 }
