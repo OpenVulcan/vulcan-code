@@ -825,6 +825,46 @@ fn merge_tool_display_messages(messages: Vec<SessionMessageEntry>) -> Vec<Sessio
     merged_messages
 }
 
+/// Builds the visible transcript slice that should participate in one background agent-view projection refresh.
+/// 构建应参与单次后台 agent-view 投影刷新任务的可见转录切片。
+fn visible_session_messages_for_agent_view_projection(
+    messages: Vec<SessionMessageEntry>,
+    floating_thinking_message_id: Option<&str>,
+) -> Vec<SessionMessageEntry> {
+    merge_tool_display_messages(
+        messages
+            .into_iter()
+            .filter(|message| {
+                message.is_visible_to_user()
+                    && floating_thinking_message_id
+                        .is_none_or(|active_id| message.id != active_id)
+            })
+            .collect(),
+    )
+}
+
+/// Builds one session-scoped unified transcript projection snapshot entirely off the UI thread.
+/// 在 UI 线程之外完整构建一份按会话归属的统一转录投影视图快照。
+fn build_session_agent_view_projection_snapshot(
+    session_id: SessionId,
+    messages: Vec<SessionMessageEntry>,
+    runtime_events: Vec<RuntimeEvent>,
+) -> SessionAgentViewProjectionSnapshot {
+    let document = build_agent_view_document(&messages, &runtime_events);
+    let selectable_document =
+        vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
+    let selectable_text = selectable_document.buffer().to_string();
+    let raw_source_text = agent_view_document_raw_source(&document);
+
+    SessionAgentViewProjectionSnapshot {
+        session_id,
+        document,
+        selectable_document,
+        selectable_text,
+        raw_source_text,
+    }
+}
+
 /// Extracts the stable tool-call identifier from one display-capable transcript message when metadata provides it.
 /// 当元数据中存在稳定工具调用标识时，从单条可显示转录消息中提取该标识。
 fn tool_display_message_call_id(message: &SessionMessageEntry) -> Option<String> {
@@ -2027,6 +2067,9 @@ pub struct VulcanWorkbench {
     /// Session identifiers currently running the first lazy hydration task.
     /// 当前正在执行首次懒加载任务的会话标识集合。
     loading_session_ids: BTreeSet<SessionId>,
+    /// Session identifiers currently materializing the heavy unified agent-view projections on a background worker thread.
+    /// 当前正在后台工作线程中物化较重统一 agent-view 投影的会话标识集合。
+    loading_session_agent_view_projection_ids: BTreeSet<SessionId>,
     /// Earliest loaded transcript ordinal for each hydrated session.
     /// 每个已水合会话当前已加载的最早转录序号。
     session_history_earliest_ordinals: BTreeMap<SessionId, i64>,
@@ -3713,6 +3756,27 @@ struct AiCapabilityVendorEditorState {
     is_new: bool,
 }
 
+/// Session-scoped agent-view projection snapshot materialized off the UI thread before being applied back into the live workbench caches.
+/// 在 UI 线程之外先行物化、随后再回写到工作台实时缓存中的按会话归属 agent-view 投影视图快照。
+#[derive(Debug, Clone)]
+struct SessionAgentViewProjectionSnapshot {
+    /// Stable session identifier owning the projected transcript payloads.
+    /// 拥有当前投影转录载荷的稳定会话标识。
+    session_id: SessionId,
+    /// Structured transcript document rendered by the unified agent-view surface.
+    /// 由统一 agent-view 表面渲染的结构化转录文档。
+    document: vulcan_agent_view::AgentViewDocument,
+    /// Selectable projection aligned with the structured document and reused by selection-aware transcript surfaces.
+    /// 与结构化文档对齐、并供支持文本选择的转录表面复用的可选投影对象。
+    selectable_document: vulcan_agent_view::AgentViewSelectableDocument,
+    /// Plain selectable transcript text stored into the read-only text-editor buffer cache.
+    /// 保存到只读文本编辑缓冲区缓存中的可选转录纯文本。
+    selectable_text: String,
+    /// Raw-source projection stored into the dedicated source-view buffer cache.
+    /// 保存到专用源码视图缓冲区缓存中的原始源码投影文本。
+    raw_source_text: String,
+}
+
 /// Returns the inline monochrome SVG bytes used by one left activity-bar panel switcher icon.
 /// 返回左侧活动条某个面板切换图标使用的内联单色 SVG 字节。
 fn main_display_panel_icon_svg_bytes(panel: MainDisplayPanel) -> &'static [u8] {
@@ -3754,6 +3818,12 @@ enum Message {
     /// Applies the completed lazy hydration result for one opened session.
     /// 应用单个已打开会话的懒加载水合结果。
     SessionHydrationLoaded(SessionId, Result<SessionHydrationSnapshot, String>),
+    /// Applies one background-built unified transcript projection snapshot for the given session.
+    /// 应用指定会话在后台构建完成的一份统一转录投影视图快照。
+    SessionAgentViewProjectionLoaded(
+        SessionId,
+        Result<SessionAgentViewProjectionSnapshot, String>,
+    ),
     /// Applies one older transcript page loaded before the current session window.
     /// 应用在当前会话窗口之前加载的一页更早转录历史。
     OlderSessionHistoryLoaded(SessionId, Result<SessionHistoryPage, String>),
@@ -5064,6 +5134,7 @@ impl VulcanWorkbench {
             dirty_session_payload_ids: BTreeSet::new(),
             dirty_session_message_ids: BTreeSet::new(),
             loading_session_ids: BTreeSet::new(),
+            loading_session_agent_view_projection_ids: BTreeSet::new(),
             session_history_earliest_ordinals: BTreeMap::new(),
             session_history_has_more: BTreeSet::new(),
             loading_older_session_history_ids: BTreeSet::new(),
@@ -6246,6 +6317,10 @@ impl VulcanWorkbench {
                         self.apply_session_hydration_snapshot(snapshot);
                         let maintenance_task =
                             self.schedule_session_storage_maintenance(session_id);
+                        let projection_task =
+                            self.schedule_session_agent_view_projection_refresh_if_needed(
+                                session_id,
+                            );
                         if self
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
@@ -6255,6 +6330,7 @@ impl VulcanWorkbench {
                             self.status_message = String::from("当前会话正文已按需加载完成。");
                             return Task::batch([
                                 maintenance_task,
+                                projection_task,
                                 self.schedule_session_tool_detail_loads(
                                     session_id,
                                     &tool_detail_turn_indices,
@@ -6267,11 +6343,42 @@ impl VulcanWorkbench {
                             ]);
                         }
 
-                        return maintenance_task;
+                        return Task::batch([maintenance_task, projection_task]);
                     }
                     Err(error) => {
                         self.status_message = format!("当前会话正文加载失败：{error}");
                         self.push_activity(ActivityLevel::Warning, "当前会话正文加载失败", error);
+                    }
+                }
+
+                Task::none()
+            }
+            Message::SessionAgentViewProjectionLoaded(session_id, result) => {
+                if !self
+                    .loading_session_agent_view_projection_ids
+                    .remove(&session_id)
+                {
+                    return Task::none();
+                }
+
+                match result {
+                    Ok(snapshot) => {
+                        self.apply_session_agent_view_projection_snapshot(snapshot);
+                        if self
+                            .selected_session()
+                            .is_some_and(|session| session.id == session_id)
+                        {
+                            return Task::batch([
+                                self.maybe_follow_selected_session_transcript_tail(session_id),
+                                self.maybe_follow_selected_session_thinking_overlay_tail(
+                                    session_id,
+                                ),
+                            ]);
+                        }
+                    }
+                    Err(error) => {
+                        self.status_message = format!("当前会话视图构建失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "当前会话视图构建失败", error);
                     }
                 }
 
@@ -8657,7 +8764,6 @@ impl VulcanWorkbench {
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_subagent_panel = None;
                 self.rebuild_subagent_task_cache_for_session(session_id);
-                self.refresh_session_agent_view_buffers(session_id);
                 self.session_agent_view_follow_tail
                     .insert(session_id, !has_pending_search_navigation);
                 self.session_streaming_thinking_follow_tail
@@ -8670,8 +8776,11 @@ impl VulcanWorkbench {
                     .unwrap_or_else(|| String::from("未知会话"));
 
                 self.status_message = format!("当前会话已切换为：{selected_title}。");
+                let projection_task =
+                    self.schedule_session_agent_view_projection_refresh_if_needed(session_id);
                 Task::batch([
                     self.schedule_session_hydration(session_id),
+                    projection_task,
                     if has_pending_search_navigation {
                         Task::none()
                     } else {
@@ -8689,8 +8798,8 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.refresh_session_agent_view_buffers(session_id);
                 Task::batch([
+                    self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
                     self.maybe_follow_selected_session_transcript_tail(session_id),
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
                 ])
@@ -8703,8 +8812,8 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.refresh_session_agent_view_buffers(session_id);
                 Task::batch([
+                    self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
                     self.maybe_follow_selected_session_transcript_tail(session_id),
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
                 ])
@@ -8717,8 +8826,8 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.refresh_session_agent_view_buffers(session_id);
                 Task::batch([
+                    self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
                     self.maybe_follow_selected_session_transcript_tail(session_id),
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
                 ])
@@ -14612,6 +14721,95 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Returns whether one session already owns a complete cached transcript projection for the currently active transcript surface mode.
+    /// 返回某个会话当前是否已经拥有与活动转录表面模式匹配的一整套缓存转录投影。
+    fn session_agent_view_projection_ready(&self, session_id: SessionId) -> bool {
+        if !self.session_agent_view_documents.contains_key(&session_id) {
+            return false;
+        }
+
+        if self.should_materialize_session_agent_view_text_buffers(session_id) {
+            self.session_agent_view_selectable_documents
+                .contains_key(&session_id)
+                && self.session_agent_view_buffers.contains_key(&session_id)
+                && self.session_agent_view_raw_buffers.contains_key(&session_id)
+        } else {
+            true
+        }
+    }
+
+    /// Schedules one background refresh that materializes the unified transcript document and optional selectable/raw projections for a hydrated session.
+    /// 为单个已水合会话调度一条后台刷新任务，用于物化统一转录文档及可选的可选文本/原文投影。
+    fn schedule_session_agent_view_projection_refresh(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        if session_id.is_nil()
+            || !self
+                .loading_session_agent_view_projection_ids
+                .insert(session_id)
+        {
+            return Task::none();
+        }
+
+        let floating_thinking_message_id = if self.session_has_active_run(session_id)
+            && self
+                .floating_streaming_thinking_sessions
+                .contains(&session_id)
+        {
+            self.streaming_thinking_message_ids
+                .get(&session_id)
+                .cloned()
+        } else {
+            None
+        };
+        let raw_messages = self
+            .session_messages
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let runtime_events = self
+            .session_runtime_events
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+
+        Task::perform(
+            async move {
+                let task = tokio::task::spawn_blocking(move || {
+                    let visible_messages = visible_session_messages_for_agent_view_projection(
+                        raw_messages,
+                        floating_thinking_message_id.as_deref(),
+                    );
+                    build_session_agent_view_projection_snapshot(
+                        session_id,
+                        visible_messages,
+                        runtime_events,
+                    )
+                });
+                task.await
+                    .map_err(|error| format!("后台构建会话视图失败：{error}"))
+            },
+            move |result| Message::SessionAgentViewProjectionLoaded(session_id, result),
+        )
+    }
+
+    /// Schedules one background transcript projection refresh only when the selected session is already hydrated but the current surface still misses required caches.
+    /// 仅当已选会话已经完成水合、但当前表面仍缺失必要缓存时，才调度一条后台转录投影刷新任务。
+    fn schedule_session_agent_view_projection_refresh_if_needed(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        if session_id.is_nil()
+            || !self.hydrated_session_ids.contains(&session_id)
+            || self.session_agent_view_projection_ready(session_id)
+        {
+            return Task::none();
+        }
+
+        self.schedule_session_agent_view_projection_refresh(session_id)
+    }
+
     /// Schedules one older transcript page load when the current session window reaches the top.
     /// 当当前会话窗口滚动到顶部时，调度一页更早转录历史加载。
     fn schedule_older_session_history_load(&mut self, session_id: SessionId) -> Task<Message> {
@@ -14894,8 +15092,9 @@ impl VulcanWorkbench {
         }
 
         self.rebuild_subagent_task_cache_for_session(session_id);
-        self.refresh_hydrated_session_message_buffers(session_id);
-        self.refresh_session_agent_view_buffers(session_id);
+        self.clear_session_agent_view_text_buffers(session_id);
+        self.session_agent_view_documents.remove(&session_id);
+        self.session_agent_view_block_collapsed.remove(&session_id);
         self.refresh_session_queued_steps(session_id);
     }
 
@@ -14947,7 +15146,6 @@ impl VulcanWorkbench {
                 "已加载更早历史，并为控制内存保留最近 {SESSION_IN_MEMORY_MESSAGE_LIMIT} 条消息。"
             );
         }
-        self.refresh_hydrated_session_message_buffers(session_id);
         self.refresh_session_agent_view_buffers(session_id);
     }
 
@@ -14984,7 +15182,6 @@ impl VulcanWorkbench {
             .sort_by_key(|message| parse_unix_millis_text(&message.created_at).unwrap_or_default());
 
         self.prune_session_message_cache_to_limit(session_id);
-        self.refresh_hydrated_session_message_buffers(session_id);
         self.refresh_session_agent_view_buffers(session_id);
     }
 
@@ -15042,41 +15239,6 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Refreshes per-message raw and Markdown caches for one hydrated session only.
-    /// 仅刷新单个已水合会话的逐消息原文与 Markdown 缓存。
-    fn refresh_hydrated_session_message_buffers(&mut self, session_id: SessionId) {
-        let message_ids = self
-            .session_messages
-            .get(&session_id)
-            .or_else(|| self.archived_session_messages.get(&session_id))
-            .map(|messages| {
-                messages
-                    .iter()
-                    .map(|message| message.id.clone())
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
-
-        self.session_message_raw_buffers
-            .retain(|message_id, _| !message_ids.contains(message_id));
-        self.session_message_markdown
-            .retain(|message_id, _| !message_ids.contains(message_id));
-        self.session_message_markdown_buffers
-            .retain(|message_id, _| !message_ids.contains(message_id));
-
-        let Some(messages) = self
-            .session_messages
-            .get(&session_id)
-            .or_else(|| self.archived_session_messages.get(&session_id))
-            .cloned()
-        else {
-            return;
-        };
-        for message in messages {
-            self.refresh_session_message_projection_buffers(session_id, &message.id);
-        }
-    }
-
     /// Applies one persisted workspace snapshot to the live GUI state in a single place.
     /// 将一份持久化工作台快照集中应用到当前图形界面状态。
     fn apply_workspace_snapshot(&mut self, snapshot: WorkspaceSnapshot) {
@@ -15108,6 +15270,7 @@ impl VulcanWorkbench {
         self.dirty_session_payload_ids.clear();
         self.dirty_session_message_ids.clear();
         self.loading_session_ids.clear();
+        self.loading_session_agent_view_projection_ids.clear();
         self.session_history_earliest_ordinals.clear();
         self.session_history_has_more.clear();
         self.loading_older_session_history_ids.clear();
@@ -15150,9 +15313,6 @@ impl VulcanWorkbench {
         self.session_agent_view_block_collapsed.clear();
         self.session_agent_view_follow_tail.clear();
         self.session_agent_view_viewports.clear();
-        if !self.selected_session.is_nil() {
-            self.refresh_session_agent_view_buffers(self.selected_session);
-        }
         self.sync_workspace_path_with_selected_session();
         self.workspace_path = normalize_workspace_path_text(&self.workspace_path);
         self.refresh_all_session_queued_steps();
@@ -15230,6 +15390,45 @@ impl VulcanWorkbench {
         );
     }
 
+    /// Applies one background-built session-scoped transcript projection snapshot to the live workbench caches.
+    /// 将一份后台构建完成的按会话归属转录投影视图快照应用到实时工作台缓存。
+    fn apply_session_agent_view_projection_snapshot(
+        &mut self,
+        snapshot: SessionAgentViewProjectionSnapshot,
+    ) {
+        let session_id = snapshot.session_id;
+
+        if snapshot.document.blocks.is_empty() {
+            self.clear_session_agent_view_text_buffers(session_id);
+            self.session_agent_view_documents.remove(&session_id);
+            self.session_agent_view_block_collapsed.remove(&session_id);
+            self.session_agent_view_follow_tail.remove(&session_id);
+            self.refresh_active_modal_payloads_for_session(session_id);
+            return;
+        }
+
+        self.sync_session_agent_view_block_collapsed_state(session_id, &snapshot.document);
+        self.session_agent_view_documents
+            .insert(session_id, snapshot.document);
+
+        if self.should_materialize_session_agent_view_text_buffers(session_id) {
+            self.session_agent_view_buffers.insert(
+                session_id,
+                text_editor::Content::with_text(&snapshot.selectable_text),
+            );
+            self.session_agent_view_raw_buffers.insert(
+                session_id,
+                text_editor::Content::with_text(&snapshot.raw_source_text),
+            );
+            self.session_agent_view_selectable_documents
+                .insert(session_id, snapshot.selectable_document);
+        } else {
+            self.clear_session_agent_view_text_buffers(session_id);
+        }
+
+        self.refresh_active_modal_payloads_for_session(session_id);
+    }
+
     /// Rebuilds the structural agent-view document cache for one session without forcing every text projection to refresh.
     /// 为单个会话重建结构化 agent-view 文档缓存，而不强制刷新全部文本投影。
     fn refresh_session_agent_view_document_cache(&mut self, session_id: SessionId) {
@@ -15282,6 +15481,7 @@ impl VulcanWorkbench {
     /// Refreshes the structural transcript cache first, then materializes heavyweight text projections only when the active surface needs them.
     /// 先刷新结构化转录缓存，再仅在当前活动表面确实需要时物化较重的文本投影。
     fn refresh_session_agent_view_buffers(&mut self, session_id: SessionId) {
+        self.loading_session_agent_view_projection_ids.remove(&session_id);
         self.refresh_session_agent_view_document_cache(session_id);
         self.refresh_active_modal_payloads_for_session(session_id);
 
@@ -15419,6 +15619,8 @@ impl VulcanWorkbench {
         self.markdown_session_message_ids.remove(&session_id);
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
+        self.loading_session_agent_view_projection_ids
+            .remove(&session_id);
         self.collapsed_runtime_event_ids.remove(&session_id);
         self.markdown_runtime_event_ids.remove(&session_id);
         self.remove_runtime_event_raw_buffers(session_id);
@@ -15956,45 +16158,20 @@ impl VulcanWorkbench {
             .find(|message| message.id == *message_id && !message.body.trim().is_empty())
     }
 
-    /// Builds the unified agent-view document for the currently selected session when enough transcript state is available.
-    /// 当当前选中会话拥有足够转录状态时构建统一 agent-view 文档。
+    /// Returns the cached unified agent-view document for the currently selected session when it has already been materialized.
+    /// 当当前选中会话已经完成物化时，返回其缓存中的统一 agent-view 文档。
     fn selected_session_agent_view_document(&self) -> Option<vulcan_agent_view::AgentViewDocument> {
         let session_id = self.selected_session().map(|session| session.id)?;
-        self.session_agent_view_documents
-            .get(&session_id)
-            .cloned()
-            .or_else(|| {
-                let messages = self.visible_session_messages_for_agent_view(session_id);
-                let runtime_events = self
-                    .session_runtime_events
-                    .get(&session_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                Some(build_agent_view_document(&messages, &runtime_events))
-            })
+        self.session_agent_view_documents.get(&session_id).cloned()
     }
 
-    /// Builds the runtime-decorated transcript document used by the primary rendered transcript surface.
-    /// 构建主渲染转录表面使用的运行时增强文档。
+    /// Returns the cached runtime-decorated transcript document used by the primary rendered transcript surface.
+    /// 返回主渲染转录表面使用的缓存运行时增强文档。
     fn rendered_session_agent_view_document(
         &self,
         session_id: SessionId,
     ) -> Option<vulcan_agent_view::AgentViewDocument> {
-        let mut document = self
-            .session_agent_view_documents
-            .get(&session_id)
-            .cloned()
-            .or_else(|| {
-                let messages = self.visible_session_messages_for_agent_view(session_id);
-                let runtime_events = self
-                    .session_runtime_events
-                    .get(&session_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                Some(build_agent_view_document(&messages, &runtime_events))
-            })?;
+        let mut document = self.session_agent_view_documents.get(&session_id).cloned()?;
 
         for (block_index, block) in document.blocks.iter_mut().enumerate() {
             let block_id = agent_view_block_id(session_id, block_index, block);
@@ -16117,6 +16294,26 @@ impl VulcanWorkbench {
         self.generated_audio_playback
             .as_ref()
             .is_some_and(|playback| playback.local_path == local_path && !playback.sink.empty())
+    }
+
+    /// Returns the current loading progress snapshot for one session transcript surface when hydration or projection materialization is still in flight.
+    /// 当水合或投影物化仍在进行中时，返回单个会话转录表面的当前加载进度快照。
+    fn session_agent_view_loading_progress(
+        &self,
+        session_id: SessionId,
+    ) -> Option<(f32, &'static str)> {
+        if self.loading_session_ids.contains(&session_id) {
+            return Some((0.38, "正在载入会话正文与运行时快照，请稍候。"));
+        }
+
+        if self
+            .loading_session_agent_view_projection_ids
+            .contains(&session_id)
+        {
+            return Some((0.76, "正在构建会话视图与可选文本投影，请稍候。"));
+        }
+
+        None
     }
 
     /// Returns the selectable transcript projection for the currently selected session when it is already cached.

@@ -520,7 +520,7 @@ impl VulcanWorkbench {
             let (start, end, top_spacer_height, bottom_spacer_height) =
                 self.visible_workbench_model_picker_range(filtered_choices.len());
             scrollable(
-                column![
+                container(column![
                     space::vertical().height(top_spacer_height),
                     column(filtered_choices[start..end].iter().enumerate().map(
                         |(offset, choice)| {
@@ -578,7 +578,13 @@ impl VulcanWorkbench {
                     ))
                     .spacing(WORKBENCH_MODEL_PICKER_ROW_GAP),
                     space::vertical().height(bottom_spacer_height),
-                ],
+                ])
+                .padding(iced::Padding {
+                    top: 0.0,
+                    right: 14.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
             )
             .id(workbench_model_picker_scrollable_id())
             .on_scroll(Message::WorkbenchModelPickerScrolled)
@@ -4209,6 +4215,25 @@ impl VulcanWorkbench {
             .center(Fill)
             .into();
         };
+
+        if let Some((progress_value, progress_detail)) =
+            self.session_agent_view_loading_progress(session_id)
+        {
+            return container(
+                column![
+                    text("正在载入会话").size(18),
+                    text(progress_detail).size(13),
+                    container(progress_bar(0.0..=1.0, progress_value)).width(Fill),
+                ]
+                .spacing(10)
+                .max_width(420)
+                .align_x(iced::Alignment::Center),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into();
+        }
 
         let has_any_document_content = self
             .selected_session_agent_view_document()
