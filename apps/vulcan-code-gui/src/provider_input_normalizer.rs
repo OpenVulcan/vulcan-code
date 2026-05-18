@@ -217,6 +217,7 @@ mod tests {
             source_path: Some(format!("source/{file_name}")),
             asset_id: Some(format!("asset-{file_name}")),
             byte_len: Some(4),
+            preview_local_path: None,
             mime_type: mime_type.to_string(),
         }
     }

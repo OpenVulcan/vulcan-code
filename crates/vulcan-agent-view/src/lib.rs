@@ -9,6 +9,7 @@ pub mod iced_surface;
 pub mod iced_theme;
 pub mod parser;
 pub mod selectable_document;
+mod video_thumbnail;
 
 pub use document::{
     AgentViewAttributes, AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind,
@@ -32,3 +33,4 @@ pub use parser::parse_agent_view_document;
 pub use selectable_document::{
     AgentViewSelectableBlock, AgentViewSelectableBlockKind, AgentViewSelectableDocument,
 };
+pub use video_thumbnail::{VideoThumbnailPreview, resolve_video_thumbnail_preview};

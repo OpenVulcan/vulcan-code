@@ -239,7 +239,7 @@ fn draw_rendered_media_card_node(
             draw_audio_media_preview(renderer, media_card_node, preview_bounds);
         }
         RenderedMediaKind::Video => {
-            draw_video_media_preview(renderer, media_card_node, preview_bounds);
+            draw_video_media_preview(renderer, media_card_node, preview_bounds, scene.viewport);
         }
         RenderedMediaKind::Pdf => {
             draw_document_media_preview(renderer, media_card_node, preview_bounds);
@@ -378,73 +378,42 @@ fn draw_audio_media_preview(
     }
 }
 
-/// Draws one video preview placeholder with a centered play glyph.
-/// 绘制一个带居中播放图标的视频预览占位卡片。
+/// Draws one video preview placeholder with a centered translucent play button overlay.
+/// 绘制一个带居中半透明播放按钮覆盖层的视频预览占位卡片。
 fn draw_video_media_preview(
     renderer: &mut Renderer,
     media_card_node: &RenderedMediaCardNode,
     preview_bounds: Rectangle,
+    viewport: Rectangle,
 ) {
-    let badge_bounds = Rectangle::new(
-        Point::new(preview_bounds.x + 12.0, preview_bounds.y + 12.0),
-        Size::new(54.0, 22.0),
-    );
-    renderer.fill_quad(
-        renderer::Quad {
-            bounds: badge_bounds,
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: 11.0.into(),
-            },
-            ..renderer::Quad::default()
-        },
-        Background::Color(Color::BLACK.scale_alpha(0.24)),
-    );
-    renderer.fill_text(
-        text::Text {
-            content: String::from("VIDEO"),
-            bounds: badge_bounds.size(),
-            size: iced::Pixels(11.0),
-            line_height: text::LineHeight::default(),
-            font: crate::iced_theme::code_font(),
-            align_x: text::Alignment::Center,
-            align_y: iced::alignment::Vertical::Center,
-            shaping: text::Shaping::Advanced,
-            wrapping: text::Wrapping::None,
-            ellipsis: text::Ellipsis::None,
-            hint_factor: None,
-        },
-        badge_bounds.position(),
-        Color::WHITE.scale_alpha(0.92),
-        preview_bounds,
-    );
+    if let Some(preview_local_path) = media_card_node.preview_image_handle.as_ref() {
+        renderer.draw_image(
+            image::Image::new(preview_local_path.clone()),
+            preview_bounds,
+            viewport,
+        );
+    }
 
     let play_bounds = Rectangle::new(
         Point::new(
-            preview_bounds.x + preview_bounds.width / 2.0 - 28.0,
-            preview_bounds.y + preview_bounds.height / 2.0 - 28.0,
+            preview_bounds.x + preview_bounds.width / 2.0 - 31.0,
+            preview_bounds.y + preview_bounds.height / 2.0 - 31.0,
         ),
-        Size::new(56.0, 56.0),
+        Size::new(62.0, 62.0),
     );
     renderer.fill_quad(
         renderer::Quad {
             bounds: play_bounds,
             border: Border {
-                color: media_card_node.accent_color.scale_alpha(0.20),
-                width: 1.0,
-                radius: 28.0.into(),
+                color: Color::WHITE.scale_alpha(0.88),
+                width: 1.2,
+                radius: 31.0.into(),
             },
             ..renderer::Quad::default()
         },
-        Background::Color(Color::BLACK.scale_alpha(0.24)),
+        Background::Color(Color::WHITE.scale_alpha(0.30)),
     );
-    draw_right_pointing_play_glyph(
-        renderer,
-        play_bounds,
-        24.0,
-        Color::WHITE.scale_alpha(0.95),
-    );
+    draw_right_pointing_play_glyph(renderer, play_bounds, 24.0, Color::WHITE.scale_alpha(0.98));
 }
 
 /// Draws one right-pointing play glyph using a symmetric stepped geometry so play and stop states share the same visual baseline.

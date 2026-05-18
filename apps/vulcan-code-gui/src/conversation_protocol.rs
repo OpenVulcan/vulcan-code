@@ -689,12 +689,14 @@ fn compact_historical_record(
 fn generated_attachment_tool_result_should_survive_compaction(
     record: &SessionConversationRecord,
 ) -> bool {
-    matches!(record.record_kind, SessionMessageRecordKind::ToolResultOutput)
-        && record
-            .metadata
-            .as_ref()
-            .and_then(resolve_generated_attachment_host_result_from_metadata)
-            .is_some()
+    matches!(
+        record.record_kind,
+        SessionMessageRecordKind::ToolResultOutput
+    ) && record
+        .metadata
+        .as_ref()
+        .and_then(resolve_generated_attachment_host_result_from_metadata)
+        .is_some()
 }
 
 /// Resolves the generated-attachments host-result payload from transcript metadata, accepting nested and flattened shapes.
@@ -703,9 +705,7 @@ fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> O
     let nested_host_result = metadata
         .get("host_result")
         .filter(|value| value.is_object())
-        .filter(|value| {
-            value.get("kind").and_then(Value::as_str) == Some("generated_attachments")
-        });
+        .filter(|value| value.get("kind").and_then(Value::as_str) == Some("generated_attachments"));
     nested_host_result.or_else(|| {
         (metadata.get("kind").and_then(Value::as_str) == Some("generated_attachments")
             && metadata.get("payload").is_some())
@@ -795,6 +795,17 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
     }
     if let Some(byte_len) = output_object.get("byte_len").cloned() {
         compact_output.insert(String::from("byte_len"), byte_len);
+    }
+    if let Some(preview_local_path) = output_object
+        .get("preview_local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact_output.insert(
+            String::from("preview_local_path"),
+            Value::String(preview_local_path.to_string()),
+        );
     }
     if let Some(asset_id) = output_object
         .get("asset_id")
@@ -1105,7 +1116,10 @@ mod tests {
             .and_then(Value::as_array)
             .expect("generated-media outputs should remain available");
         assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].get("kind").and_then(Value::as_str), Some("image"));
+        assert_eq!(
+            outputs[0].get("kind").and_then(Value::as_str),
+            Some("image")
+        );
         assert_eq!(
             outputs[0].get("file_name").and_then(Value::as_str),
             Some("demo.jpg")

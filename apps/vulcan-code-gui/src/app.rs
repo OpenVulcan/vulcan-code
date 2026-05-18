@@ -114,8 +114,8 @@ use vulcan_agent_view::{
     THINKING_MODAL_ANIMATION_DURATION, THINKING_MODAL_TICK_INTERVAL, ThinkingModalPhase,
     build_modal_thinking_surface_document, build_modal_tool_surface_document,
     build_overlay_thinking_surface_document, build_thinking_title, format_thinking_duration_label,
-    parse_agent_view_document, thinking_modal_progress, thinking_overlay_scrollable_id,
-    view_thinking_modal_surface, view_thinking_overlay_surface,
+    parse_agent_view_document, resolve_video_thumbnail_preview, thinking_modal_progress,
+    thinking_overlay_scrollable_id, view_thinking_modal_surface, view_thinking_overlay_surface,
 };
 use vulcan_core::types::CoreEventKind as VulcanCoreEventKind;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
@@ -1257,6 +1257,12 @@ fn parse_generated_attachment_output(output: &Value) -> Option<ConversationAttac
             .filter(|value| !value.is_empty())
             .map(str::to_string),
         byte_len: output.get("byte_len").and_then(Value::as_u64),
+        preview_local_path: output
+            .get("preview_local_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         mime_type,
     })
 }
@@ -6385,16 +6391,7 @@ impl VulcanWorkbench {
                 local_path,
             } => self.open_composer_image_attachment_preview(file_name, local_path),
             Message::OpenGeneratedAttachmentWithDefaultApp(local_path) => {
-                match open_path_with_system_default_application(&local_path) {
-                    Ok(()) => {
-                        self.status_message = String::from("已使用系统默认应用打开生成媒体。");
-                    }
-                    Err(error) => {
-                        self.show_workbench_notice_modal("无法打开生成媒体", error.clone());
-                        self.status_message = format!("打开生成媒体失败：{error}");
-                    }
-                }
-                Task::none()
+                self.open_generated_attachment_with_system_default_application(&local_path)
             }
             Message::RevealGeneratedAttachmentInFolder(local_path) => {
                 match reveal_path_in_system_file_manager(&local_path) {
@@ -10025,6 +10022,24 @@ impl VulcanWorkbench {
             preview_pointer: None,
             scroll_offset: scrollable::AbsoluteOffset::default(),
         });
+        Task::none()
+    }
+
+    /// Opens one generated media file through the host operating system default application and updates the user-visible status banner.
+    /// 通过宿主操作系统默认应用打开某个生成媒体文件，并更新面向用户的状态横幅。
+    fn open_generated_attachment_with_system_default_application(
+        &mut self,
+        local_path: &str,
+    ) -> Task<Message> {
+        match open_path_with_system_default_application(local_path) {
+            Ok(()) => {
+                self.status_message = String::from("已使用系统默认应用打开生成媒体。");
+            }
+            Err(error) => {
+                self.show_workbench_notice_modal("无法打开生成媒体", error.clone());
+                self.status_message = format!("打开生成媒体失败：{error}");
+            }
+        }
         Task::none()
     }
 
@@ -15896,8 +15911,8 @@ mod tests {
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
         composer_text_has_submittable_content, composer_visible_line_count,
         generated_attachments_from_tool_metadata, merge_tool_display_messages,
-        pending_prompt_dispatch_index,
-        prune_session_messages_to_limit, task_session_payload_from_tool_metadata,
+        pending_prompt_dispatch_index, prune_session_messages_to_limit,
+        task_session_payload_from_tool_metadata,
     };
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
@@ -16267,6 +16282,7 @@ mod tests {
                     "kind": "audio",
                     "file_name": "demo.mp3",
                     "local_path": "D:/demo.mp3",
+                    "preview_local_path": "D:/demo.preview.png",
                     "mime_type": "audio/mpeg",
                     "asset_id": "asset-1",
                     "byte_len": 2048,
@@ -16278,6 +16294,10 @@ mod tests {
         assert_eq!(attachments[0].kind, ConversationAttachmentKind::Audio);
         assert_eq!(attachments[0].file_name, "demo.mp3");
         assert_eq!(attachments[0].local_path, "D:/demo.mp3");
+        assert_eq!(
+            attachments[0].preview_local_path.as_deref(),
+            Some("D:/demo.preview.png")
+        );
     }
 
     #[test]

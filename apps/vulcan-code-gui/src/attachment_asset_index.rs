@@ -1,7 +1,9 @@
 //! Host-managed attachment asset index and cleanup helpers shared by staging, replay, and settings surfaces.
 //! 供暂存、回放与设置界面共享的宿主管理附件资产索引与清理辅助模块。
 
-use crate::attachment_assets::resolve_managed_attachment_root;
+use crate::attachment_assets::{
+    remove_attachment_preview_sidecar, resolve_managed_attachment_root,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -429,6 +431,16 @@ pub fn discard_unreferenced_staged_attachment(
     if let CleanupManagedPath::Existing(managed_path) =
         validate_cleanup_managed_path(&asset_root, &document.assets[index])?
     {
+        let preview_cleanup_attachment = ConversationAttachment {
+            kind: document.assets[index].kind.clone(),
+            file_name: document.assets[index].original_file_name.clone(),
+            local_path: managed_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: Some(document.assets[index].asset_id.clone()),
+            byte_len: document.assets[index].byte_len,
+            preview_local_path: None,
+            mime_type: document.assets[index].mime_type.clone(),
+        };
         fs::remove_file(&managed_path).map_err(|error| {
             format!(
                 "删除未引用托管附件 `{}` 失败：{}。",
@@ -436,6 +448,19 @@ pub fn discard_unreferenced_staged_attachment(
                 error
             )
         })?;
+        remove_attachment_preview_sidecar(&preview_cleanup_attachment);
+    } else {
+        let preview_cleanup_attachment = ConversationAttachment {
+            kind: document.assets[index].kind.clone(),
+            file_name: document.assets[index].original_file_name.clone(),
+            local_path: document.assets[index].managed_path.clone(),
+            source_path: None,
+            asset_id: Some(document.assets[index].asset_id.clone()),
+            byte_len: document.assets[index].byte_len,
+            preview_local_path: None,
+            mime_type: document.assets[index].mime_type.clone(),
+        };
+        remove_attachment_preview_sidecar(&preview_cleanup_attachment);
     }
 
     document.assets.remove(index);
@@ -520,6 +545,16 @@ fn discard_attachment_record_at(
     if let CleanupManagedPath::Existing(managed_path) =
         validate_cleanup_managed_path(asset_root, &document.assets[index])?
     {
+        let preview_cleanup_attachment = ConversationAttachment {
+            kind: document.assets[index].kind.clone(),
+            file_name: document.assets[index].original_file_name.clone(),
+            local_path: managed_path.to_string_lossy().into_owned(),
+            source_path: None,
+            asset_id: Some(document.assets[index].asset_id.clone()),
+            byte_len: document.assets[index].byte_len,
+            preview_local_path: None,
+            mime_type: document.assets[index].mime_type.clone(),
+        };
         fs::remove_file(&managed_path).map_err(|error| {
             format!(
                 "删除未引用托管附件 `{}` 失败：{}。",
@@ -527,6 +562,19 @@ fn discard_attachment_record_at(
                 error
             )
         })?;
+        remove_attachment_preview_sidecar(&preview_cleanup_attachment);
+    } else {
+        let preview_cleanup_attachment = ConversationAttachment {
+            kind: document.assets[index].kind.clone(),
+            file_name: document.assets[index].original_file_name.clone(),
+            local_path: document.assets[index].managed_path.clone(),
+            source_path: None,
+            asset_id: Some(document.assets[index].asset_id.clone()),
+            byte_len: document.assets[index].byte_len,
+            preview_local_path: None,
+            mime_type: document.assets[index].mime_type.clone(),
+        };
+        remove_attachment_preview_sidecar(&preview_cleanup_attachment);
     }
     document.assets.remove(index);
     Ok(())
@@ -735,6 +783,17 @@ pub fn execute_attachment_cleanup(
         match planned_path {
             CleanupManagedPath::Existing(managed_path) => match fs::remove_file(&managed_path) {
                 Ok(()) => {
+                    let preview_cleanup_attachment = ConversationAttachment {
+                        kind: record.kind.clone(),
+                        file_name: record.original_file_name.clone(),
+                        local_path: managed_path.to_string_lossy().into_owned(),
+                        source_path: None,
+                        asset_id: Some(record.asset_id.clone()),
+                        byte_len: record.byte_len,
+                        preview_local_path: None,
+                        mime_type: record.mime_type.clone(),
+                    };
+                    remove_attachment_preview_sidecar(&preview_cleanup_attachment);
                     deleted_file_count += 1;
                 }
                 Err(error) => {
@@ -747,6 +806,17 @@ pub fn execute_attachment_cleanup(
                 }
             },
             CleanupManagedPath::Missing => {
+                let preview_cleanup_attachment = ConversationAttachment {
+                    kind: record.kind.clone(),
+                    file_name: record.original_file_name.clone(),
+                    local_path: record.managed_path.clone(),
+                    source_path: None,
+                    asset_id: Some(record.asset_id.clone()),
+                    byte_len: record.byte_len,
+                    preview_local_path: None,
+                    mime_type: record.mime_type.clone(),
+                };
+                remove_attachment_preview_sidecar(&preview_cleanup_attachment);
                 already_missing_file_count += 1;
             }
         }

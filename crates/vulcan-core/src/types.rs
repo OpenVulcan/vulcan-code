@@ -242,6 +242,10 @@ pub struct ConversationAttachment {
     /// 为宿主侧预算估算与诊断保留的可选源字节长度。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_len: Option<u64>,
+    /// Optional local preview image path derived from the attachment, used by host-side media cards when the primary file is not directly displayable.
+    /// 当主文件本身不可直接展示时，供宿主侧媒体卡片使用的、从附件派生出的可选本地预览图片路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_local_path: Option<String>,
     /// Resolved MIME type attached to the local file.
     /// 绑定到本地文件上的已解析 MIME 类型。
     pub mime_type: String,

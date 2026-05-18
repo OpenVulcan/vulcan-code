@@ -245,7 +245,6 @@ pub fn stage_attachment_bytes(
     })?;
 
     set_managed_attachment_file_times(&managed_file_path, timestamp.unix_millis)?;
-
     let attachment = ConversationAttachment {
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
@@ -255,6 +254,7 @@ pub fn stage_attachment_bytes(
             .map(|path| path.to_string_lossy().into_owned()),
         asset_id: Some(asset_id),
         byte_len: Some(bytes.len() as u64),
+        preview_local_path: None,
         mime_type: descriptor.mime_type.to_string(),
     };
     record_staged_attachment(workspace_path, &attachment, &timestamp)?;
@@ -317,6 +317,24 @@ pub fn resolve_attachment_replay_path(attachment: &ConversationAttachment) -> Op
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .filter(|path| path.is_file())
+}
+
+/// Removes any deterministic managed preview sidecar associated with the provided managed attachment path.
+/// 移除与给定托管附件路径关联的任意确定性托管预览旁路文件。
+pub fn remove_attachment_preview_sidecar(attachment: &ConversationAttachment) {
+    if matches!(attachment.kind, ConversationAttachmentKind::Video) {
+        let managed_path = Path::new(&attachment.local_path);
+        let parent = managed_path.parent().unwrap_or_else(|| Path::new("."));
+        let stem = managed_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("video");
+        let legacy_preview_path = parent.join(format!("{stem}.preview.png"));
+        if legacy_preview_path.is_file() {
+            let _ = fs::remove_file(legacy_preview_path);
+        }
+    }
 }
 
 /// Returns the stable category directory path used by the provided attachment kind below the managed attachment root.

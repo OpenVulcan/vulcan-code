@@ -808,12 +808,10 @@ pub async fn load_session_hydration_snapshot(
     let generated_media_rows =
         query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
             .await?;
-    let earliest_ordinal = merge_generated_media_rows_into_transcript_window(
-        &mut message_rows,
-        generated_media_rows,
-    );
-    let has_more_history = loaded_turn_count >= effective_limit
-        && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
+    let earliest_ordinal =
+        merge_generated_media_rows_into_transcript_window(&mut message_rows, generated_media_rows);
+    let has_more_history =
+        loaded_turn_count >= effective_limit && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
     let messages =
         hydrate_transcript_window_messages(&controller, session_id, message_rows).await?;
     let compactions = query_session_compaction_rows_for_session(&controller, session_id)
@@ -868,12 +866,10 @@ pub async fn load_session_history_page(
     let generated_media_rows =
         query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
             .await?;
-    let earliest_ordinal = merge_generated_media_rows_into_transcript_window(
-        &mut message_rows,
-        generated_media_rows,
-    );
-    let has_more_history = loaded_turn_count >= effective_limit
-        && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
+    let earliest_ordinal =
+        merge_generated_media_rows_into_transcript_window(&mut message_rows, generated_media_rows);
+    let has_more_history =
+        loaded_turn_count >= effective_limit && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
     let messages =
         hydrate_transcript_window_messages(&controller, session_id, message_rows).await?;
 
@@ -2266,12 +2262,7 @@ ORDER BY m.ordinal ASC;
         );
         let mut params = Vec::with_capacity(chunk.len() + 1);
         params.push(ControllerSqliteValue::String(session_id_text.clone()));
-        params.extend(
-            chunk
-                .iter()
-                .copied()
-                .map(ControllerSqliteValue::Int64),
-        );
+        params.extend(chunk.iter().copied().map(ControllerSqliteValue::Int64));
         let result = controller
             .client
             .query_sqlite_json_typed(
@@ -4240,13 +4231,11 @@ fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> O
     let nested_host_result = metadata
         .get("host_result")
         .filter(|value| value.is_object())
-        .filter(|value| {
-            value.get("kind").and_then(Value::as_str) == Some("generated_attachments")
-        });
+        .filter(|value| value.get("kind").and_then(Value::as_str) == Some("generated_attachments"));
     nested_host_result.or_else(|| {
         (metadata.get("kind").and_then(Value::as_str) == Some("generated_attachments")
             && metadata.get("payload").is_some())
-            .then_some(metadata)
+        .then_some(metadata)
     })
 }
 
@@ -4526,6 +4515,17 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
     }
     if let Some(byte_len) = output_object.get("byte_len").cloned() {
         compact.insert(String::from("byte_len"), byte_len);
+    }
+    if let Some(preview_local_path) = output_object
+        .get("preview_local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact.insert(
+            String::from("preview_local_path"),
+            Value::String(preview_local_path.to_string()),
+        );
     }
     if let Some(asset_id) = output_object
         .get("asset_id")
@@ -4894,6 +4894,7 @@ mod tests {
                             "kind": "image",
                             "file_name": "demo.png",
                             "local_path": "D:/demo.png",
+                            "preview_local_path": "D:/demo.preview.png",
                             "mime_type": "image/png",
                             "byte_len": 1024,
                             "asset_id": "asset-demo",
@@ -4908,7 +4909,9 @@ mod tests {
             .expect("expected generated attachment metadata payload");
         let parsed = parse_session_message_meta_from_json(&json_payload)
             .expect("expected generated attachment metadata to parse");
-        let metadata = parsed.metadata.expect("expected generated attachment metadata");
+        let metadata = parsed
+            .metadata
+            .expect("expected generated attachment metadata");
         let host_result = metadata
             .get("host_result")
             .and_then(Value::as_object)
@@ -4927,6 +4930,16 @@ mod tests {
                 .and_then(|output| output.get("local_path"))
                 .and_then(Value::as_str),
             Some("D:/demo.png")
+        );
+        assert_eq!(
+            host_result
+                .get("payload")
+                .and_then(|value| value.get("outputs"))
+                .and_then(Value::as_array)
+                .and_then(|outputs| outputs.first())
+                .and_then(|output| output.get("preview_local_path"))
+                .and_then(Value::as_str),
+            Some("D:/demo.preview.png")
         );
     }
 
@@ -5026,8 +5039,10 @@ mod tests {
             created_at: String::from("22"),
         }];
 
-        let earliest =
-            merge_generated_media_rows_into_transcript_window(&mut transcript_rows, generated_media_rows);
+        let earliest = merge_generated_media_rows_into_transcript_window(
+            &mut transcript_rows,
+            generated_media_rows,
+        );
 
         assert_eq!(earliest, Some(20));
         assert_eq!(

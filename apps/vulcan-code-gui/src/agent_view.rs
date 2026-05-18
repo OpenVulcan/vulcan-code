@@ -315,6 +315,17 @@ fn attach_generated_media_attributes(attributes: &mut AgentViewAttributes, metad
         String::from("generated-media-local-path"),
         local_path.to_string(),
     );
+    if let Some(preview_local_path) = first_output
+        .get("preview_local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        attributes.insert(
+            String::from("generated-media-preview-local-path"),
+            preview_local_path.to_string(),
+        );
+    }
     attributes.insert(
         String::from("generated-media-count"),
         outputs.len().to_string(),
@@ -327,21 +338,21 @@ fn attach_generated_media_attributes(attributes: &mut AgentViewAttributes, metad
     {
         attributes.insert(
             String::from("generated-media-mime-type"),
-        mime_type.to_string(),
-    );
-}
+            mime_type.to_string(),
+        );
+    }
 
-/// Resolves the structured host-result payload stored on one tool transcript metadata object, accepting both nested and flattened runtime-event shapes.
-/// 解析单条工具转录元数据中保存的结构化宿主结果载荷，同时兼容嵌套与扁平两种运行时事件形状。
-fn resolved_host_result_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-    metadata
-        .get("host_result")
-        .filter(|value| value.is_object())
-        .or_else(|| {
-            (metadata.get("kind").is_some() && metadata.get("payload").is_some())
-                .then_some(metadata)
-        })
-}
+    /// Resolves the structured host-result payload stored on one tool transcript metadata object, accepting both nested and flattened runtime-event shapes.
+    /// 解析单条工具转录元数据中保存的结构化宿主结果载荷，同时兼容嵌套与扁平两种运行时事件形状。
+    fn resolved_host_result_from_tool_metadata(metadata: &Value) -> Option<&Value> {
+        metadata
+            .get("host_result")
+            .filter(|value| value.is_object())
+            .or_else(|| {
+                (metadata.get("kind").is_some() && metadata.get("payload").is_some())
+                    .then_some(metadata)
+            })
+    }
 }
 
 /// Builds one error notice directive block from the visible session message.

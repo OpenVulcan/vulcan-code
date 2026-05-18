@@ -1271,6 +1271,7 @@ fn attachment_to_json(attachment: &ConversationAttachment) -> Value {
         "mime_type": attachment.mime_type,
         "asset_id": attachment.asset_id,
         "byte_len": attachment.byte_len,
+        "preview_local_path": attachment.preview_local_path,
     })
 }
 

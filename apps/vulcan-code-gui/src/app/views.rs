@@ -3090,6 +3090,19 @@ impl VulcanWorkbench {
                 .border_radius(14.0)
                 .into();
         }
+        if matches!(attachment.kind, ConversationAttachmentKind::Video)
+            && let Some(preview) = resolve_video_thumbnail_preview(
+                &attachment.local_path,
+                Some(attachment.mime_type.as_str()),
+            )
+        {
+            return iced_image(preview.handle)
+                .width(Fill)
+                .height(Fill)
+                .content_fit(ContentFit::Cover)
+                .border_radius(14.0)
+                .into();
+        }
 
         let palette = self.app_theme.extended_palette();
         let icon_color = match attachment.kind {
@@ -4604,6 +4617,37 @@ impl VulcanWorkbench {
                         file_name: attachment.file_name.clone(),
                         local_path: attachment.local_path.clone(),
                     }),
+                )
+                .width(Fill)
+                .align_x(iced::Alignment::Start)
+                .into()
+            }
+            ConversationAttachmentKind::Video
+                if resolve_video_thumbnail_preview(
+                    &attachment.local_path,
+                    Some(attachment.mime_type.as_str()),
+                )
+                .is_some() =>
+            {
+                let preview = resolve_video_thumbnail_preview(
+                    &attachment.local_path,
+                    Some(attachment.mime_type.as_str()),
+                )
+                .expect("guard above ensures video preview exists");
+                let preview_size =
+                    bounded_image_preview_size(Some(preview.aspect_ratio), 220.0, 520.0);
+                container(
+                    button(
+                        iced_image(preview.handle)
+                            .width(preview_size.width)
+                            .height(preview_size.height)
+                            .content_fit(ContentFit::Contain),
+                    )
+                    .padding(0)
+                    .style(style::workbench_composer_attachment_preview_button_style)
+                    .on_press(Message::OpenGeneratedAttachmentWithDefaultApp(
+                        attachment.local_path.clone(),
+                    )),
                 )
                 .width(Fill)
                 .align_x(iced::Alignment::Start)

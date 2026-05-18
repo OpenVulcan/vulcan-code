@@ -233,6 +233,7 @@ mod tests {
             source_path: Some(String::from("source/test.png")),
             asset_id: Some(String::from("asset-test")),
             byte_len: Some(4),
+            preview_local_path: None,
             mime_type: String::from("image/png"),
         }
     }

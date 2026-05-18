@@ -207,10 +207,7 @@ pub(crate) fn build_tool_result_runtime_metadata(
     );
 
     if let Some(Value::Object(object)) = host_metadata {
-        metadata.insert(
-            String::from("host_result"),
-            Value::Object(object.clone()),
-        );
+        metadata.insert(String::from("host_result"), Value::Object(object.clone()));
         metadata.extend(object.clone());
     } else if let Some(other) = host_metadata {
         metadata.insert(String::from("host_metadata"), other.clone());
@@ -270,7 +267,9 @@ mod tests {
         .expect("metadata should exist");
 
         assert_eq!(
-            metadata.get("tool_call_id").and_then(|value| value.as_str()),
+            metadata
+                .get("tool_call_id")
+                .and_then(|value| value.as_str()),
             Some("call-1")
         );
         assert_eq!(

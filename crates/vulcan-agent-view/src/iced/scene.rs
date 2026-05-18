@@ -361,8 +361,11 @@ pub(super) struct RenderedMediaCardNode {
     /// Local absolute path used by host-side preview, playback, or file-manager actions.
     /// 供宿主侧预览、播放或文件管理器动作使用的本地绝对路径。
     pub(super) local_path: String,
-    /// Optional intrinsic image aspect ratio captured from the local file so image cards can size themselves proportionally.
-    /// 从本地文件中捕获的可选原始图片宽高比，供图片卡片按比例自适应尺寸。
+    /// Optional in-memory raster preview handle used when the actionable media file itself cannot be drawn directly inside the transcript, such as MP4 video cards backed by dynamically decoded first frames.
+    /// 当可执行媒体文件本身无法直接在转录中绘制时使用的可选内存预览句柄，例如使用动态解码首帧的 MP4 视频卡片。
+    pub(super) preview_image_handle: Option<iced::widget::image::Handle>,
+    /// Optional intrinsic raster-preview aspect ratio captured from the local file so image and video cards can size themselves proportionally.
+    /// 从本地图像预览文件中捕获的可选原始宽高比，供图片卡片与视频卡片按比例自适应尺寸。
     pub(super) image_aspect_ratio: Option<f32>,
     /// Total number of generated outputs represented by the current card.
     /// 当前卡片代表的生成输出总数量。

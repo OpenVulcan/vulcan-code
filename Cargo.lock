@@ -2918,6 +2918,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp4"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "num-rational",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3105,6 +3119,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -4603,6 +4618,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "rust_h264"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbedf5e104105e8783a77926f1e212ea37e78fd3b38b2c928938a283d083d6f1"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5936,8 +5957,10 @@ version = "0.1.0"
 dependencies = [
  "iced",
  "image",
+ "mp4",
  "pulldown-cmark 0.13.3",
  "ropey",
+ "rust_h264",
  "serde",
  "time",
  "unicode-segmentation",

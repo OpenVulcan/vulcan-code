@@ -126,61 +126,67 @@ pub async fn bootstrap_application_data_plane(
     };
     let client = ControllerClient::new(config, registration);
 
-    client
-        .connect()
-        .await
-        .map_err(|error| format!("连接或唤起 vldb-controller 失败：{error}"))?;
+    let bootstrap_result = async {
+        client
+            .connect()
+            .await
+            .map_err(|error| format!("连接或唤起 vldb-controller 失败：{error}"))?;
 
-    let binding_scope_id = resolve_controller_binding_scope_id(&client)
-        .await
-        .map_err(|error| format!("解析 vldb 控制器客户端会话作用域失败：{error}"))?;
-    let sqlite_binding_id = build_controller_binding_id(APP_SQLITE_BINDING_TAG, &binding_scope_id);
+        let sqlite_binding_id = build_application_sqlite_binding_id();
 
-    let status = client.get_status().await.ok();
+        client
+            .attach_space(SpaceRegistration {
+                space_id: String::from(APP_SPACE_ID),
+                space_label: String::from("APP"),
+                space_kind: SpaceKind::User,
+                space_root: data_root.display().to_string(),
+            })
+            .await
+            .map_err(|error| format!("附着应用数据空间失败：{error}"))?;
 
-    client
-        .attach_space(SpaceRegistration {
-            space_id: String::from(APP_SPACE_ID),
-            space_label: String::from("APP"),
-            space_kind: SpaceKind::User,
-            space_root: data_root.display().to_string(),
-        })
-        .await
-        .map_err(|error| format!("附着应用数据空间失败：{error}"))?;
+        client
+            .enable_sqlite(ControllerSqliteEnableRequest {
+                space_id: String::from(APP_SPACE_ID),
+                binding_id: sqlite_binding_id.clone(),
+                db_path: sqlite_path.display().to_string(),
+                ..ControllerSqliteEnableRequest::default()
+            })
+            .await
+            .map_err(|error| format!("启用应用 SQLite 数据库失败：{error}"))?;
 
-    client
-        .enable_sqlite(ControllerSqliteEnableRequest {
-            space_id: String::from(APP_SPACE_ID),
-            binding_id: sqlite_binding_id.clone(),
-            db_path: sqlite_path.display().to_string(),
-            ..ControllerSqliteEnableRequest::default()
-        })
-        .await
-        .map_err(|error| format!("启用应用 SQLite 数据库失败：{error}"))?;
+        client
+            .execute_sqlite_script_typed(
+                APP_SPACE_ID,
+                sqlite_binding_id.as_str(),
+                build_application_schema_script(),
+                Vec::new(),
+            )
+            .await
+            .map_err(|error| format!("初始化应用数据结构失败：{error}"))?;
 
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id.as_str(),
-            build_application_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("初始化应用数据结构失败：{error}"))?;
+        ensure_application_schema_migrations(&client, &sqlite_binding_id).await?;
 
-    ensure_application_schema_migrations(&client, &sqlite_binding_id).await?;
+        Ok::<_, String>((client.get_status().await.ok(), sqlite_binding_id))
+    }
+    .await;
 
-    Ok(ControllerBootstrapReport {
-        handle: ControllerRuntimeHandle {
-            client,
-            endpoint,
-            executable,
-            data_root,
-            sqlite_path,
-            sqlite_binding_id,
-        },
-        status,
-    })
+    match bootstrap_result {
+        Ok((status, sqlite_binding_id)) => Ok(ControllerBootstrapReport {
+            handle: ControllerRuntimeHandle {
+                client,
+                endpoint,
+                executable,
+                data_root,
+                sqlite_path,
+                sqlite_binding_id,
+            },
+            status,
+        }),
+        Err(error) => {
+            cleanup_failed_controller_bootstrap(&client, &error).await?;
+            Err(error)
+        }
+    }
 }
 
 /// Builds one controller client config from the persisted application configuration.
@@ -227,30 +233,23 @@ fn build_controller_client_config(
     Ok(config)
 }
 
-/// Resolves the current controller client session identifier after connect and uses it as one binding scope.
-/// 在连接完成后解析当前控制器客户端会话标识，并将其用作绑定作用域。
-async fn resolve_controller_binding_scope_id(client: &ControllerClient) -> Result<String, String> {
-    let mut snapshots = client
-        .list_clients()
-        .await
-        .map_err(|error| format!("查询控制器客户端列表失败：{error}"))?
-        .into_iter();
-    let snapshot = snapshots
-        .next()
-        .ok_or_else(|| String::from("控制器未返回当前客户端会话。"))?;
-    if snapshots.next().is_some() {
-        return Err(String::from(
-            "控制器返回了多个可见客户端会话，无法安全解析当前绑定作用域。",
-        ));
-    }
-
-    Ok(snapshot.client_session_id)
+/// Builds the stable application SQLite binding identifier used across controller sessions.
+/// 构建跨控制器会话复用的稳定应用 SQLite 绑定标识符。
+fn build_application_sqlite_binding_id() -> String {
+    String::from(APP_SQLITE_BINDING_TAG)
 }
 
-/// Builds one controller binding identifier from the stable host binding tag and one session-scoped suffix.
-/// 基于稳定宿主绑定标签与会话作用域后缀构建一条控制器绑定标识。
-fn build_controller_binding_id(binding_tag: &str, binding_scope_id: &str) -> String {
-    format!("{binding_tag}@{binding_scope_id}")
+/// Shuts down one partially initialized controller client after bootstrap failure so the next retry starts cleanly.
+/// 在引导失败后关闭部分初始化的控制器客户端，确保下一次重试从干净状态开始。
+async fn cleanup_failed_controller_bootstrap(
+    client: &ControllerClient,
+    bootstrap_error: &str,
+) -> Result<(), String> {
+    client.shutdown().await.map_err(|cleanup_error| {
+        format!(
+            "{bootstrap_error}；另外清理失败的 vldb 会话也失败：{cleanup_error}"
+        )
+    })
 }
 
 /// Applies additive schema migrations required by newer application builds.

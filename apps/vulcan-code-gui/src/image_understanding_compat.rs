@@ -443,6 +443,7 @@ mod tests {
             source_path: None,
             asset_id: Some(format!("asset-{file_name}")),
             byte_len: Some(4),
+            preview_local_path: None,
             mime_type: String::from("image/png"),
         }
     }

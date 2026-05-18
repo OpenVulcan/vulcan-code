@@ -263,7 +263,10 @@ fn measure_rendered_media_card_node(
     let outer_x = widget_bounds.x;
     let outer_y = current_y + media_card_node.gap_before;
     let capped_width = (available_width * media_card_node.max_width_ratio)
-        .clamp(media_card_kind_min_width(media_card_node.kind), media_card_kind_max_width(media_card_node.kind))
+        .clamp(
+            media_card_kind_min_width(media_card_node.kind),
+            media_card_kind_max_width(media_card_node.kind),
+        )
         .min(available_width);
     let (outer_bounds, preview_bounds, title_bounds, meta_bounds) =
         media_card_layout_bounds(media_card_node, outer_x, outer_y, capped_width);
@@ -334,12 +337,18 @@ fn media_card_layout_bounds(
                 Size::new(outer_width, outer_height),
             );
             let preview_bounds = Rectangle::new(
-                Point::new(outer_bounds.x + horizontal_inset, outer_bounds.y + top_inset),
+                Point::new(
+                    outer_bounds.x + horizontal_inset,
+                    outer_bounds.y + top_inset,
+                ),
                 Size::new(preview_width, preview_height),
             );
             let title_bounds = if show_caption {
                 Rectangle::new(
-                    Point::new(outer_bounds.x + 14.0, preview_bounds.y + preview_bounds.height + 12.0),
+                    Point::new(
+                        outer_bounds.x + 14.0,
+                        preview_bounds.y + preview_bounds.height + 12.0,
+                    ),
                     Size::new((outer_bounds.width - 28.0).max(1.0), 20.0),
                 )
             } else {
@@ -350,7 +359,74 @@ fn media_card_layout_bounds(
             };
             let meta_bounds = if show_caption {
                 Rectangle::new(
-                    Point::new(outer_bounds.x + 14.0, preview_bounds.y + preview_bounds.height + 34.0),
+                    Point::new(
+                        outer_bounds.x + 14.0,
+                        preview_bounds.y + preview_bounds.height + 34.0,
+                    ),
+                    Size::new((outer_bounds.width - 28.0).max(1.0), 16.0),
+                )
+            } else {
+                Rectangle::new(
+                    Point::new(outer_bounds.x, outer_bounds.y + outer_bounds.height),
+                    Size::new(0.0, 0.0),
+                )
+            };
+            (outer_bounds, preview_bounds, title_bounds, meta_bounds)
+        }
+        (RenderedMediaKind::Video, show_caption)
+            if media_card_node
+                .image_aspect_ratio
+                .is_some_and(|ratio| ratio.is_finite() && ratio > 0.0) =>
+        {
+            let horizontal_inset = if show_caption { 12.0 } else { 10.0 };
+            let top_inset = if show_caption { 12.0 } else { 10.0 };
+            let bottom_inset = if show_caption { 62.0 } else { 10.0 };
+            let preview_max_height = if show_caption { 152.0 } else { 156.0 };
+            let preview_max_width = (capped_width - horizontal_inset * 2.0).max(1.0);
+            let aspect_ratio = media_card_node
+                .image_aspect_ratio
+                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+                .unwrap_or(16.0 / 9.0);
+            let unconstrained_preview_width = preview_max_height * aspect_ratio;
+            let preview_width = unconstrained_preview_width
+                .min(preview_max_width)
+                .max(preview_max_width.min(120.0));
+            let preview_height = (preview_width / aspect_ratio)
+                .min(preview_max_height)
+                .max(1.0);
+            let outer_width = preview_width + horizontal_inset * 2.0;
+            let outer_height = top_inset + preview_height + bottom_inset;
+            let outer_bounds = Rectangle::new(
+                Point::new(outer_x, outer_y),
+                Size::new(outer_width, outer_height),
+            );
+            let preview_bounds = Rectangle::new(
+                Point::new(
+                    outer_bounds.x + horizontal_inset,
+                    outer_bounds.y + top_inset,
+                ),
+                Size::new(preview_width, preview_height),
+            );
+            let title_bounds = if show_caption {
+                Rectangle::new(
+                    Point::new(
+                        outer_bounds.x + 14.0,
+                        preview_bounds.y + preview_bounds.height + 12.0,
+                    ),
+                    Size::new((outer_bounds.width - 28.0).max(1.0), 20.0),
+                )
+            } else {
+                Rectangle::new(
+                    Point::new(outer_bounds.x, outer_bounds.y + outer_bounds.height),
+                    Size::new(0.0, 0.0),
+                )
+            };
+            let meta_bounds = if show_caption {
+                Rectangle::new(
+                    Point::new(
+                        outer_bounds.x + 14.0,
+                        preview_bounds.y + preview_bounds.height + 34.0,
+                    ),
                     Size::new((outer_bounds.width - 28.0).max(1.0), 16.0),
                 )
             } else {

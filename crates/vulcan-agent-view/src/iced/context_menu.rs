@@ -15,8 +15,7 @@ use iced::advanced::text;
 use iced::advanced::text::Renderer as _;
 use iced::advanced::{Renderer as _, Shell};
 use iced::{
-    Background, Border, Color, Event, Pixels, Point, Rectangle, Renderer, Size, Theme,
-    keyboard,
+    Background, Border, Color, Event, Pixels, Point, Rectangle, Renderer, Size, Theme, keyboard,
 };
 
 /// Fixed width used by the lightweight transcript context menu.

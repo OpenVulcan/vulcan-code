@@ -16,6 +16,7 @@ use super::scene::{
 };
 use super::text_routing::build_agent_view_plain_text_spans;
 use crate::iced_theme as theme;
+use crate::resolve_video_thumbnail_preview;
 use crate::{AgentViewDirectiveBlock, AgentViewDirectiveKind};
 use iced::advanced::text;
 use iced::font;
@@ -554,8 +555,21 @@ fn render_generated_media_directive_card(
         }
     };
     builder.register_link_action(action_link_target.clone(), action);
+    let video_thumbnail_preview = match kind {
+        RenderedMediaKind::Video => resolve_video_thumbnail_preview(
+            local_path,
+            block
+                .attributes
+                .get("generated-media-mime-type")
+                .map(String::as_str),
+        ),
+        _ => None,
+    };
     let image_aspect_ratio = match kind {
         RenderedMediaKind::Image => local_image_aspect_ratio(local_path),
+        RenderedMediaKind::Video => video_thumbnail_preview
+            .as_ref()
+            .map(|preview| preview.aspect_ratio),
         _ => None,
     };
     builder.push_media_card(
@@ -563,6 +577,9 @@ fn render_generated_media_directive_card(
         title,
         file_name.to_string(),
         local_path.to_string(),
+        video_thumbnail_preview
+            .as_ref()
+            .map(|preview| preview.handle.clone()),
         image_aspect_ratio,
         output_count,
         false,
@@ -1355,10 +1372,12 @@ mod tests {
     /// 验证生成媒体工具卡会隐藏转录侧说明文字，并通过渲染媒体节点暴露当前播放激活状态。
     #[test]
     fn generated_media_tool_card_uses_minimal_chrome_and_playback_state() {
-        let mut builder =
-            RenderedTranscriptBuilder::new(color!(0x4477AA), color!(0xE8EEF7));
+        let mut builder = RenderedTranscriptBuilder::new(color!(0x4477AA), color!(0xE8EEF7));
         let mut attributes = AgentViewAttributes::new();
-        attributes.insert(String::from("tool-visual-kind"), String::from("generated-media"));
+        attributes.insert(
+            String::from("tool-visual-kind"),
+            String::from("generated-media"),
+        );
         attributes.insert(String::from("generated-media-kind"), String::from("audio"));
         attributes.insert(
             String::from("generated-media-file-name"),
