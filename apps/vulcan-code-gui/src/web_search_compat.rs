@@ -1762,6 +1762,7 @@ mod tests {
                 name: String::from("DuckDuckGo"),
                 enabled: true,
                 api_key: String::new(),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::new(),
                 targets: vec![

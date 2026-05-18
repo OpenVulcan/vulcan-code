@@ -299,12 +299,12 @@ fn decorate_video_thumbnail_with_play_overlay(image: &mut RgbaImage) {
         return;
     }
 
-    let radius = ((width.min(height) as f32) * 0.18).clamp(20.0, 36.0);
+    let radius = ((width.min(height) as f32) * 0.46).clamp(56.0, 96.0);
     let center_x = width as f32 / 2.0;
     let center_y = height as f32 / 2.0;
     let border_alpha = 228u8;
-    let fill_alpha = 84u8;
-    let border_thickness = (radius * 0.06).max(1.2);
+    let fill_alpha = 112u8;
+    let border_thickness = (radius * 0.05).max(1.8);
 
     for pixel_y in 0..height {
         for pixel_x in 0..width {
@@ -323,9 +323,9 @@ fn decorate_video_thumbnail_with_play_overlay(image: &mut RgbaImage) {
         }
     }
 
-    let triangle_height = radius * 0.92;
-    let triangle_width = triangle_height * 0.78;
-    let triangle_left = center_x - triangle_width * 0.30;
+    let triangle_height = radius * 1.02;
+    let triangle_width = triangle_height * 0.84;
+    let triangle_left = center_x - triangle_width * 0.24;
     let triangle_top = center_y - triangle_height / 2.0;
     let triangle_right = triangle_left + triangle_width;
     let triangle_mid_y = center_y;

@@ -1059,6 +1059,33 @@ pub fn workbench_pending_prompt_queue_row_style(
     }
 }
 
+/// Returns the compact square-corner row style used by AI capability target bindings.
+/// 返回 AI 扩展能力目标绑定行使用的紧凑直角边框样式。
+pub fn workbench_ai_capability_route_row_style(
+    theme: &Theme,
+    is_drag_source: bool,
+) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(if is_drag_source {
+            palette.primary.weak.color.scale_alpha(0.20)
+        } else {
+            palette.background.base.color.scale_alpha(0.72)
+        })),
+        border: Border {
+            radius: 0.0.into(),
+            width: 1.0,
+            color: if is_drag_source {
+                palette.primary.weak.color.scale_alpha(0.60)
+            } else {
+                palette.background.strong.color.scale_alpha(0.20)
+            },
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the insertion-indicator style shown while pending-prompt queue rows are being reordered.
 /// 返回待发送队列行重排期间显示的插入指示线样式。
 pub fn workbench_pending_prompt_drop_indicator_style(theme: &Theme) -> container::Style {
@@ -2010,6 +2037,68 @@ pub fn workbench_transcript_mode_button_style(
             text_color: palette.background.base.text.scale_alpha(0.36),
             border: Border {
                 color: palette.background.strong.color.scale_alpha(0.14),
+                ..base.border
+            },
+            ..base
+        },
+    }
+}
+
+/// Returns the rounded label-button style used by compact action chips such as edit/remove buttons in settings lists.
+/// 返回设置列表中编辑/移除等紧凑操作标签使用的圆角标签按钮样式。
+pub fn workbench_label_action_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_danger: bool,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let (background, text_color, border_color) = if is_danger {
+        (
+            palette.danger.strong.color,
+            palette.danger.strong.text,
+            palette.danger.strong.color,
+        )
+    } else {
+        (
+            palette.primary.base.color,
+            palette.primary.base.text,
+            palette.primary.strong.color,
+        )
+    };
+    let base = button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: border_color,
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered => button::Style {
+            shadow: Shadow {
+                color: Color {
+                    a: 0.18,
+                    ..Color::BLACK
+                },
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 4.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            shadow: Shadow::default(),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(Background::Color(background.scale_alpha(0.42))),
+            text_color: text_color.scale_alpha(0.62),
+            border: Border {
+                color: border_color.scale_alpha(0.42),
                 ..base.border
             },
             ..base

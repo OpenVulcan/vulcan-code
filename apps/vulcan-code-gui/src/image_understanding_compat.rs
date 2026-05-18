@@ -475,6 +475,7 @@ mod tests {
                 name: String::from("MiniMax"),
                 enabled: true,
                 api_key: String::from("token"),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::from("global"),
                 targets: vec![

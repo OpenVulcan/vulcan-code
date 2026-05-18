@@ -8,6 +8,28 @@
   "fields": [
     "apiKey"
   ],
+  "reasoningProfile": {
+    "kind": "tiered",
+    "off": {
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "high": {
+      "thinking": {
+        "type": "enabled"
+      },
+      "reasoning_effort": "high"
+    },
+    "xHigh": {
+      "thinking": {
+        "type": "enabled"
+      },
+      "reasoning_effort": "max"
+    },
+    "highLabel": "高",
+    "xHighLabel": "Max"
+  },
   "baseUrl": {
     "kind": "fixed",
     "value": "https:\/\/api.deepseek.com",

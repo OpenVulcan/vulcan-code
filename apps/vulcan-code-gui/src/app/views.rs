@@ -197,6 +197,89 @@ fn tool_modal_transcript_surface_id(session_id: SessionId) -> SelectableTranscri
 }
 
 impl VulcanWorkbench {
+    /// Builds one unified two-line trigger used by the composer control row for model, AI capability, and reasoning selectors.
+    /// 构建一类统一的双行触发器，供输入区控制行中的模型、AI 能力与思考级别选择器复用。
+    fn view_workbench_dual_line_trigger<'a>(
+        &self,
+        icon: Option<Element<'a, Message>>,
+        title: String,
+        subtitle: String,
+        width: f32,
+        active: bool,
+        on_press: Option<Message>,
+    ) -> Element<'a, Message> {
+        let palette = self.app_theme.extended_palette();
+        let centered_title_column: Element<'_, Message> = container(
+            column![
+                container(
+                    text(title)
+                        .size(13)
+                        .color(if active {
+                            Color::WHITE
+                        } else {
+                            palette.background.base.text.scale_alpha(0.88)
+                        })
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                )
+                .height(14)
+                .width(Fill)
+                .clip(true)
+                .center_x(Fill),
+                container(
+                    text(subtitle)
+                        .size(11)
+                        .color(palette.background.base.text.scale_alpha(0.56))
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                )
+                .height(11)
+                .width(Fill)
+                .clip(true)
+                .center_x(Fill),
+            ]
+            .spacing(2)
+            .align_x(iced::Alignment::Center)
+            .width(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .center(Fill)
+        .into();
+        let mut accessory_row = row![].align_y(Center).width(Fill);
+        if let Some(icon) = icon {
+            accessory_row = accessory_row.push(container(icon).width(18).center_y(Fill));
+        }
+        accessory_row = accessory_row
+            .push(space::horizontal())
+            .push(
+                container(
+                    codicon::chevron_down()
+                        .size(14)
+                        .line_height(1.0)
+                        .color(palette.background.base.text.scale_alpha(0.48)),
+                )
+                .width(14)
+                .center_y(Fill),
+            );
+        let trigger_body = stack([
+            centered_title_column,
+            container(accessory_row)
+                .width(Fill)
+                .height(Fill)
+                .center_y(Fill)
+                .into(),
+        ]);
+        let trigger = button(container(trigger_body).width(Fill).height(Fill))
+            .width(width)
+            .height(COMPOSER_CONTROL_ROW_HEIGHT)
+            .padding([0, 12])
+            .style(style::workbench_model_trigger_button_style);
+        if let Some(message) = on_press {
+            trigger.on_press(message).into()
+        } else {
+            trigger.into()
+        }
+    }
+
     /// Builds the full window view by composing header, panes, and footer.
     /// 通过组合头部、分栏和底部状态栏构建完整窗口视图。
     pub(super) fn view(&self, window_id: window::Id) -> Element<'_, Message> {
@@ -243,6 +326,9 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_workbench_model_picker_modal() {
             layered_surfaces.push(overlay);
         }
+        if let Some(overlay) = self.view_workbench_reasoning_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
         if let Some(overlay) = self.view_ai_capability_vendor_picker_modal() {
             layered_surfaces.push(overlay);
         }
@@ -250,6 +336,9 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_ai_capability_target_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_workbench_ai_capability_panel_modal() {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_workbench_context_menu_overlay() {
@@ -428,12 +517,14 @@ impl VulcanWorkbench {
             .height(WORKBENCH_MODEL_PICKER_LIST_HEIGHT)
             .into()
         } else {
+            let (start, end, top_spacer_height, bottom_spacer_height) =
+                self.visible_workbench_model_picker_range(filtered_choices.len());
             scrollable(
-                column(
-                    filtered_choices
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, choice)| {
+                column![
+                    space::vertical().height(top_spacer_height),
+                    column(filtered_choices[start..end].iter().enumerate().map(
+                        |(offset, choice)| {
+                            let index = start + offset;
                             let is_selected = highlighted_index == Some(index);
                             let indicator: Element<'_, Message> = if is_selected {
                                 codicon::chevron_right()
@@ -472,7 +563,8 @@ impl VulcanWorkbench {
                                 .center_y(Fill),
                             )
                             .width(Fill)
-                            .padding([8, 12])
+                            .height(WORKBENCH_MODEL_PICKER_ROW_HEIGHT)
+                            .padding([0, 12])
                             .style(move |theme, status| {
                                 style::workbench_model_picker_option_button_style(
                                     theme,
@@ -482,10 +574,14 @@ impl VulcanWorkbench {
                             })
                             .on_press(Message::WorkbenchModelSelected(choice.clone()))
                             .into()
-                        }),
-                )
-                .spacing(6),
+                        },
+                    ))
+                    .spacing(WORKBENCH_MODEL_PICKER_ROW_GAP),
+                    space::vertical().height(bottom_spacer_height),
+                ],
             )
+            .id(workbench_model_picker_scrollable_id())
+            .on_scroll(Message::WorkbenchModelPickerScrolled)
             .height(WORKBENCH_MODEL_PICKER_LIST_HEIGHT)
             .into()
         };
@@ -509,6 +605,243 @@ impl VulcanWorkbench {
         .style(style::startup_overlay_card_style);
         let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
             .on_press(Message::CloseWorkbenchModelPicker);
+
+        Some(
+            stack([
+                container(backdrop)
+                    .width(Fill)
+                    .height(Fill)
+                    .style(style::startup_overlay_backdrop_style)
+                    .into(),
+                container(mouse_area(modal_card).on_press(Message::Noop))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Builds the blocking compact reasoning-effort picker modal opened from the composer footer trigger.
+    /// 构建从输入区底部触发器打开的阻塞式紧凑思考级别选择弹窗。
+    pub(super) fn view_workbench_reasoning_picker_modal(&self) -> Option<Element<'_, Message>> {
+        if !self.workbench_reasoning_picker_open {
+            return None;
+        }
+
+        let reasoning_view = self.active_workbench_reasoning_view();
+        let reasoning_options = reasoning_view
+            .as_ref()
+            .map(|view| view.options.clone())
+            .unwrap_or_else(|| {
+                vec![provider_config::ReasoningSelectionOption {
+                    effort: self.workbench_reasoning_effort,
+                    label: self.workbench_reasoning_effort.compact_label().to_string(),
+                }]
+            });
+        let selected_effort = reasoning_view
+            .as_ref()
+            .map(|view| view.selected_effort)
+            .unwrap_or(self.workbench_reasoning_effort);
+        let option_row_height = 30.0f32;
+        let option_gap = 2.0f32;
+        let panel_width = WORKBENCH_REASONING_SELECTOR_WIDTH.max(112.0);
+        let option_list = column(reasoning_options.iter().cloned().map(|option| {
+                let is_selected = option.effort == selected_effort;
+                button(
+                    container(
+                        text(option.label.clone()).size(13).width(Fill),
+                    )
+                    .width(Fill)
+                    .center_y(Fill),
+                )
+                .width(Fill)
+                .height(option_row_height)
+                .padding([0, 8])
+                .style(move |theme, status| {
+                    style::workbench_model_picker_option_button_style(
+                        theme,
+                        status,
+                        is_selected,
+                    )
+                })
+                .on_press(Message::WorkbenchReasoningEffortSelected(option))
+                .into()
+            }))
+            .spacing(option_gap);
+        let panel_height = (reasoning_options.len() as f32 * option_row_height)
+            + (reasoning_options.len().saturating_sub(1) as f32 * option_gap)
+            + 8.0;
+        let show_explicit_stop_button = self.selected_session_has_busy_execution_lane()
+            && self.composer_has_submittable_content();
+        let composer_panel_width = self.composer_panel_width();
+        let composer_panel_left = self.composer_panel_left();
+        let trailing_controls_width = if show_explicit_stop_button {
+            WORKBENCH_REASONING_SELECTOR_WIDTH
+                + (COMPOSER_TRIGGER_BUTTON_SIZE * 2.0)
+                + (COMPOSER_PANEL_CONTROL_GAP * 2.0)
+        } else {
+            WORKBENCH_REASONING_SELECTOR_WIDTH
+                + COMPOSER_TRIGGER_BUTTON_SIZE
+                + COMPOSER_PANEL_CONTROL_GAP
+        };
+        let panel_x = composer_panel_left
+            + composer_panel_width
+            - COMPOSER_PANEL_EDGE_PADDING as f32
+            - trailing_controls_width;
+        let status_bar_height = 44.0f32;
+        let main_canvas_bottom_padding = 16.0f32;
+        let panel_y = (self.main_window_size.height
+            - status_bar_height
+            - main_canvas_bottom_padding
+            - COMPOSER_PANEL_EDGE_PADDING as f32
+            - COMPOSER_CONTROL_ROW_HEIGHT
+            - panel_height
+            - 4.0)
+            .max(12.0);
+        let modal_card = container(option_list)
+            .padding([4, 4])
+            .width(panel_width)
+            .style(|theme: &Theme| {
+                let menu_style = style::workbench_compact_pick_list_menu_style(theme);
+                container::Style {
+                    background: Some(menu_style.background),
+                    border: menu_style.border,
+                    shadow: menu_style.shadow,
+                    ..Default::default()
+                }
+            });
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseWorkbenchReasoningPicker);
+        let overlay_position = iced::Point::new(panel_x.max(12.0), panel_y);
+
+        Some(
+            stack([
+                backdrop.into(),
+                pin(mouse_area(modal_card).on_press(Message::Noop))
+                    .position(overlay_position)
+                    .width(Fill)
+                    .height(Fill)
+                    .into(),
+            ])
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        )
+    }
+
+    /// Builds the blocking quick AI capability modal opened from the composer control row.
+    /// 构建从输入区控制行打开的阻塞式快捷 AI 能力面板弹窗。
+    pub(super) fn view_workbench_ai_capability_panel_modal(&self) -> Option<Element<'_, Message>> {
+        if !self.workbench_ai_capability_panel_open {
+            return None;
+        }
+
+        let palette = self.app_theme.extended_palette();
+        let selected_section = self.workbench_ai_capability_section;
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseWorkbenchAiCapabilityPanel);
+        let left_navigation = scrollable(
+            WorkbenchAiCapabilitySection::ALL.into_iter().fold(
+                column![].spacing(1).width(Fill),
+                |list, section| list.push(self.view_workbench_ai_capability_section_row(section)),
+            ),
+        )
+        .height(420);
+        let right_panel: Element<'_, Message> = match selected_section.capability_kind() {
+            Some(capability_kind) => self.view_ai_capability_management_panel(
+                capability_kind,
+                false,
+                false,
+                true,
+            ),
+            None if selected_section.supports_routing_strategy() => self
+                .view_ai_capability_unavailable_page(
+                    selected_section.label(),
+                    "当前能力入口已预留；后续接通后，这里会提供原生优先与工具理解等路由策略选项。",
+                )
+                .into(),
+            None => self
+                .view_ai_capability_unavailable_page(
+                    selected_section.label(),
+                    "当前能力入口已预留，但还没有接通可配置的目标与执行工具。",
+                )
+                        .into(),
+        };
+        let modal_card = container(
+            column![
+                container(
+                    row![
+                        column![
+                            text("AI扩展能力设置").size(20),
+                            text("这里用于高频调整已配置能力的启用状态与顺序；新增供应商仍需前往设置页。")
+                                .size(12)
+                                .color(palette.background.base.text.scale_alpha(0.62)),
+                        ]
+                        .spacing(4),
+                        space::horizontal(),
+                        close_button,
+                    ]
+                    .align_y(Center),
+                )
+                .padding(iced::Padding {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 14.0,
+                    left: 0.0,
+                }),
+                rule::horizontal(1),
+                row![
+                    container(left_navigation)
+                        .padding(iced::Padding {
+                            top: 14.0,
+                            right: 14.0,
+                            bottom: 0.0,
+                            left: 0.0,
+                        })
+                        .width(200)
+                        .height(Fill),
+                    rule::vertical(1),
+                    scrollable(
+                        container(right_panel)
+                            .padding(iced::Padding {
+                                top: 14.0,
+                                right: 0.0,
+                                bottom: 0.0,
+                                left: 14.0,
+                            })
+                            .width(Fill),
+                    )
+                        .width(Fill)
+                        .height(410),
+                ]
+                .spacing(0)
+                .height(420),
+            ]
+            .spacing(0),
+        )
+        .padding([22, 24])
+        .width(920)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseWorkbenchAiCapabilityPanel);
 
         Some(
             stack([
@@ -2481,11 +2814,11 @@ impl VulcanWorkbench {
         let drag_handle = mouse_area(
             container(
                 text("⋮⋮")
-                    .size(12)
+                    .size(11)
                     .wrapping(iced::advanced::text::Wrapping::None),
             )
-            .width(18)
-            .center(Fill),
+            .center_x(12)
+            .center_y(Fill),
         )
         .interaction(if self.dragging_pending_prompt_entry_id.is_some() {
             iced::mouse::Interaction::Move
@@ -2560,14 +2893,17 @@ impl VulcanWorkbench {
             };
         container(
             row![
-                container(text(format!("{}", index + 1)).size(12))
-                    .width(28)
-                    .center_y(Fill),
                 drag_handle,
+                container(text(format!("{:02}", index + 1)).size(12))
+                    .width(24)
+                    .center_y(Fill),
+                container(text("·").size(12))
+                    .width(10)
+                    .center_y(Fill),
                 container(label_surface).width(Fill).center_y(Fill),
                 action_surface,
             ]
-            .spacing(10)
+            .spacing(8)
             .align_y(Center),
         )
         .padding([6, 10])
@@ -2662,91 +2998,140 @@ impl VulcanWorkbench {
         let provider_label = selected_choice
             .as_ref()
             .map(|choice| choice.provider_label.clone())
-            .unwrap_or_default();
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| String::from("选择供应商"));
         let has_choices = !self.configured_workbench_model_choices().is_empty();
-        let provider_line: Element<'_, Message> = if provider_label.is_empty() {
-            container(space::vertical().height(11))
-                .height(11)
-                .width(Fill)
-                .into()
-        } else {
-            container(
-                text(provider_label)
-                    .size(11)
-                    .color(palette.background.base.text.scale_alpha(0.56))
-                    .wrapping(iced::advanced::text::Wrapping::None),
-            )
-            .height(11)
-            .width(Fill)
-            .clip(true)
-            .center_x(Fill)
-            .into()
-        };
-        let text_row = row![
-            container(
-                column![
-                    container(
-                        text(model_label)
-                            .size(13)
-                            .color(if has_selected_choice {
-                                iced::Color::WHITE
-                            } else {
-                                palette.background.base.text.scale_alpha(0.56)
-                            })
-                            .wrapping(iced::advanced::text::Wrapping::None),
-                    )
-                    .height(14)
-                    .width(Fill)
-                    .clip(true)
-                    .center_x(Fill),
-                    provider_line,
-                ]
-                .spacing(2)
-                .align_x(iced::Alignment::Center),
-            )
-            .width(Fill)
-            .height(COMPOSER_CONTROL_ROW_HEIGHT)
-            .center_x(Fill)
-            .center_y(Fill),
-            codicon::chevron_down()
-                .size(14)
-                .line_height(1.0)
-                .color(palette.background.base.text.scale_alpha(0.48)),
-        ]
-        .spacing(10)
-        .align_y(Center);
-        let trigger = button(container(text_row).width(Fill).center_y(Fill))
-            .width(WORKBENCH_MODEL_SELECTOR_WIDTH)
-            .height(COMPOSER_CONTROL_ROW_HEIGHT)
-            .padding([0, 12])
-            .style(style::workbench_model_trigger_button_style);
+        let icon = lucide::cpu()
+            .size(14)
+            .line_height(1.0)
+            .color(palette.primary.base.color)
+            .into();
 
-        if has_choices {
-            trigger.on_press(Message::OpenWorkbenchModelPicker).into()
-        } else {
-            trigger.into()
-        }
+        self.view_workbench_dual_line_trigger(
+            Some(icon),
+            model_label,
+            provider_label,
+            WORKBENCH_MODEL_SELECTOR_WIDTH,
+            has_selected_choice,
+            has_choices.then_some(Message::OpenWorkbenchModelPicker),
+        )
     }
 
-    /// Builds the compact web-search override selector shown beside the workbench model trigger.
-    /// 构建显示在工作台模型触发器旁侧的紧凑网页搜索覆盖选择器。
-    pub(super) fn view_workbench_web_search_selector(&self) -> Element<'_, Message> {
-        let choices = self.configured_workbench_web_search_choices();
-        let selected_choice = self.active_workbench_web_search_choice();
+    /// Builds the compact AI capability quick controls shown beside the workbench model trigger.
+    /// 构建显示在工作台模型触发器旁侧的紧凑 AI 能力快捷控制区。
+    pub(super) fn view_workbench_ai_capability_quick_controls(&self) -> Element<'_, Message> {
+        let icon = lucide::sliders_horizontal()
+            .size(14)
+            .line_height(1.0)
+            .color(self.app_theme.extended_palette().primary.base.color)
+            .into();
 
-        pick_list(
-            choices,
-            selected_choice,
-            Message::WorkbenchWebSearchSelected,
+        self.view_workbench_dual_line_trigger(
+            Some(icon),
+            String::from("扩展能力"),
+            String::from("AI扩展能力设置"),
+            WORKBENCH_AI_CAPABILITY_QUICK_CONTROL_WIDTH,
+            true,
+            Some(Message::OpenWorkbenchAiCapabilityPanel),
         )
-        .width(WORKBENCH_WEB_SEARCH_SELECTOR_WIDTH)
-        .placeholder("搜索")
-        .padding([8, 10])
-        .text_size(13)
-        .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
-        .style(style::workbench_compact_pick_list_style)
-        .menu_style(style::workbench_compact_pick_list_menu_style)
-        .into()
+    }
+
+    /// Builds the semantic icon rendered beside one quick capability section row.
+    /// 构建渲染在快捷能力分区行左侧的语义图标。
+    fn view_workbench_ai_capability_section_icon(
+        &self,
+        section: WorkbenchAiCapabilitySection,
+    ) -> Element<'_, Message> {
+        let palette = self.app_theme.extended_palette();
+        let color = palette.background.base.text.scale_alpha(0.82);
+        let icon: Element<'_, Message> = match section {
+            WorkbenchAiCapabilitySection::WebSearch => lucide::search()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::UnderstandImage => lucide::image()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::UnderstandVideo => lucide::video()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::UnderstandAudio => lucide::volume_two()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::ImageGeneration => lucide::image_plus()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::VideoGeneration => lucide::video()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::SpeechSynthesis => lucide::mic()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::MusicGeneration => lucide::music()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            WorkbenchAiCapabilitySection::MusicCover => codicon::sync()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+        };
+
+        container(icon).width(18).center_y(Fill).into()
+    }
+
+    /// Builds one single-level quick capability section row shown in the left shortcut navigation list.
+    /// 构建显示在左侧快捷导航列表中的单级快捷能力分区行。
+    fn view_workbench_ai_capability_section_row(
+        &self,
+        section: WorkbenchAiCapabilitySection,
+    ) -> Element<'_, Message> {
+        let is_selected = section == self.workbench_ai_capability_section;
+        let toggle_available = self.workbench_ai_capability_is_available(section);
+        let toggle_enabled = self.workbench_ai_capability_is_enabled(section);
+        let toggle: Element<'_, Message> = if section.capability_kind().is_some() {
+            let checkbox = checkbox(toggle_enabled).spacing(0).size(16);
+            if toggle_available {
+                checkbox
+                    .on_toggle(move |enabled| {
+                        Message::WorkbenchAiCapabilitySectionEnabledToggled { section, enabled }
+                    })
+                    .into()
+            } else {
+                checkbox.into()
+            }
+        } else {
+            checkbox(false).spacing(0).size(16).into()
+        };
+        self.view_tree_navigation_button_row_with_leading(
+            Some(toggle),
+            self.view_workbench_ai_capability_section_icon(section),
+            if section.capability_kind().is_some() {
+                section.label().to_string()
+            } else {
+                format!("{}（待开放）", section.label())
+            },
+            None,
+            None,
+            is_selected,
+            MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            Message::WorkbenchAiCapabilitySectionSelected(section),
+        )
     }
 
     /// Builds the compact reasoning-effort selector shown before the trailing send button.
@@ -2771,40 +3156,98 @@ impl VulcanWorkbench {
                     .cloned()
             })
             .or_else(|| reasoning_options.first().cloned());
+        let title = selected_option
+            .as_ref()
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| String::from("关闭"));
+        let is_expandable = reasoning_options.len() > 1;
 
-        if reasoning_options.len() <= 1 {
-            let disabled_label = selected_option
-                .as_ref()
-                .map(|option| option.label.as_str())
-                .unwrap_or("关闭")
-                .to_string();
+        self.view_workbench_reasoning_trigger(
+            title,
+            selected_option.is_some(),
+            is_expandable,
+            is_expandable.then_some(Message::OpenWorkbenchReasoningPicker),
+        )
+    }
 
-            return button(
-                container(text(disabled_label).size(13))
-                    .width(Fill)
-                    .height(Fill)
-                    .center_y(Fill),
+    /// Builds the dedicated two-line reasoning trigger without reserving any leading icon gutter.
+    /// 构建不预留左侧图标槽位的专用双行思考级别触发器。
+    fn view_workbench_reasoning_trigger(
+        &self,
+        title: String,
+        active: bool,
+        shows_chevron: bool,
+        on_press: Option<Message>,
+    ) -> Element<'_, Message> {
+        let palette = self.app_theme.extended_palette();
+        let centered_title_column = container(
+            column![
+                container(
+                    text(title)
+                        .size(13)
+                        .color(if active {
+                            Color::WHITE
+                        } else {
+                            palette.background.base.text.scale_alpha(0.88)
+                        })
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                )
+                .height(14)
+                .width(Fill)
+                .clip(true)
+                .center_x(Fill),
+                container(
+                    text("思考级别")
+                        .size(11)
+                        .color(palette.background.base.text.scale_alpha(0.56))
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                )
+                .height(11)
+                .width(Fill)
+                .clip(true)
+                .center_x(Fill),
+            ]
+            .spacing(2)
+            .align_x(iced::Alignment::Center)
+            .width(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .center(Fill);
+        let chevron_overlay: Element<'_, Message> = if shows_chevron {
+            container(
+                row![
+                    space::horizontal(),
+                    codicon::chevron_down()
+                        .size(14)
+                        .line_height(1.0)
+                        .color(palette.background.base.text.scale_alpha(0.48)),
+                ]
+                .align_y(Center)
+                .width(Fill),
             )
-            .width(WORKBENCH_REASONING_SELECTOR_WIDTH)
-            .height(COMPOSER_CONTROL_ROW_HEIGHT)
-            .padding([0, 10])
-            .style(style::workbench_model_trigger_button_style)
-            .into();
-        }
-
-        pick_list(
-            reasoning_options,
-            selected_option,
-            Message::WorkbenchReasoningEffortSelected,
+            .width(Fill)
+            .height(Fill)
+            .center_y(Fill)
+            .padding([0, 12])
+            .into()
+        } else {
+            space().into()
+        };
+        let trigger = button(
+            container(stack([centered_title_column.into(), chevron_overlay]))
+                .width(Fill)
+                .height(Fill),
         )
         .width(WORKBENCH_REASONING_SELECTOR_WIDTH)
-        .placeholder("级别")
-        .padding([8, 10])
-        .text_size(13)
-        .line_height(iced::widget::text::LineHeight::Absolute(Pixels(20.0)))
-        .style(style::workbench_compact_pick_list_style)
-        .menu_style(style::workbench_compact_pick_list_menu_style)
-        .into()
+        .height(COMPOSER_CONTROL_ROW_HEIGHT)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style);
+        if let Some(message) = on_press {
+            trigger.on_press(message).into()
+        } else {
+            trigger.into()
+        }
     }
 
     /// Builds the dedicated attachment button shown beside the composer execution controls.
@@ -3086,6 +3529,21 @@ impl VulcanWorkbench {
         let canvas_width = (self.main_window_size.width - chrome_width).max(420.0);
 
         (canvas_width * 0.80).max(420.0)
+    }
+
+    /// Returns the actual left edge of the floating composer panel inside the right workbench canvas.
+    /// 返回浮动输入面板在右侧工作台画布中的实际左边界。
+    pub(super) fn composer_panel_left(&self) -> f32 {
+        let left_region_width = if self.main_task_panel_expanded {
+            self.main_task_panel_width + MAIN_TASK_PANEL_RESIZE_HANDLE_WIDTH
+        } else {
+            MAIN_TASK_PANEL_RESTORE_RAIL_WIDTH
+        };
+        let chrome_width = MAIN_PANEL_ACTIVITY_BAR_WIDTH + left_region_width + 36.0;
+        let canvas_width = (self.main_window_size.width - chrome_width).max(420.0);
+        let composer_panel_width = self.composer_panel_width();
+
+        chrome_width + ((canvas_width - composer_panel_width) / 2.0).max(0.0)
     }
 
     /// Returns the floating composer footprint currently covering the bottom of the transcript viewport.
@@ -3612,7 +4070,7 @@ impl VulcanWorkbench {
         let composer_primary_controls = row![
             execution_mode_selector,
             self.view_workbench_model_selector(),
-            self.view_workbench_web_search_selector(),
+            self.view_workbench_ai_capability_quick_controls(),
             self.view_composer_attachment_button(),
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)
@@ -5410,22 +5868,26 @@ impl VulcanWorkbench {
     /// Builds the settings panel content without adding an extra outer frame layer.
     /// 构建设置面板内容，并且不再增加额外的外层边框层级。
     pub(super) fn view_settings_panel(&self) -> Element<'_, Message> {
-        let panel_header = container(
-            column![
-                text(MainDisplayPanel::Settings.section_title()).size(22),
-                text(MainDisplayPanel::Settings.description()).size(13),
-            ]
-            .spacing(4),
-        )
-        .padding([4, 2]);
-        let section_header = container(
-            column![
-                text(self.selected_settings_section.title()).size(20),
-                text(self.selected_settings_section.description()).size(12),
-            ]
-            .spacing(4),
-        )
-        .padding([4, 2]);
+        let navigation_width = self.main_task_panel_width.clamp(260.0, 340.0);
+        let section_header = column![
+            text(self.selected_settings_section.title()).size(26),
+            text(self.selected_settings_section.description())
+                .size(13)
+                .color(
+                    self.app_theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.62),
+                ),
+            container(space())
+                .width(Fill)
+                .height(1)
+                .style(style::main_display_bottom_separator_style),
+        ]
+        .spacing(6)
+        .width(Fill);
         let section_body: Element<'_, Message> = match self.selected_settings_section {
             SettingsSection::ModelProviders => column![
                 self.view_provider_configuration_card(),
@@ -5440,6 +5902,18 @@ impl VulcanWorkbench {
             }
             SettingsSection::AiCapabilityUnderstandImage => {
                 self.view_ai_capability_settings_page(AiToolKind::UnderstandImage)
+            }
+            SettingsSection::AiCapabilityUnderstandVideo => {
+                self.view_ai_capability_unavailable_page(
+                    "视频理解",
+                    "视频理解能力入口已预留，但当前尚未接通可配置的供应商与理解工具。",
+                )
+            }
+            SettingsSection::AiCapabilityUnderstandAudio => {
+                self.view_ai_capability_unavailable_page(
+                    "音频理解",
+                    "音频理解能力入口已预留，但当前尚未接通可配置的供应商与理解工具。",
+                )
             }
             SettingsSection::AiCapabilityImageGeneration => {
                 self.view_ai_capability_settings_page(AiToolKind::ImageGeneration)
@@ -5459,130 +5933,367 @@ impl VulcanWorkbench {
             SettingsSection::McpServers => self.view_mcp_configuration_card(),
             SettingsSection::ArchivedRestore => self.view_archived_restore_card(),
         };
-        let content_panel = container(
-            scrollable(column![section_header, section_body].spacing(12))
-                .height(Fill)
-                .spacing(8),
+        let content_panel: Element<'_, Message> = container(
+            column![
+                section_header,
+                scrollable(container(section_body).width(Fill))
+                    .height(Fill)
+                    .spacing(8),
+            ]
+            .spacing(14)
+            .height(Fill),
         )
-        .padding(16)
+        .padding([16, 16])
         .width(Fill)
         .height(Fill)
-        .style(container::bordered_box);
+        .into();
 
-        column![
-            panel_header,
-            row![self.view_settings_navigation_tree(), content_panel,]
-                .spacing(12)
+        row![
+            container(self.view_settings_navigation_panel())
+                .width(Pixels(navigation_width))
+                .height(Fill),
+            container(space())
+                .width(1)
                 .height(Fill)
+                .style(style::main_display_left_separator_style),
+            content_panel,
         ]
-        .spacing(12)
+        .spacing(0)
         .height(Fill)
         .into()
+    }
+
+    /// Builds the left settings drawer using the same visual structure as the main task panel.
+    /// 构建与主任务面板使用相同视觉结构的左侧设置抽屉。
+    pub(super) fn view_settings_navigation_panel(&self) -> Element<'_, Message> {
+        let navigation_tree = scrollable(self.view_settings_navigation_tree())
+            .height(Fill)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(6)
+                    .margin(0)
+                    .scroller_width(6),
+            ));
+
+        container(column![navigation_tree].spacing(10).height(Fill))
+            .padding([12, 2])
+            .width(Fill)
+            .height(Fill)
+            .into()
     }
 
     /// Builds the collapsible left navigation tree used by the dedicated settings workspace.
     /// 构建独立设置工作区使用的可折叠左侧导航树。
     pub(super) fn view_settings_navigation_tree(&self) -> Element<'_, Message> {
-        let ai_tree_icon: Element<'_, Message> = if self.settings_ai_capability_tree_expanded {
+        let mut navigation = column![self.view_main_task_group_label("设置", false)]
+            .spacing(1)
+            .width(Fill)
+            .push(self.view_settings_navigation_top_level_button(
+                SettingsSection::ModelProviders,
+            ))
+            .push(self.view_settings_navigation_top_level_button(
+                SettingsSection::RuntimeDiagnostics,
+            ))
+            .push(self.view_settings_navigation_ai_group_button());
+        if self.settings_ai_capability_tree_expanded {
+            navigation =
+                navigation
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityVendors,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityWebSearch,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityUnderstandImage,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityUnderstandVideo,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityUnderstandAudio,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityImageGeneration,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityVideoGeneration,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilitySpeechSynthesis,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityMusicGeneration,
+                    ))
+                    .push(self.view_settings_navigation_child_button(
+                        SettingsSection::AiCapabilityMusicCover,
+                    ));
+        }
+        navigation = navigation
+            .push(self.view_settings_navigation_top_level_button(
+                SettingsSection::McpServers,
+            ))
+            .push(self.view_settings_navigation_top_level_button(
+                SettingsSection::ArchivedRestore,
+            ));
+
+        container(navigation).width(Fill).into()
+    }
+
+    /// Builds one reusable navigation-tree row shared by settings, target pickers, and quick capability sidebars.
+    /// 构建由设置页、目标选择器与快捷能力侧栏复用的通用导航树行。
+    pub(super) fn view_tree_navigation_button_row<'a>(
+        &self,
+        icon: Element<'a, Message>,
+        label: String,
+        secondary: Option<String>,
+        trailing: Option<Element<'a, Message>>,
+        is_selected: bool,
+        left_padding: f32,
+        on_press: Message,
+    ) -> Element<'a, Message> {
+        self.view_tree_navigation_button_row_with_leading(
+            None,
+            icon,
+            label,
+            secondary,
+            trailing,
+            is_selected,
+            left_padding,
+            on_press,
+        )
+    }
+
+    /// Builds one reusable tree-navigation row that optionally includes one extra leading control before the icon.
+    /// 构建一个可复用树形导航行，并可选地在图标前插入额外前导控件。
+    pub(super) fn view_tree_navigation_button_row_with_leading<'a>(
+        &self,
+        leading: Option<Element<'a, Message>>,
+        icon: Element<'a, Message>,
+        label: String,
+        secondary: Option<String>,
+        trailing: Option<Element<'a, Message>>,
+        is_selected: bool,
+        left_padding: f32,
+        on_press: Message,
+    ) -> Element<'a, Message> {
+        let palette = self.app_theme.extended_palette();
+        let text_column = if let Some(secondary) = secondary {
+            column![
+                text(label)
+                    .size(13)
+                    .wrapping(iced::advanced::text::Wrapping::None),
+                text(secondary)
+                    .size(11)
+                    .color(palette.background.base.text.scale_alpha(0.56))
+                    .wrapping(iced::advanced::text::Wrapping::None),
+            ]
+            .spacing(3)
+            .width(Fill)
+        } else {
+            column![text(label)
+                .size(13)
+                .wrapping(iced::advanced::text::Wrapping::None)]
+            .spacing(0)
+            .width(Fill)
+        };
+
+        button(
+            container(
+                row![
+                    leading.unwrap_or_else(|| space::horizontal().width(0).into()),
+                    icon,
+                    text_column,
+                    space::horizontal(),
+                    trailing.unwrap_or_else(|| space::horizontal().width(0).into()),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding(iced::Padding {
+                top: 3.0,
+                right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                bottom: 3.0,
+                left: left_padding,
+            })
+            .width(Fill)
+            .height(MAIN_TASK_PROJECT_ROW_HEIGHT),
+        )
+        .width(Fill)
+        .padding(0)
+        .style(move |theme, status| {
+            style::main_task_tree_session_button_style(theme, status, is_selected, false)
+        })
+        .on_press(on_press)
+        .into()
+    }
+
+    /// Builds one top-level tree row inside the left settings navigation drawer.
+    /// 构建左侧设置导航抽屉中的顶层树节点行。
+    pub(super) fn view_settings_navigation_top_level_button(
+        &self,
+        section: SettingsSection,
+    ) -> Element<'_, Message> {
+        let is_selected = self.selected_settings_section == section;
+        let icon = self.view_settings_navigation_icon(section, false);
+        self.view_tree_navigation_button_row(
+            icon,
+            section.label().to_string(),
+            None,
+            None,
+            is_selected,
+            MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            Message::SettingsSectionSelected(section),
+        )
+    }
+
+    /// Builds the collapsible AI-capability parent row inside the left settings navigation drawer.
+    /// 构建左侧设置导航抽屉中的可折叠 AI 能力父级树节点行。
+    pub(super) fn view_settings_navigation_ai_group_button(&self) -> Element<'_, Message> {
+        let folder_icon: Element<'_, Message> = if self.settings_ai_capability_tree_expanded {
+            codicon::folder_opened().size(16).line_height(1.0).into()
+        } else {
+            codicon::folder().size(16).line_height(1.0).into()
+        };
+        let chevron_icon: Element<'_, Message> = if self.settings_ai_capability_tree_expanded {
             codicon::chevron_down().size(14).line_height(1.0).into()
         } else {
             codicon::chevron_right().size(14).line_height(1.0).into()
         };
-        let ai_tree_button = button(
-            row![
-                container(ai_tree_icon).width(16).center_y(Shrink),
-                text("AI 能力").size(14),
-                space::horizontal(),
-            ]
-            .spacing(8)
-            .align_y(Center),
+
+        button(
+            container(
+                row![
+                    container(folder_icon).width(16).center_y(Fill),
+                    text("AI 能力")
+                        .size(14)
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                    space::horizontal(),
+                    container(chevron_icon).width(16).center_y(Fill),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding(iced::Padding {
+                top: 3.0,
+                right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                bottom: 3.0,
+                left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            })
+            .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
+            .width(Fill),
         )
         .width(Fill)
-        .padding([8, 10])
-        .style(button::secondary)
-        .on_press(Message::ToggleAiCapabilitySettingsTree);
-        let mut navigation = column![
-            text("设置目录").size(15),
-            self.view_settings_navigation_button(SettingsSection::ModelProviders, 0.0),
-            self.view_settings_navigation_button(SettingsSection::RuntimeDiagnostics, 0.0),
-            ai_tree_button,
-        ]
-        .spacing(8);
-        if self.settings_ai_capability_tree_expanded {
-            navigation =
-                navigation
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityVendors,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityWebSearch,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityUnderstandImage,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityImageGeneration,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityVideoGeneration,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilitySpeechSynthesis,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityMusicGeneration,
-                        20.0,
-                    ))
-                    .push(self.view_settings_navigation_button(
-                        SettingsSection::AiCapabilityMusicCover,
-                        20.0,
-                    ));
-        }
-        navigation = navigation
-            .push(self.view_settings_navigation_button(SettingsSection::McpServers, 0.0))
-            .push(self.view_settings_navigation_button(SettingsSection::ArchivedRestore, 0.0));
-
-        container(navigation)
-            .padding(14)
-            .width(260)
-            .height(Fill)
-            .style(container::bordered_box)
-            .into()
+        .padding(0)
+        .style(move |theme, status| {
+            style::main_task_tree_session_button_style(theme, status, false, false)
+        })
+        .on_press(Message::ToggleAiCapabilitySettingsTree)
+        .into()
     }
 
-    /// Builds one row button inside the left settings navigation tree.
-    /// 构建左侧设置导航树中的单行按钮。
-    pub(super) fn view_settings_navigation_button(
+    /// Builds one child row shown under the AI-capability parent inside the settings navigation drawer.
+    /// 构建显示在设置导航抽屉中 AI 能力父节点下方的子级树节点行。
+    pub(super) fn view_settings_navigation_child_button(
         &self,
         section: SettingsSection,
-        indent: f32,
     ) -> Element<'_, Message> {
         let is_selected = self.selected_settings_section == section;
-        button(
-            container(text(section.label()).size(if indent > 0.0 { 13 } else { 14 })).padding(
-                iced::Padding {
-                    top: 0.0,
-                    right: 0.0,
-                    bottom: 0.0,
-                    left: indent,
-                },
-            ),
+        let icon = self.view_settings_navigation_icon(section, true);
+        self.view_tree_navigation_button_row(
+            icon,
+            section.label().to_string(),
+            None,
+            None,
+            is_selected,
+            35.0,
+            Message::SettingsSectionSelected(section),
         )
-        .width(Fill)
-        .padding([8, 10])
-        .style(if is_selected {
-            button::primary
-        } else {
-            button::secondary
-        })
-        .on_press(Message::SettingsSectionSelected(section))
-        .into()
+    }
+
+    /// Builds the semantic icon surface used by one settings navigation row.
+    /// 构建单条设置导航行使用的语义图标表面。
+    pub(super) fn view_settings_navigation_icon(
+        &self,
+        section: SettingsSection,
+        is_child: bool,
+    ) -> Element<'_, Message> {
+        let palette = self.app_theme.extended_palette();
+        let color = palette.background.base.text.scale_alpha(if is_child { 0.72 } else { 0.82 });
+        let icon: Element<'_, Message> = match section {
+            SettingsSection::ModelProviders => lucide::file_text()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::RuntimeDiagnostics => codicon::sync()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityVendors => lucide::file_text()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityWebSearch => lucide::search()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityUnderstandImage => lucide::image()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityUnderstandVideo => lucide::video()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityUnderstandAudio => lucide::volume_two()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityImageGeneration => lucide::image()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityVideoGeneration => lucide::video()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilitySpeechSynthesis => lucide::volume_two()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityMusicGeneration => lucide::volume_two()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AiCapabilityMusicCover => codicon::sync()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::McpServers => codicon::folder()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::ArchivedRestore => codicon::archive()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+        };
+
+        container(icon).width(18).center_y(Fill).into()
     }
 
     /// Builds the dedicated archived-item restore card shown inside settings instead of the main session tree.
@@ -7342,12 +8053,22 @@ impl VulcanWorkbench {
                                     .spacing(6),
                                     space::horizontal(),
                                     button("编辑")
-                                        .style(button::secondary)
+                                        .padding([4, 10])
+                                        .style(|theme, status| {
+                                            style::workbench_label_action_button_style(
+                                                theme, status, false,
+                                            )
+                                        })
                                         .on_press(Message::OpenAiCapabilityVendorEditor(
                                             edit_vendor_id,
                                         )),
-                                    button("删除")
-                                        .style(button::secondary)
+                                    button("移除")
+                                        .padding([4, 10])
+                                        .style(|theme, status| {
+                                            style::workbench_label_action_button_style(
+                                                theme, status, true,
+                                            )
+                                        })
                                         .on_press(Message::RemoveAiCapabilityVendor(
                                             remove_vendor_id,
                                         )),
@@ -7434,24 +8155,28 @@ impl VulcanWorkbench {
             .into()
     }
 
-    /// Builds one draggable enabled AI capability route row rendered inside one capability settings page.
-    /// 构建渲染在单个能力设置页中的单条可拖拽已启用 AI 能力路由行。
+    /// Builds one draggable AI capability route row rendered inside one capability settings or quick panel.
+    /// 构建渲染在单个能力设置页或快捷面板中的单条可拖拽 AI 能力路由行。
     pub(super) fn view_ai_capability_route_row(
         &self,
         capability_kind: AiToolKind,
         index: usize,
         entry: ResolvedAiCapabilityRouteTarget,
+        show_remove_action: bool,
     ) -> Element<'_, Message> {
         let is_drag_source = self.dragging_ai_capability_route_target.as_deref()
             == Some(entry.target_selector.as_str());
+        let enabled = entry.enabled;
+        let vendor_id = entry.vendor_id.clone();
+        let target_alias = entry.target_alias.clone();
         let drag_handle = mouse_area(
             container(
                 text("⋮⋮")
-                    .size(12)
+                    .size(11)
                     .wrapping(iced::advanced::text::Wrapping::None),
             )
-            .width(18)
-            .center(Fill),
+            .center_x(12)
+            .center_y(Fill),
         )
         .interaction(if self.dragging_ai_capability_route_target.is_some() {
             iced::mouse::Interaction::Move
@@ -7474,45 +8199,56 @@ impl VulcanWorkbench {
             capability_kind,
             target_selector: entry.target_selector.clone(),
         };
+        let toggle = checkbox(enabled)
+            .size(16)
+            .spacing(0)
+            .on_toggle(move |next_enabled| Message::AiCapabilityTargetEnabledToggled {
+                capability_kind,
+                vendor_id: vendor_id.clone(),
+                target_alias: target_alias.clone(),
+                enabled: next_enabled,
+            });
+        let detail_color = self
+            .app_theme
+            .extended_palette()
+            .background
+            .base
+            .text
+            .scale_alpha(if enabled { 0.62 } else { 0.38 });
+        let trailing_action: Element<'_, Message> = if show_remove_action {
+            button("移除")
+                .padding([4, 10])
+                .style(|theme, status| style::workbench_label_action_button_style(theme, status, true))
+                .on_press(remove_message)
+                .into()
+        } else {
+            container(space()).width(0).into()
+        };
 
         container(
             row![
-                container(text(format!("{}", index + 1)).size(12))
-                    .width(28)
-                    .center_y(Fill),
                 drag_handle,
-                container(
-                    column![
-                        text(entry.display_label()).size(14),
-                        text(format!(
-                            "供应商：{} · Target：{}/{} · 请求模型：{}",
-                            entry.vendor_name, entry.vendor_id, entry.target_alias, entry.model_id
-                        ))
-                        .size(12)
-                        .color(
-                            self.app_theme
-                                .extended_palette()
-                                .background
-                                .base
-                                .text
-                                .scale_alpha(0.62),
-                        ),
-                    ]
-                    .spacing(6),
-                )
-                .width(Fill)
-                .center_y(Fill),
-                button("移除")
-                    .style(button::secondary)
-                    .on_press(remove_message),
+                toggle,
+                container(text(format!("{:02}", index + 1)).size(12))
+                    .width(24)
+                    .center_y(Fill),
+                container(text("·").size(12))
+                    .width(10)
+                    .center_y(Fill),
+                text(entry.display_label())
+                    .size(13)
+                    .color(detail_color)
+                    .wrapping(iced::advanced::text::Wrapping::None)
+                    .width(Fill),
+                trailing_action,
             ]
-            .spacing(10)
+            .spacing(8)
             .align_y(Center),
         )
-        .padding([8, 12])
+        .padding([4, 10])
         .width(Fill)
         .height(AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT)
-        .style(move |theme| style::workbench_pending_prompt_queue_row_style(theme, is_drag_source))
+        .style(move |theme| style::workbench_ai_capability_route_row_style(theme, is_drag_source))
         .into()
     }
 
@@ -7564,11 +8300,84 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Renders one dedicated AI capability page that manages enabled targets and their execution order for a single semantic tool.
-    /// 渲染管理单个语义工具启用目标与执行顺序的独立 AI 能力页面。
-    pub(super) fn view_ai_capability_settings_page(
+    /// Renders one placeholder page for AI capability sections that are not wired yet.
+    /// 渲染尚未接通实现的 AI 能力分区占位页面。
+    pub(super) fn view_ai_capability_unavailable_page(
+        &self,
+        title: &'static str,
+        description: &'static str,
+    ) -> Element<'_, Message> {
+        container(
+            column![
+                text(title).size(18),
+                text(description).size(12),
+                text("当前可先在这里预留入口；后续接通供应商与解析链后，再开放真实目标配置与排序。")
+                    .size(12)
+                    .color(
+                        self.app_theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.62),
+                    ),
+            ]
+            .spacing(10),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds the shared routing strategy block shown above AI capability target lists when that capability supports native-versus-host routing.
+    /// 构建显示在 AI 能力目标列表上方的共享路由策略区块，供支持原生与宿主路由的能力复用。
+    pub(super) fn view_ai_capability_routing_strategy_block(
         &self,
         capability_kind: AiToolKind,
+    ) -> Option<Element<'_, Message>> {
+        match capability_kind {
+            AiToolKind::WebSearch => Some(
+                column![
+                    text("路由策略").size(13),
+                    pick_list(
+                        WebSearchRoutingMode::ALL.to_vec(),
+                        Some(self.ai_tool_configuration.web_search.mode),
+                        Message::WebSearchRoutingModeSelected,
+                    )
+                    .width(Fill)
+                    .placeholder("选择联网搜索路由策略"),
+                    text(self.ai_tool_configuration.web_search.mode.description()).size(12),
+                ]
+                .spacing(8)
+                .into(),
+            ),
+            AiToolKind::UnderstandImage => Some(
+                column![
+                    text("路由策略").size(13),
+                    pick_list(
+                        NativeBridgeRoutingMode::ALL.to_vec(),
+                        Some(self.ai_tool_configuration.understand_image.mode),
+                        Message::UnderstandImageRoutingModeSelected,
+                    )
+                    .width(Fill)
+                    .placeholder("选择图像理解路由策略"),
+                    text(self.ai_tool_configuration.understand_image.mode.description()).size(12),
+                ]
+                .spacing(8)
+                .into(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Builds the shared capability-management surface reused by the settings page and the workbench quick capability modal.
+    /// 构建由设置页与工作台快捷能力弹窗复用的共享能力管理表面。
+    pub(super) fn view_ai_capability_management_panel(
+        &self,
+        capability_kind: AiToolKind,
+        show_configure_button: bool,
+        show_remove_action: bool,
+        show_runtime_toggle: bool,
     ) -> Element<'_, Message> {
         let available_vendor_ids = self
             .ai_tool_configuration
@@ -7581,91 +8390,71 @@ impl VulcanWorkbench {
             })
             .map(|vendor| vendor.vendor_id.clone())
             .collect::<Vec<_>>();
-        let enabled_targets = self
+        let configured_targets = self
             .ai_tool_configuration
-            .resolved_route_targets_for_kind(capability_kind);
-        let description = match capability_kind {
-            AiToolKind::WebSearch => {
-                "统一 web-search 只有一个语义工具名，`target=auto` 会按这里保存的顺序尝试。点“添加目标”后，可在弹层中按供应商勾选要暴露给模型的搜索目标。"
-            }
-            AiToolKind::UnderstandImage => {
-                "当当前对话模型不支持图片理解时，这里配置的目标会作为 `understand_image` 工具补位。建议只勾选真正想让模型使用的视觉目标。"
-            }
-            AiToolKind::ImageGeneration => {
-                "这里决定对话模型可调用哪些图片生成目标，以及 `target=auto` 时的默认顺序。每个目标都以“供应商 / 模型”的方式暴露给模型。"
-            }
-            AiToolKind::VideoGeneration => {
-                "这里决定对话模型可调用哪些视频生成目标，以及自动模式下的默认优先级。通常建议把速度更快的目标放在前面。"
-            }
-            AiToolKind::SpeechSynthesis => {
-                "这里决定文本转语音与语音合成工具暴露哪些目标。若某供应商支持多个音色或模型，可在弹层中分别勾选。"
-            }
-            AiToolKind::MusicGeneration => {
-                "这里决定音乐生成工具暴露哪些目标，以及自动模式下的默认顺序。"
-            }
-            AiToolKind::MusicCover => {
-                "这里决定音乐翻唱工具暴露哪些目标，并控制自动模式的默认顺序。"
-            }
-            _ => "这里决定当前语义能力暴露哪些目标，以及自动模式的默认顺序。",
-        };
+            .resolved_configured_targets_for_kind(capability_kind);
+        let enabled_target_count = configured_targets
+            .iter()
+            .filter(|entry| entry.enabled)
+            .count();
         let mut content = column![
-            text(description).size(12),
             row![
                 text(format!(
-                    "已配置供应商：{} 个 · 当前启用目标：{} 个",
+                    "已配置供应商：{} 个 · 已配置目标：{} 个 · 当前启用：{} 个",
                     available_vendor_ids.len(),
-                    enabled_targets.len()
+                    configured_targets.len(),
+                    enabled_target_count
                 ))
                 .size(12),
                 space::horizontal(),
-                button("配置目标")
-                    .style(button::primary)
-                    .on_press(Message::OpenAiCapabilityTargetPicker(capability_kind)),
             ]
             .align_y(Center),
         ]
         .spacing(12);
-        if capability_kind == AiToolKind::WebSearch {
-            content = content
-                .push(text("路由策略").size(13))
-                .push(
-                    pick_list(
-                        WebSearchRoutingMode::ALL.to_vec(),
-                        Some(self.ai_tool_configuration.web_search.mode),
-                        Message::WebSearchRoutingModeSelected,
-                    )
-                    .width(Fill)
-                    .placeholder("选择 web-search 路由策略"),
-                )
-                .push(text(self.ai_tool_configuration.web_search.mode.description()).size(12));
+        if show_configure_button {
+            content = content.push(
+                row![
+                    space::horizontal(),
+                    button("配置目标")
+                        .style(button::primary)
+                        .on_press(Message::OpenAiCapabilityTargetPicker(capability_kind)),
+                ]
+                .align_y(Center),
+            );
+        }
+        if let Some(strategy_block) = self.view_ai_capability_routing_strategy_block(capability_kind)
+        {
+            content = content.push(strategy_block);
         }
         if available_vendor_ids.is_empty() {
             content = content.push(
                 container(
                     column![
                         text("当前还没有可用于这个能力的共享供应商。").size(13),
-                        button("前往供应商配置").style(button::secondary).on_press(
-                            Message::SettingsSectionSelected(SettingsSection::AiCapabilityVendors,)
-                        ),
+                        button("前往供应商配置")
+                            .style(button::secondary)
+                            .on_press(Message::SettingsSectionSelected(
+                                SettingsSection::AiCapabilityVendors,
+                            )),
                     ]
                     .spacing(8),
                 )
                 .padding(12)
                 .style(container::bordered_box),
             );
-        } else if enabled_targets.is_empty() {
+        } else if configured_targets.is_empty() {
+            let empty_text = if show_configure_button {
+                "当前还没有配置任何目标。点击“配置目标”后，可在弹层中按供应商勾选要启用的模型或功能。"
+            } else {
+                "当前还没有已配置目标。请前往设置页中的对应能力分页，先完成目标配置。"
+            };
             content = content.push(
-                container(
-                    text(
-                        "当前还没有启用任何目标。点击右上角“配置目标”后，可在弹层中按供应商勾选。",
-                    )
-                    .size(13),
-                )
-                .padding(12)
-                .style(container::bordered_box),
+                container(text(empty_text).size(13))
+                    .padding(12)
+                    .style(container::bordered_box),
             );
         } else {
-            let enabled_list = enabled_targets.into_iter().enumerate().fold(
+            let target_list = configured_targets.into_iter().enumerate().fold(
                 column![].spacing(0).width(Fill),
                 |list, (index, entry)| {
                     let shows_drop_before = matches!(
@@ -7674,25 +8463,49 @@ impl VulcanWorkbench {
                             if target_selector == &entry.target_selector
                     );
                     list.push(self.view_ai_capability_route_drop_indicator(shows_drop_before))
-                        .push(self.view_ai_capability_route_row(capability_kind, index, entry))
+                        .push(self.view_ai_capability_route_row(
+                            capability_kind,
+                            index,
+                            entry,
+                            show_remove_action,
+                        ))
                 },
             );
             content = content
-                .push(text("当前启用列表").size(14))
+                .push(text("目标列表").size(14))
+                .push(target_list.push(self.view_ai_capability_route_tail_drop_zone(
+                    capability_kind,
+                )))
                 .push(
-                    enabled_list
-                        .push(self.view_ai_capability_route_tail_drop_zone(capability_kind)),
-                )
-                .push(
-                    text("拖动左侧把手即可调整默认顺序；改动会自动保存，`target=auto` 会严格按这里的排列尝试。")
+                    text("拖动左侧把手即可调整默认顺序；勾选表示启用，不勾选表示保留配置但当前不参与 `target=auto`。")
                         .size(12),
                 );
         }
 
-        container(content)
-            .padding(16)
-            .style(container::bordered_box)
-            .into()
+        let panel = if show_runtime_toggle {
+            container(content).padding(iced::Padding {
+                top: 0.0,
+                right: 16.0,
+                bottom: 16.0,
+                left: 16.0,
+            })
+        } else {
+            container(content).padding(16)
+        };
+        if show_runtime_toggle {
+            panel.into()
+        } else {
+            panel.style(container::bordered_box).into()
+        }
+    }
+
+    /// Renders one dedicated AI capability page that manages configured targets and their execution order for a single semantic tool.
+    /// 渲染管理单个语义工具已配置目标与执行顺序的独立 AI 能力页面。
+    pub(super) fn view_ai_capability_settings_page(
+        &self,
+        capability_kind: AiToolKind,
+    ) -> Element<'_, Message> {
+        self.view_ai_capability_management_panel(capability_kind, true, true, false)
     }
 
     /// Builds the blocking AI capability vendor-picker modal used by the supplier page before one new shared vendor is created.
@@ -7858,6 +8671,13 @@ impl VulcanWorkbench {
             crate::ai_capability_provider_catalog::ai_capability_provider_definitions_for_vendor(
                 &editor.vendor_id,
             );
+        let supports_connection_mode = editor.vendor_id.eq_ignore_ascii_case("ollama");
+        let supports_api_key_field = definitions.iter().any(|definition| {
+            !matches!(
+                definition.api_key_requirement,
+                crate::ai_capability_provider_catalog::AiCapabilityProviderApiKeyRequirement::None
+            )
+        });
         let supports_region_field = definitions
             .iter()
             .any(|definition| definition.supports_region_field)
@@ -7897,6 +8717,21 @@ impl VulcanWorkbench {
             .into_iter()
             .collect::<Vec<_>>()
             .join("\n");
+        let editor_description = match (supports_api_key_field, supports_region_field) {
+            (true, true) => {
+                "这里只配置共享凭据。供应商名称固定，Base URL 不对外开放，后续各能力分页直接复用这里的 API Key 与区域。"
+            }
+            (true, false) => {
+                "这里只配置共享凭据。供应商名称固定，Base URL 不对外开放，后续各能力分页直接复用这里的 API Key。"
+            }
+            (false, true) => {
+                "这里只配置共享区域。供应商名称固定，Base URL 不对外开放，后续各能力分页直接复用这里的区域设置。"
+            }
+            (false, false) => {
+                "当前供应商无需额外凭据或区域配置，确认后即可加入共享 AI 能力供应商列表。"
+            }
+        };
+        let local_base_url_placeholder = "例如：http://127.0.0.1:11434 或 http://nasbox:11434";
         let close_button = button(
             container(
                 codicon::chrome_close()
@@ -7952,6 +8787,55 @@ impl VulcanWorkbench {
                 .style(container::bordered_box)
                 .into()
         };
+        let api_key_field: Element<'_, Message> = if !supports_api_key_field {
+            space().into()
+        } else {
+            column![
+                text(api_key_label).size(12),
+                text_input(api_key_placeholder, &editor.api_key)
+                    .on_input(Message::AiCapabilityVendorEditorApiKeyChanged)
+                    .secure(true)
+                    .padding(8)
+                    .width(Fill),
+            ]
+            .spacing(5)
+            .into()
+        };
+        let connection_mode_field: Element<'_, Message> = if !supports_connection_mode {
+            space().into()
+        } else {
+            column![
+                text("连接方式").size(12),
+                pick_list(
+                    crate::provider_config::AiCapabilityVendorConnectionMode::ALL.to_vec(),
+                    Some(editor.connection_mode),
+                    Message::AiCapabilityVendorEditorConnectionModeChanged,
+                )
+                .width(Fill)
+                .placeholder("选择连接方式"),
+            ]
+            .spacing(5)
+            .into()
+        };
+        let local_base_url_field: Element<'_, Message> = if !supports_connection_mode
+            || !matches!(
+                editor.connection_mode,
+                crate::provider_config::AiCapabilityVendorConnectionMode::Local
+            )
+        {
+            space().into()
+        } else {
+            column![
+                text("本地 Ollama 地址").size(12),
+                text_input(local_base_url_placeholder, &editor.base_url)
+                    .on_input(Message::AiCapabilityVendorEditorBaseUrlChanged)
+                    .padding(8)
+                    .width(Fill),
+                text("仅本地模式可编辑；留空时默认使用 http://127.0.0.1:11434。").size(12),
+            ]
+            .spacing(5)
+            .into()
+        };
         let modal_card = container(
             column![
                 row![
@@ -7965,18 +8849,11 @@ impl VulcanWorkbench {
                     close_button,
                 ]
                 .align_y(Center),
-                text("这里只配置共享凭据。供应商名称固定，Base URL 不对外开放，后续各能力分页直接复用这里的 API Key 与区域。")
-                    .size(12),
+                text(editor_description).size(12),
                 note_block,
-                column![
-                    text(api_key_label).size(12),
-                    text_input(api_key_placeholder, &editor.api_key)
-                        .on_input(Message::AiCapabilityVendorEditorApiKeyChanged)
-                        .secure(true)
-                        .padding(8)
-                        .width(Fill),
-                ]
-                .spacing(5),
+                connection_mode_field,
+                api_key_field,
+                local_base_url_field,
                 region_field,
                 row![
                     space::horizontal(),
@@ -8055,7 +8932,7 @@ impl VulcanWorkbench {
         .style(style::workbench_model_trigger_button_style)
         .on_press(Message::CloseAiCapabilityTargetPicker);
         let vendor_list = scrollable(vendor_ids.iter().fold(
-            column![].spacing(8),
+            column![].spacing(1).width(Fill),
             |list, vendor_id| {
                 let vendor = self.ai_tool_configuration.vendor_by_id(vendor_id);
                 let vendor_name = vendor
@@ -8067,26 +8944,19 @@ impl VulcanWorkbench {
                     .map(BTreeMap::len)
                     .unwrap_or(0);
                 let is_selected = selected_vendor_id.as_deref() == Some(vendor_id.as_str());
-                list.push(
-                    button(
-                        row![
-                            text(vendor_name).size(14),
-                            space::horizontal(),
-                            text(format!("{} 项", selected_count)).size(12),
-                        ]
-                        .align_y(Center),
-                    )
-                    .width(Fill)
-                    .padding([8, 10])
-                    .style(if is_selected {
-                        button::primary
-                    } else {
-                        button::secondary
-                    })
-                    .on_press(Message::AiCapabilityTargetPickerVendorSelected(
-                        vendor_id.clone(),
-                    )),
-                )
+                let trailing_badge: Element<'_, Message> = text(format!("[{}]", selected_count))
+                    .size(12)
+                    .color(self.app_theme.extended_palette().background.base.text.scale_alpha(0.56))
+                    .into();
+                list.push(self.view_tree_navigation_button_row(
+                    self.view_settings_navigation_icon(SettingsSection::AiCapabilityVendors, true),
+                    vendor_name,
+                    None,
+                    Some(trailing_badge),
+                    is_selected,
+                    MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                    Message::AiCapabilityTargetPickerVendorSelected(vendor_id.clone()),
+                ))
             },
         ))
         .height(280);
@@ -8113,36 +8983,27 @@ impl VulcanWorkbench {
                         let vendor_id_for_model = vendor_id.clone();
                         let target_alias_for_toggle = choice.target_alias.clone();
                         let target_alias_for_model = choice.target_alias.clone();
-                        let model_editor: Element<'_, Message> =
-                            if choice.supports_model_override && is_checked {
-                                column![
-                                    text("请求模型").size(12),
-                                    text_input("模型 ID", &current_model)
-                                        .on_input(move |value| {
-                                            Message::AiCapabilityTargetPickerTargetModelChanged {
-                                                vendor_id: vendor_id_for_model.clone(),
-                                                target_alias: target_alias_for_model.clone(),
-                                                model_id: value,
-                                            }
-                                        })
-                                        .padding(8)
-                                        .width(Fill),
-                                ]
-                                .spacing(5)
-                                .into()
-                            } else {
-                                text(format!("Target：{}/{}", vendor_id, choice.target_alias))
-                                    .size(12)
-                                    .color(
-                                        self.app_theme
-                                            .extended_palette()
-                                            .background
-                                            .base
-                                            .text
-                                            .scale_alpha(0.62),
-                                    )
-                                    .into()
-                            };
+                        let model_editor: Element<'_, Message> = if choice.supports_model_override
+                            && is_checked
+                        {
+                            column![
+                                text("请求模型").size(12),
+                                text_input("模型 ID", &current_model)
+                                    .on_input(move |value| {
+                                        Message::AiCapabilityTargetPickerTargetModelChanged {
+                                            vendor_id: vendor_id_for_model.clone(),
+                                            target_alias: target_alias_for_model.clone(),
+                                            model_id: value,
+                                        }
+                                    })
+                                    .padding(8)
+                                    .width(Fill),
+                            ]
+                            .spacing(5)
+                            .into()
+                        } else {
+                            space::vertical().height(0).into()
+                        };
                         list.push(
                             container(
                                 column![
@@ -8154,7 +9015,7 @@ impl VulcanWorkbench {
                                                 enabled,
                                             }
                                         }
-                                    ),
+                                    ).size(13),
                                     model_editor,
                                 ]
                                 .spacing(6),

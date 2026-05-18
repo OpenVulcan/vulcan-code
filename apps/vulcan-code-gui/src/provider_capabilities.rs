@@ -4,10 +4,11 @@
 use crate::provider_config::{
     AiToolDeclaration, AiToolKind, AiToolPolicy, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
     MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID, MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, ModelChoice,
-    ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
-    ProviderApiFamily, SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID, SupportedProviderDefinition,
-    UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID, VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
-    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
+    ModelInterleavedCapability, NativeBridgeRoutingMode, PersistedAiToolConfiguration,
+    PersistedProviderOptions, ProviderApiFamily, SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID,
+    SupportedProviderDefinition, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+    VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
+    WebSearchRoutingMode,
 };
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachmentKind;
@@ -373,19 +374,30 @@ fn apply_understand_image_runtime_configuration(
     let existing_index = ai_tools
         .iter()
         .position(|tool| tool.kind == AiToolKind::UnderstandImage);
+    let host_targets_available =
+        root_configuration.has_usable_targets_for_kind(AiToolKind::UnderstandImage);
 
-    if model_supports_native_image {
+    if !host_targets_available {
         if let Some(index) = existing_index {
             ai_tools.remove(index);
         }
         return;
     }
 
-    if !root_configuration.has_usable_targets_for_kind(AiToolKind::UnderstandImage) {
-        if let Some(index) = existing_index {
-            ai_tools.remove(index);
+    match root_configuration.understand_image.mode {
+        NativeBridgeRoutingMode::NativeOnly => {
+            if let Some(index) = existing_index {
+                ai_tools.remove(index);
+            }
+            return;
         }
-        return;
+        NativeBridgeRoutingMode::NativeFirst if model_supports_native_image => {
+            if let Some(index) = existing_index {
+                ai_tools.remove(index);
+            }
+            return;
+        }
+        NativeBridgeRoutingMode::NativeFirst | NativeBridgeRoutingMode::HostOnly => {}
     }
 
     let mut capability = existing_index
@@ -801,12 +813,13 @@ mod tests {
         resolve_model_capabilities, resolve_provider_api_key, resolve_provider_api_key_with_lookup,
     };
     use crate::provider_config::{
-        AiToolKind, AiToolPolicy, ModelChoice, PersistedAiToolConfiguration,
-        PersistedProviderOptions, PersistedUnderstandImageConfiguration,
-        PersistedWebSearchConfiguration, ProviderBaseUrlConfig, ProviderBaseUrlKind,
-        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-        SupportedProviderDefinition, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
-        WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
+        AiToolKind, AiToolPolicy, ModelChoice, NativeBridgeRoutingMode,
+        PersistedAiToolConfiguration, PersistedProviderOptions,
+        PersistedUnderstandImageConfiguration, PersistedWebSearchConfiguration,
+        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderModelDiscoveryConfig,
+        ProviderModelDiscoveryKind, ProviderRuntimeKind, SupportedProviderDefinition,
+        UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
+        WebSearchRoutingMode,
     };
     use std::collections::BTreeMap;
 
@@ -1018,6 +1031,7 @@ mod tests {
                 name: String::from("Brave Search"),
                 enabled: true,
                 api_key: String::from("token"),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::new(),
                 targets: vec![
@@ -1096,6 +1110,7 @@ mod tests {
                 name: String::from("MiniMax"),
                 enabled: true,
                 api_key: String::from("token"),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::from("global"),
                 targets: vec![
@@ -1107,6 +1122,7 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
+                mode: NativeBridgeRoutingMode::NativeFirst,
                 target_order: vec![String::from("minimax/minimax")],
                 providers: Vec::new(),
             },
@@ -1145,6 +1161,7 @@ mod tests {
                 name: String::from("MiniMax"),
                 enabled: true,
                 api_key: String::from("token"),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::from("global"),
                 targets: vec![
@@ -1156,6 +1173,7 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
+                mode: NativeBridgeRoutingMode::NativeFirst,
                 target_order: vec![String::from("minimax/minimax")],
                 providers: Vec::new(),
             },
@@ -1210,6 +1228,7 @@ mod tests {
                 name: String::from("MiniMax"),
                 enabled: true,
                 api_key: String::from("token"),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::from("global"),
                 targets: vec![
@@ -1221,6 +1240,7 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
+                mode: NativeBridgeRoutingMode::NativeFirst,
                 target_order: vec![String::from("minimax/minimax")],
                 providers: Vec::new(),
             },
@@ -1254,6 +1274,7 @@ mod tests {
                 name: String::from("MiniMax"),
                 enabled: true,
                 api_key: String::from("token"),
+                connection_mode: None,
                 base_url: String::new(),
                 region: String::from("global"),
                 targets: vec![

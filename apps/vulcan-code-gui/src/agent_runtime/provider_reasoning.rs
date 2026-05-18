@@ -59,6 +59,17 @@ pub(crate) fn resolve_provider_runtime_reasoning(
     provider_profile: Option<&ReasoningProfileConfig>,
     model_profile: Option<&ReasoningProfileConfig>,
 ) -> ProviderRuntimeReasoningResolution {
+    if reasoning_profile_uses_default_only(model_profile)
+        || reasoning_profile_uses_default_only(provider_profile)
+    {
+        return ProviderRuntimeReasoningResolution {
+            requested_effort,
+            source_label: String::from("模型默认"),
+            additional_params: None,
+            note: None,
+        };
+    }
+
     if let Some(patch) =
         model_profile.and_then(|profile| profile.patch_for_effort(requested_effort))
     {
@@ -113,6 +124,15 @@ pub(crate) fn resolve_provider_runtime_reasoning(
         additional_params: None,
         note: build_runtime_reasoning_note(runtime_kind, model_id, requested_effort),
     }
+}
+
+/// Returns whether the current provider or model reasoning profile should always preserve the upstream default behavior.
+/// 返回当前供应商或模型思考配置是否应始终保留上游默认行为。
+fn reasoning_profile_uses_default_only(profile: Option<&ReasoningProfileConfig>) -> bool {
+    matches!(
+        profile.and_then(|item| item.kind),
+        Some(crate::provider_config::ReasoningCapabilityKind::DefaultOnly)
+    )
 }
 
 /// Deep-merges one optional provider-default JSON payload with one optional reasoning patch while preserving nested object fields.
@@ -491,5 +511,29 @@ mod tests {
                 }
             }))
         );
+    }
+
+    /// Verifies default-only reasoning profiles preserve upstream provider defaults instead of falling through to generic runtime patches.
+    /// 验证默认思考配置会保留上游 Provider 默认行为，而不会继续落到通用运行时 Patch。
+    #[test]
+    fn default_only_reasoning_profile_preserves_provider_defaults() {
+        let model_profile = ReasoningProfileConfig {
+            kind: Some(ReasoningCapabilityKind::DefaultOnly),
+            ..ReasoningProfileConfig::default()
+        };
+
+        let resolution = resolve_provider_runtime_reasoning(
+            ProviderRuntimeKind::OpenAiCompatible,
+            "alibaba-cn",
+            "future-ali-model",
+            true,
+            ReasoningEffortLevel::Medium,
+            None,
+            Some(&model_profile),
+        );
+
+        assert_eq!(resolution.source_label, "模型默认");
+        assert_eq!(resolution.additional_params, None);
+        assert_eq!(resolution.note, None);
     }
 }

@@ -5,8 +5,8 @@ use crate::ai_capability_provider_catalog;
 use crate::runtime_assets;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::BTreeMap;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -336,6 +336,9 @@ pub struct ReasoningSelectionView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReasoningCapabilityKind {
+    /// Uses the provider/model default reasoning behavior without exposing any manual selector.
+    /// 使用供应商或模型默认思考行为，不暴露任何手动选择器。
+    DefaultOnly,
     /// Native multi-level reasoning controls.
     /// 原生多档位推理控制。
     Tiered,
@@ -418,6 +421,10 @@ pub const MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_music_generati
 /// 宿主侧配置化音乐翻唱供应商链使用的回退工具标识。
 pub const MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID: &str = "vulcan_music_cover_chain";
 
+/// Maximum number of enabled targets allowed beneath one semantic AI capability.
+/// 单个语义 AI 能力允许启用的目标上限数量。
+pub const MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND: usize = 20;
+
 impl AiToolKind {
     /// Returns the stable public semantic key used by diagnostics and configuration.
     /// 返回诊断与配置使用的稳定公开语义键。
@@ -454,6 +461,21 @@ impl AiToolKind {
             Self::AudioGeneration => "音频生成",
         }
     }
+
+    /// Returns whether the current semantic capability participates in the workbench quick-toggle persistence flow.
+    /// 返回当前语义能力是否参与工作台快捷开关持久化流程。
+    pub const fn supports_workbench_quick_toggle(self) -> bool {
+        matches!(
+            self,
+            Self::WebSearch
+                | Self::UnderstandImage
+                | Self::ImageGeneration
+                | Self::VideoGeneration
+                | Self::SpeechSynthesis
+                | Self::MusicGeneration
+                | Self::MusicCover
+        )
+    }
 }
 
 /// User-selected routing mode for the unified web-search capability.
@@ -483,12 +505,11 @@ pub enum WebSearchRoutingMode {
 impl WebSearchRoutingMode {
     /// All routing modes shown by the settings picker in stable order.
     /// 设置选择器中按稳定顺序展示的全部路由模式。
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::NativeOnly,
         Self::NativeFirst,
         Self::ThirdPartyFirst,
         Self::ThirdPartyOnly,
-        Self::Disabled,
     ];
 
     /// Returns the compact settings label for this routing mode.
@@ -524,11 +545,69 @@ impl WebSearchRoutingMode {
     }
 }
 
+/// User-selected routing mode for native multimodal input versus one host-provided understanding bridge.
+/// 用户为原生多模态输入与宿主理解桥接能力选择的路由模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeBridgeRoutingMode {
+    /// Only keep the model's native multimodal understanding path.
+    /// 仅保留模型原生多模态理解路径。
+    NativeOnly,
+    /// Prefer the model's native multimodal understanding path, then fall back to one host bridge.
+    /// 优先使用模型原生多模态理解路径，再回退到宿主桥接能力。
+    NativeFirst,
+    /// Always expose the host bridge instead of relying on native understanding.
+    /// 始终暴露宿主桥接能力，而不是依赖原生理解。
+    HostOnly,
+}
+
+impl NativeBridgeRoutingMode {
+    /// All routing modes shown by native-versus-host bridge pickers in stable order.
+    /// 原生与宿主桥接选择器按稳定顺序展示的全部路由模式。
+    pub const ALL: [Self; 3] = [Self::NativeFirst, Self::NativeOnly, Self::HostOnly];
+
+    /// Returns the compact settings label for the current routing mode.
+    /// 返回当前路由模式在设置界面使用的紧凑标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NativeOnly => "仅使用模型原生",
+            Self::NativeFirst => "原生优先，工具兜底",
+            Self::HostOnly => "仅使用工具理解",
+        }
+    }
+
+    /// Returns one explanatory sentence for settings and diagnostics surfaces.
+    /// 返回用于设置与诊断界面的一句解释说明。
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::NativeOnly => "仅在模型自身声明支持对应输入模态时使用原生理解，不额外暴露宿主理解工具。",
+            Self::NativeFirst => "优先依赖模型原生多模态输入；当模型不支持时，再暴露宿主理解工具补位。",
+            Self::HostOnly => "无论模型是否具备原生多模态输入，都优先暴露宿主理解工具并通过工具链完成理解。",
+        }
+    }
+}
+
+impl Default for NativeBridgeRoutingMode {
+    /// Returns the safest default that keeps native input first and uses the host bridge only as a fallback.
+    /// 返回最稳妥的默认值，优先保留原生输入，并仅在需要时使用宿主桥接作为回退。
+    fn default() -> Self {
+        Self::NativeFirst
+    }
+}
+
+impl fmt::Display for NativeBridgeRoutingMode {
+    /// Formats one native-versus-host routing mode as a user-facing label.
+    /// 将单个原生与宿主路由模式格式化为面向用户的标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 impl Default for WebSearchRoutingMode {
     /// Returns the conservative default that preserves provider-native behavior.
     /// 返回保守默认值，以保留供应商原生行为。
     fn default() -> Self {
-        Self::NativeOnly
+        Self::NativeFirst
     }
 }
 
@@ -1207,6 +1286,42 @@ pub struct PersistedAiCapabilityTargetBinding {
     pub enabled: bool,
 }
 
+/// One explicit shared-vendor connection mode used by providers that can switch between local and official cloud transports.
+/// 供可在本地与官方云端传输之间切换的供应商使用的显式共享连接模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiCapabilityVendorConnectionMode {
+    /// Uses one self-hosted or local endpoint.
+    /// 使用自托管或本地端点。
+    Local,
+    /// Uses the official vendor-managed cloud endpoint.
+    /// 使用供应商官方托管的云端端点。
+    Cloud,
+}
+
+impl AiCapabilityVendorConnectionMode {
+    /// Ordered connection-mode choices shown in the shared vendor editor.
+    /// 显示在共享供应商编辑器中的有序连接模式选项。
+    pub const ALL: [Self; 2] = [Self::Local, Self::Cloud];
+
+    /// Returns the stable user-facing label for the current connection mode.
+    /// 返回当前连接模式的稳定面向用户标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Local => "本地",
+            Self::Cloud => "Ollama Cloud",
+        }
+    }
+}
+
+impl fmt::Display for AiCapabilityVendorConnectionMode {
+    /// Renders the stable user-facing label used by pick lists.
+    /// 渲染供下拉选择器使用的稳定面向用户标签。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 #[allow(dead_code)]
 impl PersistedAiCapabilityTargetBinding {
     /// Builds one default enabled target binding for the provided capability and target pair.
@@ -1281,6 +1396,10 @@ pub struct PersistedAiCapabilityVendorEntry {
     /// 在该供应商下所有已启用目标之间复用的共享 API Key 或 `{env:NAME}` 占位符。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
+    /// Optional connection mode used by vendors that can switch between local and cloud backends.
+    /// 可由支持本地与云端后端切换的供应商使用的可选连接模式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_mode: Option<AiCapabilityVendorConnectionMode>,
     /// Shared vendor-level base URL or root endpoint override.
     /// 共享的供应商级 Base URL 或根端点覆盖值。
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1308,6 +1427,7 @@ impl PersistedAiCapabilityVendorEntry {
             name: vendor_name,
             enabled: true,
             api_key: String::new(),
+            connection_mode: None,
             base_url: String::new(),
             region: default_ai_capability_vendor_region(""),
             targets: Vec::new(),
@@ -1334,6 +1454,16 @@ impl PersistedAiCapabilityVendorEntry {
             .collect()
     }
 
+    /// Returns the fully qualified `vendor/target` selectors configured for one capability regardless of the current enabled flag.
+    /// 返回单个能力当前已配置的完整 `供应商/目标` 选择器集合，不受当前启用标记影响。
+    pub fn configured_target_strings_for(&self, capability_kind: AiToolKind) -> Vec<String> {
+        self.targets
+            .iter()
+            .filter(|binding| binding.capability_kind == capability_kind)
+            .map(|binding| format!("{}/{}", self.vendor_id, binding.target_alias()))
+            .collect()
+    }
+
     /// Returns the first enabled binding that matches the provided capability and target selector.
     /// 返回首条与给定能力及目标选择器匹配的已启用绑定。
     pub fn matching_binding(
@@ -1350,10 +1480,70 @@ impl PersistedAiCapabilityVendorEntry {
         })
     }
 
+    /// Returns the first configured binding that matches the provided capability and target selector regardless of the enabled flag.
+    /// 返回首条与给定能力及目标选择器匹配的已配置绑定，不受启用标记影响。
+    pub fn matching_configured_binding(
+        &self,
+        capability_kind: AiToolKind,
+        target: &str,
+    ) -> Option<&PersistedAiCapabilityTargetBinding> {
+        let normalized_target = target.trim().to_ascii_lowercase();
+        self.targets.iter().find(|binding| {
+            binding.capability_kind == capability_kind
+                && format!("{}/{}", self.vendor_id, binding.target_alias()).to_ascii_lowercase()
+                    == normalized_target
+        })
+    }
+
     /// Resolves the shared API key for the current vendor instance, honoring `{env:NAME}` placeholders.
     /// 解析当前供应商实例的共享 API Key，并支持 `{env:NAME}` 环境变量占位符。
     pub fn resolved_api_key(&self) -> Result<Option<String>, String> {
         resolve_env_backed_secret(Some(self.api_key.as_str()), "AI 能力供应商 API Key")
+    }
+
+    /// Returns whether the current shared vendor exposes an explicit local/cloud connection-mode switch.
+    /// 返回当前共享供应商是否暴露显式的本地/云端连接模式切换。
+    pub fn supports_connection_mode(self: &Self) -> bool {
+        self.vendor_id.eq_ignore_ascii_case("ollama")
+    }
+
+    /// Returns the effective connection mode, inferring one sensible default for legacy vendor rows that predate the explicit selector.
+    /// 返回生效连接模式，并为显式选择器落地前的旧供应商条目推断合理默认值。
+    pub fn resolved_connection_mode(&self) -> AiCapabilityVendorConnectionMode {
+        if !self.supports_connection_mode() {
+            return AiCapabilityVendorConnectionMode::Local;
+        }
+
+        self.connection_mode.unwrap_or_else(|| {
+            if self.api_key.trim().is_empty() {
+                AiCapabilityVendorConnectionMode::Local
+            } else {
+                AiCapabilityVendorConnectionMode::Cloud
+            }
+        })
+    }
+
+    /// Returns the effective vendor-level base URL after applying vendor-specific connection-mode defaults.
+    /// 应用供应商专属连接模式默认值后，返回生效的供应商级 Base URL。
+    pub fn resolved_vendor_base_url(&self) -> String {
+        let trimmed = self.base_url.trim();
+
+        if self.vendor_id.eq_ignore_ascii_case("ollama") {
+            return match self.resolved_connection_mode() {
+                AiCapabilityVendorConnectionMode::Local => {
+                    if trimmed.is_empty() {
+                        String::from("http://127.0.0.1:11434")
+                    } else {
+                        trimmed.to_string()
+                    }
+                }
+                AiCapabilityVendorConnectionMode::Cloud => {
+                    String::from("https://ollama.com")
+                }
+            };
+        }
+
+        trimmed.to_string()
     }
 
     /// Returns the effective region value for the current vendor instance.
@@ -1383,6 +1573,15 @@ impl PersistedAiCapabilityVendorEntry {
         for mut binding in self.targets.drain(..) {
             binding.target_alias = binding.target_alias().to_string();
             binding.model_id = binding.model_id().to_string();
+            if ai_capability_provider_catalog::ai_capability_provider_definition_by_target(
+                &normalized_vendor_id,
+                binding.capability_kind,
+                binding.target_alias(),
+            )
+            .is_none()
+            {
+                continue;
+            }
             if normalized_targets
                 .iter()
                 .any(|existing: &PersistedAiCapabilityTargetBinding| {
@@ -1430,9 +1629,13 @@ pub struct PersistedWebSearchConfiguration {
 
 /// Persisted configuration for the standalone image-understanding capability.
 /// 独立图片理解能力的持久化配置。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedUnderstandImageConfiguration {
+    /// User-selected native-versus-host routing mode for image understanding.
+    /// 用户为图片理解选择的原生与宿主路由模式。
+    #[serde(default)]
+    pub mode: NativeBridgeRoutingMode,
     /// Ordered fully qualified `vendor/target` selectors used when the semantic tool receives `target=auto`.
     /// 当语义工具收到 `target=auto` 时使用的完整 `供应商/目标` 选择器顺序。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1441,6 +1644,18 @@ pub struct PersistedUnderstandImageConfiguration {
     /// 仅为兼容迁移保留的旧版按顺序排列的外部提供方列表。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<PersistedUnderstandImageProviderEntry>,
+}
+
+impl Default for PersistedUnderstandImageConfiguration {
+    /// Builds the default image-understanding configuration.
+    /// 构建默认图片理解配置。
+    fn default() -> Self {
+        Self {
+            mode: NativeBridgeRoutingMode::default(),
+            target_order: Vec::new(),
+            providers: Vec::new(),
+        }
+    }
 }
 
 /// Persisted route-order configuration shared by host-owned AI capability tools that only need ordered `vendor/target` selectors.
@@ -1498,6 +1713,9 @@ impl PersistedUnderstandImageConfiguration {
         let mut normalized = Vec::new();
 
         for mut provider in self.providers.drain(..) {
+            if !understand_image_provider_kind_is_supported(provider.kind) {
+                continue;
+            }
             if normalized
                 .iter()
                 .any(|existing: &PersistedUnderstandImageProviderEntry| {
@@ -1558,6 +1776,9 @@ impl PersistedWebSearchConfiguration {
         let mut normalized = Vec::new();
 
         for mut provider in self.providers.drain(..) {
+            if !web_search_provider_kind_is_supported(provider.kind) {
+                continue;
+            }
             if normalized
                 .iter()
                 .any(|existing: &PersistedWebSearchProviderEntry| existing.kind == provider.kind)
@@ -1577,6 +1798,9 @@ impl PersistedWebSearchConfiguration {
 
         self.providers = normalized;
         self.target_order = normalize_route_target_order(&self.target_order);
+        if self.mode == WebSearchRoutingMode::Disabled {
+            self.mode = WebSearchRoutingMode::default();
+        }
         if self.max_results == 0 {
             self.max_results = default_web_search_max_results();
         }
@@ -1599,6 +1823,10 @@ pub struct PersistedAiToolConfiguration {
     /// 单次配置并可在多个语义能力之间复用的共享 AI 能力供应商实例集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vendors: Vec<PersistedAiCapabilityVendorEntry>,
+    /// Semantic capability kinds that stay disabled in the workbench quick-toggle surface until the user explicitly re-enables them.
+    /// 在工作台快捷开关界面中保持关闭、直到用户显式重新开启的语义能力类型集合。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub disabled_capability_kinds: BTreeSet<AiToolKind>,
     /// Unified web-search configuration.
     /// 统一网页搜索配置。
     #[serde(
@@ -1661,6 +1889,9 @@ impl PersistedAiToolConfiguration {
     /// Normalizes nested capability-provider sections into their canonical standalone shape.
     /// 将嵌套能力提供方分区归一化为其规范独立形态。
     pub fn normalize(&mut self) -> bool {
+        let original_disabled_capability_kinds = self.disabled_capability_kinds.clone();
+        self.disabled_capability_kinds
+            .retain(|kind| kind.supports_workbench_quick_toggle());
         let web_search_changed = self.web_search.normalize();
         let understand_image_changed = self.understand_image.normalize();
         let image_generation_changed = self.image_generation.normalize();
@@ -1671,7 +1902,10 @@ impl PersistedAiToolConfiguration {
         let migration_changed = self.migrate_legacy_capability_entries_into_vendors();
         let vendor_changed = normalize_ai_capability_vendors(&mut self.vendors);
         let route_changed = self.normalize_capability_route_orders();
+        let disabled_capability_changed =
+            self.disabled_capability_kinds != original_disabled_capability_kinds;
         web_search_changed
+            || disabled_capability_changed
             || understand_image_changed
             || image_generation_changed
             || video_generation_changed
@@ -1709,6 +1943,22 @@ impl PersistedAiToolConfiguration {
         !self
             .projected_target_order_for_kind(capability_kind)
             .is_empty()
+    }
+
+    /// Returns the total count of currently usable enabled targets for one semantic capability.
+    /// 返回单个语义能力当前可用且已启用目标的总数量。
+    pub fn enabled_target_count_for_kind(&self, capability_kind: AiToolKind) -> usize {
+        self.vendors
+            .iter()
+            .filter(|vendor| vendor.enabled)
+            .map(|vendor| {
+                vendor
+                    .targets
+                    .iter()
+                    .filter(|binding| binding.enabled && binding.capability_kind == capability_kind)
+                    .count()
+            })
+            .sum()
     }
 
     /// Returns the ordered list of enabled fully qualified `vendor/target` selectors for one semantic capability.
@@ -1794,6 +2044,22 @@ impl PersistedAiToolConfiguration {
             .collect()
     }
 
+    /// Returns the ordered route entries rendered in settings and quick panels for all configured targets of one semantic capability, including currently disabled items.
+    /// 返回设置页与快捷面板为某个语义能力渲染的全部已配置目标有序条目，包含当前已禁用项。
+    pub fn resolved_configured_targets_for_kind(
+        &self,
+        capability_kind: AiToolKind,
+    ) -> Vec<ResolvedAiCapabilityRouteTarget> {
+        build_stable_route_target_order(
+            self.configured_target_order_for_kind(capability_kind),
+            &self.vendors,
+            capability_kind,
+        )
+        .into_iter()
+        .filter_map(|target| self.resolve_route_target_for_kind(capability_kind, &target))
+        .collect()
+    }
+
     /// Returns the vendor instance matching the provided identifier when one exists.
     /// 返回与给定标识匹配的供应商实例（若存在）。
     pub fn vendor_by_id(&self, vendor_id: &str) -> Option<&PersistedAiCapabilityVendorEntry> {
@@ -1848,37 +2114,37 @@ impl PersistedAiToolConfiguration {
             self.music_generation.target_order.clone(),
             self.music_cover.target_order.clone(),
         );
-        self.web_search.target_order = build_effective_route_target_order(
+        self.web_search.target_order = build_stable_route_target_order(
             &self.web_search.target_order,
             &self.vendors,
             AiToolKind::WebSearch,
         );
-        self.understand_image.target_order = build_effective_route_target_order(
+        self.understand_image.target_order = build_stable_route_target_order(
             &self.understand_image.target_order,
             &self.vendors,
             AiToolKind::UnderstandImage,
         );
-        self.image_generation.target_order = build_effective_route_target_order(
+        self.image_generation.target_order = build_stable_route_target_order(
             &self.image_generation.target_order,
             &self.vendors,
             AiToolKind::ImageGeneration,
         );
-        self.video_generation.target_order = build_effective_route_target_order(
+        self.video_generation.target_order = build_stable_route_target_order(
             &self.video_generation.target_order,
             &self.vendors,
             AiToolKind::VideoGeneration,
         );
-        self.speech_synthesis.target_order = build_effective_route_target_order(
+        self.speech_synthesis.target_order = build_stable_route_target_order(
             &self.speech_synthesis.target_order,
             &self.vendors,
             AiToolKind::SpeechSynthesis,
         );
-        self.music_generation.target_order = build_effective_route_target_order(
+        self.music_generation.target_order = build_stable_route_target_order(
             &self.music_generation.target_order,
             &self.vendors,
             AiToolKind::MusicGeneration,
         );
-        self.music_cover.target_order = build_effective_route_target_order(
+        self.music_cover.target_order = build_stable_route_target_order(
             &self.music_cover.target_order,
             &self.vendors,
             AiToolKind::MusicCover,
@@ -1909,7 +2175,7 @@ impl PersistedAiToolConfiguration {
             target_alias: binding.target_alias().to_string(),
             enabled: vendor.enabled && binding.enabled,
             api_key: vendor.api_key.clone(),
-            base_url: vendor.base_url.clone(),
+            base_url: vendor.resolved_vendor_base_url(),
             model: binding.model_id().to_string(),
             region: vendor.region.clone(),
             max_results: self.web_search.max_results.max(1),
@@ -1965,15 +2231,15 @@ impl PersistedAiToolConfiguration {
     ) -> Option<ResolvedAiCapabilityRouteTarget> {
         let (vendor_id, target_alias) = split_vendor_target_selector(target)?;
         let vendor = self.vendor_by_id(vendor_id)?;
-        let binding = vendor.matching_binding(capability_kind, target)?;
-        let definition =
-            ai_capability_provider_catalog::ai_capability_provider_definition_by_target(
+        let binding = vendor.matching_configured_binding(capability_kind, target)?;
+        let target_definition =
+            ai_capability_provider_catalog::ai_capability_provider_target_by_target(
                 vendor_id,
                 capability_kind,
                 target_alias,
             );
-        let target_name = definition
-            .map(|definition| definition.name.clone())
+        let target_name = target_definition
+            .map(|definition| definition.name)
             .unwrap_or_else(|| binding.target_alias().to_string());
         Some(ResolvedAiCapabilityRouteTarget {
             capability_kind,
@@ -1983,6 +2249,7 @@ impl PersistedAiToolConfiguration {
             target_alias: binding.target_alias().to_string(),
             target_name,
             model_id: binding.model_id().to_string(),
+            enabled: vendor.enabled && binding.enabled,
         })
     }
 
@@ -1992,6 +2259,9 @@ impl PersistedAiToolConfiguration {
         &mut self,
         provider: PersistedWebSearchProviderEntry,
     ) {
+        if !web_search_provider_kind_is_supported(provider.kind) {
+            return;
+        }
         let vendor_id = provider.kind.key();
         let target_alias = provider.target_alias().to_string();
         let target_selector = format!("{vendor_id}/{target_alias}");
@@ -2025,6 +2295,9 @@ impl PersistedAiToolConfiguration {
         &mut self,
         provider: PersistedUnderstandImageProviderEntry,
     ) {
+        if !understand_image_provider_kind_is_supported(provider.kind) {
+            return;
+        }
         let vendor_id = provider.kind.key();
         let target_alias = provider.target_alias().to_string();
         let target_selector = format!("{vendor_id}/{target_alias}");
@@ -2103,6 +2376,25 @@ fn default_ai_capability_vendor_region(vendor_id: &str) -> String {
     }
 }
 
+/// Returns whether one shared AI capability vendor identifier is still supported by the current capability catalog.
+/// 返回单个共享 AI 能力供应商标识当前是否仍受现有能力目录支持。
+fn ai_capability_vendor_is_supported(vendor_id: &str) -> bool {
+    !ai_capability_provider_catalog::ai_capability_provider_definitions_for_vendor(vendor_id)
+        .is_empty()
+}
+
+/// Returns whether one legacy web-search provider kind is still supported by the current capability catalog.
+/// 返回单个旧版网页搜索提供方类型当前是否仍受现有能力目录支持。
+fn web_search_provider_kind_is_supported(kind: WebSearchProviderKind) -> bool {
+    ai_capability_provider_catalog::web_search_provider_enabled(kind.key())
+}
+
+/// Returns whether one legacy image-understanding provider kind is still supported by the current capability catalog.
+/// 返回单个旧版图片理解提供方类型当前是否仍受现有能力目录支持。
+fn understand_image_provider_kind_is_supported(kind: UnderstandImageProviderKind) -> bool {
+    ai_capability_provider_catalog::understand_image_provider_enabled(kind.key())
+}
+
 /// Normalizes one MiniMax vendor-level base URL so shared credentials can drive multiple capability endpoints safely.
 /// 归一化单个 MiniMax 供应商级 Base URL，使共享凭据能够安全驱动多个能力端点。
 fn normalize_minimax_vendor_base_url(base_url: &str) -> String {
@@ -2157,6 +2449,9 @@ fn normalize_ai_capability_vendors(vendors: &mut Vec<PersistedAiCapabilityVendor
     let mut normalized = Vec::new();
     for mut vendor in vendors.drain(..) {
         vendor.normalize();
+        if !ai_capability_vendor_is_supported(&vendor.vendor_id) {
+            continue;
+        }
         if normalized
             .iter()
             .any(|existing: &PersistedAiCapabilityVendorEntry| {
@@ -2199,6 +2494,44 @@ fn build_effective_route_target_order(
         }
     }
     for target in natural_targets {
+        if !ordered
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&target))
+        {
+            ordered.push(target);
+        }
+    }
+    if ordered.len() > MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND {
+        ordered.truncate(MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND);
+    }
+    ordered
+}
+
+/// Returns the stable persisted route target order by honoring the configured preference and then appending any configured targets not yet mentioned.
+/// 返回稳定持久化的路由目标顺序：先尊重已配置偏好，再补齐尚未出现的全部已配置目标。
+fn build_stable_route_target_order(
+    configured_order: &[String],
+    vendors: &[PersistedAiCapabilityVendorEntry],
+    capability_kind: AiToolKind,
+) -> Vec<String> {
+    let mut configured_targets = Vec::new();
+    for vendor in vendors {
+        configured_targets.extend(vendor.configured_target_strings_for(capability_kind));
+    }
+
+    let mut ordered = Vec::new();
+    for target in normalize_route_target_order(configured_order) {
+        if configured_targets
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&target))
+            && !ordered
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&target))
+        {
+            ordered.push(target);
+        }
+    }
+    for target in configured_targets {
         if !ordered
             .iter()
             .any(|existing: &String| existing.eq_ignore_ascii_case(&target))
@@ -2429,12 +2762,36 @@ pub struct ReasoningProfileConfig {
     /// 用于最高档推理预设的可选供应商专属载荷。
     #[serde(rename = "xHigh", skip_serializing_if = "Option::is_none")]
     pub x_high: Option<Value>,
+    /// Optional user-facing label override used by the disabled/default reasoning option.
+    /// 用于关闭或默认思考选项的可选界面标签覆盖。
+    #[serde(rename = "offLabel", skip_serializing_if = "Option::is_none")]
+    pub off_label: Option<String>,
+    /// Optional user-facing label override used by the low reasoning option.
+    /// 用于低档思考选项的可选界面标签覆盖。
+    #[serde(rename = "lowLabel", skip_serializing_if = "Option::is_none")]
+    pub low_label: Option<String>,
+    /// Optional user-facing label override used by the medium reasoning option.
+    /// 用于中档思考选项的可选界面标签覆盖。
+    #[serde(rename = "mediumLabel", skip_serializing_if = "Option::is_none")]
+    pub medium_label: Option<String>,
+    /// Optional user-facing label override used by the high reasoning option.
+    /// 用于高档思考选项的可选界面标签覆盖。
+    #[serde(rename = "highLabel", skip_serializing_if = "Option::is_none")]
+    pub high_label: Option<String>,
+    /// Optional user-facing label override used by the strongest reasoning option.
+    /// 用于最高档思考选项的可选界面标签覆盖。
+    #[serde(rename = "xHighLabel", skip_serializing_if = "Option::is_none")]
+    pub x_high_label: Option<String>,
 }
 
 impl ReasoningProfileConfig {
     /// Returns the provider- or model-specific JSON patch for one shared reasoning-effort preset.
     /// 返回某个共享推理档位预设对应的供应商或模型专属 JSON Patch。
     pub fn patch_for_effort(&self, effort: ReasoningEffortLevel) -> Option<Value> {
+        if matches!(self.kind, Some(ReasoningCapabilityKind::DefaultOnly)) {
+            return None;
+        }
+
         if matches!(
             self.kind,
             Some(ReasoningCapabilityKind::Binary | ReasoningCapabilityKind::BinaryWithBudget)
@@ -2457,6 +2814,10 @@ impl ReasoningProfileConfig {
     /// Returns the ordered visible effort list declared by this profile after taking binary collapsing rules into account.
     /// 在考虑二值折叠规则后，返回当前配置声明的有序可见档位列表。
     pub fn available_efforts(&self) -> Vec<ReasoningEffortLevel> {
+        if matches!(self.kind, Some(ReasoningCapabilityKind::DefaultOnly)) {
+            return vec![ReasoningEffortLevel::Off];
+        }
+
         if matches!(
             self.kind,
             Some(ReasoningCapabilityKind::Binary | ReasoningCapabilityKind::BinaryWithBudget)
@@ -2498,6 +2859,18 @@ impl ReasoningProfileConfig {
         ]
         .into_iter()
         .find_map(|(effort, patch)| patch.is_some().then_some(effort))
+    }
+
+    /// Returns one optional UI label override for the current shared reasoning effort.
+    /// 返回当前共享思考档位对应的可选界面标签覆盖。
+    pub fn label_for_effort(&self, effort: ReasoningEffortLevel) -> Option<&str> {
+        match effort {
+            ReasoningEffortLevel::Off => self.off_label.as_deref(),
+            ReasoningEffortLevel::Low => self.low_label.as_deref(),
+            ReasoningEffortLevel::Medium => self.medium_label.as_deref(),
+            ReasoningEffortLevel::High => self.high_label.as_deref(),
+            ReasoningEffortLevel::XHigh => self.x_high_label.as_deref(),
+        }
     }
 }
 
@@ -2838,9 +3211,12 @@ impl SupportedProviderDefinition {
         model: Option<&ModelChoice>,
         preferred_effort: ReasoningEffortLevel,
     ) -> ReasoningSelectionView {
+        let active_profile = model
+            .and_then(|item| item.reasoning_profile.as_ref())
+            .or(self.reasoning_profile.as_ref());
         let supported_efforts = self.supported_reasoning_efforts(model);
         let selected_effort = reconcile_reasoning_effort(preferred_effort, &supported_efforts);
-        let options = build_reasoning_selection_options(&supported_efforts);
+        let options = build_reasoning_selection_options(active_profile, &supported_efforts);
         let note =
             build_reasoning_selection_note(model, preferred_effort, selected_effort, &options);
 
@@ -2857,11 +3233,6 @@ impl SupportedProviderDefinition {
         &self,
         model: Option<&ModelChoice>,
     ) -> Vec<ReasoningEffortLevel> {
-        let model_supports_reasoning = model.and_then(|item| item.reasoning).unwrap_or(false);
-        if !model_supports_reasoning {
-            return vec![ReasoningEffortLevel::Off];
-        }
-
         if let Some(profile) = model
             .and_then(|item| item.reasoning_profile.as_ref())
             .or(self.reasoning_profile.as_ref())
@@ -2870,6 +3241,11 @@ impl SupportedProviderDefinition {
             if !profile_efforts.is_empty() {
                 return profile_efforts;
             }
+        }
+
+        let model_supports_reasoning = model.and_then(|item| item.reasoning).unwrap_or(false);
+        if !model_supports_reasoning {
+            return vec![ReasoningEffortLevel::Off];
         }
 
         infer_runtime_reasoning_efforts(self.runtime, self.id.as_str(), model)
@@ -2898,7 +3274,14 @@ fn infer_runtime_reasoning_efforts(
         }
         ProviderApiFamily::OpenAiChatCompatible
             if runtime == ProviderRuntimeKind::OpenAiCompatible
-                && matches!(provider_id, "alibaba" | "bailing") =>
+                && matches!(
+                    provider_id,
+                    "alibaba"
+                        | "alibaba-cn"
+                        | "alibaba-coding-plan"
+                        | "alibaba-coding-plan-cn"
+                        | "bailing"
+                ) =>
         {
             vec![ReasoningEffortLevel::Off, ReasoningEffortLevel::Low]
         }
@@ -2941,11 +3324,176 @@ fn infer_google_gemini_reasoning_efforts(model_id: &str) -> Vec<ReasoningEffortL
     ]
 }
 
+/// Applies provider-specific reasoning-mode overrides onto one mutable model list after catalog loading or remote refresh merging.
+/// 在目录加载或远端刷新合并后，将供应商专属思考模式覆盖应用到可变模型列表上。
+fn apply_provider_reasoning_model_overrides(provider_id: &str, models: &mut [ModelChoice]) {
+    for model in models {
+        let Some(mode) = provider_reasoning_mode(provider_id, model.id.as_str()) else {
+            continue;
+        };
+
+        model.reasoning = Some(true);
+        model.reasoning_profile = Some(match mode {
+            ProviderReasoningMode::DefaultOnly => default_only_reasoning_profile(),
+            ProviderReasoningMode::BinaryToggle => binary_toggle_reasoning_profile(),
+        });
+    }
+}
+
+/// Returns the normalized provider-specific reasoning control mode for one provider/model pair when the catalog needs an explicit override.
+/// 当目录需要显式覆盖时，返回某个供应商/模型组合归一化后的专属思考控制模式。
+fn provider_reasoning_mode(provider_id: &str, model_id: &str) -> Option<ProviderReasoningMode> {
+    if is_alibaba_family_provider(provider_id) {
+        return Some(alibaba_family_reasoning_mode(model_id));
+    }
+
+    None
+}
+
+/// Returns whether one provider belongs to the four Alibaba chat-compatible interfaces that share the same reasoning-mode matrix.
+/// 返回某个供应商是否属于共享同一思考模式矩阵的四条阿里 Chat-Compatible 接口。
+fn is_alibaba_family_provider(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        "alibaba" | "alibaba-cn" | "alibaba-coding-plan" | "alibaba-coding-plan-cn"
+    )
+}
+
+/// Resolves the Alibaba-family reasoning control mode using the maintained model matrix while leaving all unmaintained models on provider defaults.
+/// 使用维护中的模型矩阵解析阿里系思考控制模式，并让未维护模型继续沿用接口默认行为。
+fn alibaba_family_reasoning_mode(model_id: &str) -> ProviderReasoningMode {
+    let normalized = model_id.trim().to_ascii_lowercase();
+
+    if alibaba_family_model_supports_binary_toggle(normalized.as_str()) {
+        ProviderReasoningMode::BinaryToggle
+    } else {
+        ProviderReasoningMode::DefaultOnly
+    }
+}
+
+/// Returns whether one Alibaba-family model currently belongs to the maintained "supports on/off toggle" matrix.
+/// 返回某个阿里系模型当前是否属于已维护的“支持开启/关闭切换”矩阵。
+fn alibaba_family_model_supports_binary_toggle(model_id: &str) -> bool {
+    if matches!(
+        model_id,
+        "qwen3.6-max-preview"
+            | "qwen3.6-35b-a3b"
+            | "qwen3.5-397b-a17b"
+            | "qwen3.5-122b-a10b"
+            | "qwen3.5-27b"
+            | "qwen3.5-35b-a3b"
+            | "qwen3-max"
+            | "qwen3-max-preview"
+            | "qwen-plus"
+            | "qwen-plus-latest"
+            | "qwen-flash"
+            | "qwen-turbo"
+            | "qwen-turbo-latest"
+            | "qwen3-235b-a22b"
+            | "qwen3-32b"
+            | "qwen3-30b-a3b"
+            | "qwen3-14b"
+            | "qwen3-8b"
+            | "qwen3-4b"
+            | "qwen3-1.7b"
+            | "qwen3-0.6b"
+            | "deepseek-v4-pro"
+            | "deepseek-v4-flash"
+            | "deepseek-v3.2"
+            | "deepseek-v3.2-exp"
+            | "deepseek-v3.1"
+            | "siliconflow/deepseek-v3.2"
+            | "siliconflow/deepseek-v3.1-terminus"
+            | "vanchin/deepseek-v3.2-think"
+            | "vanchin/deepseek-v3.1-terminus"
+            | "glm-5.1"
+            | "glm-5"
+            | "glm-4.7"
+            | "glm-4.6"
+            | "glm-4.5"
+            | "glm-4.5-air"
+            | "kimi-k2.6"
+            | "kimi-k2.5"
+            | "kimi/kimi-k2.6"
+            | "kimi/kimi-k2.5"
+    ) {
+        return true;
+    }
+
+    matches_snapshot_series(
+        model_id,
+        &[
+            "qwen3.6-plus",
+            "qwen3.6-flash",
+            "qwen3.5-plus",
+            "qwen3.5-flash",
+            "qwen3-max",
+            "qwen-plus",
+            "qwen-flash",
+            "qwen-turbo",
+        ],
+    )
+}
+
+/// Returns whether the current model identifier belongs to one of the maintained snapshot-backed series prefixes.
+/// 返回当前模型标识是否属于某个已维护的快照系列前缀。
+fn matches_snapshot_series(model_id: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|prefix| {
+        model_id == *prefix
+            || model_id
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('-'))
+    })
+}
+
+/// Builds the unified "follow provider/model default" reasoning profile used when the host should expose a non-editable default entry.
+/// 构建统一的“沿用供应商或模型默认行为”思考配置，用于宿主仅展示不可编辑的默认项。
+fn default_only_reasoning_profile() -> ReasoningProfileConfig {
+    ReasoningProfileConfig {
+        kind: Some(ReasoningCapabilityKind::DefaultOnly),
+        ..ReasoningProfileConfig::default()
+    }
+}
+
+/// Builds the unified Alibaba-style on/off reasoning profile used by models that explicitly support a host-controlled toggle.
+/// 构建阿里系显式支持宿主开关控制模型使用的统一开启/关闭思考配置。
+fn binary_toggle_reasoning_profile() -> ReasoningProfileConfig {
+    ReasoningProfileConfig {
+        kind: Some(ReasoningCapabilityKind::Binary),
+        off: Some(json!({ "enable_thinking": false })),
+        low: Some(json!({ "enable_thinking": true })),
+        ..ReasoningProfileConfig::default()
+    }
+}
+
+/// Enumerates the normalized provider-specific reasoning control modes reused by catalog overlays.
+/// 枚举目录覆盖复用的规范化供应商专属思考控制模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderReasoningMode {
+    /// Keeps provider/model defaults and exposes a non-editable “默认” entry.
+    /// 保持供应商或模型默认行为，并暴露不可编辑的“默认”项。
+    DefaultOnly,
+    /// Exposes one host-controlled on/off toggle that maps to provider-native patches.
+    /// 暴露一个映射到供应商原生 Patch 的宿主开启/关闭开关。
+    BinaryToggle,
+}
+
 /// Builds the visible reasoning selector options from the ordered supported effort list.
 /// 根据有序支持档位列表构建可见的思考选择器选项。
 fn build_reasoning_selection_options(
+    profile: Option<&ReasoningProfileConfig>,
     supported_efforts: &[ReasoningEffortLevel],
 ) -> Vec<ReasoningSelectionOption> {
+    if matches!(
+        profile.and_then(|item| item.kind),
+        Some(ReasoningCapabilityKind::DefaultOnly)
+    ) {
+        return vec![ReasoningSelectionOption {
+            effort: ReasoningEffortLevel::Off,
+            label: String::from("默认"),
+        }];
+    }
+
     let uses_binary_labels = supported_efforts
         .iter()
         .filter(|effort| effort.requests_explicit_reasoning())
@@ -2957,11 +3505,16 @@ fn build_reasoning_selection_options(
         .copied()
         .map(|effort| ReasoningSelectionOption {
             effort,
-            label: if uses_binary_labels && effort.requests_explicit_reasoning() {
-                String::from("开启")
-            } else {
-                effort.compact_label().to_string()
-            },
+            label: profile
+                .and_then(|item| item.label_for_effort(effort))
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    if uses_binary_labels && effort.requests_explicit_reasoning() {
+                        String::from("开启")
+                    } else {
+                        effort.compact_label().to_string()
+                    }
+                }),
         })
         .collect()
 }
@@ -3774,6 +4327,9 @@ pub struct AiCapabilityVendorTargetChoice {
     /// Whether the current target exposes one editable model field.
     /// 当前目标是否暴露可编辑模型字段。
     pub supports_model_override: bool,
+    /// Optional finite request-model options shown as fixed child items when the target should not use free-form model text input.
+    /// 当目标不应使用自由输入模型文本框时，显示为固定子项的可选请求模型集合。
+    pub model_options: Vec<String>,
 }
 
 /// One resolved settings-facing route entry rendered for an enabled semantic AI capability target.
@@ -3801,6 +4357,9 @@ pub struct ResolvedAiCapabilityRouteTarget {
     /// Provider request model or provider-specific request value attached to the target.
     /// 绑定到当前目标的 Provider 请求模型或 Provider 专属请求值。
     pub model_id: String,
+    /// Whether the current configured target is effectively enabled for routing.
+    /// 当前已配置目标是否在路由中处于有效启用状态。
+    pub enabled: bool,
 }
 
 #[allow(dead_code)]
@@ -3820,30 +4379,25 @@ impl ResolvedAiCapabilityRouteTarget {
 /// 返回单个共享供应商实例当前已知的能力目标集合。
 pub fn ai_capability_vendor_target_choices(vendor_id: &str) -> Vec<AiCapabilityVendorTargetChoice> {
     let normalized_vendor_id = normalize_ai_capability_vendor_id(vendor_id.to_string());
-    ai_capability_provider_catalog::ai_capability_provider_definitions_for_vendor(
-        &normalized_vendor_id,
-    )
+    ai_capability_provider_catalog::ai_capability_provider_targets_for_vendor(&normalized_vendor_id)
     .into_iter()
-    .map(|definition| AiCapabilityVendorTargetChoice {
-        capability_kind: definition.capability_kind,
-        target_alias: definition.target_alias.clone(),
-        default_model_id: if definition.supports_model_field {
-            if definition.default_model.trim().is_empty() {
-                definition.target_alias.clone()
+    .map(|target| AiCapabilityVendorTargetChoice {
+        capability_kind: target.capability_kind,
+        target_alias: target.target_alias.clone(),
+        default_model_id: if target.supports_model_field {
+            if target.default_model.trim().is_empty() {
+                target.target_alias.clone()
             } else {
-                definition.default_model.clone()
+                target.default_model.clone()
             }
-        } else if definition.default_model.trim().is_empty() {
-            definition.target_alias.clone()
+        } else if target.default_model.trim().is_empty() {
+            target.target_alias.clone()
         } else {
-            definition.default_model.clone()
+            target.default_model.clone()
         },
-        label: format!(
-            "{} · {}",
-            definition.capability_kind.label(),
-            definition.name
-        ),
-        supports_model_override: definition.supports_model_field,
+        label: target.name.clone(),
+        supports_model_override: target.supports_model_field,
+        model_options: target.model_options.clone(),
     })
     .collect()
 }
@@ -3860,9 +4414,10 @@ pub fn effective_model_choices(
     provider_id: &str,
     config: &ProviderConfigurationFile,
 ) -> Vec<ModelChoice> {
-    let embedded_models = supported_provider_by_id(provider_id)
+    let mut embedded_models = supported_provider_by_id(provider_id)
         .map(|definition| definition.models.clone())
         .unwrap_or_default();
+    apply_provider_reasoning_model_overrides(provider_id, &mut embedded_models);
 
     if let Some(cached) = config.provider.get(provider_id) {
         if !cached.models.is_empty() {
@@ -3890,6 +4445,7 @@ pub fn effective_model_choices(
                 })
                 .collect::<Vec<_>>();
             let mut items = merge_embedded_model_metadata(items, &embedded_models);
+            apply_provider_reasoning_model_overrides(provider_id, &mut items);
             items.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
             return items;
         }
@@ -3938,7 +4494,8 @@ pub async fn fetch_remote_models(
         .await
         .map_err(|error| format!("解析模型列表响应失败：{}。", error))?;
 
-    let choices = extract_model_choices_from_value(&payload);
+    let choices =
+        filter_remote_model_choices(&definition.id, extract_model_choices_from_value(&payload));
 
     if choices.is_empty() {
         return Err(String::from("未从远端接口解析到任何模型。"));
@@ -4021,13 +4578,17 @@ fn load_supported_providers() -> Vec<SupportedProviderDefinition> {
                     path.display()
                 )
             });
-            let definition = serde_json::from_str::<SupportedProviderDefinition>(&content)
+            let mut definition = serde_json::from_str::<SupportedProviderDefinition>(&content)
                 .unwrap_or_else(|error| {
                     panic!(
                         "provider catalog resource `{}` must stay valid: {error}",
                         path.display()
                     )
                 });
+            apply_provider_reasoning_model_overrides(
+                definition.id.as_str(),
+                &mut definition.models,
+            );
 
             if UNSUPPORTED_PROVIDER_IDS
                 .iter()
@@ -4096,7 +4657,98 @@ fn remote_models_url(
         .trim_end_matches("/messages")
         .to_string();
 
-    Some(format!("{}/models", normalized.trim_end_matches('/')))
+    let endpoint = format!("{}/models", normalized.trim_end_matches('/'));
+
+    if definition.id == "openrouter" {
+        return Some(format!("{endpoint}?output_modalities=text"));
+    }
+
+    Some(endpoint)
+}
+
+/// Applies provider-specific default filtering to one remotely refreshed model list.
+/// 对单次远端刷新得到的模型列表应用供应商级默认过滤规则。
+fn filter_remote_model_choices(provider_id: &str, choices: Vec<ModelChoice>) -> Vec<ModelChoice> {
+    if provider_id != "openrouter" {
+        return choices;
+    }
+
+    choices
+        .into_iter()
+        .filter(openrouter_model_choice_is_conversation_model)
+        .collect()
+}
+
+/// Returns whether one OpenRouter model entry should stay visible in the default conversation-model picker.
+/// 返回某个 OpenRouter 模型条目是否应保留在默认对话模型选择器中。
+fn openrouter_model_choice_is_conversation_model(model: &ModelChoice) -> bool {
+    if openrouter_model_matches_non_conversation_keywords(model) {
+        return false;
+    }
+
+    if !openrouter_model_supports_text_input(model) {
+        return false;
+    }
+
+    if !openrouter_model_supports_text_only_output(model) {
+        return false;
+    }
+
+    true
+}
+
+/// Returns whether one OpenRouter model exposes text as an accepted input modality.
+/// 返回某个 OpenRouter 模型是否将文本声明为可接受输入模态。
+fn openrouter_model_supports_text_input(model: &ModelChoice) -> bool {
+    if model.input_modalities.is_empty() {
+        return true;
+    }
+
+    model.input_modalities.iter().any(|modality| {
+        modality
+            .trim()
+            .eq_ignore_ascii_case("text")
+    })
+}
+
+/// Returns whether one OpenRouter model only emits text outputs suitable for chat-style turns.
+/// 返回某个 OpenRouter 模型是否仅输出适合聊天回合的文本结果。
+fn openrouter_model_supports_text_only_output(model: &ModelChoice) -> bool {
+    if model.output_modalities.is_empty() {
+        return true;
+    }
+
+    model.output_modalities.iter().all(|modality| {
+        modality
+            .trim()
+            .eq_ignore_ascii_case("text")
+    }) && model.output_modalities.iter().any(|modality| {
+        modality
+            .trim()
+            .eq_ignore_ascii_case("text")
+    })
+}
+
+/// Returns whether one OpenRouter model id/name clearly points to non-conversation tasks that should stay hidden by default.
+/// 返回某个 OpenRouter 模型标识或名称是否明确指向默认应隐藏的非对话任务。
+fn openrouter_model_matches_non_conversation_keywords(model: &ModelChoice) -> bool {
+    let identifier = format!("{} {}", model.id, model.name).to_ascii_lowercase();
+
+    [
+        "rerank",
+        "embedding",
+        "embeddings",
+        "vector",
+        "ocr",
+        "transcribe",
+        "transcription",
+        "speech",
+        "tts",
+        "asr",
+        "moderation",
+    ]
+    .iter()
+    .any(|keyword| identifier.contains(keyword))
 }
 
 /// Extracts model choices from a loosely shaped OpenAI-style `/models` response payload.
@@ -4481,18 +5133,76 @@ fn dynamic_model_modalities(
         .map(|modalities| dynamic_model_string_array(modalities, &["output"]))
         .unwrap_or_default();
 
+    let architecture = object
+        .get("architecture")
+        .and_then(serde_json::Value::as_object);
+    let architecture_input = architecture
+        .map(|modalities| {
+            dynamic_model_string_array(modalities, &["input_modalities", "inputModalities"])
+        })
+        .unwrap_or_default();
+    let architecture_output = architecture
+        .map(|modalities| {
+            dynamic_model_string_array(modalities, &["output_modalities", "outputModalities"])
+        })
+        .unwrap_or_default();
+    let (architecture_modality_input, architecture_modality_output) = architecture
+        .and_then(|modalities| dynamic_model_string(modalities, &["modality"]))
+        .map(|modality| dynamic_model_modalities_from_descriptor(&modality))
+        .unwrap_or_default();
+
     let input_modalities = if flat_input.is_empty() {
-        nested_input
+        if nested_input.is_empty() {
+            if architecture_input.is_empty() {
+                architecture_modality_input
+            } else {
+                architecture_input
+            }
+        } else {
+            nested_input
+        }
     } else {
         flat_input
     };
     let output_modalities = if flat_output.is_empty() {
-        nested_output
+        if nested_output.is_empty() {
+            if architecture_output.is_empty() {
+                architecture_modality_output
+            } else {
+                architecture_output
+            }
+        } else {
+            nested_output
+        }
     } else {
         flat_output
     };
 
     (input_modalities, output_modalities)
+}
+
+/// Parses one compact architecture modality descriptor like `text+image->text` into ordered input/output lists.
+/// 将 `text+image->text` 这样的紧凑架构模态描述解析为有序输入输出列表。
+fn dynamic_model_modalities_from_descriptor(modality: &str) -> (Vec<String>, Vec<String>) {
+    let Some((raw_input, raw_output)) = modality.split_once("->") else {
+        return (Vec::new(), Vec::new());
+    };
+
+    (
+        dynamic_model_modalities_from_half(raw_input),
+        dynamic_model_modalities_from_half(raw_output),
+    )
+}
+
+/// Parses one modality descriptor half like `text+image` into an ordered normalized list.
+/// 将 `text+image` 这样的半段模态描述解析为有序归一化列表。
+fn dynamic_model_modalities_from_half(raw_modalities: &str) -> Vec<String> {
+    raw_modalities
+        .split('+')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>()
 }
 
 /// Parses one ordered dynamic string-array field from the loosely shaped remote `/models` payload.
@@ -4518,18 +5228,22 @@ fn dynamic_model_string_array(
 #[cfg(test)]
 mod tests {
     use super::{
-        AiToolDeclaration, AiToolKind, ModelChoice, ModelInterleavedCapability,
-        ModelInterleavedField, PersistedAiCapabilityTargetBinding,
+        AiCapabilityVendorConnectionMode, AiToolDeclaration, AiToolKind, ModelChoice, ModelInterleavedCapability,
+        ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
+        PersistedAiCapabilityTargetBinding,
         PersistedAiCapabilityVendorEntry, PersistedAiToolConfiguration,
         PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderApiFamily,
         ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
         ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
         ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
         SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
-        WebSearchRoutingMode, extract_models_from_array, merge_embedded_model_metadata,
+        WebSearchRoutingMode, apply_provider_reasoning_model_overrides,
+        extract_models_from_array, filter_remote_model_choices,
+        merge_embedded_model_metadata, remote_models_url,
+        supported_provider_by_id,
     };
     use serde_json::{Map as JsonMap, json};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// Builds one minimal supported-provider definition used by the reasoning-selection tests.
     /// 构建供思考选择测试复用的最小受支持 Provider 定义。
@@ -4678,6 +5392,128 @@ mod tests {
         );
     }
 
+    /// Verifies Alibaba China provider definitions expose one binary reasoning selector instead of falling back to tiered controls.
+    /// 验证阿里百炼中国区供应商定义会暴露二值思考选择器，而不会回退成多档位控制。
+    #[test]
+    fn alibaba_cn_provider_uses_binary_reasoning_selector() {
+        let provider =
+            supported_provider_by_id("alibaba-cn").expect("alibaba-cn provider must exist");
+        let model = provider
+            .models
+            .iter()
+            .find(|item| item.id == "qwen3.6-plus")
+            .expect("qwen3.6-plus model must exist");
+
+        let view = provider.reasoning_selection_view(Some(model), ReasoningEffortLevel::High);
+
+        assert_eq!(view.options.len(), 2);
+        assert_eq!(view.options[0].label, "关闭");
+        assert_eq!(view.options[1].label, "开启");
+        assert_eq!(view.selected_effort, ReasoningEffortLevel::Low);
+    }
+
+    /// Verifies Alibaba Coding Plan China provider definitions also expose the binary reasoning selector.
+    /// 验证阿里 Coding Plan 中国区供应商定义同样会暴露二值思考选择器。
+    #[test]
+    fn alibaba_coding_plan_cn_provider_uses_binary_reasoning_selector() {
+        let provider = supported_provider_by_id("alibaba-coding-plan-cn")
+            .expect("alibaba-coding-plan-cn provider must exist");
+        let model = provider
+            .models
+            .iter()
+            .find(|item| item.id == "qwen3.6-plus")
+            .expect("qwen3.6-plus model must exist");
+
+        let view = provider.reasoning_selection_view(Some(model), ReasoningEffortLevel::High);
+
+        assert_eq!(view.options.len(), 2);
+        assert_eq!(view.options[0].label, "关闭");
+        assert_eq!(view.options[1].label, "开启");
+        assert_eq!(view.selected_effort, ReasoningEffortLevel::Low);
+    }
+
+    /// Verifies DeepSeek official provider definitions expose the expected three-state selector and remap the shared medium default onto `高`.
+    /// 验证 DeepSeek 官方供应商定义会暴露预期的三态选择器，并将共享中档默认映射到 `高`。
+    #[test]
+    fn deepseek_provider_uses_off_high_max_selector() {
+        let provider = supported_provider_by_id("deepseek").expect("deepseek provider must exist");
+        let model = provider
+            .models
+            .iter()
+            .find(|item| item.id == "deepseek-v4-pro")
+            .expect("deepseek-v4-pro model must exist");
+
+        let view = provider.reasoning_selection_view(Some(model), ReasoningEffortLevel::Medium);
+
+        assert_eq!(view.options.len(), 3);
+        assert_eq!(view.options[0].label, "关闭");
+        assert_eq!(view.options[1].label, "高");
+        assert_eq!(view.options[2].label, "Max");
+        assert_eq!(view.selected_effort, ReasoningEffortLevel::High);
+    }
+
+    /// Verifies custom reasoning labels override the shared compact labels when one provider declares them explicitly.
+    /// 验证当供应商显式声明自定义思考标签时，会覆盖共享的紧凑标签。
+    #[test]
+    fn custom_reasoning_labels_override_shared_labels() {
+        let provider = test_provider_definition(
+            ProviderRuntimeKind::OpenAiCompatible,
+            "custom-provider",
+            Some(ReasoningProfileConfig {
+                off: Some(json!({"thinking": {"type": "disabled"}})),
+                high: Some(json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"})),
+                x_high: Some(json!({"thinking": {"type": "enabled"}, "reasoning_effort": "max"})),
+                high_label: Some(String::from("高")),
+                x_high_label: Some(String::from("Max")),
+                ..ReasoningProfileConfig::default()
+            }),
+        );
+        let model = test_model_choice("custom-model", true, None);
+
+        let view = provider.reasoning_selection_view(Some(&model), ReasoningEffortLevel::High);
+
+        assert_eq!(view.options[1].label, "高");
+        assert_eq!(view.options[2].label, "Max");
+    }
+
+    /// Verifies default-only reasoning profiles collapse the selector into one non-editable “默认” entry without forcing explicit patches.
+    /// 验证默认思考配置会把选择器收缩成一个不可编辑的“默认”项，而不会强制显式 Patch。
+    #[test]
+    fn default_only_reasoning_profile_builds_default_selector() {
+        let provider = test_provider_definition(
+            ProviderRuntimeKind::OpenAiCompatible,
+            "default-provider",
+            Some(ReasoningProfileConfig {
+                kind: Some(ReasoningCapabilityKind::DefaultOnly),
+                ..ReasoningProfileConfig::default()
+            }),
+        );
+        let model = test_model_choice("default-model", true, None);
+
+        let view = provider.reasoning_selection_view(Some(&model), ReasoningEffortLevel::High);
+
+        assert_eq!(view.options.len(), 1);
+        assert_eq!(view.options[0].label, "默认");
+        assert_eq!(view.selected_effort, ReasoningEffortLevel::Off);
+    }
+
+    /// Verifies Alibaba-family models outside the maintained binary-toggle matrix fall back to the non-editable default reasoning mode.
+    /// 验证未进入已维护二值开关矩阵的阿里系模型会回退到不可编辑的默认思考模式。
+    #[test]
+    fn alibaba_unmaintained_model_falls_back_to_default_only_reasoning_mode() {
+        let mut models = vec![test_model_choice("future-ali-model", false, None)];
+        apply_provider_reasoning_model_overrides("alibaba-cn", &mut models);
+        let model = models.pop().expect("model override result");
+
+        assert_eq!(model.reasoning, Some(true));
+        assert_eq!(
+            model.reasoning_profile
+                .as_ref()
+                .and_then(|profile| profile.kind),
+            Some(ReasoningCapabilityKind::DefaultOnly)
+        );
+    }
+
     /// Verifies a model that does not support reasoning forces the selector into a disabled off-only state and reports the downgrade.
     /// 验证不支持思考的模型会强制将选择器收缩为仅关闭状态，并报告回退说明。
     #[test]
@@ -4743,6 +5579,7 @@ mod tests {
                     name: String::from("Brave"),
                     enabled: true,
                     api_key: String::from("{env:BRAVE_SEARCH_API_KEY}"),
+                    connection_mode: None,
                     base_url: String::new(),
                     region: String::new(),
                     targets: vec![PersistedAiCapabilityTargetBinding::new(
@@ -4879,6 +5716,118 @@ mod tests {
         );
     }
 
+    /// Verifies web-search normalization removes every provider kind that is no longer enabled by the shared capability catalog.
+    /// 验证网页搜索归一化会移除所有已不再由共享能力目录启用的提供方类型。
+    #[test]
+    fn web_search_configuration_normalize_removes_unsupported_provider_kinds() {
+        let mut configuration = PersistedWebSearchConfiguration {
+            providers: vec![
+                PersistedWebSearchProviderEntry {
+                    id: String::from("duckduckgo"),
+                    name: String::from("DuckDuckGo"),
+                    kind: WebSearchProviderKind::DuckDuckGo,
+                    target_alias: String::from("duckduckgo"),
+                    enabled: true,
+                    api_key: String::new(),
+                    base_url: String::new(),
+                    model: String::new(),
+                    region: String::new(),
+                    max_results: 5,
+                },
+                PersistedWebSearchProviderEntry {
+                    id: String::from("brave"),
+                    name: String::from("Brave"),
+                    kind: WebSearchProviderKind::Brave,
+                    target_alias: String::from("brave"),
+                    enabled: true,
+                    api_key: String::from("{env:BRAVE_SEARCH_API_KEY}"),
+                    base_url: String::new(),
+                    model: String::new(),
+                    region: String::new(),
+                    max_results: 8,
+                },
+            ],
+            ..PersistedWebSearchConfiguration::default()
+        };
+
+        assert!(configuration.normalize());
+        assert_eq!(configuration.providers.len(), 1);
+        assert_eq!(configuration.providers[0].kind, WebSearchProviderKind::Brave);
+    }
+
+    /// Verifies AI capability normalization removes unsupported vendors, unsupported targets, and stale route selectors in one pass.
+    /// 验证 AI 能力归一化会一次性移除未支持的供应商、未支持的目标以及过期的路由选择器。
+    #[test]
+    fn ai_tool_configuration_normalize_removes_unsupported_vendors_targets_and_routes() {
+        let mut configuration = PersistedAiToolConfiguration {
+            vendors: vec![
+                PersistedAiCapabilityVendorEntry {
+                    id: String::from("duckduckgo"),
+                    vendor_id: String::from("duckduckgo"),
+                    name: String::from("DuckDuckGo"),
+                    enabled: true,
+                    api_key: String::new(),
+                    connection_mode: None,
+                    base_url: String::new(),
+                    region: String::new(),
+                    targets: vec![PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::WebSearch,
+                        "duckduckgo",
+                        "duckduckgo",
+                    )],
+                },
+                PersistedAiCapabilityVendorEntry {
+                    id: String::from("minimax"),
+                    vendor_id: String::from("minimax"),
+                    name: String::from("MiniMax"),
+                    enabled: true,
+                    api_key: String::from("{env:MINIMAX_API_KEY}"),
+                    connection_mode: None,
+                    base_url: String::new(),
+                    region: String::from("global"),
+                    targets: vec![
+                        PersistedAiCapabilityTargetBinding::new(
+                            AiToolKind::WebSearch,
+                            "minimax",
+                            "minimax",
+                        ),
+                        PersistedAiCapabilityTargetBinding::new(
+                            AiToolKind::ImageGeneration,
+                            "unsupported-target",
+                            "unsupported-target",
+                        ),
+                    ],
+                },
+            ],
+            web_search: PersistedWebSearchConfiguration {
+                target_order: vec![
+                    String::from("duckduckgo/duckduckgo"),
+                    String::from("minimax/minimax"),
+                    String::from("ghost/missing"),
+                ],
+                ..PersistedWebSearchConfiguration::default()
+            },
+            image_generation: PersistedAiCapabilityRouteConfiguration {
+                target_order: vec![String::from("minimax/unsupported-target")],
+            },
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        assert!(configuration.normalize());
+        assert_eq!(configuration.vendors.len(), 1);
+        assert_eq!(configuration.vendors[0].vendor_id, "minimax");
+        assert_eq!(configuration.vendors[0].targets.len(), 1);
+        assert_eq!(
+            configuration.vendors[0].targets[0].target_alias(),
+            "minimax"
+        );
+        assert_eq!(
+            configuration.web_search.target_order,
+            vec![String::from("minimax/minimax")]
+        );
+        assert!(configuration.image_generation.target_order.is_empty());
+    }
+
     /// Verifies the shared MiniMax vendor exposes generation-capability targets through the unified target-choice catalog.
     /// 验证共享 MiniMax 供应商会通过统一目标选项目录暴露生成类能力目标。
     #[test]
@@ -4904,6 +5853,176 @@ mod tests {
         assert!(choices.iter().any(|choice| {
             choice.capability_kind == AiToolKind::MusicCover && choice.target_alias == "music-cover"
         }));
+    }
+
+    /// Verifies the shared Kimi vendor exposes each supported web-search model as one independently selectable target.
+    /// 验证共享 Kimi 供应商会把每个受支持的联网搜索模型都暴露成独立可选目标。
+    #[test]
+    fn ai_capability_vendor_target_choices_flatten_kimi_search_models() {
+        let choices = super::ai_capability_vendor_target_choices("kimi");
+
+        assert!(choices.iter().any(|choice| {
+            choice.capability_kind == AiToolKind::WebSearch
+                && choice.target_alias == "kimi-k2.5"
+                && choice.default_model_id == "kimi-k2.5"
+        }));
+        assert!(choices.iter().any(|choice| {
+            choice.capability_kind == AiToolKind::WebSearch
+                && choice.target_alias == "kimi-k2-turbo-preview"
+                && choice.default_model_id == "kimi-k2-turbo-preview"
+        }));
+        assert!(choices.iter().any(|choice| {
+            choice.capability_kind == AiToolKind::WebSearch
+                && choice.target_alias == "kimi-k2-thinking"
+                && choice.default_model_id == "kimi-k2-thinking"
+        }));
+        assert!(choices.iter().any(|choice| {
+            choice.capability_kind == AiToolKind::WebSearch
+                && choice.target_alias == "kimi-k2-thinking-turbo"
+                && choice.default_model_id == "kimi-k2-thinking-turbo"
+        }));
+    }
+
+    /// Verifies deprecated single-target Kimi bindings are filtered out instead of being migrated for compatibility.
+    /// 验证废弃的单目标 Kimi 绑定会被直接过滤，而不是为了兼容继续迁移。
+    #[test]
+    fn normalize_filters_legacy_kimi_single_target_binding() {
+        let mut configuration = PersistedAiToolConfiguration {
+            vendors: vec![PersistedAiCapabilityVendorEntry {
+                id: String::from("kimi"),
+                vendor_id: String::from("kimi"),
+                name: String::from("Kimi"),
+                enabled: true,
+                api_key: String::from("{env:MOONSHOT_API_KEY}"),
+                connection_mode: None,
+                base_url: String::new(),
+                region: String::new(),
+                targets: vec![PersistedAiCapabilityTargetBinding::new(
+                    AiToolKind::WebSearch,
+                    "kimi",
+                    "kimi-k2-thinking",
+                )],
+            }],
+            web_search: PersistedWebSearchConfiguration {
+                target_order: vec![String::from("kimi/kimi")],
+                ..PersistedWebSearchConfiguration::default()
+            },
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        assert!(configuration.normalize());
+        assert_eq!(configuration.vendors.len(), 1);
+        assert!(configuration.vendors[0].targets.is_empty());
+        assert!(configuration.web_search.target_order.is_empty());
+    }
+
+    /// Verifies one semantic capability never exposes more than twenty enabled route targets to the runtime order.
+    /// 验证单个语义能力对运行时暴露的已启用途径目标永远不会超过二十条。
+    #[test]
+    fn usable_targets_for_kind_is_capped_at_twenty() {
+        let mut vendor = PersistedAiCapabilityVendorEntry::new(String::from("limit-test"));
+        vendor.enabled = true;
+        for index in 0..25usize {
+            vendor.targets.push(PersistedAiCapabilityTargetBinding::new(
+                AiToolKind::WebSearch,
+                format!("target-{index:02}"),
+                format!("model-{index:02}"),
+            ));
+        }
+        let configuration = PersistedAiToolConfiguration {
+            vendors: vec![vendor],
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        let usable_targets = configuration.usable_targets_for_kind(AiToolKind::WebSearch);
+        assert_eq!(
+            usable_targets.len(),
+            super::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
+        );
+        assert_eq!(usable_targets.first().map(String::as_str), Some("limit_test/target-00"));
+        assert_eq!(usable_targets.last().map(String::as_str), Some("limit_test/target-19"));
+    }
+
+    /// Verifies only workbench-quick-toggle capability kinds remain persisted inside the standalone AI capability configuration.
+    /// 验证只有参与工作台快捷总开关的能力类型才会保留在独立 AI 能力配置持久化字段中。
+    #[test]
+    fn normalize_filters_unsupported_disabled_capability_kinds() {
+        let mut configuration = PersistedAiToolConfiguration {
+            disabled_capability_kinds: BTreeSet::from([
+                AiToolKind::WebSearch,
+                AiToolKind::UnderstandImage,
+                AiToolKind::FileSearch,
+                AiToolKind::CodeInterpreter,
+            ]),
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        assert!(configuration.normalize());
+        assert_eq!(
+            configuration.disabled_capability_kinds,
+            BTreeSet::from([AiToolKind::WebSearch, AiToolKind::UnderstandImage])
+        );
+    }
+
+    /// Verifies legacy Ollama vendor rows that only contain an API key automatically prefer the official cloud mode until the user makes an explicit selection.
+    /// 验证仅填写 API Key 的旧版 Ollama 供应商条目会自动优先切到官方云端模式，直到用户显式做出选择。
+    #[test]
+    fn ollama_vendor_with_api_key_defaults_to_cloud_mode() {
+        let vendor = PersistedAiCapabilityVendorEntry {
+            id: String::from("ollama"),
+            vendor_id: String::from("ollama"),
+            name: String::from("Ollama"),
+            enabled: true,
+            api_key: String::from("{env:OLLAMA_API_KEY}"),
+            connection_mode: None,
+            base_url: String::new(),
+            region: String::new(),
+            targets: vec![PersistedAiCapabilityTargetBinding::new(
+                AiToolKind::WebSearch,
+                "ollama",
+                "ollama",
+            )],
+        };
+
+        assert_eq!(
+            vendor.resolved_connection_mode(),
+            AiCapabilityVendorConnectionMode::Cloud
+        );
+        assert_eq!(vendor.resolved_vendor_base_url(), "https://ollama.com");
+    }
+
+    /// Verifies explicit Ollama local mode keeps the self-hosted endpoint and falls back to the bundled localhost host when no override is entered.
+    /// 验证显式 Ollama 本地模式会保留自托管端点，并在未填写覆盖地址时回退到内置 localhost 宿主。
+    #[test]
+    fn ollama_vendor_local_mode_resolves_local_endpoint() {
+        let vendor = PersistedAiCapabilityVendorEntry {
+            id: String::from("ollama"),
+            vendor_id: String::from("ollama"),
+            name: String::from("Ollama"),
+            enabled: true,
+            api_key: String::new(),
+            connection_mode: Some(AiCapabilityVendorConnectionMode::Local),
+            base_url: String::from("http://nasbox:11434"),
+            region: String::new(),
+            targets: vec![PersistedAiCapabilityTargetBinding::new(
+                AiToolKind::WebSearch,
+                "ollama",
+                "ollama",
+            )],
+        };
+
+        assert_eq!(
+            vendor.resolved_connection_mode(),
+            AiCapabilityVendorConnectionMode::Local
+        );
+        assert_eq!(vendor.resolved_vendor_base_url(), "http://nasbox:11434");
+
+        let mut fallback_vendor = vendor.clone();
+        fallback_vendor.base_url.clear();
+        assert_eq!(
+            fallback_vendor.resolved_vendor_base_url(),
+            "http://127.0.0.1:11434"
+        );
     }
 
     /// Verifies remote model extraction preserves declared flat capability metadata and field-mapped interleaved settings.
@@ -4983,6 +6102,198 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].input_modalities, vec!["text", "image", "video"]);
         assert_eq!(models[0].output_modalities, vec!["text"]);
+    }
+
+    /// Verifies remote model extraction accepts OpenRouter-style `architecture` modality metadata and upgrades it into normalized lists.
+    /// 验证远端模型提取可接受 OpenRouter 风格的 `architecture` 模态元数据，并将其升级为规范化列表。
+    #[test]
+    fn extract_models_from_array_reads_architecture_modalities() {
+        let models = extract_models_from_array(&[json!({
+            "id": "qwen/qwen3-vl-32b-instruct",
+            "architecture": {
+                "modality": "text+image->text",
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"]
+            }
+        })]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].input_modalities, vec!["text", "image"]);
+        assert_eq!(models[0].output_modalities, vec!["text"]);
+    }
+
+    /// Verifies the OpenRouter remote refresh keeps conversation-capable models while hiding OCR, embeddings, rerank, and image-generation entries by default.
+    /// 验证 OpenRouter 远端刷新默认保留可对话模型，同时隐藏 OCR、向量、重排与图像生成条目。
+    #[test]
+    fn filter_remote_model_choices_keeps_only_openrouter_conversation_models() {
+        let filtered = filter_remote_model_choices(
+            "openrouter",
+            vec![
+                ModelChoice {
+                    id: String::from("openai/gpt-4.1"),
+                    name: String::from("GPT-4.1"),
+                    status: None,
+                    family: None,
+                    release_date: None,
+                    context_limit: None,
+                    input_limit: None,
+                    output_limit: None,
+                    reasoning: None,
+                    tool_call: None,
+                    temperature: None,
+                    attachment: None,
+                    interleaved: None,
+                    reasoning_profile: None,
+                    ai_tools: Vec::new(),
+                    input_modalities: vec![String::from("text")],
+                    output_modalities: vec![String::from("text")],
+                },
+                ModelChoice {
+                    id: String::from("qwen/qwen3-vl-32b-instruct"),
+                    name: String::from("Qwen3 VL 32B Instruct"),
+                    status: None,
+                    family: None,
+                    release_date: None,
+                    context_limit: None,
+                    input_limit: None,
+                    output_limit: None,
+                    reasoning: None,
+                    tool_call: None,
+                    temperature: None,
+                    attachment: None,
+                    interleaved: None,
+                    reasoning_profile: None,
+                    ai_tools: Vec::new(),
+                    input_modalities: vec![String::from("text"), String::from("image")],
+                    output_modalities: vec![String::from("text")],
+                },
+                ModelChoice {
+                    id: String::from("baidu/qianfan-ocr-fast"),
+                    name: String::from("Qianfan OCR Fast"),
+                    status: None,
+                    family: None,
+                    release_date: None,
+                    context_limit: None,
+                    input_limit: None,
+                    output_limit: None,
+                    reasoning: None,
+                    tool_call: None,
+                    temperature: None,
+                    attachment: None,
+                    interleaved: None,
+                    reasoning_profile: None,
+                    ai_tools: Vec::new(),
+                    input_modalities: vec![String::from("text"), String::from("image")],
+                    output_modalities: vec![String::from("text")],
+                },
+                ModelChoice {
+                    id: String::from("google/gemini-2.5-flash-image"),
+                    name: String::from("Gemini 2.5 Flash Image"),
+                    status: None,
+                    family: None,
+                    release_date: None,
+                    context_limit: None,
+                    input_limit: None,
+                    output_limit: None,
+                    reasoning: None,
+                    tool_call: None,
+                    temperature: None,
+                    attachment: None,
+                    interleaved: None,
+                    reasoning_profile: None,
+                    ai_tools: Vec::new(),
+                    input_modalities: vec![String::from("text"), String::from("image")],
+                    output_modalities: vec![String::from("text"), String::from("image")],
+                },
+                ModelChoice {
+                    id: String::from("cohere/rerank-v3.5"),
+                    name: String::from("Cohere Rerank v3.5"),
+                    status: None,
+                    family: None,
+                    release_date: None,
+                    context_limit: None,
+                    input_limit: None,
+                    output_limit: None,
+                    reasoning: None,
+                    tool_call: None,
+                    temperature: None,
+                    attachment: None,
+                    interleaved: None,
+                    reasoning_profile: None,
+                    ai_tools: Vec::new(),
+                    input_modalities: vec![String::from("text")],
+                    output_modalities: vec![String::from("text")],
+                },
+                ModelChoice {
+                    id: String::from("openai/text-embedding-3-large"),
+                    name: String::from("text-embedding-3-large"),
+                    status: None,
+                    family: None,
+                    release_date: None,
+                    context_limit: None,
+                    input_limit: None,
+                    output_limit: None,
+                    reasoning: None,
+                    tool_call: None,
+                    temperature: None,
+                    attachment: None,
+                    interleaved: None,
+                    reasoning_profile: None,
+                    ai_tools: Vec::new(),
+                    input_modalities: vec![String::from("text")],
+                    output_modalities: vec![String::from("embedding")],
+                },
+            ],
+        );
+
+        let filtered_ids = filtered
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            filtered_ids,
+            vec![
+                String::from("openai/gpt-4.1"),
+                String::from("qwen/qwen3-vl-32b-instruct"),
+            ]
+        );
+    }
+
+    /// Verifies the OpenRouter remote refresh URL explicitly requests text-output models to keep discovery aligned with conversation pickers.
+    /// 验证 OpenRouter 远端刷新 URL 会显式请求文本输出模型，以保持发现结果与对话模型选择器对齐。
+    #[test]
+    fn remote_models_url_requests_text_outputs_for_openrouter() {
+        let definition = SupportedProviderDefinition {
+            id: String::from("openrouter"),
+            name: String::from("OpenRouter"),
+            runtime: ProviderRuntimeKind::OpenRouter,
+            user_agent: None,
+            credential_env_keys: Vec::new(),
+            extra_headers: BTreeMap::new(),
+            extra_body: JsonMap::new(),
+            model_runtime_overrides: BTreeMap::new(),
+            reasoning_profile: None,
+            ai_tools: Vec::new(),
+            fields: Vec::new(),
+            base_url: ProviderBaseUrlConfig {
+                kind: ProviderBaseUrlKind::Fixed,
+                value: Some(String::from("https://openrouter.ai/api/v1")),
+                template: None,
+                parameter: None,
+                allow_override: false,
+            },
+            model_discovery: ProviderModelDiscoveryConfig {
+                kind: ProviderModelDiscoveryKind::OpenAiModels,
+            },
+            models: Vec::new(),
+        };
+
+        let url = remote_models_url(&definition, &Default::default())
+            .expect("openrouter remote refresh url must exist");
+        assert_eq!(
+            url,
+            "https://openrouter.ai/api/v1/models?output_modalities=text"
+        );
     }
 
     /// Verifies embedded metadata only fills fields that the dynamically discovered remote model did not already declare explicitly.

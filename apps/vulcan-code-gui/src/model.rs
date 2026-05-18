@@ -707,6 +707,10 @@ pub struct PendingPromptRuntimeOptions {
     /// 当选中单个指定搜索条目时捕获的可选第三方供应商标识。
     #[serde(default)]
     pub web_search_provider_id: Option<String>,
+    /// Semantic AI capability kinds temporarily disabled for the current send chain without mutating persisted target preferences.
+    /// 在不修改持久化目标偏好的前提下，为当前发送链路临时关闭的语义 AI 能力类型集合。
+    #[serde(default)]
+    pub disabled_ai_capability_kinds: BTreeSet<crate::provider_config::AiToolKind>,
 }
 
 impl Default for PendingPromptRuntimeOptions {
@@ -718,6 +722,7 @@ impl Default for PendingPromptRuntimeOptions {
             temperature: None,
             web_search_override: PendingPromptWebSearchOverride::default(),
             web_search_provider_id: None,
+            disabled_ai_capability_kinds: BTreeSet::new(),
         }
     }
 }

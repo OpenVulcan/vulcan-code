@@ -288,11 +288,19 @@ impl VulcanWorkbench {
     ) -> Option<ResolvedModelCapabilities> {
         let definition = provider_config::supported_provider_by_id(&choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(choice);
-        Some(resolve_effective_model_capabilities(
+        let runtime_options = self.current_pending_prompt_runtime_options();
+        let effective_configuration =
+            self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
+        let mut capabilities = resolve_effective_model_capabilities(
             definition,
             model.as_ref(),
-            &self.ai_tool_configuration,
-        ))
+            &effective_configuration,
+        );
+        self.apply_runtime_ai_capability_capability_overrides(
+            &mut capabilities,
+            &runtime_options,
+        );
+        Some(capabilities)
     }
 
     /// Resolves the provider-declared base capability snapshot for the currently active workbench model without applying user routing overrides.
@@ -483,12 +491,21 @@ impl VulcanWorkbench {
     /// Opens the in-app workbench model-picker modal and focuses its filter field.
     /// 打开工作台内嵌模型选择弹窗并聚焦其过滤输入框。
     pub(super) fn open_workbench_model_picker(&mut self) -> Task<Message> {
+        self.workbench_reasoning_picker_open = false;
         self.workbench_model_picker_open = true;
         self.workbench_model_picker_filter.clear();
         self.workbench_model_picker_highlighted_index =
             self.preferred_workbench_model_picker_index();
+        self.workbench_model_picker_scroll_offset = 0.0;
+        self.workbench_model_picker_viewport_height = WORKBENCH_MODEL_PICKER_LIST_HEIGHT;
 
-        operation::focus(WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID)
+        let focus_task = operation::focus(WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID);
+        let scroll_task = self
+            .workbench_model_picker_highlighted_index
+            .map(|index| self.scroll_workbench_model_picker_to_index(index))
+            .unwrap_or_else(Task::none);
+
+        Task::batch([focus_task, scroll_task])
     }
 
     /// Keeps the highlighted index inside the visible bounds of the filtered model-picker result list.
@@ -515,122 +532,214 @@ impl VulcanWorkbench {
         self.filtered_workbench_model_choices().get(index).cloned()
     }
 
-    /// Returns the full list of workbench-scoped web-search override choices shown beside the composer.
-    /// 返回显示在提示词编辑器旁侧的完整工作台网页搜索覆盖选项列表。
-    pub(super) fn configured_workbench_web_search_choices(&self) -> Vec<WorkbenchWebSearchChoice> {
-        let native_available = self.active_workbench_has_native_web_search();
-        let provider_targets = self
-            .ai_tool_configuration
-            .usable_targets_for_kind(crate::provider_config::AiToolKind::WebSearch);
-        let provider_chain_available = !provider_targets.is_empty();
-        let mut choices = Vec::new();
-
-        if native_available && provider_chain_available {
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::FollowGlobal,
-                provider_id: None,
-                label: String::from("智能搜索"),
-                detail: String::from("跟随全局 web-search 设置"),
-            });
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::NativeOnly,
-                provider_id: None,
-                label: String::from("原生搜索"),
-                detail: String::from("仅声明模型原生搜索"),
-            });
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::ThirdPartyOnly,
-                provider_id: None,
-                label: String::from("自定义搜索链"),
-                detail: String::from("仅使用第三方搜索链"),
-            });
-        } else if native_available {
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::NativeOnly,
-                provider_id: None,
-                label: String::from("原生搜索"),
-                detail: String::from("当前模型仅支持原生搜索"),
-            });
-            return choices;
-        } else if provider_chain_available {
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::FollowGlobal,
-                provider_id: None,
-                label: String::from("智能搜索"),
-                detail: String::from("跟随全局 web-search 设置"),
-            });
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::ThirdPartyOnly,
-                provider_id: None,
-                label: String::from("自定义搜索链"),
-                detail: String::from("仅使用第三方搜索链"),
-            });
-        } else {
-            choices.push(WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::Disabled,
-                provider_id: None,
-                label: String::from("关闭搜索"),
-                detail: String::from("当前模型与扩展都未提供统一搜索能力"),
-            });
-            return choices;
+    /// Returns the current visible virtualized range for the model-picker result list, including one fixed overscan window.
+    /// 返回当前模型选择结果列表的可见虚拟化范围，并额外保留一段固定预加载窗口。
+    pub(super) fn visible_workbench_model_picker_range(
+        &self,
+        total_items: usize,
+    ) -> (usize, usize, f32, f32) {
+        if total_items == 0 {
+            return (0, 0, 0.0, 0.0);
         }
 
-        let provider_choices = provider_targets
-            .iter()
-            .map(|target| WorkbenchWebSearchChoice {
-                override_mode: PendingPromptWebSearchOverride::SpecificProvider,
-                provider_id: Some(target.clone()),
-                label: format!("指定：{}", target),
-                detail: String::from("显式目标"),
-            })
-            .collect::<Vec<_>>();
-        choices.extend(provider_choices);
-        choices.push(WorkbenchWebSearchChoice {
-            override_mode: PendingPromptWebSearchOverride::Disabled,
-            provider_id: None,
-            label: String::from("关闭搜索"),
-            detail: String::from("不启用统一 web-search"),
-        });
-        choices
+        let row_extent = WORKBENCH_MODEL_PICKER_ROW_HEIGHT + WORKBENCH_MODEL_PICKER_ROW_GAP;
+        let total_height = total_items as f32 * WORKBENCH_MODEL_PICKER_ROW_HEIGHT
+            + total_items.saturating_sub(1) as f32 * WORKBENCH_MODEL_PICKER_ROW_GAP;
+        let viewport_height = self
+            .workbench_model_picker_viewport_height
+            .max(WORKBENCH_MODEL_PICKER_LIST_HEIGHT);
+        let window_top = self.workbench_model_picker_scroll_offset.max(0.0);
+        let window_bottom = window_top + viewport_height;
+        let mut start = (window_top / row_extent).floor().max(0.0) as usize;
+        let mut end = ((window_bottom / row_extent).ceil().max(0.0) as usize).min(total_items);
+
+        start = start.saturating_sub(WORKBENCH_MODEL_PICKER_VIRTUAL_OVERSCAN_ROWS);
+        end = end
+            .saturating_add(WORKBENCH_MODEL_PICKER_VIRTUAL_OVERSCAN_ROWS)
+            .min(total_items);
+        if start >= end {
+            end = (start + 1).min(total_items);
+        }
+
+        let top_spacer_height = start as f32 * row_extent;
+        let visible_count = end.saturating_sub(start);
+        let visible_height = visible_count as f32 * WORKBENCH_MODEL_PICKER_ROW_HEIGHT
+            + visible_count.saturating_sub(1) as f32 * WORKBENCH_MODEL_PICKER_ROW_GAP;
+        let bottom_spacer_height = (total_height - top_spacer_height - visible_height).max(0.0);
+
+        (start, end, top_spacer_height, bottom_spacer_height)
     }
 
-    /// Resolves the currently active workbench web-search override choice, falling back to the global-default entry when needed.
-    /// 解析当前激活的工作台网页搜索覆盖选项；必要时回退到全局默认条目。
-    pub(super) fn active_workbench_web_search_choice(&self) -> Option<WorkbenchWebSearchChoice> {
-        let configured_choices = self.configured_workbench_web_search_choices();
-        configured_choices
-            .iter()
-            .find(|choice| {
-                choice.override_mode == self.workbench_web_search_override
-                    && choice.provider_id == self.workbench_web_search_provider_id
-            })
-            .cloned()
-            .or_else(|| {
-                configured_choices
-                    .iter()
-                    .find(|choice| {
-                        choice.override_mode == PendingPromptWebSearchOverride::FollowGlobal
-                    })
-                    .cloned()
-                    .or_else(|| {
-                        configured_choices
-                            .iter()
-                            .find(|choice| {
-                                choice.override_mode == PendingPromptWebSearchOverride::NativeOnly
-                            })
-                            .cloned()
-                    })
-                    .or_else(|| {
-                        configured_choices
-                            .iter()
-                            .find(|choice| {
-                                choice.override_mode
-                                    == PendingPromptWebSearchOverride::ThirdPartyOnly
-                            })
-                            .cloned()
-                    })
-                    .or_else(|| configured_choices.into_iter().next())
-            })
+    /// Estimates the scroll offset needed to bring one highlighted model-picker row close to the viewport center.
+    /// 估算将某个高亮模型选择行带到接近视口中心所需的滚动偏移量。
+    pub(super) fn estimated_workbench_model_picker_scroll_offset(&self, index: usize) -> f32 {
+        let row_extent = WORKBENCH_MODEL_PICKER_ROW_HEIGHT + WORKBENCH_MODEL_PICKER_ROW_GAP;
+        let viewport_height = self
+            .workbench_model_picker_viewport_height
+            .max(WORKBENCH_MODEL_PICKER_LIST_HEIGHT);
+        let row_top = index as f32 * row_extent;
+        let centered = row_top - ((viewport_height - WORKBENCH_MODEL_PICKER_ROW_HEIGHT) / 2.0);
+
+        centered.max(0.0)
+    }
+
+    /// Builds the scroll task that reveals one highlighted model-picker row inside the virtualized list.
+    /// 构建将某个高亮模型选择行滚动到虚拟化列表可见区域的滚动任务。
+    pub(super) fn scroll_workbench_model_picker_to_index(&self, index: usize) -> Task<Message> {
+        let target_offset = self.estimated_workbench_model_picker_scroll_offset(index);
+
+        operation::scroll_to(
+            workbench_model_picker_scrollable_id(),
+            scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: target_offset,
+            },
+        )
+    }
+
+    /// Returns whether the requested quick-panel capability section currently has at least one usable execution path.
+    /// 返回快捷能力面板中的指定能力分区当前是否至少存在一条可用执行路径。
+    pub(super) fn workbench_ai_capability_is_available(
+        &self,
+        section: super::WorkbenchAiCapabilitySection,
+    ) -> bool {
+        let Some(capability_kind) = section.capability_kind() else {
+            return false;
+        };
+        self.ai_tool_configuration
+            .has_usable_targets_for_kind(capability_kind)
+    }
+
+    /// Returns whether the requested quick-panel capability section stays enabled for the current workbench send chain.
+    /// 返回快捷能力面板中的指定能力分区当前是否对工作台发送链路保持启用。
+    pub(super) fn workbench_ai_capability_is_enabled(
+        &self,
+        section: super::WorkbenchAiCapabilitySection,
+    ) -> bool {
+        let Some(capability_kind) = section.capability_kind() else {
+            return false;
+        };
+        self.workbench_ai_capability_is_available(section)
+            && !self
+                .effective_workbench_disabled_ai_capability_kinds()
+                .contains(&capability_kind)
+    }
+
+    /// Builds the runtime-disabled AI capability set after force-disabling every semantic capability that currently lacks at least one usable configured target.
+    /// 构建运行时关闭的 AI 能力集合，并强制关闭当前缺少可用已配置目标的所有语义能力。
+    pub(super) fn effective_workbench_disabled_ai_capability_kinds(
+        &self,
+    ) -> std::collections::BTreeSet<crate::provider_config::AiToolKind> {
+        let mut disabled = self.workbench_disabled_ai_capability_kinds.clone();
+        for section in super::WorkbenchAiCapabilitySection::ALL {
+            let Some(capability_kind) = section.capability_kind() else {
+                continue;
+            };
+            if !self
+                .ai_tool_configuration
+                .has_usable_targets_for_kind(capability_kind)
+            {
+                disabled.insert(capability_kind);
+            }
+        }
+        disabled
+    }
+
+    /// Synchronizes the current workbench quick-toggle state back into the persisted standalone AI capability configuration snapshot.
+    /// 将当前工作台快捷开关状态同步回独立 AI 能力配置持久化快照。
+    fn sync_workbench_ai_capability_runtime_preferences_into_configuration(&mut self) {
+        self.ai_tool_configuration.disabled_capability_kinds = self
+            .effective_workbench_disabled_ai_capability_kinds()
+            .into_iter()
+            .filter(|kind| kind.supports_workbench_quick_toggle())
+            .collect();
+    }
+
+    /// Reconciles the current-message AI capability toggles so every semantic capability without usable configured targets is force-closed until the user explicitly re-enables it later.
+    /// 对当前消息级 AI 能力开关执行对齐：凡是缺少可用已配置目标的语义能力都会被强制关闭，后续需由用户显式重新开启。
+    pub(super) fn reconcile_workbench_ai_capability_runtime_state(&mut self) {
+        for section in super::WorkbenchAiCapabilitySection::ALL {
+            let Some(capability_kind) = section.capability_kind() else {
+                continue;
+            };
+            if self
+                .ai_tool_configuration
+                .has_usable_targets_for_kind(capability_kind)
+            {
+                continue;
+            }
+            self.workbench_disabled_ai_capability_kinds
+                .insert(capability_kind);
+            if capability_kind == crate::provider_config::AiToolKind::WebSearch {
+                self.disable_workbench_web_search();
+            }
+        }
+    }
+
+    /// Re-enables unified web-search for the current workbench send chain using the best available non-disabled override mode.
+    /// 使用当前最合适的非关闭覆盖模式，为当前工作台发送链路重新启用统一网页搜索。
+    pub(super) fn enable_workbench_web_search(&mut self) {
+        let native_available = self.active_workbench_has_native_web_search();
+        let provider_chain_available = self
+            .ai_tool_configuration
+            .has_usable_targets_for_kind(crate::provider_config::AiToolKind::WebSearch);
+        let (override_mode, provider_id) = if native_available && provider_chain_available {
+            (PendingPromptWebSearchOverride::FollowGlobal, None)
+        } else if native_available {
+            (PendingPromptWebSearchOverride::NativeOnly, None)
+        } else if provider_chain_available {
+            (PendingPromptWebSearchOverride::ThirdPartyOnly, None)
+        } else {
+            (PendingPromptWebSearchOverride::Disabled, None)
+        };
+        self.workbench_web_search_override = override_mode;
+        self.workbench_web_search_provider_id = provider_id;
+    }
+
+    /// Disables unified web-search for the current workbench send chain without mutating the persisted global route preference.
+    /// 在不修改持久化全局路由偏好的前提下，为当前工作台发送链路关闭统一网页搜索。
+    pub(super) fn disable_workbench_web_search(&mut self) {
+        self.workbench_web_search_override = PendingPromptWebSearchOverride::Disabled;
+        self.workbench_web_search_provider_id = None;
+    }
+
+    /// Updates one quick-panel semantic capability toggle without mutating the persisted target-enabled preferences.
+    /// 更新一条快捷能力分区的语义能力开关，但不修改持久化目标启用偏好。
+    pub(super) fn set_workbench_ai_capability_enabled(
+        &mut self,
+        section: super::WorkbenchAiCapabilitySection,
+        enabled: bool,
+    ) {
+        let Some(capability_kind) = section.capability_kind() else {
+            return;
+        };
+        if !self
+            .ai_tool_configuration
+            .has_usable_targets_for_kind(capability_kind)
+        {
+            self.workbench_disabled_ai_capability_kinds
+                .insert(capability_kind);
+            if capability_kind == crate::provider_config::AiToolKind::WebSearch {
+                self.disable_workbench_web_search();
+            }
+            return;
+        }
+        if capability_kind == crate::provider_config::AiToolKind::WebSearch {
+            if enabled {
+                self.enable_workbench_web_search();
+            } else {
+                self.disable_workbench_web_search();
+            }
+            return;
+        }
+
+        if enabled {
+            self.workbench_disabled_ai_capability_kinds
+                .remove(&capability_kind);
+        } else {
+            self.workbench_disabled_ai_capability_kinds
+                .insert(capability_kind);
+        }
     }
 
     /// Builds one effective AI-tool configuration snapshot after applying the current workbench web-search override.
@@ -704,6 +813,20 @@ impl VulcanWorkbench {
             }
         }
 
+        for disabled_kind in &runtime_options.disabled_ai_capability_kinds {
+            if *disabled_kind == crate::provider_config::AiToolKind::WebSearch {
+                configuration.web_search.mode = WebSearchRoutingMode::Disabled;
+                continue;
+            }
+            for vendor in &mut configuration.vendors {
+                for binding in &mut vendor.targets {
+                    if binding.capability_kind == *disabled_kind {
+                        binding.enabled = false;
+                    }
+                }
+            }
+        }
+
         configuration
     }
 
@@ -746,6 +869,7 @@ impl VulcanWorkbench {
             temperature: self.temperature_enabled.then_some(self.temperature),
             web_search_override: self.workbench_web_search_override,
             web_search_provider_id: self.workbench_web_search_provider_id.clone(),
+            disabled_ai_capability_kinds: self.effective_workbench_disabled_ai_capability_kinds(),
         }
     }
 
@@ -754,6 +878,7 @@ impl VulcanWorkbench {
     pub(super) fn resolve_pending_prompt_model_capabilities(
         &self,
         model_reference: &PendingPromptModelReference,
+        runtime_options: &PendingPromptRuntimeOptions,
     ) -> Option<ResolvedModelCapabilities> {
         let definition = provider_config::supported_provider_by_id(&model_reference.provider_id)?;
         let model = provider_config::effective_model_choices(
@@ -762,11 +887,38 @@ impl VulcanWorkbench {
         )
         .into_iter()
         .find(|model| model.id == model_reference.model_id);
-        Some(resolve_effective_model_capabilities(
+        let effective_configuration =
+            self.effective_ai_tool_configuration_for_runtime_options(runtime_options);
+        let mut capabilities = resolve_effective_model_capabilities(
             definition,
             model.as_ref(),
-            &self.ai_tool_configuration,
-        ))
+            &effective_configuration,
+        );
+        self.apply_runtime_ai_capability_capability_overrides(
+            &mut capabilities,
+            runtime_options,
+        );
+        Some(capabilities)
+    }
+
+    /// Applies current-message AI capability disable toggles to one already resolved capability snapshot.
+    /// 将当前消息级 AI 能力关闭开关应用到一份已经解析完成的能力快照。
+    pub(super) fn apply_runtime_ai_capability_capability_overrides(
+        &self,
+        capabilities: &mut ResolvedModelCapabilities,
+        runtime_options: &PendingPromptRuntimeOptions,
+    ) {
+        for disabled_kind in &runtime_options.disabled_ai_capability_kinds {
+            capabilities.ai_tools.retain(|tool| tool.kind != *disabled_kind);
+            match disabled_kind {
+                crate::provider_config::AiToolKind::UnderstandImage => {
+                    capabilities
+                        .input_modalities
+                        .retain(|modality| modality != "image");
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Clones the provider configuration and overrides only the active model for one queued prompt run.
@@ -1107,6 +1259,8 @@ impl VulcanWorkbench {
     /// Persists standalone AI capability configuration and refreshes the runtime foundation.
     /// 持久化独立 AI 能力配置并刷新运行时基础架构。
     pub(super) fn save_ai_tool_configuration(&mut self) -> Result<(), String> {
+        self.reconcile_workbench_ai_capability_runtime_state();
+        self.sync_workbench_ai_capability_runtime_preferences_into_configuration();
         ai_tool_configuration::save_ai_tool_configuration_file(&self.ai_tool_configuration)?;
         if !self.provider_configuration.ai_tools.is_default() {
             self.provider_configuration.ai_tools = PersistedAiToolConfiguration::default();
@@ -1223,6 +1377,64 @@ impl VulcanWorkbench {
 
         self.ai_tool_configuration.normalize();
         true
+    }
+
+    /// Toggles one configured semantic capability target without removing its stored order or model override.
+    /// 切换单条已配置语义能力目标的启用状态，同时保留其顺序与模型覆盖配置。
+    pub(super) fn set_ai_capability_target_enabled(
+        &mut self,
+        capability_kind: AiToolKind,
+        vendor_id: &str,
+        target_alias: &str,
+        enabled: bool,
+    ) -> Result<bool, String> {
+        let normalized_vendor_id = vendor_id.trim().to_ascii_lowercase();
+        let normalized_target_alias = target_alias.trim().to_ascii_lowercase();
+        if enabled
+            && self
+                .ai_tool_configuration
+                .enabled_target_count_for_kind(capability_kind)
+                >= provider_config::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
+            && !self
+                .ai_tool_configuration
+                .vendors
+                .iter()
+                .filter(|vendor| vendor.vendor_id == normalized_vendor_id)
+                .flat_map(|vendor| vendor.targets.iter())
+                .any(|binding| {
+                    binding.enabled
+                        && binding.capability_kind == capability_kind
+                        && binding.target_alias().eq_ignore_ascii_case(&normalized_target_alias)
+                })
+        {
+            return Err(format!(
+                "“{}”最多只能启用 {} 条目标，请先取消部分已勾选项。",
+                capability_kind.label(),
+                provider_config::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
+            ));
+        }
+        let Some(vendor) = self
+            .ai_tool_configuration
+            .vendors
+            .iter_mut()
+            .find(|vendor| vendor.vendor_id == normalized_vendor_id)
+        else {
+            return Ok(false);
+        };
+        let Some(binding) = vendor.targets.iter_mut().find(|binding| {
+            binding.capability_kind == capability_kind
+                && binding
+                    .target_alias()
+                    .eq_ignore_ascii_case(&normalized_target_alias)
+        }) else {
+            return Ok(false);
+        };
+        if binding.enabled == enabled {
+            return Ok(false);
+        }
+        binding.enabled = enabled;
+        self.ai_tool_configuration.normalize();
+        Ok(true)
     }
 
     /// Removes one enabled semantic capability target from both the vendor binding list and the persisted route order.

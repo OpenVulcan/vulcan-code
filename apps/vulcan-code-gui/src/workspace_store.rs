@@ -166,9 +166,9 @@ pub struct SessionHydrationSnapshot {
     /// Whether older transcript rows probably still exist before the current window.
     /// 当前窗口之前是否大概率仍存在更早的转录行。
     pub has_more_history: bool,
-    /// Latest loaded turn index used to lazily hydrate recent tool details.
-    /// 用于懒加载最近工具明细的已加载最新轮次索引。
-    pub latest_turn_index: Option<i64>,
+    /// Loaded turn indices that still own tool-call or tool-result rows outside the main transcript window and should therefore request tool-detail hydration.
+    /// 当前已加载窗口中仍拥有主转录窗口外工具调用或工具结果行、因此需要补拉工具明细的轮次索引集合。
+    pub tool_detail_turn_indices: Vec<i64>,
 }
 
 /// One older transcript page loaded before an already hydrated session window.
@@ -187,6 +187,9 @@ pub struct SessionHistoryPage {
     /// Whether more older transcript rows probably still exist.
     /// 是否大概率仍存在更多更早的转录行。
     pub has_more_history: bool,
+    /// Loaded turn indices inside this older page that still own tool-call or tool-result rows outside the visible transcript rows.
+    /// 当前更早历史页中仍拥有可见转录窗口外工具调用或工具结果行的轮次索引集合。
+    pub tool_detail_turn_indices: Vec<i64>,
 }
 
 /// Workspace-scoped BM25 search results returned for one left-panel history query.
@@ -389,6 +392,15 @@ struct StoredSessionMessageRow {
     /// Created-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的创建时间。
     created_at: String,
+}
+
+/// Lightweight session turn-index row used by tool-detail hydration lookups.
+/// 工具明细水合查询使用的轻量会话轮次索引行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredSessionTurnIndexRow {
+    /// Stable conversation-turn index already stored in SQLite.
+    /// 已持久化到 SQLite 中的稳定对话轮次索引。
+    turn_index: i64,
 }
 
 /// Raw session-message chunk row decoded from the controller SQLite query payload.
@@ -804,7 +816,8 @@ pub async fn load_session_hydration_snapshot(
     let mut message_rows = message_rows;
     message_rows.sort_by_key(|row| row.ordinal);
     let loaded_turn_count = loaded_message_turn_count(&message_rows);
-    let latest_turn_index = message_rows.last().map(|row| row.turn_index);
+    let tool_detail_turn_indices =
+        query_tool_detail_turn_indices_for_turns(&controller, session_id, &message_rows).await?;
     let generated_media_rows =
         query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
             .await?;
@@ -838,7 +851,7 @@ pub async fn load_session_hydration_snapshot(
         runtime_state,
         earliest_ordinal,
         has_more_history,
-        latest_turn_index,
+        tool_detail_turn_indices,
     })
 }
 
@@ -863,6 +876,8 @@ pub async fn load_session_history_page(
     let mut message_rows = message_rows;
     message_rows.sort_by_key(|row| row.ordinal);
     let loaded_turn_count = loaded_message_turn_count(&message_rows);
+    let tool_detail_turn_indices =
+        query_tool_detail_turn_indices_for_turns(&controller, session_id, &message_rows).await?;
     let generated_media_rows =
         query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
             .await?;
@@ -878,6 +893,7 @@ pub async fn load_session_history_page(
         messages,
         earliest_ordinal,
         has_more_history,
+        tool_detail_turn_indices,
     })
 }
 
@@ -2281,6 +2297,61 @@ ORDER BY m.ordinal ASC;
     }
 
     Ok(rows)
+}
+
+/// Queries the distinct turn indices that own persisted tool-call or tool-result rows for the already loaded transcript turns.
+/// 查询当前已加载转录轮次中仍然拥有持久化工具调用或工具结果行的去重轮次索引集合。
+async fn query_tool_detail_turn_indices_for_turns(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    transcript_rows: &[StoredSessionMessageRow],
+) -> Result<Vec<i64>, String> {
+    let turn_indices = transcript_rows
+        .iter()
+        .map(|row| row.turn_index)
+        .collect::<BTreeSet<_>>();
+    if turn_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let session_id_text = session_id.to_string();
+    let turn_indices = turn_indices.into_iter().collect::<Vec<_>>();
+    let mut hydrated_tool_turn_indices = Vec::new();
+    for chunk in turn_indices.chunks(SESSION_TRANSCRIPT_WINDOW_LIMIT) {
+        let placeholders = (2..=chunk.len() + 1)
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let statement = format!(
+            r#"
+SELECT DISTINCT m.turn_index
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND m.turn_index IN ({placeholders})
+  AND m.kind IN ('tool-call-output', 'tool-result-output')
+ORDER BY m.turn_index ASC;
+"#
+        );
+        let mut params = Vec::with_capacity(chunk.len() + 1);
+        params.push(ControllerSqliteValue::String(session_id_text.clone()));
+        params.extend(chunk.iter().copied().map(ControllerSqliteValue::Int64));
+        let result = controller
+            .client
+            .query_sqlite_json_typed(
+                APP_SPACE_ID,
+                app_sqlite_binding_id(controller),
+                &statement,
+                params,
+            )
+            .await
+            .map_err(|error| format!("查询会话工具明细轮次索引失败：{error}"))?;
+        let rows = decode_query_rows::<StoredSessionTurnIndexRow>(&result.json_data)?;
+        hydrated_tool_turn_indices.extend(rows.into_iter().map(|row| row.turn_index));
+    }
+
+    hydrated_tool_turn_indices.sort_unstable();
+    hydrated_tool_turn_indices.dedup();
+    Ok(hydrated_tool_turn_indices)
 }
 
 /// Merges generated-media tool-result rows into one visible transcript window while keeping row ordering stable.

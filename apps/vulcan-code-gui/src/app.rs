@@ -62,10 +62,10 @@ use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;
 use crate::provider_config::{
     self, AiToolKind, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
-    PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
-    PersistedProviderEntry, PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile,
-    ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
-    WebSearchRoutingMode,
+    NativeBridgeRoutingMode, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
+    PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
+    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
+    ReasoningSelectionOption, WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
@@ -509,7 +509,7 @@ const COMPOSER_PENDING_QUEUE_DROP_INDICATOR_HEIGHT: f32 = 8.0;
 
 /// Shared fixed row height used by each enabled AI capability target row inside settings pages.
 /// 设置页中每一条已启用 AI 能力目标行使用的共享固定行高。
-const AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT: f32 = 68.0;
+const AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT: f32 = 36.0;
 
 /// Shared indicator height shown while one enabled AI capability target row is being reordered.
 /// 当某条已启用 AI 能力目标行正在重排时显示的共享插入指示高度。
@@ -545,15 +545,15 @@ const WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH: f32 = 66.0;
 
 /// Shared fixed width used by the inline workbench model trigger surface.
 /// 工作台内联模型触发表面使用的共享固定宽度。
-const WORKBENCH_MODEL_SELECTOR_WIDTH: f32 = 244.0;
+const WORKBENCH_MODEL_SELECTOR_WIDTH: f32 = 200.0;
 
 /// Shared fixed width used by the compact workbench web-search selector placed beside the model trigger.
 /// 放置在模型触发器旁侧的紧凑工作台网页搜索选择器使用的共享固定宽度。
-const WORKBENCH_WEB_SEARCH_SELECTOR_WIDTH: f32 = 164.0;
+const WORKBENCH_AI_CAPABILITY_QUICK_CONTROL_WIDTH: f32 = 150.0;
 
 /// Shared fixed width used by the compact reasoning-effort selector placed before the send button.
 /// 放置在发送按钮之前的紧凑推理级别选择器使用的共享固定宽度。
-const WORKBENCH_REASONING_SELECTOR_WIDTH: f32 = 76.0;
+const WORKBENCH_REASONING_SELECTOR_WIDTH: f32 = 112.0;
 
 /// Shared fixed width used by the in-app workbench model-picker modal card.
 /// 工作台内嵌模型选择弹窗卡片使用的共享固定宽度。
@@ -635,6 +635,18 @@ const WORKBENCH_IMAGE_PREVIEW_PAN_EPSILON: f32 = 0.5;
 /// 工作台模型选择弹窗内部滚动结果列表使用的共享固定高度。
 const WORKBENCH_MODEL_PICKER_LIST_HEIGHT: f32 = 340.0;
 
+/// Shared fixed row height used by each virtualized model-picker option.
+/// 工作台模型选择弹窗中每个虚拟化选项使用的共享固定行高。
+const WORKBENCH_MODEL_PICKER_ROW_HEIGHT: f32 = 40.0;
+
+/// Shared vertical gap used between two neighboring virtualized model-picker rows.
+/// 工作台模型选择弹窗中相邻虚拟化选项之间使用的共享纵向间隔。
+const WORKBENCH_MODEL_PICKER_ROW_GAP: f32 = 6.0;
+
+/// Shared overscan row count kept above and below the visible model-picker viewport.
+/// 工作台模型选择弹窗在可视区域上下方保留的共享预加载行数。
+const WORKBENCH_MODEL_PICKER_VIRTUAL_OVERSCAN_ROWS: usize = 10;
+
 /// Shared fixed width used by the in-app workspace-history search modal card.
 /// 工作台历史搜索弹窗卡片使用的共享固定宽度。
 const WORKSPACE_HISTORY_SEARCH_MODAL_WIDTH: f32 = 760.0;
@@ -661,6 +673,12 @@ fn composer_available_text_width(surface_width: f32) -> f32 {
 /// 构建图片预览弹窗平移区域使用的稳定滚动容器标识。
 fn workbench_image_preview_scrollable_id() -> iced::widget::Id {
     iced::widget::Id::new("workbench-image-preview-scrollable")
+}
+
+/// Builds the stable scrollable identifier used by the virtualized workbench model-picker list.
+/// 构建工作台虚拟化模型选择列表使用的稳定滚动容器标识。
+fn workbench_model_picker_scrollable_id() -> iced::widget::Id {
+    iced::widget::Id::new("workbench-model-picker-scrollable")
 }
 
 /// Measures the current composer content with the native editor layout engine and returns its minimum bounds plus caret position.
@@ -2312,15 +2330,33 @@ pub struct VulcanWorkbench {
     /// Optional third-party provider identifier used when one specific web-search entry is selected in the workbench.
     /// 当工作台选中单个指定网页搜索条目时使用的可选第三方供应商标识。
     workbench_web_search_provider_id: Option<String>,
+    /// Semantic AI capability kinds temporarily disabled for the current workbench send chain without mutating persisted target preferences.
+    /// 在不修改持久化目标偏好的前提下，为当前工作台发送链路临时关闭的语义 AI 能力类型集合。
+    workbench_disabled_ai_capability_kinds: BTreeSet<AiToolKind>,
+    /// Whether the quick AI capability panel opened from the composer controls is currently visible.
+    /// 从提示词控制区打开的快捷 AI 能力面板当前是否可见。
+    workbench_ai_capability_panel_open: bool,
+    /// Currently selected section inside the workbench quick AI capability panel.
+    /// 当前在工作台快捷 AI 能力面板中选中的分区。
+    workbench_ai_capability_section: WorkbenchAiCapabilitySection,
     /// Whether the in-app workbench model-picker modal is currently visible.
     /// 工作台内嵌模型选择弹窗当前是否可见。
     workbench_model_picker_open: bool,
+    /// Whether the compact in-app reasoning-effort picker modal is currently visible.
+    /// 工作台内嵌思考级别选择弹窗当前是否可见。
+    workbench_reasoning_picker_open: bool,
     /// Current free-text filter value applied inside the workbench model-picker modal.
     /// 当前在工作台模型选择弹窗内部应用的自由文本过滤值。
     workbench_model_picker_filter: String,
     /// Currently highlighted filtered option index inside the workbench model-picker modal.
     /// 当前在工作台模型选择弹窗中过滤结果内高亮的选项索引。
     workbench_model_picker_highlighted_index: Option<usize>,
+    /// Current vertical scroll offset tracked by the virtualized workbench model-picker list.
+    /// 当前由虚拟化工作台模型选择列表跟踪的纵向滚动偏移量。
+    workbench_model_picker_scroll_offset: f32,
+    /// Current viewport height reported by the virtualized workbench model-picker list.
+    /// 当前由虚拟化工作台模型选择列表上报的可视高度。
+    workbench_model_picker_viewport_height: f32,
     /// Active visual theme.
     /// 当前使用的视觉主题。
     app_theme: Theme,
@@ -3012,32 +3048,6 @@ impl std::fmt::Display for WorkbenchModelChoice {
     }
 }
 
-/// Workbench-scoped web-search override choice shown beside the composer controls.
-/// 显示在提示词控制区旁侧的工作台网页搜索覆盖选项。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WorkbenchWebSearchChoice {
-    /// Queued override mode represented by the current option.
-    /// 当前选项对应的排队覆盖模式。
-    override_mode: PendingPromptWebSearchOverride,
-    /// Optional third-party provider identifier used when the option targets one specific search entry.
-    /// 当选项指向单个搜索条目时使用的可选第三方供应商标识。
-    provider_id: Option<String>,
-    /// Human-readable visible label rendered inside the compact picker surface.
-    /// 渲染在紧凑选择器界面中的人类可读可见标签。
-    label: String,
-    /// Human-readable compact detail text used by the view layer for helper copy.
-    /// 供视图层展示辅助说明的人类可读紧凑详情文本。
-    detail: String,
-}
-
-impl std::fmt::Display for WorkbenchWebSearchChoice {
-    /// Renders the visible label shown inside the workbench web-search selector.
-    /// 渲染显示在工作台网页搜索选择器内部的可见标签。
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.label)
-    }
-}
-
 /// Shared workbench reasoning-effort alias reused by the application state and compact picker surfaces.
 /// 供应用状态与紧凑选择器界面复用的共享工作台推理档位别名。
 type WorkbenchReasoningEffort = ReasoningEffortLevel;
@@ -3454,6 +3464,12 @@ enum SettingsSection {
     /// Image-understanding capability routing delegated to external vision vendors.
     /// 委派给外部视觉供应商的图片理解能力路由。
     AiCapabilityUnderstandImage,
+    /// Video-understanding capability routing placeholder reserved for future multimodal ingestion.
+    /// 为未来多模态接入预留的视频理解能力路由占位。
+    AiCapabilityUnderstandVideo,
+    /// Audio-understanding capability routing placeholder reserved for future multimodal ingestion.
+    /// 为未来多模态接入预留的音频理解能力路由占位。
+    AiCapabilityUnderstandAudio,
     /// Image-generation capability routing.
     /// 图片生成能力路由。
     AiCapabilityImageGeneration,
@@ -3487,6 +3503,8 @@ impl SettingsSection {
             Self::AiCapabilityVendors => "供应商配置",
             Self::AiCapabilityWebSearch => "联网搜索",
             Self::AiCapabilityUnderstandImage => "图像理解",
+            Self::AiCapabilityUnderstandVideo => "视频理解",
+            Self::AiCapabilityUnderstandAudio => "音频理解",
             Self::AiCapabilityImageGeneration => "图像生成",
             Self::AiCapabilityVideoGeneration => "视频生成",
             Self::AiCapabilitySpeechSynthesis => "语音合成",
@@ -3512,6 +3530,8 @@ impl SettingsSection {
             Self::AiCapabilityVendors => "先在这里配置共享供应商凭据，后续各能力页直接复用。",
             Self::AiCapabilityWebSearch => "管理统一 web-search 的默认链路、启用目标与顺序。",
             Self::AiCapabilityUnderstandImage => "为不具备原生视觉的模型补齐图片理解能力。",
+            Self::AiCapabilityUnderstandVideo => "预留未来的视频理解入口；当前仅提供配置入口与路由占位。",
+            Self::AiCapabilityUnderstandAudio => "预留未来的音频理解入口；当前仅提供配置入口与路由占位。",
             Self::AiCapabilityImageGeneration => "配置可供对话模型调用的图片生成目标与顺序。",
             Self::AiCapabilityVideoGeneration => "配置可供对话模型调用的视频生成目标与顺序。",
             Self::AiCapabilitySpeechSynthesis => "配置文本转语音与语音合成目标与顺序。",
@@ -3530,11 +3550,103 @@ impl SettingsSection {
             Self::AiCapabilityVendors
                 | Self::AiCapabilityWebSearch
                 | Self::AiCapabilityUnderstandImage
+                | Self::AiCapabilityUnderstandVideo
+                | Self::AiCapabilityUnderstandAudio
                 | Self::AiCapabilityImageGeneration
                 | Self::AiCapabilityVideoGeneration
                 | Self::AiCapabilitySpeechSynthesis
                 | Self::AiCapabilityMusicGeneration
                 | Self::AiCapabilityMusicCover
+        )
+    }
+}
+
+/// Capability sections rendered inside the workbench quick capability panel opened from the composer controls.
+/// 渲染在提示词控制区快捷能力面板中的能力分区。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchAiCapabilitySection {
+    /// Unified hosted or third-party web-search capability routing.
+    /// 统一原生或第三方网页搜索能力路由。
+    WebSearch,
+    /// Image-understanding capability routing delegated to external vision vendors.
+    /// 委派给外部视觉供应商的图片理解能力路由。
+    UnderstandImage,
+    /// Video-understanding placeholder section.
+    /// 视频理解占位分区。
+    UnderstandVideo,
+    /// Audio-understanding placeholder section.
+    /// 音频理解占位分区。
+    UnderstandAudio,
+    /// Image-generation capability routing.
+    /// 图片生成能力路由。
+    ImageGeneration,
+    /// Video-generation capability routing.
+    /// 视频生成能力路由。
+    VideoGeneration,
+    /// Speech-synthesis capability routing.
+    /// 语音合成能力路由。
+    SpeechSynthesis,
+    /// Music-generation capability routing.
+    /// 音乐生成能力路由。
+    MusicGeneration,
+    /// Music-cover capability routing.
+    /// 音乐翻唱能力路由。
+    MusicCover,
+}
+
+impl WorkbenchAiCapabilitySection {
+    /// Returns all quick-panel sections in stable order.
+    /// 返回快捷能力面板按稳定顺序展示的全部分区。
+    const ALL: [Self; 9] = [
+        Self::WebSearch,
+        Self::UnderstandImage,
+        Self::UnderstandVideo,
+        Self::UnderstandAudio,
+        Self::ImageGeneration,
+        Self::VideoGeneration,
+        Self::SpeechSynthesis,
+        Self::MusicGeneration,
+        Self::MusicCover,
+    ];
+
+    /// Returns the compact function label rendered in the quick capability panel.
+    /// 返回渲染在快捷能力面板中的紧凑功能标签。
+    const fn label(self) -> &'static str {
+        match self {
+            Self::WebSearch => "联网搜索",
+            Self::UnderstandImage => "图像理解",
+            Self::UnderstandVideo => "视频理解",
+            Self::UnderstandAudio => "音频理解",
+            Self::ImageGeneration => "图像生成",
+            Self::VideoGeneration => "视频生成",
+            Self::SpeechSynthesis => "语音合成",
+            Self::MusicGeneration => "音乐生成",
+            Self::MusicCover => "音乐翻唱",
+        }
+    }
+
+    /// Returns the semantic capability kind already implemented by the current section when one exists.
+    /// 返回当前分区已经具备实现时对应的语义能力类型。
+    const fn capability_kind(self) -> Option<AiToolKind> {
+        match self {
+            Self::WebSearch => Some(AiToolKind::WebSearch),
+            Self::UnderstandImage => Some(AiToolKind::UnderstandImage),
+            Self::UnderstandVideo => None,
+            Self::UnderstandAudio => None,
+            Self::ImageGeneration => Some(AiToolKind::ImageGeneration),
+            Self::VideoGeneration => Some(AiToolKind::VideoGeneration),
+            Self::SpeechSynthesis => Some(AiToolKind::SpeechSynthesis),
+            Self::MusicGeneration => Some(AiToolKind::MusicGeneration),
+            Self::MusicCover => Some(AiToolKind::MusicCover),
+        }
+    }
+
+    /// Returns whether the current section should show one routing-strategy block above the target list.
+    /// 返回当前分区是否应在目标列表上方展示路由策略区块。
+    const fn supports_routing_strategy(self) -> bool {
+        matches!(
+            self,
+            Self::WebSearch | Self::UnderstandImage | Self::UnderstandVideo | Self::UnderstandAudio
         )
     }
 }
@@ -3584,6 +3696,12 @@ struct AiCapabilityVendorEditorState {
     /// Shared API key or token staged in the editor.
     /// 在编辑器中暂存的共享 API Key 或 Token。
     api_key: String,
+    /// Optional local/cloud connection mode staged in the editor for vendors that support explicit host switching.
+    /// 为支持显式宿主切换的供应商在编辑器中暂存的本地/云端连接模式。
+    connection_mode: crate::provider_config::AiCapabilityVendorConnectionMode,
+    /// Shared vendor-level base URL override staged in the editor.
+    /// 在编辑器中暂存的共享供应商级 Base URL 覆盖值。
+    base_url: String,
     /// Shared region or locale staged in the editor.
     /// 在编辑器中暂存的共享区域或地区值。
     region: String,
@@ -3912,6 +4030,25 @@ enum Message {
     /// Selects the global web-search routing mode.
     /// 选择全局网页搜索路由模式。
     WebSearchRoutingModeSelected(WebSearchRoutingMode),
+    /// Selects the global native-versus-host routing mode for image understanding.
+    /// 选择图像理解的全局原生与宿主桥接路由模式。
+    UnderstandImageRoutingModeSelected(NativeBridgeRoutingMode),
+    /// Toggles one configured semantic capability target directly from the settings page or quick capability panel.
+    /// 直接从设置页或快捷能力面板切换某条已配置语义能力目标的启用状态。
+    AiCapabilityTargetEnabledToggled {
+        /// Semantic capability owning the target row.
+        /// 拥有该目标行的语义能力。
+        capability_kind: AiToolKind,
+        /// Stable vendor identifier owning the target.
+        /// 拥有该目标的稳定供应商标识。
+        vendor_id: String,
+        /// Stable target alias being toggled.
+        /// 当前切换的稳定目标别名。
+        target_alias: String,
+        /// Whether the configured target should stay enabled.
+        /// 当前已配置目标是否应保持启用。
+        enabled: bool,
+    },
     /// Removes one shared AI capability vendor instance.
     /// 移除一条共享 AI 能力供应商实例。
     RemoveAiCapabilityVendor(String),
@@ -3936,6 +4073,14 @@ enum Message {
     /// Updates the staged API key value inside the currently visible shared AI capability vendor editor.
     /// 更新当前可见共享 AI 能力供应商编辑器中的暂存 API Key 值。
     AiCapabilityVendorEditorApiKeyChanged(String),
+    /// Updates the staged local/cloud connection mode inside the currently visible shared AI capability vendor editor.
+    /// 更新当前可见共享 AI 能力供应商编辑器中的暂存本地/云端连接模式。
+    AiCapabilityVendorEditorConnectionModeChanged(
+        crate::provider_config::AiCapabilityVendorConnectionMode,
+    ),
+    /// Updates the staged Base URL value inside the currently visible shared AI capability vendor editor.
+    /// 更新当前可见共享 AI 能力供应商编辑器中的暂存 Base URL 值。
+    AiCapabilityVendorEditorBaseUrlChanged(String),
     /// Updates the staged region value inside the currently visible shared AI capability vendor editor.
     /// 更新当前可见共享 AI 能力供应商编辑器中的暂存区域值。
     AiCapabilityVendorEditorRegionChanged(String),
@@ -4026,9 +4171,25 @@ enum Message {
     /// Persists standalone AI capability configuration.
     /// 持久化独立 AI 能力配置。
     SaveAiToolConfiguration,
-    /// Selects one workbench-scoped web-search override option for direct sends and queued prompts.
-    /// 为直接发送与排队提示词选择一个工作台作用域网页搜索覆盖选项。
-    WorkbenchWebSearchSelected(WorkbenchWebSearchChoice),
+    /// Opens the workbench quick AI capability panel from the composer controls.
+    /// 从提示词控制区打开工作台快捷 AI 能力面板。
+    OpenWorkbenchAiCapabilityPanel,
+    /// Closes the workbench quick AI capability panel without changing the selected section.
+    /// 在不改变当前分区选择的前提下关闭工作台快捷 AI 能力面板。
+    CloseWorkbenchAiCapabilityPanel,
+    /// Selects one capability section inside the workbench quick AI capability panel.
+    /// 在工作台快捷 AI 能力面板内部选中某个能力分区。
+    WorkbenchAiCapabilitySectionSelected(WorkbenchAiCapabilitySection),
+    /// Quickly enables or disables one capability from the top checkbox grid of the quick capability panel.
+    /// 从快捷能力面板顶部勾选网格中快速启用或关闭某个能力。
+    WorkbenchAiCapabilitySectionEnabledToggled {
+        /// Quick-panel section whose effective enabled state is being toggled.
+        /// 当前被切换生效启用状态的快捷面板分区。
+        section: WorkbenchAiCapabilitySection,
+        /// Desired enabled state after the toggle interaction.
+        /// 当前切换交互结束后期望达到的启用状态。
+        enabled: bool,
+    },
     /// Selects one globally configured model from the in-app workbench model picker.
     /// 从工作台内嵌模型选择器中选中一个全局已配置模型。
     WorkbenchModelSelected(WorkbenchModelChoice),
@@ -4239,6 +4400,15 @@ enum Message {
     /// Compact reasoning-effort selection changed inside the workbench composer footer row.
     /// 工作台提示词底部控制行中的紧凑推理级别选择发生变化。
     WorkbenchReasoningEffortSelected(ReasoningSelectionOption),
+    /// Opens the compact reasoning-effort picker modal from the composer footer trigger.
+    /// 从提示词底部触发器打开紧凑思考级别选择弹窗。
+    OpenWorkbenchReasoningPicker,
+    /// Closes the compact reasoning-effort picker modal.
+    /// 关闭紧凑思考级别选择弹窗。
+    CloseWorkbenchReasoningPicker,
+    /// Records the current viewport of the virtualized workbench model-picker list.
+    /// 记录虚拟化工作台模型选择列表的当前视口状态。
+    WorkbenchModelPickerScrolled(scrollable::Viewport),
     /// Cycles the current execution mode from the main-input shortcut.
     /// 通过主输入区快捷键循环切换当前执行模式。
     CycleExecutionMode,
@@ -4817,6 +4987,8 @@ impl VulcanWorkbench {
         } else {
             ExecutionMode::Build
         };
+        let initial_workbench_disabled_ai_capability_kinds =
+            ai_tool_configuration.disabled_capability_kinds.clone();
 
         let mut application = Self {
             main_window_id: Some(main_window_id),
@@ -5002,9 +5174,16 @@ impl VulcanWorkbench {
             workbench_reasoning_effort: initial_workbench_reasoning_effort,
             workbench_web_search_override: PendingPromptWebSearchOverride::FollowGlobal,
             workbench_web_search_provider_id: None,
+            workbench_disabled_ai_capability_kinds:
+                initial_workbench_disabled_ai_capability_kinds,
+            workbench_ai_capability_panel_open: false,
+            workbench_ai_capability_section: WorkbenchAiCapabilitySection::WebSearch,
             workbench_model_picker_open: false,
+            workbench_reasoning_picker_open: false,
             workbench_model_picker_filter: String::new(),
             workbench_model_picker_highlighted_index: None,
+            workbench_model_picker_scroll_offset: 0.0,
+            workbench_model_picker_viewport_height: WORKBENCH_MODEL_PICKER_LIST_HEIGHT,
             app_theme,
             temperature_enabled: false,
             temperature: 0.25,
@@ -6063,7 +6242,7 @@ impl VulcanWorkbench {
                 self.loading_session_ids.remove(&session_id);
                 match result {
                     Ok(snapshot) => {
-                        let latest_turn_index = snapshot.latest_turn_index;
+                        let tool_detail_turn_indices = snapshot.tool_detail_turn_indices.clone();
                         self.apply_session_hydration_snapshot(snapshot);
                         let maintenance_task =
                             self.schedule_session_storage_maintenance(session_id);
@@ -6076,13 +6255,10 @@ impl VulcanWorkbench {
                             self.status_message = String::from("当前会话正文已按需加载完成。");
                             return Task::batch([
                                 maintenance_task,
-                                latest_turn_index
-                                    .map(|turn_index| {
-                                        self.schedule_session_tool_detail_load(
-                                            session_id, turn_index,
-                                        )
-                                    })
-                                    .unwrap_or_else(Task::none),
+                                self.schedule_session_tool_detail_loads(
+                                    session_id,
+                                    &tool_detail_turn_indices,
+                                ),
                                 self.maybe_follow_selected_session_transcript_tail(session_id),
                                 self.maybe_follow_selected_session_thinking_overlay_tail(
                                     session_id,
@@ -6105,9 +6281,16 @@ impl VulcanWorkbench {
                 self.loading_older_session_history_ids.remove(&session_id);
                 match result {
                     Ok(page) => {
+                        let tool_detail_turn_indices = page.tool_detail_turn_indices.clone();
                         self.apply_older_session_history_page(page);
                         self.status_message = String::from("已加载更早一段会话历史。");
-                        return self.maybe_continue_workspace_history_search_navigation(session_id);
+                        return Task::batch([
+                            self.schedule_session_tool_detail_loads(
+                                session_id,
+                                &tool_detail_turn_indices,
+                            ),
+                            self.maybe_continue_workspace_history_search_navigation(session_id),
+                        ]);
                     }
                     Err(error) => {
                         self.status_message = format!("加载更早会话历史失败：{error}");
@@ -6940,6 +7123,14 @@ impl VulcanWorkbench {
                 if self.ai_capability_target_picker.take().is_some() {
                     return Task::none();
                 }
+                if self.workbench_ai_capability_panel_open {
+                    self.workbench_ai_capability_panel_open = false;
+                    return Task::none();
+                }
+                if self.workbench_reasoning_picker_open {
+                    self.workbench_reasoning_picker_open = false;
+                    return Task::none();
+                }
                 if self.workbench_notice_modal.take().is_some() {
                     return Task::none();
                 }
@@ -6947,6 +7138,9 @@ impl VulcanWorkbench {
                     self.workbench_model_picker_open = false;
                     self.workbench_model_picker_filter.clear();
                     self.workbench_model_picker_highlighted_index = None;
+                    self.workbench_model_picker_scroll_offset = 0.0;
+                    self.workbench_model_picker_viewport_height =
+                        WORKBENCH_MODEL_PICKER_LIST_HEIGHT;
                     return Task::none();
                 }
                 self.begin_close_thinking_modal();
@@ -6965,6 +7159,14 @@ impl VulcanWorkbench {
                 }
                 if self.ai_capability_target_picker.is_some() {
                     return self.apply_ai_capability_target_picker_selections();
+                }
+                if self.workbench_ai_capability_panel_open {
+                    self.workbench_ai_capability_panel_open = false;
+                    return Task::none();
+                }
+                if self.workbench_reasoning_picker_open {
+                    self.workbench_reasoning_picker_open = false;
+                    return Task::none();
                 }
                 if self.workbench_notice_modal.is_some() {
                     return self.confirm_workbench_notice_modal();
@@ -7326,6 +7528,43 @@ impl VulcanWorkbench {
                 ));
                 Task::none()
             }
+            Message::UnderstandImageRoutingModeSelected(mode) => {
+                self.ai_tool_configuration.understand_image.mode = mode;
+                self.persist_ai_tool_configuration_change(format!(
+                    "图像理解路由已切换为「{}」并自动保存。",
+                    mode.label()
+                ));
+                Task::none()
+            }
+            Message::AiCapabilityTargetEnabledToggled {
+                capability_kind,
+                vendor_id,
+                target_alias,
+                enabled,
+            } => {
+                match self.set_ai_capability_target_enabled(
+                    capability_kind,
+                    &vendor_id,
+                    &target_alias,
+                    enabled,
+                ) {
+                    Ok(true) => {
+                        let state_label = if enabled { "启用" } else { "停用" };
+                        self.persist_ai_tool_configuration_change(format!(
+                            "已{state_label}“{}”中的 `{}/{}` 并自动保存。",
+                            capability_kind.label(),
+                            vendor_id,
+                            target_alias
+                        ));
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        self.ai_tool_notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
             Message::RemoveAiCapabilityVendor(vendor_id) => {
                 if self.remove_ai_capability_vendor(&vendor_id) {
                     self.persist_ai_tool_configuration_change(String::from(
@@ -7367,6 +7606,18 @@ impl VulcanWorkbench {
             Message::AiCapabilityVendorEditorApiKeyChanged(value) => {
                 if let Some(editor) = self.ai_capability_vendor_editor.as_mut() {
                     editor.api_key = value;
+                }
+                Task::none()
+            }
+            Message::AiCapabilityVendorEditorConnectionModeChanged(value) => {
+                if let Some(editor) = self.ai_capability_vendor_editor.as_mut() {
+                    editor.connection_mode = value;
+                }
+                Task::none()
+            }
+            Message::AiCapabilityVendorEditorBaseUrlChanged(value) => {
+                if let Some(editor) = self.ai_capability_vendor_editor.as_mut() {
+                    editor.base_url = value;
                 }
                 Task::none()
             }
@@ -7445,7 +7696,7 @@ impl VulcanWorkbench {
                 }
                 let route_entries = self
                     .ai_tool_configuration
-                    .resolved_route_targets_for_kind(capability_kind);
+                    .resolved_configured_targets_for_kind(capability_kind);
                 self.active_ai_capability_route_drop_target = Some(
                     if position.y <= AI_CAPABILITY_ROUTE_TARGET_ROW_HEIGHT / 2.0 {
                         AiCapabilityRouteDropTarget::Before(target_selector)
@@ -7518,11 +7769,59 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
-            Message::WorkbenchWebSearchSelected(choice) => {
-                self.workbench_web_search_override = choice.override_mode;
-                self.workbench_web_search_provider_id = choice.provider_id.clone();
-                self.status_message =
-                    format!("当前发送链路的搜索方式已切换为 `{}`。", choice.label);
+            Message::OpenWorkbenchAiCapabilityPanel => {
+                self.workbench_ai_capability_panel_open = true;
+                Task::none()
+            }
+            Message::CloseWorkbenchAiCapabilityPanel => {
+                self.workbench_ai_capability_panel_open = false;
+                Task::none()
+            }
+            Message::WorkbenchAiCapabilitySectionSelected(section) => {
+                self.workbench_ai_capability_section = section;
+                Task::none()
+            }
+            Message::WorkbenchAiCapabilitySectionEnabledToggled { section, enabled } => {
+                match section.capability_kind() {
+                    Some(capability_kind) => {
+                        let usable_target_count = self
+                            .ai_tool_configuration
+                            .usable_targets_for_kind(capability_kind)
+                            .len();
+                        if usable_target_count == 0 {
+                            self.set_workbench_ai_capability_enabled(section, false);
+                            self.status_message = format!(
+                                "“{}”当前没有已启用的可用目标，请先在右侧内容区至少勾选一个模型后再开启。",
+                                section.label()
+                            );
+                            return Task::none();
+                        }
+                        self.set_workbench_ai_capability_enabled(section, enabled);
+                        let configured_target_count = self
+                            .ai_tool_configuration
+                            .resolved_configured_targets_for_kind(capability_kind)
+                            .len();
+                        if configured_target_count > 0 {
+                            let state_label = if enabled { "启用" } else { "关闭" };
+                            self.persist_ai_tool_configuration_change(format!(
+                                "已{state_label}“{}”并自动保存。已保留既有目标勾选与顺序偏好。",
+                                capability_kind.label()
+                            ));
+                            return Task::none();
+                        } else {
+                            self.status_message = format!(
+                                "“{}”当前还没有可快速切换的已配置目标，请先在左侧能力页中完成配置。",
+                                section.label()
+                            );
+                        }
+                    }
+                    None => {
+                        self.status_message = format!(
+                            "“{}”入口已预留，当前还没有可快速切换的真实能力目标。",
+                            section.label()
+                        );
+                    }
+                }
                 Task::none()
             }
             Message::WorkbenchModelSelected(choice) => self.request_workbench_model_choice(choice),
@@ -7531,6 +7830,24 @@ impl VulcanWorkbench {
                 self.workbench_model_picker_open = false;
                 self.workbench_model_picker_filter.clear();
                 self.workbench_model_picker_highlighted_index = None;
+                self.workbench_model_picker_scroll_offset = 0.0;
+                self.workbench_model_picker_viewport_height = WORKBENCH_MODEL_PICKER_LIST_HEIGHT;
+                Task::none()
+            }
+            Message::OpenWorkbenchReasoningPicker => {
+                self.workbench_model_picker_open = false;
+                self.workbench_model_picker_filter.clear();
+                self.workbench_model_picker_highlighted_index = None;
+                self.workbench_reasoning_picker_open = true;
+                Task::none()
+            }
+            Message::CloseWorkbenchReasoningPicker => {
+                self.workbench_reasoning_picker_open = false;
+                Task::none()
+            }
+            Message::WorkbenchModelPickerScrolled(viewport) => {
+                self.workbench_model_picker_scroll_offset = viewport.absolute_offset().y.max(0.0);
+                self.workbench_model_picker_viewport_height = viewport.bounds().height.max(0.0);
                 Task::none()
             }
             Message::WorkbenchModelPickerFilterChanged(value) => {
@@ -7538,7 +7855,10 @@ impl VulcanWorkbench {
                 self.workbench_model_picker_highlighted_index =
                     self.preferred_workbench_model_picker_index();
                 self.clamp_workbench_model_picker_highlight();
-                Task::none()
+                self.workbench_model_picker_scroll_offset = 0.0;
+                self.workbench_model_picker_highlighted_index
+                    .map(|index| self.scroll_workbench_model_picker_to_index(index))
+                    .unwrap_or_else(Task::none)
             }
             Message::WorkbenchModelPickerMoveSelectionUp => {
                 if !self.workbench_model_picker_open {
@@ -7556,7 +7876,9 @@ impl VulcanWorkbench {
                             .unwrap_or(filtered_len.saturating_sub(1)),
                     )
                 };
-                Task::none()
+                self.workbench_model_picker_highlighted_index
+                    .map(|index| self.scroll_workbench_model_picker_to_index(index))
+                    .unwrap_or_else(Task::none)
             }
             Message::WorkbenchModelPickerMoveSelectionDown => {
                 if !self.workbench_model_picker_open {
@@ -7574,7 +7896,9 @@ impl VulcanWorkbench {
                             % filtered_len,
                     )
                 };
-                Task::none()
+                self.workbench_model_picker_highlighted_index
+                    .map(|index| self.scroll_workbench_model_picker_to_index(index))
+                    .unwrap_or_else(Task::none)
             }
             Message::ConfiguredProviderSelected(provider_id) => {
                 if let Some(choice) = provider_config::supported_provider_choices()
@@ -8251,6 +8575,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WorkbenchReasoningEffortSelected(option) => {
+                self.workbench_reasoning_picker_open = false;
                 self.workbench_reasoning_effort_preference = option.effort;
                 self.workbench_reasoning_effort = option.effort;
                 match self.persist_workbench_reasoning_effort_preference() {
@@ -10228,8 +10553,8 @@ impl VulcanWorkbench {
         did_move
     }
 
-    /// Applies one drag-drop target to reorder the enabled route list of the provided semantic AI capability.
-    /// 将一次拖拽落点应用到给定语义 AI 能力的已启用路由列表，以完成重排。
+    /// Applies one drag-drop target to reorder the configured route list of the provided semantic AI capability.
+    /// 将一次拖拽落点应用到给定语义 AI 能力的已配置路由列表，以完成重排。
     fn apply_ai_capability_route_drop_target(
         &mut self,
         capability_kind: AiToolKind,
@@ -10417,11 +10742,19 @@ impl VulcanWorkbench {
         let active_choice = self.active_workbench_model_choice()?;
         let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(&active_choice);
-        Some(resolve_effective_model_capabilities(
+        let runtime_options = self.current_pending_prompt_runtime_options();
+        let effective_configuration =
+            self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
+        let mut capabilities = resolve_effective_model_capabilities(
             definition,
             model.as_ref(),
-            &self.ai_tool_configuration,
-        ))
+            &effective_configuration,
+        );
+        self.apply_runtime_ai_capability_capability_overrides(
+            &mut capabilities,
+            &runtime_options,
+        );
+        Some(capabilities)
     }
 
     /// Returns whether the currently active workbench model should accept one staged attachment kind according to declared input modalities.
@@ -11318,7 +11651,10 @@ impl VulcanWorkbench {
             .model_reference
             .as_ref()
             .and_then(|model_reference| {
-                self.resolve_pending_prompt_model_capabilities(model_reference)
+                self.resolve_pending_prompt_model_capabilities(
+                    model_reference,
+                    &prompt_entry.runtime_options,
+                )
             });
         if let Some(capabilities) = capabilities {
             for attachment in &prompt_entry.attachments {
@@ -14387,6 +14723,30 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Schedules tool-detail loads for every relevant turn already present in one hydrated transcript window.
+    /// 为单个已水合转录窗口中所有相关轮次统一调度工具明细加载任务。
+    fn schedule_session_tool_detail_loads(
+        &mut self,
+        session_id: SessionId,
+        turn_indices: &[i64],
+    ) -> Task<Message> {
+        let unique_turn_indices = turn_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if unique_turn_indices.is_empty() {
+            return Task::none();
+        }
+
+        Task::batch(
+            unique_turn_indices
+                .into_iter()
+                .map(|turn_index| self.schedule_session_tool_detail_load(session_id, turn_index)),
+        )
+    }
+
     /// Schedules best-effort storage maintenance for one already hydrated session.
     /// 为单个已水合会话调度尽力而为的存储维护任务。
     fn schedule_session_storage_maintenance(&self, session_id: SessionId) -> Task<Message> {
@@ -16281,16 +16641,39 @@ impl VulcanWorkbench {
         }) else {
             return;
         };
-        let vendor_entry = picker
-            .selections
-            .entry(vendor_id.to_ascii_lowercase())
-            .or_default();
         if enabled {
+            let current_selected_count = picker
+                .selections
+                .values()
+                .map(std::collections::BTreeMap::len)
+                .sum::<usize>();
+            let already_selected = picker
+                .selections
+                .get(&vendor_id.to_ascii_lowercase())
+                .is_some_and(|targets| targets.contains_key(choice.target_alias.as_str()));
+            if !already_selected
+                && current_selected_count
+                    >= provider_config::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
+            {
+                self.ai_tool_notice = format!(
+                    "“{}”最多只能启用 {} 条目标，请先取消部分已勾选项。",
+                    picker.capability_kind.label(),
+                    provider_config::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
+                );
+                self.status_message = self.ai_tool_notice.clone();
+                return;
+            }
+            let vendor_entry = picker
+                .selections
+                .entry(vendor_id.to_ascii_lowercase())
+                .or_default();
             vendor_entry
                 .entry(choice.target_alias.clone())
                 .or_insert(choice.default_model_id);
         } else {
-            vendor_entry.remove(choice.target_alias.as_str());
+            if let Some(vendor_entry) = picker.selections.get_mut(&vendor_id.to_ascii_lowercase()) {
+                vendor_entry.remove(choice.target_alias.as_str());
+            }
         }
     }
 
@@ -16371,6 +16754,9 @@ impl VulcanWorkbench {
             crate::ai_capability_provider_catalog::ai_capability_vendor_region_options(
                 &normalized_vendor_id,
             );
+        let connection_mode = existing_vendor
+            .map(|vendor| vendor.resolved_connection_mode())
+            .unwrap_or(crate::provider_config::AiCapabilityVendorConnectionMode::Local);
         let region = existing_vendor
             .map(|vendor| vendor.region.clone())
             .filter(|value| !value.trim().is_empty())
@@ -16381,6 +16767,10 @@ impl VulcanWorkbench {
             display_name,
             api_key: existing_vendor
                 .map(|vendor| vendor.api_key.clone())
+                .unwrap_or_default(),
+            connection_mode,
+            base_url: existing_vendor
+                .map(|vendor| vendor.base_url.clone())
                 .unwrap_or_default(),
             region,
             region_options,
@@ -16394,6 +16784,34 @@ impl VulcanWorkbench {
         let Some(editor) = self.ai_capability_vendor_editor.take() else {
             return Task::none();
         };
+        let definitions =
+            crate::ai_capability_provider_catalog::ai_capability_provider_definitions_for_vendor(
+                &editor.vendor_id,
+            );
+        let supports_api_key_field = definitions.iter().any(|definition| {
+            !matches!(
+                definition.api_key_requirement,
+                crate::ai_capability_provider_catalog::AiCapabilityProviderApiKeyRequirement::None
+            )
+        });
+        let supports_region_field = definitions
+            .iter()
+            .any(|definition| definition.supports_region_field)
+            || !editor.region_options.is_empty();
+        if editor.vendor_id.eq_ignore_ascii_case("ollama")
+            && matches!(
+                editor.connection_mode,
+                crate::provider_config::AiCapabilityVendorConnectionMode::Cloud
+            )
+            && editor.api_key.trim().is_empty()
+        {
+            self.ai_tool_notice = String::from(
+                "Ollama Cloud 模式需要填写 API Key；若要连接本地 Ollama，请切换到“本地”模式。",
+            );
+            self.status_message = self.ai_tool_notice.clone();
+            self.ai_capability_vendor_editor = Some(editor);
+            return Task::none();
+        }
         if editor.is_new && !self.add_ai_capability_vendor(&editor.vendor_id) {
             self.ai_tool_notice = format!("共享 AI 能力供应商 `{}` 已存在。", editor.display_name);
             self.status_message = self.ai_tool_notice.clone();
@@ -16404,9 +16822,31 @@ impl VulcanWorkbench {
         self.update_ai_capability_vendor(&vendor_id, |vendor| {
             vendor.name = provider_config::ai_capability_vendor_display_name(&vendor_id);
             vendor.enabled = true;
-            vendor.api_key = editor.api_key.trim().to_string();
-            vendor.base_url.clear();
-            vendor.region = editor.region.trim().to_string();
+            vendor.api_key = if supports_api_key_field {
+                editor.api_key.trim().to_string()
+            } else {
+                String::new()
+            };
+            vendor.connection_mode = if vendor_id.eq_ignore_ascii_case("ollama") {
+                Some(editor.connection_mode)
+            } else {
+                None
+            };
+            vendor.base_url = if vendor_id.eq_ignore_ascii_case("ollama")
+                && matches!(
+                    editor.connection_mode,
+                    crate::provider_config::AiCapabilityVendorConnectionMode::Local
+                )
+            {
+                editor.base_url.trim().to_string()
+            } else {
+                String::new()
+            };
+            vendor.region = if supports_region_field {
+                editor.region.trim().to_string()
+            } else {
+                String::new()
+            };
         });
         let success_notice = if editor.is_new {
             format!("已新增共享 AI 能力供应商 `{display_name}` 并自动保存。")
