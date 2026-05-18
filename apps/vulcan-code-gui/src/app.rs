@@ -59,9 +59,7 @@ use crate::model::{
     SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
-use crate::provider_capabilities::{
-    apply_ai_tool_runtime_configuration, resolve_model_capabilities,
-};
+use crate::provider_capabilities::resolve_effective_model_capabilities;
 use crate::provider_config::{
     self, AiToolKind, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
     PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
@@ -70,8 +68,10 @@ use crate::provider_config::{
     WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
-    SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
-    SelectableTranscriptInteraction, view_selectable_rendered_transcript,
+    SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
+    SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
+    SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptInteraction,
+    SelectableTranscriptSurfaceId, view_selectable_rendered_transcript_with_context_menu,
 };
 use crate::skills::{
     CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
@@ -98,7 +98,7 @@ use iced::{
     Center, ContentFit, Element, Fill, FillPortion, Pixels, Shrink, Subscription, Task, Theme,
     clipboard, keyboard, task,
 };
-use iced_aw::{ContextMenu, date_picker::Date};
+use iced_aw::date_picker::Date;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
 use rodio::{Decoder, OutputStream, Sink};
 use serde_json::{Value, json};
@@ -115,7 +115,8 @@ use vulcan_agent_view::{
     build_modal_thinking_surface_document, build_modal_tool_surface_document,
     build_overlay_thinking_surface_document, build_thinking_title, format_thinking_duration_label,
     parse_agent_view_document, resolve_video_thumbnail_preview, thinking_modal_progress,
-    thinking_overlay_scrollable_id, view_thinking_modal_surface, view_thinking_overlay_surface,
+    thinking_overlay_scrollable_id, view_thinking_modal_surface_with_context_menu,
+    view_thinking_overlay_surface_with_context_menu,
 };
 use vulcan_core::types::CoreEventKind as VulcanCoreEventKind;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
@@ -522,13 +523,17 @@ const COMPOSER_TRIGGER_BUTTON_SIZE: f32 = COMPOSER_CONTROL_ROW_HEIGHT;
 /// 尾部圆形发送或停止按钮使用的共享图标尺寸。
 const COMPOSER_TRIGGER_BUTTON_ICON_SIZE: f32 = 18.0;
 
-/// Shared width used by the composer context menu shown on right click.
-/// 右键点击时显示的提示词输入框上下文菜单使用的共享宽度。
-const COMPOSER_CONTEXT_MENU_WIDTH: f32 = 168.0;
+/// Shared width used by compact workbench context menus such as the composer menu.
+/// 输入区等紧凑工作台右键菜单使用的共享宽度。
+const WORKBENCH_CONTEXT_MENU_COMPACT_WIDTH: f32 = 168.0;
 
-/// Shared row height used by the composer context menu actions.
-/// 提示词输入框上下文菜单动作项使用的共享行高。
-const COMPOSER_CONTEXT_MENU_ROW_HEIGHT: f32 = 34.0;
+/// Shared width used by regular workbench context menus such as project and transcript menus.
+/// 项目与转录等常规工作台右键菜单使用的共享宽度。
+const WORKBENCH_CONTEXT_MENU_DEFAULT_WIDTH: f32 = 200.0;
+
+/// Shared row height used by unified workbench context-menu actions.
+/// 统一工作台右键菜单动作项使用的共享行高。
+const WORKBENCH_CONTEXT_MENU_ROW_HEIGHT: f32 = 34.0;
 
 /// Shared maximal undo snapshot count retained for the composer editor.
 /// 提示词编辑器保留的共享最大撤销快照数量。
@@ -1105,8 +1110,36 @@ fn build_user_prompt_transcript_body(
     prompt: &str,
     attachments: &[ConversationAttachment],
 ) -> String {
-    let parts = build_composer_input_parts(prompt, attachments);
-    composer_parts_transcript_body(&parts)
+    let visible_attachments = attachments
+        .iter()
+        .filter(|attachment| attachment.kind != ConversationAttachmentKind::Image)
+        .cloned()
+        .collect::<Vec<_>>();
+    let parts = build_composer_input_parts(prompt, &visible_attachments);
+    let body = composer_parts_transcript_body(&parts);
+
+    if prompt.trim().is_empty() && !attachments.is_empty() && visible_attachments.is_empty() {
+        String::new()
+    } else {
+        body
+    }
+}
+
+/// Builds transcript-only metadata for one visible user prompt so GUI projections can recover canonical text and attachment strips after reload.
+/// 为一条可见用户提示词构建仅供转录使用的元数据，使图形界面投影能在重开后恢复规范文本与附件面板。
+fn build_user_prompt_transcript_metadata(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+) -> Option<Value> {
+    if attachments.is_empty() {
+        return None;
+    }
+
+    let serialized_attachments = serde_json::to_value(attachments).ok()?;
+    Some(json!({
+        "canonical_user_text": prompt,
+        "transcript_attachments": serialized_attachments,
+    }))
 }
 
 /// Returns whether pending-prompt dispatch must stay blocked because Anthropic sessions cannot safely continue the parent coordinator while detached subagents from the previous tool round are still running.
@@ -1660,6 +1693,71 @@ struct ComposerScrollbarLayout {
     max_scroll_offset: f32,
 }
 
+/// One action row rendered by the shared workbench context menu.
+/// 由共享工作台右键菜单渲染的一行动作。
+#[derive(Debug, Clone)]
+struct WorkbenchContextMenuItem {
+    /// User-facing label displayed inside the menu row.
+    /// 菜单行内部显示的面向用户标签。
+    label: String,
+    /// Message emitted when the menu row is enabled and pressed.
+    /// 菜单行启用并被点击时发出的消息。
+    message: Option<Message>,
+}
+
+/// Identifies the feature surface that opened the shared workbench context menu.
+/// 标识打开共享工作台右键菜单的功能表面。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchContextMenuSource {
+    /// Menu opened from the prompt composer editor.
+    /// 从提示词编辑器打开的菜单。
+    Composer,
+    /// Menu opened from the left task tree.
+    /// 从左侧任务树打开的菜单。
+    TaskTree,
+    /// Menu opened from the rendered transcript surface.
+    /// 从渲染转录表面打开的菜单。
+    Transcript,
+}
+
+/// Runtime state for one open shared workbench context menu.
+/// 单个已打开共享工作台右键菜单的运行时状态。
+#[derive(Debug, Clone)]
+struct WorkbenchContextMenuState {
+    /// Feature surface that opened this shared menu.
+    /// 打开此共享菜单的功能表面。
+    source: WorkbenchContextMenuSource,
+    /// Window-relative position used to anchor the menu before clamping.
+    /// 进行边界钳制前用于锚定菜单的窗口相对位置。
+    anchor: iced::Point,
+    /// Fixed width used to render the menu body.
+    /// 渲染菜单主体时使用的固定宽度。
+    width: f32,
+    /// Ordered action rows shown inside the menu.
+    /// 菜单内部显示的有序动作行。
+    items: Vec<WorkbenchContextMenuItem>,
+}
+
+impl WorkbenchContextMenuItem {
+    /// Builds one enabled shared context-menu item.
+    /// 构建一个启用状态的共享右键菜单项。
+    fn enabled(label: impl Into<String>, message: Message) -> Self {
+        Self {
+            label: label.into(),
+            message: Some(message),
+        }
+    }
+
+    /// Builds one disabled shared context-menu item.
+    /// 构建一个禁用状态的共享右键菜单项。
+    fn disabled(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            message: None,
+        }
+    }
+}
+
 /// Launches the GUI application using the official iced crate.
 /// 使用官方 iced crate 启动图形界面应用。
 pub fn run() -> iced::Result {
@@ -1776,15 +1874,18 @@ pub struct VulcanWorkbench {
     /// Current grabbed offset inside the draggable composer scrollbar thumb, when dragging is active.
     /// 当前处于激活拖拽状态时在提示词滚动条滑块内部抓取到的偏移量。
     composer_scrollbar_drag_grab_offset: Option<f32>,
-    /// Whether the composer context menu is currently visible.
-    /// 当前提示词编辑器上下文菜单是否可见。
-    composer_context_menu_open: bool,
-    /// Last main-window anchor position used to place the composer context menu.
-    /// 最近一次用于放置提示词上下文菜单的主窗口锚点位置。
-    composer_context_menu_anchor: iced::Point,
+    /// Currently open shared workbench context menu, if any.
+    /// 当前已打开的共享工作台右键菜单（如果存在）。
+    workbench_context_menu: Option<WorkbenchContextMenuState>,
     /// Latest clipboard text snapshot loaded for composer menu availability and paste actions.
     /// 为提示词菜单可用性与粘贴动作载入的最新剪贴板文本快照。
     composer_context_clipboard_text: Option<String>,
+    /// Last host-driven selectable transcript command emitted from a shared context menu.
+    /// 最近一次由共享右键菜单发出的宿主侧可选择转录命令。
+    selectable_transcript_command: Option<SelectableTranscriptCommand>,
+    /// Monotonic revision assigned to selectable transcript commands.
+    /// 分配给可选择转录命令的单调修订号。
+    selectable_transcript_command_revision: u64,
     /// Text editor content for patch and scaffold previews.
     /// 用于补丁与骨架预览的文本编辑器内容。
     editor_content: text_editor::Content,
@@ -3727,9 +3828,27 @@ enum Message {
     /// Opens the composer context menu at the latest tracked cursor position.
     /// 在最近一次追踪到的鼠标位置打开提示词上下文菜单。
     OpenComposerContextMenu,
-    /// Closes the composer context menu without mutating the editor contents.
-    /// 在不修改编辑器内容的前提下关闭提示词上下文菜单。
-    CloseComposerContextMenu,
+    /// Opens the shared context menu for one visible task project row.
+    /// 为一条可见任务项目行打开共享右键菜单。
+    OpenTaskProjectContextMenu(String),
+    /// Opens the shared context menu for one visible task session row.
+    /// 为一条可见任务会话行打开共享右键菜单。
+    OpenTaskSessionContextMenu(SessionId),
+    /// Opens the shared context menu for one archived task project row.
+    /// 为一条已归档任务项目行打开共享右键菜单。
+    OpenArchivedTaskProjectContextMenu(String),
+    /// Opens the shared context menu for one archived task session row.
+    /// 为一条已归档任务会话行打开共享右键菜单。
+    OpenArchivedTaskSessionContextMenu(SessionId),
+    /// Opens the shared context menu requested by one selectable transcript surface.
+    /// 打开某个可选择转录表面请求的共享右键菜单。
+    OpenTranscriptContextMenu(SelectableTranscriptContextMenuRequest),
+    /// Closes the current shared workbench context menu without invoking an item.
+    /// 在不触发菜单项的情况下关闭当前共享工作台右键菜单。
+    CloseWorkbenchContextMenu,
+    /// Invokes one item from the currently open shared workbench context menu.
+    /// 触发当前已打开共享工作台右键菜单中的某一项。
+    InvokeWorkbenchContextMenuItem(usize),
     /// Copies the current composer selection through the context menu.
     /// 通过上下文菜单复制当前提示词选区。
     ComposerContextMenuCopy,
@@ -3742,6 +3861,12 @@ enum Message {
     /// Selects all composer contents through the context menu.
     /// 通过上下文菜单全选提示词内容。
     ComposerContextMenuSelectAll,
+    /// Copies the selected transcript text captured when its context menu opened.
+    /// 复制打开转录右键菜单时捕获的转录选中文本。
+    TranscriptContextMenuCopySelection(String),
+    /// Selects all text in the transcript surface that opened the shared context menu.
+    /// 全选打开共享右键菜单的转录表面中的文本。
+    TranscriptContextMenuSelectAll(SelectableTranscriptSurfaceId),
     /// Applies the clipboard text snapshot loaded for the composer context menu.
     /// 应用为提示词上下文菜单载入的剪贴板文本快照。
     ComposerContextClipboardLoaded(Result<std::sync::Arc<String>, clipboard::Error>),
@@ -4722,9 +4847,10 @@ impl VulcanWorkbench {
             composer_scroll_offset: 0.0,
             composer_scrollbar_pointer_y: None,
             composer_scrollbar_drag_grab_offset: None,
-            composer_context_menu_open: false,
-            composer_context_menu_anchor: iced::Point::ORIGIN,
+            workbench_context_menu: None,
             composer_context_clipboard_text: None,
+            selectable_transcript_command: None,
+            selectable_transcript_command_revision: 0,
             editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
             diff_summary: placeholder_diff_panel.summary_text(),
             diff_panel: placeholder_diff_panel,
@@ -5221,7 +5347,7 @@ impl VulcanWorkbench {
         self.composer = snapshot.text;
         self.composer_attachments = snapshot.attachments;
         self.composer_scroll_offset = snapshot.scroll_offset.max(0.0);
-        self.composer_context_menu_open = false;
+        self.dismiss_workbench_context_menu();
 
         operation::focus(COMPOSER_EDITOR_ID)
     }
@@ -5289,16 +5415,365 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Opens the composer context menu near the current pointer and refreshes the clipboard snapshot used by its action states.
-    /// 在当前指针附近打开提示词上下文菜单，并刷新其动作可用性使用的剪贴板快照。
-    fn open_composer_context_menu(&mut self) -> Task<Message> {
-        self.composer_context_menu_anchor = self
-            .main_window_cursor_position
-            .unwrap_or(iced::Point::ORIGIN);
-        self.composer_context_menu_open = true;
+    /// Resolves the best root-window anchor from the tracked pointer and a fallback event position.
+    /// 通过已跟踪指针与备用事件坐标解析最佳根窗口锚点。
+    fn workbench_context_menu_anchor(&self, fallback: iced::Point) -> iced::Point {
+        self.main_window_cursor_position.unwrap_or(fallback)
+    }
+
+    /// Opens the shared workbench context menu at the provided window-relative anchor.
+    /// 在给定窗口相对锚点处打开共享工作台右键菜单。
+    fn open_workbench_context_menu(
+        &mut self,
+        source: WorkbenchContextMenuSource,
+        anchor: iced::Point,
+        width: f32,
+        items: Vec<WorkbenchContextMenuItem>,
+    ) {
+        self.workbench_context_menu = Some(WorkbenchContextMenuState {
+            source,
+            anchor,
+            width,
+            items,
+        });
+    }
+
+    /// Dismisses the shared workbench context menu and clears any composer-only clipboard snapshot.
+    /// 关闭共享工作台右键菜单，并清理仅供提示词菜单使用的剪贴板快照。
+    fn dismiss_workbench_context_menu(&mut self) {
+        self.workbench_context_menu = None;
         self.composer_context_clipboard_text = None;
+    }
+
+    /// Invokes one enabled item from the current shared workbench context menu.
+    /// 触发当前共享工作台右键菜单中的一个启用菜单项。
+    fn invoke_workbench_context_menu_item(&mut self, index: usize) -> Task<Message> {
+        let Some(menu) = self.workbench_context_menu.take() else {
+            return Task::none();
+        };
+        let Some(message) = menu.items.get(index).and_then(|item| item.message.clone()) else {
+            return Task::none();
+        };
+
+        self.update(message)
+    }
+
+    /// Builds the current composer menu items from editor state and clipboard availability.
+    /// 根据编辑器状态与剪贴板可用性构建当前提示词菜单项。
+    fn composer_context_menu_items(&self) -> Vec<WorkbenchContextMenuItem> {
+        let has_any_text = !self.composer_buffer.is_empty();
+        let has_selection =
+            composer_selection_has_content(self.composer_buffer.selection().as_deref());
+        let can_paste =
+            composer_clipboard_text_is_pastable(self.composer_context_clipboard_text.as_deref());
+        let supports_attachments = self.active_workbench_supports_any_attachments();
+
+        vec![
+            if supports_attachments {
+                WorkbenchContextMenuItem::enabled("添加附件", Message::AddComposerAttachments)
+            } else {
+                WorkbenchContextMenuItem::disabled("添加附件")
+            },
+            if supports_attachments {
+                WorkbenchContextMenuItem::enabled(
+                    "粘贴附件",
+                    Message::PasteComposerClipboardAttachments,
+                )
+            } else {
+                WorkbenchContextMenuItem::disabled("粘贴附件")
+            },
+            if has_any_text {
+                WorkbenchContextMenuItem::enabled("全选", Message::ComposerContextMenuSelectAll)
+            } else {
+                WorkbenchContextMenuItem::disabled("全选")
+            },
+            if has_selection {
+                WorkbenchContextMenuItem::enabled("复制", Message::ComposerContextMenuCopy)
+            } else {
+                WorkbenchContextMenuItem::disabled("复制")
+            },
+            if has_selection {
+                WorkbenchContextMenuItem::enabled("剪切", Message::ComposerContextMenuCut)
+            } else {
+                WorkbenchContextMenuItem::disabled("剪切")
+            },
+            if can_paste {
+                WorkbenchContextMenuItem::enabled("粘贴", Message::ComposerContextMenuPaste)
+            } else {
+                WorkbenchContextMenuItem::disabled("粘贴")
+            },
+        ]
+    }
+
+    /// Opens the composer context menu through the shared workbench menu renderer.
+    /// 通过共享工作台菜单渲染器打开提示词右键菜单。
+    fn open_composer_context_menu(&mut self) -> Task<Message> {
+        self.composer_context_clipboard_text = None;
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::Composer,
+            self.workbench_context_menu_anchor(iced::Point::ORIGIN),
+            WORKBENCH_CONTEXT_MENU_COMPACT_WIDTH,
+            self.composer_context_menu_items(),
+        );
 
         clipboard::read_text().map(Message::ComposerContextClipboardLoaded)
+    }
+
+    /// Refreshes the menu rows if the currently open shared menu belongs to the composer.
+    /// 当当前已打开共享菜单属于提示词输入区时刷新菜单行。
+    fn refresh_open_composer_context_menu(&mut self) {
+        let Some(menu) = self.workbench_context_menu.as_ref() else {
+            return;
+        };
+        if menu.source != WorkbenchContextMenuSource::Composer {
+            return;
+        }
+        let anchor = menu.anchor;
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::Composer,
+            anchor,
+            WORKBENCH_CONTEXT_MENU_COMPACT_WIDTH,
+            self.composer_context_menu_items(),
+        );
+    }
+
+    /// Opens the shared context menu for one visible project row.
+    /// 为一条可见项目行打开共享右键菜单。
+    fn open_task_project_context_menu(&mut self, project_id: String) -> Task<Message> {
+        let Some(project) = self
+            .task_projects
+            .iter()
+            .find(|project| project.id == project_id)
+        else {
+            return Task::none();
+        };
+        let pin_label = if project.pinned {
+            "取消置顶"
+        } else {
+            "置顶"
+        };
+        let items = vec![
+            WorkbenchContextMenuItem::enabled(
+                "从资源管理器中打开",
+                Message::OpenTaskProjectDirectory(project.id.clone()),
+            ),
+            WorkbenchContextMenuItem::enabled(
+                pin_label,
+                Message::PinTaskProject(project.id.clone()),
+            ),
+            WorkbenchContextMenuItem::enabled(
+                "重命名",
+                Message::RenameTaskProject(project.id.clone()),
+            ),
+            WorkbenchContextMenuItem::enabled(
+                "项目设置",
+                Message::OpenTaskProjectSettings(project.id.clone()),
+            ),
+            WorkbenchContextMenuItem::enabled(
+                "归档",
+                Message::ArchiveTaskProject(project.id.clone()),
+            ),
+        ];
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::TaskTree,
+            self.workbench_context_menu_anchor(iced::Point::ORIGIN),
+            WORKBENCH_CONTEXT_MENU_DEFAULT_WIDTH,
+            items,
+        );
+        Task::none()
+    }
+
+    /// Opens the shared context menu for one visible session row.
+    /// 为一条可见会话行打开共享右键菜单。
+    fn open_task_session_context_menu(&mut self, session_id: SessionId) -> Task<Message> {
+        if !self.sessions.iter().any(|session| session.id == session_id) {
+            return Task::none();
+        }
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::TaskTree,
+            self.workbench_context_menu_anchor(iced::Point::ORIGIN),
+            WORKBENCH_CONTEXT_MENU_DEFAULT_WIDTH,
+            vec![
+                WorkbenchContextMenuItem::enabled("重命名", Message::RenameTaskSession(session_id)),
+                WorkbenchContextMenuItem::enabled("归档", Message::ArchiveTaskSession(session_id)),
+            ],
+        );
+        Task::none()
+    }
+
+    /// Opens the shared context menu for one archived project row.
+    /// 为一条已归档项目行打开共享右键菜单。
+    fn open_archived_task_project_context_menu(&mut self, project_id: String) -> Task<Message> {
+        let Some(project) = self
+            .archived_task_projects
+            .iter()
+            .find(|project| project.id == project_id)
+        else {
+            return Task::none();
+        };
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::TaskTree,
+            self.workbench_context_menu_anchor(iced::Point::ORIGIN),
+            WORKBENCH_CONTEXT_MENU_DEFAULT_WIDTH,
+            vec![
+                WorkbenchContextMenuItem::enabled(
+                    "恢复",
+                    Message::RestoreTaskProject(project.id.clone()),
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "彻底删除",
+                    Message::RequestPermanentDeleteArchivedTaskProject(project.id.clone()),
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "从资源管理器中打开",
+                    Message::OpenTaskProjectDirectory(project.id.clone()),
+                ),
+            ],
+        );
+        Task::none()
+    }
+
+    /// Opens the shared context menu for one archived session row.
+    /// 为一条已归档会话行打开共享右键菜单。
+    fn open_archived_task_session_context_menu(&mut self, session_id: SessionId) -> Task<Message> {
+        if !self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id)
+        {
+            return Task::none();
+        }
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::TaskTree,
+            self.workbench_context_menu_anchor(iced::Point::ORIGIN),
+            WORKBENCH_CONTEXT_MENU_DEFAULT_WIDTH,
+            vec![
+                WorkbenchContextMenuItem::enabled("恢复", Message::RestoreTaskSession(session_id)),
+                WorkbenchContextMenuItem::enabled(
+                    "彻底删除",
+                    Message::RequestPermanentDeleteArchivedTaskSession(session_id),
+                ),
+            ],
+        );
+        Task::none()
+    }
+
+    /// Opens the shared context menu requested by the rendered transcript surface.
+    /// 打开渲染转录表面请求的共享右键菜单。
+    fn open_transcript_context_menu(
+        &mut self,
+        request: SelectableTranscriptContextMenuRequest,
+    ) -> Task<Message> {
+        let anchor = request.anchor_position;
+        let items = if let Some(media_target) = request.media_target {
+            self.transcript_media_context_menu_items(media_target)
+        } else {
+            self.transcript_text_context_menu_items(request)
+        };
+        self.open_workbench_context_menu(
+            WorkbenchContextMenuSource::Transcript,
+            self.workbench_context_menu_anchor(anchor),
+            WORKBENCH_CONTEXT_MENU_DEFAULT_WIDTH,
+            items,
+        );
+        Task::none()
+    }
+
+    /// Builds text-selection actions for a rendered transcript context menu request.
+    /// 为一条渲染转录右键菜单请求构建文本选择动作。
+    fn transcript_text_context_menu_items(
+        &self,
+        request: SelectableTranscriptContextMenuRequest,
+    ) -> Vec<WorkbenchContextMenuItem> {
+        let mut items = Vec::new();
+        if let Some(selected_text) = request
+            .selected_text
+            .filter(|selected_text| !selected_text.is_empty())
+        {
+            items.push(WorkbenchContextMenuItem::enabled(
+                "复制",
+                Message::TranscriptContextMenuCopySelection(selected_text),
+            ));
+        }
+        if request.has_document_text {
+            items.push(WorkbenchContextMenuItem::enabled(
+                "全选",
+                Message::TranscriptContextMenuSelectAll(request.surface_id),
+            ));
+        } else {
+            items.push(WorkbenchContextMenuItem::disabled("全选"));
+        }
+        items
+    }
+
+    /// Builds generated-media actions for a rendered transcript context menu target.
+    /// 为一个渲染转录右键菜单媒体目标构建生成媒体动作。
+    fn transcript_media_context_menu_items(
+        &self,
+        media_target: crate::selectable_transcript::SelectableTranscriptContextMenuMediaTarget,
+    ) -> Vec<WorkbenchContextMenuItem> {
+        match media_target.kind {
+            SelectableTranscriptContextMenuMediaKind::Image => vec![
+                WorkbenchContextMenuItem::enabled(
+                    "预览图片",
+                    Message::OpenComposerImageAttachmentPreview {
+                        file_name: media_target.file_name.clone(),
+                        local_path: media_target.local_path.clone(),
+                    },
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "复制图片",
+                    Message::CopyGeneratedImageToClipboard {
+                        file_name: media_target.file_name,
+                        local_path: media_target.local_path.clone(),
+                    },
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "复制路径",
+                    Message::CopyGeneratedAttachmentPath(media_target.local_path.clone()),
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "定位文件",
+                    Message::RevealGeneratedAttachmentInFolder(media_target.local_path),
+                ),
+            ],
+            SelectableTranscriptContextMenuMediaKind::Audio => vec![
+                WorkbenchContextMenuItem::enabled(
+                    if media_target.is_active {
+                        "停止播放"
+                    } else {
+                        "播放音频"
+                    },
+                    Message::ToggleGeneratedAudioPlayback {
+                        file_name: media_target.file_name,
+                        local_path: media_target.local_path.clone(),
+                    },
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "复制路径",
+                    Message::CopyGeneratedAttachmentPath(media_target.local_path.clone()),
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "定位文件",
+                    Message::RevealGeneratedAttachmentInFolder(media_target.local_path),
+                ),
+            ],
+            SelectableTranscriptContextMenuMediaKind::Video
+            | SelectableTranscriptContextMenuMediaKind::Pdf => vec![
+                WorkbenchContextMenuItem::enabled(
+                    "打开媒体",
+                    Message::OpenGeneratedAttachmentWithDefaultApp(media_target.local_path.clone()),
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "复制路径",
+                    Message::CopyGeneratedAttachmentPath(media_target.local_path.clone()),
+                ),
+                WorkbenchContextMenuItem::enabled(
+                    "定位文件",
+                    Message::RevealGeneratedAttachmentInFolder(media_target.local_path),
+                ),
+            ],
+        }
     }
 
     /// Returns the current draggable scrollbar layout for the capped composer editor, when scrolling is actually needed.
@@ -6186,6 +6661,7 @@ impl VulcanWorkbench {
             Message::WindowResized(window_id, size) => {
                 if self.main_window_id == Some(window_id) {
                     self.main_window_size = size;
+                    self.dismiss_workbench_context_menu();
                 }
 
                 if self.diff_window_id == Some(window_id) {
@@ -6448,6 +6924,10 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::DismissTopLevelOverlay => {
+                if self.workbench_context_menu.take().is_some() {
+                    self.composer_context_clipboard_text = None;
+                    return Task::none();
+                }
                 if self.workbench_image_preview_modal.take().is_some() {
                     return Task::none();
                 }
@@ -6550,16 +7030,34 @@ impl VulcanWorkbench {
                 }
             }
             Message::OpenComposerContextMenu => self.open_composer_context_menu(),
-            Message::CloseComposerContextMenu => {
-                self.composer_context_menu_open = false;
-                self.composer_context_clipboard_text = None;
+            Message::OpenTaskProjectContextMenu(project_id) => {
+                self.open_task_project_context_menu(project_id)
+            }
+            Message::OpenTaskSessionContextMenu(session_id) => {
+                self.open_task_session_context_menu(session_id)
+            }
+            Message::OpenArchivedTaskProjectContextMenu(project_id) => {
+                self.open_archived_task_project_context_menu(project_id)
+            }
+            Message::OpenArchivedTaskSessionContextMenu(session_id) => {
+                self.open_archived_task_session_context_menu(session_id)
+            }
+            Message::OpenTranscriptContextMenu(request) => {
+                self.open_transcript_context_menu(request)
+            }
+            Message::CloseWorkbenchContextMenu => {
+                self.dismiss_workbench_context_menu();
                 Task::none()
+            }
+            Message::InvokeWorkbenchContextMenuItem(index) => {
+                self.invoke_workbench_context_menu_item(index)
             }
             Message::ComposerContextClipboardLoaded(result) => {
                 self.composer_context_clipboard_text = result
                     .ok()
                     .map(|text| text.as_ref().clone())
                     .filter(|text| composer_clipboard_text_is_pastable(Some(text)));
+                self.refresh_open_composer_context_menu();
                 Task::none()
             }
             Message::ComposerScrollbarPointerMoved(pointer_y) => {
@@ -6586,12 +7084,14 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ComposerContextMenuSelectAll => {
-                self.composer_context_menu_open = false;
+                self.workbench_context_menu = None;
+                self.composer_context_clipboard_text = None;
                 let task = self.apply_composer_editor_action(text_editor::Action::SelectAll);
                 Task::batch([task, operation::focus(COMPOSER_EDITOR_ID)])
             }
             Message::ComposerContextMenuCopy => {
-                self.composer_context_menu_open = false;
+                self.workbench_context_menu = None;
+                self.composer_context_clipboard_text = None;
                 if let Some(selection) = self
                     .composer_buffer
                     .selection()
@@ -6606,7 +7106,8 @@ impl VulcanWorkbench {
                 }
             }
             Message::ComposerContextMenuCut => {
-                self.composer_context_menu_open = false;
+                self.workbench_context_menu = None;
+                self.composer_context_clipboard_text = None;
                 if let Some(selection) = self
                     .composer_buffer
                     .selection()
@@ -6625,8 +7126,9 @@ impl VulcanWorkbench {
                 }
             }
             Message::ComposerContextMenuPaste => {
-                self.composer_context_menu_open = false;
-                if let Some(text) = self.composer_context_clipboard_text.clone() {
+                self.workbench_context_menu = None;
+                let clipboard_text = self.composer_context_clipboard_text.take();
+                if let Some(text) = clipboard_text {
                     let action_task = self.apply_composer_editor_action(text_editor::Action::Edit(
                         text_editor::Edit::Paste(std::sync::Arc::new(text)),
                     ));
@@ -6634,6 +7136,22 @@ impl VulcanWorkbench {
                 } else {
                     operation::focus(COMPOSER_EDITOR_ID)
                 }
+            }
+            Message::TranscriptContextMenuCopySelection(selected_text) => {
+                self.workbench_context_menu = None;
+                self.status_message = String::from("已复制转录选中文本。");
+                clipboard::write(selected_text).discard()
+            }
+            Message::TranscriptContextMenuSelectAll(surface_id) => {
+                self.workbench_context_menu = None;
+                self.selectable_transcript_command_revision = self
+                    .selectable_transcript_command_revision
+                    .saturating_add(1);
+                self.selectable_transcript_command = Some(SelectableTranscriptCommand::SelectAll {
+                    surface_id,
+                    revision: self.selectable_transcript_command_revision,
+                });
+                Task::none()
             }
             Message::EditorActionPerformed(action) => {
                 self.editor_content.perform(action);
@@ -9796,8 +10314,7 @@ impl VulcanWorkbench {
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
-        self.composer_context_menu_open = false;
-        self.composer_context_clipboard_text = None;
+        self.dismiss_workbench_context_menu();
         Ok(operation::focus(COMPOSER_EDITOR_ID))
     }
 
@@ -9821,8 +10338,7 @@ impl VulcanWorkbench {
         self.composer_scroll_offset = 0.0;
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
-        self.composer_context_menu_open = false;
-        self.composer_context_clipboard_text = None;
+        self.dismiss_workbench_context_menu();
     }
 
     /// Formats one raw attachment-cleanup byte count into a compact human-readable label for the settings card.
@@ -9901,9 +10417,11 @@ impl VulcanWorkbench {
         let active_choice = self.active_workbench_model_choice()?;
         let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(&active_choice);
-        let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-        apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
-        Some(capabilities)
+        Some(resolve_effective_model_capabilities(
+            definition,
+            model.as_ref(),
+            &self.ai_tool_configuration,
+        ))
     }
 
     /// Returns whether the currently active workbench model should accept one staged attachment kind according to declared input modalities.
@@ -10536,8 +11054,7 @@ impl VulcanWorkbench {
             }
         }
 
-        self.composer_context_menu_open = false;
-        self.composer_context_clipboard_text = None;
+        self.dismiss_workbench_context_menu();
         self.composer_drag_hover_labels.clear();
         let mut status_parts = Vec::new();
         if additions.is_empty() {
@@ -10611,8 +11128,7 @@ impl VulcanWorkbench {
     /// Pastes the highest-priority clipboard payload into the composer, optionally restricting the operation to attachment-only imports.
     /// 将最高优先级的剪贴板载荷粘贴到提示词输入框，并可按需限制为仅导入附件。
     fn paste_composer_clipboard(&mut self, attachments_only: bool) -> Task<Message> {
-        self.composer_context_menu_open = false;
-        self.composer_context_clipboard_text = None;
+        self.dismiss_workbench_context_menu();
 
         match read_composer_clipboard_payload() {
             Ok(ComposerClipboardPayload::Files(files)) => {
@@ -11039,11 +11555,17 @@ impl VulcanWorkbench {
         }
 
         if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
-            self.push_session_message(
+            self.push_visible_session_record_message_with_metadata(
                 session_id,
                 SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
                 "用户指令",
                 build_user_prompt_transcript_body(&prompt_entry.prompt, &prompt_entry.attachments),
+                build_user_prompt_transcript_metadata(
+                    &prompt_entry.prompt,
+                    &prompt_entry.attachments,
+                ),
+                false,
             );
             if composer_text_has_submittable_content(&prompt_entry.prompt) {
                 let _ = self.maybe_generate_session_title_from_prompt(
@@ -13402,8 +13924,11 @@ impl VulcanWorkbench {
                 provider_config::effective_model_choices(provider_id, &self.provider_configuration)
                     .into_iter()
                     .find(|entry| entry.id == model_id);
-            let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-            apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
+            let capabilities = resolve_effective_model_capabilities(
+                definition,
+                model.as_ref(),
+                &self.ai_tool_configuration,
+            );
             (
                 provider_id.to_string(),
                 model_id.to_string(),
@@ -13414,8 +13939,11 @@ impl VulcanWorkbench {
             let active_choice = self.active_workbench_model_choice()?;
             let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
             let model = self.resolve_workbench_model_entry(&active_choice);
-            let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-            apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
+            let capabilities = resolve_effective_model_capabilities(
+                definition,
+                model.as_ref(),
+                &self.ai_tool_configuration,
+            );
             (
                 active_choice.provider_id.clone(),
                 active_choice.model_id.clone(),

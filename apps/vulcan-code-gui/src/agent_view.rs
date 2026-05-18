@@ -10,6 +10,7 @@ use vulcan_agent_view::{
     AgentViewAttributes, AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind,
     AgentViewDocument, parse_agent_view_document, render_directive_source,
 };
+use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
 /// Builds one unified agent-view document from the visible session transcript and runtime events.
 /// 根据可见会话转录与运行时事件构建一份统一 agent-view 文档。
@@ -147,6 +148,9 @@ fn build_user_prompt_block(message: &SessionMessageEntry) -> AgentViewDirectiveB
     if !message.title.trim().is_empty() {
         attributes.insert(String::from("title"), message.title.clone());
     }
+    if let Some(metadata) = message.metadata.as_ref() {
+        attach_user_prompt_image_attributes(&mut attributes, metadata);
+    }
     let raw_source = render_directive_source(
         &AgentViewDirectiveKind::UserPrompt,
         &attributes,
@@ -160,6 +164,44 @@ fn build_user_prompt_block(message: &SessionMessageEntry) -> AgentViewDirectiveB
         raw_source,
         false,
     )
+}
+
+/// Attaches user-image descriptors to one user-prompt block so the transcript renderer can show compact image tiles above the prompt bubble.
+/// 向一条用户提示词区块附着用户图片描述符，使转录渲染器可以在提示词气泡上方显示紧凑图片方格。
+fn attach_user_prompt_image_attributes(attributes: &mut AgentViewAttributes, metadata: &Value) {
+    let Some(attachments) = metadata
+        .get("transcript_attachments")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<ConversationAttachment>>(value).ok())
+    else {
+        return;
+    };
+
+    let image_attachments = attachments
+        .into_iter()
+        .filter(|attachment| attachment.kind == ConversationAttachmentKind::Image)
+        .filter(|attachment| {
+            !attachment.file_name.trim().is_empty() && !attachment.local_path.trim().is_empty()
+        })
+        .collect::<Vec<_>>();
+    if image_attachments.is_empty() {
+        return;
+    }
+
+    attributes.insert(
+        String::from("user-image-count"),
+        image_attachments.len().to_string(),
+    );
+    for (index, attachment) in image_attachments.into_iter().enumerate() {
+        attributes.insert(
+            format!("user-image-{index}-file-name"),
+            attachment.file_name,
+        );
+        attributes.insert(
+            format!("user-image-{index}-local-path"),
+            attachment.local_path,
+        );
+    }
 }
 
 /// Builds one thinking directive block from the visible session message.
@@ -638,6 +680,57 @@ mod tests {
                         .attributes
                         .get("tool-display-state")
                         .is_some_and(|value| value == "completed")
+        ));
+    }
+
+    /// Verifies user transcript rows expose compact image-strip attributes so downgraded image-understanding inputs remain visible after projection.
+    /// 验证用户转录行会暴露紧凑图片条属性，使降级为图片理解输入的图片在投影后仍然可见。
+    #[test]
+    fn user_prompt_block_exposes_image_strip_attributes_from_metadata() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("user-attachment-1"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: String::from("请先看图再回答。"),
+            metadata: Some(json!({
+                "canonical_user_text": "请先看图再回答。",
+                "transcript_attachments": [
+                    {
+                        "kind": "image",
+                        "file_name": "diagram.png",
+                        "local_path": "D:/diagram.png",
+                        "mime_type": "image/png",
+                    },
+                    {
+                        "kind": "audio",
+                        "file_name": "demo.mp3",
+                        "local_path": "D:/demo.mp3",
+                        "mime_type": "audio/mpeg",
+                    }
+                ],
+            })),
+            created_at: String::from("2"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::UserPrompt
+                    && block
+                        .attributes
+                        .get("user-image-count")
+                        .is_some_and(|value| value == "1")
+                    && block
+                        .attributes
+                        .get("user-image-0-file-name")
+                        .is_some_and(|value| value == "diagram.png")
+                    && block
+                        .attributes
+                        .get("user-image-0-local-path")
+                        .is_some_and(|value| value == "D:/diagram.png")
         ));
     }
 

@@ -6,6 +6,7 @@ use crate::runtime_assets;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vldb_controller_client::{
     ClientRegistration, ControllerClient, ControllerClientConfig, ControllerProcessMode,
@@ -19,6 +20,10 @@ pub const APP_SPACE_ID: &str = "app-workspace";
 /// Stable application-level SQLite binding tag.
 /// 稳定的应用级 SQLite 绑定标签。
 pub const APP_SQLITE_BINDING_TAG: &str = "app-state";
+
+/// Process-local sequence that guarantees each bootstrap gets one distinct SQLite binding suffix.
+/// 进程内序号，确保每次引导都能拿到不同的 SQLite 绑定后缀。
+static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
@@ -47,8 +52,8 @@ pub struct ControllerRuntimeHandle {
     /// SQLite file path used by the application state space.
     /// 应用状态空间使用的 SQLite 文件路径。
     pub sqlite_path: PathBuf,
-    /// Client-scoped SQLite binding identifier derived from the current controller session.
-    /// 基于当前控制器会话推导出的客户端作用域 SQLite 绑定标识符。
+    /// Bootstrap-scoped SQLite binding identifier used by the current controller runtime handle.
+    /// 当前控制器运行时句柄使用的单次引导作用域 SQLite 绑定标识符。
     pub sqlite_binding_id: String,
 }
 
@@ -233,10 +238,18 @@ fn build_controller_client_config(
     Ok(config)
 }
 
-/// Builds the stable application SQLite binding identifier used across controller sessions.
-/// 构建跨控制器会话复用的稳定应用 SQLite 绑定标识符。
+/// Builds one bootstrap-scoped application SQLite binding identifier while preserving the stable app-level tag for diagnostics.
+/// 在保留稳定应用级标签用于诊断的同时，构建单次引导作用域的应用 SQLite 绑定标识符。
 fn build_application_sqlite_binding_id() -> String {
-    String::from(APP_SQLITE_BINDING_TAG)
+    let bootstrap_scope_ms = current_unix_epoch_millis();
+    let bootstrap_sequence = APP_SQLITE_BINDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{}@{}-{}-{}",
+        APP_SQLITE_BINDING_TAG,
+        std::process::id(),
+        bootstrap_scope_ms,
+        bootstrap_sequence
+    )
 }
 
 /// Shuts down one partially initialized controller client after bootstrap failure so the next retry starts cleanly.
@@ -246,9 +259,7 @@ async fn cleanup_failed_controller_bootstrap(
     bootstrap_error: &str,
 ) -> Result<(), String> {
     client.shutdown().await.map_err(|cleanup_error| {
-        format!(
-            "{bootstrap_error}；另外清理失败的 vldb 会话也失败：{cleanup_error}"
-        )
+        format!("{bootstrap_error}；另外清理失败的 vldb 会话也失败：{cleanup_error}")
     })
 }
 
@@ -662,5 +673,17 @@ mod tests {
 
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS workspace_history_search_docs"));
         assert!(schema.contains("idx_workspace_history_search_docs_session"));
+    }
+
+    /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.
+    /// 验证每次引导都会获得不同的 SQLite 绑定标识，并保留稳定诊断标签前缀。
+    #[test]
+    fn application_sqlite_binding_id_is_bootstrap_scoped() {
+        let first = build_application_sqlite_binding_id();
+        let second = build_application_sqlite_binding_id();
+
+        assert!(first.starts_with("app-state@"));
+        assert!(second.starts_with("app-state@"));
+        assert_ne!(first, second);
     }
 }

@@ -11,9 +11,13 @@ use super::interaction::{
     hit_test_rendered_document, media_target_at_position, scroll_collapsible_body_at_position,
 };
 use super::layout_engine::{localize_point, localize_rectangle};
+use super::scene::RenderedMediaKind;
 use super::{
-    RenderedTranscriptDocument, RenderedTranscriptLinkAction, SelectableTranscriptDragAutoScroll,
-    SelectableTranscriptInteraction, SelectableTranscriptState, TranscriptContextMenuState,
+    RenderedTranscriptDocument, RenderedTranscriptLinkAction,
+    SelectableTranscriptContextMenuMediaKind, SelectableTranscriptContextMenuMediaTarget,
+    SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
+    SelectableTranscriptInteraction, SelectableTranscriptState, SelectableTranscriptSurfaceId,
+    TranscriptContextMenuState, TranscriptMediaTarget,
 };
 use iced::advanced::Shell;
 use iced::advanced::mouse;
@@ -26,6 +30,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
     document: &RenderedTranscriptDocument,
     on_drag_auto_scroll: &dyn Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message,
     on_interaction: &dyn Fn(SelectableTranscriptInteraction) -> Message,
+    context_menu_surface_id: Option<&SelectableTranscriptSurfaceId>,
     state: &mut SelectableTranscriptState,
     event: &Event,
     widget_bounds: Rectangle,
@@ -62,7 +67,15 @@ pub(super) fn handle_transcript_widget_event<Message>(
             );
         }
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-            handle_right_button_pressed(document, state, widget_bounds, cursor, shell);
+            handle_right_button_pressed(
+                document,
+                on_interaction,
+                context_menu_surface_id,
+                state,
+                widget_bounds,
+                cursor,
+                shell,
+            );
         }
         Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
             handle_drag_cursor_moved(
@@ -214,6 +227,8 @@ fn handle_left_button_pressed<Message>(
 /// 处理一次次按钮按下事件，以打开或关闭转录右键菜单。
 fn handle_right_button_pressed<Message>(
     document: &RenderedTranscriptDocument,
+    on_interaction: &dyn Fn(SelectableTranscriptInteraction) -> Message,
+    context_menu_surface_id: Option<&SelectableTranscriptSurfaceId>,
     state: &mut SelectableTranscriptState,
     widget_bounds: Rectangle,
     cursor: mouse::Cursor,
@@ -222,15 +237,64 @@ fn handle_right_button_pressed<Message>(
     if let Some(position) = cursor.position_over(widget_bounds) {
         state.focused = true;
         let local_position = localize_point(position, widget_bounds.position());
+        let media_target = media_target_at_position(document, state, local_position);
+        if let Some(surface_id) = context_menu_surface_id {
+            let selected_text =
+                current_selection_for_state(state).map(|(selection_start, selection_end)| {
+                    document.selected_text(selection_start, selection_end)
+                });
+            shell.publish(on_interaction(
+                SelectableTranscriptInteraction::OpenContextMenu(
+                    SelectableTranscriptContextMenuRequest {
+                        surface_id: surface_id.clone(),
+                        anchor_position: position,
+                        selected_text,
+                        has_document_text: document.len_chars() > 0,
+                        media_target: media_target.map(selectable_context_menu_media_target),
+                    },
+                ),
+            ));
+            state.context_menu = None;
+            shell.request_redraw();
+            shell.capture_event();
+            return;
+        }
+
         state.context_menu = Some(TranscriptContextMenuState {
             anchor_position: position,
-            media_target: media_target_at_position(document, state, local_position),
+            media_target,
         });
         shell.request_redraw();
         shell.capture_event();
     } else {
         state.context_menu = None;
         shell.request_redraw();
+    }
+}
+
+/// Converts one rendered media kind into the host-visible context-menu media kind.
+/// 将一种已渲染媒体类型转换为宿主可见的右键菜单媒体类型。
+fn selectable_context_menu_media_kind(
+    kind: RenderedMediaKind,
+) -> SelectableTranscriptContextMenuMediaKind {
+    match kind {
+        RenderedMediaKind::Image => SelectableTranscriptContextMenuMediaKind::Image,
+        RenderedMediaKind::Audio => SelectableTranscriptContextMenuMediaKind::Audio,
+        RenderedMediaKind::Video => SelectableTranscriptContextMenuMediaKind::Video,
+        RenderedMediaKind::Pdf => SelectableTranscriptContextMenuMediaKind::Pdf,
+    }
+}
+
+/// Converts one internal media target into a host-visible context-menu media target.
+/// 将一个内部媒体目标转换为宿主可见的右键菜单媒体目标。
+fn selectable_context_menu_media_target(
+    target: TranscriptMediaTarget,
+) -> SelectableTranscriptContextMenuMediaTarget {
+    SelectableTranscriptContextMenuMediaTarget {
+        kind: selectable_context_menu_media_kind(target.kind),
+        file_name: target.file_name,
+        local_path: target.local_path,
+        is_active: target.is_active,
     }
 }
 

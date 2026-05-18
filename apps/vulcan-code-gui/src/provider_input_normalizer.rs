@@ -45,7 +45,8 @@ pub fn normalize_provider_user_input_for_model(
 ) -> NormalizedProviderUserInput {
     let mut supported_attachments = Vec::new();
     let mut downgraded_attachments = Vec::new();
-    let mut error_lines = Vec::new();
+    let mut prefix_lines = Vec::new();
+    let mut suffix_lines = Vec::new();
 
     for attachment in attachments.iter().cloned() {
         let attachment_is_replayable = !matches!(
@@ -61,10 +62,10 @@ pub fn normalize_provider_user_input_for_model(
         if attachment_is_replayable && api_supports_attachment && model_supports_attachment {
             supported_attachments.push(attachment);
         } else if !attachment_is_replayable {
-            error_lines.push(build_missing_attachment_replay_text(&attachment));
+            suffix_lines.push(build_missing_attachment_replay_text(&attachment));
             downgraded_attachments.push(attachment);
         } else if !api_supports_attachment {
-            error_lines.push(build_attachment_transport_error_text(
+            suffix_lines.push(build_attachment_transport_error_text(
                 &attachment,
                 provider_api_family_scope_label(api_family),
             ));
@@ -72,13 +73,13 @@ pub fn normalize_provider_user_input_for_model(
         } else if let Some(tool_hints) = capabilities.and_then(|capabilities| {
             bridgeable_ai_tool_hints_for_attachment(capabilities, &attachment)
         }) {
-            error_lines.push(build_attachment_ai_tool_bridge_text(
+            prefix_lines.push(build_attachment_ai_tool_bridge_text(
                 &attachment,
                 &tool_hints,
             ));
             downgraded_attachments.push(attachment);
         } else {
-            error_lines.push(build_attachment_transport_error_text(
+            suffix_lines.push(build_attachment_transport_error_text(
                 &attachment,
                 "the selected model",
             ));
@@ -86,12 +87,27 @@ pub fn normalize_provider_user_input_for_model(
         }
     }
 
-    let final_text = if error_lines.is_empty() {
-        text.to_string()
-    } else if text.trim().is_empty() {
-        error_lines.join("\n")
-    } else {
-        format!("{}\n\n{}", text.trim_end(), error_lines.join("\n"))
+    let trimmed_text = text.trim();
+    let final_text = match (
+        prefix_lines.is_empty(),
+        trimmed_text.is_empty(),
+        suffix_lines.is_empty(),
+    ) {
+        (true, true, true) => String::new(),
+        (true, false, true) => text.to_string(),
+        (true, true, false) => suffix_lines.join("\n"),
+        (true, false, false) => format!("{}\n\n{}", text.trim_end(), suffix_lines.join("\n")),
+        (false, true, true) => prefix_lines.join("\n"),
+        (false, false, true) => format!("{}\n\n{}", prefix_lines.join("\n"), trimmed_text),
+        (false, true, false) => {
+            format!("{}\n\n{}", prefix_lines.join("\n"), suffix_lines.join("\n"))
+        }
+        (false, false, false) => format!(
+            "{}\n\n{}\n\n{}",
+            prefix_lines.join("\n"),
+            trimmed_text,
+            suffix_lines.join("\n")
+        ),
     };
 
     NormalizedProviderUserInput {
@@ -142,6 +158,7 @@ fn build_attachment_ai_tool_bridge_text(
     attachment: &ConversationAttachment,
     tool_hints: &[(&str, &str)],
 ) -> String {
+    let local_path = attachment.local_path.trim();
     let tool_summary = tool_hints
         .iter()
         .map(|(tool_name, parameter_name)| {
@@ -153,8 +170,8 @@ fn build_attachment_ai_tool_bridge_text(
         .collect::<Vec<_>>()
         .join("、");
     format!(
-        "INFO: Attachment \"{}\" is available through host AI tools: {}.",
-        attachment.file_name, tool_summary,
+        "INFO: Attachment \"{}\" is kept locally and will not be uploaded as a native multimodal attachment for the current model. Local path: `{}`. If you need to inspect or reuse it, use host AI tools: {}.",
+        attachment.file_name, local_path, tool_summary,
     )
 }
 
@@ -301,8 +318,16 @@ mod tests {
 
         assert!(normalized.attachments.is_empty());
         assert_eq!(normalized.downgraded_attachments.len(), 1);
+        assert!(normalized.text.starts_with("INFO: Attachment"));
         assert!(normalized.text.contains("understand_image"));
         assert!(normalized.text.contains("image=\"demo.png\""));
+        assert!(
+            normalized
+                .text
+                .contains("will not be uploaded as a native multimodal attachment")
+        );
+        assert!(normalized.text.contains("Cargo.toml"));
+        assert!(normalized.text.ends_with("请看图"));
     }
 
     /// Degrades non-image attachments for strict OpenAI-compatible Chat endpoints.

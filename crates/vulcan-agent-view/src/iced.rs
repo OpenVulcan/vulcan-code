@@ -26,8 +26,10 @@ use self::paint::*;
 use self::scene::*;
 use self::surface_state::*;
 pub use self::surface_state::{
+    SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
+    SelectableTranscriptContextMenuMediaTarget, SelectableTranscriptContextMenuRequest,
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
-    SelectableTranscriptInteraction,
+    SelectableTranscriptInteraction, SelectableTranscriptSurfaceId,
 };
 use self::text_utils::*;
 use self::viewport_scene::*;
@@ -62,6 +64,24 @@ pub fn view_selectable_rendered_transcript<'a, Message: 'a>(
     ))
 }
 
+/// Builds one selectable rendered transcript element that opens host-level context menus and consumes host commands.
+/// 构建一个可打开宿主级右键菜单并消费宿主命令的可选择渲染转录元素。
+pub fn view_selectable_rendered_transcript_with_context_menu<'a, Message: 'a>(
+    document: &AgentViewDocument,
+    app_theme: &Theme,
+    surface_id: SelectableTranscriptSurfaceId,
+    command: Option<SelectableTranscriptCommand>,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
+) -> Element<'a, Message> {
+    let rendered_document = RenderedTranscriptDocument::from_agent_document(document, app_theme);
+    Element::new(
+        SelectableTranscript::new(rendered_document, on_drag_auto_scroll, on_interaction)
+            .with_context_menu_surface(surface_id)
+            .with_command(command),
+    )
+}
+
 /// Builds one selectable rendered transcript element from owned structured agent-document inputs so lazy wrappers can cache the heavy widget tree without borrowing external state.
 /// 根据拥有所有权的结构化代理文档输入构建一个可选择的渲染转录元素，使惰性包装器能够缓存重型组件树而不借用外部状态。
 pub fn view_selectable_rendered_transcript_owned<'a, Message: 'a>(
@@ -78,6 +98,24 @@ pub fn view_selectable_rendered_transcript_owned<'a, Message: 'a>(
     ))
 }
 
+/// Builds one owned selectable rendered transcript element with host-level context-menu routing enabled.
+/// 构建一个启用宿主级右键菜单路由的拥有型可选择渲染转录元素。
+pub fn view_selectable_rendered_transcript_owned_with_context_menu<'a, Message: 'a>(
+    document: AgentViewDocument,
+    app_theme: Theme,
+    surface_id: SelectableTranscriptSurfaceId,
+    command: Option<SelectableTranscriptCommand>,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
+) -> Element<'a, Message> {
+    let rendered_document = RenderedTranscriptDocument::from_agent_document(&document, &app_theme);
+    Element::new(
+        SelectableTranscript::new(rendered_document, on_drag_auto_scroll, on_interaction)
+            .with_context_menu_surface(surface_id)
+            .with_command(command),
+    )
+}
+
 /// Custom widget keeping the rendered transcript selectable without falling back to a text editor surface.
 /// 在不退回文本编辑器表面的情况下保持渲染转录可选择的自定义组件。
 struct SelectableTranscript<'a, Message> {
@@ -90,6 +128,12 @@ struct SelectableTranscript<'a, Message> {
     /// Callback used to bubble high-level transcript interactions back to the application shell.
     /// 用于将高层转录交互回传给应用壳层的回调。
     on_interaction: Box<dyn Fn(SelectableTranscriptInteraction) -> Message + 'a>,
+    /// Optional host-visible surface identifier used by the shared workbench context menu.
+    /// 共享工作台右键菜单使用的可选宿主可见表面标识。
+    context_menu_surface_id: Option<SelectableTranscriptSurfaceId>,
+    /// Optional host-driven command that this widget may consume while laying out.
+    /// 此组件可在布局期间消费的可选宿主侧命令。
+    command: Option<SelectableTranscriptCommand>,
     /// Marker preserving the message type even though the widget is internally message-free.
     /// 即使组件内部不主动发消息，也用于保留消息类型的标记。
     message_marker: PhantomData<Message>,
@@ -107,8 +151,52 @@ impl<'a, Message> SelectableTranscript<'a, Message> {
             document,
             on_drag_auto_scroll: Box::new(on_drag_auto_scroll),
             on_interaction: Box::new(on_interaction),
+            context_menu_surface_id: None,
+            command: None,
             message_marker: PhantomData,
         }
+    }
+
+    /// Attaches one host-visible surface identifier for shared context-menu routing.
+    /// 为共享右键菜单路由附加一个宿主可见表面标识。
+    fn with_context_menu_surface(mut self, surface_id: SelectableTranscriptSurfaceId) -> Self {
+        self.context_menu_surface_id = Some(surface_id);
+        self
+    }
+
+    /// Attaches one host-driven command that can be consumed by the widget state.
+    /// 附加一条可由组件状态消费的宿主侧命令。
+    fn with_command(mut self, command: Option<SelectableTranscriptCommand>) -> Self {
+        self.command = command;
+        self
+    }
+}
+
+/// Applies one pending host command to the selectable transcript state when its target surface matches.
+/// 当目标表面匹配时，将一条待处理宿主命令应用到可选择转录状态。
+fn apply_selectable_transcript_command(
+    document: &RenderedTranscriptDocument,
+    state: &mut SelectableTranscriptState,
+    surface_id: Option<&SelectableTranscriptSurfaceId>,
+    command: Option<&SelectableTranscriptCommand>,
+) {
+    let (Some(surface_id), Some(command)) = (surface_id, command) else {
+        return;
+    };
+
+    match command {
+        SelectableTranscriptCommand::SelectAll {
+            surface_id: target_surface_id,
+            revision,
+        } if target_surface_id == surface_id
+            && *revision > state.last_context_menu_command_revision =>
+        {
+            state.anchor_char = 0;
+            state.head_char = document.len_chars();
+            state.context_menu = None;
+            state.last_context_menu_command_revision = *revision;
+        }
+        _ => {}
     }
 }
 
@@ -144,6 +232,12 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         limits: &layout::Limits,
     ) -> layout::Node {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+        apply_selectable_transcript_command(
+            &self.document,
+            state,
+            self.context_menu_surface_id.as_ref(),
+            self.command.as_ref(),
+        );
         let max_size = limits.width(Length::Fill).height(Length::Shrink).max();
         let available_width = max_size.width.max(1.0);
         let local_widget_bounds = Rectangle::new(
@@ -206,6 +300,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             &self.document,
             self.on_drag_auto_scroll.as_ref(),
             self.on_interaction.as_ref(),
+            self.context_menu_surface_id.as_ref(),
             state,
             event,
             layout.bounds(),

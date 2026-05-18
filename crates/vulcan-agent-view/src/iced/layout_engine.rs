@@ -260,7 +260,6 @@ fn measure_rendered_media_card_node(
     current_y: f32,
 ) -> LaidOutMediaCardNode {
     let available_width = widget_bounds.width.max(1.0);
-    let outer_x = widget_bounds.x;
     let outer_y = current_y + media_card_node.gap_before;
     let capped_width = (available_width * media_card_node.max_width_ratio)
         .clamp(
@@ -268,8 +267,16 @@ fn measure_rendered_media_card_node(
             media_card_kind_max_width(media_card_node.kind),
         )
         .min(available_width);
+    let (outer_width, outer_height) =
+        media_card_outer_size(media_card_node, capped_width, media_card_node.show_caption);
+    let outer_x = match media_card_node.horizontal_placement {
+        super::scene::RenderedParagraphHorizontalPlacement::Leading => widget_bounds.x,
+        super::scene::RenderedParagraphHorizontalPlacement::Trailing => {
+            widget_bounds.x + (available_width - outer_width).max(0.0)
+        }
+    };
     let (outer_bounds, preview_bounds, title_bounds, meta_bounds) =
-        media_card_layout_bounds(media_card_node, outer_x, outer_y, capped_width);
+        media_card_layout_bounds(media_card_node, outer_x, outer_y, outer_width, outer_height);
     let flow_end_y = outer_bounds.y + outer_bounds.height + media_card_node.gap_after;
 
     LaidOutMediaCardNode {
@@ -286,7 +293,7 @@ fn measure_rendered_media_card_node(
 /// 返回给定生成媒体模态使用的宽度下限，使较窄的竖图仍保持稳定点击区域。
 fn media_card_kind_min_width(kind: RenderedMediaKind) -> f32 {
     match kind {
-        RenderedMediaKind::Image => 140.0,
+        RenderedMediaKind::Image => 64.0,
         RenderedMediaKind::Audio => 220.0,
         RenderedMediaKind::Video => 220.0,
         RenderedMediaKind::Pdf => 220.0,
@@ -310,15 +317,25 @@ fn media_card_layout_bounds(
     media_card_node: &RenderedMediaCardNode,
     outer_x: f32,
     outer_y: f32,
-    capped_width: f32,
+    outer_width: f32,
+    outer_height: f32,
 ) -> (Rectangle, Rectangle, Rectangle, Rectangle) {
+    if media_card_node.compact_style {
+        let outer_bounds = Rectangle::new(
+            Point::new(outer_x, outer_y),
+            Size::new(outer_width, outer_height),
+        );
+        let empty_bounds = Rectangle::new(outer_bounds.position(), Size::new(0.0, 0.0));
+        return (outer_bounds, outer_bounds, empty_bounds, empty_bounds);
+    }
+
     match (media_card_node.kind, media_card_node.show_caption) {
         (RenderedMediaKind::Image, show_caption) => {
             let horizontal_inset = if show_caption { 12.0 } else { 10.0 };
             let top_inset = if show_caption { 12.0 } else { 10.0 };
             let bottom_inset = if show_caption { 62.0 } else { 10.0 };
             let preview_max_height = if show_caption { 204.0 } else { 208.0 };
-            let preview_max_width = (capped_width - horizontal_inset * 2.0).max(1.0);
+            let preview_max_width = (outer_width - horizontal_inset * 2.0).max(1.0);
             let aspect_ratio = media_card_node
                 .image_aspect_ratio
                 .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
@@ -330,11 +347,12 @@ fn media_card_layout_bounds(
             let preview_height = (preview_width / aspect_ratio)
                 .min(preview_max_height)
                 .max(1.0);
-            let outer_width = preview_width + horizontal_inset * 2.0;
-            let outer_height = top_inset + preview_height + bottom_inset;
             let outer_bounds = Rectangle::new(
                 Point::new(outer_x, outer_y),
-                Size::new(outer_width, outer_height),
+                Size::new(
+                    preview_width + horizontal_inset * 2.0,
+                    top_inset + preview_height + bottom_inset,
+                ),
             );
             let preview_bounds = Rectangle::new(
                 Point::new(
@@ -382,7 +400,7 @@ fn media_card_layout_bounds(
             let top_inset = if show_caption { 12.0 } else { 10.0 };
             let bottom_inset = if show_caption { 62.0 } else { 10.0 };
             let preview_max_height = if show_caption { 152.0 } else { 156.0 };
-            let preview_max_width = (capped_width - horizontal_inset * 2.0).max(1.0);
+            let preview_max_width = (outer_width - horizontal_inset * 2.0).max(1.0);
             let aspect_ratio = media_card_node
                 .image_aspect_ratio
                 .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
@@ -438,16 +456,64 @@ fn media_card_layout_bounds(
             (outer_bounds, preview_bounds, title_bounds, meta_bounds)
         }
         (kind, show_caption) => {
-            let outer_height = media_card_kind_outer_height(kind, show_caption);
             let outer_bounds = Rectangle::new(
                 Point::new(outer_x, outer_y),
-                Size::new(capped_width, outer_height),
+                Size::new(outer_width, outer_height),
             );
             let preview_bounds = media_card_preview_bounds(kind, outer_bounds, show_caption);
             let title_bounds = media_card_title_bounds(kind, outer_bounds);
             let meta_bounds = media_card_meta_bounds(kind, outer_bounds);
             (outer_bounds, preview_bounds, title_bounds, meta_bounds)
         }
+    }
+}
+
+/// Resolves the outer card size used by one media node before the final inner preview/title rectangles are derived.
+/// 解析单个媒体节点在进一步推导内部预览区和标题区之前使用的外层卡片尺寸。
+fn media_card_outer_size(
+    media_card_node: &RenderedMediaCardNode,
+    capped_width: f32,
+    show_caption: bool,
+) -> (f32, f32) {
+    if media_card_node.compact_style {
+        return (64.0, 64.0);
+    }
+
+    match media_card_node.kind {
+        RenderedMediaKind::Image => {
+            let horizontal_inset = if show_caption { 12.0 } else { 10.0 };
+            let top_inset = if show_caption { 12.0 } else { 10.0 };
+            let bottom_inset = if show_caption { 62.0 } else { 10.0 };
+            let preview_max_height = if show_caption { 204.0 } else { 208.0 };
+            let preview_max_width = (capped_width - horizontal_inset * 2.0).max(1.0);
+            let aspect_ratio = media_card_node
+                .image_aspect_ratio
+                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+                .unwrap_or(16.0 / 10.0);
+            let unconstrained_preview_width = preview_max_height * aspect_ratio;
+            let preview_width = unconstrained_preview_width
+                .min(preview_max_width)
+                .max(preview_max_width.min(96.0));
+            let preview_height = (preview_width / aspect_ratio)
+                .min(preview_max_height)
+                .max(1.0);
+            (
+                preview_width + horizontal_inset * 2.0,
+                top_inset + preview_height + bottom_inset,
+            )
+        }
+        RenderedMediaKind::Audio => (
+            capped_width.min(320.0),
+            media_card_kind_outer_height(RenderedMediaKind::Audio, show_caption),
+        ),
+        RenderedMediaKind::Video => (
+            capped_width.min(360.0),
+            media_card_kind_outer_height(RenderedMediaKind::Video, show_caption),
+        ),
+        RenderedMediaKind::Pdf => (
+            capped_width.min(320.0),
+            media_card_kind_outer_height(RenderedMediaKind::Pdf, show_caption),
+        ),
     }
 }
 

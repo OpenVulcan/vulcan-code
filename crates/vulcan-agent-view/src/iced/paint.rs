@@ -392,7 +392,21 @@ fn draw_video_media_preview(
             preview_bounds,
             viewport,
         );
+        return;
     }
+
+    renderer.fill_quad(
+        renderer::Quad {
+            bounds: preview_bounds,
+            border: Border {
+                color: media_card_node.accent_color.scale_alpha(0.18),
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            ..renderer::Quad::default()
+        },
+        Background::Color(media_card_node.accent_color.scale_alpha(0.20)),
+    );
 
     let play_bounds = Rectangle::new(
         Point::new(

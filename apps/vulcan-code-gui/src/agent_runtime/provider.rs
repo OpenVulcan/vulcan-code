@@ -5,8 +5,8 @@ use crate::agent_runtime::provider_reasoning::{
     ProviderRuntimeReasoningResolution, resolve_provider_runtime_reasoning,
 };
 use crate::provider_capabilities::{
-    ResolvedModelCapabilities, apply_ai_tool_runtime_configuration,
-    resolve_credential_source_summary, resolve_model_capabilities, resolve_provider_api_key,
+    ResolvedModelCapabilities, resolve_credential_source_summary,
+    resolve_effective_model_capabilities, resolve_provider_api_key,
 };
 use crate::provider_config::{
     self, ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
@@ -154,8 +154,11 @@ pub fn resolve_active_provider_blueprint_with_ai_tools(
         .into_iter()
         .find(|model| model.id == model_id);
     let effective_runtime = definition.effective_runtime_for_model(model_id);
-    let mut capabilities = resolve_model_capabilities(definition, selected_model.as_ref());
-    apply_ai_tool_runtime_configuration(&mut capabilities, ai_tool_configuration);
+    let capabilities = resolve_effective_model_capabilities(
+        definition,
+        selected_model.as_ref(),
+        ai_tool_configuration,
+    );
     validate_required_provider_fields(
         definition.input_fields().as_slice(),
         options,

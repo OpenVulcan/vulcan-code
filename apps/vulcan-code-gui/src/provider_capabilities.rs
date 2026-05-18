@@ -229,6 +229,18 @@ pub fn resolve_model_capabilities(
     }
 }
 
+/// Resolves one effective provider/model capability snapshot after applying user-level AI tool routing overlays.
+/// 在应用用户级 AI 工具路由覆盖后解析一份生效的 Provider/Model 能力快照。
+pub fn resolve_effective_model_capabilities(
+    definition: &SupportedProviderDefinition,
+    model: Option<&ModelChoice>,
+    configuration: &PersistedAiToolConfiguration,
+) -> ResolvedModelCapabilities {
+    let mut capabilities = resolve_model_capabilities(definition, model);
+    apply_ai_tool_runtime_configuration(&mut capabilities, configuration);
+    capabilities
+}
+
 /// Applies user-level API-native tool routing configuration to one resolved capability snapshot.
 /// 将用户级 API 原生工具路由配置应用到一份已解析能力快照。
 pub fn apply_ai_tool_runtime_configuration(
@@ -785,8 +797,8 @@ mod tests {
 
     use super::{
         ResolvedModelCapabilities, apply_ai_tool_runtime_configuration,
-        resolve_credential_source_summary, resolve_model_capabilities, resolve_provider_api_key,
-        resolve_provider_api_key_with_lookup,
+        resolve_credential_source_summary, resolve_effective_model_capabilities,
+        resolve_model_capabilities, resolve_provider_api_key, resolve_provider_api_key_with_lookup,
     };
     use crate::provider_config::{
         AiToolKind, AiToolPolicy, ModelChoice, PersistedAiToolConfiguration,
@@ -1114,6 +1126,51 @@ mod tests {
             Some(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID)
         );
         assert!(!understand_image.native_provider_tool);
+        assert!(
+            capabilities.allows_staged_attachment_kind(
+                vulcan_core::types::ConversationAttachmentKind::Image
+            )
+        );
+    }
+
+    /// Resolves one shared effective capability snapshot that already includes user-configured host AI-tool overlays.
+    /// 解析一份已经包含用户配置宿主 AI 工具覆盖的共享生效能力快照。
+    #[test]
+    fn resolve_effective_model_capabilities_applies_host_ai_tool_overlays() {
+        let definition = test_provider_definition();
+        let configuration = PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::UnderstandImage,
+                        "minimax",
+                        "minimax",
+                    ),
+                ],
+            }],
+            understand_image: PersistedUnderstandImageConfiguration {
+                target_order: vec![String::from("minimax/minimax")],
+                providers: Vec::new(),
+            },
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        let capabilities =
+            resolve_effective_model_capabilities(&definition, None, &configuration);
+
+        assert!(
+            capabilities
+                .ai_tools
+                .iter()
+                .any(|tool| tool.kind == AiToolKind::UnderstandImage)
+        );
         assert!(
             capabilities.allows_staged_attachment_kind(
                 vulcan_core::types::ConversationAttachmentKind::Image

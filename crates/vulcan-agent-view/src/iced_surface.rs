@@ -2,8 +2,11 @@
 //! 构建在 agent-view 转录渲染器之上的高阶 iced 展示表面。
 
 use crate::iced::{
-    SelectableTranscriptDragAutoScroll, SelectableTranscriptInteraction,
+    SelectableTranscriptCommand, SelectableTranscriptDragAutoScroll,
+    SelectableTranscriptInteraction, SelectableTranscriptSurfaceId,
     view_selectable_rendered_transcript, view_selectable_rendered_transcript_owned,
+    view_selectable_rendered_transcript_owned_with_context_menu,
+    view_selectable_rendered_transcript_with_context_menu,
 };
 use crate::iced_style::{thinking_modal_backdrop_style, thinking_modal_card_style};
 use crate::{
@@ -62,6 +65,9 @@ struct ModalBodyLazyDependency {
     /// Stable theme signature used to invalidate the cached body when the visible palette changes.
     /// 当可见调色板变化时用于使缓存正文失效的稳定主题签名。
     theme_signature: u64,
+    /// Stable command signature used to refresh cached bodies when host menu commands target this surface.
+    /// 当宿主菜单命令命中该表面时用于刷新缓存正文的稳定命令签名。
+    command_signature: u64,
 }
 
 /// Builds the centered thinking modal surface on top of one prepared thinking document.
@@ -74,6 +80,74 @@ pub fn view_thinking_modal_surface<'a, Message: Clone + 'a + 'static>(
     app_theme: &Theme,
     progress: f32,
     scrollable_id: Id,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a + 'static,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a + 'static,
+    on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a + 'static,
+    on_close: Message,
+) -> Element<'a, Message> {
+    view_thinking_modal_surface_core(
+        title,
+        helper_text,
+        document,
+        document_signature,
+        app_theme,
+        progress,
+        scrollable_id,
+        None,
+        None,
+        on_drag_auto_scroll,
+        on_interaction,
+        on_scroll,
+        on_close,
+    )
+}
+
+/// Builds the centered thinking modal surface while routing transcript context menus through the host workbench.
+/// 构建居中思考弹层表面，并将转录右键菜单路由到宿主工作台。
+pub fn view_thinking_modal_surface_with_context_menu<'a, Message: Clone + 'a + 'static>(
+    title: String,
+    helper_text: String,
+    document: &AgentViewDocument,
+    document_signature: u64,
+    app_theme: &Theme,
+    progress: f32,
+    scrollable_id: Id,
+    surface_id: SelectableTranscriptSurfaceId,
+    command: Option<SelectableTranscriptCommand>,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a + 'static,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a + 'static,
+    on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a + 'static,
+    on_close: Message,
+) -> Element<'a, Message> {
+    view_thinking_modal_surface_core(
+        title,
+        helper_text,
+        document,
+        document_signature,
+        app_theme,
+        progress,
+        scrollable_id,
+        Some(surface_id),
+        command,
+        on_drag_auto_scroll,
+        on_interaction,
+        on_scroll,
+        on_close,
+    )
+}
+
+/// Builds the shared centered modal chrome and optionally enables host-routed transcript context menus.
+/// 构建共享的居中弹层外框，并可选启用宿主路由的转录右键菜单。
+fn view_thinking_modal_surface_core<'a, Message: Clone + 'a + 'static>(
+    title: String,
+    helper_text: String,
+    document: &AgentViewDocument,
+    document_signature: u64,
+    app_theme: &Theme,
+    progress: f32,
+    scrollable_id: Id,
+    context_menu_surface_id: Option<SelectableTranscriptSurfaceId>,
+    command: Option<SelectableTranscriptCommand>,
     on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a + 'static,
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a + 'static,
     on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a + 'static,
@@ -97,24 +171,41 @@ pub fn view_thinking_modal_surface<'a, Message: Clone + 'a + 'static>(
     let modal_body_dependency = ModalBodyLazyDependency {
         document_signature,
         theme_signature: hash_modal_theme(app_theme),
+        command_signature: selectable_transcript_command_signature(
+            context_menu_surface_id.as_ref(),
+            command.as_ref(),
+        ),
     };
     let modal_body: Element<'a, Message> = lazy(modal_body_dependency, move |_| {
         let drag_callback = Rc::clone(&on_drag_auto_scroll);
         let interaction_callback = Rc::clone(&on_interaction);
         let scroll_callback = Rc::clone(&on_scroll);
+        let transcript_surface_id = context_menu_surface_id.clone();
+        let transcript_command = command.clone();
 
-        scrollable(
-            container(view_selectable_rendered_transcript_owned::<Message>(
+        let transcript_body = match transcript_surface_id {
+            Some(surface_id) => {
+                view_selectable_rendered_transcript_owned_with_context_menu::<Message>(
+                    transcript_document.clone(),
+                    transcript_theme.clone(),
+                    surface_id,
+                    transcript_command,
+                    move |request| drag_callback(request),
+                    move |interaction| interaction_callback(interaction),
+                )
+            }
+            None => view_selectable_rendered_transcript_owned::<Message>(
                 transcript_document.clone(),
                 transcript_theme.clone(),
                 move |request| drag_callback(request),
                 move |interaction| interaction_callback(interaction),
-            ))
-            .width(Fill),
-        )
-        .id(transcript_scrollable_id.clone())
-        .height(Fill)
-        .on_scroll(move |viewport| scroll_callback(viewport))
+            ),
+        };
+
+        scrollable(container(transcript_body).width(Fill))
+            .id(transcript_scrollable_id.clone())
+            .height(Fill)
+            .on_scroll(move |viewport| scroll_callback(viewport))
     })
     .into();
 
@@ -197,20 +288,84 @@ pub fn view_thinking_overlay_surface<'a, Message: 'a>(
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
     on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let helper_color = app_theme.palette().background.base.text.scale_alpha(0.56);
+    view_thinking_overlay_surface_core(
+        title,
+        helper_text,
+        document,
+        app_theme,
+        scrollable_id,
+        None,
+        None,
+        on_drag_auto_scroll,
+        on_interaction,
+        on_scroll,
+    )
+}
 
-    let overlay_body = scrollable(
-        container(view_selectable_rendered_transcript::<Message>(
+/// Builds the floating streaming-thinking overlay while routing transcript context menus through the host workbench.
+/// 构建流式思考浮动面板，并将转录右键菜单路由到宿主工作台。
+pub fn view_thinking_overlay_surface_with_context_menu<'a, Message: 'a>(
+    title: String,
+    helper_text: String,
+    document: &AgentViewDocument,
+    app_theme: &Theme,
+    scrollable_id: Id,
+    surface_id: SelectableTranscriptSurfaceId,
+    command: Option<SelectableTranscriptCommand>,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
+    on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a,
+) -> Element<'a, Message> {
+    view_thinking_overlay_surface_core(
+        title,
+        helper_text,
+        document,
+        app_theme,
+        scrollable_id,
+        Some(surface_id),
+        command,
+        on_drag_auto_scroll,
+        on_interaction,
+        on_scroll,
+    )
+}
+
+/// Builds the shared floating overlay chrome and optionally enables host-routed transcript context menus.
+/// 构建共享的浮动面板外框，并可选启用宿主路由的转录右键菜单。
+fn view_thinking_overlay_surface_core<'a, Message: 'a>(
+    title: String,
+    helper_text: String,
+    document: &AgentViewDocument,
+    app_theme: &Theme,
+    scrollable_id: Id,
+    context_menu_surface_id: Option<SelectableTranscriptSurfaceId>,
+    command: Option<SelectableTranscriptCommand>,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
+    on_scroll: impl Fn(scrollable::Viewport) -> Message + 'a,
+) -> Element<'a, Message> {
+    let helper_color = app_theme.palette().background.base.text.scale_alpha(0.56);
+    let transcript_body = match context_menu_surface_id {
+        Some(surface_id) => view_selectable_rendered_transcript_with_context_menu::<Message>(
+            document,
+            app_theme,
+            surface_id,
+            command,
+            on_drag_auto_scroll,
+            on_interaction,
+        ),
+        None => view_selectable_rendered_transcript::<Message>(
             document,
             app_theme,
             on_drag_auto_scroll,
             on_interaction,
-        ))
-        .width(Fill),
-    )
-    .id(scrollable_id)
-    .height(Fill)
-    .on_scroll(on_scroll);
+        ),
+    };
+
+    let overlay_body = scrollable(container(transcript_body).width(Fill))
+        .id(scrollable_id)
+        .height(Fill)
+        .on_scroll(on_scroll);
 
     let overlay_panel = container(
         column![
@@ -245,6 +400,24 @@ pub fn view_thinking_overlay_surface<'a, Message: 'a>(
     .width(Fill)
     .height(Fill)
     .into()
+}
+
+/// Returns the revision signature of one host command when it targets the provided transcript surface.
+/// 当宿主命令命中给定转录表面时返回其修订签名。
+fn selectable_transcript_command_signature(
+    surface_id: Option<&SelectableTranscriptSurfaceId>,
+    command: Option<&SelectableTranscriptCommand>,
+) -> u64 {
+    match (surface_id, command) {
+        (
+            Some(surface_id),
+            Some(SelectableTranscriptCommand::SelectAll {
+                surface_id: target_surface_id,
+                revision,
+            }),
+        ) if target_surface_id == surface_id => *revision,
+        _ => 0,
+    }
 }
 
 /// Builds a single-block modal thinking document by selecting one decorated thinking directive from the provided source document.

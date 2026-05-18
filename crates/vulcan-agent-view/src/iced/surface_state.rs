@@ -31,9 +31,87 @@ pub enum SelectableTranscriptDragAutoScrollDirection {
     Down,
 }
 
+/// Identifies one selectable transcript surface that can receive host-driven menu commands.
+/// 标识一个可接收宿主侧菜单命令的可选择转录表面。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectableTranscriptSurfaceId(pub String);
+
+/// Describes one host-driven command that should be applied to a selectable transcript surface.
+/// 描述一条需要应用到可选择转录表面的宿主侧命令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectableTranscriptCommand {
+    /// Selects the complete transcript text for the matching surface and revision.
+    /// 按匹配的表面与修订号选中完整转录文本。
+    SelectAll {
+        /// Target surface identifier that should consume this command.
+        /// 应消费该命令的目标表面标识。
+        surface_id: SelectableTranscriptSurfaceId,
+        /// Monotonic revision used to apply the command exactly once per widget state.
+        /// 用于让每个组件状态仅应用一次命令的单调修订号。
+        revision: u64,
+    },
+}
+
+/// Media modality exposed by one transcript context-menu target.
+/// 单个转录右键菜单目标暴露的媒体模态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectableTranscriptContextMenuMediaKind {
+    /// Raster image card.
+    /// 光栅图片卡片。
+    Image,
+    /// Audio playback card.
+    /// 音频播放卡片。
+    Audio,
+    /// Video card.
+    /// 视频卡片。
+    Video,
+    /// PDF document card.
+    /// PDF 文档卡片。
+    Pdf,
+}
+
+/// Host-visible media target resolved while opening a transcript context menu.
+/// 打开转录右键菜单时解析出的宿主可见媒体目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectableTranscriptContextMenuMediaTarget {
+    /// Media modality represented by the target card.
+    /// 目标卡片表示的媒体模态。
+    pub kind: SelectableTranscriptContextMenuMediaKind,
+    /// Human-readable file name displayed by the card.
+    /// 卡片显示的人类可读文件名。
+    pub file_name: String,
+    /// Local absolute path of the generated media file.
+    /// 生成媒体文件的本地绝对路径。
+    pub local_path: String,
+    /// Whether the target currently represents the active playing audio strip.
+    /// 目标当前是否代表正在播放的音频条。
+    pub is_active: bool,
+}
+
+/// Host-visible transcript context-menu request emitted from a right-click gesture.
+/// 从右键手势发出的宿主可见转录右键菜单请求。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectableTranscriptContextMenuRequest {
+    /// Surface identifier that should receive follow-up commands from the menu.
+    /// 应接收菜单后续命令的表面标识。
+    pub surface_id: SelectableTranscriptSurfaceId,
+    /// Widget-layer pointer position used as a fallback when the host has no tracked root pointer.
+    /// 当宿主没有已跟踪根指针时用作兜底的组件层指针位置。
+    pub anchor_position: Point,
+    /// Currently selected text, when the right-click occurred over a textual selection.
+    /// 右键发生时已有文本选区对应的当前选中文本。
+    pub selected_text: Option<String>,
+    /// Whether the transcript contains any selectable text at all.
+    /// 转录是否包含任何可选择文本。
+    pub has_document_text: bool,
+    /// Optional generated-media card target under the pointer.
+    /// 指针下方的可选生成媒体卡片目标。
+    pub media_target: Option<SelectableTranscriptContextMenuMediaTarget>,
+}
+
 /// High-level transcript interaction emitted by synthetic chrome spans inside the rendered transcript.
 /// 由渲染转录内部合成交互外框片段发出的高层转录交互。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SelectableTranscriptInteraction {
     /// Toggles one generic inline semantic block between collapsed and expanded states.
     /// 切换某个通用内联语义区块的折叠与展开状态。
@@ -83,6 +161,9 @@ pub enum SelectableTranscriptInteraction {
         /// 待复制图片文件的本地绝对路径。
         local_path: String,
     },
+    /// Requests opening the shared host-level transcript context menu.
+    /// 请求打开宿主层统一转录右键菜单。
+    OpenContextMenu(SelectableTranscriptContextMenuRequest),
 }
 
 /// Enumerates the lightweight context-menu actions exposed by the selectable transcript.
@@ -181,6 +262,9 @@ pub(super) struct SelectableTranscriptState {
     /// Currently open lightweight context menu anchored inside the transcript surface.
     /// 当前在转录表面内部打开的轻量右键菜单。
     pub(super) context_menu: Option<TranscriptContextMenuState>,
+    /// Last host-driven context-menu command revision already consumed by this widget state.
+    /// 此组件状态已消费的最近一次宿主侧右键菜单命令修订号。
+    pub(super) last_context_menu_command_revision: u64,
 }
 
 impl Default for SelectableTranscriptState {
@@ -199,6 +283,7 @@ impl Default for SelectableTranscriptState {
             last_click_instant: None,
             collapsible_body_scroll_offsets: BTreeMap::new(),
             context_menu: None,
+            last_context_menu_command_revision: 0,
         }
     }
 }

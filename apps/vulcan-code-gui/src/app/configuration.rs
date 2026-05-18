@@ -6,7 +6,7 @@ use super::*;
 use crate::ai_tool_configuration;
 use crate::context_budget::{ContextCompactionPolicy, build_context_budget_fingerprint};
 use crate::provider_capabilities::{
-    ResolvedModelCapabilities, apply_ai_tool_runtime_configuration, resolve_model_capabilities,
+    ResolvedModelCapabilities, resolve_effective_model_capabilities, resolve_model_capabilities,
 };
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
@@ -288,9 +288,11 @@ impl VulcanWorkbench {
     ) -> Option<ResolvedModelCapabilities> {
         let definition = provider_config::supported_provider_by_id(&choice.provider_id)?;
         let model = self.resolve_workbench_model_entry(choice);
-        let mut capabilities = resolve_model_capabilities(definition, model.as_ref());
-        apply_ai_tool_runtime_configuration(&mut capabilities, &self.ai_tool_configuration);
-        Some(capabilities)
+        Some(resolve_effective_model_capabilities(
+            definition,
+            model.as_ref(),
+            &self.ai_tool_configuration,
+        ))
     }
 
     /// Resolves the provider-declared base capability snapshot for the currently active workbench model without applying user routing overrides.
@@ -760,7 +762,11 @@ impl VulcanWorkbench {
         )
         .into_iter()
         .find(|model| model.id == model_reference.model_id);
-        Some(resolve_model_capabilities(definition, model.as_ref()))
+        Some(resolve_effective_model_capabilities(
+            definition,
+            model.as_ref(),
+            &self.ai_tool_configuration,
+        ))
     }
 
     /// Clones the provider configuration and overrides only the active model for one queued prompt run.

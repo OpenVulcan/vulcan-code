@@ -373,6 +373,9 @@ pub(super) struct RenderedMediaCardNode {
     /// Whether the card should suppress transcript-side title and metadata chrome so the media itself becomes the primary visual.
     /// 卡片是否应隐藏转录侧标题与元信息外框，从而让媒体自身成为主视觉。
     pub(super) show_caption: bool,
+    /// Whether the card should use compact attachment-strip sizing instead of the richer generated-media summary layout.
+    /// 卡片是否应使用紧凑附件条尺寸，而不是较丰富的生成媒体摘要布局。
+    pub(super) compact_style: bool,
     /// Whether the card currently represents the actively playing generated-audio clip.
     /// 卡片当前是否代表正在播放的生成音频片段。
     pub(super) is_active: bool,
@@ -385,6 +388,9 @@ pub(super) struct RenderedMediaCardNode {
     /// Maximum transcript-width ratio consumed by the card before clamping to the modality-specific width cap.
     /// 在钳制到模态专属宽度上限前，卡片可占用的最大转录宽度比例。
     pub(super) max_width_ratio: f32,
+    /// Horizontal placement used when positioning the card inside the transcript viewport.
+    /// 当前卡片在转录视口内部定位时使用的水平放置方式。
+    pub(super) horizontal_placement: RenderedParagraphHorizontalPlacement,
     /// Background treatment painted behind the whole card.
     /// 绘制在整张卡片背后的背景样式。
     pub(super) background: RenderedParagraphBackground,

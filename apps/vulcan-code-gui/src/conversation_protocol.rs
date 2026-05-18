@@ -611,8 +611,8 @@ fn session_message_to_protocol_message(
             Some(SessionConversationMessage {
                 id: message.id.clone(),
                 payload: SessionConversationPayload::UserText {
-                    text: message.body.clone(),
-                    attachments: Vec::new(),
+                    text: visible_user_message_canonical_text(message),
+                    attachments: visible_user_message_transcript_attachments(message),
                 },
             })
         }
@@ -633,6 +633,32 @@ fn session_message_to_protocol_message(
         }
         _ => None,
     }
+}
+
+/// Resolves the canonical user-text payload stored for one visible user transcript message, falling back to the rendered body for older rows.
+/// 解析一条可见用户转录消息保存的规范用户文本载荷；若旧记录未保存该字段，则回退到渲染正文。
+fn visible_user_message_canonical_text(message: &SessionMessageEntry) -> String {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("canonical_user_text"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| message.body.clone())
+}
+
+/// Resolves transcript attachment metadata stored on one visible user message so canonical replay can preserve image-understanding inputs across reloads.
+/// 解析保存在可见用户消息上的转录附件元数据，使规范重放在重开后仍能保留图片理解输入。
+fn visible_user_message_transcript_attachments(
+    message: &SessionMessageEntry,
+) -> Vec<ConversationAttachment> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("transcript_attachments"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<ConversationAttachment>>(value).ok())
+        .unwrap_or_default()
 }
 
 /// Returns whether one assistant record kind is safe to replay as plain assistant context.
@@ -918,6 +944,43 @@ mod tests {
         let projected = conversation_state_to_session_messages(&state);
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].metadata, Some(metadata));
+    }
+
+    /// Verifies visible user transcript metadata can recover canonical text and attachments during protocol replay after a session reload.
+    /// 验证可见用户转录元数据可以在会话重开后的协议重放阶段恢复规范文本与附件。
+    #[test]
+    fn user_transcript_metadata_round_trips_canonical_text_and_attachments() {
+        let message = SessionMessageEntry {
+            id: String::from("user-1"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: String::from("请分析图片"),
+            metadata: Some(json!({
+                "canonical_user_text": "请分析图片并告诉我结构",
+                "transcript_attachments": [{
+                    "kind": "image",
+                    "file_name": "diagram.png",
+                    "local_path": "D:/diagram.png",
+                    "mime_type": "image/png",
+                }],
+            })),
+            created_at: String::from("1"),
+        };
+
+        let Some(protocol_message) = session_message_to_protocol_message(&message) else {
+            panic!("expected one replayable user protocol message");
+        };
+        let SessionConversationPayload::UserText { text, attachments } = protocol_message.payload
+        else {
+            panic!("expected one replayable user text payload");
+        };
+
+        assert_eq!(text, "请分析图片并告诉我结构");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].file_name, "diagram.png");
+        assert_eq!(attachments[0].local_path, "D:/diagram.png");
     }
 
     /// Verifies compaction keeps the newest tool-call turn structurally replayable even when the result is large.

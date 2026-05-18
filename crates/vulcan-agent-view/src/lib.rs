@@ -18,8 +18,13 @@ pub use document::{
 };
 pub use editor_core::{Cursor, Selection, TextBuffer, ViewState};
 pub use iced::{
+    SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
+    SelectableTranscriptContextMenuMediaTarget, SelectableTranscriptContextMenuRequest,
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
-    SelectableTranscriptInteraction, view_selectable_rendered_transcript,
+    SelectableTranscriptInteraction, SelectableTranscriptSurfaceId,
+    view_selectable_rendered_transcript,
+    view_selectable_rendered_transcript_owned_with_context_menu,
+    view_selectable_rendered_transcript_with_context_menu,
 };
 pub use iced_style::{thinking_modal_backdrop_style, thinking_modal_card_style};
 pub use iced_surface::{
@@ -27,7 +32,8 @@ pub use iced_surface::{
     build_modal_thinking_surface_document, build_modal_tool_surface_document,
     build_overlay_thinking_surface_document, build_thinking_title, estimate_thinking_token_count,
     format_thinking_duration_label, thinking_modal_progress, thinking_overlay_scrollable_id,
-    view_thinking_modal_surface, view_thinking_overlay_surface,
+    view_thinking_modal_surface, view_thinking_modal_surface_with_context_menu,
+    view_thinking_overlay_surface, view_thinking_overlay_surface_with_context_menu,
 };
 pub use parser::parse_agent_view_document;
 pub use selectable_document::{

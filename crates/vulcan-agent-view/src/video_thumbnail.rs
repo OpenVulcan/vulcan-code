@@ -244,7 +244,8 @@ fn feed_supported_h264_parameter_sets_into_decoder<R: std::io::Read + std::io::S
 /// Converts one decoded YUV420 frame into a cached RGBA thumbnail preview and its aspect ratio.
 /// 将单帧解码后的 YUV420 图像转换为缓存用 RGBA 缩略图预览及其宽高比。
 fn frame_to_thumbnail_preview(frame: &Frame) -> Result<VideoThumbnailPreview, String> {
-    let rgba_image = frame_to_rgba_image(frame)?;
+    let mut rgba_image = frame_to_rgba_image(frame)?;
+    decorate_video_thumbnail_with_play_overlay(&mut rgba_image);
     let width = rgba_image.width();
     let height = rgba_image.height();
     let aspect_ratio = width as f32 / height.max(1) as f32;
@@ -289,6 +290,110 @@ fn frame_to_rgba_image(frame: &Frame) -> Result<RgbaImage, String> {
     Ok(image)
 }
 
+/// Paints one translucent centered play affordance directly into the decoded preview frame so video cards always keep a visible playback cue even when later renderer layers reorder image and quad draws.
+/// 直接在解码后的预览帧中绘制半透明居中播放提示，从而让视频卡片即使在后续渲染层对图片与几何绘制重排时也能稳定保留可见播放提示。
+fn decorate_video_thumbnail_with_play_overlay(image: &mut RgbaImage) {
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let radius = ((width.min(height) as f32) * 0.18).clamp(20.0, 36.0);
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+    let border_alpha = 228u8;
+    let fill_alpha = 84u8;
+    let border_thickness = (radius * 0.06).max(1.2);
+
+    for pixel_y in 0..height {
+        for pixel_x in 0..width {
+            let dx = pixel_x as f32 + 0.5 - center_x;
+            let dy = pixel_y as f32 + 0.5 - center_y;
+            let distance = (dx * dx + dy * dy).sqrt();
+            if distance > radius {
+                continue;
+            }
+            let overlay = if distance >= (radius - border_thickness).max(0.0) {
+                image::Rgba([255, 255, 255, border_alpha])
+            } else {
+                image::Rgba([255, 255, 255, fill_alpha])
+            };
+            blend_rgba_pixel(image.get_pixel_mut(pixel_x, pixel_y), overlay);
+        }
+    }
+
+    let triangle_height = radius * 0.92;
+    let triangle_width = triangle_height * 0.78;
+    let triangle_left = center_x - triangle_width * 0.30;
+    let triangle_top = center_y - triangle_height / 2.0;
+    let triangle_right = triangle_left + triangle_width;
+    let triangle_mid_y = center_y;
+    for pixel_y in 0..height {
+        for pixel_x in 0..width {
+            let pixel_center = (pixel_x as f32 + 0.5, pixel_y as f32 + 0.5);
+            if point_inside_triangle(
+                pixel_center,
+                (triangle_left, triangle_top),
+                (triangle_left, triangle_top + triangle_height),
+                (triangle_right, triangle_mid_y),
+            ) {
+                blend_rgba_pixel(
+                    image.get_pixel_mut(pixel_x, pixel_y),
+                    image::Rgba([255, 255, 255, 248]),
+                );
+            }
+        }
+    }
+}
+
+/// Blends one RGBA source color over the destination pixel using straight-alpha compositing so the overlay stays crisp without discarding the thumbnail underneath.
+/// 使用直通 Alpha 合成将源 RGBA 颜色叠加到目标像素上，从而在保留底层缩略图的同时保持覆盖层清晰。
+fn blend_rgba_pixel(destination: &mut image::Rgba<u8>, source: image::Rgba<u8>) {
+    let source_alpha = source[3] as f32 / 255.0;
+    if source_alpha <= f32::EPSILON {
+        return;
+    }
+    let destination_alpha = destination[3] as f32 / 255.0;
+    let output_alpha = source_alpha + destination_alpha * (1.0 - source_alpha);
+    for channel_index in 0..3 {
+        let source_channel = source[channel_index] as f32 / 255.0;
+        let destination_channel = destination[channel_index] as f32 / 255.0;
+        let output_channel = if output_alpha <= f32::EPSILON {
+            0.0
+        } else {
+            (source_channel * source_alpha
+                + destination_channel * destination_alpha * (1.0 - source_alpha))
+                / output_alpha
+        };
+        destination[channel_index] = (output_channel * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    destination[3] = (output_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+}
+
+/// Returns whether one point lies inside the provided play-triangle geometry by comparing signed edge orientations.
+/// 通过比较有向边符号判断一个点是否位于给定播放三角形几何内部。
+fn point_inside_triangle(
+    point: (f32, f32),
+    vertex_a: (f32, f32),
+    vertex_b: (f32, f32),
+    vertex_c: (f32, f32),
+) -> bool {
+    let cross_ab = triangle_edge_cross(point, vertex_a, vertex_b);
+    let cross_bc = triangle_edge_cross(point, vertex_b, vertex_c);
+    let cross_ca = triangle_edge_cross(point, vertex_c, vertex_a);
+    let has_negative = cross_ab < 0.0 || cross_bc < 0.0 || cross_ca < 0.0;
+    let has_positive = cross_ab > 0.0 || cross_bc > 0.0 || cross_ca > 0.0;
+    !(has_negative && has_positive)
+}
+
+/// Computes one oriented edge cross-product used by the point-in-triangle helper.
+/// 计算点三角形判定辅助逻辑使用的单条有向边叉积值。
+fn triangle_edge_cross(point: (f32, f32), edge_start: (f32, f32), edge_end: (f32, f32)) -> f32 {
+    (point.0 - edge_end.0) * (edge_start.1 - edge_end.1)
+        - (edge_start.0 - edge_end.0) * (point.1 - edge_end.1)
+}
+
 /// Converts one YUV420 pixel triplet into an RGBA pixel using an inexpensive broadcast-range matrix.
 /// 使用轻量广播级矩阵将单个 YUV420 像素三元组转换为 RGBA 像素。
 fn yuv420_to_rgba_pixel(y: u8, u: u8, v: u8) -> image::Rgba<u8> {
@@ -309,7 +414,8 @@ fn clamp_color_channel(value: i32) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::is_supported_video_thumbnail_source;
+    use super::{decorate_video_thumbnail_with_play_overlay, is_supported_video_thumbnail_source};
+    use image::RgbaImage;
     use std::fs;
 
     /// Verifies only MP4 inputs are routed through the built-in dynamic thumbnail decoder while other video containers continue to use the placeholder-and-system-player fallback.
@@ -334,5 +440,24 @@ mod tests {
         ));
 
         let _ = fs::remove_file(video_path);
+    }
+
+    /// Verifies the decoded video preview receives a baked-in play cue so transcript rendering no longer depends on a separate overlay draw pass remaining visible.
+    /// 验证解码后的视频预览会获得烘焙进去的播放提示，从而让转录渲染不再依赖额外覆盖层绘制通道必须保持可见。
+    #[test]
+    fn decoded_video_thumbnail_receives_baked_play_overlay() {
+        let mut image = RgbaImage::from_pixel(240, 136, image::Rgba([12, 24, 36, 255]));
+        let original_center = *image.get_pixel(120, 68);
+        let original_ring = *image.get_pixel(120, 44);
+
+        decorate_video_thumbnail_with_play_overlay(&mut image);
+
+        let decorated_center = *image.get_pixel(120, 68);
+        let decorated_ring = *image.get_pixel(120, 44);
+
+        assert_ne!(decorated_center, original_center);
+        assert_ne!(decorated_ring, original_ring);
+        assert!(decorated_center[0] > original_center[0]);
+        assert!(decorated_ring[0] > original_ring[0]);
     }
 }

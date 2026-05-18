@@ -1040,6 +1040,7 @@ fn render_user_prompt_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
+    let user_prompt_images = user_prompt_image_descriptors_from_attributes(block);
     let palette = app_theme.palette();
     let bubble_fill = mix_color(
         palette.background.strong.color,
@@ -1058,31 +1059,35 @@ fn render_user_prompt_block(
     let bubble_action_color = iced::color!(0x84D2FF);
     let bubble_background = directive_background(bubble_fill, bubble_border_color);
 
-    builder.push_rich_paragraph_with_layout(
-        build_agent_view_plain_text_spans(
-            if block.body.is_empty() {
-                " "
-            } else {
-                &block.body
-            },
-            theme::ui_font(),
-            PlainTextRenderKind::Flow,
-            Some(bubble_text_color),
-            app_theme,
-        ),
-        markdown_settings.text_size,
-        text::LineHeight::default(),
-        text::Wrapping::Word,
-        0.0,
-        0.0,
-        0.0,
-        Padding::from([10.0, 12.0]),
-        Some(bubble_background),
-        0,
-        RenderedParagraphHorizontalPlacement::Trailing,
-        true,
-        Some(USER_PROMPT_BUBBLE_MAX_WIDTH_RATIO),
-    );
+    render_user_prompt_image_panels(builder, &user_prompt_images, app_theme);
+
+    if !block.body.trim().is_empty() || user_prompt_images.is_empty() {
+        builder.push_rich_paragraph_with_layout(
+            build_agent_view_plain_text_spans(
+                if block.body.is_empty() {
+                    " "
+                } else {
+                    &block.body
+                },
+                theme::ui_font(),
+                PlainTextRenderKind::Flow,
+                Some(bubble_text_color),
+                app_theme,
+            ),
+            markdown_settings.text_size,
+            text::LineHeight::default(),
+            text::Wrapping::Word,
+            0.0,
+            0.0,
+            0.0,
+            Padding::from([10.0, 12.0]),
+            Some(bubble_background),
+            0,
+            RenderedParagraphHorizontalPlacement::Trailing,
+            true,
+            Some(USER_PROMPT_BUBBLE_MAX_WIDTH_RATIO),
+        );
+    }
 
     let copy_action_link = user_prompt_copy_action_link(block);
     if let Some(copy_action_link) = copy_action_link.as_ref() {
@@ -1118,6 +1123,103 @@ fn render_user_prompt_block(
         true,
         None,
     );
+}
+
+/// One compact user-image descriptor projected from user-prompt metadata so the renderer can show staged image tiles above the prompt bubble.
+/// 从用户提示词元数据投影出的一条紧凑用户图片描述符，供渲染器在提示词气泡上方显示已暂存图片方格。
+#[derive(Debug, Clone)]
+struct UserPromptImageDescriptor {
+    /// Human-readable file name mirrored into preview actions.
+    /// 镜像到预览动作中的人类可读文件名。
+    file_name: String,
+    /// Local absolute path used by the host image preview modal.
+    /// 供宿主图片预览弹层使用的本地绝对路径。
+    local_path: String,
+}
+
+/// Renders compact user image tiles above one prompt bubble so downgraded image-understanding inputs remain visible after send and reload.
+/// 在提示词气泡上方渲染紧凑用户图片方格，使降级为图片理解工具输入的图片在发送后与重开后仍然可见。
+fn render_user_prompt_image_panels(
+    builder: &mut RenderedTranscriptBuilder,
+    images: &[UserPromptImageDescriptor],
+    app_theme: &Theme,
+) {
+    if images.is_empty() {
+        return;
+    }
+
+    let palette = app_theme.palette();
+    let background = directive_background(
+        palette.primary.weak.color.scale_alpha(0.12),
+        palette.primary.strong.color.scale_alpha(0.22),
+    );
+
+    for image in images {
+        let action_link_target =
+            format!("vulcan-agent-view://user-prompt-image/{}", image.local_path);
+        builder.register_link_action(
+            action_link_target.clone(),
+            RenderedTranscriptLinkAction::OpenImagePreview {
+                file_name: image.file_name.clone(),
+                local_path: image.local_path.clone(),
+            },
+        );
+        builder.push_media_card_with_options(
+            RenderedMediaKind::Image,
+            String::new(),
+            image.file_name.clone(),
+            image.local_path.clone(),
+            None,
+            local_image_aspect_ratio(&image.local_path),
+            1,
+            false,
+            true,
+            false,
+            0.0,
+            6.0,
+            0.70,
+            RenderedParagraphHorizontalPlacement::Trailing,
+            background,
+            palette.primary.strong.color,
+            Some(action_link_target),
+        );
+    }
+}
+
+/// Extracts compact user-image descriptors from one user-prompt block attribute map.
+/// 从单个用户提示词区块属性映射中提取紧凑用户图片描述符。
+fn user_prompt_image_descriptors_from_attributes(
+    block: &AgentViewDirectiveBlock,
+) -> Vec<UserPromptImageDescriptor> {
+    let Some(image_count) = block
+        .attributes
+        .get("user-image-count")
+        .and_then(|value| value.parse::<usize>().ok())
+    else {
+        return Vec::new();
+    };
+
+    (0..image_count)
+        .filter_map(|index| {
+            let file_name = block
+                .attributes
+                .get(&format!("user-image-{index}-file-name"))?
+                .trim()
+                .to_string();
+            let local_path = block
+                .attributes
+                .get(&format!("user-image-{index}-local-path"))?
+                .trim()
+                .to_string();
+            if file_name.is_empty() || local_path.is_empty() {
+                return None;
+            }
+            Some(UserPromptImageDescriptor {
+                file_name,
+                local_path,
+            })
+        })
+        .collect()
 }
 
 /// Builds the timestamp and copy-action spans shown under one right-aligned user-prompt bubble.

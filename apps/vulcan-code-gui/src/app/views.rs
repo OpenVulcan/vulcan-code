@@ -166,7 +166,34 @@ fn map_selectable_transcript_interaction(
             file_name,
             local_path,
         },
+        SelectableTranscriptInteraction::OpenContextMenu(request) => {
+            Message::OpenTranscriptContextMenu(request)
+        }
     }
+}
+
+/// Builds the stable surface identifier used by a selectable session transcript widget.
+/// 构建可选择会话转录组件使用的稳定表面标识。
+fn session_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!("session:{session_id}"))
+}
+
+/// Builds the stable surface identifier used by a centered thinking-modal transcript widget.
+/// 构建居中思考弹层转录组件使用的稳定表面标识。
+fn thinking_modal_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!("thinking-modal:{session_id}"))
+}
+
+/// Builds the stable surface identifier used by a streaming thinking-overlay transcript widget.
+/// 构建流式思考浮层转录组件使用的稳定表面标识。
+fn thinking_overlay_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!("thinking-overlay:{session_id}"))
+}
+
+/// Builds the stable surface identifier used by a selectable tool-modal transcript widget.
+/// 构建可选择工具弹层转录组件使用的稳定表面标识。
+fn tool_modal_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!("tool-modal:{session_id}"))
 }
 
 impl VulcanWorkbench {
@@ -225,7 +252,7 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_ai_capability_target_picker_modal() {
             layered_surfaces.push(overlay);
         }
-        if let Some(overlay) = self.view_composer_context_menu_overlay() {
+        if let Some(overlay) = self.view_workbench_context_menu_overlay() {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_workspace_history_search_modal() {
@@ -1875,25 +1902,21 @@ impl VulcanWorkbench {
             style::main_task_tree_project_row_style(theme, is_active, is_drag_source)
         });
 
-        ContextMenu::new(
-            mouse_area(header)
-                .interaction(if self.dragging_task_project.is_some() {
-                    iced::mouse::Interaction::Move
-                } else {
-                    iced::mouse::Interaction::default()
-                })
-                .on_press(Message::StartTaskProjectInteraction(project.id.clone()))
-                .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
-                .on_move({
-                    let project_id = project.id.clone();
-                    move |position| {
-                        Message::TaskProjectDropPreviewMoved(project_id.clone(), position)
-                    }
-                })
-                .on_exit(Message::TaskProjectHovered(None)),
-            move || self.view_main_task_project_menu(project),
-        )
-        .into()
+        mouse_area(header)
+            .interaction(if self.dragging_task_project.is_some() {
+                iced::mouse::Interaction::Move
+            } else {
+                iced::mouse::Interaction::default()
+            })
+            .on_press(Message::StartTaskProjectInteraction(project.id.clone()))
+            .on_right_press(Message::OpenTaskProjectContextMenu(project.id.clone()))
+            .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
+            .on_move({
+                let project_id = project.id.clone();
+                move |position| Message::TaskProjectDropPreviewMoved(project_id.clone(), position)
+            })
+            .on_exit(Message::TaskProjectHovered(None))
+            .into()
     }
 
     /// Builds the expanded child rows shown beneath one project header in the task drawer tree.
@@ -2019,90 +2042,14 @@ impl VulcanWorkbench {
         })
         .on_press(Message::SessionSelected(session.id));
 
-        ContextMenu::new(
-            mouse_area(
-                container(session_button)
-                    .height(MAIN_TASK_SESSION_ROW_HEIGHT)
-                    .width(Fill),
-            )
-            .on_enter(Message::TaskSessionHovered(Some(session.id)))
-            .on_exit(Message::TaskSessionHovered(None)),
-            move || self.view_main_task_session_menu(session),
+        mouse_area(
+            container(session_button)
+                .height(MAIN_TASK_SESSION_ROW_HEIGHT)
+                .width(Fill),
         )
-        .into()
-    }
-
-    /// Builds the overflow menu displayed beneath one hovered project row.
-    /// 构建显示在某个项目行下方的溢出菜单。
-    pub(super) fn view_main_task_project_menu<'a>(
-        &'a self,
-        project: &'a TaskProjectSummary,
-    ) -> Element<'a, Message> {
-        let _project = project;
-        let menu_width = 200.0;
-
-        container(
-            column![
-                Self::view_main_task_tree_menu_button(
-                    "从资源管理器中打开",
-                    Message::OpenTaskProjectDirectory(project.id.clone()),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    if project.pinned {
-                        "取消置顶"
-                    } else {
-                        "置顶"
-                    },
-                    Message::PinTaskProject(project.id.clone()),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "重命名",
-                    Message::RenameTaskProject(project.id.clone()),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "项目设置",
-                    Message::OpenTaskProjectSettings(project.id.clone()),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "归档",
-                    Message::ArchiveTaskProject(project.id.clone()),
-                ),
-            ]
-            .spacing(2)
-            .width(menu_width),
-        )
-        .padding([6, 6])
-        .width(menu_width)
-        .style(style::main_task_tree_menu_style)
-        .into()
-    }
-
-    /// Builds the overflow menu displayed beneath one session row.
-    /// 构建显示在某个会话行下方的溢出菜单。
-    pub(super) fn view_main_task_session_menu<'a>(
-        &'a self,
-        session: &'a SessionSummary,
-    ) -> Element<'a, Message> {
-        let _session = session;
-        let menu_width = 200.0;
-
-        container(
-            column![
-                Self::view_main_task_tree_menu_button(
-                    "重命名",
-                    Message::RenameTaskSession(session.id),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "归档",
-                    Message::ArchiveTaskSession(session.id),
-                ),
-            ]
-            .spacing(2)
-            .width(menu_width),
-        )
-        .padding([6, 6])
-        .width(menu_width)
-        .style(style::main_task_tree_menu_style)
+        .on_right_press(Message::OpenTaskSessionContextMenu(session.id))
+        .on_enter(Message::TaskSessionHovered(Some(session.id)))
+        .on_exit(Message::TaskSessionHovered(None))
         .into()
     }
 
@@ -2144,45 +2091,43 @@ impl VulcanWorkbench {
             ),
         });
 
-        ContextMenu::new(
-            mouse_area(
-                container(
-                    row![
-                        folder_icon,
-                        project_label,
-                        text("已归档").size(12).style(|theme: &Theme| {
-                            iced::widget::text::Style {
-                                color: Some(
-                                    theme
-                                        .extended_palette()
-                                        .background
-                                        .base
-                                        .text
-                                        .scale_alpha(0.45),
-                                ),
-                            }
-                        }),
-                    ]
-                    .spacing(8)
-                    .align_y(Center),
-                )
-                .padding(iced::Padding {
-                    top: 3.0,
-                    right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
-                    bottom: 3.0,
-                    left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
-                })
-                .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
-                .width(Fill)
-                .style(move |theme| {
-                    style::main_task_tree_project_row_style(theme, is_hovered, false)
-                }),
+        mouse_area(
+            container(
+                row![
+                    folder_icon,
+                    project_label,
+                    text("已归档").size(12).style(|theme: &Theme| {
+                        iced::widget::text::Style {
+                            color: Some(
+                                theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(0.45),
+                            ),
+                        }
+                    }),
+                ]
+                .spacing(8)
+                .align_y(Center),
             )
-            .on_press(Message::RestoreTaskProject(project.id.clone()))
-            .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
-            .on_exit(Message::TaskProjectHovered(None)),
-            move || self.view_archived_task_project_menu(project),
+            .padding(iced::Padding {
+                top: 3.0,
+                right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                bottom: 3.0,
+                left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            })
+            .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
+            .width(Fill)
+            .style(move |theme| style::main_task_tree_project_row_style(theme, is_hovered, false)),
         )
+        .on_press(Message::RestoreTaskProject(project.id.clone()))
+        .on_right_press(Message::OpenArchivedTaskProjectContextMenu(
+            project.id.clone(),
+        ))
+        .on_enter(Message::TaskProjectHovered(Some(project.id.clone())))
+        .on_exit(Message::TaskProjectHovered(None))
         .into()
     }
 
@@ -2249,76 +2194,14 @@ impl VulcanWorkbench {
         })
         .on_press(Message::RestoreTaskSession(session.id));
 
-        ContextMenu::new(
-            mouse_area(
-                container(session_button)
-                    .height(MAIN_TASK_SESSION_ROW_HEIGHT)
-                    .width(Fill),
-            )
-            .on_enter(Message::TaskSessionHovered(Some(session.id)))
-            .on_exit(Message::TaskSessionHovered(None)),
-            move || self.view_archived_task_session_menu(session),
+        mouse_area(
+            container(session_button)
+                .height(MAIN_TASK_SESSION_ROW_HEIGHT)
+                .width(Fill),
         )
-        .into()
-    }
-
-    /// Builds the overflow menu displayed for one archived project row.
-    /// 构建显示在某个归档项目行上的溢出菜单。
-    pub(super) fn view_archived_task_project_menu<'a>(
-        &'a self,
-        project: &'a TaskProjectSummary,
-    ) -> Element<'a, Message> {
-        let menu_width = 200.0;
-
-        container(
-            column![
-                Self::view_main_task_tree_menu_button(
-                    "恢复",
-                    Message::RestoreTaskProject(project.id.clone()),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "彻底删除",
-                    Message::RequestPermanentDeleteArchivedTaskProject(project.id.clone()),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "从资源管理器中打开",
-                    Message::OpenTaskProjectDirectory(project.id.clone()),
-                ),
-            ]
-            .spacing(2)
-            .width(menu_width),
-        )
-        .padding([6, 6])
-        .width(menu_width)
-        .style(style::main_task_tree_menu_style)
-        .into()
-    }
-
-    /// Builds the overflow menu displayed for one archived session row.
-    /// 构建显示在某个归档会话行上的溢出菜单。
-    pub(super) fn view_archived_task_session_menu<'a>(
-        &'a self,
-        session: &'a SessionSummary,
-    ) -> Element<'a, Message> {
-        let menu_width = 200.0;
-
-        container(
-            column![
-                Self::view_main_task_tree_menu_button(
-                    "恢复",
-                    Message::RestoreTaskSession(session.id),
-                ),
-                Self::view_main_task_tree_menu_button(
-                    "彻底删除",
-                    Message::RequestPermanentDeleteArchivedTaskSession(session.id),
-                ),
-            ]
-            .spacing(2)
-            .width(menu_width),
-        )
-        .padding([6, 6])
-        .width(menu_width)
-        .style(style::main_task_tree_menu_style)
+        .on_right_press(Message::OpenArchivedTaskSessionContextMenu(session.id))
+        .on_enter(Message::TaskSessionHovered(Some(session.id)))
+        .on_exit(Message::TaskSessionHovered(None))
         .into()
     }
 
@@ -2385,20 +2268,6 @@ impl VulcanWorkbench {
                 .center(Fill)
                 .into()
         }
-    }
-
-    /// Builds one compact menu button used inside the task-drawer project overflow menu.
-    /// 构建任务抽屉项目溢出菜单内部使用的紧凑菜单按钮。
-    pub(super) fn view_main_task_tree_menu_button(
-        label: &'static str,
-        message: Message,
-    ) -> Element<'static, Message> {
-        button(container(text(label).size(13)).padding([6, 10]).width(Fill))
-            .padding(0)
-            .width(Fill)
-            .style(style::main_task_tree_menu_button_style)
-            .on_press(message)
-            .into()
     }
 
     /// Returns whether the current composer buffer contains any submittable user instruction text.
@@ -3376,18 +3245,15 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Builds the floating overlay used by the composer context menu when the user right-clicks inside the editor.
-    /// 构建在用户于编辑器内部右键时使用的提示词上下文菜单浮动覆盖层。
-    pub(super) fn view_composer_context_menu_overlay(&self) -> Option<Element<'_, Message>> {
-        if !self.composer_context_menu_open {
-            return None;
-        }
-
+    /// Builds the floating overlay used by the shared workbench context menu.
+    /// 构建共享工作台右键菜单使用的浮动覆盖层。
+    pub(super) fn view_workbench_context_menu_overlay(&self) -> Option<Element<'_, Message>> {
+        let menu_state = self.workbench_context_menu.as_ref()?;
         let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
-            .on_press(Message::CloseComposerContextMenu)
-            .on_right_press(Message::CloseComposerContextMenu);
-        let menu_position = self.composer_context_menu_position();
-        let menu = pin(self.view_composer_context_menu())
+            .on_press(Message::CloseWorkbenchContextMenu)
+            .on_right_press(Message::CloseWorkbenchContextMenu);
+        let menu_position = self.workbench_context_menu_position(menu_state);
+        let menu = pin(self.view_workbench_context_menu())
             .position(menu_position)
             .width(Fill)
             .height(Fill);
@@ -3400,90 +3266,84 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Returns the bounded window-relative position used by the composer context menu overlay.
-    /// 返回提示词上下文菜单覆盖层使用的受边界约束的窗口相对位置。
-    pub(super) fn composer_context_menu_position(&self) -> iced::Point {
-        let menu_width = COMPOSER_CONTEXT_MENU_WIDTH;
-        let menu_height = (COMPOSER_CONTEXT_MENU_ROW_HEIGHT * 6.0) + 12.0;
+    /// Returns the bounded window-relative position used by the shared context menu overlay.
+    /// 返回共享右键菜单覆盖层使用的受边界约束窗口相对位置。
+    pub(super) fn workbench_context_menu_position(
+        &self,
+        menu_state: &WorkbenchContextMenuState,
+    ) -> iced::Point {
+        let row_count = menu_state.items.len() as f32;
+        let gap_count = menu_state.items.len().saturating_sub(1) as f32;
+        let menu_width = menu_state.width;
+        let menu_height =
+            (WORKBENCH_CONTEXT_MENU_ROW_HEIGHT * row_count) + (2.0 * gap_count) + 12.0;
         let window_width = self.main_window_size.width.max(menu_width + 12.0);
         let window_height = self.main_window_size.height.max(menu_height + 12.0);
-        let anchor = self.composer_context_menu_anchor;
 
         iced::Point::new(
-            anchor
+            menu_state
+                .anchor
                 .x
                 .clamp(8.0, (window_width - menu_width - 8.0).max(8.0)),
-            anchor
+            menu_state
+                .anchor
                 .y
                 .clamp(8.0, (window_height - menu_height - 8.0).max(8.0)),
         )
     }
 
-    /// Builds the menu body used by the composer context menu overlay.
-    /// 构建提示词上下文菜单覆盖层使用的菜单主体。
-    pub(super) fn view_composer_context_menu(&self) -> Element<'_, Message> {
-        let has_any_text = !self.composer_buffer.is_empty();
-        let has_selection =
-            composer_selection_has_content(self.composer_buffer.selection().as_deref());
-        let can_paste =
-            composer_clipboard_text_is_pastable(self.composer_context_clipboard_text.as_deref());
-        let supports_attachments = self.active_workbench_supports_any_attachments();
+    /// Builds the menu body used by the shared workbench context menu overlay.
+    /// 构建共享工作台右键菜单覆盖层使用的菜单主体。
+    pub(super) fn view_workbench_context_menu(&self) -> Element<'_, Message> {
+        let Some(menu_state) = self.workbench_context_menu.as_ref() else {
+            return container(space::vertical().height(0)).into();
+        };
+        let items = menu_state
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| self.view_workbench_context_menu_button(index, item))
+            .collect::<Vec<_>>();
 
-        container(
-            column![
-                self.view_composer_context_menu_button(
-                    "添加附件",
-                    supports_attachments.then_some(Message::AddComposerAttachments),
-                ),
-                self.view_composer_context_menu_button(
-                    "粘贴附件",
-                    supports_attachments.then_some(Message::PasteComposerClipboardAttachments),
-                ),
-                self.view_composer_context_menu_button(
-                    "全选",
-                    has_any_text.then_some(Message::ComposerContextMenuSelectAll),
-                ),
-                self.view_composer_context_menu_button(
-                    "复制",
-                    has_selection.then_some(Message::ComposerContextMenuCopy),
-                ),
-                self.view_composer_context_menu_button(
-                    "剪切",
-                    has_selection.then_some(Message::ComposerContextMenuCut),
-                ),
-                self.view_composer_context_menu_button(
-                    "粘贴",
-                    can_paste.then_some(Message::ComposerContextMenuPaste),
-                ),
-            ]
-            .spacing(2)
-            .width(COMPOSER_CONTEXT_MENU_WIDTH),
-        )
-        .padding([6, 6])
-        .width(COMPOSER_CONTEXT_MENU_WIDTH)
-        .style(style::main_task_tree_menu_style)
-        .into()
+        container(column(items).spacing(2).width(menu_state.width))
+            .padding([6, 6])
+            .width(menu_state.width)
+            .style(style::main_task_tree_menu_style)
+            .into()
     }
 
-    /// Builds one compact menu button used inside the composer context menu overlay.
-    /// 构建提示词上下文菜单覆盖层内部使用的一条紧凑菜单按钮。
-    pub(super) fn view_composer_context_menu_button(
+    /// Builds one compact menu button used inside the shared context menu overlay.
+    /// 构建共享右键菜单覆盖层内部使用的一条紧凑菜单按钮。
+    pub(super) fn view_workbench_context_menu_button(
         &self,
-        label: &'static str,
-        message: Option<Message>,
-    ) -> Element<'static, Message> {
+        index: usize,
+        item: &WorkbenchContextMenuItem,
+    ) -> Element<'_, Message> {
+        let text_alpha = if item.message.is_some() { 0.92 } else { 0.38 };
+        let label = item.label.clone();
         let mut button = button(
-            container(text(label).size(13))
-                .padding([6, 10])
-                .width(Fill)
-                .height(COMPOSER_CONTEXT_MENU_ROW_HEIGHT),
+            container(text(label).size(13).style(move |theme: &Theme| {
+                iced::widget::text::Style {
+                    color: Some(
+                        theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(text_alpha),
+                    ),
+                }
+            }))
+            .padding([6, 10])
+            .width(Fill)
+            .height(WORKBENCH_CONTEXT_MENU_ROW_HEIGHT),
         )
         .padding(0)
         .width(Fill)
         .style(style::main_task_tree_menu_button_style);
 
-        if let Some(message) = message {
-            button = button.on_press(message);
+        if item.message.is_some() {
+            button = button.on_press(Message::InvokeWorkbenchContextMenuItem(index));
         }
 
         button.into()
@@ -4008,9 +3868,11 @@ impl VulcanWorkbench {
         if let Some(document) = self.rendered_subagent_task_panel_document(&state) {
             let session_id = state.task_id;
             let content_column = column![
-                view_selectable_rendered_transcript::<Message>(
+                view_selectable_rendered_transcript_with_context_menu::<Message>(
                     &document,
                     &self.app_theme,
+                    session_transcript_surface_id(session_id),
+                    self.selectable_transcript_command.clone(),
                     move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
                         session_id,
                         request,
@@ -4216,9 +4078,11 @@ impl VulcanWorkbench {
         };
         let content_column = column![
             self.view_session_history_load_control(session_id),
-            view_selectable_rendered_transcript::<Message>(
+            view_selectable_rendered_transcript_with_context_menu::<Message>(
                 &document,
                 &self.app_theme,
+                session_transcript_surface_id(session_id),
+                self.selectable_transcript_command.clone(),
                 move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
                     session_id,
                     request,
@@ -4406,7 +4270,7 @@ impl VulcanWorkbench {
             .as_ref()
             .filter(|modal_state| modal_state.session_id == session_id)?;
         let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
-        Some(view_thinking_modal_surface(
+        Some(view_thinking_modal_surface_with_context_menu(
             modal_state.payload.title.clone(),
             modal_state.payload.helper_text.clone(),
             &modal_state.payload.document,
@@ -4414,6 +4278,8 @@ impl VulcanWorkbench {
             &self.app_theme,
             progress,
             thinking_overlay_scrollable_id(session_id),
+            thinking_modal_transcript_surface_id(session_id),
+            self.selectable_transcript_command.clone(),
             move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
                 session_id,
                 request,
@@ -4447,7 +4313,7 @@ impl VulcanWorkbench {
         if !modal_state.payload.generated_attachments.is_empty() {
             return Some(self.view_generated_tool_modal_surface(session_id, modal_state, progress));
         }
-        Some(view_thinking_modal_surface(
+        Some(view_thinking_modal_surface_with_context_menu(
             modal_state.payload.title.clone(),
             modal_state.payload.helper_text.clone(),
             &modal_state.payload.document,
@@ -4455,6 +4321,8 @@ impl VulcanWorkbench {
             &self.app_theme,
             progress,
             tool_modal_scrollable_id(session_id),
+            tool_modal_transcript_surface_id(session_id),
+            self.selectable_transcript_command.clone(),
             |_| Message::Noop,
             |interaction| {
                 map_selectable_transcript_interaction(
@@ -4487,9 +4355,11 @@ impl VulcanWorkbench {
             .scale_alpha(0.54 + reveal_progress * 0.24);
         let generated_cards =
             self.view_generated_tool_modal_cards(&modal_state.payload.generated_attachments);
-        let transcript_body = view_selectable_rendered_transcript::<Message>(
+        let transcript_body = view_selectable_rendered_transcript_with_context_menu::<Message>(
             &modal_state.payload.document,
             &self.app_theme,
+            tool_modal_transcript_surface_id(session_id),
+            self.selectable_transcript_command.clone(),
             |_| Message::Noop,
             |interaction| {
                 map_selectable_transcript_interaction(
@@ -4793,12 +4663,14 @@ impl VulcanWorkbench {
         let (title, document) = build_overlay_thinking_surface_document(document)?;
 
         Some(
-            container(view_thinking_overlay_surface(
+            container(view_thinking_overlay_surface_with_context_menu(
                 title,
                 String::from("运行中思考会先停留在这里，完成后再回收到主会话。"),
                 &document,
                 &self.app_theme,
                 thinking_overlay_scrollable_id(session_id),
+                thinking_overlay_transcript_surface_id(session_id),
+                self.selectable_transcript_command.clone(),
                 move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
                     session_id,
                     request,

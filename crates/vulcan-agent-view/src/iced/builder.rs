@@ -304,6 +304,49 @@ impl RenderedTranscriptBuilder {
         accent_color: Color,
         action_link: Option<String>,
     ) {
+        self.push_media_card_with_options(
+            kind,
+            title,
+            file_name,
+            local_path,
+            preview_image_handle,
+            image_aspect_ratio,
+            output_count,
+            show_caption,
+            false,
+            is_active,
+            4.0,
+            10.0,
+            0.78,
+            RenderedParagraphHorizontalPlacement::Leading,
+            background,
+            accent_color,
+            action_link,
+        );
+    }
+
+    /// Pushes one inline generated-media card node with explicit layout options so callers can reuse the media renderer for compact user attachment strips.
+    /// 推入一个带显式布局选项的内联生成媒体卡片节点，使调用方可以复用媒体渲染器来构建紧凑用户附件条。
+    pub(super) fn push_media_card_with_options(
+        &mut self,
+        kind: RenderedMediaKind,
+        title: impl Into<String>,
+        file_name: impl Into<String>,
+        local_path: impl Into<String>,
+        preview_image_handle: Option<iced::widget::image::Handle>,
+        image_aspect_ratio: Option<f32>,
+        output_count: usize,
+        show_caption: bool,
+        compact_style: bool,
+        is_active: bool,
+        gap_before: f32,
+        gap_after: f32,
+        max_width_ratio: f32,
+        horizontal_placement: RenderedParagraphHorizontalPlacement,
+        background: RenderedParagraphBackground,
+        accent_color: Color,
+        action_link: Option<String>,
+    ) {
         self.nodes
             .push(RenderedTranscriptNode::MediaCard(RenderedMediaCardNode {
                 kind,
@@ -314,10 +357,12 @@ impl RenderedTranscriptBuilder {
                 image_aspect_ratio,
                 output_count,
                 show_caption,
+                compact_style,
                 is_active,
-                gap_before: 4.0,
-                gap_after: 10.0,
-                max_width_ratio: 0.78,
+                gap_before,
+                gap_after,
+                max_width_ratio,
+                horizontal_placement,
                 background,
                 accent_color,
                 action_link,
