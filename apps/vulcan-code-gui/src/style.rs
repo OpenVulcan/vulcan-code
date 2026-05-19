@@ -2055,7 +2055,7 @@ pub fn workbench_label_action_button_style(
     let (background, text_color, border_color) = if is_danger {
         (
             palette.danger.strong.color,
-            palette.danger.strong.text,
+            Color::WHITE,
             palette.danger.strong.color,
         )
     } else {
