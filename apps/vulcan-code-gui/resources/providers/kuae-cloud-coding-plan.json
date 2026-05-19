@@ -36,7 +36,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     }
   ]
 }

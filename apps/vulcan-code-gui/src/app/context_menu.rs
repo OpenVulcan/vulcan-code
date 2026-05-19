@@ -4,7 +4,7 @@
 use super::*;
 
 impl VulcanWorkbench {
-/// Resolves the best root-window anchor from the tracked pointer and a fallback event position.
+    /// Resolves the best root-window anchor from the tracked pointer and a fallback event position.
     /// 通过已跟踪指针与备用事件坐标解析最佳根窗口锚点。
     pub(super) fn workbench_context_menu_anchor(&self, fallback: iced::Point) -> iced::Point {
         self.main_window_cursor_position.unwrap_or(fallback)
@@ -174,7 +174,10 @@ impl VulcanWorkbench {
 
     /// Opens the shared context menu for one visible session row.
     /// 为一条可见会话行打开共享右键菜单。
-    pub(super) fn open_task_session_context_menu(&mut self, session_id: SessionId) -> Task<Message> {
+    pub(super) fn open_task_session_context_menu(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
         if !self.sessions.iter().any(|session| session.id == session_id) {
             return Task::none();
         }
@@ -192,7 +195,10 @@ impl VulcanWorkbench {
 
     /// Opens the shared context menu for one archived project row.
     /// 为一条已归档项目行打开共享右键菜单。
-    pub(super) fn open_archived_task_project_context_menu(&mut self, project_id: String) -> Task<Message> {
+    pub(super) fn open_archived_task_project_context_menu(
+        &mut self,
+        project_id: String,
+    ) -> Task<Message> {
         let Some(project) = self
             .archived_task_projects
             .iter()
@@ -224,7 +230,10 @@ impl VulcanWorkbench {
 
     /// Opens the shared context menu for one archived session row.
     /// 为一条已归档会话行打开共享右键菜单。
-    pub(super) fn open_archived_task_session_context_menu(&mut self, session_id: SessionId) -> Task<Message> {
+    pub(super) fn open_archived_task_session_context_menu(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
         if !self
             .archived_sessions
             .iter()

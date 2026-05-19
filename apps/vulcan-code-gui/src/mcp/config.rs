@@ -123,6 +123,9 @@ pub struct McpServerConfig {
     /// Additional HTTP headers used by HTTP transports.
     /// HTTP 传输使用的附加 HTTP 请求头。
     pub headers: BTreeMap<String, String>,
+    /// Optional HTTP-header values sourced from host environment variables when present.
+    /// 当宿主环境变量存在时从中取值的可选 HTTP 请求头映射。
+    pub headers_from_env: BTreeMap<String, String>,
     /// Optional OAuth configuration used by host-driven remote authorization flows.
     /// 宿主驱动远端授权流程使用的可选 OAuth 配置。
     pub oauth: Option<McpServerOAuthConfig>,
@@ -132,6 +135,9 @@ pub struct McpServerConfig {
     /// Additional environment variables.
     /// 附加环境变量集合。
     pub env: BTreeMap<String, String>,
+    /// Optional environment-variable names that should be passed through from the host process when present.
+    /// 当前宿主进程存在时应被透传的可选环境变量名称集合。
+    pub env_passthrough: Vec<String>,
 }
 
 impl McpServerConfig {
@@ -153,6 +159,75 @@ impl McpServerConfig {
         }
     }
 
+    /// Resolves the effective child-process environment by merging explicit variables with optional host passthrough entries.
+    /// 通过合并显式变量与可选宿主透传项解析最终子进程环境变量集合。
+    fn resolved_env(&self) -> BTreeMap<String, String> {
+        Self::resolved_env_with_lookup(&self.env, &self.env_passthrough, |env_name| {
+            std::env::var(env_name).ok()
+        })
+    }
+
+    /// Resolves the effective request headers by merging explicit values with optional host environment lookups.
+    /// 通过合并显式值与可选宿主环境变量查找解析最终请求头集合。
+    fn resolved_headers(&self) -> BTreeMap<String, String> {
+        Self::resolved_headers_with_lookup(&self.headers, &self.headers_from_env, |env_name| {
+            std::env::var(env_name).ok()
+        })
+    }
+
+    /// Resolves the effective child-process environment using one injectable host-environment lookup.
+    /// 使用可注入的宿主环境查找函数解析最终子进程环境变量集合。
+    fn resolved_env_with_lookup<F>(
+        explicit_env: &BTreeMap<String, String>,
+        passthrough_names: &[String],
+        mut lookup_env: F,
+    ) -> BTreeMap<String, String>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let mut resolved_env = explicit_env.clone();
+        for env_name in passthrough_names
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            if resolved_env.contains_key(env_name) {
+                continue;
+            }
+            if let Some(env_value) = lookup_env(env_name) {
+                resolved_env.insert(env_name.to_string(), env_value);
+            }
+        }
+        resolved_env
+    }
+
+    /// Resolves the effective request headers using one injectable host-environment lookup.
+    /// 使用可注入的宿主环境查找函数解析最终请求头集合。
+    fn resolved_headers_with_lookup<F>(
+        explicit_headers: &BTreeMap<String, String>,
+        headers_from_env: &BTreeMap<String, String>,
+        mut lookup_env: F,
+    ) -> BTreeMap<String, String>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let mut resolved_headers = explicit_headers.clone();
+        for (header_name, env_name) in headers_from_env {
+            if resolved_headers.contains_key(header_name) {
+                continue;
+            }
+            let trimmed_header_name = header_name.trim();
+            let trimmed_env_name = env_name.trim();
+            if trimmed_header_name.is_empty() || trimmed_env_name.is_empty() {
+                continue;
+            }
+            if let Some(env_value) = lookup_env(trimmed_env_name) {
+                resolved_headers.insert(trimmed_header_name.to_string(), env_value);
+            }
+        }
+        resolved_headers
+    }
+
     /// Converts the runtime-facing server configuration into a host-owned transport launch specification.
     /// 将面向运行时的服务器配置转换为宿主自有传输启动规格。
     pub fn launch_spec(&self) -> Result<McpTransportLaunchSpec, String> {
@@ -163,7 +238,7 @@ impl McpServerConfig {
                 program: self.command.clone(),
                 args: self.args.clone(),
                 cwd: self.cwd.clone().map(PathBuf::from),
-                env: self.env.clone(),
+                env: self.resolved_env(),
             }),
             McpTransportKind::Http => Ok(McpTransportLaunchSpec::Http {
                 endpoint,
@@ -172,7 +247,7 @@ impl McpServerConfig {
                     .clone()
                     .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 HTTP URL。", self.name))?,
                 bearer_token: self.bearer_token.clone(),
-                headers: self.headers.clone(),
+                headers: self.resolved_headers(),
                 oauth: self.oauth.clone().map(Into::into),
             }),
             McpTransportKind::Sse => Ok(McpTransportLaunchSpec::Sse {
@@ -182,7 +257,7 @@ impl McpServerConfig {
                     .clone()
                     .ok_or_else(|| format!("MCP 服务器 `{}` 缺少 SSE URL。", self.name))?,
                 bearer_token: self.bearer_token.clone(),
-                headers: self.headers.clone(),
+                headers: self.resolved_headers(),
                 oauth: self.oauth.clone().map(Into::into),
             }),
         }
@@ -229,9 +304,11 @@ fn runtime_mcp_server_from_persisted(id: &str, entry: &PersistedMcpServerEntry) 
         url: entry.url.clone(),
         bearer_token: entry.bearer_token.clone(),
         headers: entry.headers.clone(),
+        headers_from_env: entry.headers_from_env.clone(),
         oauth: entry.oauth.clone().map(Into::into),
         cwd: entry.cwd.clone(),
         env: entry.env.clone(),
+        env_passthrough: entry.env_passthrough.clone(),
     }
 }
 
@@ -253,6 +330,7 @@ mod tests {
             url: Some(String::from("https://example.test/mcp")),
             bearer_token: Some(String::from("token-123")),
             headers: BTreeMap::from([(String::from("X-Test"), String::from("1"))]),
+            headers_from_env: BTreeMap::new(),
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some(String::from("demo-client")),
                 client_secret: Some(String::from("demo-secret")),
@@ -261,6 +339,7 @@ mod tests {
             }),
             cwd: Some(String::from("D:/mock/mcp")),
             env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
+            env_passthrough: Vec::new(),
         }
     }
 
@@ -313,6 +392,55 @@ mod tests {
                     redirect_uri: Some(String::from("http://localhost:8787/callback")),
                 }),
             }
+        );
+    }
+
+    #[test]
+    fn resolved_env_and_headers_merge_optional_host_passthrough_without_overwriting_explicit_values()
+     {
+        let resolved_env = McpServerConfig::resolved_env_with_lookup(
+            &BTreeMap::from([(String::from("STATIC_ENV"), String::from("static"))]),
+            &[
+                String::from("HOST_TOKEN"),
+                String::from("STATIC_ENV"),
+                String::from("MISSING_TOKEN"),
+            ],
+            |env_name| match env_name {
+                "HOST_TOKEN" => Some(String::from("host-value")),
+                "STATIC_ENV" => Some(String::from("should-not-override")),
+                _ => None,
+            },
+        );
+        assert_eq!(
+            resolved_env,
+            BTreeMap::from([
+                (String::from("HOST_TOKEN"), String::from("host-value")),
+                (String::from("STATIC_ENV"), String::from("static")),
+            ])
+        );
+
+        let resolved_headers = McpServerConfig::resolved_headers_with_lookup(
+            &BTreeMap::from([(String::from("X-Static"), String::from("1"))]),
+            &BTreeMap::from([
+                (String::from("Authorization"), String::from("ACCESS_TOKEN")),
+                (
+                    String::from("X-Static"),
+                    String::from("STATIC_HEADER_TOKEN"),
+                ),
+                (String::from("X-Missing"), String::from("MISSING_TOKEN")),
+            ]),
+            |env_name| match env_name {
+                "ACCESS_TOKEN" => Some(String::from("Bearer host")),
+                "STATIC_HEADER_TOKEN" => Some(String::from("should-not-override")),
+                _ => None,
+            },
+        );
+        assert_eq!(
+            resolved_headers,
+            BTreeMap::from([
+                (String::from("Authorization"), String::from("Bearer host")),
+                (String::from("X-Static"), String::from("1")),
+            ])
         );
     }
 }

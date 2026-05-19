@@ -27,6 +27,9 @@ mod history_search;
 mod persistence;
 mod session_load;
 
+use self::persistence::{
+    migrate_legacy_oversized_session_messages, session_has_legacy_oversized_message_candidates,
+};
 pub use history_search::search_workspace_history;
 pub use persistence::{
     maintain_hydrated_session_storage, maintain_legacy_session_storage,
@@ -36,15 +39,12 @@ pub use persistence::{
 pub use session_load::{
     load_session_history_page, load_session_hydration_snapshot, load_session_tool_detail_page,
 };
-use self::persistence::{
-    migrate_legacy_oversized_session_messages, session_has_legacy_oversized_message_candidates,
-};
 
 #[cfg(test)]
 use self::persistence::{
-    legacy_inline_message_chunk_count, legacy_inline_message_chunk_migration_script,
-    legacy_oversized_message_candidate_query, push_session_message_rows_for_session,
-    assign_session_message_turn_indexes, prepare_session_message_body_for_storage,
+    assign_session_message_turn_indexes, legacy_inline_message_chunk_count,
+    legacy_inline_message_chunk_migration_script, legacy_oversized_message_candidate_query,
+    prepare_session_message_body_for_storage, push_session_message_rows_for_session,
     push_session_runtime_state_batch_rows, session_message_chunk_upsert_statement,
     session_message_is_workspace_history_search_indexable, session_message_upsert_statement,
     session_runtime_conversation_state_cleanup_statement,

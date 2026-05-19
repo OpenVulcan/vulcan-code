@@ -36,7 +36,10 @@ impl VulcanWorkbench {
 
     /// Schedules one older transcript page load when the current session window reaches the top.
     /// 当当前会话窗口滚动到顶部时，调度一页更早转录历史加载。
-    pub(super) fn schedule_older_session_history_load(&mut self, session_id: SessionId) -> Task<Message> {
+    pub(super) fn schedule_older_session_history_load(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
         if session_id.is_nil()
             || !self.session_history_has_more.contains(&session_id)
             || !self.loading_older_session_history_ids.insert(session_id)
@@ -187,7 +190,9 @@ impl VulcanWorkbench {
             .iter()
             .any(|session| session.id == session_id);
         let messages = if session_is_archived {
-            self.archived_session_messages.entry(session_id).or_default()
+            self.archived_session_messages
+                .entry(session_id)
+                .or_default()
         } else {
             self.session_messages.entry(session_id).or_default()
         };
@@ -236,7 +241,9 @@ impl VulcanWorkbench {
             .iter()
             .any(|session| session.id == session_id);
         let messages = if session_is_archived {
-            self.archived_session_messages.entry(session_id).or_default()
+            self.archived_session_messages
+                .entry(session_id)
+                .or_default()
         } else {
             self.session_messages.entry(session_id).or_default()
         };

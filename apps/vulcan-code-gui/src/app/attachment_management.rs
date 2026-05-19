@@ -4,7 +4,6 @@
 use super::*;
 
 impl VulcanWorkbench {
-
     /// Formats one raw attachment-cleanup byte count into a compact human-readable label for the settings card.
     /// 将原始附件清理字节数格式化为供设置卡片使用的紧凑可读标签。
     pub(super) fn format_attachment_cleanup_byte_len(byte_len: u64) -> String {
@@ -22,7 +21,6 @@ impl VulcanWorkbench {
             format!("{byte_len} B")
         }
     }
-
 
     /// Formats one cleanup preview into a concise one-line summary used by both the notice bar and the settings detail card.
     /// 将清理预览格式化为一条紧凑单行摘要，供通知栏与设置详情卡片共同复用。
@@ -49,10 +47,12 @@ impl VulcanWorkbench {
         )
     }
 
-
     /// Formats one cleanup execution report into a concise one-line summary used by the settings card and status bar.
     /// 将清理执行报告格式化为一条紧凑单行摘要，供设置卡片与状态栏共同复用。
-    pub(super) fn format_attachment_cleanup_report_summary(&self, report: &AttachmentCleanupReport) -> String {
+    pub(super) fn format_attachment_cleanup_report_summary(
+        &self,
+        report: &AttachmentCleanupReport,
+    ) -> String {
         // Extra summary suffix shown when replay has been revoked but the file could not be removed from disk.
         // 当回放已被撤销但文件无法从磁盘移除时展示的额外摘要后缀。
         let failed_delete_suffix = if report.failed_delete_count == 0 {
@@ -75,7 +75,6 @@ impl VulcanWorkbench {
         )
     }
 
-
     /// Returns the resolved capability snapshot for the currently active workbench model when one is available.
     /// 返回当前激活工作台模型的已解析能力快照（如果存在）。
     pub(super) fn active_workbench_model_capabilities_snapshot(
@@ -92,23 +91,21 @@ impl VulcanWorkbench {
             model.as_ref(),
             &effective_configuration,
         );
-        self.apply_runtime_ai_capability_capability_overrides(
-            &mut capabilities,
-            &runtime_options,
-        );
+        self.apply_runtime_ai_capability_capability_overrides(&mut capabilities, &runtime_options);
         Some(capabilities)
     }
 
-
     /// Returns whether the currently active workbench model should accept one staged attachment kind according to declared input modalities.
     /// 返回当前激活工作台模型是否应根据声明输入模态接受某种已暂存附件类型。
-    pub(super) fn active_workbench_supports_attachment_kind(&self, kind: ConversationAttachmentKind) -> bool {
+    pub(super) fn active_workbench_supports_attachment_kind(
+        &self,
+        kind: ConversationAttachmentKind,
+    ) -> bool {
         let Some(capabilities) = self.active_workbench_model_capabilities_snapshot() else {
             return false;
         };
         capabilities.allows_staged_attachment_kind(kind)
     }
-
 
     /// Returns whether the currently active workbench model should expose the generic attachment picker.
     /// 返回当前激活工作台模型是否应暴露通用附件选择器。
@@ -123,14 +120,12 @@ impl VulcanWorkbench {
         .any(|kind| self.active_workbench_supports_attachment_kind(kind))
     }
 
-
     /// Returns the project currently bound to the project-settings modal.
     /// 返回当前绑定到项目设置弹窗的项目。
     pub(super) fn project_settings_task_project(&self) -> Option<&TaskProjectSummary> {
         let project_id = self.project_settings_project_id.as_deref()?;
         self.task_project_by_id(project_id)
     }
-
 
     /// Resolves the project-space root that should own managed attachment assets for one session.
     /// 解析单个会话的托管附件资产应归属的项目空间根目录。
@@ -142,7 +137,6 @@ impl VulcanWorkbench {
             .unwrap_or_else(|| self.workspace_path.trim().to_string())
     }
 
-
     /// Resolves the current composer attachment staging root, preferring the selected session project over the global workspace field.
     /// 解析当前提示词附件暂存根目录，优先使用选中会话所属项目而不是全局工作区输入框。
     pub(super) fn selected_attachment_workspace_path(&self) -> String {
@@ -151,7 +145,6 @@ impl VulcanWorkbench {
             .map(|session_id| self.attachment_workspace_path_for_session(session_id))
             .unwrap_or_else(|| self.workspace_path.trim().to_string())
     }
-
 
     /// Resolves a concise user-facing title for one attachment import error.
     /// 为单条附件导入错误解析面向用户的简洁标题。
@@ -165,7 +158,6 @@ impl VulcanWorkbench {
         }
     }
 
-
     /// Shows the standard attachment-limit notice for an import source that cannot accept more files.
     /// 为无法继续接收文件的导入来源显示标准附件数量上限提示。
     pub(super) fn show_composer_attachment_limit_notice(&mut self, source_label: &str) {
@@ -176,7 +168,6 @@ impl VulcanWorkbench {
         self.show_workbench_notice_modal("附件数量已达上限", notice.clone());
         self.status_message = notice;
     }
-
 
     /// Validates whether every staged attachment still matches the active model modality declaration.
     /// 校验每条已暂存附件当前是否仍满足激活模型的模态声明。
@@ -204,7 +195,6 @@ impl VulcanWorkbench {
         Ok(())
     }
 
-
     /// Builds one best-effort stable deduplication key for one staged composer attachment so repeated imports of the same source file do not flood the attachment strip.
     /// 为单条已暂存提示词附件构建一条最佳努力的稳定去重键，避免同一源文件被重复导入后淹没附件条。
     pub(super) fn composer_attachment_identity_key(attachment: &ConversationAttachment) -> String {
@@ -231,10 +221,12 @@ impl VulcanWorkbench {
         )
     }
 
-
     /// Best-effort discards one newly staged attachment that was rejected before it entered the composer.
     /// 尽力丢弃一条在进入提示词输入框前被拒绝的新暂存附件。
-    pub(super) fn discard_rejected_staged_composer_attachment(&mut self, attachment: &ConversationAttachment) {
+    pub(super) fn discard_rejected_staged_composer_attachment(
+        &mut self,
+        attachment: &ConversationAttachment,
+    ) {
         let attachment_workspace_path = self.selected_attachment_workspace_path();
         if let Err(error) = crate::attachment_asset_index::discard_unreferenced_staged_attachment(
             &attachment_workspace_path,
@@ -250,7 +242,6 @@ impl VulcanWorkbench {
             );
         }
     }
-
 
     /// Appends one imported attachment batch into the composer while enforcing model modality gates, deduplicating repeated file imports, and refreshing focus.
     /// 在强制模型模态门控、去重重复文件导入并刷新焦点的前提下，将一批导入附件追加到提示词输入框。
@@ -382,7 +373,6 @@ impl VulcanWorkbench {
         operation::focus(COMPOSER_EDITOR_ID)
     }
 
-
     /// Stages one arbitrary RGBA image snapshot as a managed PNG attachment reusable by both iced clipboard images and native clipboard fallbacks.
     /// 将任意 RGBA 图片快照暂存为受管理的 PNG 附件，供 iced 剪贴板图片与原生剪贴板回退路径共同复用。
     pub(super) fn stage_composer_rgba_image_attachment(
@@ -406,7 +396,6 @@ impl VulcanWorkbench {
             &png_bytes,
         )
     }
-
 
     /// Pastes the highest-priority clipboard payload into the composer, optionally restricting the operation to attachment-only imports.
     /// 将最高优先级的剪贴板载荷粘贴到提示词输入框，并可按需限制为仅导入附件。
@@ -492,7 +481,6 @@ impl VulcanWorkbench {
         }
     }
 
-
     /// Tracks one hovered file label so the floating composer panel can surface a drop hint before the user releases the pointer.
     /// 跟踪一条悬停文件标签，使浮动提示词面板能在用户释放指针前展示拖放提示。
     pub(super) fn push_composer_drag_hover_label(&mut self, path: &Path) {
@@ -509,7 +497,6 @@ impl VulcanWorkbench {
         }
         self.composer_drag_hover_labels.push(label);
     }
-
 
     /// Opens the native attachment picker and appends unique supported attachments into the composer draft.
     /// 打开原生附件选择器，并向提示词草稿追加不重复且受支持的附件。
@@ -546,7 +533,6 @@ impl VulcanWorkbench {
             }
         }
     }
-
 
     /// Removes one staged composer attachment and keeps undo state available for recovery.
     /// 移除一条已暂存的提示词附件，并保留可恢复的撤销状态。

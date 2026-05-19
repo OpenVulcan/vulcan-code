@@ -7,11 +7,11 @@ use iced::widget::{column, opaque, pin, rich_text};
 use iced::{Background, Border, Color};
 use iced_aw::helpers::date_picker;
 
-mod transcript;
-mod task_tree;
-mod settings_navigation;
 mod ai_capability;
 mod diff;
+mod settings_navigation;
+mod task_tree;
+mod transcript;
 
 /// Returns the active subagent dispatch list height needed for the current running task count.
 /// 返回当前运行中任务数量所需的活动子代理调度列表高度。
@@ -162,18 +162,16 @@ impl VulcanWorkbench {
         if let Some(icon) = icon {
             accessory_row = accessory_row.push(container(icon).width(18).center_y(Fill));
         }
-        accessory_row = accessory_row
-            .push(space::horizontal())
-            .push(
-                container(
-                    codicon::chevron_down()
-                        .size(14)
-                        .line_height(1.0)
-                        .color(palette.background.base.text.scale_alpha(0.48)),
-                )
-                .width(14)
-                .center_y(Fill),
-            );
+        accessory_row = accessory_row.push(space::horizontal()).push(
+            container(
+                codicon::chevron_down()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.48)),
+            )
+            .width(14)
+            .center_y(Fill),
+        );
         let trigger_body = stack([
             centered_title_column,
             container(accessory_row)
@@ -250,6 +248,21 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_ai_capability_target_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_ai_capability_routing_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_provider_editor_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_mcp_server_editor_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_provider_model_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_provider_model_override_editor_modal() {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_workbench_ai_capability_panel_modal() {
@@ -527,20 +540,22 @@ impl VulcanWorkbench {
             .on_press(Message::CloseWorkbenchModelPicker);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -570,28 +585,22 @@ impl VulcanWorkbench {
         let option_gap = 2.0f32;
         let panel_width = WORKBENCH_REASONING_SELECTOR_WIDTH.max(112.0);
         let option_list = column(reasoning_options.iter().cloned().map(|option| {
-                let is_selected = option.effort == selected_effort;
-                button(
-                    container(
-                        text(option.label.clone()).size(13).width(Fill),
-                    )
+            let is_selected = option.effort == selected_effort;
+            button(
+                container(text(option.label.clone()).size(13).width(Fill))
                     .width(Fill)
                     .center_y(Fill),
-                )
-                .width(Fill)
-                .height(option_row_height)
-                .padding([0, 8])
-                .style(move |theme, status| {
-                    style::workbench_model_picker_option_button_style(
-                        theme,
-                        status,
-                        is_selected,
-                    )
-                })
-                .on_press(Message::WorkbenchReasoningEffortSelected(option))
-                .into()
-            }))
-            .spacing(option_gap);
+            )
+            .width(Fill)
+            .height(option_row_height)
+            .padding([0, 8])
+            .style(move |theme, status| {
+                style::workbench_model_picker_option_button_style(theme, status, is_selected)
+            })
+            .on_press(Message::WorkbenchReasoningEffortSelected(option))
+            .into()
+        }))
+        .spacing(option_gap);
         let panel_height = (reasoning_options.len() as f32 * option_row_height)
             + (reasoning_options.len().saturating_sub(1) as f32 * option_gap)
             + 8.0;
@@ -608,8 +617,7 @@ impl VulcanWorkbench {
                 + COMPOSER_TRIGGER_BUTTON_SIZE
                 + COMPOSER_PANEL_CONTROL_GAP
         };
-        let panel_x = composer_panel_left
-            + composer_panel_width
+        let panel_x = composer_panel_left + composer_panel_width
             - COMPOSER_PANEL_EDGE_PADDING as f32
             - trailing_controls_width;
         let status_bar_height = 44.0f32;
@@ -639,16 +647,18 @@ impl VulcanWorkbench {
         let overlay_position = iced::Point::new(panel_x.max(12.0), panel_y);
 
         Some(
-            stack([
-                backdrop.into(),
-                pin(mouse_area(modal_card).on_press(Message::Noop))
-                    .position(overlay_position)
-                    .width(Fill)
-                    .height(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    backdrop.into(),
+                    pin(mouse_area(modal_card).on_press(Message::Noop))
+                        .position(overlay_position)
+                        .width(Fill)
+                        .height(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -740,20 +750,22 @@ impl VulcanWorkbench {
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Noop);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -953,7 +965,13 @@ impl VulcanWorkbench {
         .width(Fill)
         .height(Fill);
 
-        Some(WheelIntercept::new(overlay, Message::WorkbenchImagePreviewWheelScrolled).into())
+        Some(
+            opaque(WheelIntercept::new(
+                overlay,
+                Message::WorkbenchImagePreviewWheelScrolled,
+            ))
+            .into(),
+        )
     }
 
     /// Builds the in-app workspace-history search modal shown above the main workbench when history lookup is requested.
@@ -1133,20 +1151,22 @@ impl VulcanWorkbench {
             .on_press(Message::CloseWorkspaceHistorySearchPanel);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -1208,20 +1228,22 @@ impl VulcanWorkbench {
             .on_press(Message::CloseTaskProjectSettings);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -1969,9 +1991,7 @@ impl VulcanWorkbench {
                 container(text(format!("{:02}", index + 1)).size(12))
                     .width(24)
                     .center_y(Fill),
-                container(text("·").size(12))
-                    .width(10)
-                    .center_y(Fill),
+                container(text("·").size(12)).width(10).center_y(Fill),
                 container(label_surface).width(Fill).center_y(Fill),
                 action_surface,
             ]
@@ -2672,10 +2692,12 @@ impl VulcanWorkbench {
             .height(Fill);
 
         Some(
-            stack([backdrop.into(), menu.into()])
-                .width(Fill)
-                .height(Fill)
-                .into(),
+            opaque(
+                stack([backdrop.into(), menu.into()])
+                    .width(Fill)
+                    .height(Fill),
+            )
+            .into(),
         )
     }
 
@@ -3855,11 +3877,14 @@ impl VulcanWorkbench {
     /// 构建设置面板内容，并且不再增加额外的外层边框层级。
     pub(super) fn view_settings_panel(&self) -> Element<'_, Message> {
         let navigation_width = self.main_task_panel_width.clamp(260.0, 340.0);
-        let section_header = column![
-            text(self.selected_settings_section.title()).size(26),
-            text(self.selected_settings_section.description())
-                .size(13)
-                .color(
+        let mut header_title_column =
+            column![text(self.selected_settings_section.title()).size(26)]
+                .spacing(6)
+                .width(Fill);
+        let header_description = self.selected_settings_section.description().trim();
+        if !header_description.is_empty() {
+            header_title_column = header_title_column.push(
+                text(header_description).size(13).color(
                     self.app_theme
                         .extended_palette()
                         .background
@@ -3867,6 +3892,19 @@ impl VulcanWorkbench {
                         .text
                         .scale_alpha(0.62),
                 ),
+            );
+        }
+        let section_header_body: Element<'_, Message> =
+            if let Some(header_actions) = self.view_settings_panel_header_actions() {
+                row![header_title_column, header_actions]
+                    .spacing(16)
+                    .width(Fill)
+                    .into()
+            } else {
+                header_title_column.into()
+            };
+        let section_header = column![
+            section_header_body,
             container(space())
                 .width(Fill)
                 .height(1)
@@ -3875,12 +3913,8 @@ impl VulcanWorkbench {
         .spacing(6)
         .width(Fill);
         let section_body: Element<'_, Message> = match self.selected_settings_section {
-            SettingsSection::ModelProviders => column![
-                self.view_provider_configuration_card(),
-                self.view_runtime_selector_settings_card(),
-            ]
-            .spacing(12)
-            .into(),
+            SettingsSection::ModelProviders => self.view_provider_configuration_card(),
+            SettingsSection::ModelList => self.view_provider_model_list_card(),
             SettingsSection::RuntimeDiagnostics => self.view_inspector(),
             SettingsSection::AiCapabilityVendors => self.view_ai_tool_configuration_card(),
             SettingsSection::AiCapabilityWebSearch => {
@@ -3889,18 +3923,16 @@ impl VulcanWorkbench {
             SettingsSection::AiCapabilityUnderstandImage => {
                 self.view_ai_capability_settings_page(AiToolKind::UnderstandImage)
             }
-            SettingsSection::AiCapabilityUnderstandVideo => {
-                self.view_ai_capability_unavailable_page(
+            SettingsSection::AiCapabilityUnderstandVideo => self
+                .view_ai_capability_unavailable_page(
                     "视频理解",
                     "视频理解能力入口已预留，但当前尚未接通可配置的供应商与理解工具。",
-                )
-            }
-            SettingsSection::AiCapabilityUnderstandAudio => {
-                self.view_ai_capability_unavailable_page(
+                ),
+            SettingsSection::AiCapabilityUnderstandAudio => self
+                .view_ai_capability_unavailable_page(
                     "音频理解",
                     "音频理解能力入口已预留，但当前尚未接通可配置的供应商与理解工具。",
-                )
-            }
+                ),
             SettingsSection::AiCapabilityImageGeneration => {
                 self.view_ai_capability_settings_page(AiToolKind::ImageGeneration)
             }
@@ -3919,15 +3951,24 @@ impl VulcanWorkbench {
             SettingsSection::McpServers => self.view_mcp_configuration_card(),
             SettingsSection::ArchivedRestore => self.view_archived_restore_card(),
         };
+        let uses_fill_layout = matches!(
+            self.selected_settings_section,
+            SettingsSection::ModelProviders
+                | SettingsSection::ModelList
+                | SettingsSection::McpServers
+        ) || self.selected_settings_section.belongs_to_ai_capabilities();
+        let section_body_panel: Element<'_, Message> = if uses_fill_layout {
+            container(section_body).width(Fill).height(Fill).into()
+        } else {
+            scrollable(container(section_body).width(Fill))
+                .height(Fill)
+                .spacing(8)
+                .into()
+        };
         let content_panel: Element<'_, Message> = container(
-            column![
-                section_header,
-                scrollable(container(section_body).width(Fill))
-                    .height(Fill)
-                    .spacing(8),
-            ]
-            .spacing(14)
-            .height(Fill),
+            column![section_header, section_body_panel,]
+                .spacing(14)
+                .height(Fill),
         )
         .padding([16, 16])
         .width(Fill)
@@ -3947,6 +3988,135 @@ impl VulcanWorkbench {
         .spacing(0)
         .height(Fill)
         .into()
+    }
+
+    /// Resolves the active configured provider used by the model-list settings page header and content.
+    /// 解析模型列表设置页头部与内容区共用的当前已配置供应商。
+    fn selected_model_list_provider_choice(&self) -> Option<ProviderChoice> {
+        let configured_providers = self.configured_provider_choices();
+        configured_providers
+            .iter()
+            .find(|provider| provider.id == self.selected_provider.id)
+            .cloned()
+            .or_else(|| configured_providers.first().cloned())
+    }
+
+    /// Builds optional header actions shown beside the settings-page title for sections that need top-level controls.
+    /// 构建显示在设置页标题右侧、供特定分区使用的可选头部动作区。
+    fn view_settings_panel_header_actions(&self) -> Option<Element<'_, Message>> {
+        match self.selected_settings_section {
+            SettingsSection::ModelProviders => Some(
+                button("新增供应商")
+                    .style(button::secondary)
+                    .on_press(Message::OpenProviderEditorForCreate)
+                    .into(),
+            ),
+            SettingsSection::ModelList => {
+                let active_provider = self.selected_model_list_provider_choice()?;
+                let enabled_model_count = provider_config::effective_model_choices(
+                    &active_provider.id,
+                    &self.provider_configuration,
+                )
+                .len();
+
+                Some(
+                    column![
+                        button(container(text("调整模型列表")).width(Fill).center_x(Fill))
+                            .width(156)
+                            .style(button::primary)
+                            .on_press(Message::OpenProviderModelPicker(active_provider.id)),
+                        text(format!("总启用 {enabled_model_count}"))
+                            .size(12)
+                            .color(
+                                self.app_theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(0.56),
+                            ),
+                    ]
+                    .spacing(6)
+                    .into(),
+                )
+            }
+            SettingsSection::AiCapabilityVendors => Some(
+                button("新增供应商")
+                    .style(button::secondary)
+                    .on_press(Message::OpenAiCapabilityVendorPicker)
+                    .into(),
+            ),
+            SettingsSection::McpServers => Some(
+                button("新增 MCP")
+                    .style(button::secondary)
+                    .on_press(Message::CreateMcpServer)
+                    .into(),
+            ),
+            section if section.belongs_to_ai_capabilities() => {
+                let capability_kind = section.capability_kind()?;
+                let enabled_target_count = self
+                    .ai_tool_configuration
+                    .resolved_configured_targets_for_kind(capability_kind)
+                    .into_iter()
+                    .filter(|entry| entry.enabled)
+                    .count();
+                let mut actions = row![].align_y(Center).spacing(10);
+                if section.supports_routing_strategy() {
+                    let routing_trigger = match capability_kind {
+                        AiToolKind::WebSearch => self.view_workbench_dual_line_trigger(
+                            None,
+                            self.ai_tool_configuration
+                                .web_search
+                                .mode
+                                .label()
+                                .to_string(),
+                            String::from("路由策略"),
+                            220.0,
+                            true,
+                            Some(Message::OpenAiCapabilityRoutingPicker(capability_kind)),
+                        ),
+                        AiToolKind::UnderstandImage => self.view_workbench_dual_line_trigger(
+                            None,
+                            self.ai_tool_configuration
+                                .understand_image
+                                .mode
+                                .label()
+                                .to_string(),
+                            String::from("路由策略"),
+                            220.0,
+                            true,
+                            Some(Message::OpenAiCapabilityRoutingPicker(capability_kind)),
+                        ),
+                        _ => space::horizontal().width(0).into(),
+                    };
+                    actions = actions.push(routing_trigger);
+                }
+                actions = actions.push(
+                    button("配置接口")
+                        .style(button::primary)
+                        .on_press(Message::OpenAiCapabilityTargetPicker(capability_kind)),
+                );
+                Some(
+                    column![
+                        actions,
+                        text(format!("总启用 {enabled_target_count}"))
+                            .size(12)
+                            .color(
+                                self.app_theme
+                                    .extended_palette()
+                                    .background
+                                    .base
+                                    .text
+                                    .scale_alpha(0.56),
+                            ),
+                    ]
+                    .spacing(6)
+                    .align_x(iced::Alignment::End)
+                    .into(),
+                )
+            }
+            _ => None,
+        }
     }
 
     /// Builds the custom undecorated window title bar used by the main and diff windows.
@@ -4610,50 +4780,346 @@ impl VulcanWorkbench {
     /// Renders the standalone provider-configuration card used by the dedicated settings workspace.
     /// 渲染独立设置工作区使用的供应商配置卡片。
     pub(super) fn view_provider_configuration_card(&self) -> Element<'_, Message> {
-        let provider_choices = provider_config::supported_provider_choices();
-        let selected_provider = Some(self.selected_provider.clone());
         let configured_providers = self.configured_provider_choices();
-        let selected_definition = self.selected_provider_definition();
-        let provider_metadata: Element<'_, Message> = if let Some(definition) = selected_definition
-        {
-            let selected_model_id = self
-                .active_workbench_model_choice()
-                .filter(|choice| choice.provider_id == self.selected_provider.id)
-                .map(|choice| choice.model_id);
-            let effective_runtime = selected_model_id
-                .as_deref()
-                .map(|model_id| definition.effective_runtime_for_model(model_id))
-                .unwrap_or(definition.runtime);
-            column![
-                text(format!("运行时：{}", effective_runtime.label())).size(12),
-                text(format!(
-                    "接口族：{} · {}",
-                    effective_runtime.api_family().label(),
-                    effective_runtime.api_family().key()
-                ))
-                .size(12),
-                text(format!(
-                    "接口地址：{}",
-                    self.selected_provider_endpoint_summary()
-                ))
-                .size(12),
-                text(format!(
-                    "模型目录：{}",
-                    self.selected_provider_model_source_summary()
-                ))
-                .size(12),
-            ]
-            .spacing(4)
+        let configured_provider_list: Element<'_, Message> = if configured_providers.is_empty() {
+            container(
+                column![
+                    text("还没有模型供应商。").size(13),
+                    text("先点击右上角“新增供应商”完成接入配置。保存后会进入“调整模型列表”草稿页，默认勾选供应商声明的推荐模型，其余模型需要你显式保存后才会生效。").size(12),
+                ]
+                .spacing(6),
+            )
+            .padding(12)
+            .style(container::bordered_box)
             .into()
         } else {
-            container(column![]).into()
+            configured_providers
+                .into_iter()
+                .fold(column![].spacing(10), |list, provider| {
+                    let provider_id = provider.id.clone();
+                    let provider_name = provider.name.clone();
+                    let definition = provider_config::supported_provider_by_id(&provider_id);
+                    let entry = self.provider_configuration.provider.get(&provider_id);
+                    let catalog_models = provider_config::catalog_model_choices(
+                        &provider_id,
+                        &self.provider_configuration,
+                    );
+                    let endpoint_summary = definition
+                        .and_then(|definition| {
+                            entry.and_then(|entry| definition.resolved_base_url(&entry.options))
+                        })
+                        .unwrap_or_else(|| String::from("由运行时自动解析"));
+                    let api_key_summary = if entry
+                        .map(|entry| {
+                            entry
+                                .options
+                                .api_key
+                                .as_deref()
+                                .is_some_and(|api_key| !api_key.trim().is_empty())
+                        })
+                        .unwrap_or(false)
+                    {
+                        String::from("API Key：已填写")
+                    } else {
+                        String::from("API Key：未填写")
+                    };
+                    let enabled_model_count = provider_config::effective_model_choices(
+                        &provider_id,
+                        &self.provider_configuration,
+                    )
+                    .len();
+                    let source_summary = definition
+                        .map(|_| {
+                            format!(
+                                "{} · 内置目录 {} 个 · 当前启用 {} 个",
+                                api_key_summary,
+                                catalog_models.len(),
+                                enabled_model_count
+                            )
+                        })
+                        .unwrap_or_else(|| String::from("未找到供应商定义"));
+
+                    let mut action_row = row![
+                        button("编辑")
+                            .padding([4, 10])
+                            .style(|theme, status| {
+                                style::workbench_label_action_button_style(theme, status, false)
+                            })
+                            .on_press(Message::OpenProviderEditorForEdit(provider_id.clone())),
+                        button("调整模型列表")
+                            .padding([4, 10])
+                            .style(|theme, status| {
+                                style::workbench_label_action_button_style(theme, status, false)
+                            })
+                            .on_press(Message::OpenProviderModelPicker(provider_id.clone())),
+                    ]
+                    .spacing(10);
+                    action_row = action_row.push(
+                        button("删除")
+                            .padding([4, 10])
+                            .style(|theme, status| {
+                                style::workbench_label_action_button_style(theme, status, true)
+                            })
+                            .on_press(Message::RemoveConfiguredProvider(provider_id.clone())),
+                    );
+
+                    list.push(
+                        container(
+                            column![
+                                row![
+                                    column![
+                                        text(provider_name).size(16),
+                                        text(format!(
+                                            "{source_summary} · 接口地址：{endpoint_summary}"
+                                        ))
+                                        .size(12)
+                                        .color(
+                                            self.app_theme
+                                                .extended_palette()
+                                                .background
+                                                .base
+                                                .text
+                                                .scale_alpha(0.62),
+                                        ),
+                                    ]
+                                    .spacing(6),
+                                    space::horizontal(),
+                                    action_row,
+                                ]
+                                .align_y(Center)
+                                .spacing(10),
+                            ]
+                            .spacing(10),
+                        )
+                        .padding(12)
+                        .style(container::bordered_box),
+                    )
+                })
+                .into()
         };
+
+        scrollable(container(configured_provider_list).width(Fill))
+            .height(Fill)
+            .spacing(8)
+            .width(Fill)
+            .into()
+    }
+
+    /// Renders the standalone enabled-model management page grouped by provider.
+    /// 渲染按供应商分组展示的独立已启用模型管理页面。
+    pub(super) fn view_provider_model_list_card(&self) -> Element<'_, Message> {
+        let configured_providers = self.configured_provider_choices();
+        let Some(active_provider) = self.selected_model_list_provider_choice() else {
+            return column![text("当前还没有可展示的供应商。请先在“模型供应商”里新增至少一个供应商，然后再配置启用模型。").size(12)]
+                .spacing(12)
+                .width(Fill)
+                .height(Fill)
+                .into();
+        };
+
+        let provider_list = scrollable(configured_providers.into_iter().fold(
+            column![].spacing(1).width(Fill),
+            |list, provider| {
+                let enabled_count = provider_config::effective_model_choices(
+                    &provider.id,
+                    &self.provider_configuration,
+                )
+                .len();
+                let trailing_badge: Element<'_, Message> = text(format!("[{}]", enabled_count))
+                    .size(12)
+                    .color(
+                        self.app_theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.56),
+                    )
+                    .into();
+                list.push(self.view_tree_navigation_button_row(
+                    self.view_settings_navigation_icon(SettingsSection::ModelProviders, true),
+                    provider.name.clone(),
+                    None,
+                    Some(trailing_badge),
+                    active_provider.id == provider.id,
+                    MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                    Message::ProviderCatalogSelected(provider),
+                ))
+            },
+        ))
+        .height(Fill);
+
+        let enabled_models = provider_config::effective_model_choices(
+            &active_provider.id,
+            &self.provider_configuration,
+        );
+        let enabled_model_list: Element<'_, Message> = if enabled_models.is_empty() {
+            container(
+                column![
+                    text("当前供应商还没有启用任何模型。").size(13),
+                    text(
+                        "点击右上角“调整模型列表”进入完整目录草稿页，勾选后点击保存才会真正生效。"
+                    )
+                    .size(12),
+                ]
+                .spacing(6),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into()
+        } else {
+            scrollable(
+                enabled_models
+                    .into_iter()
+                    .fold(column![].spacing(10), |list, model| {
+                        let modality_summary = if model.input_modalities.is_empty() {
+                            String::from("text")
+                        } else {
+                            model.input_modalities.join(" / ")
+                        };
+                        let summary = format!(
+                            "{} · 上下文 {} · 输出 {}",
+                            modality_summary,
+                            model
+                                .context_limit
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| String::from("-")),
+                            model
+                                .output_limit
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| String::from("-")),
+                        );
+
+                        list.push(
+                            container(
+                                row![
+                                    column![
+                                        text(model.name.clone()).size(13),
+                                        text(format!("{} · {}", model.id, summary)).size(11).color(
+                                            self.app_theme
+                                                .extended_palette()
+                                                .background
+                                                .base
+                                                .text
+                                                .scale_alpha(0.58),
+                                        ),
+                                    ]
+                                    .spacing(4)
+                                    .width(Fill),
+                                    button("编辑能力").style(button::secondary).on_press(
+                                        Message::OpenProviderModelOverrideEditor {
+                                            provider_id: active_provider.id.clone(),
+                                            model_id: model.id.clone(),
+                                        }
+                                    ),
+                                ]
+                                .align_y(Center)
+                                .spacing(10),
+                            )
+                            .padding(10)
+                            .style(container::bordered_box),
+                        )
+                    }),
+            )
+            .height(Fill)
+            .into()
+        };
+
+        row![
+            column![text("供应商").size(13), provider_list]
+                .spacing(8)
+                .width(FillPortion(2))
+                .height(Fill),
+            column![
+                row![
+                    text("已启用模型").size(13),
+                    space::horizontal(),
+                    text(provider_config::provider_summary(&active_provider.id)).size(12),
+                ]
+                .align_y(Center),
+                enabled_model_list,
+            ]
+            .spacing(10)
+            .width(FillPortion(5))
+            .height(Fill),
+        ]
+        .spacing(16)
+        .width(Fill)
+        .height(Fill)
+        .into()
+    }
+
+    /// Renders the blocking provider editor modal used for creating or updating one provider entry.
+    /// 渲染用于创建或更新单条供应商配置的阻塞式供应商编辑弹窗。
+    pub(super) fn view_provider_editor_modal(&self) -> Option<Element<'_, Message>> {
+        let editor = self.provider_editor.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let provider_choices = provider_config::supported_provider_choices();
+        let selected_definition = self.selected_provider_definition();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseProviderEditor);
+        let provider_picker: Element<'_, Message> = if editor.is_new {
+            pick_list(
+                provider_choices,
+                Some(self.selected_provider.clone()),
+                Message::ProviderCatalogSelected,
+            )
+            .width(Fill)
+            .placeholder("选择供应商")
+            .into()
+        } else {
+            container(text(self.selected_provider.name.clone()).size(14))
+                .padding(10)
+                .style(container::bordered_box)
+                .width(Fill)
+                .into()
+        };
+        let provider_metadata: Element<'_, Message> = selected_definition.map_or_else(
+            || text("当前没有可用的供应商定义。").size(12).into(),
+            |definition| {
+                column![
+                    text(format!("运行时：{}", definition.runtime.label())).size(12),
+                    text(format!(
+                        "接口族：{} · {}",
+                        definition.runtime.api_family().label(),
+                        definition.runtime.api_family().key()
+                    ))
+                    .size(12),
+                    text(format!(
+                        "接口地址：{}",
+                        self.selected_provider_endpoint_summary()
+                    ))
+                    .size(12),
+                    text(format!(
+                        "模型目录：{}",
+                        self.selected_provider_model_source_summary()
+                    ))
+                    .size(12),
+                ]
+                .spacing(4)
+                .into()
+            },
+        );
         let provider_field_list = selected_definition.map_or_else(
             || column![text("当前没有可用的供应商定义。").size(13)].spacing(8),
             |definition| {
-                let fields = definition.input_fields();
-
-                fields
+                definition
+                    .input_fields()
                     .into_iter()
                     .fold(column![].spacing(10), |form, field| {
                         let label = definition.field_label(field);
@@ -4667,117 +5133,526 @@ impl VulcanWorkbench {
                         } else {
                             input
                         };
-
-                        form.push(column![text(label).size(13), input].spacing(6).width(Fill))
+                        form.push(column![text(label).size(13), input].spacing(6))
                     })
             },
         );
-        let configured_provider_list: Element<'_, Message> = if configured_providers.is_empty() {
-            column![text("尚未保存任何供应商配置。").size(12)].into()
-        } else {
-            configured_providers
-                .into_iter()
-                .fold(column![].spacing(8), |list, provider| {
-                    list.push(
-                        button(
-                            row![
-                                text(provider.name.clone()).size(13),
-                                space::horizontal(),
-                                text(self.configured_provider_model_summary(&provider.id)).size(12),
-                            ]
-                            .align_y(Center)
-                            .width(Fill),
-                        )
-                        .padding([8, 10])
-                        .width(Fill)
-                        .style(if provider.id == self.selected_provider.id {
-                            button::primary
-                        } else {
-                            button::secondary
-                        })
-                        .on_press(Message::ConfiguredProviderSelected(provider.id)),
-                    )
-                })
-                .into()
-        };
-
-        container(
-            column![
+        let modal_card =
+            container(
+                column![
                 row![
-                    text("模型供应商配置").size(18),
+                    text(if editor.is_new {
+                        "新增模型供应商"
+                    } else {
+                        "编辑模型供应商"
+                    })
+                    .size(20),
                     space::horizontal(),
-                    text("~/.vulcan/vulcan-code.json").size(12),
+                    close_button,
                 ]
                 .align_y(Center),
-                pick_list(
-                    provider_choices,
-                    selected_provider,
-                    Message::ProviderCatalogSelected
-                )
-                .width(Fill)
-                .placeholder("选择供应商"),
+                text("这里只保存供应商接入配置；启用模型与停用模型请进入“调整模型列表”弹窗后显式保存。")
+                    .size(12),
+                text("供应商").size(13),
+                provider_picker,
                 provider_metadata,
                 provider_field_list,
                 row![
-                    button("保存配置")
+                    text(if editor.is_new {
+                        "保存后会打开“调整模型列表”弹窗，并按该供应商内置目录里的默认勾选初始化草稿。"
+                    } else {
+                        "保存只更新当前供应商接入配置，不会自动改动已启用模型集合。"
+                    })
+                    .size(12),
+                    space::horizontal(),
+                    button("保存")
                         .style(button::primary)
                         .on_press(Message::SaveProviderConfiguration),
-                    button("移除配置")
-                        .style(button::secondary)
-                        .on_press(Message::RemoveProviderConfiguration),
-                    selected_definition.map_or_else(
-                        || button("尝试拉取模型").style(button::secondary),
-                        |definition| {
-                            let action = if definition.supports_remote_model_refresh() {
-                                Some(Message::RefreshProviderModels)
-                            } else {
-                                None
-                            };
-                            let mut button_widget =
-                                button(if definition.supports_remote_model_refresh() {
-                                    "尝试拉取模型"
-                                } else {
-                                    "仅使用静态模型目录"
-                                })
-                                .style(button::secondary);
-                            if let Some(message) = action {
-                                button_widget = button_widget.on_press(message);
-                            }
-                            button_widget
+                ]
+                .align_y(Center),
+            ]
+                .spacing(14),
+            )
+            .padding([22, 24])
+            .width(760)
+            .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseProviderEditor);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
+    }
+
+    /// Renders the blocking provider model-picker modal used to edit one provider's enabled-model draft before explicit save.
+    /// 渲染用于在显式保存前编辑某个供应商启用模型草稿的阻塞式供应商模型配置弹窗。
+    pub(super) fn view_provider_model_picker_modal(&self) -> Option<Element<'_, Message>> {
+        let picker = self.provider_model_picker.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseProviderModelPicker);
+        let current_draft_enabled_ids = picker
+            .draft_enabled_model_ids_by_provider
+            .get(&picker.selected_provider_id)
+            .cloned()
+            .unwrap_or_default();
+        let total_draft_enabled_count = picker
+            .draft_enabled_model_ids_by_provider
+            .values()
+            .map(BTreeSet::len)
+            .sum::<usize>();
+        let provider_list = scrollable(
+            self.provider_model_picker_provider_choices()
+                .into_iter()
+                .fold(column![].spacing(1).width(Fill), |list, provider| {
+                    let enabled_count = picker
+                        .draft_enabled_model_ids_by_provider
+                        .get(&provider.id)
+                        .map(BTreeSet::len)
+                        .unwrap_or_else(|| {
+                            provider_config::effective_model_choices(
+                                &provider.id,
+                                &self.provider_configuration,
+                            )
+                            .len()
+                        });
+                    let trailing_badge: Element<'_, Message> = text(format!("[{}]", enabled_count))
+                        .size(12)
+                        .color(
+                            self.app_theme
+                                .extended_palette()
+                                .background
+                                .base
+                                .text
+                                .scale_alpha(0.56),
+                        )
+                        .into();
+                    list.push(self.view_tree_navigation_button_row(
+                        self.view_settings_navigation_icon(SettingsSection::ModelProviders, true),
+                        provider.name.clone(),
+                        None,
+                        Some(trailing_badge),
+                        picker.selected_provider_id == provider.id,
+                        MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                        Message::ProviderModelPickerProviderSelected(provider.id),
+                    ))
+                }),
+        )
+        .height(320);
+        let filtered_catalog = self.filtered_provider_model_picker_catalog();
+        let catalog_list: Element<'_, Message> = if filtered_catalog.is_empty() {
+            container(text("当前过滤条件下没有匹配模型。").size(13))
+                .width(Fill)
+                .height(260)
+                .center(Fill)
+                .into()
+        } else {
+            scrollable(
+                filtered_catalog
+                    .into_iter()
+                    .fold(column![].spacing(10), |list, model| {
+                        let model_id = model.id.clone();
+                        let provider_id = picker.selected_provider_id.clone();
+                        let checked = current_draft_enabled_ids.contains(&model_id);
+                        let mut subtitle_parts = Vec::new();
+                        if let Some(family) = model.family.as_deref() {
+                            subtitle_parts.push(family.to_string());
                         }
+                        if !model.input_modalities.is_empty() {
+                            subtitle_parts.push(model.input_modalities.join(" / "));
+                        } else {
+                            subtitle_parts.push(String::from("text"));
+                        }
+                        if let Some(context_limit) = model.context_limit {
+                            subtitle_parts.push(format!("上下文 {context_limit}"));
+                        }
+                        if model.default_enabled {
+                            subtitle_parts.push(String::from("默认勾选"));
+                        }
+                        list.push(
+                            container(
+                                column![
+                                    row![
+                                        checkbox(checked)
+                                            .label(model.name.clone())
+                                            .on_toggle(move |enabled| {
+                                                Message::ProviderModelPickerModelToggled {
+                                                    provider_id: provider_id.clone(),
+                                                    model_id: model_id.clone(),
+                                                    enabled,
+                                                }
+                                            })
+                                            .size(13)
+                                            .width(Fill),
+                                        button("编辑能力").style(button::secondary).on_press(
+                                            Message::OpenProviderModelOverrideEditor {
+                                                provider_id: picker.selected_provider_id.clone(),
+                                                model_id: model.id.clone(),
+                                            }
+                                        ),
+                                    ]
+                                    .align_y(Center)
+                                    .spacing(10),
+                                    text(format!("{} · {}", model.id, subtitle_parts.join(" · ")))
+                                        .size(11)
+                                        .color(
+                                            self.app_theme
+                                                .extended_palette()
+                                                .background
+                                                .base
+                                                .text
+                                                .scale_alpha(0.56),
+                                        ),
+                                ]
+                                .spacing(6),
+                            )
+                            .padding(10)
+                            .style(container::bordered_box),
+                        )
+                    }),
+            )
+            .height(260)
+            .into()
+        };
+        let modal_card = container(
+            column![
+                row![
+                    text("配置启用模型").size(20),
+                    space::horizontal(),
+                    text(format!("当前草稿共勾选 {} 项", total_draft_enabled_count)).size(12),
+                    close_button,
+                ]
+                .align_y(Center),
+                text("左侧切换供应商，右侧编辑供应商内置完整模型目录。全选、取消等操作都只写入草稿，只有点击保存才会真正落盘。")
+                    .size(12),
+                row![
+                    container(column![text("供应商").size(13), provider_list].spacing(8))
+                        .width(FillPortion(2)),
+                    container(
+                        column![
+                            row![
+                                text("模型目录").size(13),
+                                space::horizontal(),
+                                text_input("输入模型名称或 ID 过滤", &picker.filter)
+                                    .on_input(Message::ProviderModelPickerFilterChanged)
+                                    .padding(8)
+                                    .width(260),
+                            ]
+                            .align_y(Center),
+                            row![
+                                button("全选当前结果")
+                                    .style(button::secondary)
+                                    .on_press(Message::ProviderModelPickerSelectAllVisible),
+                                button("取消当前结果")
+                                    .style(button::secondary)
+                                    .on_press(Message::ProviderModelPickerClearAllVisible),
+                            ]
+                            .spacing(10),
+                            catalog_list,
+                        ]
+                        .spacing(10),
+                    )
+                    .width(FillPortion(5)),
+                ]
+                .spacing(12)
+                .height(360),
+                row![
+                    text("取消会丢弃当前草稿，不会污染已保存结果。").size(12),
+                    space::horizontal(),
+                    button("保存")
+                        .style(button::primary)
+                        .on_press(Message::SaveProviderModelPicker),
+                ]
+                .align_y(Center),
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(920)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseProviderModelPicker);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
+    }
+
+    /// Renders the blocking per-model metadata editor used to correct one enabled model's capability declaration.
+    /// 渲染用于修正单个已启用模型能力声明的阻塞式逐模型元数据编辑弹窗。
+    pub(super) fn view_provider_model_override_editor_modal(&self) -> Option<Element<'_, Message>> {
+        let editor = self.provider_model_override_editor.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseProviderModelOverrideEditor);
+        let modality_toggles = column![
+            checkbox(editor.supports_text)
+                .label("文本输入")
+                .on_toggle(
+                    |enabled| Message::ProviderModelOverrideInputModalityToggled {
+                        modality: String::from("text"),
+                        enabled,
+                    }
+                ),
+            checkbox(editor.supports_image)
+                .label("图片输入")
+                .on_toggle(
+                    |enabled| Message::ProviderModelOverrideInputModalityToggled {
+                        modality: String::from("image"),
+                        enabled,
+                    }
+                ),
+            checkbox(editor.supports_audio)
+                .label("音频输入")
+                .on_toggle(
+                    |enabled| Message::ProviderModelOverrideInputModalityToggled {
+                        modality: String::from("audio"),
+                        enabled,
+                    }
+                ),
+            checkbox(editor.supports_video)
+                .label("视频输入")
+                .on_toggle(
+                    |enabled| Message::ProviderModelOverrideInputModalityToggled {
+                        modality: String::from("video"),
+                        enabled,
+                    }
+                ),
+            checkbox(editor.supports_pdf)
+                .label("PDF / 文件输入")
+                .on_toggle(
+                    |enabled| Message::ProviderModelOverrideInputModalityToggled {
+                        modality: String::from("pdf"),
+                        enabled,
+                    }
+                ),
+        ]
+        .spacing(8);
+        let modal_card = container(
+            column![
+                row![
+                    text("编辑模型能力").size(20),
+                    space::horizontal(),
+                    close_button,
+                ]
+                .align_y(Center),
+                text(format!(
+                    "{} · {}",
+                    provider_config::provider_summary(&editor.provider_id),
+                    editor.model_name
+                ))
+                .size(12),
+                row![
+                    checkbox(editor.reasoning)
+                        .label("声明支持思考 / 推理")
+                        .on_toggle(Message::ProviderModelOverrideReasoningChanged),
+                    tooltip(
+                        checkbox(editor.attachment)
+                            .label("声明附件标记")
+                            .on_toggle(Message::ProviderModelOverrideAttachmentChanged),
+                        "用于记录目录级附件声明，主要服务于诊断摘要与元数据对齐；真正决定图片、音频、视频、PDF 能否直接进入模型输入的是下方“输入能力”开关。",
+                        tooltip::Position::Bottom,
                     ),
                 ]
+                .spacing(18),
+                container(column![text("输入能力").size(13), modality_toggles].spacing(8))
+                    .padding(12)
+                    .style(container::bordered_box),
+                row![
+                    column![
+                        row![
+                            text("上下文长度").size(12),
+                            tooltip(
+                                container(
+                                    text("?").size(11).color(
+                                        self.app_theme
+                                            .extended_palette()
+                                            .background
+                                            .base
+                                            .text
+                                            .scale_alpha(0.56),
+                                    ),
+                                )
+                                .padding([0, 4]),
+                                "表示模型声明的总上下文窗口上限，通常覆盖系统提示词、历史消息、当前输入以及部分运行时预留空间。",
+                                tooltip::Position::Bottom,
+                            ),
+                        ]
+                        .spacing(4)
+                        .align_y(Center),
+                        text_input("例如 131072", &editor.context_limit_text)
+                            .on_input(Message::ProviderModelOverrideContextLimitChanged)
+                            .padding(8)
+                            .width(Fill),
+                    ]
+                    .spacing(6)
+                    .width(Fill),
+                    column![
+                        row![
+                            text("输入长度").size(12),
+                            tooltip(
+                                container(
+                                    text("?").size(11).color(
+                                        self.app_theme
+                                            .extended_palette()
+                                            .background
+                                            .base
+                                            .text
+                                            .scale_alpha(0.56),
+                                    ),
+                                )
+                                .padding([0, 4]),
+                                "表示宿主优先采用的输入预算上限，会直接影响上下文占用、预警与压缩判断；如果留空，则回退到“上下文长度”。它不一定等于“上下文长度 - 输出长度”，因为有些供应商会单独限制最大输入预算。",
+                                tooltip::Position::Bottom,
+                            ),
+                        ]
+                        .spacing(4)
+                        .align_y(Center),
+                        text_input("例如 65536", &editor.input_limit_text)
+                            .on_input(Message::ProviderModelOverrideInputLimitChanged)
+                            .padding(8)
+                            .width(Fill),
+                    ]
+                    .spacing(6)
+                    .width(Fill),
+                    column![
+                        text("输出长度").size(12),
+                        text_input("例如 8192", &editor.output_limit_text)
+                            .on_input(Message::ProviderModelOverrideOutputLimitChanged)
+                            .padding(8)
+                            .width(Fill),
+                    ]
+                    .spacing(6)
+                    .width(Fill),
+                ]
                 .spacing(10),
-                text(&self.provider_notice).size(12),
-                column![text("已保存的供应商").size(14), configured_provider_list].spacing(8),
+                column![
+                    text("思考模式附加配置（可选 JSON）").size(12),
+                    container(
+                        text_editor(&editor.reasoning_profile_buffer)
+                            .height(140)
+                            .padding(10)
+                            .size(13)
+                            .line_height(Pixels(18.0))
+                            .font(theme::code_font())
+                            .wrapping(iced::widget::text::Wrapping::None)
+                            .on_action(Message::ProviderModelOverrideReasoningProfileAction),
+                    )
+                    .style(container::bordered_box)
+                    .width(Fill),
+                    text("支持多行 JSON；留空则不写入额外思考配置。")
+                        .size(11)
+                        .color(
+                            self.app_theme
+                                .extended_palette()
+                                .background
+                                .base
+                                .text
+                                .scale_alpha(0.56),
+                        ),
+                ]
+                .spacing(6),
+                row![
+                    text("修改只会写入该模型的用户覆盖配置；点击保存前不会影响正式结果。").size(12),
+                    space::horizontal(),
+                    button("保存")
+                        .style(button::primary)
+                        .on_press(Message::SaveProviderModelOverrideEditor),
+                ]
+                .align_y(Center),
             ]
-            .spacing(12),
+            .spacing(14),
         )
-        .padding(16)
-        .style(container::bordered_box)
-        .into()
+        .padding([22, 24])
+        .width(760)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseProviderModelOverrideEditor);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
     }
 
     /// Renders the runtime selector card used by both the provider page and the runtime diagnostics page.
     /// 渲染供供应商页与运行诊断页复用的运行参数选择卡片。
     pub(super) fn view_runtime_selector_settings_card(&self) -> Element<'_, Message> {
-        let available_models = self.current_provider_model_choices();
-        let selected_model = self.active_model_choice_for_selected_provider();
-        let model_selector: Element<'_, Message> = if available_models.is_empty() {
-            container(text("当前供应商没有可用模型，请先保存配置或刷新模型目录。").size(13))
-                .padding(10)
-                .style(container::bordered_box)
-                .into()
-        } else {
-            pick_list(
-                available_models,
-                selected_model,
-                Message::ActiveModelSelected,
-            )
-            .width(Fill)
-            .placeholder("选择当前激活模型")
-            .into()
-        };
         let temperature_control: Element<'_, Message> = if self.temperature_enabled {
             slider(0.0..=1.0, self.temperature, Message::TemperatureChanged)
                 .step(0.05)
@@ -4791,7 +5666,7 @@ impl VulcanWorkbench {
         container(
             column![
                 text("运行参数").size(18),
-                model_selector,
+                text("当前对话模型选择已移到对话面板顶部，这里只保留主题与运行参数。").size(12),
                 pick_list(
                     Theme::ALL,
                     Some(self.app_theme.clone()),
@@ -4957,284 +5832,627 @@ impl VulcanWorkbench {
         .into()
     }
 
-    /// Renders the MCP configuration card that exposes server summaries and one editable transport-aware server form.
-    /// 渲染 MCP 配置卡片，以暴露服务器摘要与单个感知传输类型的可编辑服务器表单。
+    /// Renders the MCP configuration page as a pure server list with compact edit and remove actions.
+    /// 将 MCP 配置页渲染为纯服务器列表，并提供紧凑的编辑与移除动作。
     pub(super) fn view_mcp_configuration_card(&self) -> Element<'_, Message> {
-        let server_choices = self.configured_mcp_server_choices();
-        let selected_server = self.selected_mcp_server_choice();
-        let transport_choices = mcp_transport_choices();
-        let mcp_overview = self.runtime_foundation.mcp_overview();
-        let server_summary_rows = mcp_overview.summary_rows().to_vec();
-        let server_summary_list: Element<'_, Message> = if server_summary_rows.is_empty() {
-            text("尚未配置 MCP 服务器。").size(12).into()
-        } else {
-            server_summary_rows
-                .into_iter()
-                .fold(column![].spacing(6), |column, row_text| {
-                    column.push(text(format!("• {row_text}")).size(12))
-                })
-                .into()
-        };
-        let server_picker: Element<'_, Message> = if server_choices.is_empty() {
-            container(text("当前没有可编辑的 MCP 服务器，可先点击“新增服务器”。").size(12))
-                .padding(10)
-                .style(container::bordered_box)
-                .into()
-        } else {
-            pick_list(server_choices, selected_server, Message::McpServerSelected)
-                .width(Fill)
-                .placeholder("选择 MCP 服务器")
-                .into()
-        };
-        let mut remove_button = button("删除服务器").style(button::secondary);
-        if self.selected_mcp_server_id.is_some() {
-            remove_button = remove_button.on_press(Message::RemoveMcpServerConfiguration);
-        }
-        let latest_discovery_list: Element<'_, Message> = if self.last_mcp_discovery_rows.is_empty()
-            && self.last_mcp_discovery_errors.is_empty()
+        let palette = self.app_theme.extended_palette();
+        let server_list: Element<'_, Message> = if self
+            .provider_configuration
+            .mcp
+            .servers
+            .is_empty()
         {
-            text("尚未执行真实 MCP 工具发现。").size(12).into()
-        } else {
-            let mut latest_rows = column![].spacing(6);
-
-            for row_text in &self.last_mcp_discovery_rows {
-                latest_rows = latest_rows.push(text(format!("• {row_text}")).size(12));
-            }
-
-            for error_text in &self.last_mcp_discovery_errors {
-                latest_rows = latest_rows.push(text(format!("• 失败：{error_text}")).size(12));
-            }
-
-            latest_rows.into()
-        };
-
-        let transport_picker = pick_list(
-            transport_choices,
-            Some(self.mcp_server_form.transport),
-            Message::McpServerTransportSelected,
-        )
-        .width(Fill)
-        .placeholder("选择传输类型");
-        let transport_fields: Element<'_, Message> = match self.mcp_server_form.transport {
-            PersistedMcpTransportKind::Stdio => column![
-                text_input("启动命令，例如 uvx", &self.mcp_server_form.command)
-                    .on_input(Message::McpServerCommandChanged)
-                    .padding(10)
-                    .width(Fill),
-                text_input(
-                    "参数（使用 | 分隔），例如 mcp-server-filesystem | D:/openvulcan/vulcan-code",
-                    &self.mcp_server_form.args_text,
-                )
-                .on_input(Message::McpServerArgsChanged)
-                .padding(10)
-                .width(Fill),
-                text_input("工作目录（可选）", &self.mcp_server_form.cwd)
-                    .on_input(Message::McpServerCwdChanged)
-                    .padding(10)
-                    .width(Fill),
-                text_input(
-                    "环境变量（可选，KEY=VALUE; KEY2=VALUE）",
-                    &self.mcp_server_form.env_text,
-                )
-                .on_input(Message::McpServerEnvChanged)
-                .padding(10)
-                .width(Fill),
-            ]
-            .spacing(10)
-            .into(),
-            PersistedMcpTransportKind::Http => column![
-                text_input(
-                    "MCP URL，例如 https://example.com/mcp",
-                    &self.mcp_server_form.url
-                )
-                .on_input(Message::McpServerUrlChanged)
-                .padding(10)
-                .width(Fill),
-                text_input(
-                    "Bearer Token（可选，仅填写 Token 内容）",
-                    &self.mcp_server_form.bearer_token,
-                )
-                .on_input(Message::McpServerBearerTokenChanged)
-                .padding(10)
-                .width(Fill),
-                text_input(
-                    "HTTP 请求头（可选，KEY=VALUE; KEY2=VALUE）",
-                    &self.mcp_server_form.headers_text,
-                )
-                .on_input(Message::McpServerHeadersChanged)
-                .padding(10)
-                .width(Fill),
-            ]
-            .spacing(10)
-            .into(),
-            PersistedMcpTransportKind::Sse => column![
-                text_input(
-                    "SSE URL，例如 https://example.com/sse",
-                    &self.mcp_server_form.url
-                )
-                .on_input(Message::McpServerUrlChanged)
-                .padding(10)
-                .width(Fill),
-                text(
-                    "该模式面向旧式 MCP SSE 服务：客户端先连接 SSE 事件流，再根据 endpoint 事件公布的消息端点发起调用。",
-                )
-                .size(12),
-                text_input(
-                    "Bearer Token（可选，仅填写 Token 内容）",
-                    &self.mcp_server_form.bearer_token,
-                )
-                .on_input(Message::McpServerBearerTokenChanged)
-                .padding(10)
-                .width(Fill),
-                text_input(
-                    "HTTP 请求头（可选，KEY=VALUE; KEY2=VALUE）",
-                    &self.mcp_server_form.headers_text,
-                )
-                .on_input(Message::McpServerHeadersChanged)
-                .padding(10)
-                .width(Fill),
-            ]
-            .spacing(10)
-            .into(),
-        };
-        let mut start_oauth_button = button(if self.mcp_oauth_flow_in_flight {
-            "OAuth 进行中"
-        } else {
-            "发起 OAuth"
-        })
-        .style(button::secondary);
-        if self.selected_mcp_server_id.is_some()
-            && !matches!(
-                self.mcp_server_form.transport,
-                PersistedMcpTransportKind::Stdio
-            )
-            && !self.mcp_oauth_flow_in_flight
-        {
-            start_oauth_button = start_oauth_button.on_press(Message::StartSelectedMcpServerOAuth);
-        }
-        let mut complete_oauth_button = button("完成授权").style(button::secondary);
-        if !self.mcp_oauth_callback_input.trim().is_empty() {
-            complete_oauth_button =
-                complete_oauth_button.on_press(Message::CompleteSelectedMcpServerOAuthFromInput);
-        }
-        let mut clear_oauth_button = button("清理凭据").style(button::secondary);
-        if self.selected_mcp_server_id.is_some()
-            && !matches!(
-                self.mcp_server_form.transport,
-                PersistedMcpTransportKind::Stdio
-            )
-        {
-            clear_oauth_button =
-                clear_oauth_button.on_press(Message::RemoveSelectedMcpServerOAuthAuthorization);
-        }
-        let authorization_url_summary: Element<'_, Message> =
-            if self.mcp_oauth_authorization_url.trim().is_empty() {
-                text("最近一次授权链接：尚未生成").size(12).into()
-            } else {
-                text(format!(
-                    "最近一次授权链接：{}",
-                    self.mcp_oauth_authorization_url
-                ))
-                .size(12)
-                .into()
-            };
-        let oauth_fields: Element<'_, Message> = if matches!(
-            self.mcp_server_form.transport,
-            PersistedMcpTransportKind::Stdio
-        ) {
-            container(text("stdio 传输不需要宿主侧 OAuth 浏览器授权。").size(12))
-                .padding(10)
-                .style(container::bordered_box)
-                .into()
-        } else {
-            column![
-                text("OAuth（可选）").size(14),
-                text(format!("当前认证状态：{}", self.mcp_oauth_status)).size(12),
-                text_input(
-                    "OAuth Client ID（可选，留空则尝试动态注册）",
-                    &self.mcp_server_form.oauth_client_id,
-                )
-                .on_input(Message::McpServerOAuthClientIdChanged)
-                .padding(10)
-                .width(Fill),
-                text_input(
-                    "OAuth Client Secret（可选）",
-                    &self.mcp_server_form.oauth_client_secret,
-                )
-                .on_input(Message::McpServerOAuthClientSecretChanged)
-                .padding(10)
-                .width(Fill),
-                text_input(
-                    "OAuth Scopes（可选，使用分号、逗号或空格分隔）",
-                    &self.mcp_server_form.oauth_scopes_text,
-                )
-                .on_input(Message::McpServerOAuthScopesChanged)
-                .padding(10)
-                .width(Fill),
-                text_input(
-                    "OAuth Redirect URI（建议填写 localhost 回调地址）",
-                    &self.mcp_server_form.oauth_redirect_uri,
-                )
-                .on_input(Message::McpServerOAuthRedirectUriChanged)
-                .padding(10)
-                .width(Fill),
-                authorization_url_summary,
-                text_input(
-                    "浏览器最终跳转 URL、/callback?... 路径或 query string",
-                    &self.mcp_oauth_callback_input,
-                )
-                .on_input(Message::McpServerOAuthCallbackInputChanged)
-                .padding(10)
-                .width(Fill),
-                row![
-                    start_oauth_button,
-                    complete_oauth_button,
-                    clear_oauth_button,
+            container(
+                column![
+                    text("还没有 MCP。").size(13),
+                    text("点击右上角“新增 MCP”添加一个自定义服务器。").size(12),
                 ]
-                .spacing(10),
-            ]
-            .spacing(10)
+                .spacing(6),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into()
+        } else {
+            scrollable(self.provider_configuration.mcp.servers.iter().fold(
+                column![].spacing(10),
+                |list, (server_id, entry)| {
+                    let transport_label = match entry.transport {
+                        PersistedMcpTransportKind::Stdio => "STDIO",
+                        PersistedMcpTransportKind::Http => "流式 HTTP",
+                        PersistedMcpTransportKind::Sse => "兼容 SSE",
+                    };
+                    let status_label = if entry.enabled {
+                        "已启用"
+                    } else {
+                        "已停用"
+                    };
+                    let endpoint_summary = match entry.transport {
+                        PersistedMcpTransportKind::Stdio => {
+                            let argument_suffix = if entry.args.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" {}", entry.args.join(" "))
+                            };
+                            format!("{}{}", entry.command, argument_suffix)
+                        }
+                        PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => entry
+                            .url
+                            .clone()
+                            .unwrap_or_else(|| String::from("未配置 URL")),
+                    };
+                    let metadata_summary = format!(
+                        "{status_label} · {transport_label}{}",
+                        if entry.oauth.is_some()
+                            && !matches!(entry.transport, PersistedMcpTransportKind::Stdio)
+                        {
+                            " · OAuth"
+                        } else {
+                            ""
+                        }
+                    );
+                    let edit_choice = McpServerChoice {
+                        id: server_id.clone(),
+                        label: entry.name.clone(),
+                    };
+
+                    list.push(
+                        container(
+                            row![
+                                column![
+                                    text(&entry.name).size(16),
+                                    text(metadata_summary)
+                                        .size(12)
+                                        .color(palette.background.base.text.scale_alpha(0.62)),
+                                    text(endpoint_summary)
+                                        .size(12)
+                                        .color(palette.background.base.text.scale_alpha(0.52)),
+                                ]
+                                .spacing(6)
+                                .width(Fill),
+                                row![
+                                    button("编辑")
+                                        .padding([4, 10])
+                                        .style(|theme, status| {
+                                            style::workbench_label_action_button_style(
+                                                theme, status, false,
+                                            )
+                                        })
+                                        .on_press(Message::McpServerSelected(edit_choice)),
+                                    button("删除")
+                                        .padding([4, 10])
+                                        .style(|theme, status| {
+                                            style::workbench_label_action_button_style(
+                                                theme, status, true,
+                                            )
+                                        })
+                                        .on_press(Message::RequestRemoveMcpServerConfiguration(
+                                            server_id.clone(),
+                                        ),),
+                                ]
+                                .spacing(10),
+                            ]
+                            .align_y(Center)
+                            .spacing(12),
+                        )
+                        .padding(12)
+                        .style(container::bordered_box),
+                    )
+                },
+            ))
+            .height(Fill)
+            .width(Fill)
             .into()
         };
 
-        container(
+        container(server_list).width(Fill).height(Fill).into()
+    }
+
+    /// Renders the blocking MCP editor overlay used for creating or updating one custom MCP server entry.
+    /// 渲染用于创建或更新单条自定义 MCP 服务器配置的阻塞式编辑遮罩层。
+    pub(super) fn view_mcp_server_editor_modal(&self) -> Option<Element<'_, Message>> {
+        if !self.mcp_server_editor_open {
+            return None;
+        }
+
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseMcpServerEditor);
+        let transport_selector = row(mcp_transport_choices()
+            .into_iter()
+            .map(|transport| {
+                let label = match transport {
+                    PersistedMcpTransportKind::Stdio => "STDIO",
+                    PersistedMcpTransportKind::Http => "流式 HTTP",
+                    PersistedMcpTransportKind::Sse => "兼容 SSE",
+                };
+                button(container(text(label).size(13)).width(Fill).center_x(Fill))
+                    .width(Fill)
+                    .padding([10, 12])
+                    .style(move |theme, status| {
+                        style::workbench_transcript_mode_button_style(
+                            theme,
+                            status,
+                            self.mcp_server_form.transport == transport,
+                        )
+                    })
+                    .on_press(Message::McpServerTransportSelected(transport))
+                    .into()
+            })
+            .collect::<Vec<Element<'_, Message>>>())
+        .spacing(8)
+        .width(Fill);
+        let build_row_remove_button = |enabled: bool, on_press: Message| -> Element<'_, Message> {
+            let button = button(
+                container(lucide::trash().size(14).line_height(1.0))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(32)
+            .height(32)
+            .padding(0)
+            .style(style::workbench_model_trigger_button_style);
+            if enabled {
+                button.on_press(on_press).into()
+            } else {
+                button.into()
+            }
+        };
+        let transport_fields: Element<'_, Message> = match self.mcp_server_form.transport {
+            PersistedMcpTransportKind::Stdio => {
+                let allow_remove_args = self.mcp_server_form.args_rows.len() > 1;
+                let argument_rows = self.mcp_server_form.args_rows.iter().enumerate().fold(
+                    column![].spacing(8),
+                    |list, (index, row_state)| {
+                        list.push(
+                            row![
+                                text_input("参数", &row_state.value)
+                                    .on_input(move |value| Message::McpServerArgRowChanged(
+                                        index, value
+                                    ))
+                                    .padding(10)
+                                    .width(Fill),
+                                build_row_remove_button(
+                                    allow_remove_args,
+                                    Message::RemoveMcpServerArgRow(index),
+                                ),
+                            ]
+                            .spacing(8)
+                            .align_y(Center),
+                        )
+                    },
+                );
+                let allow_remove_env_rows = self.mcp_server_form.env_rows.len() > 1;
+                let environment_rows = self.mcp_server_form.env_rows.iter().enumerate().fold(
+                    column![].spacing(8),
+                    |list, (index, row_state)| {
+                        list.push(
+                            row![
+                                text_input("键", &row_state.key)
+                                    .on_input(move |value| Message::McpServerEnvKeyChanged(
+                                        index, value
+                                    ))
+                                    .padding(10)
+                                    .width(FillPortion(2)),
+                                text_input("值", &row_state.value)
+                                    .on_input(move |value| Message::McpServerEnvValueChanged(
+                                        index, value
+                                    ))
+                                    .padding(10)
+                                    .width(FillPortion(3)),
+                                build_row_remove_button(
+                                    allow_remove_env_rows,
+                                    Message::RemoveMcpServerEnvRow(index),
+                                ),
+                            ]
+                            .spacing(8)
+                            .align_y(Center),
+                        )
+                    },
+                );
+                let allow_remove_passthrough_rows =
+                    self.mcp_server_form.env_passthrough_rows.len() > 1;
+                let passthrough_rows = self
+                    .mcp_server_form
+                    .env_passthrough_rows
+                    .iter()
+                    .enumerate()
+                    .fold(column![].spacing(8), |list, (index, row_state)| {
+                        list.push(
+                            row![
+                                text_input("环境变量名，例如 TEST_TOKEN", &row_state.value)
+                                    .on_input(move |value| Message::McpServerEnvPassthroughChanged(
+                                        index, value
+                                    ))
+                                    .padding(10)
+                                    .width(Fill),
+                                build_row_remove_button(
+                                    allow_remove_passthrough_rows,
+                                    Message::RemoveMcpServerEnvPassthroughRow(index),
+                                ),
+                            ]
+                            .spacing(8)
+                            .align_y(Center),
+                        )
+                    });
+
+                column![
+                    column![
+                        text("启动命令").size(13),
+                        text_input(
+                            "例如 openai-dev-mcp serve-sqlite",
+                            &self.mcp_server_form.command
+                        )
+                        .on_input(Message::McpServerCommandChanged)
+                        .padding(10)
+                        .width(Fill),
+                    ]
+                    .spacing(6),
+                    container(
+                        column![
+                            text("参数").size(13),
+                            argument_rows,
+                            button("+ 添加参数")
+                                .style(button::secondary)
+                                .on_press(Message::AddMcpServerArgRow),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(14)
+                    .style(container::bordered_box)
+                    .width(Fill),
+                    container(
+                        column![
+                            text("环境变量").size(13),
+                            environment_rows,
+                            button("+ 添加环境变量")
+                                .style(button::secondary)
+                                .on_press(Message::AddMcpServerEnvRow),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(14)
+                    .style(container::bordered_box)
+                    .width(Fill),
+                    container(
+                        column![
+                            text("环境变量传递").size(13),
+                            passthrough_rows,
+                            button("+ 添加变量")
+                                .style(button::secondary)
+                                .on_press(Message::AddMcpServerEnvPassthroughRow),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(14)
+                    .style(container::bordered_box)
+                    .width(Fill),
+                    column![
+                        text("工作目录").size(13),
+                        text_input(DEFAULT_MCP_WORKING_DIRECTORY, &self.mcp_server_form.cwd)
+                            .on_input(Message::McpServerCwdChanged)
+                            .padding(10)
+                            .width(Fill),
+                    ]
+                    .spacing(6),
+                ]
+                .spacing(14)
+                .into()
+            }
+            PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => {
+                let endpoint_label = if matches!(
+                    self.mcp_server_form.transport,
+                    PersistedMcpTransportKind::Http
+                ) {
+                    "接口地址"
+                } else {
+                    "SSE 地址"
+                };
+                let mut start_oauth_button = button(if self.mcp_oauth_flow_in_flight {
+                    "OAuth 进行中"
+                } else {
+                    "发起 OAuth"
+                })
+                .style(button::secondary);
+                if self.selected_mcp_server_id.is_some() && !self.mcp_oauth_flow_in_flight {
+                    start_oauth_button =
+                        start_oauth_button.on_press(Message::StartSelectedMcpServerOAuth);
+                }
+                let mut complete_oauth_button = button("完成授权").style(button::secondary);
+                if !self.mcp_oauth_callback_input.trim().is_empty() {
+                    complete_oauth_button = complete_oauth_button
+                        .on_press(Message::CompleteSelectedMcpServerOAuthFromInput);
+                }
+                let mut clear_oauth_button = button("清理凭据").style(button::secondary);
+                if self.selected_mcp_server_id.is_some() {
+                    clear_oauth_button = clear_oauth_button
+                        .on_press(Message::RemoveSelectedMcpServerOAuthAuthorization);
+                }
+                let authorization_url_summary: Element<'_, Message> =
+                    if self.mcp_oauth_authorization_url.trim().is_empty() {
+                        text("最近一次授权链接：尚未生成").size(12).into()
+                    } else {
+                        text(format!(
+                            "最近一次授权链接：{}",
+                            self.mcp_oauth_authorization_url
+                        ))
+                        .size(12)
+                        .into()
+                    };
+                let allow_remove_headers = self.mcp_server_form.header_rows.len() > 1;
+                let header_rows = self.mcp_server_form.header_rows.iter().enumerate().fold(
+                    column![].spacing(8),
+                    |list, (index, row_state)| {
+                        list.push(
+                            row![
+                                text_input("键", &row_state.key)
+                                    .on_input(move |value| Message::McpServerHeaderKeyChanged(
+                                        index, value
+                                    ))
+                                    .padding(10)
+                                    .width(FillPortion(2)),
+                                text_input("值", &row_state.value)
+                                    .on_input(move |value| Message::McpServerHeaderValueChanged(
+                                        index, value
+                                    ))
+                                    .padding(10)
+                                    .width(FillPortion(3)),
+                                build_row_remove_button(
+                                    allow_remove_headers,
+                                    Message::RemoveMcpServerHeaderRow(index),
+                                ),
+                            ]
+                            .spacing(8)
+                            .align_y(Center),
+                        )
+                    },
+                );
+                let allow_remove_env_headers = self.mcp_server_form.header_from_env_rows.len() > 1;
+                let header_from_env_rows = self
+                    .mcp_server_form
+                    .header_from_env_rows
+                    .iter()
+                    .enumerate()
+                    .fold(column![].spacing(8), |list, (index, row_state)| {
+                        list.push(
+                            row![
+                                text_input("Header 键", &row_state.key)
+                                    .on_input(move |value| {
+                                        Message::McpServerHeaderFromEnvKeyChanged(index, value)
+                                    })
+                                    .padding(10)
+                                    .width(FillPortion(2)),
+                                text_input("环境变量名", &row_state.value)
+                                    .on_input(move |value| {
+                                        Message::McpServerHeaderFromEnvValueChanged(index, value)
+                                    })
+                                    .padding(10)
+                                    .width(FillPortion(3)),
+                                build_row_remove_button(
+                                    allow_remove_env_headers,
+                                    Message::RemoveMcpServerHeaderFromEnvRow(index),
+                                ),
+                            ]
+                            .spacing(8)
+                            .align_y(Center),
+                        )
+                    });
+
+                column![
+                    column![
+                        text(endpoint_label).size(13),
+                        text_input("例如 https://example.com/mcp", &self.mcp_server_form.url,)
+                            .on_input(Message::McpServerUrlChanged)
+                            .padding(10)
+                            .width(Fill),
+                    ]
+                    .spacing(6),
+                    column![
+                        text("Bearer Token").size(13),
+                        text_input(
+                            "可选，仅填写 Token 内容",
+                            &self.mcp_server_form.bearer_token,
+                        )
+                        .on_input(Message::McpServerBearerTokenChanged)
+                        .padding(10)
+                        .secure(true)
+                        .width(Fill),
+                    ]
+                    .spacing(6),
+                    container(
+                        column![
+                            text("请求头").size(13),
+                            header_rows,
+                            button("+ 添加请求头")
+                                .style(button::secondary)
+                                .on_press(Message::AddMcpServerHeaderRow),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(14)
+                    .style(container::bordered_box)
+                    .width(Fill),
+                    container(
+                        column![
+                            text("来自环境变量的请求头").size(13),
+                            header_from_env_rows,
+                            button("+ 添加环境变量请求头")
+                                .style(button::secondary)
+                                .on_press(Message::AddMcpServerHeaderFromEnvRow),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(14)
+                    .style(container::bordered_box)
+                    .width(Fill),
+                    container(
+                        column![
+                            text("OAuth（可选）").size(14),
+                            text(format!("当前认证状态：{}", self.mcp_oauth_status)).size(12),
+                            column![
+                                text("Client ID").size(13),
+                                text_input(
+                                    "留空则尝试动态注册",
+                                    &self.mcp_server_form.oauth_client_id,
+                                )
+                                .on_input(Message::McpServerOAuthClientIdChanged)
+                                .padding(10)
+                                .width(Fill),
+                            ]
+                            .spacing(6),
+                            column![
+                                text("Client Secret").size(13),
+                                text_input("可选", &self.mcp_server_form.oauth_client_secret,)
+                                    .on_input(Message::McpServerOAuthClientSecretChanged)
+                                    .padding(10)
+                                    .secure(true)
+                                    .width(Fill),
+                            ]
+                            .spacing(6),
+                            column![
+                                text("Scopes").size(13),
+                                text_input(
+                                    "使用分号、逗号或空格分隔",
+                                    &self.mcp_server_form.oauth_scopes_text,
+                                )
+                                .on_input(Message::McpServerOAuthScopesChanged)
+                                .padding(10)
+                                .width(Fill),
+                            ]
+                            .spacing(6),
+                            column![
+                                text("回调地址").size(13),
+                                text_input(
+                                    "建议填写 localhost 回调地址",
+                                    &self.mcp_server_form.oauth_redirect_uri,
+                                )
+                                .on_input(Message::McpServerOAuthRedirectUriChanged)
+                                .padding(10)
+                                .width(Fill),
+                            ]
+                            .spacing(6),
+                            authorization_url_summary,
+                            column![
+                                text("手动回调").size(13),
+                                text_input(
+                                    "浏览器最终跳转 URL、/callback?... 路径或 query string",
+                                    &self.mcp_oauth_callback_input,
+                                )
+                                .on_input(Message::McpServerOAuthCallbackInputChanged)
+                                .padding(10)
+                                .width(Fill),
+                            ]
+                            .spacing(6),
+                            row![
+                                start_oauth_button,
+                                complete_oauth_button,
+                                clear_oauth_button,
+                            ]
+                            .spacing(10),
+                        ]
+                        .spacing(12),
+                    )
+                    .padding(14)
+                    .style(container::bordered_box)
+                    .width(Fill),
+                ]
+                .spacing(14)
+                .into()
+            }
+        };
+        let notice_text: Element<'_, Message> = if self.mcp_notice.trim().is_empty() {
+            container(space()).height(0).into()
+        } else {
+            text(&self.mcp_notice)
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.68))
+                .into()
+        };
+        let modal_body = scrollable(
+            column![
+                column![
+                    text("名称").size(13),
+                    text_input("MCP server name", &self.mcp_server_form.name)
+                        .on_input(Message::McpServerNameChanged)
+                        .padding(10)
+                        .width(Fill),
+                ]
+                .spacing(6),
+                column![text("连接方式").size(13), transport_selector].spacing(6),
+                transport_fields,
+                notice_text,
+            ]
+            .spacing(14),
+        )
+        .height(560)
+        .spacing(8);
+        let modal_card = container(
             column![
                 row![
-                    text("MCP 服务器").size(18),
+                    text(if self.selected_mcp_server_id.is_some() {
+                        "编辑自定义 MCP"
+                    } else {
+                        "连接至自定义 MCP"
+                    })
+                    .size(20),
                     space::horizontal(),
-                    text("当前开放 stdio、http(streamable) 与 sse(legacy)").size(12),
+                    close_button,
                 ]
                 .align_y(Center),
-                server_picker,
-                checkbox(self.mcp_server_form.enabled)
-                    .label("启用该服务器")
-                    .on_toggle(Message::McpServerEnabledToggled),
-                text_input("服务器名称", &self.mcp_server_form.name)
-                    .on_input(Message::McpServerNameChanged)
-                    .padding(10)
-                    .width(Fill),
-                transport_picker,
-                transport_fields,
-                oauth_fields,
+                modal_body,
                 row![
-                    button("新增服务器")
-                        .style(button::secondary)
-                        .on_press(Message::CreateMcpServer),
-                    button("保存服务器")
+                    checkbox(self.mcp_server_form.enabled)
+                        .label("启用该服务器")
+                        .on_toggle(Message::McpServerEnabledToggled),
+                    space::horizontal(),
+                    button("保存")
                         .style(button::primary)
                         .on_press(Message::SaveMcpServerConfiguration),
-                    remove_button,
                 ]
-                .spacing(10),
-                text(&self.mcp_notice).size(12),
-                column![text("服务器摘要").size(14), server_summary_list].spacing(8),
-                column![text("最近一次发现").size(14), latest_discovery_list].spacing(8),
+                .align_y(Center),
             ]
-            .spacing(12),
+            .spacing(16),
         )
-        .padding(16)
-        .style(container::bordered_box)
-        .into()
+        .padding([22, 24])
+        .width(820)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseMcpServerEditor);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
     }
 
     /// Renders the project-scoped historical attachment cleanup card used inside the project settings modal.

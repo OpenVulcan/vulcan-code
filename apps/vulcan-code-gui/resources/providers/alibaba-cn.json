@@ -23,7 +23,7 @@
     "allowOverride": false
   },
   "modelDiscovery": {
-    "kind": "openai-models"
+    "kind": "none"
   },
   "modelRuntimeOverrides": {
     "qwen3-max": "openai-responses-compatible",
@@ -48,7 +48,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "deepseek-r1-0528",
@@ -66,7 +67,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "deepseek-r1-distill-llama-70b",
@@ -1179,6 +1181,7 @@
       "outputModalities": [
         "text"
       ],
+      "defaultEnabled": true,
       "aiTools": [
         {
           "kind": "web_search",

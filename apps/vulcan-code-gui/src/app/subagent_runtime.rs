@@ -646,4 +646,5 @@ impl VulcanWorkbench {
         }
 
         None
-    }}
+    }
+}

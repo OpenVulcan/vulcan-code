@@ -500,13 +500,10 @@ pub fn ai_capability_provider_definition_by_target(
         .find(|definition| {
             definition.enabled
                 && definition.id.eq_ignore_ascii_case(vendor_id)
-                && definition
-                    .flattened_targets()
-                    .into_iter()
-                    .any(|target| {
-                        target.capability_kind == capability_kind
-                            && target.target_alias.eq_ignore_ascii_case(target_alias)
-                    })
+                && definition.flattened_targets().into_iter().any(|target| {
+                    target.capability_kind == capability_kind
+                        && target.target_alias.eq_ignore_ascii_case(target_alias)
+                })
         })
 }
 

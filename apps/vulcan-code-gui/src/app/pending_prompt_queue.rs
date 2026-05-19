@@ -4,9 +4,12 @@
 use super::*;
 
 impl VulcanWorkbench {
-/// Returns the persisted pending prompt queue attached to the provided session runtime state.
+    /// Returns the persisted pending prompt queue attached to the provided session runtime state.
     /// 返回附着在给定会话运行时状态上的持久化待发送提示词队列。
-    pub(super) fn session_pending_prompt_queue(&self, session_id: SessionId) -> &[PendingSessionPromptEntry] {
+    pub(super) fn session_pending_prompt_queue(
+        &self,
+        session_id: SessionId,
+    ) -> &[PendingSessionPromptEntry] {
         self.session_runtime_state(session_id)
             .map(|state| state.ui_state.pending_prompt_queue.as_slice())
             .unwrap_or(&[])
@@ -47,7 +50,10 @@ impl VulcanWorkbench {
 
     /// Returns whether the internal prompt queue still contains delegated subagent completion callbacks for the provided parent session.
     /// 返回给定父会话的内部提示词队列中是否仍包含子代理完成回流回调。
-    pub(super) fn session_has_pending_delegate_completion_prompt(&self, session_id: SessionId) -> bool {
+    pub(super) fn session_has_pending_delegate_completion_prompt(
+        &self,
+        session_id: SessionId,
+    ) -> bool {
         self.session_pending_prompt_queue(session_id)
             .iter()
             .any(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
@@ -55,7 +61,10 @@ impl VulcanWorkbench {
 
     /// Returns whether one session should keep showing its subagent navigation round even after individual child tasks reach terminal states.
     /// 返回某个会话是否仍应保留当前子代理导航轮次，即使单个子任务已经进入终态。
-    pub(super) fn session_should_keep_subagent_navigation_round(&self, session_id: SessionId) -> bool {
+    pub(super) fn session_should_keep_subagent_navigation_round(
+        &self,
+        session_id: SessionId,
+    ) -> bool {
         self.session_has_active_run(session_id)
             || self.session_has_running_subagent_tasks(session_id)
             || self.session_has_pending_delegate_completion_prompt(session_id)
@@ -586,7 +595,10 @@ impl VulcanWorkbench {
 
     /// Marks one session as waiting on already-inserted internal queue work so the UI no longer looks idle while follow-up dispatch is pending.
     /// 将某个会话标记为正在等待已接入的内部队列任务，避免后续分发待命期间界面错误表现为空闲。
-    pub(super) fn mark_session_waiting_for_inserted_prompt_dispatch(&mut self, session_id: SessionId) {
+    pub(super) fn mark_session_waiting_for_inserted_prompt_dispatch(
+        &mut self,
+        session_id: SessionId,
+    ) {
         if self.session_has_active_run(session_id) {
             return;
         }
@@ -602,7 +614,7 @@ impl VulcanWorkbench {
         }
     }
 
-/// Validates whether the provided prompt entry still matches the active model attachment capability set.
+    /// Validates whether the provided prompt entry still matches the active model attachment capability set.
     /// 校验给定提示词项当前是否仍满足激活模型的附件能力集合。
     pub(super) fn validate_prompt_entry_attachments(
         &self,
@@ -1120,7 +1132,10 @@ impl VulcanWorkbench {
 
     /// Submits the current composer draft for the selected session, staging it in the visible panel whenever the internal system lane is still busy.
     /// 为当前选中会话提交提示词草稿；若内部系统通道仍然繁忙，则先把它暂存到可见面板中。
-    pub(super) fn submit_selected_session_prompt(&mut self, interrupt_running: bool) -> Task<Message> {
+    pub(super) fn submit_selected_session_prompt(
+        &mut self,
+        interrupt_running: bool,
+    ) -> Task<Message> {
         let Some((session_id, session_title)) = self
             .selected_session()
             .map(|session| (session.id, session.title.clone()))

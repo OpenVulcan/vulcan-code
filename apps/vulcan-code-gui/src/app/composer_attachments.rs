@@ -4,7 +4,7 @@
 use super::*;
 
 impl VulcanWorkbench {
-/// Builds the transient lease scope used by the currently selected composer attachment strip.
+    /// Builds the transient lease scope used by the currently selected composer attachment strip.
     /// 构建当前选中输入框附件条使用的瞬时租约作用域。
     pub(super) fn composer_attachment_ref_scope(&self) -> String {
         self.selected_session()
@@ -24,19 +24,28 @@ impl VulcanWorkbench {
 
     /// Builds the transient lease scope for one visible pending-prompt panel entry.
     /// 构建一条可见待发送面板项的瞬时租约作用域。
-    pub(super) fn pending_panel_attachment_ref_scope(session_id: SessionId, entry_id: &str) -> String {
+    pub(super) fn pending_panel_attachment_ref_scope(
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> String {
         format!("pending-panel:{session_id}:{entry_id}")
     }
 
     /// Builds the transient lease scope for one internal pending-prompt queue entry.
     /// 构建一条内部待发送队列项的瞬时租约作用域。
-    pub(super) fn pending_internal_attachment_ref_scope(session_id: SessionId, entry_id: &str) -> String {
+    pub(super) fn pending_internal_attachment_ref_scope(
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> String {
         format!("pending-internal:{session_id}:{entry_id}")
     }
 
     /// Builds the transient lease scope for one prompt entry that is being dispatched immediately.
     /// 构建一条正在立即派发的提示词项的瞬时租约作用域。
-    pub(super) fn prompt_dispatch_attachment_ref_scope(session_id: SessionId, entry_id: &str) -> String {
+    pub(super) fn prompt_dispatch_attachment_ref_scope(
+        session_id: SessionId,
+        entry_id: &str,
+    ) -> String {
         format!("dispatch:{session_id}:{entry_id}")
     }
 
@@ -327,7 +336,10 @@ impl VulcanWorkbench {
 
     /// Applies one composer editor action while keeping undo history, focus, and mirrored scroll state in sync.
     /// 应用一条提示词编辑器动作，并同步维护撤销历史、焦点以及镜像滚动状态。
-    pub(super) fn apply_composer_editor_action(&mut self, action: text_editor::Action) -> Task<Message> {
+    pub(super) fn apply_composer_editor_action(
+        &mut self,
+        action: text_editor::Action,
+    ) -> Task<Message> {
         let composer_surface_width = self.composer_input_surface_width();
         let action_is_scroll = matches!(action, text_editor::Action::Scroll { .. });
         let action_is_mutating = action.is_edit();

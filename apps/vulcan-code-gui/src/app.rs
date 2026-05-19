@@ -1,16 +1,16 @@
 //! Main application state and view composition for the desktop scaffold.
 //! 桌面端骨架的主应用状态与界面组合逻辑。
+mod attachment_management;
+mod composer_attachments;
 mod configuration;
+mod context_menu;
 mod helpers;
+mod media_preview;
 mod oauth_flow;
+mod pending_prompt_queue;
 mod session_loading;
 mod session_projection;
 mod subagent_runtime;
-mod attachment_management;
-mod composer_attachments;
-mod context_menu;
-mod media_preview;
-mod pending_prompt_queue;
 mod task_tree;
 mod views;
 
@@ -69,11 +69,11 @@ use crate::model::{
 use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;
 use crate::provider_config::{
-    self, AiToolKind, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
-    NativeBridgeRoutingMode, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
-    PersistedMcpTransportKind, PersistedProviderEntry, PersistedProviderOptions, ProviderChoice,
-    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
-    ReasoningSelectionOption, WebSearchRoutingMode,
+    self, AiToolKind, ModelChoice, NativeBridgeRoutingMode, PersistedAiToolConfiguration,
+    PersistedControllerConfiguration, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
+    PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedProviderEntry,
+    PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
+    ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption, WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
@@ -844,8 +844,7 @@ fn visible_session_messages_for_agent_view_projection(
             .into_iter()
             .filter(|message| {
                 message.is_visible_to_user()
-                    && floating_thinking_message_id
-                        .is_none_or(|active_id| message.id != active_id)
+                    && floating_thinking_message_id.is_none_or(|active_id| message.id != active_id)
             })
             .collect(),
     )
@@ -1677,6 +1676,27 @@ enum WorkbenchNoticeConfirmAction {
         /// 用户在兼容性确认之前选择的待切换模型。
         choice: WorkbenchModelChoice,
     },
+    /// Removes one configured model provider after the user confirms the destructive action.
+    /// 在用户确认破坏性操作后移除一条模型供应商配置。
+    RemoveConfiguredProvider {
+        /// Stable configured provider identifier that will be removed permanently.
+        /// 完成确认后将被移除的稳定模型供应商标识。
+        provider_id: String,
+    },
+    /// Removes one shared capability vendor after the user confirms the destructive action.
+    /// 在用户确认破坏性操作后移除一条共享能力供应商配置。
+    RemoveAiCapabilityVendor {
+        /// Stable shared capability vendor identifier that will be removed permanently.
+        /// 完成确认后将被移除的稳定共享能力供应商标识。
+        vendor_id: String,
+    },
+    /// Removes one configured MCP server after the user confirms the destructive action.
+    /// 在用户确认破坏性操作后移除一条 MCP 服务器配置。
+    RemoveMcpServerConfiguration {
+        /// Stable configured MCP server identifier that will be removed permanently.
+        /// 完成确认后将被移除的稳定 MCP 服务器标识。
+        server_id: String,
+    },
 }
 
 /// Reusable blocking notice modal state shared by acknowledgement and confirmation prompts.
@@ -2289,6 +2309,9 @@ pub struct VulcanWorkbench {
     /// Whether the left settings tree should keep the AI capability subtree expanded.
     /// 左侧设置树是否保持 AI 能力子树展开。
     settings_ai_capability_tree_expanded: bool,
+    /// Whether the left settings tree should keep the model-settings subtree expanded.
+    /// 左侧设置树是否保持模型设置子树展开。
+    settings_model_tree_expanded: bool,
     /// Optional blocking vendor picker modal used by the supplier page before one new shared AI capability vendor is created.
     /// 供应商页在创建新的共享 AI 能力供应商前使用的可选阻塞式供应商选择弹窗。
     ai_capability_vendor_picker: Option<AiCapabilityVendorPickerState>,
@@ -2298,6 +2321,18 @@ pub struct VulcanWorkbench {
     /// Optional blocking picker modal used by capability pages to batch-select vendor targets before saving them into one capability route.
     /// 供能力页在保存前批量选择供应商目标使用的可选阻塞式选择器弹窗。
     ai_capability_target_picker: Option<AiCapabilityTargetPickerState>,
+    /// Optional blocking picker modal used by capability pages to choose one routing strategy from a compact selector.
+    /// 供能力页从紧凑选择器中挑选单条路由策略时使用的可选阻塞式弹窗。
+    ai_capability_routing_picker: Option<AiCapabilityRoutingPickerState>,
+    /// Optional blocking editor modal used when one configured model provider is created or updated.
+    /// 新增或更新模型供应商配置时使用的可选阻塞式编辑弹窗。
+    provider_editor: Option<ProviderEditorState>,
+    /// Optional blocking model-picker modal used to edit one provider's enabled-model draft before explicit save.
+    /// 在显式保存前编辑某个供应商启用模型草稿时使用的可选阻塞式模型配置弹窗。
+    provider_model_picker: Option<ProviderModelPickerState>,
+    /// Optional blocking per-model metadata editor used to correct one enabled model's capability declaration.
+    /// 用于修正单个已启用模型能力声明的可选阻塞式逐模型元数据编辑弹窗。
+    provider_model_override_editor: Option<ProviderModelOverrideEditorState>,
     /// Currently selected provider entry inside the configuration page.
     /// 当前在配置页面中选中的供应商条目。
     selected_provider: ProviderChoice,
@@ -2316,6 +2351,9 @@ pub struct VulcanWorkbench {
     /// Currently selected MCP server identifier inside the settings page.
     /// 当前在设置页面中选中的 MCP 服务器标识。
     selected_mcp_server_id: Option<String>,
+    /// Whether the standalone MCP server editor overlay is currently visible.
+    /// 当前是否显示独立 MCP 服务器编辑遮罩层。
+    mcp_server_editor_open: bool,
     /// Editable MCP server form state for the selected MCP server entry.
     /// 当前选中 MCP 服务器条目对应的可编辑表单状态。
     mcp_server_form: McpServerFormState,
@@ -3053,6 +3091,78 @@ impl ProviderFormState {
     }
 }
 
+/// Blocking provider-editor modal state used when one model provider is being created or updated.
+/// 新增或更新模型供应商时使用的阻塞式供应商编辑弹窗状态。
+#[derive(Debug, Clone)]
+struct ProviderEditorState {
+    /// Whether the current editor session is creating a brand-new provider entry.
+    /// 当前编辑会话是否正在创建一条全新的供应商配置。
+    is_new: bool,
+}
+
+/// Blocking provider model-picker modal state used to edit one provider's enabled-model draft before explicit save.
+/// 在显式保存前编辑某个供应商启用模型草稿时使用的阻塞式供应商模型配置弹窗状态。
+#[derive(Debug, Clone)]
+struct ProviderModelPickerState {
+    /// Provider identifier whose complete catalog is currently being edited.
+    /// 当前正在编辑其完整目录的供应商标识。
+    selected_provider_id: String,
+    /// Live free-text filter applied to the catalog list.
+    /// 应用于目录列表的实时自由文本过滤值。
+    filter: String,
+    /// Per-provider draft enabled-model identifier sets that only become persistent after the user clicks save.
+    /// 按供应商分组、仅在用户点击保存后才会真正持久化的启用模型标识草稿集合。
+    draft_enabled_model_ids_by_provider: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// Blocking per-model metadata editor state used to correct one enabled model's capability declaration.
+/// 用于修正单个已启用模型能力声明的阻塞式逐模型元数据编辑状态。
+#[derive(Debug, Clone)]
+struct ProviderModelOverrideEditorState {
+    /// Provider identifier owning the model currently being edited.
+    /// 拥有当前编辑模型的供应商标识。
+    provider_id: String,
+    /// Model identifier whose override metadata is currently being edited.
+    /// 当前正在编辑覆盖元数据的模型标识。
+    model_id: String,
+    /// Human-readable model name shown in the modal header.
+    /// 显示在弹窗标题中的人类可读模型名称。
+    model_name: String,
+    /// Whether reasoning support should be explicitly declared by the override.
+    /// 当前覆盖是否应显式声明推理能力支持。
+    reasoning: bool,
+    /// Whether the catalog-level attachment flag should stay declared after the override is saved.
+    /// 保存覆盖后目录级附件标记是否仍应保持声明。
+    attachment: bool,
+    /// Whether text input should stay declared for the model.
+    /// 当前模型是否仍应声明支持文本输入。
+    supports_text: bool,
+    /// Whether image input should stay declared for the model.
+    /// 当前模型是否仍应声明支持图像输入。
+    supports_image: bool,
+    /// Whether audio input should stay declared for the model.
+    /// 当前模型是否仍应声明支持音频输入。
+    supports_audio: bool,
+    /// Whether video input should stay declared for the model.
+    /// 当前模型是否仍应声明支持视频输入。
+    supports_video: bool,
+    /// Whether PDF/file input should stay declared for the model.
+    /// 当前模型是否仍应声明支持 PDF/文件输入。
+    supports_pdf: bool,
+    /// Editable context-window limit text buffer.
+    /// 可编辑的上下文窗口上限文本缓冲区。
+    context_limit_text: String,
+    /// Editable input-token limit text buffer.
+    /// 可编辑的输入 Token 上限文本缓冲区。
+    input_limit_text: String,
+    /// Editable output-token limit text buffer.
+    /// 可编辑的输出 Token 上限文本缓冲区。
+    output_limit_text: String,
+    /// Editable multi-line JSON buffer for the optional reasoning-profile override.
+    /// 可选推理档位覆盖配置使用的可编辑多行 JSON 缓冲区。
+    reasoning_profile_buffer: text_editor::Content,
+}
+
 /// Pick-list choice representing one configurable runtime agent.
 /// 表示单个可配置运行时代理的下拉选择项。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3168,8 +3278,8 @@ impl Default for AgentProfileFormState {
     }
 }
 
-/// Pick-list choice representing one configurable MCP server entry.
-/// 表示单个可配置 MCP 服务器条目的下拉选择项。
+/// Lightweight selection payload representing one configurable MCP server entry.
+/// 表示单个可配置 MCP 服务器条目的轻量选择载荷。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct McpServerChoice {
     /// Stable MCP server identifier.
@@ -3185,6 +3295,52 @@ impl std::fmt::Display for McpServerChoice {
     /// 渲染单个 MCP 服务器选择项的面向用户标签。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.label)
+    }
+}
+
+/// Default working directory seeded into new stdio MCP drafts.
+/// 新建 stdio MCP 草稿时预填的默认工作目录。
+const DEFAULT_MCP_WORKING_DIRECTORY: &str = "~/.vulcan/code/mcp";
+
+/// One editable single-value row used by MCP argument and passthrough-environment lists.
+/// MCP 参数与透传环境变量列表使用的单值可编辑行。
+#[derive(Debug, Clone, Default)]
+struct McpTextRowState {
+    /// Current row value buffer.
+    /// 当前行的值缓冲区。
+    value: String,
+}
+
+impl McpTextRowState {
+    /// Builds one single-value MCP row from an optional initial value.
+    /// 根据可选初始值构建一条单值 MCP 行。
+    fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
+}
+
+/// One editable key-value row used by MCP environment and header groups.
+/// MCP 环境变量与请求头分组使用的键值可编辑行。
+#[derive(Debug, Clone, Default)]
+struct McpKeyValueRowState {
+    /// Current row key buffer.
+    /// 当前行的键缓冲区。
+    key: String,
+    /// Current row value buffer.
+    /// 当前行的值缓冲区。
+    value: String,
+}
+
+impl McpKeyValueRowState {
+    /// Builds one key-value MCP row from optional initial key and value buffers.
+    /// 根据可选初始键和值缓冲区构建一条 MCP 键值行。
+    fn new(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+        }
     }
 }
 
@@ -3204,18 +3360,21 @@ struct McpServerFormState {
     /// Command used to start the MCP server process.
     /// 用于启动 MCP 服务器进程的命令。
     command: String,
-    /// Delimited argument text shown in the settings form.
-    /// 展示在设置表单中的分隔参数文本。
-    args_text: String,
+    /// Editable argument rows shown in the settings form.
+    /// 展示在设置表单中的可编辑参数行集合。
+    args_rows: Vec<McpTextRowState>,
     /// Remote endpoint URL used by HTTP transports.
     /// HTTP 传输使用的远端端点 URL。
     url: String,
     /// Optional bearer token used by HTTP transports.
     /// HTTP 传输使用的可选 Bearer Token。
     bearer_token: String,
-    /// Semicolon-delimited HTTP header declarations.
-    /// 使用分号分隔的 HTTP 请求头声明文本。
-    headers_text: String,
+    /// Editable explicit HTTP header rows.
+    /// 可编辑的显式 HTTP 请求头行集合。
+    header_rows: Vec<McpKeyValueRowState>,
+    /// Editable request-header rows that resolve values from process environment variables.
+    /// 从当前进程环境变量解析值的可编辑请求头行集合。
+    header_from_env_rows: Vec<McpKeyValueRowState>,
     /// Optional OAuth client identifier used by remote MCP transports.
     /// 远端 MCP 传输使用的可选 OAuth 客户端标识。
     oauth_client_id: String,
@@ -3231,12 +3390,102 @@ struct McpServerFormState {
     /// Optional working directory override.
     /// 可选的工作目录覆盖值。
     cwd: String,
-    /// Semicolon-delimited environment declarations.
-    /// 使用分号分隔的环境变量声明文本。
-    env_text: String,
+    /// Editable explicit environment-variable rows injected into stdio child processes.
+    /// 注入到 stdio 子进程中的可编辑显式环境变量行集合。
+    env_rows: Vec<McpKeyValueRowState>,
+    /// Editable environment-variable names that should be passed through from the current host process.
+    /// 需要从当前宿主进程透传的可编辑环境变量名称行集合。
+    env_passthrough_rows: Vec<McpTextRowState>,
 }
 
 impl McpServerFormState {
+    /// Returns one default stdio working directory used by new MCP drafts and empty persisted entries.
+    /// 返回新 MCP 草稿与空持久化条目使用的默认 stdio 工作目录。
+    fn default_working_directory() -> String {
+        String::from(DEFAULT_MCP_WORKING_DIRECTORY)
+    }
+
+    /// Converts one persisted string vector into editable MCP single-value rows while preserving at least one row.
+    /// 将持久化字符串向量转换为可编辑 MCP 单值行，并保证至少保留一行。
+    fn text_rows_from_values(values: &[String]) -> Vec<McpTextRowState> {
+        if values.is_empty() {
+            vec![McpTextRowState::default()]
+        } else {
+            values
+                .iter()
+                .map(|value| McpTextRowState::new(value.clone()))
+                .collect()
+        }
+    }
+
+    /// Converts one persisted key-value map into editable MCP key-value rows while preserving at least one row.
+    /// 将持久化键值映射转换为可编辑 MCP 键值行，并保证至少保留一行。
+    fn key_value_rows_from_map(values: &BTreeMap<String, String>) -> Vec<McpKeyValueRowState> {
+        if values.is_empty() {
+            vec![McpKeyValueRowState::default()]
+        } else {
+            values
+                .iter()
+                .map(|(key, value)| McpKeyValueRowState::new(key.clone(), value.clone()))
+                .collect()
+        }
+    }
+
+    /// Resolves one ordered argument vector from the current editable row set, trimming blank entries.
+    /// 从当前可编辑行集合解析出有序参数向量，并裁剪空白项。
+    fn resolved_argument_rows(&self) -> Vec<String> {
+        self.args_rows
+            .iter()
+            .map(|row| row.value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    /// Resolves one ordered passthrough-environment list from the current editable row set, trimming blanks and removing duplicates.
+    /// 从当前可编辑行集合解析出有序透传环境变量列表，并裁剪空白与移除重复项。
+    fn resolved_env_passthrough_rows(&self) -> Vec<String> {
+        let mut ordered_values = Vec::new();
+        for value in self
+            .env_passthrough_rows
+            .iter()
+            .map(|row| row.value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            if !ordered_values.iter().any(|existing| existing == value) {
+                ordered_values.push(value.to_string());
+            }
+        }
+        ordered_values
+    }
+
+    /// Resolves one validated key-value map from editable rows while ignoring fully blank rows and rejecting partial or duplicate keys.
+    /// 从可编辑行解析出一份经过校验的键值映射，并忽略完全空白行且拒绝半填写或重复键。
+    fn resolved_key_value_rows(
+        rows: &[McpKeyValueRowState],
+        subject_label: &str,
+        value_label: &str,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let mut map = BTreeMap::new();
+        for row in rows {
+            let key = row.key.trim();
+            let value = row.value.trim();
+            if key.is_empty() && value.is_empty() {
+                continue;
+            }
+            if key.is_empty() {
+                return Err(format!("{subject_label} 的键不能为空。"));
+            }
+            if value.is_empty() {
+                return Err(format!("{subject_label} 的{value_label}不能为空。"));
+            }
+            if map.insert(key.to_string(), value.to_string()).is_some() {
+                return Err(format!("{subject_label} `{key}` 重复，请保留一条即可。"));
+            }
+        }
+        Ok(map)
+    }
+
     /// Builds an editable form state from one persisted MCP server entry.
     /// 根据单个持久化 MCP 服务器条目构建可编辑表单状态。
     fn from_entry(entry: &PersistedMcpServerEntry) -> Self {
@@ -3245,10 +3494,11 @@ impl McpServerFormState {
             enabled: entry.enabled,
             transport: entry.transport,
             command: entry.command.clone(),
-            args_text: join_mcp_server_args(&entry.args),
+            args_rows: Self::text_rows_from_values(&entry.args),
             url: entry.url.clone().unwrap_or_default(),
             bearer_token: entry.bearer_token.clone().unwrap_or_default(),
-            headers_text: join_mcp_server_headers(&entry.headers),
+            header_rows: Self::key_value_rows_from_map(&entry.headers),
+            header_from_env_rows: Self::key_value_rows_from_map(&entry.headers_from_env),
             oauth_client_id: entry
                 .oauth
                 .as_ref()
@@ -3269,8 +3519,12 @@ impl McpServerFormState {
                 .as_ref()
                 .and_then(|oauth| oauth.redirect_uri.clone())
                 .unwrap_or_default(),
-            cwd: entry.cwd.clone().unwrap_or_default(),
-            env_text: join_mcp_server_env(&entry.env),
+            cwd: entry
+                .cwd
+                .clone()
+                .unwrap_or_else(Self::default_working_directory),
+            env_rows: Self::key_value_rows_from_map(&entry.env),
+            env_passthrough_rows: Self::text_rows_from_values(&entry.env_passthrough),
         }
     }
 
@@ -3295,13 +3549,15 @@ impl McpServerFormState {
                     enabled: self.enabled,
                     transport: PersistedMcpTransportKind::Stdio,
                     command: command.to_string(),
-                    args: parse_mcp_server_args(&self.args_text),
+                    args: self.resolved_argument_rows(),
                     url: None,
                     bearer_token: None,
                     headers: BTreeMap::new(),
+                    headers_from_env: BTreeMap::new(),
                     oauth: None,
                     cwd: trim_to_option(&self.cwd),
-                    env: parse_mcp_server_env(&self.env_text)?,
+                    env: Self::resolved_key_value_rows(&self.env_rows, "环境变量", "值")?,
+                    env_passthrough: self.resolved_env_passthrough_rows(),
                 })
             }
             PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => {
@@ -3323,10 +3579,16 @@ impl McpServerFormState {
                     args: Vec::new(),
                     url: Some(url.to_string()),
                     bearer_token: trim_to_option(&self.bearer_token),
-                    headers: parse_mcp_server_headers(&self.headers_text)?,
+                    headers: Self::resolved_key_value_rows(&self.header_rows, "请求头", "值")?,
+                    headers_from_env: Self::resolved_key_value_rows(
+                        &self.header_from_env_rows,
+                        "来自环境变量的请求头",
+                        "环境变量名",
+                    )?,
                     oauth: oauth_config,
                     cwd: None,
                     env: BTreeMap::new(),
+                    env_passthrough: Vec::new(),
                 })
             }
         }
@@ -3366,16 +3628,18 @@ impl Default for McpServerFormState {
             enabled: false,
             transport: PersistedMcpTransportKind::Stdio,
             command: String::new(),
-            args_text: String::new(),
+            args_rows: vec![McpTextRowState::default()],
             url: String::new(),
             bearer_token: String::new(),
-            headers_text: String::new(),
+            header_rows: vec![McpKeyValueRowState::default()],
+            header_from_env_rows: vec![McpKeyValueRowState::default()],
             oauth_client_id: String::new(),
             oauth_client_secret: String::new(),
             oauth_scopes_text: String::new(),
             oauth_redirect_uri: String::new(),
-            cwd: String::new(),
-            env_text: String::new(),
+            cwd: Self::default_working_directory(),
+            env_rows: vec![McpKeyValueRowState::default()],
+            env_passthrough_rows: vec![McpTextRowState::default()],
         }
     }
 }
@@ -3442,7 +3706,7 @@ impl MainDisplayPanel {
             Self::Plugins => "承载插件能力、扩展安装与版本管理的占位面板。",
             Self::VulcanMemoryMesh => "承载记忆网格、关联记忆与长期上下文能力的占位面板。",
             Self::Example => "承载当前工作区主体与交互示例，便于持续重构布局。",
-            Self::Settings => "集中呈现供应商配置与运行参数，不混入全局动作。",
+            Self::Settings => "集中呈现模型、能力与运行设置，不混入全局动作。",
         }
     }
 
@@ -3501,8 +3765,11 @@ impl MainDisplayPanel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsSection {
     /// Chat-provider credentials and active-model configuration.
-    /// 对话模型供应商凭据与激活模型配置。
+    /// 对话模型供应商凭据与已启用模型配置。
     ModelProviders,
+    /// Enabled-model overview grouped by provider with per-model capability editing.
+    /// 按供应商分组的已启用模型总览与逐模型能力编辑入口。
+    ModelList,
     /// Runtime tuning, execution diagnostics, and engineering guardrails.
     /// 运行调优、执行诊断与工程约束设置。
     RuntimeDiagnostics,
@@ -3550,8 +3817,9 @@ impl SettingsSection {
     const fn label(self) -> &'static str {
         match self {
             Self::ModelProviders => "模型供应商",
+            Self::ModelList => "模型列表",
             Self::RuntimeDiagnostics => "运行与诊断",
-            Self::AiCapabilityVendors => "供应商配置",
+            Self::AiCapabilityVendors => "能力供应商",
             Self::AiCapabilityWebSearch => "联网搜索",
             Self::AiCapabilityUnderstandImage => "图像理解",
             Self::AiCapabilityUnderstandVideo => "视频理解",
@@ -3576,13 +3844,20 @@ impl SettingsSection {
     /// 返回所选设置分区的一句简洁说明。
     const fn description(self) -> &'static str {
         match self {
-            Self::ModelProviders => "配置对话模型供应商、激活模型与基础凭据。",
-            Self::RuntimeDiagnostics => "集中查看执行运行时、工程策略、指引与日志。",
-            Self::AiCapabilityVendors => "先在这里配置共享供应商凭据，后续各能力页直接复用。",
-            Self::AiCapabilityWebSearch => "管理统一 web-search 的默认链路、启用目标与顺序。",
+            Self::ModelProviders => {
+                "管理对话模型供应商接入配置，并通过配置动作进入模型启用草稿页。"
+            }
+            Self::ModelList => "管理已启用模型与模型能力覆盖。",
+            Self::RuntimeDiagnostics => "集中查看运行参数、执行运行时、工程策略、指引与日志。",
+            Self::AiCapabilityVendors => "先在这里配置共享能力供应商凭据，后续各能力页直接复用。",
+            Self::AiCapabilityWebSearch => "管理统一 web-search 的默认路由、启用接口与顺序。",
             Self::AiCapabilityUnderstandImage => "为不具备原生视觉的模型补齐图片理解能力。",
-            Self::AiCapabilityUnderstandVideo => "预留未来的视频理解入口；当前仅提供配置入口与路由占位。",
-            Self::AiCapabilityUnderstandAudio => "预留未来的音频理解入口；当前仅提供配置入口与路由占位。",
+            Self::AiCapabilityUnderstandVideo => {
+                "预留未来的视频理解入口；当前仅提供配置入口与路由占位。"
+            }
+            Self::AiCapabilityUnderstandAudio => {
+                "预留未来的音频理解入口；当前仅提供配置入口与路由占位。"
+            }
             Self::AiCapabilityImageGeneration => "配置可供对话模型调用的图片生成目标与顺序。",
             Self::AiCapabilityVideoGeneration => "配置可供对话模型调用的视频生成目标与顺序。",
             Self::AiCapabilitySpeechSynthesis => "配置文本转语音与语音合成目标与顺序。",
@@ -3608,6 +3883,38 @@ impl SettingsSection {
                 | Self::AiCapabilitySpeechSynthesis
                 | Self::AiCapabilityMusicGeneration
                 | Self::AiCapabilityMusicCover
+        )
+    }
+
+    /// Returns whether the current section belongs to the collapsible model-settings subtree.
+    /// 返回当前分区是否属于可折叠的模型设置子树。
+    const fn belongs_to_model_settings(self) -> bool {
+        matches!(self, Self::ModelProviders | Self::ModelList)
+    }
+
+    /// Returns the semantic capability kind represented by one settings section when the section manages one concrete capability.
+    /// 返回某个设置分区所代表的语义能力类型；若该分区并不管理具体能力则返回空值。
+    const fn capability_kind(self) -> Option<AiToolKind> {
+        match self {
+            Self::AiCapabilityWebSearch => Some(AiToolKind::WebSearch),
+            Self::AiCapabilityUnderstandImage => Some(AiToolKind::UnderstandImage),
+            Self::AiCapabilityUnderstandVideo => None,
+            Self::AiCapabilityUnderstandAudio => None,
+            Self::AiCapabilityImageGeneration => Some(AiToolKind::ImageGeneration),
+            Self::AiCapabilityVideoGeneration => Some(AiToolKind::VideoGeneration),
+            Self::AiCapabilitySpeechSynthesis => Some(AiToolKind::SpeechSynthesis),
+            Self::AiCapabilityMusicGeneration => Some(AiToolKind::MusicGeneration),
+            Self::AiCapabilityMusicCover => Some(AiToolKind::MusicCover),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the current settings section should expose a compact routing-strategy selector.
+    /// 返回当前设置分区是否应暴露紧凑路由策略选择器。
+    const fn supports_routing_strategy(self) -> bool {
+        matches!(
+            self,
+            Self::AiCapabilityWebSearch | Self::AiCapabilityUnderstandImage
         )
     }
 }
@@ -3723,6 +4030,15 @@ impl AiCapabilityTargetPickerState {
     fn total_selected_count(&self) -> usize {
         self.selections.values().map(BTreeMap::len).sum()
     }
+}
+
+/// Temporary in-memory picker state used by one capability page when the user chooses a routing strategy from a compact selector.
+/// 某个能力页在用户从紧凑选择器中挑选路由策略时使用的临时内存弹窗状态。
+#[derive(Debug, Clone)]
+struct AiCapabilityRoutingPickerState {
+    /// Semantic capability currently owning the routing strategy being edited.
+    /// 当前持有待编辑路由策略的语义能力。
+    capability_kind: AiToolKind,
 }
 
 /// Blocking vendor picker state used by the supplier page before one new shared AI capability vendor instance is created.
@@ -4084,33 +4400,117 @@ enum Message {
     /// Toggles whether the AI capability subtree stays expanded in the left settings tree.
     /// 切换左侧设置树中的 AI 能力子树是否保持展开。
     ToggleAiCapabilitySettingsTree,
+    /// Toggles whether the model-settings subtree stays expanded in the left settings tree.
+    /// 切换左侧设置树中的模型设置子树是否保持展开。
+    ToggleModelSettingsTree,
     /// One provider form field changed in the configuration page.
     /// 配置页面中的某个供应商表单字段发生变化。
     ProviderFieldChanged(ProviderFieldKey, String),
+    /// Opens the blocking editor used to create one brand-new provider configuration entry.
+    /// 打开用于创建全新供应商配置条目的阻塞式编辑弹窗。
+    OpenProviderEditorForCreate,
+    /// Opens the blocking editor used to update one existing configured provider entry.
+    /// 打开用于更新某条已有供应商配置的阻塞式编辑弹窗。
+    OpenProviderEditorForEdit(String),
+    /// Closes the currently visible provider editor without saving staged changes.
+    /// 在不保存暂存改动的前提下关闭当前可见的供应商编辑弹窗。
+    CloseProviderEditor,
     /// Persists the currently selected provider configuration.
     /// 持久化当前选中供应商的配置。
     SaveProviderConfiguration,
-    /// Removes the currently selected provider configuration.
-    /// 移除当前选中供应商的配置。
-    RemoveProviderConfiguration,
-    /// Tries refreshing the current provider model list from a remote endpoint.
-    /// 尝试从远端端点刷新当前供应商的模型列表。
-    RefreshProviderModels,
-    /// Applies a successful remote provider model refresh result.
-    /// 应用一次成功的远端供应商模型刷新结果。
-    ProviderModelsRefreshed(String, Vec<ModelChoice>),
-    /// Applies a failed remote provider model refresh result.
-    /// 应用一次失败的远端供应商模型刷新结果。
-    ProviderModelsRefreshFailed(String, String),
-    /// Selects the active global model from the current provider model list.
-    /// 从当前供应商模型列表中选择全局激活模型。
-    ActiveModelSelected(ModelChoice),
+    /// Opens the blocking model-picker modal used to edit one configured provider's enabled-model draft.
+    /// 打开用于编辑某个已配置供应商启用模型草稿的阻塞式模型配置弹窗。
+    OpenProviderModelPicker(String),
+    /// Closes the currently visible provider model-picker modal without saving staged changes.
+    /// 在不保存暂存改动的前提下关闭当前可见的供应商模型配置弹窗。
+    CloseProviderModelPicker,
+    /// Selects one provider row inside the blocking provider model-picker modal.
+    /// 在阻塞式供应商模型配置弹窗内部选中某条供应商行。
+    ProviderModelPickerProviderSelected(String),
+    /// Updates the live filter text used by the blocking provider model-picker modal.
+    /// 更新阻塞式供应商模型配置弹窗使用的实时过滤文本。
+    ProviderModelPickerFilterChanged(String),
+    /// Toggles one staged enabled-model checkbox inside the blocking provider model-picker modal.
+    /// 在阻塞式供应商模型配置弹窗内部切换某个暂存启用模型勾选框。
+    ProviderModelPickerModelToggled {
+        /// Provider identifier owning the staged catalog row.
+        /// 拥有该暂存目录行的供应商标识。
+        provider_id: String,
+        /// Model identifier being toggled in the staged enabled-model set.
+        /// 当前在暂存启用模型集合中被切换的模型标识。
+        model_id: String,
+        /// Whether the staged model should stay enabled after the toggle.
+        /// 当前暂存模型在切换后是否应保持启用。
+        enabled: bool,
+    },
+    /// Selects every currently visible model row inside the blocking provider model-picker modal.
+    /// 在阻塞式供应商模型配置弹窗内部选中当前全部可见模型行。
+    ProviderModelPickerSelectAllVisible,
+    /// Clears every currently visible model row inside the blocking provider model-picker modal.
+    /// 在阻塞式供应商模型配置弹窗内部取消当前全部可见模型行。
+    ProviderModelPickerClearAllVisible,
+    /// Persists the staged enabled-model draft from the blocking provider model-picker modal.
+    /// 将阻塞式供应商模型配置弹窗中的启用模型草稿持久化保存。
+    SaveProviderModelPicker,
+    /// Removes one configured provider entry chosen from the provider result list.
+    /// 从供应商结果列表中移除一条已配置供应商条目。
+    RemoveConfiguredProvider(String),
+    /// Opens the blocking per-model metadata editor used to correct one enabled model entry.
+    /// 打开用于修正某条已启用模型元数据的阻塞式逐模型编辑弹窗。
+    OpenProviderModelOverrideEditor {
+        /// Provider identifier owning the selected model.
+        /// 拥有当前所选模型的供应商标识。
+        provider_id: String,
+        /// Model identifier whose override metadata should be edited.
+        /// 需要编辑其覆盖元数据的模型标识。
+        model_id: String,
+    },
+    /// Closes the currently visible per-model metadata editor without saving staged changes.
+    /// 在不保存暂存改动的前提下关闭当前可见的逐模型元数据编辑弹窗。
+    CloseProviderModelOverrideEditor,
+    /// Updates the staged reasoning support flag inside the per-model metadata editor.
+    /// 更新逐模型元数据编辑弹窗中的暂存推理能力标记。
+    ProviderModelOverrideReasoningChanged(bool),
+    /// Updates the staged attachment declaration flag inside the per-model metadata editor.
+    /// 更新逐模型元数据编辑弹窗中的暂存附件声明标记。
+    ProviderModelOverrideAttachmentChanged(bool),
+    /// Toggles one staged input modality flag inside the per-model metadata editor.
+    /// 在逐模型元数据编辑弹窗中切换某个暂存输入模态标记。
+    ProviderModelOverrideInputModalityToggled {
+        /// Normalized modality name being toggled.
+        /// 当前被切换的规范化模态名称。
+        modality: String,
+        /// Whether the staged modality should stay enabled.
+        /// 当前暂存模态在切换后是否应保持启用。
+        enabled: bool,
+    },
+    /// Updates the staged context-window limit text inside the per-model metadata editor.
+    /// 更新逐模型元数据编辑弹窗中的暂存上下文窗口上限文本。
+    ProviderModelOverrideContextLimitChanged(String),
+    /// Updates the staged input-token limit text inside the per-model metadata editor.
+    /// 更新逐模型元数据编辑弹窗中的暂存输入 Token 上限文本。
+    ProviderModelOverrideInputLimitChanged(String),
+    /// Updates the staged output-token limit text inside the per-model metadata editor.
+    /// 更新逐模型元数据编辑弹窗中的暂存输出 Token 上限文本。
+    ProviderModelOverrideOutputLimitChanged(String),
+    /// Applies one text-editor action inside the staged reasoning-profile JSON editor.
+    /// 在暂存推理档位 JSON 编辑器中应用一条文本编辑器动作。
+    ProviderModelOverrideReasoningProfileAction(text_editor::Action),
+    /// Persists the staged per-model override metadata back into the provider configuration file.
+    /// 将暂存的逐模型覆盖元数据持久化回供应商配置文件。
+    SaveProviderModelOverrideEditor,
     /// Selects the global web-search routing mode.
     /// 选择全局网页搜索路由模式。
     WebSearchRoutingModeSelected(WebSearchRoutingMode),
     /// Selects the global native-versus-host routing mode for image understanding.
     /// 选择图像理解的全局原生与宿主桥接路由模式。
     UnderstandImageRoutingModeSelected(NativeBridgeRoutingMode),
+    /// Opens the compact routing-strategy picker used by one concrete capability settings page.
+    /// 打开某个具体能力设置页使用的紧凑路由策略选择弹窗。
+    OpenAiCapabilityRoutingPicker(AiToolKind),
+    /// Closes the currently visible compact routing-strategy picker without changing the active mode.
+    /// 在不修改当前模式的前提下关闭当前可见的紧凑路由策略选择弹窗。
+    CloseAiCapabilityRoutingPicker,
     /// Toggles one configured semantic capability target directly from the settings page or quick capability panel.
     /// 直接从设置页或快捷能力面板切换某条已配置语义能力目标的启用状态。
     AiCapabilityTargetEnabledToggled {
@@ -4246,9 +4646,6 @@ enum Message {
         /// 需要移除的完整 `供应商/目标` 选择器。
         target_selector: String,
     },
-    /// Persists standalone AI capability configuration.
-    /// 持久化独立 AI 能力配置。
-    SaveAiToolConfiguration,
     /// Opens the workbench quick AI capability panel from the composer controls.
     /// 从提示词控制区打开工作台快捷 AI 能力面板。
     OpenWorkbenchAiCapabilityPanel,
@@ -4286,9 +4683,6 @@ enum Message {
     /// Moves the highlighted option downward inside the filtered workbench model-picker result list.
     /// 在工作台模型选择弹窗的过滤结果列表中向下移动高亮选项。
     WorkbenchModelPickerMoveSelectionDown,
-    /// Selects one already-configured provider entry for editing.
-    /// 选中一个已配置的供应商条目进行编辑。
-    ConfiguredProviderSelected(String),
     /// Selects the active runtime agent used by compose-based execution.
     /// 选中 compose 执行链路使用的激活运行时代理。
     ActiveAgentSelected(AgentChoice),
@@ -4328,6 +4722,9 @@ enum Message {
     /// Selects one configured MCP server entry for editing.
     /// 选中一个已配置 MCP 服务器条目进行编辑。
     McpServerSelected(McpServerChoice),
+    /// Closes the currently visible MCP server editor without saving staged changes.
+    /// 在不保存暂存改动的前提下关闭当前可见的 MCP 服务器编辑器。
+    CloseMcpServerEditor,
     /// Updates the editable MCP server name field.
     /// 更新可编辑 MCP 服务器名称字段。
     McpServerNameChanged(String),
@@ -4337,18 +4734,45 @@ enum Message {
     /// Updates the editable MCP server command field.
     /// 更新可编辑 MCP 服务器命令字段。
     McpServerCommandChanged(String),
-    /// Updates the editable MCP server argument text field.
-    /// 更新可编辑 MCP 服务器参数文本字段。
-    McpServerArgsChanged(String),
+    /// Updates one editable MCP argument row.
+    /// 更新一条可编辑 MCP 参数行。
+    McpServerArgRowChanged(usize, String),
+    /// Appends one blank MCP argument row.
+    /// 追加一条空白 MCP 参数行。
+    AddMcpServerArgRow,
+    /// Removes one editable MCP argument row while preserving at least one row.
+    /// 删除一条可编辑 MCP 参数行并保证至少保留一行。
+    RemoveMcpServerArgRow(usize),
     /// Updates the editable MCP server URL field.
     /// 更新可编辑 MCP 服务器 URL 字段。
     McpServerUrlChanged(String),
     /// Updates the editable MCP server bearer token field.
     /// 更新可编辑 MCP 服务器 Bearer Token 字段。
     McpServerBearerTokenChanged(String),
-    /// Updates the editable MCP server HTTP headers field.
-    /// 更新可编辑 MCP 服务器 HTTP 请求头字段。
-    McpServerHeadersChanged(String),
+    /// Updates one editable explicit MCP HTTP-header key row.
+    /// 更新一条可编辑显式 MCP HTTP 请求头键行。
+    McpServerHeaderKeyChanged(usize, String),
+    /// Updates one editable explicit MCP HTTP-header value row.
+    /// 更新一条可编辑显式 MCP HTTP 请求头值行。
+    McpServerHeaderValueChanged(usize, String),
+    /// Appends one blank explicit MCP HTTP-header row.
+    /// 追加一条空白显式 MCP HTTP 请求头行。
+    AddMcpServerHeaderRow,
+    /// Removes one editable explicit MCP HTTP-header row while preserving at least one row.
+    /// 删除一条可编辑显式 MCP HTTP 请求头行并保证至少保留一行。
+    RemoveMcpServerHeaderRow(usize),
+    /// Updates one editable environment-backed MCP HTTP-header key row.
+    /// 更新一条可编辑环境变量来源 MCP HTTP 请求头键行。
+    McpServerHeaderFromEnvKeyChanged(usize, String),
+    /// Updates one editable environment-backed MCP HTTP-header environment-name row.
+    /// 更新一条可编辑环境变量来源 MCP HTTP 请求头环境变量名行。
+    McpServerHeaderFromEnvValueChanged(usize, String),
+    /// Appends one blank environment-backed MCP HTTP-header row.
+    /// 追加一条空白环境变量来源 MCP HTTP 请求头行。
+    AddMcpServerHeaderFromEnvRow,
+    /// Removes one editable environment-backed MCP HTTP-header row while preserving at least one row.
+    /// 删除一条可编辑环境变量来源 MCP HTTP 请求头行并保证至少保留一行。
+    RemoveMcpServerHeaderFromEnvRow(usize),
     /// Updates the editable MCP server OAuth client identifier field.
     /// 更新可编辑 MCP 服务器 OAuth 客户端标识字段。
     McpServerOAuthClientIdChanged(String),
@@ -4364,9 +4788,27 @@ enum Message {
     /// Updates the editable MCP server working-directory field.
     /// 更新可编辑 MCP 服务器工作目录字段。
     McpServerCwdChanged(String),
-    /// Updates the editable MCP server environment text field.
-    /// 更新可编辑 MCP 服务器环境变量文本字段。
-    McpServerEnvChanged(String),
+    /// Updates one editable explicit MCP environment-variable key row.
+    /// 更新一条可编辑显式 MCP 环境变量键行。
+    McpServerEnvKeyChanged(usize, String),
+    /// Updates one editable explicit MCP environment-variable value row.
+    /// 更新一条可编辑显式 MCP 环境变量值行。
+    McpServerEnvValueChanged(usize, String),
+    /// Appends one blank explicit MCP environment-variable row.
+    /// 追加一条空白显式 MCP 环境变量行。
+    AddMcpServerEnvRow,
+    /// Removes one editable explicit MCP environment-variable row while preserving at least one row.
+    /// 删除一条可编辑显式 MCP 环境变量行并保证至少保留一行。
+    RemoveMcpServerEnvRow(usize),
+    /// Updates one editable passthrough-environment row.
+    /// 更新一条可编辑透传环境变量行。
+    McpServerEnvPassthroughChanged(usize, String),
+    /// Appends one blank passthrough-environment row.
+    /// 追加一条空白透传环境变量行。
+    AddMcpServerEnvPassthroughRow,
+    /// Removes one editable passthrough-environment row while preserving at least one row.
+    /// 删除一条可编辑透传环境变量行并保证至少保留一行。
+    RemoveMcpServerEnvPassthroughRow(usize),
     /// Updates the editable MCP OAuth callback input field used for manual authorization completion.
     /// 更新用于手动完成授权的 MCP OAuth 回调输入字段。
     McpServerOAuthCallbackInputChanged(String),
@@ -4379,9 +4821,9 @@ enum Message {
     /// Persists the currently edited MCP server entry.
     /// 持久化当前编辑中的 MCP 服务器条目。
     SaveMcpServerConfiguration,
-    /// Removes the currently selected MCP server entry.
-    /// 删除当前选中的 MCP 服务器条目。
-    RemoveMcpServerConfiguration,
+    /// Requests removal for one configured MCP server entry from the list page.
+    /// 从列表页请求移除一条已配置 MCP 服务器条目。
+    RequestRemoveMcpServerConfiguration(String),
     /// Starts the host-driven OAuth authorization flow for the currently selected MCP server.
     /// 为当前选中的 MCP 服务器启动宿主驱动的 OAuth 授权流程。
     StartSelectedMcpServerOAuth,
@@ -5217,9 +5659,14 @@ impl VulcanWorkbench {
             active_main_panel: MainDisplayPanel::Main,
             selected_settings_section: SettingsSection::ModelProviders,
             settings_ai_capability_tree_expanded: true,
+            settings_model_tree_expanded: true,
             ai_capability_vendor_picker: None,
             ai_capability_vendor_editor: None,
             ai_capability_target_picker: None,
+            ai_capability_routing_picker: None,
+            provider_editor: None,
+            provider_model_picker: None,
+            provider_model_override_editor: None,
             selected_provider,
             provider_form,
             provider_notice,
@@ -5230,6 +5677,7 @@ impl VulcanWorkbench {
                 String::from("尚未配置 MCP 服务器，可在此新增一个 stdio 或 http 服务器。")
             },
             selected_mcp_server_id,
+            mcp_server_editor_open: false,
             mcp_server_form,
             mcp_oauth_status: String::from("未配置 OAuth"),
             mcp_oauth_callback_input: String::new(),
@@ -5253,8 +5701,7 @@ impl VulcanWorkbench {
             workbench_reasoning_effort: initial_workbench_reasoning_effort,
             workbench_web_search_override: PendingPromptWebSearchOverride::FollowGlobal,
             workbench_web_search_provider_id: None,
-            workbench_disabled_ai_capability_kinds:
-                initial_workbench_disabled_ai_capability_kinds,
+            workbench_disabled_ai_capability_kinds: initial_workbench_disabled_ai_capability_kinds,
             workbench_ai_capability_panel_open: false,
             workbench_ai_capability_section: WorkbenchAiCapabilitySection::WebSearch,
             workbench_model_picker_open: false,
@@ -5580,10 +6027,8 @@ impl VulcanWorkbench {
                         self.apply_session_hydration_snapshot(snapshot);
                         let maintenance_task =
                             self.schedule_session_storage_maintenance(session_id);
-                        let projection_task =
-                            self.schedule_session_agent_view_projection_refresh_if_needed(
-                                session_id,
-                            );
+                        let projection_task = self
+                            .schedule_session_agent_view_projection_refresh_if_needed(session_id);
                         if self
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
@@ -6171,7 +6616,7 @@ impl VulcanWorkbench {
                         String::from("已切换到示例面板，主工作区主体现以独立面板形式展示。")
                     }
                     MainDisplayPanel::Settings => {
-                        String::from("已切换到设置面板，当前聚焦供应商配置与运行参数。")
+                        String::from("已切换到设置面板，当前聚焦模型与能力配置。")
                     }
                 };
 
@@ -6493,6 +6938,22 @@ impl VulcanWorkbench {
                 if self.ai_capability_target_picker.take().is_some() {
                     return Task::none();
                 }
+                if self.ai_capability_routing_picker.take().is_some() {
+                    return Task::none();
+                }
+                if self.provider_model_override_editor.take().is_some() {
+                    return Task::none();
+                }
+                if self.provider_model_picker.take().is_some() {
+                    return Task::none();
+                }
+                if self.provider_editor.take().is_some() {
+                    return Task::none();
+                }
+                if self.mcp_server_editor_open {
+                    self.mcp_server_editor_open = false;
+                    return Task::none();
+                }
                 if self.workbench_ai_capability_panel_open {
                     self.workbench_ai_capability_panel_open = false;
                     return Task::none();
@@ -6529,6 +6990,21 @@ impl VulcanWorkbench {
                 }
                 if self.ai_capability_target_picker.is_some() {
                     return self.apply_ai_capability_target_picker_selections();
+                }
+                if self.ai_capability_routing_picker.is_some() {
+                    return Task::none();
+                }
+                if self.provider_model_override_editor.is_some() {
+                    return Task::done(Message::SaveProviderModelOverrideEditor);
+                }
+                if self.provider_model_picker.is_some() {
+                    return Task::done(Message::SaveProviderModelPicker);
+                }
+                if self.provider_editor.is_some() {
+                    return Task::done(Message::SaveProviderConfiguration);
+                }
+                if self.mcp_server_editor_open {
+                    return Task::done(Message::SaveMcpServerConfiguration);
                 }
                 if self.workbench_ai_capability_panel_open {
                     self.workbench_ai_capability_panel_open = false;
@@ -6734,7 +7210,14 @@ impl VulcanWorkbench {
                 if section.belongs_to_ai_capabilities() {
                     self.settings_ai_capability_tree_expanded = true;
                 }
+                if section.belongs_to_model_settings() {
+                    self.settings_model_tree_expanded = true;
+                }
                 self.status_message = format!("当前设置分区已切换到“{}”。", section.title());
+                Task::none()
+            }
+            Message::ToggleModelSettingsTree => {
+                self.settings_model_tree_expanded = !self.settings_model_tree_expanded;
                 Task::none()
             }
             Message::ToggleAiCapabilitySettingsTree => {
@@ -6744,153 +7227,284 @@ impl VulcanWorkbench {
             }
             Message::ProviderCatalogSelected(provider) => {
                 self.selected_provider = provider;
-                self.reload_selected_provider_form();
-                self.provider_notice = format!(
-                    "已切换到供应商：{}。",
-                    provider_config::provider_summary(&self.selected_provider.id)
-                );
+                if self.provider_editor.is_some() {
+                    self.reload_selected_provider_form();
+                    self.provider_notice = format!(
+                        "已切换到供应商：{}。",
+                        provider_config::provider_summary(&self.selected_provider.id)
+                    );
+                }
                 Task::none()
             }
             Message::ProviderFieldChanged(field, value) => {
                 self.provider_form.set(field, value);
                 Task::none()
             }
+            Message::OpenProviderEditorForCreate => {
+                self.open_provider_editor_for_create();
+                Task::none()
+            }
+            Message::OpenProviderEditorForEdit(provider_id) => {
+                if let Err(error) = self.open_provider_editor_for_edit(&provider_id) {
+                    self.provider_notice = error.clone();
+                    self.status_message = error;
+                }
+                Task::none()
+            }
+            Message::CloseProviderEditor => {
+                self.provider_editor = None;
+                Task::none()
+            }
             Message::SaveProviderConfiguration => {
+                let provider_id = self.selected_provider.id.clone();
+                let provider_name = provider_config::provider_summary(&provider_id);
+                let should_open_model_picker = self
+                    .provider_editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.is_new);
                 if let Err(error) = self.save_selected_provider_configuration() {
                     self.provider_notice = error.clone();
                     self.status_message = error;
                     return Task::none();
                 }
                 self.refresh_runtime_foundation();
-
-                let provider_name = provider_config::provider_summary(&self.selected_provider.id);
                 self.provider_notice = format!("已保存 `{provider_name}` 供应商配置。");
                 self.status_message = format!("供应商 `{provider_name}` 配置已写入本地文件。");
+                self.provider_editor = None;
+                if should_open_model_picker {
+                    if let Err(error) = self.open_provider_model_picker(&provider_id) {
+                        self.provider_notice = error.clone();
+                        self.status_message = error;
+                    } else if let Some(state) = self.provider_model_picker.as_mut() {
+                        let default_enabled_ids =
+                            provider_config::supported_provider_by_id(&provider_id)
+                                .map(|definition| {
+                                    provider_config::default_enabled_model_ids(&definition.models)
+                                        .into_iter()
+                                        .collect::<BTreeSet<_>>()
+                                })
+                                .unwrap_or_default();
+                        state
+                            .draft_enabled_model_ids_by_provider
+                            .insert(provider_id.clone(), default_enabled_ids);
+                    }
+                }
                 Task::none()
             }
-            Message::RemoveProviderConfiguration => {
-                let provider_id = self.selected_provider.id.clone();
-                let provider_name = provider_config::provider_summary(&provider_id);
-                self.provider_configuration.provider.remove(&provider_id);
-
-                if self
-                    .provider_configuration
-                    .model
-                    .as_deref()
-                    .and_then(provider_config::parse_active_model_reference)
-                    .is_some_and(|(active_provider_id, _)| active_provider_id == provider_id)
-                {
-                    self.provider_configuration.model = None;
+            Message::OpenProviderModelPicker(provider_id) => {
+                if let Err(error) = self.open_provider_model_picker(&provider_id) {
+                    self.provider_notice = error.clone();
+                    self.status_message = error;
                 }
-
-                if let Err(error) =
-                    provider_config::save_configuration_file(&self.provider_configuration)
-                {
+                Task::none()
+            }
+            Message::CloseProviderModelPicker => {
+                self.provider_model_picker = None;
+                Task::none()
+            }
+            Message::ProviderModelPickerProviderSelected(provider_id) => {
+                if let Some(state) = self.provider_model_picker.as_mut() {
+                    state.selected_provider_id = provider_id;
+                    state.filter.clear();
+                }
+                Task::none()
+            }
+            Message::ProviderModelPickerFilterChanged(value) => {
+                if let Some(state) = self.provider_model_picker.as_mut() {
+                    state.filter = value;
+                }
+                Task::none()
+            }
+            Message::ProviderModelPickerModelToggled {
+                provider_id,
+                model_id,
+                enabled,
+            } => {
+                if let Some(state) = self.provider_model_picker.as_mut() {
+                    if state.selected_provider_id == provider_id {
+                        let draft_ids = state
+                            .draft_enabled_model_ids_by_provider
+                            .entry(provider_id)
+                            .or_insert_with(BTreeSet::new);
+                        if enabled {
+                            draft_ids.insert(model_id);
+                        } else {
+                            draft_ids.remove(&model_id);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderModelPickerSelectAllVisible => {
+                let visible_ids = self
+                    .filtered_provider_model_picker_catalog()
+                    .into_iter()
+                    .map(|model| model.id)
+                    .collect::<Vec<_>>();
+                if let Some(state) = self.provider_model_picker.as_mut() {
+                    let draft_ids = state
+                        .draft_enabled_model_ids_by_provider
+                        .entry(state.selected_provider_id.clone())
+                        .or_insert_with(BTreeSet::new);
+                    for model_id in visible_ids {
+                        draft_ids.insert(model_id);
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderModelPickerClearAllVisible => {
+                let visible_ids = self
+                    .filtered_provider_model_picker_catalog()
+                    .into_iter()
+                    .map(|model| model.id)
+                    .collect::<Vec<_>>();
+                if let Some(state) = self.provider_model_picker.as_mut() {
+                    let draft_ids = state
+                        .draft_enabled_model_ids_by_provider
+                        .entry(state.selected_provider_id.clone())
+                        .or_insert_with(BTreeSet::new);
+                    for model_id in visible_ids {
+                        draft_ids.remove(&model_id);
+                    }
+                }
+                Task::none()
+            }
+            Message::SaveProviderModelPicker => {
+                let provider_id = self
+                    .provider_model_picker
+                    .as_ref()
+                    .map(|state| state.selected_provider_id.clone())
+                    .unwrap_or_default();
+                if let Err(error) = self.save_provider_model_picker() {
                     self.provider_notice = error.clone();
                     self.status_message = error;
                     return Task::none();
                 }
+                self.provider_model_picker = None;
                 self.refresh_runtime_foundation();
-
-                self.reload_selected_provider_form();
-                self.provider_notice = format!("已移除 `{provider_name}` 供应商配置。");
-                self.status_message = format!("供应商 `{provider_name}` 配置已删除。");
-                Task::none()
-            }
-            Message::RefreshProviderModels => {
-                let provider_id = self.selected_provider.id.clone();
-                let Some(definition) =
-                    provider_config::supported_provider_by_id(&provider_id).cloned()
-                else {
-                    let error = String::from("当前供应商未找到可用定义。");
-                    self.provider_notice = error.clone();
-                    self.status_message = error;
-                    return Task::none();
-                };
-
-                if !definition.supports_remote_model_refresh() {
-                    let message =
-                        String::from("当前供应商不支持远端模型刷新，将继续使用内置静态模型目录。");
-                    self.provider_notice = message.clone();
-                    self.status_message = message;
-                    return Task::none();
-                }
-
-                let options = self.provider_form.to_options();
-                self.provider_notice = format!("正在尝试刷新 `{}` 的模型列表。", definition.name);
-                let refresh_provider_id = provider_id.clone();
-
-                Task::perform(
-                    async move {
-                        provider_config::fetch_remote_models(&definition, &options)
-                            .await
-                            .map(|models| (provider_id, models))
-                    },
-                    move |result| match result {
-                        Ok((provider_id, models)) => {
-                            Message::ProviderModelsRefreshed(provider_id, models)
-                        }
-                        Err(error) => {
-                            Message::ProviderModelsRefreshFailed(refresh_provider_id.clone(), error)
-                        }
-                    },
-                )
-            }
-            Message::ProviderModelsRefreshed(provider_id, models) => {
-                let provider_name = provider_config::provider_summary(&provider_id);
-                let entry = self
-                    .provider_configuration
-                    .provider
-                    .entry(provider_id.clone())
-                    .or_insert_with(PersistedProviderEntry::default);
-                entry.name = Some(provider_name.clone());
-                entry.options = self.provider_form.to_options();
-                entry.models = provider_config::persist_remote_models(&models);
-
-                if let Err(error) =
-                    provider_config::save_configuration_file(&self.provider_configuration)
-                {
-                    self.provider_notice = error.clone();
-                    self.status_message = error;
-                    return Task::none();
-                }
-
                 self.provider_notice = format!(
-                    "已刷新 `{provider_name}` 的模型列表，共 {} 个模型。",
-                    models.len()
+                    "已保存 `{}` 的启用模型配置。",
+                    provider_config::provider_summary(&provider_id)
                 );
-                self.status_message = format!("供应商 `{provider_name}` 模型列表已更新。");
+                self.status_message = self.provider_notice.clone();
                 Task::none()
             }
-            Message::ProviderModelsRefreshFailed(provider_id, error) => {
+            Message::RemoveConfiguredProvider(provider_id) => {
                 let provider_name = provider_config::provider_summary(&provider_id);
-                self.provider_notice =
-                    format!("刷新 `{provider_name}` 模型列表失败，将继续使用静态目录：{error}");
-                self.status_message = format!("供应商 `{provider_name}` 模型刷新失败。");
+                self.show_workbench_confirmation_modal(
+                    format!("确认移除模型供应商 `{provider_name}`"),
+                    "移除后，该供应商的接入配置与已启用模型都会一并删除；如果它正作为当前模型来源，也会同步清空当前选择。",
+                    "确认移除",
+                    "取消",
+                    WorkbenchNoticeConfirmAction::RemoveConfiguredProvider { provider_id },
+                );
                 Task::none()
             }
-            Message::ActiveModelSelected(model) => {
-                self.provider_configuration.model =
-                    Some(format!("{}/{}", self.selected_provider.id, model.id));
-
+            Message::OpenProviderModelOverrideEditor {
+                provider_id,
+                model_id,
+            } => {
                 if let Err(error) =
-                    provider_config::save_configuration_file(&self.provider_configuration)
+                    self.open_provider_model_override_editor(&provider_id, &model_id)
                 {
+                    self.provider_notice = error.clone();
+                    self.status_message = error;
+                }
+                Task::none()
+            }
+            Message::CloseProviderModelOverrideEditor => {
+                self.provider_model_override_editor = None;
+                Task::none()
+            }
+            Message::ProviderModelOverrideReasoningChanged(value) => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    editor.reasoning = value;
+                }
+                Task::none()
+            }
+            Message::ProviderModelOverrideAttachmentChanged(value) => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    editor.attachment = value;
+                }
+                Task::none()
+            }
+            Message::ProviderModelOverrideInputModalityToggled { modality, enabled } => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    match modality.as_str() {
+                        "text" => editor.supports_text = enabled,
+                        "image" => editor.supports_image = enabled,
+                        "audio" => editor.supports_audio = enabled,
+                        "video" => editor.supports_video = enabled,
+                        "pdf" => editor.supports_pdf = enabled,
+                        _ => {}
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderModelOverrideContextLimitChanged(value) => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    editor.context_limit_text = value;
+                }
+                Task::none()
+            }
+            Message::ProviderModelOverrideInputLimitChanged(value) => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    editor.input_limit_text = value;
+                }
+                Task::none()
+            }
+            Message::ProviderModelOverrideOutputLimitChanged(value) => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    editor.output_limit_text = value;
+                }
+                Task::none()
+            }
+            Message::ProviderModelOverrideReasoningProfileAction(action) => {
+                if let Some(editor) = self.provider_model_override_editor.as_mut() {
+                    editor.reasoning_profile_buffer.perform(action);
+                }
+                Task::none()
+            }
+            Message::SaveProviderModelOverrideEditor => {
+                let provider_id = self
+                    .provider_model_override_editor
+                    .as_ref()
+                    .map(|editor| editor.provider_id.clone())
+                    .unwrap_or_default();
+                let model_name = self
+                    .provider_model_override_editor
+                    .as_ref()
+                    .map(|editor| editor.model_name.clone())
+                    .unwrap_or_default();
+                if let Err(error) = self.save_provider_model_override_editor() {
                     self.provider_notice = error.clone();
                     self.status_message = error;
                     return Task::none();
                 }
+                self.provider_model_override_editor = None;
                 self.refresh_runtime_foundation();
                 let reasoning_note = self.reconcile_workbench_reasoning_effort_for_active_model();
-
-                self.provider_notice = format!("已将 `{}` 设为当前激活模型。", model);
-                self.status_message = reasoning_note.map_or_else(
-                    || format!("当前激活模型已切换为 `{}`。", model),
-                    |note| format!("当前激活模型已切换为 `{}`。{}", model, note),
+                let temperature_note = self.reconcile_workbench_temperature_for_active_model();
+                let mut notes = Vec::new();
+                if let Some(note) = reasoning_note {
+                    notes.push(note);
+                }
+                if let Some(note) = temperature_note {
+                    notes.push(note);
+                }
+                self.provider_notice = format!(
+                    "已保存 `{}` 下模型 `{model_name}` 的覆盖配置。",
+                    provider_config::provider_summary(&provider_id)
                 );
+                self.status_message = if notes.is_empty() {
+                    self.provider_notice.clone()
+                } else {
+                    format!("{} {}", self.provider_notice, notes.join(" "))
+                };
                 Task::none()
             }
             Message::WebSearchRoutingModeSelected(mode) => {
+                self.ai_capability_routing_picker = None;
                 self.ai_tool_configuration.web_search.mode = mode;
                 self.persist_ai_tool_configuration_change(format!(
                     "web-search 路由已切换为「{}」并自动保存。",
@@ -6899,11 +7513,21 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::UnderstandImageRoutingModeSelected(mode) => {
+                self.ai_capability_routing_picker = None;
                 self.ai_tool_configuration.understand_image.mode = mode;
                 self.persist_ai_tool_configuration_change(format!(
                     "图像理解路由已切换为「{}」并自动保存。",
                     mode.label()
                 ));
+                Task::none()
+            }
+            Message::OpenAiCapabilityRoutingPicker(capability_kind) => {
+                self.ai_capability_routing_picker =
+                    Some(AiCapabilityRoutingPickerState { capability_kind });
+                Task::none()
+            }
+            Message::CloseAiCapabilityRoutingPicker => {
+                self.ai_capability_routing_picker = None;
                 Task::none()
             }
             Message::AiCapabilityTargetEnabledToggled {
@@ -6936,14 +7560,20 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::RemoveAiCapabilityVendor(vendor_id) => {
-                if self.remove_ai_capability_vendor(&vendor_id) {
-                    self.persist_ai_tool_configuration_change(String::from(
-                        "已移除共享 AI 能力供应商并自动保存。",
-                    ));
-                } else {
-                    self.ai_tool_notice = String::from("未找到要移除的共享 AI 能力供应商。");
-                    self.status_message = self.ai_tool_notice.clone();
-                }
+                let vendor_name = self
+                    .ai_tool_configuration
+                    .vendor_by_id(&vendor_id)
+                    .map(|vendor| vendor.name.clone())
+                    .unwrap_or_else(|| {
+                        provider_config::ai_capability_vendor_display_name(&vendor_id)
+                    });
+                self.show_workbench_confirmation_modal(
+                    format!("确认移除共享能力供应商 `{vendor_name}`"),
+                    "移除后，这个供应商下所有已配置接口都会一起删除，并立即写回当前能力扩展配置。",
+                    "确认移除",
+                    "取消",
+                    WorkbenchNoticeConfirmAction::RemoveAiCapabilityVendor { vendor_id },
+                );
                 Task::none()
             }
             Message::OpenAiCapabilityVendorPicker => {
@@ -7125,20 +7755,6 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
-            Message::SaveAiToolConfiguration => {
-                match self.save_ai_tool_configuration() {
-                    Ok(()) => {
-                        self.ai_tool_notice =
-                            String::from("独立 AI 能力配置已重新写入并刷新运行时。");
-                        self.status_message = self.ai_tool_notice.clone();
-                    }
-                    Err(error) => {
-                        self.ai_tool_notice = error.clone();
-                        self.status_message = error;
-                    }
-                }
-                Task::none()
-            }
             Message::OpenWorkbenchAiCapabilityPanel => {
                 self.workbench_ai_capability_panel_open = true;
                 Task::none()
@@ -7180,7 +7796,7 @@ impl VulcanWorkbench {
                             return Task::none();
                         } else {
                             self.status_message = format!(
-                                "“{}”当前还没有可快速切换的已配置目标，请先在左侧能力页中完成配置。",
+                                "“{}”当前还没有可快速切换的已配置接口，请先在左侧能力页中完成配置。",
                                 section.label()
                             );
                         }
@@ -7269,20 +7885,6 @@ impl VulcanWorkbench {
                 self.workbench_model_picker_highlighted_index
                     .map(|index| self.scroll_workbench_model_picker_to_index(index))
                     .unwrap_or_else(Task::none)
-            }
-            Message::ConfiguredProviderSelected(provider_id) => {
-                if let Some(choice) = provider_config::supported_provider_choices()
-                    .into_iter()
-                    .find(|item| item.id == provider_id)
-                {
-                    self.selected_provider = choice;
-                    self.reload_selected_provider_form();
-                    self.provider_notice = format!(
-                        "已定位到已配置供应商：{}。",
-                        provider_config::provider_summary(&provider_id)
-                    );
-                }
-                Task::none()
             }
             Message::ActiveAgentSelected(choice) => {
                 let selected_agent_id = if choice.id == SYSTEM_DEFAULT_AGENT_CHOICE_ID {
@@ -7404,12 +8006,17 @@ impl VulcanWorkbench {
             Message::McpServerSelected(choice) => {
                 self.selected_mcp_server_id = Some(choice.id.clone());
                 self.reload_selected_mcp_server_form();
+                self.mcp_server_editor_open = true;
                 self.mcp_oauth_callback_input.clear();
                 self.mcp_oauth_authorization_url.clear();
                 self.mcp_oauth_pending_state = None;
                 self.mcp_oauth_flow_in_flight = false;
-                self.mcp_notice = format!("已切换到 MCP 服务器 `{}`。", choice.label);
+                self.mcp_notice.clear();
                 self.load_selected_mcp_server_oauth_status_task()
+            }
+            Message::CloseMcpServerEditor => {
+                self.mcp_server_editor_open = false;
+                Task::none()
             }
             Message::McpServerNameChanged(value) => {
                 self.mcp_server_form.name = value;
@@ -7423,8 +8030,24 @@ impl VulcanWorkbench {
                 self.mcp_server_form.command = value;
                 Task::none()
             }
-            Message::McpServerArgsChanged(value) => {
-                self.mcp_server_form.args_text = value;
+            Message::McpServerArgRowChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.args_rows.get_mut(index) {
+                    row.value = value;
+                }
+                Task::none()
+            }
+            Message::AddMcpServerArgRow => {
+                self.mcp_server_form
+                    .args_rows
+                    .push(McpTextRowState::default());
+                Task::none()
+            }
+            Message::RemoveMcpServerArgRow(index) => {
+                if self.mcp_server_form.args_rows.len() > 1
+                    && index < self.mcp_server_form.args_rows.len()
+                {
+                    self.mcp_server_form.args_rows.remove(index);
+                }
                 Task::none()
             }
             Message::McpServerUrlChanged(value) => {
@@ -7435,8 +8058,56 @@ impl VulcanWorkbench {
                 self.mcp_server_form.bearer_token = value;
                 Task::none()
             }
-            Message::McpServerHeadersChanged(value) => {
-                self.mcp_server_form.headers_text = value;
+            Message::McpServerHeaderKeyChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.header_rows.get_mut(index) {
+                    row.key = value;
+                }
+                Task::none()
+            }
+            Message::McpServerHeaderValueChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.header_rows.get_mut(index) {
+                    row.value = value;
+                }
+                Task::none()
+            }
+            Message::AddMcpServerHeaderRow => {
+                self.mcp_server_form
+                    .header_rows
+                    .push(McpKeyValueRowState::default());
+                Task::none()
+            }
+            Message::RemoveMcpServerHeaderRow(index) => {
+                if self.mcp_server_form.header_rows.len() > 1
+                    && index < self.mcp_server_form.header_rows.len()
+                {
+                    self.mcp_server_form.header_rows.remove(index);
+                }
+                Task::none()
+            }
+            Message::McpServerHeaderFromEnvKeyChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.header_from_env_rows.get_mut(index) {
+                    row.key = value;
+                }
+                Task::none()
+            }
+            Message::McpServerHeaderFromEnvValueChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.header_from_env_rows.get_mut(index) {
+                    row.value = value;
+                }
+                Task::none()
+            }
+            Message::AddMcpServerHeaderFromEnvRow => {
+                self.mcp_server_form
+                    .header_from_env_rows
+                    .push(McpKeyValueRowState::default());
+                Task::none()
+            }
+            Message::RemoveMcpServerHeaderFromEnvRow(index) => {
+                if self.mcp_server_form.header_from_env_rows.len() > 1
+                    && index < self.mcp_server_form.header_from_env_rows.len()
+                {
+                    self.mcp_server_form.header_from_env_rows.remove(index);
+                }
                 Task::none()
             }
             Message::McpServerOAuthClientIdChanged(value) => {
@@ -7459,8 +8130,50 @@ impl VulcanWorkbench {
                 self.mcp_server_form.cwd = value;
                 Task::none()
             }
-            Message::McpServerEnvChanged(value) => {
-                self.mcp_server_form.env_text = value;
+            Message::McpServerEnvKeyChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.env_rows.get_mut(index) {
+                    row.key = value;
+                }
+                Task::none()
+            }
+            Message::McpServerEnvValueChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.env_rows.get_mut(index) {
+                    row.value = value;
+                }
+                Task::none()
+            }
+            Message::AddMcpServerEnvRow => {
+                self.mcp_server_form
+                    .env_rows
+                    .push(McpKeyValueRowState::default());
+                Task::none()
+            }
+            Message::RemoveMcpServerEnvRow(index) => {
+                if self.mcp_server_form.env_rows.len() > 1
+                    && index < self.mcp_server_form.env_rows.len()
+                {
+                    self.mcp_server_form.env_rows.remove(index);
+                }
+                Task::none()
+            }
+            Message::McpServerEnvPassthroughChanged(index, value) => {
+                if let Some(row) = self.mcp_server_form.env_passthrough_rows.get_mut(index) {
+                    row.value = value;
+                }
+                Task::none()
+            }
+            Message::AddMcpServerEnvPassthroughRow => {
+                self.mcp_server_form
+                    .env_passthrough_rows
+                    .push(McpTextRowState::default());
+                Task::none()
+            }
+            Message::RemoveMcpServerEnvPassthroughRow(index) => {
+                if self.mcp_server_form.env_passthrough_rows.len() > 1
+                    && index < self.mcp_server_form.env_passthrough_rows.len()
+                {
+                    self.mcp_server_form.env_passthrough_rows.remove(index);
+                }
                 Task::none()
             }
             Message::McpServerOAuthCallbackInputChanged(value) => {
@@ -7473,6 +8186,7 @@ impl VulcanWorkbench {
             }
             Message::CreateMcpServer => {
                 self.selected_mcp_server_id = None;
+                self.mcp_server_editor_open = true;
                 self.mcp_server_form = McpServerFormState {
                     enabled: true,
                     ..McpServerFormState::default()
@@ -7482,13 +8196,14 @@ impl VulcanWorkbench {
                 self.mcp_oauth_authorization_url.clear();
                 self.mcp_oauth_pending_state = None;
                 self.mcp_oauth_flow_in_flight = false;
-                self.mcp_notice = String::from("已创建新的 MCP 服务器草稿，请填写名称与连接信息。");
+                self.mcp_notice.clear();
                 Task::none()
             }
             Message::SaveMcpServerConfiguration => {
                 match self.save_selected_mcp_server_configuration() {
                     Ok(server_id) => {
                         self.selected_mcp_server_id = Some(server_id);
+                        self.mcp_server_editor_open = false;
                         self.reload_selected_mcp_server_form();
                         self.mcp_oauth_callback_input.clear();
                         self.mcp_oauth_authorization_url.clear();
@@ -7505,24 +8220,21 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
-            Message::RemoveMcpServerConfiguration => {
-                match self.remove_selected_mcp_server_configuration() {
-                    Ok(removed_name) => {
-                        self.reload_selected_mcp_server_form();
-                        self.mcp_oauth_status = String::from("未配置 OAuth");
-                        self.mcp_oauth_callback_input.clear();
-                        self.mcp_oauth_authorization_url.clear();
-                        self.mcp_oauth_pending_state = None;
-                        self.mcp_oauth_flow_in_flight = false;
-                        self.mcp_notice = format!("已移除 MCP 服务器 `{removed_name}`。");
-                        self.status_message = format!("MCP 服务器 `{removed_name}` 配置已删除。");
-                        return self.restart_mcp_runtime_task();
-                    }
-                    Err(error) => {
-                        self.mcp_notice = error.clone();
-                        self.status_message = error;
-                    }
-                }
+            Message::RequestRemoveMcpServerConfiguration(server_id) => {
+                let server_name = self
+                    .provider_configuration
+                    .mcp
+                    .servers
+                    .get(&server_id)
+                    .map(|entry| entry.name.clone())
+                    .unwrap_or_else(|| String::from("未命名服务器"));
+                self.show_workbench_confirmation_modal(
+                    format!("确认移除 MCP `{server_name}`"),
+                    "移除后，该 MCP 服务器的本地配置会被立即删除；如果它正处于编辑状态，对应编辑器也会一起关闭。",
+                    "确认移除",
+                    "取消",
+                    WorkbenchNoticeConfirmAction::RemoveMcpServerConfiguration { server_id },
+                );
                 Task::none()
             }
             Message::StartSelectedMcpServerOAuth => {
@@ -9483,6 +10195,89 @@ impl VulcanWorkbench {
             WorkbenchNoticeConfirmAction::ApplyModelSwitchRemovingUnsupportedAttachments {
                 choice,
             } => self.apply_confirmed_workbench_model_choice_after_attachment_cleanup(choice),
+            WorkbenchNoticeConfirmAction::RemoveConfiguredProvider { provider_id } => {
+                self.remove_configured_provider_after_confirmation(&provider_id)
+            }
+            WorkbenchNoticeConfirmAction::RemoveAiCapabilityVendor { vendor_id } => {
+                self.remove_ai_capability_vendor_after_confirmation(&vendor_id)
+            }
+            WorkbenchNoticeConfirmAction::RemoveMcpServerConfiguration { server_id } => {
+                self.remove_mcp_server_configuration_after_confirmation(&server_id)
+            }
+        }
+    }
+
+    /// Removes one configured model provider after the user explicitly confirms the destructive action.
+    /// 在用户显式确认破坏性操作后移除一条模型供应商配置。
+    fn remove_configured_provider_after_confirmation(
+        &mut self,
+        provider_id: &str,
+    ) -> Task<Message> {
+        let provider_name = provider_config::provider_summary(provider_id);
+        self.provider_configuration.provider.remove(provider_id);
+        if self
+            .provider_configuration
+            .model
+            .as_deref()
+            .and_then(provider_config::parse_active_model_reference)
+            .is_some_and(|(active_provider_id, _)| active_provider_id == provider_id)
+        {
+            self.provider_configuration.model = None;
+        }
+        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
+            self.provider_notice = error.clone();
+            self.status_message = error;
+            return Task::none();
+        }
+        self.refresh_runtime_foundation();
+        self.provider_notice = format!("已移除 `{provider_name}` 供应商配置。");
+        self.status_message = format!("供应商 `{provider_name}` 配置已删除。");
+        Task::none()
+    }
+
+    /// Removes one shared capability vendor after the user explicitly confirms the destructive action.
+    /// 在用户显式确认破坏性操作后移除一条共享能力供应商配置。
+    fn remove_ai_capability_vendor_after_confirmation(&mut self, vendor_id: &str) -> Task<Message> {
+        let vendor_name = self
+            .ai_tool_configuration
+            .vendor_by_id(vendor_id)
+            .map(|vendor| vendor.name.clone())
+            .unwrap_or_else(|| provider_config::ai_capability_vendor_display_name(vendor_id));
+        if self.remove_ai_capability_vendor(vendor_id) {
+            self.persist_ai_tool_configuration_change(format!(
+                "已移除共享能力供应商 `{vendor_name}` 并自动保存。"
+            ));
+        } else {
+            self.ai_tool_notice = String::from("未找到要移除的共享能力供应商。");
+            self.status_message = self.ai_tool_notice.clone();
+        }
+        Task::none()
+    }
+
+    /// Removes one configured MCP server after the user explicitly confirms the destructive action.
+    /// 在用户显式确认破坏性操作后移除一条 MCP 服务器配置。
+    fn remove_mcp_server_configuration_after_confirmation(
+        &mut self,
+        server_id: &str,
+    ) -> Task<Message> {
+        match self.remove_mcp_server_configuration_by_id(server_id) {
+            Ok(removed_name) => {
+                self.mcp_server_editor_open = false;
+                self.reload_selected_mcp_server_form();
+                self.mcp_oauth_status = String::from("未配置 OAuth");
+                self.mcp_oauth_callback_input.clear();
+                self.mcp_oauth_authorization_url.clear();
+                self.mcp_oauth_pending_state = None;
+                self.mcp_oauth_flow_in_flight = false;
+                self.mcp_notice = format!("已移除 MCP `{removed_name}`。");
+                self.status_message = format!("MCP `{removed_name}` 配置已删除。");
+                self.restart_mcp_runtime_task()
+            }
+            Err(error) => {
+                self.mcp_notice = error.clone();
+                self.status_message = error;
+                Task::none()
+            }
         }
     }
 
@@ -12241,7 +13036,7 @@ impl VulcanWorkbench {
             .collect::<Vec<_>>();
         if vendor_ids.is_empty() {
             self.ai_tool_notice = format!(
-                "当前还没有可用于“{}”的共享供应商，请先到“供应商配置”页新增并填写凭据。",
+                "当前还没有可用于“{}”的共享供应商，请先到“能力供应商”页新增并填写凭据。",
                 capability_kind.label()
             );
             self.status_message = self.ai_tool_notice.clone();
@@ -12310,7 +13105,7 @@ impl VulcanWorkbench {
                     >= provider_config::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
             {
                 self.ai_tool_notice = format!(
-                    "“{}”最多只能启用 {} 条目标，请先取消部分已勾选项。",
+                    "“{}”最多只能启用 {} 个接口，请先取消部分已勾选项。",
                     picker.capability_kind.label(),
                     provider_config::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
                 );
@@ -12389,7 +13184,7 @@ impl VulcanWorkbench {
         }
 
         self.persist_ai_tool_configuration_change(format!(
-            "已更新“{}”的启用目标并自动保存。",
+            "已更新“{}”的启用接口并自动保存。",
             picker.capability_kind.label()
         ));
         Task::none()
@@ -12467,7 +13262,7 @@ impl VulcanWorkbench {
             return Task::none();
         }
         if editor.is_new && !self.add_ai_capability_vendor(&editor.vendor_id) {
-            self.ai_tool_notice = format!("共享 AI 能力供应商 `{}` 已存在。", editor.display_name);
+            self.ai_tool_notice = format!("共享能力供应商 `{}` 已存在。", editor.display_name);
             self.status_message = self.ai_tool_notice.clone();
             return Task::none();
         }
@@ -12490,8 +13285,7 @@ impl VulcanWorkbench {
                 && matches!(
                     editor.connection_mode,
                     crate::provider_config::AiCapabilityVendorConnectionMode::Local
-                )
-            {
+                ) {
                 editor.base_url.trim().to_string()
             } else {
                 String::new()
@@ -12503,9 +13297,9 @@ impl VulcanWorkbench {
             };
         });
         let success_notice = if editor.is_new {
-            format!("已新增共享 AI 能力供应商 `{display_name}` 并自动保存。")
+            format!("已新增共享能力供应商 `{display_name}` 并自动保存。")
         } else {
-            format!("已更新共享 AI 能力供应商 `{display_name}` 并自动保存。")
+            format!("已更新共享能力供应商 `{display_name}` 并自动保存。")
         };
         self.persist_ai_tool_configuration_change(success_notice);
         Task::none()

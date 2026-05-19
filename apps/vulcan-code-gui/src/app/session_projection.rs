@@ -15,7 +15,9 @@ impl VulcanWorkbench {
             self.session_agent_view_selectable_documents
                 .contains_key(&session_id)
                 && self.session_agent_view_buffers.contains_key(&session_id)
-                && self.session_agent_view_raw_buffers.contains_key(&session_id)
+                && self
+                    .session_agent_view_raw_buffers
+                    .contains_key(&session_id)
         } else {
             true
         }
@@ -105,7 +107,10 @@ impl VulcanWorkbench {
 
     /// Returns whether one session currently needs fully materialized selectable/raw transcript buffers.
     /// 返回某个会话当前是否确实需要完整物化的可选结构化/原文转录缓冲区。
-    pub(super) fn should_materialize_session_agent_view_text_buffers(&self, session_id: SessionId) -> bool {
+    pub(super) fn should_materialize_session_agent_view_text_buffers(
+        &self,
+        session_id: SessionId,
+    ) -> bool {
         self.selected_session()
             .is_some_and(|session| session.id == session_id)
             && self.agent_transcript_surface_mode != AgentTranscriptSurfaceMode::DetailCards
@@ -224,7 +229,8 @@ impl VulcanWorkbench {
     /// Refreshes the structural transcript cache first, then materializes heavyweight text projections only when the active surface needs them.
     /// 先刷新结构化转录缓存，再仅在当前活动表面确实需要时物化较重的文本投影。
     pub(super) fn refresh_session_agent_view_buffers(&mut self, session_id: SessionId) {
-        self.loading_session_agent_view_projection_ids.remove(&session_id);
+        self.loading_session_agent_view_projection_ids
+            .remove(&session_id);
         self.refresh_session_agent_view_document_cache(session_id);
         self.refresh_active_modal_payloads_for_session(session_id);
 
@@ -466,7 +472,10 @@ impl VulcanWorkbench {
 
     /// Returns the currently streaming thinking message for one session when it is still actively floating above the transcript.
     /// 返回某个会话当前仍以浮层方式展示的流式思考消息。
-    pub(super) fn streaming_thinking_message(&self, session_id: SessionId) -> Option<&SessionMessageEntry> {
+    pub(super) fn streaming_thinking_message(
+        &self,
+        session_id: SessionId,
+    ) -> Option<&SessionMessageEntry> {
         if !self.session_has_active_run(session_id) {
             return None;
         }
@@ -490,7 +499,10 @@ impl VulcanWorkbench {
         &self,
         session_id: SessionId,
     ) -> Option<vulcan_agent_view::AgentViewDocument> {
-        let mut document = self.session_agent_view_documents.get(&session_id).cloned()?;
+        let mut document = self
+            .session_agent_view_documents
+            .get(&session_id)
+            .cloned()?;
 
         for (block_index, block) in document.blocks.iter_mut().enumerate() {
             let block_id = agent_view_block_id(session_id, block_index, block);
@@ -718,7 +730,10 @@ impl VulcanWorkbench {
 
     /// Hashes one agent-view document into a stable signature used to invalidate lazy modal-body rebuilds only when the rendered content really changes.
     /// 将一份 agent-view 文档哈希为稳定签名，仅在实际渲染内容变化时触发惰性弹层正文重建失效。
-    pub(super) fn hash_agent_view_document(&self, document: &vulcan_agent_view::AgentViewDocument) -> u64 {
+    pub(super) fn hash_agent_view_document(
+        &self,
+        document: &vulcan_agent_view::AgentViewDocument,
+    ) -> u64 {
         let mut hasher = DefaultHasher::new();
 
         for block in &document.blocks {

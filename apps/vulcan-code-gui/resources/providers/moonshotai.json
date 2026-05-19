@@ -14,7 +14,7 @@
     "allowOverride": false
   },
   "modelDiscovery": {
-    "kind": "openai-models"
+    "kind": "none"
   },
   "models": [
     {
@@ -33,7 +33,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "kimi-k2-0905-preview",
@@ -157,7 +158,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     }
   ]
 }

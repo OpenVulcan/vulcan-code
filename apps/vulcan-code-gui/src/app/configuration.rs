@@ -102,34 +102,6 @@ impl VulcanWorkbench {
             .or_else(|| choices.first().cloned())
     }
 
-    /// Builds the configured MCP server choices rendered in the MCP settings card.
-    /// 构建渲染在 MCP 设置卡片中的已配置 MCP 服务器选择项。
-    pub(super) fn configured_mcp_server_choices(&self) -> Vec<McpServerChoice> {
-        self.provider_configuration
-            .mcp
-            .servers
-            .iter()
-            .map(|(id, entry)| McpServerChoice {
-                id: id.clone(),
-                label: format!(
-                    "{} · {}",
-                    entry.name,
-                    if entry.enabled { "启用" } else { "禁用" }
-                ),
-            })
-            .collect()
-    }
-
-    /// Returns the currently selected MCP server choice rendered in the MCP settings card.
-    /// 返回渲染在 MCP 设置卡片中的当前选中 MCP 服务器选择项。
-    pub(super) fn selected_mcp_server_choice(&self) -> Option<McpServerChoice> {
-        let selected_server_id = self.selected_mcp_server_id.as_deref()?;
-
-        self.configured_mcp_server_choices()
-            .into_iter()
-            .find(|choice| choice.id == selected_server_id)
-    }
-
     /// Reloads the editable MCP server form from the currently selected persisted entry.
     /// 根据当前选中的持久化条目重新载入可编辑 MCP 服务器表单。
     pub(super) fn reload_selected_mcp_server_form(&mut self) {
@@ -180,6 +152,15 @@ impl VulcanWorkbench {
     /// 返回当前选中供应商的生效模型列表。
     pub(super) fn current_provider_model_choices(&self) -> Vec<ModelChoice> {
         provider_config::effective_model_choices(
+            &self.selected_provider.id,
+            &self.provider_configuration,
+        )
+    }
+
+    /// Returns the full catalog model list for the currently selected provider before enabled-model filtering is applied.
+    /// 返回当前选中供应商在应用启用模型过滤之前的完整目录模型列表。
+    pub(super) fn current_provider_catalog_choices(&self) -> Vec<ModelChoice> {
+        provider_config::catalog_model_choices(
             &self.selected_provider.id,
             &self.provider_configuration,
         )
@@ -296,10 +277,7 @@ impl VulcanWorkbench {
             model.as_ref(),
             &effective_configuration,
         );
-        self.apply_runtime_ai_capability_capability_overrides(
-            &mut capabilities,
-            &runtime_options,
-        );
+        self.apply_runtime_ai_capability_capability_overrides(&mut capabilities, &runtime_options);
         Some(capabilities)
     }
 
@@ -894,10 +872,7 @@ impl VulcanWorkbench {
             model.as_ref(),
             &effective_configuration,
         );
-        self.apply_runtime_ai_capability_capability_overrides(
-            &mut capabilities,
-            runtime_options,
-        );
+        self.apply_runtime_ai_capability_capability_overrides(&mut capabilities, runtime_options);
         Some(capabilities)
     }
 
@@ -909,7 +884,9 @@ impl VulcanWorkbench {
         runtime_options: &PendingPromptRuntimeOptions,
     ) {
         for disabled_kind in &runtime_options.disabled_ai_capability_kinds {
-            capabilities.ai_tools.retain(|tool| tool.kind != *disabled_kind);
+            capabilities
+                .ai_tools
+                .retain(|tool| tool.kind != *disabled_kind);
             match disabled_kind {
                 crate::provider_config::AiToolKind::UnderstandImage => {
                     capabilities
@@ -1165,66 +1142,18 @@ impl VulcanWorkbench {
     /// Returns the model-source summary computed from the current provider definition and cache state.
     /// 返回根据当前供应商定义与缓存状态计算出的模型来源摘要。
     pub(super) fn selected_provider_model_source_summary(&self) -> String {
-        let models = self.current_provider_model_choices();
+        let catalog_models = self.current_provider_catalog_choices();
+        let enabled_models = self.current_provider_model_choices();
 
         self.selected_provider_definition()
-            .map(|definition| {
-                if definition.supports_remote_model_refresh() {
-                    let has_cached_models = self
-                        .provider_configuration
-                        .provider
-                        .get(&self.selected_provider.id)
-                        .is_some_and(|entry| !entry.models.is_empty());
-
-                    if has_cached_models {
-                        format!("已缓存 {} 个模型", models.len())
-                    } else {
-                        format!("可远端拉取，当前内置 {} 个模型", models.len())
-                    }
-                } else {
-                    format!("使用内置目录，共 {} 个模型", models.len())
-                }
-            })
-            .unwrap_or_else(|| String::from("未找到供应商定义"))
-    }
-
-    /// Returns the currently active model choice when it belongs to the selected provider.
-    /// 当当前激活模型属于选中供应商时，返回对应的模型选项。
-    pub(super) fn active_model_choice_for_selected_provider(&self) -> Option<ModelChoice> {
-        let (provider_id, model_id) = self
-            .provider_configuration
-            .model
-            .as_deref()
-            .and_then(provider_config::parse_active_model_reference)?;
-
-        if provider_id != self.selected_provider.id {
-            return None;
-        }
-
-        self.current_provider_model_choices()
-            .into_iter()
-            .find(|model| model.id == model_id)
-    }
-
-    /// Returns the summary text rendered for one configured provider entry.
-    /// 返回某个已配置供应商条目渲染使用的摘要文本。
-    pub(super) fn configured_provider_model_summary(&self, provider_id: &str) -> String {
-        self.provider_configuration
-            .model
-            .as_deref()
-            .and_then(provider_config::parse_active_model_reference)
-            .filter(|(active_provider_id, _)| *active_provider_id == provider_id)
-            .map(|(_, model_id)| {
+            .map(|_| {
                 format!(
-                    "当前：{}",
-                    provider_config::model_summary(
-                        provider_id,
-                        model_id,
-                        &self.provider_configuration,
-                    )
+                    "使用内置目录，共 {} 个模型，当前启用 {} 个",
+                    catalog_models.len(),
+                    enabled_models.len()
                 )
             })
-            .unwrap_or_else(|| String::from("未设为当前模型"))
+            .unwrap_or_else(|| String::from("未找到供应商定义"))
     }
 
     /// Persists the selected provider form back into the Vulcan configuration file.
@@ -1241,6 +1170,10 @@ impl VulcanWorkbench {
             }
         }
 
+        let is_new_entry = !self
+            .provider_configuration
+            .provider
+            .contains_key(&definition.id);
         let entry = self
             .provider_configuration
             .provider
@@ -1249,9 +1182,292 @@ impl VulcanWorkbench {
         entry.name = Some(definition.name.clone());
         entry.options = self.provider_form.to_options();
 
-        if entry.models.is_empty() {
-            entry.models = provider_config::persist_remote_models(&definition.models);
+        if is_new_entry {
+            entry.set_enabled_models(Vec::<String>::new());
         }
+
+        provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
+    /// Opens the blocking provider editor for a brand-new provider configuration draft.
+    /// 为一条全新的供应商配置草稿打开阻塞式供应商编辑弹窗。
+    pub(super) fn open_provider_editor_for_create(&mut self) {
+        if let Some(choice) = provider_config::supported_provider_choices()
+            .into_iter()
+            .find(|choice| choice.id == self.selected_provider.id)
+            .or_else(|| {
+                provider_config::supported_provider_choices()
+                    .into_iter()
+                    .next()
+            })
+        {
+            self.selected_provider = choice;
+        }
+        self.provider_form = ProviderFormState::default();
+        self.provider_editor = Some(ProviderEditorState { is_new: true });
+        self.provider_notice = String::from("正在创建新的模型供应商配置。");
+    }
+
+    /// Opens the blocking provider editor for one existing configured provider entry.
+    /// 为一条已有供应商配置打开阻塞式供应商编辑弹窗。
+    pub(super) fn open_provider_editor_for_edit(
+        &mut self,
+        provider_id: &str,
+    ) -> Result<(), String> {
+        let Some(choice) = provider_config::supported_provider_choices()
+            .into_iter()
+            .find(|choice| choice.id == provider_id)
+        else {
+            return Err(format!("未找到供应商 `{provider_id}` 的目录定义。"));
+        };
+        self.selected_provider = choice;
+        self.reload_selected_provider_form();
+        self.provider_editor = Some(ProviderEditorState { is_new: false });
+        self.provider_notice = format!(
+            "正在编辑供应商 `{}`。",
+            provider_config::provider_summary(provider_id)
+        );
+        Ok(())
+    }
+
+    /// Opens the blocking enabled-model picker modal for one configured provider.
+    /// 为一条已配置供应商打开阻塞式启用模型配置弹窗。
+    pub(super) fn open_provider_model_picker(&mut self, provider_id: &str) -> Result<(), String> {
+        if !self
+            .provider_configuration
+            .provider
+            .contains_key(provider_id)
+        {
+            return Err(format!(
+                "供应商 `{}` 尚未保存，无法配置模型。",
+                provider_config::provider_summary(provider_id)
+            ));
+        }
+
+        self.provider_model_picker = Some(ProviderModelPickerState {
+            selected_provider_id: provider_id.to_string(),
+            filter: String::new(),
+            draft_enabled_model_ids_by_provider: self
+                .configured_provider_choices()
+                .into_iter()
+                .map(|choice| {
+                    (
+                        choice.id.clone(),
+                        provider_config::enabled_model_ids(
+                            &choice.id,
+                            &self.provider_configuration,
+                        ),
+                    )
+                })
+                .collect(),
+        });
+        self.provider_notice = format!(
+            "正在配置 `{}` 的启用模型列表。",
+            provider_config::provider_summary(provider_id)
+        );
+        Ok(())
+    }
+
+    /// Returns the configured provider choices rendered inside the blocking model-picker modal.
+    /// 返回渲染在阻塞式模型配置弹窗中的已配置供应商选择项。
+    pub(super) fn provider_model_picker_provider_choices(&self) -> Vec<ProviderChoice> {
+        self.configured_provider_choices()
+    }
+
+    /// Returns the full filtered catalog shown in the blocking provider model-picker modal.
+    /// 返回阻塞式供应商模型配置弹窗中展示的完整过滤后目录列表。
+    pub(super) fn filtered_provider_model_picker_catalog(&self) -> Vec<ModelChoice> {
+        let Some(state) = self.provider_model_picker.as_ref() else {
+            return Vec::new();
+        };
+        let filter = state.filter.trim().to_ascii_lowercase();
+
+        provider_config::catalog_model_choices(
+            &state.selected_provider_id,
+            &self.provider_configuration,
+        )
+        .into_iter()
+        .filter(|model| {
+            if filter.is_empty() {
+                return true;
+            }
+
+            model.id.to_ascii_lowercase().contains(&filter)
+                || model.name.to_ascii_lowercase().contains(&filter)
+                || model
+                    .family
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .contains(&filter)
+        })
+        .collect()
+    }
+
+    /// Persists the staged enabled-model draft from the blocking provider model-picker modal and reconciles the active workbench model when needed.
+    /// 持久化阻塞式供应商模型配置弹窗中的启用模型草稿，并在需要时对齐当前工作台激活模型。
+    pub(super) fn save_provider_model_picker(&mut self) -> Result<(), String> {
+        let Some(state) = self.provider_model_picker.as_ref() else {
+            return Err(String::from("当前没有可保存的模型配置草稿。"));
+        };
+        for (provider_id, draft_ids) in &state.draft_enabled_model_ids_by_provider {
+            let Some(entry) = self.provider_configuration.provider.get_mut(provider_id) else {
+                continue;
+            };
+            entry.set_enabled_models(draft_ids.iter().cloned().collect::<Vec<_>>());
+        }
+
+        if let Some((active_provider_id, active_model_id)) = self
+            .provider_configuration
+            .model
+            .as_deref()
+            .and_then(provider_config::parse_active_model_reference)
+            .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()))
+        {
+            let next_models = provider_config::effective_model_choices(
+                &active_provider_id,
+                &self.provider_configuration,
+            );
+            if !next_models.iter().any(|model| model.id == active_model_id) {
+                self.provider_configuration.model = next_models
+                    .first()
+                    .map(|model| format!("{active_provider_id}/{}", model.id));
+            }
+            if next_models.is_empty() {
+                self.provider_configuration.model = None;
+            }
+        }
+
+        provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
+    /// Opens the blocking per-model metadata editor for one enabled model entry.
+    /// 为一条已启用模型条目打开阻塞式逐模型元数据编辑弹窗。
+    pub(super) fn open_provider_model_override_editor(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<(), String> {
+        let catalog =
+            provider_config::catalog_model_choices(provider_id, &self.provider_configuration);
+        let Some(model) = catalog.into_iter().find(|model| model.id == model_id) else {
+            return Err(format!(
+                "未找到供应商 `{}` 下的模型 `{model_id}`。",
+                provider_config::provider_summary(provider_id)
+            ));
+        };
+        let active_override = self
+            .provider_configuration
+            .provider
+            .get(provider_id)
+            .and_then(|entry| entry.model_overrides.get(model_id))
+            .cloned()
+            .unwrap_or_default();
+        let active_input_modalities = if let Some(modalities) = active_override.input_modalities {
+            modalities
+        } else if model.input_modalities.is_empty() {
+            vec![String::from("text")]
+        } else {
+            model.input_modalities.clone()
+        };
+        let reasoning_profile_text = active_override
+            .reasoning_profile
+            .clone()
+            .or_else(|| model.reasoning_profile.clone())
+            .map(|profile| serde_json::to_string_pretty(&profile).unwrap_or_default())
+            .unwrap_or_default();
+
+        self.provider_model_override_editor = Some(ProviderModelOverrideEditorState {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            model_name: model.name,
+            reasoning: active_override
+                .reasoning
+                .unwrap_or(model.reasoning.unwrap_or(false)),
+            attachment: active_override
+                .attachment
+                .unwrap_or(model.attachment.unwrap_or(false)),
+            supports_text: active_input_modalities
+                .iter()
+                .any(|modality| modality.eq_ignore_ascii_case("text")),
+            supports_image: active_input_modalities
+                .iter()
+                .any(|modality| modality.eq_ignore_ascii_case("image")),
+            supports_audio: active_input_modalities
+                .iter()
+                .any(|modality| modality.eq_ignore_ascii_case("audio")),
+            supports_video: active_input_modalities
+                .iter()
+                .any(|modality| modality.eq_ignore_ascii_case("video")),
+            supports_pdf: active_input_modalities
+                .iter()
+                .any(|modality| modality.eq_ignore_ascii_case("pdf")),
+            context_limit_text: active_override
+                .context_limit
+                .or(model.context_limit)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            input_limit_text: active_override
+                .input_limit
+                .or(model.input_limit)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            output_limit_text: active_override
+                .output_limit
+                .or(model.output_limit)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            reasoning_profile_buffer: text_editor::Content::with_text(&reasoning_profile_text),
+        });
+        self.provider_notice = format!(
+            "正在编辑 `{}` 的模型元数据。",
+            provider_config::provider_summary(provider_id)
+        );
+        Ok(())
+    }
+
+    /// Persists the staged per-model override metadata back into the provider configuration file.
+    /// 将暂存的逐模型覆盖元数据持久化回供应商配置文件。
+    pub(super) fn save_provider_model_override_editor(&mut self) -> Result<(), String> {
+        let Some(editor) = self.provider_model_override_editor.as_ref() else {
+            return Err(String::from("当前没有可保存的模型元数据草稿。"));
+        };
+
+        let context_limit = parse_optional_usize_field(&editor.context_limit_text, "上下文长度")?;
+        let input_limit = parse_optional_usize_field(&editor.input_limit_text, "输入长度")?;
+        let output_limit = parse_optional_usize_field(&editor.output_limit_text, "输出长度")?;
+        let reasoning_profile_text = editor.reasoning_profile_buffer.text();
+        let reasoning_profile = if reasoning_profile_text.trim().is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_str(&reasoning_profile_text)
+                    .map_err(|error| format!("思考模式 JSON 解析失败：{error}"))?,
+            )
+        };
+        let input_modalities = build_model_override_input_modalities(editor);
+
+        let Some(entry) = self
+            .provider_configuration
+            .provider
+            .get_mut(&editor.provider_id)
+        else {
+            return Err(String::from("目标供应商配置不存在，无法保存模型元数据。"));
+        };
+
+        entry.model_overrides.insert(
+            editor.model_id.clone(),
+            PersistedModelOverrideEntry {
+                reasoning: Some(editor.reasoning),
+                attachment: Some(editor.attachment),
+                context_limit,
+                input_limit,
+                output_limit,
+                reasoning_profile,
+                input_modalities: Some(input_modalities),
+                output_modalities: None,
+            },
+        );
 
         provider_config::save_configuration_file(&self.provider_configuration)
     }
@@ -1404,7 +1620,9 @@ impl VulcanWorkbench {
                 .any(|binding| {
                     binding.enabled
                         && binding.capability_kind == capability_kind
-                        && binding.target_alias().eq_ignore_ascii_case(&normalized_target_alias)
+                        && binding
+                            .target_alias()
+                            .eq_ignore_ascii_case(&normalized_target_alias)
                 })
         {
             return Err(format!(
@@ -1488,19 +1706,21 @@ impl VulcanWorkbench {
         Ok(next_server_id)
     }
 
-    /// Removes the currently selected MCP server entry from the shared Vulcan configuration file.
-    /// 从共享 Vulcan 配置文件中移除当前选中的 MCP 服务器条目。
-    pub(super) fn remove_selected_mcp_server_configuration(&mut self) -> Result<String, String> {
-        let Some(server_id) = self.selected_mcp_server_id.clone() else {
-            return Err(String::from("当前没有可移除的 MCP 服务器。"));
-        };
-        let Some(removed_entry) = self.provider_configuration.mcp.servers.remove(&server_id) else {
-            return Err(String::from("当前选中的 MCP 服务器不存在。"));
+    /// Removes one specified MCP server entry from the shared Vulcan configuration file.
+    /// 从共享 Vulcan 配置文件中移除指定的 MCP 服务器条目。
+    pub(super) fn remove_mcp_server_configuration_by_id(
+        &mut self,
+        server_id: &str,
+    ) -> Result<String, String> {
+        let Some(removed_entry) = self.provider_configuration.mcp.servers.remove(server_id) else {
+            return Err(String::from("目标 MCP 服务器不存在。"));
         };
 
         provider_config::save_configuration_file(&self.provider_configuration)?;
-        self.selected_mcp_server_id =
-            Self::resolve_initial_mcp_server_id(&self.provider_configuration);
+        if self.selected_mcp_server_id.as_deref() == Some(server_id) {
+            self.selected_mcp_server_id =
+                Self::resolve_initial_mcp_server_id(&self.provider_configuration);
+        }
 
         Ok(removed_entry.name)
     }
@@ -1723,4 +1943,40 @@ impl VulcanWorkbench {
             },
         )
     }
+}
+
+/// Parses one optional positive integer field from an editor text buffer.
+/// 从编辑器文本缓冲区解析一个可选正整数数值字段。
+fn parse_optional_usize_field(value: &str, field_label: &str) -> Result<Option<usize>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    trimmed
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|error| format!("{field_label} 解析失败：{error}"))
+}
+
+/// Builds the normalized input modality override list from the staged model editor checkbox state.
+/// 根据暂存模型编辑器勾选状态构建规范化输入模态覆盖列表。
+fn build_model_override_input_modalities(editor: &ProviderModelOverrideEditorState) -> Vec<String> {
+    let mut modalities = BTreeSet::new();
+    if editor.supports_text {
+        modalities.insert(String::from("text"));
+    }
+    if editor.supports_image {
+        modalities.insert(String::from("image"));
+    }
+    if editor.supports_audio {
+        modalities.insert(String::from("audio"));
+    }
+    if editor.supports_video {
+        modalities.insert(String::from("video"));
+    }
+    if editor.supports_pdf {
+        modalities.insert(String::from("pdf"));
+    }
+    modalities.into_iter().collect()
 }

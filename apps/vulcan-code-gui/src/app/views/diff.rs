@@ -654,4 +654,5 @@ impl VulcanWorkbench {
         .clip(true)
         .width(Fill)
         .into()
-    }}
+    }
+}

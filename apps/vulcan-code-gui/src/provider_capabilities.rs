@@ -860,6 +860,7 @@ mod tests {
         let model = ModelChoice {
             id: String::from("deepseek-v4-pro"),
             name: String::from("DeepSeek V4 Pro"),
+            default_enabled: false,
             status: Some(String::from("stable")),
             family: Some(String::from("thinking")),
             release_date: Some(String::from("2026-04-24")),
@@ -907,6 +908,7 @@ mod tests {
         let model = ModelChoice {
             id: String::from("qwen3.6-plus"),
             name: String::from("Qwen3.6 Plus"),
+            default_enabled: false,
             status: None,
             family: None,
             release_date: None,
@@ -1180,8 +1182,7 @@ mod tests {
             ..PersistedAiToolConfiguration::default()
         };
 
-        let capabilities =
-            resolve_effective_model_capabilities(&definition, None, &configuration);
+        let capabilities = resolve_effective_model_capabilities(&definition, None, &configuration);
 
         assert!(
             capabilities
@@ -1204,6 +1205,7 @@ mod tests {
         let model = ModelChoice {
             id: String::from("vision-model"),
             name: String::from("Vision Model"),
+            default_enabled: false,
             input_modalities: vec![String::from("text"), String::from("image")],
             output_modalities: vec![String::from("text")],
             status: None,

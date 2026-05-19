@@ -760,38 +760,6 @@ pub(super) fn trim_to_option(value: &str) -> Option<String> {
     }
 }
 
-/// Joins MCP server arguments into one compact editable text field.
-/// 将 MCP 服务器参数拼接为一段紧凑的可编辑文本字段。
-pub(super) fn join_mcp_server_args(args: &[String]) -> String {
-    args.join(" | ")
-}
-
-/// Parses one compact MCP server argument text field into its vector representation.
-/// 将一段紧凑 MCP 服务器参数文本解析成向量表示。
-pub(super) fn parse_mcp_server_args(value: &str) -> Vec<String> {
-    value
-        .split('|')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-/// Joins MCP server environment variables into one compact editable text field.
-/// 将 MCP 服务器环境变量拼接为一段紧凑的可编辑文本字段。
-pub(super) fn join_mcp_server_env(env: &BTreeMap<String, String>) -> String {
-    env.iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-/// Parses one compact MCP server environment text field into its map representation.
-/// 将一段紧凑 MCP 服务器环境变量文本解析成映射表示。
-pub(super) fn parse_mcp_server_env(value: &str) -> Result<BTreeMap<String, String>, String> {
-    parse_key_value_pairs(value, "环境变量", "请使用 `KEY=VALUE` 并以分号分隔。")
-}
-
 /// Returns the MCP transport choices exposed by the settings form.
 /// 返回设置表单暴露的 MCP 传输类型选项。
 pub(super) fn mcp_transport_choices() -> Vec<PersistedMcpTransportKind> {
@@ -800,16 +768,6 @@ pub(super) fn mcp_transport_choices() -> Vec<PersistedMcpTransportKind> {
         PersistedMcpTransportKind::Http,
         PersistedMcpTransportKind::Sse,
     ]
-}
-
-/// Joins MCP server HTTP headers into one compact editable text field.
-/// 将 MCP 服务器 HTTP 请求头拼接为一段紧凑的可编辑文本字段。
-pub(super) fn join_mcp_server_headers(headers: &BTreeMap<String, String>) -> String {
-    headers
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 /// Joins MCP OAuth scopes into one compact editable text field.
@@ -827,39 +785,6 @@ pub(super) fn parse_mcp_server_oauth_scopes(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(ToOwned::to_owned)
         .collect()
-}
-
-/// Parses one compact MCP server HTTP headers field into its map representation.
-/// 将一段紧凑 MCP 服务器 HTTP 请求头文本解析成映射表示。
-pub(super) fn parse_mcp_server_headers(value: &str) -> Result<BTreeMap<String, String>, String> {
-    parse_key_value_pairs(value, "请求头", "请使用 `KEY=VALUE` 并以分号分隔。")
-}
-
-/// Parses one semicolon-delimited key-value text field into a map.
-/// 将一段使用分号分隔的键值对文本解析成映射。
-pub(super) fn parse_key_value_pairs(
-    value: &str,
-    subject_label: &str,
-    format_hint: &str,
-) -> Result<BTreeMap<String, String>, String> {
-    let mut map = BTreeMap::new();
-
-    for pair in value
-        .split(';')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-    {
-        let Some((raw_key, raw_value)) = pair.split_once('=') else {
-            return Err(format!("{subject_label} `{pair}` 格式无效，{format_hint}"));
-        };
-        let key = raw_key.trim();
-        if key.is_empty() {
-            return Err(format!("{subject_label}名称不能为空。"));
-        }
-        map.insert(key.to_string(), raw_value.trim().to_string());
-    }
-
-    Ok(map)
 }
 
 #[cfg(test)]

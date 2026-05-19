@@ -3,7 +3,6 @@
 
 use crate::ai_capability_provider_catalog;
 use crate::runtime_assets;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -580,9 +579,15 @@ impl NativeBridgeRoutingMode {
     /// 返回用于设置与诊断界面的一句解释说明。
     pub const fn description(self) -> &'static str {
         match self {
-            Self::NativeOnly => "仅在模型自身声明支持对应输入模态时使用原生理解，不额外暴露宿主理解工具。",
-            Self::NativeFirst => "优先依赖模型原生多模态输入；当模型不支持时，再暴露宿主理解工具补位。",
-            Self::HostOnly => "无论模型是否具备原生多模态输入，都优先暴露宿主理解工具并通过工具链完成理解。",
+            Self::NativeOnly => {
+                "仅在模型自身声明支持对应输入模态时使用原生理解，不额外暴露宿主理解工具。"
+            }
+            Self::NativeFirst => {
+                "优先依赖模型原生多模态输入；当模型不支持时，再暴露宿主理解工具补位。"
+            }
+            Self::HostOnly => {
+                "无论模型是否具备原生多模态输入，都优先暴露宿主理解工具并通过工具链完成理解。"
+            }
         }
     }
 }
@@ -1537,9 +1542,7 @@ impl PersistedAiCapabilityVendorEntry {
                         trimmed.to_string()
                     }
                 }
-                AiCapabilityVendorConnectionMode::Cloud => {
-                    String::from("https://ollama.com")
-                }
+                AiCapabilityVendorConnectionMode::Cloud => String::from("https://ollama.com"),
             };
         }
 
@@ -2949,7 +2952,7 @@ impl ProviderModelDiscoveryKind {
 
 /// One selectable model item shown in the provider configuration page.
 /// 展示在供应商配置页面中的单个可选模型项。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelChoice {
     /// Stable model identifier persisted into the configuration file.
@@ -3018,6 +3021,10 @@ pub struct ModelChoice {
     /// 可选的输出模态列表。
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub output_modalities: Vec<String>,
+    /// Whether the model should be checked by default the first time one provider instance is configured.
+    /// 当前供应商实例首次配置时，该模型是否应默认被勾选。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub default_enabled: bool,
 }
 
 impl fmt::Display for ModelChoice {
@@ -3756,6 +3763,63 @@ pub struct PersistedModelEntry {
     /// 可选的输出模态集合。
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub output_modalities: Vec<String>,
+    /// Whether the model belongs to the provider-declared default-enabled subset.
+    /// 当前模型是否属于供应商声明的默认启用子集。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub default_enabled: bool,
+}
+
+/// Persisted user override metadata for one model entry.
+/// 单个模型条目的持久化用户覆盖元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PersistedModelOverrideEntry {
+    /// Optional reasoning capability override.
+    /// 可选的推理能力覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    /// Optional attachment capability override kept for diagnostics and metadata parity.
+    /// 供诊断与元数据对齐使用的可选附件能力覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<bool>,
+    /// Optional context-window limit override.
+    /// 可选的上下文窗口上限覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<usize>,
+    /// Optional input-token limit override.
+    /// 可选的输入 Token 上限覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_limit: Option<usize>,
+    /// Optional output-token limit override.
+    /// 可选的输出 Token 上限覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<usize>,
+    /// Optional reasoning-profile override.
+    /// 可选的推理档位配置覆盖值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile: Option<ReasoningProfileConfig>,
+    /// Optional input-modality override list.
+    /// 可选的输入模态覆盖列表。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_modalities: Option<Vec<String>>,
+    /// Optional output-modality override list.
+    /// 可选的输出模态覆盖列表。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_modalities: Option<Vec<String>>,
+}
+
+impl PersistedModelOverrideEntry {
+    /// Returns whether the override entry is effectively empty and can be skipped during serialization.
+    /// 返回该覆盖条目是否实际上为空，从而可在序列化时跳过。
+    pub fn is_empty(&self) -> bool {
+        self.reasoning.is_none()
+            && self.attachment.is_none()
+            && self.context_limit.is_none()
+            && self.input_limit.is_none()
+            && self.output_limit.is_none()
+            && self.reasoning_profile.is_none()
+            && self.input_modalities.is_none()
+            && self.output_modalities.is_none()
+    }
 }
 
 /// Persisted provider entry written into the Vulcan configuration file.
@@ -3770,10 +3834,30 @@ pub struct PersistedProviderEntry {
     /// 与当前项目 Schema 对齐的供应商 options 对象。
     #[serde(default, skip_serializing_if = "PersistedProviderOptions::is_empty")]
     pub options: PersistedProviderOptions,
-    /// Cached model list used when the provider supports remote refresh.
-    /// 当供应商支持远端刷新时缓存下来的模型列表。
+    /// Deprecated remote model cache retained only for backward-compatible deserialization.
+    /// 仅为向后兼容反序列化而保留的废弃远端模型缓存。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, PersistedModelEntry>,
+    /// Explicitly enabled model identifiers, where `None` preserves legacy "all enabled" compatibility.
+    /// 显式启用的模型标识集合，其中 `None` 用于保留旧版“全部启用”的兼容语义。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled_models: Option<Vec<String>>,
+    /// User-authored per-model metadata overrides.
+    /// 用户编写的逐模型元数据覆盖配置。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_overrides: BTreeMap<String, PersistedModelOverrideEntry>,
+}
+
+impl PersistedProviderEntry {
+    /// Replaces the explicit enabled-model set with one stable deduplicated list.
+    /// 使用一份稳定去重后的列表替换显式启用模型集合。
+    pub fn set_enabled_models<I>(&mut self, model_ids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let ordered = model_ids.into_iter().collect::<BTreeSet<_>>();
+        self.enabled_models = Some(ordered.into_iter().collect());
+    }
 }
 
 /// Persisted skill family used by the runtime foundation.
@@ -4039,6 +4123,10 @@ pub struct PersistedMcpServerEntry {
     /// 注入到远端 MCP 请求中的可选 HTTP 请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// Optional HTTP headers whose values should be resolved from current process environment variables.
+    /// 值需要从当前进程环境变量解析的可选 HTTP 请求头映射。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers_from_env: BTreeMap<String, String>,
     /// Optional OAuth configuration used by host-driven remote authorization flows.
     /// 宿主驱动远端授权流程使用的可选 OAuth 配置。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4051,6 +4139,10 @@ pub struct PersistedMcpServerEntry {
     /// 注入到服务器进程中的可选环境变量集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Optional environment-variable names that should be passed through from the current host process when they are present.
+    /// 当前宿主进程中存在时应被透传的可选环境变量名称集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_passthrough: Vec<String>,
 }
 
 /// MCP configuration block persisted inside the shared Vulcan configuration file.
@@ -4282,7 +4374,8 @@ pub fn save_configuration_file(config: &ProviderConfigurationFile) -> Result<(),
 
     fs::create_dir_all(&parent).map_err(|error| format!("创建配置目录失败：{}。", error))?;
 
-    let content = serde_json::to_string_pretty(config)
+    let normalized_config = normalize_provider_configuration_for_save(config);
+    let content = serde_json::to_string_pretty(&normalized_config)
         .map_err(|error| format!("序列化供应商配置失败：{}。", error))?;
 
     fs::write(&path, content).map_err(|error| format!("写入供应商配置失败：{}。", error))
@@ -4380,26 +4473,26 @@ impl ResolvedAiCapabilityRouteTarget {
 pub fn ai_capability_vendor_target_choices(vendor_id: &str) -> Vec<AiCapabilityVendorTargetChoice> {
     let normalized_vendor_id = normalize_ai_capability_vendor_id(vendor_id.to_string());
     ai_capability_provider_catalog::ai_capability_provider_targets_for_vendor(&normalized_vendor_id)
-    .into_iter()
-    .map(|target| AiCapabilityVendorTargetChoice {
-        capability_kind: target.capability_kind,
-        target_alias: target.target_alias.clone(),
-        default_model_id: if target.supports_model_field {
-            if target.default_model.trim().is_empty() {
+        .into_iter()
+        .map(|target| AiCapabilityVendorTargetChoice {
+            capability_kind: target.capability_kind,
+            target_alias: target.target_alias.clone(),
+            default_model_id: if target.supports_model_field {
+                if target.default_model.trim().is_empty() {
+                    target.target_alias.clone()
+                } else {
+                    target.default_model.clone()
+                }
+            } else if target.default_model.trim().is_empty() {
                 target.target_alias.clone()
             } else {
                 target.default_model.clone()
-            }
-        } else if target.default_model.trim().is_empty() {
-            target.target_alias.clone()
-        } else {
-            target.default_model.clone()
-        },
-        label: target.name.clone(),
-        supports_model_override: target.supports_model_field,
-        model_options: target.model_options.clone(),
-    })
-    .collect()
+            },
+            label: target.name.clone(),
+            supports_model_override: target.supports_model_field,
+            model_options: target.model_options.clone(),
+        })
+        .collect()
 }
 
 /// Returns the shared vendor display name shown by the AI capability settings pages when one provider instance should not expose a custom editable alias.
@@ -4408,9 +4501,9 @@ pub fn ai_capability_vendor_display_name(vendor_id: &str) -> String {
     default_ai_capability_vendor_name(&normalize_ai_capability_vendor_id(vendor_id.to_string()))
 }
 
-/// Resolves the effective model choices for one provider using persisted cache or embedded fallback models.
-/// 使用持久化缓存或内置回退模型为某个供应商解析生效模型列表。
-pub fn effective_model_choices(
+/// Resolves the full catalog model choices for one provider after merging embedded metadata and user overrides.
+/// 合并内置元数据与用户覆盖后，为某个供应商解析完整目录模型列表。
+pub fn catalog_model_choices(
     provider_id: &str,
     config: &ProviderConfigurationFile,
 ) -> Vec<ModelChoice> {
@@ -4419,39 +4512,41 @@ pub fn effective_model_choices(
         .unwrap_or_default();
     apply_provider_reasoning_model_overrides(provider_id, &mut embedded_models);
 
-    if let Some(cached) = config.provider.get(provider_id) {
-        if !cached.models.is_empty() {
-            let items = cached
-                .models
-                .iter()
-                .map(|(id, model)| ModelChoice {
-                    id: id.clone(),
-                    name: model.name.clone().unwrap_or_else(|| id.clone()),
-                    status: model.status.clone(),
-                    family: model.family.clone(),
-                    release_date: model.release_date.clone(),
-                    context_limit: model.context_limit,
-                    input_limit: model.input_limit,
-                    output_limit: model.output_limit,
-                    reasoning: model.reasoning,
-                    tool_call: model.tool_call,
-                    temperature: model.temperature,
-                    attachment: model.attachment,
-                    interleaved: model.interleaved.clone(),
-                    reasoning_profile: model.reasoning_profile.clone(),
-                    ai_tools: model.ai_tools.clone(),
-                    input_modalities: model.input_modalities.clone(),
-                    output_modalities: model.output_modalities.clone(),
-                })
-                .collect::<Vec<_>>();
-            let mut items = merge_embedded_model_metadata(items, &embedded_models);
-            apply_provider_reasoning_model_overrides(provider_id, &mut items);
-            items.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
-            return items;
-        }
+    let mut catalog = embedded_models.clone();
+
+    if let Some(entry) = config.provider.get(provider_id) {
+        catalog = apply_model_overrides_to_catalog(catalog, &entry.model_overrides);
     }
 
-    embedded_models
+    apply_provider_reasoning_model_overrides(provider_id, &mut catalog);
+    catalog.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    catalog.dedup_by(|left, right| left.id == right.id);
+    catalog
+}
+
+/// Resolves the effective enabled model choices for one provider by filtering the full catalog through explicit enabled-model preferences.
+/// 通过显式启用模型偏好过滤完整目录，为某个供应商解析生效可用模型列表。
+pub fn effective_model_choices(
+    provider_id: &str,
+    config: &ProviderConfigurationFile,
+) -> Vec<ModelChoice> {
+    let catalog = catalog_model_choices(provider_id, config);
+    let enabled_ids = resolved_enabled_model_ids(config.provider.get(provider_id), &catalog);
+
+    catalog
+        .into_iter()
+        .filter(|model| enabled_ids.contains(&model.id))
+        .collect()
+}
+
+/// Resolves the explicit enabled-model identifier set for one provider using persisted preferences or first-save defaults.
+/// 使用持久化偏好或首次保存默认值，为某个供应商解析显式启用模型标识集合。
+pub fn enabled_model_ids(
+    provider_id: &str,
+    config: &ProviderConfigurationFile,
+) -> BTreeSet<String> {
+    let catalog = catalog_model_choices(provider_id, config);
+    resolved_enabled_model_ids(config.provider.get(provider_id), &catalog)
 }
 
 /// Parses the active provider/model tuple from the persisted global model string.
@@ -4461,49 +4556,7 @@ pub fn parse_active_model_reference(model: &str) -> Option<(&str, &str)> {
     Some((provider_id, model_id))
 }
 
-/// Fetches a remote model list using the provider definition and the current persisted options.
-/// 使用供应商定义与当前持久化选项拉取远端模型列表。
-pub async fn fetch_remote_models(
-    definition: &SupportedProviderDefinition,
-    options: &PersistedProviderOptions,
-) -> Result<Vec<ModelChoice>, String> {
-    let base_url = remote_models_url(definition, options)
-        .ok_or_else(|| String::from("当前供应商不支持远端模型刷新。"))?;
-
-    let mut headers = HeaderMap::new();
-
-    if let Some(api_key) = options.resolved_api_key()? {
-        let header_value = HeaderValue::from_str(&format!("Bearer {}", api_key))
-            .map_err(|error| format!("构建认证请求头失败：{}。", error))?;
-        headers.insert(AUTHORIZATION, header_value);
-    }
-
-    let response = reqwest::Client::new()
-        .get(base_url)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|error| format!("请求模型列表失败：{}。", error))?;
-
-    if !response.status().is_success() {
-        return Err(format!("模型列表接口返回状态异常：{}。", response.status()));
-    }
-
-    let payload = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|error| format!("解析模型列表响应失败：{}。", error))?;
-
-    let choices =
-        filter_remote_model_choices(&definition.id, extract_model_choices_from_value(&payload));
-
-    if choices.is_empty() {
-        return Err(String::from("未从远端接口解析到任何模型。"));
-    }
-
-    Ok(choices)
-}
-
+#[cfg(test)]
 /// Converts a successful remote model refresh into a persisted provider cache map.
 /// 将一次成功的远端模型刷新结果转换为可持久化的供应商缓存映射。
 pub fn persist_remote_models(models: &[ModelChoice]) -> BTreeMap<String, PersistedModelEntry> {
@@ -4529,10 +4582,62 @@ pub fn persist_remote_models(models: &[ModelChoice]) -> BTreeMap<String, Persist
                     ai_tools: model.ai_tools.clone(),
                     input_modalities: model.input_modalities.clone(),
                     output_modalities: model.output_modalities.clone(),
+                    default_enabled: model.default_enabled,
                 },
             )
         })
         .collect()
+}
+
+/// Returns the first-save default enabled model identifiers declared inside one catalog.
+/// 返回单个目录内部声明的首次保存默认启用模型标识集合。
+pub fn default_enabled_model_ids(models: &[ModelChoice]) -> Vec<String> {
+    let default_ids = models
+        .iter()
+        .filter(|model| model.default_enabled)
+        .map(|model| model.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    if !default_ids.is_empty() {
+        return default_ids.into_iter().collect();
+    }
+
+    models
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(test)]
+/// Merges a freshly refreshed remote model catalog into one persisted provider entry while preserving explicit enablement and user overrides.
+/// 在保留显式启用结果与用户覆盖的前提下，将最新远端目录刷新结果合并回持久化供应商条目。
+pub fn merge_refreshed_models(
+    entry: &mut PersistedProviderEntry,
+    refreshed_models: &[ModelChoice],
+) {
+    let previous_ids = entry.models.keys().cloned().collect::<BTreeSet<_>>();
+    entry.models = persist_remote_models(refreshed_models);
+
+    let valid_ids = entry.models.keys().cloned().collect::<BTreeSet<_>>();
+    if let Some(enabled_models) = entry.enabled_models.as_mut() {
+        let mut next_ids = enabled_models
+            .iter()
+            .filter(|model_id| valid_ids.contains(model_id.as_str()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for model in refreshed_models
+            .iter()
+            .filter(|model| model.default_enabled && !previous_ids.contains(model.id.as_str()))
+        {
+            next_ids.insert(model.id.clone());
+        }
+        *enabled_models = next_ids.into_iter().collect();
+    }
+    entry
+        .model_overrides
+        .retain(|model_id, _| valid_ids.contains(model_id));
 }
 
 /// Returns a human-friendly provider summary used in status text and logs.
@@ -4638,6 +4743,7 @@ fn template_parameter_name(field: ProviderFieldKey) -> &'static str {
     }
 }
 
+#[cfg(test)]
 /// Builds the remote `/models` endpoint URL when the provider can try a standard refresh flow.
 /// 当供应商可以尝试标准刷新流程时，构建远端 `/models` 端点地址。
 fn remote_models_url(
@@ -4666,6 +4772,7 @@ fn remote_models_url(
     Some(endpoint)
 }
 
+#[cfg(test)]
 /// Applies provider-specific default filtering to one remotely refreshed model list.
 /// 对单次远端刷新得到的模型列表应用供应商级默认过滤规则。
 fn filter_remote_model_choices(provider_id: &str, choices: Vec<ModelChoice>) -> Vec<ModelChoice> {
@@ -4679,6 +4786,7 @@ fn filter_remote_model_choices(provider_id: &str, choices: Vec<ModelChoice>) -> 
         .collect()
 }
 
+#[cfg(test)]
 /// Returns whether one OpenRouter model entry should stay visible in the default conversation-model picker.
 /// 返回某个 OpenRouter 模型条目是否应保留在默认对话模型选择器中。
 fn openrouter_model_choice_is_conversation_model(model: &ModelChoice) -> bool {
@@ -4697,6 +4805,7 @@ fn openrouter_model_choice_is_conversation_model(model: &ModelChoice) -> bool {
     true
 }
 
+#[cfg(test)]
 /// Returns whether one OpenRouter model exposes text as an accepted input modality.
 /// 返回某个 OpenRouter 模型是否将文本声明为可接受输入模态。
 fn openrouter_model_supports_text_input(model: &ModelChoice) -> bool {
@@ -4704,13 +4813,13 @@ fn openrouter_model_supports_text_input(model: &ModelChoice) -> bool {
         return true;
     }
 
-    model.input_modalities.iter().any(|modality| {
-        modality
-            .trim()
-            .eq_ignore_ascii_case("text")
-    })
+    model
+        .input_modalities
+        .iter()
+        .any(|modality| modality.trim().eq_ignore_ascii_case("text"))
 }
 
+#[cfg(test)]
 /// Returns whether one OpenRouter model only emits text outputs suitable for chat-style turns.
 /// 返回某个 OpenRouter 模型是否仅输出适合聊天回合的文本结果。
 fn openrouter_model_supports_text_only_output(model: &ModelChoice) -> bool {
@@ -4718,17 +4827,17 @@ fn openrouter_model_supports_text_only_output(model: &ModelChoice) -> bool {
         return true;
     }
 
-    model.output_modalities.iter().all(|modality| {
-        modality
-            .trim()
-            .eq_ignore_ascii_case("text")
-    }) && model.output_modalities.iter().any(|modality| {
-        modality
-            .trim()
-            .eq_ignore_ascii_case("text")
-    })
+    model
+        .output_modalities
+        .iter()
+        .all(|modality| modality.trim().eq_ignore_ascii_case("text"))
+        && model
+            .output_modalities
+            .iter()
+            .any(|modality| modality.trim().eq_ignore_ascii_case("text"))
 }
 
+#[cfg(test)]
 /// Returns whether one OpenRouter model id/name clearly points to non-conversation tasks that should stay hidden by default.
 /// 返回某个 OpenRouter 模型标识或名称是否明确指向默认应隐藏的非对话任务。
 fn openrouter_model_matches_non_conversation_keywords(model: &ModelChoice) -> bool {
@@ -4749,24 +4858,6 @@ fn openrouter_model_matches_non_conversation_keywords(model: &ModelChoice) -> bo
     ]
     .iter()
     .any(|keyword| identifier.contains(keyword))
-}
-
-/// Extracts model choices from a loosely shaped OpenAI-style `/models` response payload.
-/// 从宽松形状的 OpenAI 风格 `/models` 响应载荷中提取模型项。
-fn extract_model_choices_from_value(value: &serde_json::Value) -> Vec<ModelChoice> {
-    let mut choices = match value {
-        serde_json::Value::Object(object) => object
-            .get("data")
-            .and_then(serde_json::Value::as_array)
-            .map(|items| extract_models_from_array(items))
-            .unwrap_or_default(),
-        serde_json::Value::Array(array) => extract_models_from_array(array),
-        _ => Vec::new(),
-    };
-
-    choices.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
-    choices.dedup_by(|left, right| left.id == right.id);
-    choices
 }
 
 /// Resolves a secret field that may reference one environment variable placeholder.
@@ -4898,6 +4989,7 @@ fn default_controller_lease_renew_interval_secs() -> u64 {
     30
 }
 
+#[cfg(test)]
 /// Extracts model choices from one response array node.
 /// 从单个响应数组节点中提取模型项。
 fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
@@ -4923,6 +5015,7 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                     ai_tools: Vec::new(),
                     input_modalities: Vec::new(),
                     output_modalities: Vec::new(),
+                    default_enabled: false,
                 });
             }
 
@@ -4967,11 +5060,14 @@ fn extract_models_from_array(array: &[serde_json::Value]) -> Vec<ModelChoice> {
                 ai_tools: dynamic_model_ai_tools(object, &["aiTools", "ai_tools"]),
                 input_modalities,
                 output_modalities,
+                default_enabled: dynamic_model_bool(object, &["defaultEnabled", "default_enabled"])
+                    .unwrap_or(false),
             })
         })
         .collect()
 }
 
+#[cfg(test)]
 /// Merges embedded model metadata back into dynamically discovered model entries by stable model id.
 /// 依据稳定模型标识将内置模型元数据重新合并到动态发现的模型条目中。
 fn merge_embedded_model_metadata(
@@ -5026,11 +5122,111 @@ fn merge_embedded_model_metadata(
                 } else {
                     model.output_modalities
                 },
+                default_enabled: model.default_enabled || embedded.default_enabled,
             }
         })
         .collect()
 }
 
+/// Applies persisted user override metadata onto one complete catalog while keeping untouched models identical to their discovered entries.
+/// 将持久化用户覆盖元数据应用到一份完整目录上，同时保持未修改模型与发现结果一致。
+fn apply_model_overrides_to_catalog(
+    models: Vec<ModelChoice>,
+    overrides: &BTreeMap<String, PersistedModelOverrideEntry>,
+) -> Vec<ModelChoice> {
+    models
+        .into_iter()
+        .map(
+            |model| match overrides.get(&model.id).filter(|entry| !entry.is_empty()) {
+                Some(entry) => apply_model_override(model, entry),
+                None => model,
+            },
+        )
+        .collect()
+}
+
+/// Applies one persisted user override entry onto a single model choice.
+/// 将单个持久化用户覆盖条目应用到一条模型选项上。
+fn apply_model_override(
+    mut model: ModelChoice,
+    entry: &PersistedModelOverrideEntry,
+) -> ModelChoice {
+    if let Some(reasoning) = entry.reasoning {
+        model.reasoning = Some(reasoning);
+    }
+    if let Some(attachment) = entry.attachment {
+        model.attachment = Some(attachment);
+    }
+    if let Some(context_limit) = entry.context_limit {
+        model.context_limit = Some(context_limit);
+    }
+    if let Some(input_limit) = entry.input_limit {
+        model.input_limit = Some(input_limit);
+    }
+    if let Some(output_limit) = entry.output_limit {
+        model.output_limit = Some(output_limit);
+    }
+    if let Some(reasoning_profile) = entry.reasoning_profile.clone() {
+        model.reasoning_profile = Some(reasoning_profile);
+    }
+    if let Some(input_modalities) = entry.input_modalities.clone() {
+        model.input_modalities = normalize_model_override_modalities(&input_modalities);
+    }
+    if let Some(output_modalities) = entry.output_modalities.clone() {
+        model.output_modalities = normalize_model_override_modalities(&output_modalities);
+    }
+
+    model
+}
+
+/// Normalizes one modality string list into a stable lowercase deduplicated representation.
+/// 将一组模态字符串规范化为稳定的小写去重表示。
+fn normalize_model_override_modalities(values: &[String]) -> Vec<String> {
+    let mut ordered = BTreeSet::new();
+    for value in values {
+        let normalized = value.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            ordered.insert(normalized);
+        }
+    }
+    ordered.into_iter().collect()
+}
+
+/// Resolves the enabled model identifier set by honoring explicit persisted preferences first and falling back to the full catalog only for legacy entries without any saved enablement state.
+/// 先尊重显式持久化偏好，再仅对没有保存启用状态的旧版条目回退到完整目录，以解析启用模型标识集合。
+fn resolved_enabled_model_ids(
+    entry: Option<&PersistedProviderEntry>,
+    catalog: &[ModelChoice],
+) -> BTreeSet<String> {
+    let catalog_ids = catalog
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    if let Some(explicit_ids) = entry.and_then(|item| item.enabled_models.as_ref()) {
+        return explicit_ids
+            .iter()
+            .filter(|model_id| catalog_ids.contains(model_id.as_str()))
+            .cloned()
+            .collect();
+    }
+
+    catalog_ids
+}
+
+/// Builds one normalized configuration snapshot that drops deprecated remote model caches before serialization.
+/// 构建一个会在序列化前丢弃废弃远端模型缓存的规范化配置快照。
+fn normalize_provider_configuration_for_save(
+    config: &ProviderConfigurationFile,
+) -> ProviderConfigurationFile {
+    let mut normalized = config.clone();
+    for entry in normalized.provider.values_mut() {
+        entry.models.clear();
+    }
+    normalized
+}
+
+#[cfg(test)]
 /// Returns the first matching dynamic model JSON value from a list of candidate field names.
 /// 从候选字段名列表中返回第一条匹配的动态模型 JSON 值。
 fn dynamic_model_value<'a>(
@@ -5040,6 +5236,7 @@ fn dynamic_model_value<'a>(
     keys.iter().find_map(|key| object.get(*key))
 }
 
+#[cfg(test)]
 /// Parses one optional dynamic model string field from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析一个可选动态模型字符串字段。
 fn dynamic_model_string(
@@ -5053,6 +5250,7 @@ fn dynamic_model_string(
         .map(ToOwned::to_owned)
 }
 
+#[cfg(test)]
 /// Parses one optional dynamic model boolean field from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析一个可选动态模型布尔字段。
 fn dynamic_model_bool(
@@ -5070,6 +5268,7 @@ fn dynamic_model_bool(
     })
 }
 
+#[cfg(test)]
 /// Parses one optional dynamic model numeric field from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析一个可选动态模型数值字段。
 fn dynamic_model_usize(
@@ -5083,6 +5282,7 @@ fn dynamic_model_usize(
     })
 }
 
+#[cfg(test)]
 /// Parses one optional dynamic interleaved reasoning capability from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析一个可选动态交错推理能力描述。
 fn dynamic_model_interleaved(
@@ -5093,6 +5293,7 @@ fn dynamic_model_interleaved(
         .and_then(|value| serde_json::from_value::<ModelInterleavedCapability>(value.clone()).ok())
 }
 
+#[cfg(test)]
 /// Parses one optional dynamic reasoning profile from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析一个可选动态推理档位配置。
 fn dynamic_model_reasoning_profile(
@@ -5103,6 +5304,7 @@ fn dynamic_model_reasoning_profile(
         .and_then(|value| serde_json::from_value::<ReasoningProfileConfig>(value.clone()).ok())
 }
 
+#[cfg(test)]
 /// Parses dynamic AI-tool declarations from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析动态 AI 工具声明集合。
 fn dynamic_model_ai_tools(
@@ -5114,6 +5316,7 @@ fn dynamic_model_ai_tools(
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 /// Parses one ordered dynamic modality list while tolerating both flat and nested payload shapes.
 /// 在兼容扁平与嵌套载荷形状的前提下解析一组有序动态模态列表。
 fn dynamic_model_modalities(
@@ -5181,6 +5384,7 @@ fn dynamic_model_modalities(
     (input_modalities, output_modalities)
 }
 
+#[cfg(test)]
 /// Parses one compact architecture modality descriptor like `text+image->text` into ordered input/output lists.
 /// 将 `text+image->text` 这样的紧凑架构模态描述解析为有序输入输出列表。
 fn dynamic_model_modalities_from_descriptor(modality: &str) -> (Vec<String>, Vec<String>) {
@@ -5194,6 +5398,7 @@ fn dynamic_model_modalities_from_descriptor(modality: &str) -> (Vec<String>, Vec
     )
 }
 
+#[cfg(test)]
 /// Parses one modality descriptor half like `text+image` into an ordered normalized list.
 /// 将 `text+image` 这样的半段模态描述解析为有序归一化列表。
 fn dynamic_model_modalities_from_half(raw_modalities: &str) -> Vec<String> {
@@ -5205,6 +5410,7 @@ fn dynamic_model_modalities_from_half(raw_modalities: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+#[cfg(test)]
 /// Parses one ordered dynamic string-array field from the loosely shaped remote `/models` payload.
 /// 从宽松形状的远端 `/models` 载荷中解析一个有序动态字符串数组字段。
 fn dynamic_model_string_array(
@@ -5228,19 +5434,19 @@ fn dynamic_model_string_array(
 #[cfg(test)]
 mod tests {
     use super::{
-        AiCapabilityVendorConnectionMode, AiToolDeclaration, AiToolKind, ModelChoice, ModelInterleavedCapability,
-        ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
-        PersistedAiCapabilityTargetBinding,
-        PersistedAiCapabilityVendorEntry, PersistedAiToolConfiguration,
-        PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderApiFamily,
-        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
-        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-        SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
-        WebSearchRoutingMode, apply_provider_reasoning_model_overrides,
-        extract_models_from_array, filter_remote_model_choices,
-        merge_embedded_model_metadata, remote_models_url,
-        supported_provider_by_id,
+        AiCapabilityVendorConnectionMode, AiToolDeclaration, AiToolKind, ModelChoice,
+        ModelInterleavedCapability, ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
+        PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
+        PersistedAiToolConfiguration, PersistedProviderEntry, PersistedWebSearchConfiguration,
+        PersistedWebSearchProviderEntry, ProviderApiFamily, ProviderBaseUrlConfig,
+        ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
+        ProviderModelDiscoveryKind, ProviderRuntimeKind, ReasoningCapabilityKind,
+        ReasoningEffortLevel, ReasoningProfileConfig, SupportedProviderDefinition,
+        WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
+        apply_provider_reasoning_model_overrides, catalog_model_choices, effective_model_choices,
+        extract_models_from_array, filter_remote_model_choices, merge_embedded_model_metadata,
+        merge_refreshed_models, normalize_provider_configuration_for_save, persist_remote_models,
+        remote_models_url, supported_provider_by_id,
     };
     use serde_json::{Map as JsonMap, json};
     use std::collections::{BTreeMap, BTreeSet};
@@ -5288,6 +5494,7 @@ mod tests {
         ModelChoice {
             id: model_id.to_string(),
             name: model_id.to_string(),
+            default_enabled: false,
             status: None,
             family: None,
             release_date: None,
@@ -5507,7 +5714,8 @@ mod tests {
 
         assert_eq!(model.reasoning, Some(true));
         assert_eq!(
-            model.reasoning_profile
+            model
+                .reasoning_profile
                 .as_ref()
                 .and_then(|profile| profile.kind),
             Some(ReasoningCapabilityKind::DefaultOnly)
@@ -5752,7 +5960,10 @@ mod tests {
 
         assert!(configuration.normalize());
         assert_eq!(configuration.providers.len(), 1);
-        assert_eq!(configuration.providers[0].kind, WebSearchProviderKind::Brave);
+        assert_eq!(
+            configuration.providers[0].kind,
+            WebSearchProviderKind::Brave
+        );
     }
 
     /// Verifies AI capability normalization removes unsupported vendors, unsupported targets, and stale route selectors in one pass.
@@ -5939,8 +6150,14 @@ mod tests {
             usable_targets.len(),
             super::MAX_ENABLED_AI_CAPABILITY_TARGETS_PER_KIND
         );
-        assert_eq!(usable_targets.first().map(String::as_str), Some("limit_test/target-00"));
-        assert_eq!(usable_targets.last().map(String::as_str), Some("limit_test/target-19"));
+        assert_eq!(
+            usable_targets.first().map(String::as_str),
+            Some("limit_test/target-00")
+        );
+        assert_eq!(
+            usable_targets.last().map(String::as_str),
+            Some("limit_test/target-19")
+        );
     }
 
     /// Verifies only workbench-quick-toggle capability kinds remain persisted inside the standalone AI capability configuration.
@@ -6132,6 +6349,7 @@ mod tests {
                 ModelChoice {
                     id: String::from("openai/gpt-4.1"),
                     name: String::from("GPT-4.1"),
+                    default_enabled: false,
                     status: None,
                     family: None,
                     release_date: None,
@@ -6151,6 +6369,7 @@ mod tests {
                 ModelChoice {
                     id: String::from("qwen/qwen3-vl-32b-instruct"),
                     name: String::from("Qwen3 VL 32B Instruct"),
+                    default_enabled: false,
                     status: None,
                     family: None,
                     release_date: None,
@@ -6170,6 +6389,7 @@ mod tests {
                 ModelChoice {
                     id: String::from("baidu/qianfan-ocr-fast"),
                     name: String::from("Qianfan OCR Fast"),
+                    default_enabled: false,
                     status: None,
                     family: None,
                     release_date: None,
@@ -6189,6 +6409,7 @@ mod tests {
                 ModelChoice {
                     id: String::from("google/gemini-2.5-flash-image"),
                     name: String::from("Gemini 2.5 Flash Image"),
+                    default_enabled: false,
                     status: None,
                     family: None,
                     release_date: None,
@@ -6208,6 +6429,7 @@ mod tests {
                 ModelChoice {
                     id: String::from("cohere/rerank-v3.5"),
                     name: String::from("Cohere Rerank v3.5"),
+                    default_enabled: false,
                     status: None,
                     family: None,
                     release_date: None,
@@ -6227,6 +6449,7 @@ mod tests {
                 ModelChoice {
                     id: String::from("openai/text-embedding-3-large"),
                     name: String::from("text-embedding-3-large"),
+                    default_enabled: false,
                     status: None,
                     family: None,
                     release_date: None,
@@ -6303,6 +6526,7 @@ mod tests {
         let discovered_models = vec![ModelChoice {
             id: String::from("qwen3.6-plus"),
             name: String::from("Qwen 3.6 Plus Remote"),
+            default_enabled: false,
             status: None,
             family: Some(String::from("qwen")),
             release_date: None,
@@ -6322,6 +6546,7 @@ mod tests {
         let embedded_models = vec![ModelChoice {
             id: String::from("qwen3.6-plus"),
             name: String::from("Qwen 3.6 Plus Embedded"),
+            default_enabled: false,
             status: Some(String::from("preview")),
             family: Some(String::from("qwen-embedded")),
             release_date: Some(String::from("2026-04-20")),
@@ -6376,5 +6601,112 @@ mod tests {
         assert_eq!(model.input_modalities, vec!["text", "image"]);
         assert_eq!(model.output_modalities, vec!["text"]);
         assert_eq!(model.ai_tools.len(), 1);
+    }
+
+    /// Verifies legacy provider entries without any persisted enabled-model state still expose the full embedded catalog instead of collapsing to new default selections.
+    /// 验证未持久化启用模型状态的旧版供应商条目仍会暴露完整内置目录，而不会收缩到新的默认勾选集合。
+    #[test]
+    fn effective_model_choices_keep_full_catalog_for_legacy_entries_without_enablement_state() {
+        let provider_id = "openrouter";
+        let expected_ids =
+            catalog_model_choices(provider_id, &ProviderConfigurationFile::default())
+                .into_iter()
+                .map(|model| model.id)
+                .collect::<Vec<_>>();
+        let mut config = ProviderConfigurationFile::default();
+        let entry = config
+            .provider
+            .entry(String::from(provider_id))
+            .or_insert_with(PersistedProviderEntry::default);
+        entry.enabled_models = None;
+
+        let effective_ids = effective_model_choices(provider_id, &config)
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(effective_ids, expected_ids);
+    }
+
+    /// Verifies deprecated remote caches no longer override the embedded provider catalog during model resolution.
+    /// 验证废弃远端缓存不会再在模型解析阶段覆盖内置供应商目录。
+    #[test]
+    fn catalog_model_choices_ignore_deprecated_remote_cache() {
+        let provider_id = "openrouter";
+        let mut config = ProviderConfigurationFile::default();
+        let fake_remote_model = test_model_choice("fake-remote-model", true, None);
+        let entry = config
+            .provider
+            .entry(String::from(provider_id))
+            .or_insert_with(PersistedProviderEntry::default);
+        entry.models = persist_remote_models(&[fake_remote_model]);
+
+        let catalog_ids = catalog_model_choices(provider_id, &config)
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+
+        assert!(
+            !catalog_ids
+                .iter()
+                .any(|model_id| model_id == "fake-remote-model")
+        );
+        assert!(!catalog_ids.is_empty());
+    }
+
+    /// Verifies configuration serialization normalization strips deprecated remote caches before the file hits disk.
+    /// 验证配置序列化规范化会在文件落盘前移除废弃远端缓存。
+    #[test]
+    fn normalize_provider_configuration_for_save_clears_remote_caches() {
+        let mut config = ProviderConfigurationFile::default();
+        let cached_model = test_model_choice("cached-model", true, None);
+        let entry = config
+            .provider
+            .entry(String::from("openrouter"))
+            .or_insert_with(PersistedProviderEntry::default);
+        entry.models = persist_remote_models(&[cached_model]);
+
+        let normalized = normalize_provider_configuration_for_save(&config);
+
+        assert!(
+            config
+                .provider
+                .get("openrouter")
+                .is_some_and(|entry| !entry.models.is_empty())
+        );
+        assert!(
+            normalized
+                .provider
+                .get("openrouter")
+                .is_some_and(|entry| entry.models.is_empty())
+        );
+    }
+
+    /// Verifies remote catalog refresh only auto-enables newly discovered default models and keeps previously disabled default models disabled.
+    /// 验证远端目录刷新只会自动启用新发现的默认模型，并保持此前被禁用的默认模型继续处于关闭状态。
+    #[test]
+    fn merge_refreshed_models_only_auto_enables_new_default_models() {
+        let mut old_default_model = test_model_choice("default-model", true, None);
+        old_default_model.default_enabled = true;
+        let manual_model = test_model_choice("manual-model", true, None);
+        let mut new_default_model = test_model_choice("new-default-model", true, None);
+        new_default_model.default_enabled = true;
+
+        let mut entry = PersistedProviderEntry::default();
+        entry.models = persist_remote_models(&[old_default_model.clone(), manual_model.clone()]);
+        entry.enabled_models = Some(vec![String::from("manual-model")]);
+
+        merge_refreshed_models(
+            &mut entry,
+            &[old_default_model, manual_model, new_default_model],
+        );
+
+        assert_eq!(
+            entry.enabled_models,
+            Some(vec![
+                String::from("manual-model"),
+                String::from("new-default-model"),
+            ])
+        );
     }
 }

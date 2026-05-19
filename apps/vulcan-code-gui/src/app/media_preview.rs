@@ -4,7 +4,6 @@
 use super::*;
 
 impl VulcanWorkbench {
-
     /// Opens one staged image attachment in the blocking preview modal after verifying the managed file still exists.
     /// 在确认受管文件仍然存在后，将某个已暂存图片附件打开到阻塞式预览弹窗中。
     pub(super) fn open_composer_image_attachment_preview(
@@ -30,7 +29,6 @@ impl VulcanWorkbench {
         Task::none()
     }
 
-
     /// Opens one generated media file through the host operating system default application and updates the user-visible status banner.
     /// 通过宿主操作系统默认应用打开某个生成媒体文件，并更新面向用户的状态横幅。
     pub(super) fn open_generated_attachment_with_system_default_application(
@@ -48,7 +46,6 @@ impl VulcanWorkbench {
         }
         Task::none()
     }
-
 
     /// Toggles host-side playback for one generated audio file while ensuring at most one generated clip plays at a time.
     /// 为某个生成音频文件切换宿主侧播放状态，并确保任意时刻最多只播放一条生成音频。
@@ -92,7 +89,6 @@ impl VulcanWorkbench {
         Task::none()
     }
 
-
     /// Copies one generated image into the system clipboard as bitmap data after validating the managed file still exists.
     /// 在确认受管文件仍然存在后，将某个生成图片以位图数据形式复制到系统剪贴板。
     pub(super) fn copy_generated_image_to_clipboard(
@@ -119,7 +115,6 @@ impl VulcanWorkbench {
         Task::none()
     }
 
-
     /// Stops the active generated-audio playback sink, if any, and clears the retained playback state.
     /// 停止当前激活的生成音频播放 sink（如果存在），并清空保留的播放状态。
     pub(super) fn stop_generated_audio_playback(&mut self) {
@@ -130,7 +125,6 @@ impl VulcanWorkbench {
             self.refresh_session_agent_view_buffers(session_id);
         }
     }
-
 
     /// Builds one host-side generated-audio playback state by opening, decoding, and enqueueing the target audio file.
     /// 通过打开、解码并入队目标音频文件来构建一份宿主侧生成音频播放状态。
@@ -156,7 +150,6 @@ impl VulcanWorkbench {
         })
     }
 
-
     /// Computes the modal card size used by the current image preview overlay from the live main-window size.
     /// 根据实时主窗口尺寸计算当前图片预览遮罩使用的弹窗卡片尺寸。
     pub(super) fn workbench_image_preview_modal_size(&self) -> iced::Size {
@@ -167,7 +160,6 @@ impl VulcanWorkbench {
                 .max(WORKBENCH_IMAGE_PREVIEW_MODAL_MIN_HEIGHT),
         )
     }
-
 
     /// Computes the visible image viewport size inside the current image preview modal.
     /// 计算当前图片预览弹窗内部可见图片视口尺寸。
@@ -183,13 +175,11 @@ impl VulcanWorkbench {
         )
     }
 
-
     /// Adjusts the currently open image preview zoom while preserving the hovered image point when possible.
     /// 调整当前已打开图片预览的缩放倍率，并尽量保持鼠标悬停的图片点不漂移。
     pub(super) fn adjust_workbench_image_preview_zoom(&mut self, delta: f32) -> Task<Message> {
         self.zoom_workbench_image_preview(delta, None)
     }
-
 
     /// Handles one intercepted wheel movement, using Ctrl for pointer-centered zoom and plain wheel for preview scrolling.
     /// 处理一次被拦截的滚轮移动，按住 Ctrl 时围绕指针缩放，普通滚轮则滚动预览区域。
@@ -236,7 +226,6 @@ impl VulcanWorkbench {
         )
     }
 
-
     /// Converts one wheel delta into the same absolute preview-scroll offset used by iced scrollables.
     /// 将一次滚轮增量转换为与 iced 滚动容器一致的绝对预览滚动偏移。
     pub(super) fn workbench_image_preview_wheel_scroll_offset(
@@ -252,7 +241,6 @@ impl VulcanWorkbench {
             }
         }
     }
-
 
     /// Clamps one requested preview scroll offset to the currently reachable zoomed image content bounds.
     /// 将请求的预览滚动偏移限制到当前缩放图片内容可达的边界内。
@@ -274,7 +262,6 @@ impl VulcanWorkbench {
         }
     }
 
-
     /// Starts left-button panning for the image preview from the current window cursor position.
     /// 从当前窗口光标位置开始图片预览左键平移。
     pub(super) fn begin_workbench_image_preview_pan(&mut self) -> Task<Message> {
@@ -283,7 +270,6 @@ impl VulcanWorkbench {
         }
         Task::none()
     }
-
 
     /// Ends any active left-button image preview panning gesture.
     /// 结束当前激活的任意左键图片预览平移手势。
@@ -294,10 +280,12 @@ impl VulcanWorkbench {
         Task::none()
     }
 
-
     /// Applies one cursor movement as a left-button image preview pan operation.
     /// 将一次光标移动应用为左键图片预览平移操作。
-    pub(super) fn apply_workbench_image_preview_pan(&mut self, position: iced::Point) -> Task<Message> {
+    pub(super) fn apply_workbench_image_preview_pan(
+        &mut self,
+        position: iced::Point,
+    ) -> Task<Message> {
         let viewport_size = self.workbench_image_preview_viewport_size();
         let Some(modal) = self.workbench_image_preview_modal.as_mut() else {
             return Task::none();
@@ -324,7 +312,6 @@ impl VulcanWorkbench {
         modal.scroll_offset = next_offset;
         operation::scroll_to(workbench_image_preview_scrollable_id(), next_offset)
     }
-
 
     /// Applies one zoom delta and scrolls the preview so the selected local anchor stays under the cursor.
     /// 应用一次缩放增量，并滚动预览以尽量让选定的局部锚点停留在鼠标下方。
@@ -365,7 +352,6 @@ impl VulcanWorkbench {
         modal.scroll_offset = next_offset;
         operation::scroll_to(workbench_image_preview_scrollable_id(), next_offset)
     }
-
 
     /// Resets the currently open image preview zoom to the default fit value.
     /// 将当前已打开图片预览的缩放倍率还原到默认适配值。

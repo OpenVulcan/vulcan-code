@@ -23,7 +23,7 @@
     "allowOverride": false
   },
   "modelDiscovery": {
-    "kind": "openai-models"
+    "kind": "none"
   },
   "modelRuntimeOverrides": {
     "qwen3-max": "openai-responses-compatible",
@@ -49,7 +49,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "qwen-flash",
@@ -610,6 +611,7 @@
       "outputModalities": [
         "text"
       ],
+      "defaultEnabled": true,
       "aiTools": [
         {
           "kind": "web_search",
@@ -866,6 +868,7 @@
       "outputModalities": [
         "text"
       ],
+      "defaultEnabled": true,
       "aiTools": [
         {
           "kind": "web_search",

@@ -145,13 +145,9 @@ pub(super) async fn session_has_legacy_oversized_message_candidates(
     session_id: SessionId,
 ) -> Result<bool, String> {
     Ok(
-        !query_legacy_oversized_message_candidates(
-            controller,
-            session_id,
-            1,
-        )
-        .await?
-        .is_empty(),
+        !query_legacy_oversized_message_candidates(controller, session_id, 1)
+            .await?
+            .is_empty(),
     )
 }
 
@@ -1368,7 +1364,9 @@ fn session_message_starts_new_turn(message: &SessionMessageEntry) -> bool {
 
 /// Returns whether one visible transcript message should participate in workspace BM25 search indexing.
 /// 返回某条可见转录消息是否应参与工作台 BM25 搜索索引。
-pub(super) fn session_message_is_workspace_history_search_indexable(message: &SessionMessageEntry) -> bool {
+pub(super) fn session_message_is_workspace_history_search_indexable(
+    message: &SessionMessageEntry,
+) -> bool {
     matches!(
         (message.kind, message.record_kind, message.visible),
         (

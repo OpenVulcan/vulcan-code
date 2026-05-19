@@ -42,7 +42,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "Ring-1T",
@@ -60,7 +61,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     }
   ]
 }

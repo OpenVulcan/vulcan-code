@@ -40,7 +40,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "anthropic\/claude-3.7-sonnet",
@@ -60,7 +61,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "anthropic\/claude-haiku-4.5",
@@ -80,7 +82,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "anthropic\/claude-opus-4",
@@ -100,7 +103,8 @@
       ],
       "outputModalities": [
         "text"
-      ]
+      ],
+      "defaultEnabled": true
     },
     {
       "id": "anthropic\/claude-opus-4.1",

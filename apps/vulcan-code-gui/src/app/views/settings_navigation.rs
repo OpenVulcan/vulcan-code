@@ -5,7 +5,7 @@ use super::*;
 use iced::widget::column;
 
 impl VulcanWorkbench {
-/// Builds the left settings drawer using the same visual structure as the main task panel.
+    /// Builds the left settings drawer using the same visual structure as the main task panel.
     /// 构建与主任务面板使用相同视觉结构的左侧设置抽屉。
     pub(super) fn view_settings_navigation_panel(&self) -> Element<'_, Message> {
         let navigation_tree = scrollable(self.view_settings_navigation_tree())
@@ -29,14 +29,14 @@ impl VulcanWorkbench {
     pub(super) fn view_settings_navigation_tree(&self) -> Element<'_, Message> {
         let mut navigation = column![self.view_main_task_group_label("设置", false)]
             .spacing(1)
-            .width(Fill)
-            .push(self.view_settings_navigation_top_level_button(
-                SettingsSection::ModelProviders,
-            ))
-            .push(self.view_settings_navigation_top_level_button(
-                SettingsSection::RuntimeDiagnostics,
-            ))
-            .push(self.view_settings_navigation_ai_group_button());
+            .width(Fill);
+        navigation = navigation.push(self.view_settings_navigation_model_group_button());
+        if self.settings_model_tree_expanded {
+            navigation = navigation
+                .push(self.view_settings_navigation_child_button(SettingsSection::ModelProviders))
+                .push(self.view_settings_navigation_child_button(SettingsSection::ModelList));
+        }
+        navigation = navigation.push(self.view_settings_navigation_ai_group_button());
         if self.settings_ai_capability_tree_expanded {
             navigation =
                 navigation
@@ -72,14 +72,58 @@ impl VulcanWorkbench {
                     ));
         }
         navigation = navigation
-            .push(self.view_settings_navigation_top_level_button(
-                SettingsSection::McpServers,
-            ))
-            .push(self.view_settings_navigation_top_level_button(
-                SettingsSection::ArchivedRestore,
-            ));
+            .push(self.view_settings_navigation_top_level_button(SettingsSection::McpServers))
+            .push(self.view_settings_navigation_top_level_button(SettingsSection::ArchivedRestore))
+            .push(
+                self.view_settings_navigation_top_level_button(SettingsSection::RuntimeDiagnostics),
+            );
 
         container(navigation).width(Fill).into()
+    }
+
+    /// Builds the collapsible model-settings parent row inside the left settings navigation drawer.
+    /// 构建左侧设置导航抽屉中的可折叠模型设置父级树节点行。
+    pub(super) fn view_settings_navigation_model_group_button(&self) -> Element<'_, Message> {
+        let folder_icon: Element<'_, Message> = if self.settings_model_tree_expanded {
+            codicon::folder_opened().size(16).line_height(1.0).into()
+        } else {
+            codicon::folder().size(16).line_height(1.0).into()
+        };
+        let chevron_icon: Element<'_, Message> = if self.settings_model_tree_expanded {
+            codicon::chevron_down().size(14).line_height(1.0).into()
+        } else {
+            codicon::chevron_right().size(14).line_height(1.0).into()
+        };
+
+        button(
+            container(
+                row![
+                    container(folder_icon).width(16).center_y(Fill),
+                    text("模型设置")
+                        .size(14)
+                        .wrapping(iced::advanced::text::Wrapping::None),
+                    space::horizontal(),
+                    container(chevron_icon).width(16).center_y(Fill),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding(iced::Padding {
+                top: 3.0,
+                right: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+                bottom: 3.0,
+                left: MAIN_TASK_TREE_SECTION_LEFT_PADDING,
+            })
+            .height(MAIN_TASK_PROJECT_ROW_HEIGHT)
+            .width(Fill),
+        )
+        .width(Fill)
+        .padding(0)
+        .style(move |theme, status| {
+            style::main_task_tree_session_button_style(theme, status, false, false)
+        })
+        .on_press(Message::ToggleModelSettingsTree)
+        .into()
     }
 
     /// Builds one reusable navigation-tree row shared by settings, target pickers, and quick capability sidebars.
@@ -133,9 +177,11 @@ impl VulcanWorkbench {
             .spacing(3)
             .width(Fill)
         } else {
-            column![text(label)
-                .size(13)
-                .wrapping(iced::advanced::text::Wrapping::None)]
+            column![
+                text(label)
+                    .size(13)
+                    .wrapping(iced::advanced::text::Wrapping::None)
+            ]
             .spacing(0)
             .width(Fill)
         };
@@ -207,7 +253,7 @@ impl VulcanWorkbench {
             container(
                 row![
                     container(folder_icon).width(16).center_y(Fill),
-                    text("AI 能力")
+                    text("能力扩展")
                         .size(14)
                         .wrapping(iced::advanced::text::Wrapping::None),
                     space::horizontal(),
@@ -261,9 +307,18 @@ impl VulcanWorkbench {
         is_child: bool,
     ) -> Element<'_, Message> {
         let palette = self.app_theme.extended_palette();
-        let color = palette.background.base.text.scale_alpha(if is_child { 0.72 } else { 0.82 });
+        let color = palette
+            .background
+            .base
+            .text
+            .scale_alpha(if is_child { 0.72 } else { 0.82 });
         let icon: Element<'_, Message> = match section {
             SettingsSection::ModelProviders => lucide::file_text()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::ModelList => lucide::file_text()
                 .size(15)
                 .line_height(1.0)
                 .color(color)

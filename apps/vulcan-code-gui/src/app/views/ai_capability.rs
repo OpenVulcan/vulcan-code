@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::provider_config::ResolvedAiCapabilityRouteTarget;
-use iced::widget::column;
+use iced::widget::{column, opaque};
 
 impl VulcanWorkbench {
     /// Builds the blocking quick AI capability modal opened from the composer control row.
@@ -32,19 +32,17 @@ impl VulcanWorkbench {
         .style(style::workbench_model_trigger_button_style)
         .on_press(Message::CloseWorkbenchAiCapabilityPanel);
         let left_navigation = scrollable(
-            WorkbenchAiCapabilitySection::ALL.into_iter().fold(
-                column![].spacing(1).width(Fill),
-                |list, section| list.push(self.view_workbench_ai_capability_section_row(section)),
-            ),
+            WorkbenchAiCapabilitySection::ALL
+                .into_iter()
+                .fold(column![].spacing(1).width(Fill), |list, section| {
+                    list.push(self.view_workbench_ai_capability_section_row(section))
+                }),
         )
         .height(420);
         let right_panel: Element<'_, Message> = match selected_section.capability_kind() {
-            Some(capability_kind) => self.view_ai_capability_management_panel(
-                capability_kind,
-                false,
-                false,
-                true,
-            ),
+            Some(capability_kind) => {
+                self.view_ai_capability_management_panel(capability_kind, false, false, true)
+            }
             None if selected_section.supports_routing_strategy() => self
                 .view_ai_capability_unavailable_page(
                     selected_section.label(),
@@ -56,14 +54,14 @@ impl VulcanWorkbench {
                     selected_section.label(),
                     "当前能力入口已预留，但还没有接通可配置的目标与执行工具。",
                 )
-                        .into(),
+                .into(),
         };
         let modal_card = container(
             column![
                 container(
                     row![
                         column![
-                            text("AI扩展能力设置").size(20),
+                            text("能力扩展设置").size(20),
                             text("这里用于高频调整已配置能力的启用状态与顺序；新增供应商仍需前往设置页。")
                                 .size(12)
                                 .color(palette.background.base.text.scale_alpha(0.62)),
@@ -117,20 +115,22 @@ impl VulcanWorkbench {
             .on_press(Message::CloseWorkbenchAiCapabilityPanel);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -146,7 +146,7 @@ impl VulcanWorkbench {
         self.view_workbench_dual_line_trigger(
             Some(icon),
             String::from("扩展能力"),
-            String::from("AI扩展能力设置"),
+            String::from("能力扩展设置"),
             WORKBENCH_AI_CAPABILITY_QUICK_CONTROL_WIDTH,
             true,
             Some(Message::OpenWorkbenchAiCapabilityPanel),
@@ -191,11 +191,9 @@ impl VulcanWorkbench {
                 .line_height(1.0)
                 .color(color)
                 .into(),
-            WorkbenchAiCapabilitySection::SpeechSynthesis => lucide::mic()
-                .size(15)
-                .line_height(1.0)
-                .color(color)
-                .into(),
+            WorkbenchAiCapabilitySection::SpeechSynthesis => {
+                lucide::mic().size(15).line_height(1.0).color(color).into()
+            }
             WorkbenchAiCapabilitySection::MusicGeneration => lucide::music()
                 .size(15)
                 .line_height(1.0)
@@ -219,20 +217,21 @@ impl VulcanWorkbench {
         let is_selected = section == self.workbench_ai_capability_section;
         let toggle_available = self.workbench_ai_capability_is_available(section);
         let toggle_enabled = self.workbench_ai_capability_is_enabled(section);
-        let toggle: Element<'_, Message> = if section.capability_kind().is_some() {
-            let checkbox = checkbox(toggle_enabled).spacing(0).size(16);
-            if toggle_available {
-                checkbox
-                    .on_toggle(move |enabled| {
-                        Message::WorkbenchAiCapabilitySectionEnabledToggled { section, enabled }
-                    })
-                    .into()
+        let toggle: Element<'_, Message> =
+            if section.capability_kind().is_some() {
+                let checkbox = checkbox(toggle_enabled).spacing(0).size(16);
+                if toggle_available {
+                    checkbox
+                        .on_toggle(move |enabled| {
+                            Message::WorkbenchAiCapabilitySectionEnabledToggled { section, enabled }
+                        })
+                        .into()
+                } else {
+                    checkbox.into()
+                }
             } else {
-                checkbox.into()
-            }
-        } else {
-            checkbox(false).spacing(0).size(16).into()
-        };
+                checkbox(false).spacing(0).size(16).into()
+            };
         self.view_tree_navigation_button_row_with_leading(
             Some(toggle),
             self.view_workbench_ai_capability_section_icon(section),
@@ -251,28 +250,12 @@ impl VulcanWorkbench {
     /// Renders the shared AI capability vendor page where one provider instance is configured only once and later reused by multiple capability tabs.
     /// 渲染共享 AI 能力供应商页面，使同一供应商实例只配置一次并复用于多个能力分页。
     pub(super) fn view_ai_tool_configuration_card(&self) -> Element<'_, Message> {
-        let total_enabled_targets = self
-            .ai_tool_configuration
-            .vendors
-            .iter()
-            .flat_map(|vendor| vendor.targets.iter())
-            .filter(|binding| binding.enabled)
-            .count();
-        let vendor_status = if self.ai_tool_configuration.vendors.is_empty() {
-            String::from("尚未配置共享 AI 能力供应商")
-        } else {
-            format!(
-                "已配置 {} 个供应商 · 已启用 {} 个目标",
-                self.ai_tool_configuration.vendors.len(),
-                total_enabled_targets,
-            )
-        };
         let vendor_entries: Element<'_, Message> = if self.ai_tool_configuration.vendors.is_empty()
         {
             container(
                 column![
-                    text("还没有共享 AI 能力供应商。").size(13),
-                    text("先点击下方“添加供应商”，从目录里选择一个供应商并填写 API Key。若该供应商需要区域，会在独立配置弹窗中提供区域下拉框或输入框。")
+                    text("还没有共享能力供应商。").size(13),
+                    text("先点击右上角“新增供应商”，从目录里选择一个供应商并填写 API Key。若该供应商需要区域，会在独立配置弹窗中提供区域下拉框或输入框。")
                         .size(12),
                 ]
                 .spacing(6),
@@ -306,8 +289,6 @@ impl VulcanWorkbench {
                     } else {
                         String::from("API Key：已填写")
                     };
-                    let enabled_target_count =
-                        vendor.targets.iter().filter(|binding| binding.enabled).count();
                     let remove_vendor_id = vendor.vendor_id.clone();
                     let edit_vendor_id = vendor.vendor_id.clone();
 
@@ -362,13 +343,8 @@ impl VulcanWorkbench {
                                 ]
                                 .align_y(Center)
                                 .spacing(10),
-                                text(format!(
-                                    "当前已启用 {} 个目标。具体模型和功能请到下方各能力分页里统一勾选与排序。",
-                                    enabled_target_count
-                                ))
-                                .size(12),
                             ]
-                            .spacing(10),
+                            .spacing(0),
                         )
                         .padding(12)
                         .style(container::bordered_box),
@@ -377,38 +353,11 @@ impl VulcanWorkbench {
                 .into()
         };
 
-        container(
-            column![
-                text("AI 能力工具配置").size(18),
-                text("这里先按“供应商”集中配置共享凭据。一个供应商只允许配置一次，不支持同供应商多 Key 轮询，也不暴露 Base URL 手动修改。后续各能力分页只负责勾选该供应商下要启用的模型或功能目标，改动会自动保存。")
-                    .size(12),
-                row![
-                    text("共享 AI 能力供应商").size(16),
-                    space::horizontal(),
-                    text(vendor_status).size(12),
-                ]
-                .align_y(Center),
-                text("当前已接通 web-search、understand_image，以及 MiniMax 的 image_generation、video_generation、speech_synthesis、music_generation、music_cover。能力页中的 `auto` 会按各分页保存的目标顺序执行。")
-                    .size(12),
-                vendor_entries,
-                row![
-                    button("添加供应商")
-                        .style(button::secondary)
-                        .on_press(Message::OpenAiCapabilityVendorPicker),
-                    space::horizontal(),
-                    button("重新写入配置")
-                        .style(button::primary)
-                        .on_press(Message::SaveAiToolConfiguration),
-                ]
-                .align_y(Center)
-                .spacing(10),
-                text(&self.ai_tool_notice).size(12),
-            ]
-            .spacing(12),
-        )
-        .padding(16)
-        .style(container::bordered_box)
-        .into()
+        scrollable(container(vendor_entries).width(Fill))
+            .height(Fill)
+            .spacing(8)
+            .width(Fill)
+            .into()
     }
     /// Builds the insertion indicator shown before one enabled AI capability route row while reordering.
     /// 构建 AI 能力已启用路由行重排期间显示在某条目标行之前的插入指示器。
@@ -475,12 +424,14 @@ impl VulcanWorkbench {
         let toggle = checkbox(enabled)
             .size(16)
             .spacing(0)
-            .on_toggle(move |next_enabled| Message::AiCapabilityTargetEnabledToggled {
-                capability_kind,
-                vendor_id: vendor_id.clone(),
-                target_alias: target_alias.clone(),
-                enabled: next_enabled,
-            });
+            .on_toggle(
+                move |next_enabled| Message::AiCapabilityTargetEnabledToggled {
+                    capability_kind,
+                    vendor_id: vendor_id.clone(),
+                    target_alias: target_alias.clone(),
+                    enabled: next_enabled,
+                },
+            );
         let detail_color = self
             .app_theme
             .extended_palette()
@@ -491,7 +442,9 @@ impl VulcanWorkbench {
         let trailing_action: Element<'_, Message> = if show_remove_action {
             button(text("移除").size(12))
                 .padding([3, 10])
-                .style(|theme, status| style::workbench_label_action_button_style(theme, status, true))
+                .style(|theme, status| {
+                    style::workbench_label_action_button_style(theme, status, true)
+                })
                 .on_press(remove_message)
                 .into()
         } else {
@@ -601,16 +554,18 @@ impl VulcanWorkbench {
             column![
                 text(title).size(18),
                 text(description).size(12),
-                text("当前可先在这里预留入口；后续接通供应商与解析链后，再开放真实目标配置与排序。")
-                    .size(12)
-                    .color(
-                        self.app_theme
-                            .extended_palette()
-                            .background
-                            .base
-                            .text
-                            .scale_alpha(0.62),
-                    ),
+                text(
+                    "当前可先在这里预留入口；后续接通供应商与解析链后，再开放真实目标配置与排序。"
+                )
+                .size(12)
+                .color(
+                    self.app_theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.62),
+                ),
             ]
             .spacing(10),
         )
@@ -650,7 +605,13 @@ impl VulcanWorkbench {
                     )
                     .width(Fill)
                     .placeholder("选择图像理解路由策略"),
-                    text(self.ai_tool_configuration.understand_image.mode.description()).size(12),
+                    text(
+                        self.ai_tool_configuration
+                            .understand_image
+                            .mode
+                            .description()
+                    )
+                    .size(12),
                 ]
                 .spacing(8)
                 .into(),
@@ -681,36 +642,21 @@ impl VulcanWorkbench {
         let configured_targets = self
             .ai_tool_configuration
             .resolved_configured_targets_for_kind(capability_kind);
-        let enabled_target_count = configured_targets
-            .iter()
-            .filter(|entry| entry.enabled)
-            .count();
-        let mut content = column![
-            row![
-                text(format!(
-                    "已配置供应商：{} 个 · 已配置目标：{} 个 · 当前启用：{} 个",
-                    available_vendor_ids.len(),
-                    configured_targets.len(),
-                    enabled_target_count
-                ))
-                .size(12),
-                space::horizontal(),
-            ]
-            .align_y(Center),
-        ]
-        .spacing(12);
-        if show_configure_button {
+        let mut content = column![].spacing(12).width(Fill).height(Fill);
+        if show_configure_button && show_runtime_toggle {
             content = content.push(
                 row![
                     space::horizontal(),
-                    button("配置目标")
+                    button("配置接口")
                         .style(button::primary)
                         .on_press(Message::OpenAiCapabilityTargetPicker(capability_kind)),
                 ]
                 .align_y(Center),
             );
         }
-        if let Some(strategy_block) = self.view_ai_capability_routing_strategy_block(capability_kind)
+        if show_runtime_toggle
+            && let Some(strategy_block) =
+                self.view_ai_capability_routing_strategy_block(capability_kind)
         {
             content = content.push(strategy_block);
         }
@@ -719,11 +665,9 @@ impl VulcanWorkbench {
                 container(
                     column![
                         text("当前还没有可用于这个能力的共享供应商。").size(13),
-                        button("前往供应商配置")
-                            .style(button::secondary)
-                            .on_press(Message::SettingsSectionSelected(
-                                SettingsSection::AiCapabilityVendors,
-                            )),
+                        button("前往能力供应商").style(button::secondary).on_press(
+                            Message::SettingsSectionSelected(SettingsSection::AiCapabilityVendors,)
+                        ),
                     ]
                     .spacing(8),
                 )
@@ -732,9 +676,9 @@ impl VulcanWorkbench {
             );
         } else if configured_targets.is_empty() {
             let empty_text = if show_configure_button {
-                "当前还没有配置任何目标。点击“配置目标”后，可在弹层中按供应商勾选要启用的模型或功能。"
+                "当前还没有配置任何接口。点击“配置接口”后，可在弹层中按供应商勾选要启用的模型或功能。"
             } else {
-                "当前还没有已配置目标。请前往设置页中的对应能力分页，先完成目标配置。"
+                "当前还没有已配置接口。请前往设置页中的对应能力分页，先完成接口配置。"
             };
             content = content.push(
                 container(text(empty_text).size(13))
@@ -759,15 +703,12 @@ impl VulcanWorkbench {
                         ))
                 },
             );
-            content = content
-                .push(text("目标列表").size(14))
-                .push(target_list.push(self.view_ai_capability_route_tail_drop_zone(
-                    capability_kind,
-                )))
-                .push(
-                    text("拖动整行即可调整默认顺序；勾选表示启用，不勾选表示保留配置但当前不参与 `target=auto`。")
-                        .size(12),
-                );
+            content = content.push(
+                scrollable(
+                    target_list.push(self.view_ai_capability_route_tail_drop_zone(capability_kind)),
+                )
+                .height(Fill),
+            );
         }
 
         let panel = if show_runtime_toggle {
@@ -780,11 +721,7 @@ impl VulcanWorkbench {
         } else {
             container(content).padding(16)
         };
-        if show_runtime_toggle {
-            panel.into()
-        } else {
-            panel.style(container::bordered_box).into()
-        }
+        panel.width(Fill).height(Fill).into()
     }
     /// Renders one dedicated AI capability page that manages configured targets and their execution order for a single semantic tool.
     /// 渲染管理单个语义工具已配置目标与执行顺序的独立 AI 能力页面。
@@ -930,20 +867,22 @@ impl VulcanWorkbench {
             .on_press(Message::CloseAiCapabilityVendorPicker);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
@@ -1013,7 +952,7 @@ impl VulcanWorkbench {
                 "这里只配置共享区域。供应商名称固定，Base URL 不对外开放，后续各能力分页直接复用这里的区域设置。"
             }
             (false, false) => {
-                "当前供应商无需额外凭据或区域配置，确认后即可加入共享 AI 能力供应商列表。"
+                "当前供应商无需额外凭据或区域配置，确认后即可加入共享能力供应商列表。"
             }
         };
         let local_base_url_placeholder = "例如：http://127.0.0.1:11434 或 http://nasbox:11434";
@@ -1106,8 +1045,7 @@ impl VulcanWorkbench {
             || !matches!(
                 editor.connection_mode,
                 crate::provider_config::AiCapabilityVendorConnectionMode::Local
-            )
-        {
+            ) {
             space().into()
         } else {
             column![
@@ -1161,23 +1099,151 @@ impl VulcanWorkbench {
             .on_press(Message::CloseAiCapabilityVendorEditor);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
     }
+    /// Builds the blocking routing-strategy picker modal used by settings pages for routed AI capabilities.
+    /// 构建供设置页为支持路由策略的 AI 能力选择模式的阻塞式路由策略弹窗。
+    pub(super) fn view_ai_capability_routing_picker_modal(&self) -> Option<Element<'_, Message>> {
+        let picker = self.ai_capability_routing_picker.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseAiCapabilityRoutingPicker);
+        let (title, summary, option_list): (&str, &str, Element<'_, Message>) = match picker
+            .capability_kind
+        {
+            AiToolKind::WebSearch => (
+                "选择联网搜索路由策略",
+                "当前能力会按这里选定的顺序，决定优先使用供应商原生搜索还是共享第三方搜索接口。",
+                column(WebSearchRoutingMode::ALL.into_iter().map(|mode| {
+                    let is_selected = self.ai_tool_configuration.web_search.mode == mode;
+                    button(
+                        container(
+                            column![
+                                text(mode.label()).size(13).width(Fill),
+                                text(mode.description())
+                                    .size(11)
+                                    .color(palette.background.base.text.scale_alpha(0.62))
+                                    .width(Fill),
+                            ]
+                            .spacing(4),
+                        )
+                        .width(Fill)
+                        .center_y(Fill),
+                    )
+                    .width(Fill)
+                    .padding([8, 10])
+                    .style(move |theme, status| {
+                        style::workbench_model_picker_option_button_style(
+                            theme,
+                            status,
+                            is_selected,
+                        )
+                    })
+                    .on_press(Message::WebSearchRoutingModeSelected(mode))
+                    .into()
+                }))
+                .spacing(6)
+                .into(),
+            ),
+            AiToolKind::UnderstandImage => (
+                "选择图像理解路由策略",
+                "当前能力会按这里选定的顺序，决定优先使用模型原生视觉，还是优先走宿主理解桥接工具。",
+                column(NativeBridgeRoutingMode::ALL.into_iter().map(|mode| {
+                    let is_selected = self.ai_tool_configuration.understand_image.mode == mode;
+                    button(
+                        container(
+                            column![
+                                text(mode.label()).size(13).width(Fill),
+                                text(mode.description())
+                                    .size(11)
+                                    .color(palette.background.base.text.scale_alpha(0.62))
+                                    .width(Fill),
+                            ]
+                            .spacing(4),
+                        )
+                        .width(Fill)
+                        .center_y(Fill),
+                    )
+                    .width(Fill)
+                    .padding([8, 10])
+                    .style(move |theme, status| {
+                        style::workbench_model_picker_option_button_style(
+                            theme,
+                            status,
+                            is_selected,
+                        )
+                    })
+                    .on_press(Message::UnderstandImageRoutingModeSelected(mode))
+                    .into()
+                }))
+                .spacing(6)
+                .into(),
+            ),
+            _ => return None,
+        };
+        let modal_card = container(
+            column![
+                row![text(title).size(20), space::horizontal(), close_button].align_y(Center),
+                text(summary)
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.62)),
+                scrollable(option_list).height(320),
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(640)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseAiCapabilityRoutingPicker);
+        Some(
+            opaque(
+                stack([
+                    backdrop.into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
+    }
+
     /// Builds the blocking AI capability target-picker modal used by capability pages to choose targets from configured vendors.
     /// 构建供能力页从已配置供应商中选择目标的阻塞式 AI 能力目标选择弹窗。
     pub(super) fn view_ai_capability_target_picker_modal(&self) -> Option<Element<'_, Message>> {
@@ -1230,7 +1296,14 @@ impl VulcanWorkbench {
                 let is_selected = selected_vendor_id.as_deref() == Some(vendor_id.as_str());
                 let trailing_badge: Element<'_, Message> = text(format!("[{}]", selected_count))
                     .size(12)
-                    .color(self.app_theme.extended_palette().background.base.text.scale_alpha(0.56))
+                    .color(
+                        self.app_theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.56),
+                    )
                     .into();
                 list.push(self.view_tree_navigation_button_row(
                     self.view_settings_navigation_icon(SettingsSection::AiCapabilityVendors, true),
@@ -1251,7 +1324,7 @@ impl VulcanWorkbench {
                 .collect::<Vec<_>>();
             let selected_targets = picker.selections.get(&vendor_id);
             let target_list = if target_choices.is_empty() {
-                column![text("当前供应商没有可用目标。").size(13)].spacing(8)
+                column![text("当前供应商没有可用接口。").size(13)].spacing(8)
             } else {
                 target_choices
                     .into_iter()
@@ -1267,39 +1340,39 @@ impl VulcanWorkbench {
                         let vendor_id_for_model = vendor_id.clone();
                         let target_alias_for_toggle = choice.target_alias.clone();
                         let target_alias_for_model = choice.target_alias.clone();
-                        let model_editor: Element<'_, Message> = if choice.supports_model_override
-                            && is_checked
-                        {
-                            column![
-                                text("请求模型").size(12),
-                                text_input("模型 ID", &current_model)
-                                    .on_input(move |value| {
-                                        Message::AiCapabilityTargetPickerTargetModelChanged {
-                                            vendor_id: vendor_id_for_model.clone(),
-                                            target_alias: target_alias_for_model.clone(),
-                                            model_id: value,
-                                        }
-                                    })
-                                    .padding(8)
-                                    .width(Fill),
-                            ]
-                            .spacing(5)
-                            .into()
-                        } else {
-                            space::vertical().height(0).into()
-                        };
+                        let model_editor: Element<'_, Message> =
+                            if choice.supports_model_override && is_checked {
+                                column![
+                                    text("请求模型").size(12),
+                                    text_input("模型 ID", &current_model)
+                                        .on_input(move |value| {
+                                            Message::AiCapabilityTargetPickerTargetModelChanged {
+                                                vendor_id: vendor_id_for_model.clone(),
+                                                target_alias: target_alias_for_model.clone(),
+                                                model_id: value,
+                                            }
+                                        })
+                                        .padding(8)
+                                        .width(Fill),
+                                ]
+                                .spacing(5)
+                                .into()
+                            } else {
+                                space::vertical().height(0).into()
+                            };
                         list.push(
                             container(
                                 column![
-                                    checkbox(is_checked).label(choice.label.clone()).on_toggle(
-                                        move |enabled| {
+                                    checkbox(is_checked)
+                                        .label(choice.label.clone())
+                                        .on_toggle(move |enabled| {
                                             Message::AiCapabilityTargetPickerTargetToggled {
                                                 vendor_id: vendor_id_for_toggle.clone(),
                                                 target_alias: target_alias_for_toggle.clone(),
                                                 enabled,
                                             }
-                                        }
-                                    ).size(13),
+                                        })
+                                        .size(13),
                                     model_editor,
                                 ]
                                 .spacing(6),
@@ -1322,24 +1395,24 @@ impl VulcanWorkbench {
         let modal_card = container(
             column![
                 row![
-                    text(format!("添加 {}", capability_kind.label())).size(20),
+                    text(format!("配置接口 · {}", capability_kind.label())).size(20),
                     space::horizontal(),
                     text(format!("已勾选 {} 项", picker.total_selected_count())).size(12),
                     close_button,
                 ]
                 .align_y(Center),
-                text("左侧选择供应商，右侧勾选要启用的目标模型。已启用目标会自动勾选，点击保存后会立即写回当前能力页并自动持久化。")
+                text("左侧选择供应商，右侧勾选要启用的接口。已启用接口会自动勾选，点击保存后会立即写回当前能力页并自动持久化。")
                     .size(12),
                 row![
                     container(column![text("供应商").size(13), vendor_list].spacing(8))
                         .width(FillPortion(2)),
-                    container(column![text("目标模型").size(13), right_panel].spacing(8))
+                    container(column![text("接口列表").size(13), right_panel].spacing(8))
                         .width(FillPortion(5)),
                 ]
                 .spacing(12)
                 .height(320),
                 row![
-                    text("保存后会同步更新当前能力页的已启用列表、顺序，并立即写入独立 AI 能力配置。").size(12),
+                    text("保存后会同步更新当前能力页的已启用接口、顺序，并立即写入独立 AI 能力配置。").size(12),
                     space::horizontal(),
                     button("保存")
                         .style(button::primary)
@@ -1356,20 +1429,23 @@ impl VulcanWorkbench {
             .on_press(Message::CloseAiCapabilityTargetPicker);
 
         Some(
-            stack([
-                container(backdrop)
-                    .width(Fill)
-                    .height(Fill)
-                    .style(style::startup_overlay_backdrop_style)
-                    .into(),
-                container(mouse_area(modal_card).on_press(Message::Noop))
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill)
-                    .into(),
-            ])
-            .width(Fill)
-            .height(Fill)
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
             .into(),
         )
-    }}
+    }
+}
