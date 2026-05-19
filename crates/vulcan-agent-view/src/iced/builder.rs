@@ -11,12 +11,14 @@ use super::text_routing::build_agent_view_plain_text_spans;
 use crate::iced_theme as theme;
 use iced::advanced::text;
 use iced::font;
-use iced::widget::markdown;
 use iced::widget::text::Span;
-use iced::{Color, Font, Padding, Pixels, Theme};
+use iced::{Background, Border, Color, Font, Padding, Pixels, Theme};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
+use vulcan_markdown as markdown;
 
 /// Builder responsible for flattening rich transcript content into renderable nodes and copy text.
 /// 负责将富文本转录内容展平为可渲染节点和复制文本的构建器。
@@ -165,8 +167,16 @@ impl RenderedTranscriptBuilder {
         self.full_text.push_str(&paragraph_text);
         let paragraph_end = self.full_text.chars().count();
         let (grapheme_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
+        let signature_seed = paragraph_signature_seed(
+            &paragraph_text,
+            &grapheme_spans,
+            text_size,
+            line_height,
+            wrapping,
+        );
 
         super::scene::RenderedParagraphNode {
+            signature_seed,
             display_text: paragraph_text,
             spans: grapheme_spans,
             global_char_range: paragraph_start..paragraph_end,
@@ -343,12 +353,35 @@ impl RenderedTranscriptBuilder {
         accent_color: Color,
         action_link: Option<String>,
     ) {
+        let title = title.into();
+        let file_name = file_name.into();
+        let local_path = local_path.into();
+        let signature_seed = media_card_signature_seed(
+            kind,
+            &title,
+            &file_name,
+            &local_path,
+            image_aspect_ratio,
+            output_count,
+            show_caption,
+            compact_style,
+            is_active,
+            gap_before,
+            gap_after,
+            max_width_ratio,
+            horizontal_placement,
+            background,
+            accent_color,
+            action_link.as_deref(),
+        );
+
         self.nodes
             .push(RenderedTranscriptNode::MediaCard(RenderedMediaCardNode {
+                signature_seed,
                 kind,
-                title: title.into(),
-                file_name: file_name.into(),
-                local_path: local_path.into(),
+                title,
+                file_name,
+                local_path,
                 preview_image_handle,
                 image_aspect_ratio,
                 output_count,
@@ -426,6 +459,24 @@ impl RenderedTranscriptBuilder {
 
         self.nodes.push(RenderedTranscriptNode::Table(
             super::scene::RenderedTableNode {
+                signature_seed: table_signature_seed(
+                    &cells,
+                    table.alignments.len(),
+                    row_index,
+                    style.indent_left,
+                    if separator_char_count > 1 {
+                        style.gap_before.max(6.0)
+                    } else {
+                        style.gap_before
+                    },
+                    style.gap_after,
+                    style.cell_padding,
+                    style.outer_padding,
+                    style.border_color,
+                    style.header_background,
+                    style.body_background,
+                    style.quote_depth,
+                ),
                 cells,
                 column_count: table.alignments.len(),
                 row_count: row_index,
@@ -452,6 +503,7 @@ impl RenderedTranscriptBuilder {
     pub(super) fn push_rule(&mut self, color: Color) {
         self.nodes.push(RenderedTranscriptNode::Rule(
             super::scene::RenderedRuleNode {
+                signature_seed: rule_signature_seed(8.0, 8.0, color),
                 gap_before: 8.0,
                 gap_after: 8.0,
                 color,
@@ -491,8 +543,16 @@ fn build_table_cell_paragraph_node(
         )
     };
     let (grapheme_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
+    let signature_seed = paragraph_signature_seed(
+        &cell_text,
+        &grapheme_spans,
+        text_size,
+        text::LineHeight::default(),
+        text::Wrapping::Word,
+    );
 
     RenderedParagraphNode {
+        signature_seed,
         display_text: cell_text,
         spans: grapheme_spans,
         global_char_range,
@@ -511,6 +571,198 @@ fn build_table_cell_paragraph_node(
         background_action_link: None,
         quote_depth: 0,
     }
+}
+
+/// Computes one stable content/style signature seed for a rendered paragraph node so later layout passes can skip rehashing all spans.
+/// 为渲染段落节点计算稳定的内容/样式签名种子，使后续布局过程可以跳过对全部片段的重复哈希。
+fn paragraph_signature_seed(
+    display_text: &str,
+    spans: &[Span<'static, markdown::Uri, Font>],
+    text_size: Pixels,
+    line_height: text::LineHeight,
+    wrapping: text::Wrapping,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    display_text.hash(&mut hasher);
+    text_size.0.to_bits().hash(&mut hasher);
+    hash_line_height(line_height, &mut hasher);
+    format!("{wrapping:?}").hash(&mut hasher);
+    spans.len().hash(&mut hasher);
+    for span in spans {
+        hash_span(span, &mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Computes one stable signature seed for a media card node from its layout-affecting inputs.
+/// 根据媒体卡片会影响布局的输入计算一份稳定签名种子。
+fn media_card_signature_seed(
+    kind: RenderedMediaKind,
+    title: &str,
+    file_name: &str,
+    local_path: &str,
+    image_aspect_ratio: Option<f32>,
+    output_count: usize,
+    show_caption: bool,
+    compact_style: bool,
+    is_active: bool,
+    gap_before: f32,
+    gap_after: f32,
+    max_width_ratio: f32,
+    horizontal_placement: RenderedParagraphHorizontalPlacement,
+    background: RenderedParagraphBackground,
+    accent_color: Color,
+    action_link: Option<&str>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    format!("{kind:?}").hash(&mut hasher);
+    title.hash(&mut hasher);
+    file_name.hash(&mut hasher);
+    local_path.hash(&mut hasher);
+    image_aspect_ratio.map(f32::to_bits).hash(&mut hasher);
+    output_count.hash(&mut hasher);
+    show_caption.hash(&mut hasher);
+    compact_style.hash(&mut hasher);
+    is_active.hash(&mut hasher);
+    gap_before.to_bits().hash(&mut hasher);
+    gap_after.to_bits().hash(&mut hasher);
+    max_width_ratio.to_bits().hash(&mut hasher);
+    format!("{horizontal_placement:?}").hash(&mut hasher);
+    hash_background(background.background, &mut hasher);
+    hash_border(background.border, &mut hasher);
+    color_signature_tuple(accent_color).hash(&mut hasher);
+    action_link.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Computes one stable signature seed for a horizontal rule node from its layout-affecting inputs.
+/// 根据水平分隔线会影响布局的输入计算一份稳定签名种子。
+fn rule_signature_seed(gap_before: f32, gap_after: f32, color: Color) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    gap_before.to_bits().hash(&mut hasher);
+    gap_after.to_bits().hash(&mut hasher);
+    color_signature_tuple(color).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Computes one stable signature seed for a rendered table node from its static layout-affecting fields and cell signatures.
+/// 根据渲染表格节点的静态布局字段和单元格签名计算一份稳定签名种子。
+fn table_signature_seed(
+    cells: &[RenderedTableCellNode],
+    column_count: usize,
+    row_count: usize,
+    indent_left: f32,
+    gap_before: f32,
+    gap_after: f32,
+    cell_padding: Padding,
+    outer_padding: Padding,
+    border_color: Color,
+    header_background: Background,
+    body_background: Background,
+    quote_depth: usize,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    column_count.hash(&mut hasher);
+    row_count.hash(&mut hasher);
+    indent_left.to_bits().hash(&mut hasher);
+    gap_before.to_bits().hash(&mut hasher);
+    gap_after.to_bits().hash(&mut hasher);
+    hash_padding(cell_padding, &mut hasher);
+    hash_padding(outer_padding, &mut hasher);
+    color_signature_tuple(border_color).hash(&mut hasher);
+    hash_background(header_background, &mut hasher);
+    hash_background(body_background, &mut hasher);
+    quote_depth.hash(&mut hasher);
+    for cell in cells {
+        cell.row_index.hash(&mut hasher);
+        cell.column_index.hash(&mut hasher);
+        format!("{:?}", cell.alignment).hash(&mut hasher);
+        cell.is_header.hash(&mut hasher);
+        cell.paragraph.signature_seed.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Hashes one rich text span into the provided stable signature state.
+/// 将单个富文本片段写入给定稳定签名状态。
+fn hash_span(span: &iced::widget::text::Span<'static, markdown::Uri, Font>, hasher: &mut DefaultHasher) {
+    span.text.as_ref().hash(hasher);
+    span.size.map(|size| size.0.to_bits()).hash(hasher);
+    if let Some(line_height) = span.line_height {
+        hash_line_height(line_height, hasher);
+    } else {
+        0_u8.hash(hasher);
+    }
+    span.font.hash(hasher);
+    span.color.map(color_signature_tuple).hash(hasher);
+    format!("{:?}", span.link).hash(hasher);
+    if let Some(highlight) = span.highlight {
+        hash_background(highlight.background, hasher);
+        hash_border(highlight.border, hasher);
+    } else {
+        0_u8.hash(hasher);
+    }
+    hash_padding(span.padding, hasher);
+    span.underline.hash(hasher);
+    span.strikethrough.hash(hasher);
+}
+
+/// Hashes one line-height value while preserving the exact variant used by the paragraph.
+/// 在保留段落使用的具体变体前提下，对行高值进行哈希。
+fn hash_line_height(line_height: text::LineHeight, hasher: &mut DefaultHasher) {
+    match line_height {
+        text::LineHeight::Relative(value) => {
+            1_u8.hash(hasher);
+            value.to_bits().hash(hasher);
+        }
+        text::LineHeight::Absolute(value) => {
+            2_u8.hash(hasher);
+            value.0.to_bits().hash(hasher);
+        }
+    }
+}
+
+/// Hashes one background value into the provided stable signature state.
+/// 将单个背景值写入给定稳定签名状态。
+fn hash_background(background: Background, hasher: &mut DefaultHasher) {
+    match background {
+        Background::Color(color) => {
+            1_u8.hash(hasher);
+            color_signature_tuple(color).hash(hasher);
+        }
+        Background::Gradient(gradient) => {
+            2_u8.hash(hasher);
+            format!("{gradient:?}").hash(hasher);
+        }
+    }
+}
+
+/// Hashes one border value into the provided stable signature state.
+/// 将单个边框值写入给定稳定签名状态。
+fn hash_border(border: Border, hasher: &mut DefaultHasher) {
+    border.width.to_bits().hash(hasher);
+    format!("{:?}", border.radius).hash(hasher);
+    color_signature_tuple(border.color).hash(hasher);
+}
+
+/// Hashes one padding value into the provided stable signature state.
+/// 将单个内边距值写入给定稳定签名状态。
+fn hash_padding(padding: Padding, hasher: &mut DefaultHasher) {
+    padding.top.to_bits().hash(hasher);
+    padding.right.to_bits().hash(hasher);
+    padding.bottom.to_bits().hash(hasher);
+    padding.left.to_bits().hash(hasher);
+}
+
+/// Converts one color into a stable hash-friendly integer tuple.
+/// 将颜色转换为稳定且适合哈希的整型元组。
+fn color_signature_tuple(color: Color) -> (u32, u32, u32, u32) {
+    (
+        color.r.to_bits(),
+        color.g.to_bits(),
+        color.b.to_bits(),
+        color.a.to_bits(),
+    )
 }
 
 /// Converts rich Markdown spans into grapheme-sized spans so selection rectangles can be derived from `span_bounds`.

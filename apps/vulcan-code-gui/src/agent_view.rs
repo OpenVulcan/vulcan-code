@@ -14,12 +14,34 @@ use crate::model::{SessionId, SessionMessageEntry, SessionMessageKind, SessionMe
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use vulcan_markdown::transcript::split_streaming_markdown_source;
 use vulcan_agent_view::{
     AgentViewAttributes, AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind,
-    AgentViewDocument, AgentViewToolPresentationKind, parse_agent_view_document,
-    render_directive_source,
+    AgentViewDocument, AgentViewMarkdownBlock, AgentViewToolPresentationKind,
+    parse_agent_view_document, render_directive_source,
 };
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+
+/// Stable attribute key used to tag Markdown blocks produced from sealed streaming segments.
+/// 用于标记由已封口流式片段生成 Markdown 区块的稳定属性键。
+const STREAMING_SEGMENT_ATTRIBUTE_KEY: &str = "streaming-segment";
+
+/// Stable attribute value written onto sealed immutable streaming Markdown segments.
+/// 写入已封口不可变流式 Markdown 片段的稳定属性值。
+const STREAMING_SEGMENT_SEALED_VALUE: &str = "sealed";
+
+/// Stable attribute value written onto the currently active streaming Markdown tail segment.
+/// 写入当前活动流式 Markdown 尾片段的稳定属性值。
+const STREAMING_SEGMENT_ACTIVE_TAIL_VALUE: &str = "active-tail";
+
+/// Build options that allow the GUI to steer transcript-specific projection behaviors without leaking app state into the renderer.
+/// 允许图形界面在不泄露应用状态给渲染器的前提下控制转录专用投影行为的构建选项。
+#[derive(Debug, Clone, Default)]
+pub struct AgentViewBuildOptions {
+    /// Visible assistant-output message id that is still actively receiving streaming deltas and should therefore keep only its last Markdown block mutable.
+    /// 当前仍在接收流式增量、因此只应让其最后一个 Markdown 区块保持可变的可见助手输出消息标识。
+    pub active_streaming_output_message_id: Option<String>,
+}
 
 /// Builds one unified agent-view document from the visible session transcript and runtime events.
 /// 根据可见会话转录与运行时事件构建一份统一 agent-view 文档。
@@ -27,13 +49,23 @@ pub fn build_agent_view_document(
     messages: &[SessionMessageEntry],
     runtime_events: &[RuntimeEvent],
 ) -> AgentViewDocument {
+    build_agent_view_document_with_options(messages, runtime_events, &AgentViewBuildOptions::default())
+}
+
+/// Builds one unified agent-view document from the visible session transcript and runtime events using explicit GUI-side projection options.
+/// 使用显式图形界面投影选项，根据可见会话转录与运行时事件构建统一 agent-view 文档。
+pub fn build_agent_view_document_with_options(
+    messages: &[SessionMessageEntry],
+    runtime_events: &[RuntimeEvent],
+    options: &AgentViewBuildOptions,
+) -> AgentViewDocument {
     let mut document = AgentViewDocument::new();
 
     for message in messages
         .iter()
         .filter(|message| message.is_visible_to_user())
     {
-        append_session_message_blocks(&mut document, message);
+        append_session_message_blocks(&mut document, message, options);
     }
 
     for runtime_event in runtime_events
@@ -98,7 +130,11 @@ pub fn agent_view_block_collapsed_by_default(block: &AgentViewBlock) -> bool {
 
 /// Appends the block sequence contributed by one visible session message into the target document.
 /// 将单条可见会话消息贡献出的区块序列追加到目标文档中。
-fn append_session_message_blocks(document: &mut AgentViewDocument, message: &SessionMessageEntry) {
+fn append_session_message_blocks(
+    document: &mut AgentViewDocument,
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) {
     match (message.kind, message.record_kind) {
         (SessionMessageKind::User, _) => {
             document.push_directive(build_user_prompt_block(message));
@@ -130,11 +166,30 @@ fn append_session_message_blocks(document: &mut AgentViewDocument, message: &Ses
             document.push_directive(build_error_notice_block(message));
         }
         (_, SessionMessageRecordKind::AssistantOutput | SessionMessageRecordKind::Transcript) => {
-            append_parsed_markdown_document(document, &message.body, Some(&message.id));
+            append_assistant_output_blocks(document, message, options);
         }
         _ => {
             append_parsed_markdown_document(document, &message.body, Some(&message.id));
         }
+    }
+}
+
+/// Appends assistant-output blocks while optionally splitting one actively streaming Markdown reply into sealed immutable segments plus one active tail segment.
+/// 追加助手输出区块，并在需要时将一条活跃流式 Markdown 回复拆分成已封口不可变片段和一个活动尾片段。
+fn append_assistant_output_blocks(
+    document: &mut AgentViewDocument,
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) {
+    let is_active_streaming_output = options
+        .active_streaming_output_message_id
+        .as_deref()
+        .is_some_and(|active_message_id| active_message_id == message.id);
+
+    if is_active_streaming_output {
+        append_streaming_markdown_document(document, &message.body, Some(&message.id));
+    } else {
+        append_parsed_markdown_document(document, &message.body, Some(&message.id));
     }
 }
 
@@ -157,6 +212,63 @@ fn append_parsed_markdown_document(
     }
 
     document.blocks.extend(parsed_document.blocks);
+}
+
+/// Appends one actively streaming Markdown reply as sealed immutable segments plus one active tail segment so old blocks stop changing during token streaming.
+/// 将一条活跃流式 Markdown 回复追加为已封口不可变片段和一个活动尾片段，从而让旧区块在 token 流式过程中停止变化。
+fn append_streaming_markdown_document(
+    document: &mut AgentViewDocument,
+    source: &str,
+    message_id: Option<&str>,
+) {
+    let partition = split_streaming_markdown_source(source);
+
+    if partition.sealed_segments.is_empty() && partition.active_tail.is_none() {
+        return;
+    }
+
+    for sealed_segment in partition.sealed_segments {
+        push_streaming_markdown_segment(
+            document,
+            sealed_segment,
+            message_id,
+            STREAMING_SEGMENT_SEALED_VALUE,
+        );
+    }
+
+    if let Some(active_tail) = partition.active_tail.filter(|segment| !segment.trim().is_empty()) {
+        push_streaming_markdown_segment(
+            document,
+            active_tail,
+            message_id,
+            STREAMING_SEGMENT_ACTIVE_TAIL_VALUE,
+        );
+    }
+}
+
+/// Pushes one streaming Markdown segment into the document while attaching stable message ownership and segment-kind metadata.
+/// 将单个流式 Markdown 片段推入文档，同时附着稳定的消息归属与片段类型元数据。
+fn push_streaming_markdown_segment(
+    document: &mut AgentViewDocument,
+    raw_source: String,
+    message_id: Option<&str>,
+    segment_kind: &str,
+) {
+    let mut attributes = AgentViewAttributes::new();
+    attributes.insert(
+        STREAMING_SEGMENT_ATTRIBUTE_KEY.to_string(),
+        segment_kind.to_string(),
+    );
+    if let Some(message_id) = message_id.filter(|value| !value.trim().is_empty()) {
+        attributes.insert(String::from("message-id"), message_id.to_string());
+    }
+
+    document
+        .blocks
+        .push(AgentViewBlock::Markdown(AgentViewMarkdownBlock::new_with_attributes(
+            raw_source,
+            attributes,
+        )));
 }
 
 /// Builds one user-prompt directive block from the visible session message.
@@ -416,7 +528,7 @@ mod tests {
     //! Targeted adapter tests that validate the GUI transcript-to-document mapping rules.
     //! 验证 GUI 转录到文档映射规则的定向适配器测试。
 
-    use super::build_agent_view_document;
+    use super::{build_agent_view_document, build_agent_view_document_with_options, AgentViewBuildOptions};
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use serde_json::json;
@@ -707,6 +819,55 @@ mod tests {
                         .attributes
                         .get("generated-media-local-path")
                         .is_some_and(|value| value == "D:/demo.png")
+        ));
+    }
+
+    /// Verifies one actively streaming assistant reply is split into sealed immutable Markdown segments plus one active tail segment.
+    /// 验证单条活跃流式助手回复会被拆分为已封口不可变 Markdown 片段和一个活动尾片段。
+    #[test]
+    fn active_streaming_output_is_partitioned_into_sealed_segments_and_one_tail() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("assistant-stream-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("输出"),
+            body: String::from("# 标题\n\n第一段\n\n第二段"),
+            metadata: None,
+            created_at: String::from("3"),
+        }];
+        let options = AgentViewBuildOptions {
+            active_streaming_output_message_id: Some(String::from("assistant-stream-1")),
+        };
+        let document = build_agent_view_document_with_options(&messages, &[], &options);
+
+        assert_eq!(document.blocks.len(), 3);
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Markdown(block)
+                if block.raw_source == "# 标题\n"
+                    && block
+                        .attributes
+                        .get("streaming-segment")
+                        .is_some_and(|value| value == "sealed")
+        ));
+        assert!(matches!(
+            &document.blocks[1],
+            AgentViewBlock::Markdown(block)
+                if block.raw_source == "第一段\n"
+                    && block
+                        .attributes
+                        .get("streaming-segment")
+                        .is_some_and(|value| value == "sealed")
+        ));
+        assert!(matches!(
+            &document.blocks[2],
+            AgentViewBlock::Markdown(block)
+                if block.raw_source == "第二段"
+                    && block
+                        .attributes
+                        .get("streaming-segment")
+                        .is_some_and(|value| value == "active-tail")
         ));
     }
 }

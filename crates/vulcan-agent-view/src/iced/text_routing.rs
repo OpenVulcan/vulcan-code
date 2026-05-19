@@ -3,9 +3,9 @@
 
 use super::scene::{MarkdownRenderKind, PlainTextRenderKind, TranscriptScript};
 use crate::iced_theme as theme;
-use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Color, Font, Theme};
+use vulcan_markdown as markdown;
 
 /// Builds routed rich-text spans from one parsed Markdown text payload while preserving links and emphasis metadata.
 /// 从一段已解析 Markdown 文本载荷构建带路由的富文本片段，同时保留链接与强调元数据。

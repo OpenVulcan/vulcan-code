@@ -2,8 +2,8 @@
 //! AI 编程桌面骨架使用的主题辅助逻辑。
 
 use iced::highlighter;
-use iced::widget::markdown;
 use iced::{Font, Theme};
+use vulcan_markdown as markdown;
 
 /// Theme palette compatibility trait that preserves the older extended-palette accessor.
 /// 保留旧版扩展调色盘访问方式的主题调色盘兼容 trait。

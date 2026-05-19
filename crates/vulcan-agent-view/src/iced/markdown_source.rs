@@ -116,6 +116,7 @@ fn rewrite_markdown_footnote_references_in_line(line: &str) -> String {
 
 /// Returns the Markdown source normalized for transcript display so single source newlines remain visible in prose paragraphs.
 /// 返回适用于转录显示的 Markdown 规范化源码，使正文段落中的单个源码换行保持可见。
+#[cfg(test)]
 pub(super) fn normalize_markdown_source_for_transcript_display(markdown_source: &str) -> String {
     let lines = markdown_source.lines().collect::<Vec<_>>();
     let mut normalized = String::new();
@@ -156,6 +157,7 @@ pub(super) fn normalize_markdown_source_for_transcript_display(markdown_source: 
 
 /// Returns whether the provided source line should promote its trailing soft break into a visible transcript line break.
 /// 返回给定源码行是否应将尾部软换行提升为可见的转录换行。
+#[cfg(test)]
 fn line_uses_transcript_softbreak_promotion(line: &str) -> bool {
     let trimmed = line.trim();
 
@@ -191,6 +193,7 @@ pub(super) fn fenced_code_marker(line: &str) -> Option<&'static str> {
 
 /// Returns whether the provided line looks like one unordered Markdown list item.
 /// 返回给定行是否像一个无序 Markdown 列表项。
+#[cfg(test)]
 fn is_unordered_list_line(line: &str) -> bool {
     ["- ", "* ", "+ "]
         .into_iter()
@@ -199,6 +202,7 @@ fn is_unordered_list_line(line: &str) -> bool {
 
 /// Returns whether the provided line looks like one ordered Markdown list item.
 /// 返回给定行是否像一个有序 Markdown 列表项。
+#[cfg(test)]
 fn is_ordered_list_line(line: &str) -> bool {
     let mut digits = 0usize;
 
@@ -216,6 +220,7 @@ fn is_ordered_list_line(line: &str) -> bool {
 
 /// Returns whether the provided line looks like one thematic-break Markdown line.
 /// 返回给定行是否像一个 Markdown 水平分隔线。
+#[cfg(test)]
 fn is_thematic_break_line(line: &str) -> bool {
     let compact = line.chars().filter(|character| !character.is_whitespace());
     let collected = compact.collect::<String>();

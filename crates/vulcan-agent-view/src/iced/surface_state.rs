@@ -1,7 +1,7 @@
 //! Surface-state and interaction types shared by the selectable transcript shell and its helper modules.
 //! 由可选择转录外壳及其辅助模块共享的表面状态与交互类型。
 
-use super::render_cache::TranscriptRenderCache;
+use super::render_cache::{TranscriptRenderCache, stash_surface_render_cache};
 use super::scene::RenderedMediaKind;
 use iced::Point;
 use std::collections::BTreeMap;
@@ -232,6 +232,9 @@ pub(super) struct SelectableTranscriptState {
     /// Heavy render-cache payload storing paragraphs, table geometry, and flow-layout measurements.
     /// 存储段落、表格几何与流式布局测量结果的重型渲染缓存载荷。
     pub(super) render_cache: TranscriptRenderCache,
+    /// Optional surface-scoped cache key currently bound to the heavy render cache so session switching can stash and restore it across widget teardown.
+    /// 当前与重型渲染缓存绑定的可选表面级缓存键，使会话切换可以在组件销毁前后暂存并恢复该缓存。
+    pub(super) bound_surface_cache_key: Option<String>,
     /// Whether the transcript currently owns keyboard focus for copy and select-all shortcuts.
     /// 当前转录是否拥有键盘焦点，以处理复制和全选快捷键。
     pub(super) focused: bool,
@@ -273,6 +276,7 @@ impl Default for SelectableTranscriptState {
     fn default() -> Self {
         Self {
             render_cache: TranscriptRenderCache::default(),
+            bound_surface_cache_key: None,
             focused: false,
             dragging: false,
             drag_moved: false,
@@ -285,5 +289,13 @@ impl Default for SelectableTranscriptState {
             context_menu: None,
             last_context_menu_command_revision: 0,
         }
+    }
+}
+
+impl Drop for SelectableTranscriptState {
+    /// Stashes the heavy render cache when the widget state is torn down so switching away from one session does not discard its warm transcript geometry.
+    /// 当组件状态被销毁时暂存重型渲染缓存，使切离某个会话不会丢掉其已热身的转录几何缓存。
+    fn drop(&mut self) {
+        stash_surface_render_cache(&mut self.render_cache, &mut self.bound_surface_cache_key);
     }
 }

@@ -2216,7 +2216,6 @@ dependencies = [
  "log",
  "num-traits",
  "ouroboros",
- "pulldown-cmark 0.12.2",
  "rustc-hash 2.1.2",
  "thiserror 2.0.18",
  "unicode-segmentation",
@@ -5955,6 +5954,7 @@ dependencies = [
 name = "vulcan-agent-view"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "iced",
  "image",
  "mp4",
@@ -5964,6 +5964,7 @@ dependencies = [
  "serde",
  "time",
  "unicode-segmentation",
+ "vulcan-markdown",
 ]
 
 [[package]]
@@ -5997,6 +5998,7 @@ dependencies = [
  "vldb-controller-client",
  "vulcan-agent-view",
  "vulcan-core",
+ "vulcan-markdown",
  "vulcan-mcp-runtime",
  "vulcan-tools-manager",
 ]
@@ -6016,6 +6018,15 @@ name = "vulcan-iced-widget"
 version = "0.1.0"
 dependencies = [
  "iced",
+]
+
+[[package]]
+name = "vulcan-markdown"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "log",
+ "pulldown-cmark 0.12.2",
 ]
 
 [[package]]

@@ -2,19 +2,34 @@
 //! 供转录卡片与宿主媒体预览共享的、驻留内存的受支持视频缩略图提取与缓存辅助模块。
 
 use iced::widget::image::Handle as ImageHandle;
-use image::RgbaImage;
+use image::{DynamicImage, ImageFormat, RgbaImage};
 use mp4::{MediaType, Mp4Reader, TrackType};
 use rust_h264::decoder::{Frame, OrderedDecoder};
 use rust_h264::nal::{parse_annex_b, parse_avcc};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
+use std::io::{BufReader, Cursor};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 /// Maximum number of MP4 samples scanned while searching for one first decodable preview frame.
 /// 搜索首个可解码预览帧时最多扫描的 MP4 sample 数量。
 const VIDEO_THUMBNAIL_SAMPLE_SCAN_LIMIT: u32 = 120;
+
+/// Stable hidden root directory used to persist decoded first-frame thumbnail PNGs across process restarts.
+/// 用于跨进程重启持久保存已解码首帧缩略图 PNG 的稳定隐藏根目录名称。
+const VIDEO_THUMBNAIL_CACHE_ROOT_DIR_NAME: &str = ".vulcan";
+
+/// Stable application directory stored below the shared persistent thumbnail cache root.
+/// 持久缩略图缓存根目录下使用的稳定应用目录名称。
+const VIDEO_THUMBNAIL_CACHE_APP_DIR_NAME: &str = "vulcan-code";
+
+/// Stable leaf directory used to retain persisted first-frame video thumbnail PNG files.
+/// 用于保存持久首帧视频缩略图 PNG 文件的稳定叶子目录名称。
+const VIDEO_THUMBNAIL_CACHE_LEAF_DIR_NAME: &str = "video-thumbnails";
 
 /// One decoded in-memory video thumbnail preview that can be rendered directly by iced without touching any sidecar files.
 /// 一份无需依赖任何旁路文件、即可被 iced 直接渲染的内存视频缩略图预览。
@@ -70,6 +85,19 @@ pub fn resolve_video_thumbnail_preview(
             VideoThumbnailCacheEntry::Available(preview) => Some(preview),
             VideoThumbnailCacheEntry::Unavailable => None,
         };
+    }
+
+    if let Some(cached_preview) =
+        load_persisted_video_thumbnail_preview(Path::new(normalized_path)).ok().flatten()
+    {
+        cache
+            .lock()
+            .expect("video thumbnail cache should lock for persisted insert")
+            .insert(
+                normalized_path.to_string(),
+                VideoThumbnailCacheEntry::Available(cached_preview.clone()),
+            );
+        return Some(cached_preview);
     }
 
     let decoded = decode_video_thumbnail_preview(Path::new(normalized_path)).ok();
@@ -155,13 +183,13 @@ fn decode_video_thumbnail_preview(video_path: &Path) -> Result<VideoThumbnailPre
                 )
             })?;
             if let Some(frame) = decoded_frames.into_iter().next() {
-                return frame_to_thumbnail_preview(&frame);
+                return frame_to_thumbnail_preview(video_path, &frame);
             }
         }
     }
 
     if let Some(frame) = decoder.flush().into_iter().next() {
-        return frame_to_thumbnail_preview(&frame);
+        return frame_to_thumbnail_preview(video_path, &frame);
     }
 
     Err(format!(
@@ -241,18 +269,137 @@ fn feed_supported_h264_parameter_sets_into_decoder<R: std::io::Read + std::io::S
     Ok(())
 }
 
-/// Converts one decoded YUV420 frame into a cached RGBA thumbnail preview and its aspect ratio.
-/// 将单帧解码后的 YUV420 图像转换为缓存用 RGBA 缩略图预览及其宽高比。
-fn frame_to_thumbnail_preview(frame: &Frame) -> Result<VideoThumbnailPreview, String> {
+/// Converts one decoded YUV420 frame into a cached RGBA thumbnail preview, persists the PNG sidecar best-effort, and returns the preview with its aspect ratio.
+/// 将单帧解码后的 YUV420 图像转换为缓存用 RGBA 缩略图预览，以尽力方式持久保存 PNG 旁路缓存，并返回预览及其宽高比。
+fn frame_to_thumbnail_preview(
+    video_path: &Path,
+    frame: &Frame,
+) -> Result<VideoThumbnailPreview, String> {
     let mut rgba_image = frame_to_rgba_image(frame)?;
     decorate_video_thumbnail_with_play_overlay(&mut rgba_image);
     let width = rgba_image.width();
     let height = rgba_image.height();
     let aspect_ratio = width as f32 / height.max(1) as f32;
+    let png_bytes = encode_video_thumbnail_png_bytes(&rgba_image)?;
+    persist_video_thumbnail_preview(video_path, &png_bytes);
     Ok(VideoThumbnailPreview {
-        handle: ImageHandle::from_rgba(width, height, rgba_image.into_raw()),
+        handle: ImageHandle::from_bytes(png_bytes),
         aspect_ratio,
     })
+}
+
+/// Encodes one RGBA thumbnail image into PNG bytes so the same raster can be persisted on disk and consumed by iced through a byte-backed image handle.
+/// 将一份 RGBA 缩略图编码为 PNG 字节，使同一份位图既可落盘持久缓存，也可通过字节句柄交给 iced 使用。
+fn encode_video_thumbnail_png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    let mut cursor = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image.clone())
+        .write_to(&mut cursor, ImageFormat::Png)
+        .map_err(|error| format!("编码视频首帧缩略图 PNG 失败：{}。", error))?;
+    Ok(cursor.into_inner())
+}
+
+/// Loads one previously persisted first-frame PNG thumbnail from the shared cache directory and rebuilds the in-memory preview handle when the deterministic cache file already exists.
+/// 当确定性缓存文件已经存在时，从共享缓存目录载入此前持久保存的首帧 PNG 缩略图，并重建内存预览句柄。
+fn load_persisted_video_thumbnail_preview(
+    video_path: &Path,
+) -> Result<Option<VideoThumbnailPreview>, String> {
+    let Some(cache_path) = resolve_video_thumbnail_cache_path(video_path)? else {
+        return Ok(None);
+    };
+    if !cache_path.is_file() {
+        return Ok(None);
+    }
+
+    let png_bytes = fs::read(&cache_path).map_err(|error| {
+        format!(
+            "读取视频缩略图缓存 `{}` 失败：{}。",
+            cache_path.display(),
+            error
+        )
+    })?;
+    let image = image::load_from_memory_with_format(&png_bytes, ImageFormat::Png).map_err(
+        |error| {
+            format!(
+                "解码视频缩略图缓存 `{}` 失败：{}。",
+                cache_path.display(),
+                error
+            )
+        },
+    )?;
+    let width = image.width().max(1);
+    let height = image.height().max(1);
+    Ok(Some(VideoThumbnailPreview {
+        handle: ImageHandle::from_bytes(png_bytes),
+        aspect_ratio: width as f32 / height as f32,
+    }))
+}
+
+/// Persists one decoded first-frame PNG thumbnail into the shared cache directory using a deterministic file name derived from the source path and metadata, letting future cold opens skip dynamic decoding.
+/// 使用基于源路径与元数据的确定性文件名，将一份已解码首帧 PNG 缩略图写入共享缓存目录，使后续冷启动可以跳过动态解码。
+fn persist_video_thumbnail_preview(video_path: &Path, png_bytes: &[u8]) {
+    let Ok(Some(cache_path)) = resolve_video_thumbnail_cache_path(video_path) else {
+        return;
+    };
+    let Some(cache_parent) = cache_path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(cache_parent).is_err() {
+        return;
+    }
+    if cache_path.is_file() {
+        return;
+    }
+    let _ = fs::write(cache_path, png_bytes);
+}
+
+/// Resolves the deterministic shared cache path used by one video file, incorporating canonical path, file size, and modification timestamp so stale sidecars stop matching once the underlying video changes.
+/// 为单个视频文件解析确定性的共享缓存路径，并纳入规范路径、文件大小与修改时间，使底层视频变更后旧旁路缓存自动失配。
+fn resolve_video_thumbnail_cache_path(video_path: &Path) -> Result<Option<PathBuf>, String> {
+    if !video_path.is_file() {
+        return Ok(None);
+    }
+
+    let metadata = fs::metadata(video_path).map_err(|error| {
+        format!(
+            "读取视频文件 `{}` 元数据以构建缩略图缓存键失败：{}。",
+            video_path.display(),
+            error
+        )
+    })?;
+    let modified_unix_millis = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    let canonical_path = video_path
+        .canonicalize()
+        .unwrap_or_else(|_| video_path.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical_path.to_string_lossy().hash(&mut hasher);
+    metadata.len().hash(&mut hasher);
+    modified_unix_millis.hash(&mut hasher);
+    let cache_file_name = format!(
+        "{:016x}-{}-{}.png",
+        hasher.finish(),
+        metadata.len(),
+        modified_unix_millis
+    );
+
+    Ok(Some(
+        resolve_video_thumbnail_cache_root().join(cache_file_name),
+    ))
+}
+
+/// Resolves the shared persistent cache root used by decoded first-frame PNG thumbnails and falls back to the current working directory only when the home directory is unavailable.
+/// 解析已解码首帧 PNG 缩略图使用的共享持久缓存根目录，并仅在家目录不可用时回退到当前工作目录。
+fn resolve_video_thumbnail_cache_root() -> PathBuf {
+    let home_directory = dirs::home_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    home_directory
+        .join(VIDEO_THUMBNAIL_CACHE_ROOT_DIR_NAME)
+        .join(VIDEO_THUMBNAIL_CACHE_APP_DIR_NAME)
+        .join(VIDEO_THUMBNAIL_CACHE_LEAF_DIR_NAME)
 }
 
 /// Converts one decoded YUV420 frame into an RGBA raster image using the common limited-range BT.601 transform, which is sufficient for lightweight transcript thumbnails.

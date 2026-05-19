@@ -4,7 +4,7 @@
 use super::{RenderedMediaKind, RenderedTranscriptBuilder, directive_background};
 use crate::AgentViewDirectiveBlock;
 use iced::Theme;
-use iced::widget::markdown;
+use vulcan_markdown as markdown;
 
 /// Renders one generated-image tool block with image-specific transcript chrome.
 /// 使用图片专属转录外框渲染一条图片生成工具区块。

@@ -13,8 +13,7 @@ use super::markdown_render::{
     build_multiline_diff_spans, render_markdown_items, render_markdown_source_with_table_fallback,
 };
 use super::markdown_source::{
-    normalize_markdown_source_for_transcript_display, prepare_markdown_source_for_rendering,
-    raw_source_contains_markdown_table,
+    prepare_markdown_source_for_rendering, raw_source_contains_markdown_table,
 };
 use super::scene::{
     PlainParagraphStyle, PlainTextRenderKind, RenderContext, RenderedCollapsibleDirectiveNode,
@@ -28,12 +27,12 @@ use crate::{AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresen
 use iced::advanced::text;
 use iced::font;
 use iced::widget::image::Handle as ImageHandle;
-use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Background, Border, Color, Font, Padding, Pixels, Theme};
 use std::path::Path;
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 use unicode_segmentation::UnicodeSegmentation;
+use vulcan_markdown as markdown;
 
 /// Static format description used by the user-prompt meta row timestamp projection.
 /// 用户提示词元信息行时间戳投影使用的静态格式描述。
@@ -405,9 +404,7 @@ pub(super) fn render_directive_block(
                     app_theme,
                 );
             } else {
-                let normalized_body =
-                    normalize_markdown_source_for_transcript_display(&prepared_body);
-                let body_markdown = markdown::Content::parse(&normalized_body);
+                let body_markdown = markdown::Content::parse_transcript(&prepared_body);
                 render_markdown_items(
                     builder,
                     body_markdown.items(),
@@ -911,8 +908,7 @@ pub(super) fn render_thinking_block(
             app_theme,
         );
     } else {
-        let normalized_body = normalize_markdown_source_for_transcript_display(&prepared_body);
-        let body_markdown = markdown::Content::parse(&normalized_body);
+        let body_markdown = markdown::Content::parse_transcript(&prepared_body);
         render_markdown_items(
             builder,
             body_markdown.items(),
@@ -1013,8 +1009,7 @@ fn render_inline_thinking_note(
             app_theme,
         );
     } else {
-        let normalized_body = normalize_markdown_source_for_transcript_display(&prepared_body);
-        let body_markdown = markdown::Content::parse(&normalized_body);
+        let body_markdown = markdown::Content::parse_transcript(&prepared_body);
         render_markdown_items(
             builder,
             body_markdown.items(),

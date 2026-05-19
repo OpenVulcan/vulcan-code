@@ -12,9 +12,9 @@ use super::scene::{
 use super::text_routing::{build_agent_view_markdown_spans, build_agent_view_plain_text_spans};
 use crate::iced_theme as theme;
 use iced::advanced::text;
-use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Background, Color, Font, Padding, Pixels, Theme};
+use vulcan_markdown as markdown;
 
 /// Renders one slice of Markdown items recursively into the transcript builder.
 /// 将一段 Markdown 节点递归渲染到转录构建器中。
@@ -175,9 +175,7 @@ pub(super) fn render_markdown_items(
                             app_theme,
                         );
                     } else {
-                        let normalized_preview =
-                            normalize_markdown_source_for_transcript_display(&preview_source);
-                        let preview_markdown = markdown::Content::parse(&normalized_preview);
+                        let preview_markdown = markdown::Content::parse_transcript(&preview_source);
                         render_markdown_items(
                             builder,
                             preview_markdown.items(),
@@ -667,8 +665,7 @@ fn flush_plain_markdown_fallback_buffer(
     }
 
     let prepared_source = rewrite_markdown_footnotes_for_transcript(&markdown_source);
-    let normalized_source = normalize_markdown_source_for_transcript_display(&prepared_source);
-    let markdown_content = markdown::Content::parse(&normalized_source);
+    let markdown_content = markdown::Content::parse_transcript(&prepared_source);
     render_markdown_items(
         builder,
         markdown_content.items(),

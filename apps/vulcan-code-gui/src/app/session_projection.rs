@@ -100,6 +100,10 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
+        let active_streaming_output_message_id = self
+            .streaming_output_message_ids
+            .get(&session_id)
+            .cloned();
         let runtime_events = self
             .session_runtime_events
             .get(&session_id)
@@ -117,6 +121,7 @@ impl VulcanWorkbench {
                         session_id,
                         visible_messages,
                         runtime_events,
+                        active_streaming_output_message_id,
                     )
                 });
                 task.await
@@ -134,6 +139,9 @@ impl VulcanWorkbench {
     ) -> Task<Message> {
         if session_id.is_nil()
             || !self.hydrated_session_ids.contains(&session_id)
+            || self
+                .session_initial_tool_detail_batches
+                .contains_key(&session_id)
             || self.session_agent_view_projection_ready(session_id)
         {
             return Task::none();
@@ -207,24 +215,46 @@ impl VulcanWorkbench {
         replaced_block_count: usize,
         replacement_blocks: &[vulcan_agent_view::AgentViewBlock],
     ) {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "refresh_session_inline_agent_view_message_blocks",
+            format!(
+                "session_id={session_id} start_index={start_index} replaced_block_count={replaced_block_count} replacement_block_count={}",
+                replacement_blocks.len()
+            ),
+        );
+        let mut phase_started_at = Instant::now();
         let Some(mut cache) = self.session_inline_agent_view_documents.remove(&session_id) else {
+            perf_trace.checkpoint("take_inline_cache", phase_started_at);
             self.refresh_session_inline_agent_view_document_cache(session_id);
+            perf_trace.finish();
             return;
         };
+        perf_trace.checkpoint("take_inline_cache", phase_started_at);
 
+        phase_started_at = Instant::now();
         let document = Rc::make_mut(&mut cache.document);
         let end_index = start_index.saturating_add(replaced_block_count);
         if end_index > document.blocks.len() {
+            perf_trace.checkpoint("splice_bounds_validation", phase_started_at);
             self.refresh_session_inline_agent_view_document_cache(session_id);
+            perf_trace.finish();
             return;
         }
+        perf_trace.checkpoint("splice_bounds_validation", phase_started_at);
 
+        phase_started_at = Instant::now();
         document
             .blocks
             .splice(start_index..end_index, replacement_blocks.iter().cloned());
+        perf_trace.checkpoint("splice_inline_blocks", phase_started_at);
+        phase_started_at = Instant::now();
         decorate_and_prepare_inline_document_suffix(self, session_id, document, start_index);
+        perf_trace.checkpoint("decorate_inline_suffix", phase_started_at);
+        phase_started_at = Instant::now();
         self.session_inline_agent_view_documents
             .insert(session_id, cache);
+        perf_trace.checkpoint("store_inline_cache", phase_started_at);
+        perf_trace.finish();
     }
 
     /// Stores one session-scoped last-provider-request preview buffer for the dedicated request tab.
@@ -290,7 +320,13 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
-        let document = build_agent_view_document(&messages, &runtime_events);
+        let build_options = agent_view_build_options_for_streaming_output(
+            self.streaming_output_message_ids
+                .get(&session_id)
+                .map(String::as_str),
+        );
+        let document =
+            build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
 
         if document.blocks.is_empty() {
             self.clear_session_agent_view_text_buffers(session_id);
@@ -314,7 +350,12 @@ impl VulcanWorkbench {
         session_id: SessionId,
         message_id: &str,
     ) -> bool {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "refresh_session_agent_view_message_blocks",
+            format!("session_id={session_id} message_id={message_id}"),
+        );
         if self.should_materialize_session_agent_view_text_buffers(session_id) {
+            perf_trace.finish();
             return false;
         }
 
@@ -323,20 +364,42 @@ impl VulcanWorkbench {
             .contains(&session_id)
             && self
                 .streaming_thinking_message_ids
-                .get(&session_id)
-                .is_some_and(|active_message_id| active_message_id == message_id)
+            .get(&session_id)
+            .is_some_and(|active_message_id| active_message_id == message_id)
         {
+            perf_trace.finish();
             return true;
         }
 
+        let mut phase_started_at = Instant::now();
         let Some(message) = self.session_message_entry(session_id, message_id).cloned() else {
+            perf_trace.checkpoint("load_message_entry", phase_started_at);
+            perf_trace.finish();
             return false;
         };
-        let replacement_document = build_agent_view_document(std::slice::from_ref(&message), &[]);
+        perf_trace.checkpoint("load_message_entry", phase_started_at);
+        phase_started_at = Instant::now();
+        let build_options = agent_view_build_options_for_streaming_output(
+            self.streaming_output_message_ids
+                .get(&session_id)
+                .filter(|active_message_id| active_message_id.as_str() == message_id)
+                .map(String::as_str),
+        );
+        let replacement_document = build_agent_view_document_with_options(
+            std::slice::from_ref(&message),
+            &[],
+            &build_options,
+        );
+        perf_trace.checkpoint("build_replacement_document", phase_started_at);
+        phase_started_at = Instant::now();
         let Some(document) = self.session_agent_view_documents.get_mut(&session_id) else {
+            perf_trace.checkpoint("load_session_document", phase_started_at);
+            perf_trace.finish();
             return false;
         };
+        perf_trace.checkpoint("load_session_document", phase_started_at);
 
+        phase_started_at = Instant::now();
         let matching_indexes = document
             .blocks
             .iter()
@@ -353,24 +416,36 @@ impl VulcanWorkbench {
             matching_indexes.first().copied(),
             matching_indexes.last().map(|index| index + 1),
         ) else {
+            perf_trace.checkpoint("locate_message_block_range", phase_started_at);
+            perf_trace.finish();
             return false;
         };
         if end_index - start_index != matching_indexes.len() {
+            perf_trace.checkpoint("locate_message_block_range", phase_started_at);
+            perf_trace.finish();
             return false;
         }
+        perf_trace.checkpoint("locate_message_block_range", phase_started_at);
 
         let replacement_blocks = replacement_document.blocks;
         let replaced_block_count = end_index - start_index;
+        phase_started_at = Instant::now();
         document
             .blocks
             .splice(start_index..end_index, replacement_blocks.clone());
+        perf_trace.checkpoint("splice_session_blocks", phase_started_at);
+        phase_started_at = Instant::now();
         self.refresh_session_inline_agent_view_message_blocks(
             session_id,
             start_index,
             replaced_block_count,
             &replacement_blocks,
         );
+        perf_trace.checkpoint("refresh_inline_projection", phase_started_at);
+        phase_started_at = Instant::now();
         self.refresh_active_modal_payloads_for_session(session_id);
+        perf_trace.checkpoint("refresh_modal_payloads", phase_started_at);
+        perf_trace.finish();
         true
     }
 
@@ -564,7 +639,8 @@ impl VulcanWorkbench {
             return None;
         }
 
-        let mut document = build_agent_view_document(&messages, &[]);
+        let build_options = agent_view_build_options_for_streaming_output(None);
+        let mut document = build_agent_view_document_with_options(&messages, &[], &build_options);
         for (block_index, block) in document.blocks.iter_mut().enumerate() {
             let block_id = agent_view_block_id(state.task_id, block_index, block);
             self.decorate_subagent_task_block_for_render(state.task_id, &block_id, block);
@@ -797,7 +873,7 @@ impl VulcanWorkbench {
     pub(super) fn session_agent_view_loading_progress(
         &self,
         session_id: SessionId,
-    ) -> Option<(f32, &'static str)> {
+    ) -> Option<(f32, String)> {
         // Keep already-renderable cached transcripts visible while a background refresh is in flight.
         // 后台刷新仍在进行时保留已经可渲染的缓存转录，避免切换时出现不必要的整页等待。
         let has_cached_document = self
@@ -805,7 +881,28 @@ impl VulcanWorkbench {
             .get(&session_id)
             .is_some_and(|document| !document.blocks.is_empty());
         if self.loading_session_ids.contains(&session_id) && !has_cached_document {
-            return Some((0.38, "正在载入会话正文与运行时快照，请稍候。"));
+            return Some((0.38, String::from("正在载入会话正文与运行时快照，请稍候。")));
+        }
+
+        if let Some(batch_state) = self.session_initial_tool_detail_batches.get(&session_id)
+            && !has_cached_document
+        {
+            let progress_value = 0.42 + batch_state.completion_ratio() * 0.28;
+            let progress_detail = if batch_state.failed_turn_count == 0 {
+                format!(
+                    "正在补载工具明细（{}/{}），随后将一次性生成完整会话视图。",
+                    batch_state.completed_turn_count(),
+                    batch_state.total_turn_count
+                )
+            } else {
+                format!(
+                    "正在补载工具明细（{}/{}，失败 {}），随后将一次性生成完整会话视图。",
+                    batch_state.completed_turn_count(),
+                    batch_state.total_turn_count,
+                    batch_state.failed_turn_count
+                )
+            };
+            return Some((progress_value, progress_detail));
         }
 
         if self
@@ -813,7 +910,10 @@ impl VulcanWorkbench {
             .contains(&session_id)
             && !has_cached_document
         {
-            return Some((0.76, "正在构建会话视图与可选文本投影，请稍候。"));
+            return Some((
+                0.76,
+                String::from("正在构建会话视图与可选文本投影，请稍候。"),
+            ));
         }
 
         None

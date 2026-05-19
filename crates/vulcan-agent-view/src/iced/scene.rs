@@ -2,11 +2,11 @@
 //! 可选择转录渲染器共享的场景模型类型。
 
 use iced::advanced::text;
-use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Background, Border, Color, Font, Padding, Pixels, Point, Rectangle};
 use std::collections::BTreeMap;
 use std::ops::Range;
+use vulcan_markdown as markdown;
 
 /// Immutable rendered transcript model consumed by the custom widget.
 /// 自定义组件消费的不可变渲染转录模型。
@@ -274,6 +274,9 @@ pub(super) struct RenderedCollapsibleDirectiveNode {
 /// 渲染转录流中的一个带文本段落节点。
 #[derive(Debug, Clone)]
 pub(super) struct RenderedParagraphNode {
+    /// Stable content/style signature seed computed once when the paragraph node is created so repeated layout passes can avoid rehashing every span.
+    /// 在段落节点创建时一次性计算好的稳定内容/样式签名种子，使重复布局过程无需反复哈希全部片段。
+    pub(super) signature_seed: u64,
     /// Visible display text mirrored into the global copy buffer.
     /// 被镜像到全局复制缓冲区中的可见显示文本。
     pub(super) display_text: String,
@@ -349,6 +352,9 @@ pub(super) enum RenderedMediaKind {
 /// 在转录流中渲染的单个内联生成媒体摘要卡片。
 #[derive(Debug, Clone)]
 pub(super) struct RenderedMediaCardNode {
+    /// Stable layout-affecting signature seed computed once when the card node is created.
+    /// 在卡片节点创建时一次性计算好的稳定布局影响签名种子。
+    pub(super) signature_seed: u64,
     /// Media modality represented by the current card.
     /// 当前卡片表示的媒体模态。
     pub(super) kind: RenderedMediaKind,
@@ -406,6 +412,9 @@ pub(super) struct RenderedMediaCardNode {
 /// 渲染转录流中的一个水平分隔线节点。
 #[derive(Debug, Clone)]
 pub(super) struct RenderedRuleNode {
+    /// Stable layout-affecting signature seed computed once when the rule node is created.
+    /// 在分隔线节点创建时一次性计算好的稳定布局影响签名种子。
+    pub(super) signature_seed: u64,
     /// Top gap placed before the rule.
     /// 分隔线之前放置的顶部间距。
     pub(super) gap_before: f32,
@@ -421,6 +430,9 @@ pub(super) struct RenderedRuleNode {
 /// 转录流中的一个渲染表格节点。
 #[derive(Debug, Clone)]
 pub(super) struct RenderedTableNode {
+    /// Stable layout-affecting signature seed computed once when the table node is created.
+    /// 在表格节点创建时一次性计算好的稳定布局影响签名种子。
+    pub(super) signature_seed: u64,
     /// Flat table cells stored in row-major order.
     /// 以行优先顺序存储的扁平表格单元格集合。
     pub(super) cells: Vec<RenderedTableCellNode>,

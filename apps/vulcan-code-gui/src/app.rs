@@ -8,6 +8,7 @@ mod helpers;
 mod media_preview;
 mod oauth_flow;
 mod pending_prompt_queue;
+mod perf;
 mod session_loading;
 mod session_projection;
 mod subagent_runtime;
@@ -16,6 +17,7 @@ mod views;
 
 use self::helpers::*;
 use self::oauth_flow::*;
+use self::perf::*;
 
 use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
 use crate::agent_runtime::config::{
@@ -29,7 +31,7 @@ use crate::agent_runtime::{
 };
 use crate::agent_view::{
     agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_document_raw_source,
-    build_agent_view_document,
+    build_agent_view_document, build_agent_view_document_with_options, AgentViewBuildOptions,
 };
 use crate::ai_tool_configuration::{self, AiToolConfigurationLoadSource};
 use crate::attachment_asset_index::{
@@ -99,7 +101,7 @@ use crate::workspace_store::{
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
-    PickList, button, checkbox, container, image as iced_image, markdown, mouse_area,
+    PickList, button, checkbox, container, image as iced_image, mouse_area,
     pick_list as iced_pick_list, progress_bar, radio, row, rule, scrollable, slider, space, stack,
     svg, text, text_editor, text_input, toggler, tooltip,
 };
@@ -131,6 +133,7 @@ use vulcan_agent_view::{
 };
 use vulcan_core::types::CoreEventKind as VulcanCoreEventKind;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_markdown as markdown;
 
 /// Bundled SVG mark bytes used in the header.
 /// 头部区域使用的内置 SVG 标识字节。
@@ -1093,14 +1096,28 @@ fn visible_session_messages_for_agent_view_projection(
     )
 }
 
+/// Builds the GUI-side agent-view projection options for one session, keeping only the currently active streaming output mutable.
+/// 为单个会话构建图形界面侧 agent-view 投影选项，并仅让当前活跃流式输出保持可变。
+fn agent_view_build_options_for_streaming_output(
+    active_streaming_output_message_id: Option<&str>,
+) -> AgentViewBuildOptions {
+    AgentViewBuildOptions {
+        active_streaming_output_message_id: active_streaming_output_message_id
+            .map(str::to_string),
+    }
+}
+
 /// Builds one session-scoped unified transcript projection snapshot entirely off the UI thread.
 /// 在 UI 线程之外完整构建一份按会话归属的统一转录投影视图快照。
 fn build_session_agent_view_projection_snapshot(
     session_id: SessionId,
     messages: Vec<SessionMessageEntry>,
     runtime_events: Vec<RuntimeEvent>,
+    active_streaming_output_message_id: Option<String>,
 ) -> SessionAgentViewProjectionSnapshot {
-    let document = build_agent_view_document(&messages, &runtime_events);
+    let build_options =
+        agent_view_build_options_for_streaming_output(active_streaming_output_message_id.as_deref());
+    let document = build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
     let selectable_document =
         vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
     let selectable_text = selectable_document.buffer().to_string();
@@ -2116,6 +2133,39 @@ pub fn run() -> iced::Result {
     .run()
 }
 
+/// Deferred first-render tool-detail batch state kept for one cold-open session.
+/// 为单个冷启动会话保留的延迟首屏工具明细批次状态。
+#[derive(Debug, Clone, Default)]
+struct SessionInitialToolDetailBatchState {
+    /// Total distinct turns whose tool-detail pages must finish before the first transcript projection should appear.
+    /// 首次转录投影出现前必须完成工具明细补载的总去重轮次数量。
+    total_turn_count: usize,
+    /// Turn indices already completed, regardless of success or empty payload.
+    /// 无论成功还是空载荷都已经完成处理的轮次索引集合。
+    completed_turn_indices: BTreeSet<i64>,
+    /// Number of completed turn-detail loads that failed and were skipped before the first render.
+    /// 首次渲染前已经失败并跳过的轮次明细加载数量。
+    failed_turn_count: usize,
+}
+
+impl SessionInitialToolDetailBatchState {
+    /// Returns the completed turn count currently recorded by this deferred batch.
+    /// 返回当前延迟批次已经记录完成的轮次数量。
+    fn completed_turn_count(&self) -> usize {
+        self.completed_turn_indices.len()
+    }
+
+    /// Returns the normalized completion ratio for the deferred batch progress indicator.
+    /// 返回用于延迟批次进度提示的标准化完成比例。
+    fn completion_ratio(&self) -> f32 {
+        if self.total_turn_count == 0 {
+            1.0
+        } else {
+            self.completed_turn_count() as f32 / self.total_turn_count as f32
+        }
+    }
+}
+
 /// Root state for the AI coding desktop workbench.
 /// AI 编程桌面工作台的根状态。
 pub struct VulcanWorkbench {
@@ -2344,6 +2394,9 @@ pub struct VulcanWorkbench {
     /// Session identifiers currently materializing the heavy unified agent-view projections on a background worker thread.
     /// 当前正在后台工作线程中物化较重统一 agent-view 投影的会话标识集合。
     loading_session_agent_view_projection_ids: BTreeSet<SessionId>,
+    /// Session-scoped deferred first-render tool-detail batches used to avoid rendering one half-hydrated transcript before required details arrive.
+    /// 按会话保存的延迟首屏工具明细批次状态，用于避免在必要明细到齐前先渲染半水合转录。
+    session_initial_tool_detail_batches: BTreeMap<SessionId, SessionInitialToolDetailBatchState>,
     /// Earliest loaded transcript ordinal for each hydrated session.
     /// 每个已水合会话当前已加载的最早转录序号。
     session_history_earliest_ordinals: BTreeMap<SessionId, i64>,
@@ -4415,9 +4468,9 @@ enum Message {
     /// Applies one older transcript page loaded before the current session window.
     /// 应用在当前会话窗口之前加载的一页更早转录历史。
     OlderSessionHistoryLoaded(SessionId, Result<SessionHistoryPage, String>),
-    /// Applies one lazily loaded tool-detail page for a hydrated session.
-    /// 应用已水合会话的一页懒加载工具明细。
-    SessionToolDetailsLoaded(SessionId, Result<SessionToolDetailPage, String>),
+    /// Applies one lazily loaded tool-detail page for a hydrated session together with the requested turn index.
+    /// 应用已水合会话的一页懒加载工具明细，并携带对应请求轮次索引。
+    SessionToolDetailsLoaded(SessionId, i64, Result<SessionToolDetailPage, String>),
     /// Applies the completed legacy-storage maintenance result for one hydrated session.
     /// 应用单个已水合会话的旧存储维护结果。
     SessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
@@ -5856,6 +5909,7 @@ impl VulcanWorkbench {
             dirty_session_message_ids: BTreeSet::new(),
             loading_session_ids: BTreeSet::new(),
             loading_session_agent_view_projection_ids: BTreeSet::new(),
+            session_initial_tool_detail_batches: BTreeMap::new(),
             session_history_earliest_ordinals: BTreeMap::new(),
             session_history_has_more: BTreeSet::new(),
             loading_older_session_history_ids: BTreeSet::new(),
@@ -6102,6 +6156,7 @@ impl VulcanWorkbench {
                 self.dirty_session_payload_ids.clear();
                 self.dirty_session_message_ids.clear();
                 self.loading_session_ids.clear();
+                self.session_initial_tool_detail_batches.clear();
                 self.session_history_earliest_ordinals.clear();
                 self.session_history_has_more.clear();
                 self.loading_older_session_history_ids.clear();
@@ -6303,21 +6358,42 @@ impl VulcanWorkbench {
                 match result {
                     Ok(snapshot) => {
                         let tool_detail_turn_indices = snapshot.tool_detail_turn_indices.clone();
+                        let defer_initial_projection = self
+                            .should_defer_initial_selected_session_projection(
+                                session_id,
+                                &tool_detail_turn_indices,
+                            );
                         self.apply_session_hydration_snapshot(snapshot);
                         let maintenance_task =
                             self.schedule_session_storage_maintenance(session_id);
-                        let projection_task = self
-                            .schedule_session_agent_view_projection_refresh_if_needed(session_id);
                         if self
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
                         {
+                            if defer_initial_projection {
+                                self.begin_session_initial_tool_detail_batch(
+                                    session_id,
+                                    &tool_detail_turn_indices,
+                                );
+                                self.status_message =
+                                    String::from("当前会话正文已到位，正在补载工具明细以生成完整视图。");
+                                return Task::batch([
+                                    maintenance_task,
+                                    self.schedule_session_tool_detail_loads(
+                                        session_id,
+                                        &tool_detail_turn_indices,
+                                    ),
+                                ]);
+                            }
+
                             let continue_search_navigation =
                                 self.maybe_continue_workspace_history_search_navigation(session_id);
                             self.status_message = String::from("当前会话正文已按需加载完成。");
                             return Task::batch([
                                 maintenance_task,
-                                projection_task,
+                                self.schedule_session_agent_view_projection_refresh_if_needed(
+                                    session_id,
+                                ),
                                 self.schedule_session_tool_detail_loads(
                                     session_id,
                                     &tool_detail_turn_indices,
@@ -6330,7 +6406,12 @@ impl VulcanWorkbench {
                             ]);
                         }
 
-                        return Task::batch([maintenance_task, projection_task]);
+                        return Task::batch([
+                            maintenance_task,
+                            self.schedule_session_agent_view_projection_refresh_if_needed(
+                                session_id,
+                            ),
+                        ]);
                     }
                     Err(error) => {
                         self.status_message = format!("当前会话正文加载失败：{error}");
@@ -6360,6 +6441,7 @@ impl VulcanWorkbench {
                                 self.maybe_follow_selected_session_thinking_overlay_tail(
                                     session_id,
                                 ),
+                                self.maybe_continue_workspace_history_search_navigation(session_id),
                             ]);
                         }
                     }
@@ -6394,12 +6476,36 @@ impl VulcanWorkbench {
 
                 Task::none()
             }
-            Message::SessionToolDetailsLoaded(session_id, result) => {
+            Message::SessionToolDetailsLoaded(session_id, turn_index, result) => {
+                let defer_initial_projection = self
+                    .session_initial_tool_detail_batches
+                    .contains_key(&session_id);
                 match result {
                     Ok(page) => {
-                        self.apply_session_tool_detail_page(page);
+                        self.apply_session_tool_detail_page(page, !defer_initial_projection);
                         let maintenance_task =
                             self.schedule_session_storage_maintenance(session_id);
+                        if let Some(batch_state) = self.finish_session_initial_tool_detail_turn(
+                            session_id,
+                            turn_index,
+                            true,
+                        ) {
+                            self.status_message = if batch_state.failed_turn_count == 0 {
+                                String::from("当前会话工具明细已补载完成，正在构建完整视图。")
+                            } else {
+                                format!(
+                                    "当前会话工具明细已补载完成，但有 {} 项失败，正在构建可用视图。",
+                                    batch_state.failed_turn_count
+                                )
+                            };
+                            return Task::batch([
+                                maintenance_task,
+                                self.schedule_session_agent_view_projection_refresh_if_needed(
+                                    session_id,
+                                ),
+                            ]);
+                        }
+
                         let follow_task = if self
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
@@ -6411,7 +6517,22 @@ impl VulcanWorkbench {
                         return Task::batch([maintenance_task, follow_task]);
                     }
                     Err(error) => {
+                        let completed_batch = self.finish_session_initial_tool_detail_turn(
+                            session_id,
+                            turn_index,
+                            false,
+                        );
                         self.push_activity(ActivityLevel::Warning, "工具明细加载失败", error);
+                        if let Some(batch_state) = completed_batch {
+                            self.status_message = format!(
+                                "当前会话工具明细补载已结束，其中 {} 项失败，正在构建可用视图。",
+                                batch_state.failed_turn_count
+                            );
+                            return self
+                                .schedule_session_agent_view_projection_refresh_if_needed(
+                                    session_id,
+                                );
+                        }
                     }
                 }
 
@@ -10313,6 +10434,9 @@ impl VulcanWorkbench {
         }
 
         if self.loading_session_ids.contains(&session_id)
+            || self
+                .session_initial_tool_detail_batches
+                .contains_key(&session_id)
             || self.loading_older_session_history_ids.contains(&session_id)
         {
             return Task::none();
@@ -10607,6 +10731,7 @@ impl VulcanWorkbench {
             self.dirty_session_payload_ids.remove(&session_id);
             self.dirty_session_message_ids.remove(&session_id);
             self.loading_session_ids.remove(&session_id);
+            self.session_initial_tool_detail_batches.remove(&session_id);
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
@@ -10642,6 +10767,7 @@ impl VulcanWorkbench {
             self.dirty_session_payload_ids.remove(&session_id);
             self.dirty_session_message_ids.remove(&session_id);
             self.loading_session_ids.remove(&session_id);
+            self.session_initial_tool_detail_batches.remove(&session_id);
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
@@ -11662,27 +11788,87 @@ impl VulcanWorkbench {
         false
     }
 
+    /// Refreshes one visible session message raw/Markdown projection cache after a streamed delta has been applied.
+    /// 在流式增量写入后刷新单条可见会话消息的原文与 Markdown 投影缓存。
+    fn refresh_streamed_session_message_view_caches(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+        delta: &str,
+    ) {
+        let Some(message_body) = self
+            .session_message_entry(session_id, message_id)
+            .map(|message| message.body.clone())
+        else {
+            return;
+        };
+
+        self.session_message_raw_buffers.insert(
+            message_id.to_string(),
+            text_editor::Content::with_text(&message_body),
+        );
+
+        if let Some(markdown_content) = self.session_message_markdown.get_mut(message_id) {
+            let markdown_buffer = append_selectable_markdown_delta(
+                &message_body,
+                delta,
+                markdown_content,
+                &self.app_theme,
+            );
+            self.session_message_markdown_buffers
+                .insert(message_id.to_string(), markdown_buffer);
+        } else {
+            let (markdown_content, markdown_buffer) =
+                parse_selectable_markdown_body(&message_body, &self.app_theme);
+            self.session_message_markdown
+                .insert(message_id.to_string(), markdown_content);
+            self.session_message_markdown_buffers
+                .insert(message_id.to_string(), markdown_buffer);
+        }
+    }
+
     /// Appends one streamed body delta into an existing visible transcript message without rebuilding legacy per-message Markdown caches.
-    /// 将一段流式正文增量追加到现有可见转录消息，但不重建旧版逐消息 Markdown 缓存。
+    /// 将一段流式正文增量追加到现有可见转录消息，并同步刷新逐消息 Markdown 投影缓存。
     fn append_stream_delta_to_session_message(
         &mut self,
         session_id: SessionId,
         message_id: &str,
         delta: &str,
     ) {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "append_stream_delta_to_session_message",
+            format!(
+                "session_id={session_id} message_id={message_id} delta_chars={}",
+                delta.chars().count()
+            ),
+        );
         self.ensure_session_conversation_state_loaded(session_id);
+        let mut phase_started_at = Instant::now();
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
         if !append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta) {
+            perf_trace.checkpoint("append_record_body_delta", phase_started_at);
+            perf_trace.finish();
             return;
         }
+        perf_trace.checkpoint("append_record_body_delta", phase_started_at);
+        phase_started_at = Instant::now();
         runtime_state.updated_at = current_unix_millis_text();
         self.dirty_session_message_ids.insert(session_id);
+        perf_trace.checkpoint("mark_session_dirty", phase_started_at);
+        phase_started_at = Instant::now();
         if !self.append_stream_delta_to_projected_session_message(session_id, message_id, delta) {
             self.sync_session_messages_from_conversation_state(session_id);
         }
+        perf_trace.checkpoint("project_visible_messages", phase_started_at);
+        phase_started_at = Instant::now();
+        self.refresh_streamed_session_message_view_caches(session_id, message_id, delta);
+        perf_trace.checkpoint("refresh_message_view_caches", phase_started_at);
+        phase_started_at = Instant::now();
         if !self.refresh_session_agent_view_message_blocks(session_id, message_id) {
             self.refresh_session_agent_view_buffers(session_id);
         }
+        perf_trace.checkpoint("refresh_agent_view", phase_started_at);
+        perf_trace.finish();
     }
 
     /// Ensures the session owns one visible thinking message and appends the incoming delta to it.
@@ -12578,6 +12764,7 @@ impl VulcanWorkbench {
         self.dirty_session_message_ids.clear();
         self.loading_session_ids.clear();
         self.loading_session_agent_view_projection_ids.clear();
+        self.session_initial_tool_detail_batches.clear();
         self.session_history_earliest_ordinals.clear();
         self.session_history_has_more.clear();
         self.loading_older_session_history_ids.clear();
@@ -12725,6 +12912,7 @@ impl VulcanWorkbench {
         self.session_tool_detail_messages.remove(&session_id);
         self.loading_session_agent_view_projection_ids
             .remove(&session_id);
+        self.session_initial_tool_detail_batches.remove(&session_id);
         self.collapsed_runtime_event_ids.remove(&session_id);
         self.markdown_runtime_event_ids.remove(&session_id);
         self.remove_runtime_event_raw_buffers(session_id);

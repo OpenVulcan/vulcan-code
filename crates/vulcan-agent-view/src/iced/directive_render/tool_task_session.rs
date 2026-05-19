@@ -4,7 +4,7 @@
 use super::RenderedTranscriptBuilder;
 use crate::AgentViewDirectiveBlock;
 use iced::Theme;
-use iced::widget::markdown;
+use vulcan_markdown as markdown;
 
 /// Renders one task-session tool block using the shared compact summary-row presentation.
 /// 使用共享紧凑摘要行样式渲染一条 task-session 工具区块。

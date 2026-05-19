@@ -6,6 +6,23 @@ use super::*;
 use iced::widget::column;
 use std::rc::Rc;
 
+/// Shared visible width reserved by the default vertical transcript scrollbar when content overflows.
+/// 内容溢出时为默认纵向转录滚动条预留的共享可见宽度。
+const TRANSCRIPT_SCROLLBAR_WIDTH: f32 = 10.0;
+
+/// Shared spacing inserted between transcript content and the embedded vertical scrollbar so the right edge matches the left-side breathing room.
+/// 插入在转录内容与嵌入式纵向滚动条之间的共享间距，使右侧留白与左侧呼吸感保持一致。
+const TRANSCRIPT_SCROLLBAR_CONTENT_SPACING: f32 = 14.0;
+
+/// Shared total horizontal reservation occupied by the embedded vertical scrollbar lane once spacing is enabled.
+/// 开启嵌入式滚动条间距后，纵向滚动条通道占据的共享总横向预留宽度。
+const TRANSCRIPT_SCROLLBAR_RESERVED_WIDTH: f32 =
+    TRANSCRIPT_SCROLLBAR_WIDTH + TRANSCRIPT_SCROLLBAR_CONTENT_SPACING;
+
+/// Small epsilon used when deciding whether one transcript viewport currently owns a visible vertical scrollbar.
+/// 用于判断某个转录视口当前是否存在可见纵向滚动条的小阈值。
+const TRANSCRIPT_SCROLLBAR_VISIBILITY_EPSILON: f32 = 0.5;
+
 /// Resolves one bounded image preview size that preserves the intrinsic aspect ratio while capping the preview height.
 /// 解析一个保留原始宽高比且限制最大高度的图片预览尺寸。
 fn bounded_image_preview_size(
@@ -24,6 +41,13 @@ fn bounded_image_preview_size(
         .min(resolved_max_height)
         .max(1.0);
     iced::Size::new(resolved_width, resolved_height)
+}
+
+/// Returns whether one reported transcript viewport currently renders a visible vertical scrollbar.
+/// 返回某个已上报的转录视口当前是否渲染了可见的纵向滚动条。
+fn transcript_viewport_has_vertical_scrollbar(viewport: &scrollable::Viewport) -> bool {
+    viewport.content_bounds().height
+        > viewport.bounds().height + TRANSCRIPT_SCROLLBAR_VISIBILITY_EPSILON
 }
 
 /// Maps one selectable transcript interaction into the corresponding workbench message while letting each caller supply its own thinking and tool modal routes.
@@ -283,7 +307,8 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
 
-        if let Some(overlay) = self.view_selected_session_rendered_transcript_fade_overlay() {
+        if let Some(overlay) = self.view_selected_session_rendered_transcript_fade_overlay(session_id)
+        {
             layered_surfaces.push(overlay);
         }
 
@@ -387,6 +412,7 @@ impl VulcanWorkbench {
 
             let base_surface: Element<'_, Message> = container(
                 scrollable(content_column)
+                    .spacing(TRANSCRIPT_SCROLLBAR_CONTENT_SPACING)
                     .id(transcript_scrollable_id(session_id))
                     .height(Fill)
                     .on_scroll(move |viewport| Message::SelectedSessionTranscriptScrolled {
@@ -474,10 +500,18 @@ impl VulcanWorkbench {
     /// 构建仅用于渲染态转录视图的被动下半区淡隐遮罩，让底部内容逐渐融入面板背景。
     pub(super) fn view_selected_session_rendered_transcript_fade_overlay(
         &self,
+        session_id: SessionId,
     ) -> Option<Element<'_, Message>> {
         if self.agent_transcript_surface_mode != AgentTranscriptSurfaceMode::DetailCards {
             return None;
         }
+
+        let scrollbar_right_inset = self
+            .session_agent_view_viewports
+            .get(&session_id)
+            .filter(|viewport| transcript_viewport_has_vertical_scrollbar(viewport))
+            .map(|_| TRANSCRIPT_SCROLLBAR_RESERVED_WIDTH)
+            .unwrap_or(0.0);
 
         Some(
             container(
@@ -491,6 +525,12 @@ impl VulcanWorkbench {
                 .width(Fill)
                 .height(Fill),
             )
+            .padding(iced::Padding {
+                top: 0.0,
+                right: scrollbar_right_inset,
+                bottom: 0.0,
+                left: 0.0,
+            })
             .width(Fill)
             .height(Fill)
             .into(),
@@ -600,6 +640,7 @@ impl VulcanWorkbench {
 
         container(
             scrollable(content_column)
+                .spacing(TRANSCRIPT_SCROLLBAR_CONTENT_SPACING)
                 .id(transcript_scrollable_id(session_id))
                 .height(Fill)
                 .on_scroll(move |viewport| Message::SelectedSessionTranscriptScrolled {
@@ -757,6 +798,7 @@ impl VulcanWorkbench {
 
         container(
             scrollable(container(body_flow).width(Fill))
+                .spacing(TRANSCRIPT_SCROLLBAR_CONTENT_SPACING)
                 .id(transcript_scrollable_id(session_id))
                 .height(Fill)
                 .on_scroll(move |viewport| Message::SelectedSessionTranscriptScrolled {
@@ -1002,18 +1044,16 @@ impl VulcanWorkbench {
                 .align_x(iced::Alignment::Start)
                 .into()
             }
-            ConversationAttachmentKind::Video
-                if resolve_video_thumbnail_preview(
+            ConversationAttachmentKind::Video => {
+                let Some(preview) = resolve_video_thumbnail_preview(
                     &attachment.local_path,
                     Some(attachment.mime_type.as_str()),
-                )
-                .is_some() =>
-            {
-                let preview = resolve_video_thumbnail_preview(
-                    &attachment.local_path,
-                    Some(attachment.mime_type.as_str()),
-                )
-                .expect("guard above ensures video preview exists");
+                ) else {
+                    return self.view_generated_tool_modal_icon_preview(
+                        lucide::video().size(28).line_height(1.0).into(),
+                        "当前视频可使用系统默认播放器打开，或直接定位到文件位置。",
+                    );
+                };
                 let preview_size =
                     bounded_image_preview_size(Some(preview.aspect_ratio), 220.0, 520.0);
                 container(
@@ -1040,10 +1080,6 @@ impl VulcanWorkbench {
             ConversationAttachmentKind::Audio => self.view_generated_tool_modal_icon_preview(
                 lucide::volume_two().size(28).line_height(1.0).into(),
                 "点击下方播放按钮即可直接播放当前音频，再次点击会停止。",
-            ),
-            ConversationAttachmentKind::Video => self.view_generated_tool_modal_icon_preview(
-                lucide::video().size(28).line_height(1.0).into(),
-                "当前视频可使用系统默认播放器打开，或直接定位到文件位置。",
             ),
             ConversationAttachmentKind::Pdf => self.view_generated_tool_modal_icon_preview(
                 lucide::file_text().size(28).line_height(1.0).into(),

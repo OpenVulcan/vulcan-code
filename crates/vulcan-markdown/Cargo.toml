@@ -1,0 +1,22 @@
+[package]
+name = "vulcan-markdown"
+description = "Forked iced markdown kernel for Vulcan transcript and markdown rendering evolution."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[features]
+default = ["highlighter"]
+highlighter = []
+
+[dependencies]
+iced.workspace = true
+log = "0.4"
+pulldown-cmark = "0.12.2"

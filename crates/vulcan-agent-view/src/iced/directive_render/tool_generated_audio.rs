@@ -4,7 +4,7 @@
 use super::{RenderedMediaKind, RenderedTranscriptBuilder, directive_background};
 use crate::AgentViewDirectiveBlock;
 use iced::Theme;
-use iced::widget::markdown;
+use vulcan_markdown as markdown;
 
 /// Renders one generated-audio tool block with audio-specific transcript chrome.
 /// 使用音频专属转录外框渲染一条音频生成工具区块。

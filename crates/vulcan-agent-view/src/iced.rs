@@ -11,6 +11,7 @@ mod layout_engine;
 mod markdown_render;
 mod markdown_source;
 mod paint;
+mod perf;
 mod render_cache;
 mod scene;
 mod surface_state;
@@ -23,6 +24,8 @@ use self::context_menu::*;
 use self::event_routing::*;
 use self::layout_engine::*;
 use self::paint::*;
+use self::perf::TranscriptPerfTrace;
+use self::render_cache::rebind_stashed_surface_render_cache;
 use self::scene::*;
 use self::surface_state::*;
 pub use self::surface_state::{
@@ -48,6 +51,7 @@ use iced::advanced::{Shell, Widget, overlay};
 use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::time::Instant;
 
 /// Builds one selectable rendered transcript element from the provided structured agent document.
 /// 根据提供的结构化代理文档构建一个可选择的渲染转录元素。
@@ -231,6 +235,19 @@ fn apply_selectable_transcript_command(
     }
 }
 
+/// Rebinds the heavy render cache to the current transcript surface so switching sessions can restore warm geometry instead of starting from a cold widget state.
+/// 将重型渲染缓存重新绑定到当前转录表面，使会话切换时可以恢复已热身的几何缓存，而不是从冷组件状态重新开始。
+fn bind_selectable_transcript_render_cache(
+    state: &mut SelectableTranscriptState,
+    surface_id: Option<&SelectableTranscriptSurfaceId>,
+) {
+    rebind_stashed_surface_render_cache(
+        &mut state.render_cache,
+        &mut state.bound_surface_cache_key,
+        surface_id.map(|surface_id| surface_id.0.as_str()),
+    );
+}
+
 /// Concrete paragraph type used by the default iced renderer.
 /// 默认 iced 渲染器使用的具体段落类型。
 type RendererParagraph = <Renderer as text::Renderer>::Paragraph;
@@ -262,19 +279,29 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "widget.layout",
+            format!("blocks={}", self.document.blocks.len()),
+        );
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+        bind_selectable_transcript_render_cache(state, self.context_menu_surface_id.as_ref());
+        let mut phase_started_at = Instant::now();
         state
             .render_cache
             .ensure_rendered_document(&self.document, &self.app_theme);
+        perf_trace.checkpoint("ensure_rendered_document", phase_started_at);
         let Some(rendered_document) = state.render_cache.rendered_document.take() else {
+            perf_trace.finish();
             return layout::Node::new(Size::new(1.0, 1.0));
         };
+        phase_started_at = Instant::now();
         apply_selectable_transcript_command(
             &rendered_document,
             state,
             self.context_menu_surface_id.as_ref(),
             self.command.as_ref(),
         );
+        perf_trace.checkpoint("apply_host_command", phase_started_at);
         let max_size = limits.width(Length::Fill).height(Length::Shrink).max();
         let available_width = max_size.width.max(1.0);
         let local_widget_bounds = Rectangle::new(
@@ -287,18 +314,22 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             .matches_layout(rendered_document.layout_signature, available_width)
         {
             state.render_cache.rendered_document = Some(rendered_document);
+            perf_trace.finish();
             return layout::Node::new(Size::new(
                 available_width,
                 state.render_cache.cached_height.max(1.0),
             ));
         }
+        phase_started_at = Instant::now();
         let layout_height = rebuild_layout_cache(
             &rendered_document,
             state,
             local_widget_bounds,
             available_width,
         );
+        perf_trace.checkpoint("rebuild_layout_cache", phase_started_at);
         state.render_cache.rendered_document = Some(rendered_document);
+        perf_trace.finish();
 
         layout::Node::new(Size::new(available_width, layout_height))
     }
@@ -346,13 +377,22 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "widget.update",
+            format!("blocks={}", self.document.blocks.len()),
+        );
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+        bind_selectable_transcript_render_cache(state, self.context_menu_surface_id.as_ref());
+        let mut phase_started_at = Instant::now();
         state
             .render_cache
             .ensure_rendered_document(&self.document, &self.app_theme);
+        perf_trace.checkpoint("ensure_rendered_document", phase_started_at);
         let Some(rendered_document) = state.render_cache.rendered_document.take() else {
+            perf_trace.finish();
             return;
         };
+        phase_started_at = Instant::now();
         handle_transcript_widget_event(
             &rendered_document,
             self.on_drag_auto_scroll.as_ref(),
@@ -365,7 +405,9 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             shell,
             *_viewport,
         );
+        perf_trace.checkpoint("handle_transcript_widget_event", phase_started_at);
         state.render_cache.rendered_document = Some(rendered_document);
+        perf_trace.finish();
     }
 
     /// Returns the mouse interaction shown while hovering the selectable transcript widget.
@@ -397,6 +439,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
         let menu_state = state.context_menu.clone()?;
+        bind_selectable_transcript_render_cache(state, self.context_menu_surface_id.as_ref());
         state
             .render_cache
             .ensure_rendered_document(&self.document, &self.app_theme);
@@ -439,10 +482,10 @@ mod tests {
     use crate::iced_theme as theme;
     use crate::{AgentViewAttributes, AgentViewDirectiveBlock, AgentViewDirectiveKind};
     use iced::advanced::text;
-    use iced::widget::markdown;
     use iced::widget::text::Span;
     use iced::{Background, Color, Padding, Pixels, Point, Size, Theme};
     use std::ops::Range;
+    use vulcan_markdown as markdown;
 
     /// Verifies ASCII byte offsets remain identical after conversion because one byte still means one visible character.
     /// 验证 ASCII 字节偏移在转换后保持一致，因为单字节仍然对应一个可见字符。
@@ -989,6 +1032,7 @@ mod tests {
     #[test]
     fn padded_block_hit_test_points_are_clamped_to_text_bounds() {
         let paragraph_node = RenderedParagraphNode {
+            signature_seed: 0,
             display_text: String::from("[思考过程]"),
             spans: vec![Span::<markdown::Uri, iced::Font>::new("[思考过程]")],
             global_char_range: Range { start: 0, end: 6 },

@@ -172,7 +172,7 @@ pub(super) fn parse_selectable_markdown_body(
     markdown_source: &str,
     theme: &Theme,
 ) -> (markdown::Content, text_editor::Content) {
-    let markdown_content = markdown::Content::parse(markdown_source);
+    let markdown_content = markdown::Content::parse_transcript(markdown_source);
     let markdown_buffer = text_editor::Content::with_text(&build_selectable_markdown_text(
         markdown_source,
         &markdown_content,
@@ -180,6 +180,25 @@ pub(super) fn parse_selectable_markdown_body(
     ));
 
     (markdown_content, markdown_buffer)
+}
+
+/// Appends one Markdown delta into an existing parsed payload and rebuilds the paired selectable buffer.
+/// 向现有已解析 Markdown 载荷追加一段增量，并重建配套的可选缓冲区。
+pub(super) fn append_selectable_markdown_delta(
+    markdown_source: &str,
+    delta: &str,
+    markdown_content: &mut markdown::Content,
+    theme: &Theme,
+) -> text_editor::Content {
+    if !delta.is_empty() {
+        markdown_content.push_str(delta);
+    }
+
+    text_editor::Content::with_text(&build_selectable_markdown_text(
+        markdown_source,
+        markdown_content,
+        theme,
+    ))
 }
 
 /// Builds one selectable plain-text projection from parsed Markdown while preserving the major reading structure.
@@ -793,9 +812,11 @@ mod tests {
     //! 覆盖 scope 解析的 MCP OAuth 辅助回归测试。
 
     use super::{
-        parse_mcp_server_oauth_scopes, tool_modal_scrollable_id, transcript_scrollable_id,
+        append_selectable_markdown_delta, parse_mcp_server_oauth_scopes,
+        parse_selectable_markdown_body, tool_modal_scrollable_id, transcript_scrollable_id,
     };
     use crate::model::SessionId;
+    use iced::Theme;
 
     /// Parses mixed-delimiter OAuth scopes into a stable ordered scope list.
     /// 将混合分隔符的 OAuth scopes 解析为稳定有序的 scope 列表。
@@ -820,6 +841,26 @@ mod tests {
         assert_ne!(
             tool_modal_scrollable_id(session_id),
             transcript_scrollable_id(session_id)
+        );
+    }
+
+    /// Verifies incremental Markdown cache updates produce the same selectable projection as a full reparse.
+    /// 验证增量 Markdown 缓存更新生成的可选文本投影与整段重解析保持一致。
+    #[test]
+    fn incremental_markdown_append_matches_full_reparse() {
+        let theme = Theme::TokyoNight;
+        let prefix = "第一行";
+        let delta = "\n第二行\n- 列表项";
+        let full = format!("{prefix}{delta}");
+        let (mut incremental_content, _) = parse_selectable_markdown_body(prefix, &theme);
+        let incremental_buffer =
+            append_selectable_markdown_delta(&full, delta, &mut incremental_content, &theme);
+        let (reparsed_content, reparsed_buffer) = parse_selectable_markdown_body(&full, &theme);
+
+        assert_eq!(incremental_buffer.text(), reparsed_buffer.text());
+        assert_eq!(
+            incremental_content.items().len(),
+            reparsed_content.items().len()
         );
     }
 }

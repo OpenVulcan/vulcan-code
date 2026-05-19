@@ -1,11 +1,11 @@
 //! Iced-facing typography helpers shared by the agent-view renderer.
 //! agent-view 渲染器共享的 Iced 排版辅助逻辑。
 
-use iced::widget::markdown;
 use iced::{
     Font, Theme,
     font::{Style as FontStyle, Weight as FontWeight},
 };
+use vulcan_markdown as markdown;
 
 /// Bundled UI font family name expected to be registered by the host application.
 /// 由宿主应用负责注册的内置界面字体族名称。

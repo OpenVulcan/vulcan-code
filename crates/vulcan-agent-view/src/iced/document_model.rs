@@ -5,10 +5,9 @@ use super::builder::RenderedTranscriptBuilder;
 use super::directive_render::render_directive_block;
 use super::markdown_render::{render_markdown_items, render_markdown_source_with_table_fallback};
 use super::markdown_source::{
-    normalize_markdown_source_for_transcript_display, prepare_markdown_source_for_rendering,
-    raw_source_contains_markdown_table,
+    prepare_markdown_source_for_rendering, raw_source_contains_markdown_table,
 };
-use super::render_cache::CachedRenderedTranscriptBlock;
+use super::render_cache::{CachedRenderedMarkdownParse, CachedRenderedTranscriptBlock};
 use super::scene::{
     PlainParagraphStyle, RenderContext, RenderedParagraphBackground, RenderedTranscriptDocument,
     RenderedTranscriptNode,
@@ -18,6 +17,7 @@ use crate::{AgentViewBlock, AgentViewDirectiveKind, AgentViewDocument};
 use iced::{Background, Border, Color, Theme};
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
+use vulcan_markdown as markdown;
 
 impl RenderedTranscriptDocument {
     /// Builds one rendered transcript model from the structured agent document.
@@ -63,15 +63,20 @@ impl RenderedTranscriptDocument {
 
         for block in &document.blocks {
             let block_signature = Self::block_render_signature_for_agent_block(block, app_theme);
-            let cached_block = block_cache.entry(block_signature).or_insert_with(|| {
-                render_agent_view_block(
+            if !block_cache.contains_key(&block_signature) {
+                let rendered_block = render_agent_view_block(
                     block_signature,
                     block,
                     app_theme,
                     selection_color,
                     fallback_text_color,
-                )
-            });
+                    block_cache,
+                );
+                block_cache.insert(block_signature, rendered_block);
+            }
+            let cached_block = block_cache
+                .get(&block_signature)
+                .expect("rendered block must be cached after insertion");
             debug_assert_eq!(cached_block.signature, block_signature);
 
             let separator = if full_text.is_empty() || cached_block.full_text.trim().is_empty() {
@@ -130,11 +135,13 @@ fn render_agent_view_block(
     app_theme: &Theme,
     selection_color: Color,
     fallback_text_color: Color,
+    block_cache: &BTreeMap<u64, CachedRenderedTranscriptBlock>,
 ) -> CachedRenderedTranscriptBlock {
     let markdown_settings = theme::markdown_settings(app_theme);
     let mut builder = RenderedTranscriptBuilder::new(selection_color, fallback_text_color);
     let child_start_index = builder.node_count();
     builder.begin_block();
+    let mut markdown_parse = None;
 
     match block {
         AgentViewBlock::Markdown(markdown_block) => {
@@ -148,9 +155,13 @@ fn render_agent_view_block(
                     app_theme,
                 );
             } else {
-                let normalized_source =
-                    normalize_markdown_source_for_transcript_display(&prepared_source);
-                let markdown_content = iced::widget::markdown::Content::parse(&normalized_source);
+                let markdown_content =
+                    incremental_markdown_content_from_cache(block_cache, &prepared_source)
+                        .unwrap_or_else(|| markdown::Content::parse_transcript(&prepared_source));
+                markdown_parse = Some(CachedRenderedMarkdownParse {
+                    prepared_source,
+                    content: markdown_content.clone(),
+                });
                 render_markdown_items(
                     &mut builder,
                     markdown_content.items(),
@@ -180,7 +191,29 @@ fn render_agent_view_block(
         nodes: builder.nodes,
         full_text: builder.full_text,
         link_actions: builder.link_actions,
+        markdown_parse,
     }
+}
+
+/// Restores one parsed Markdown snapshot from the nearest cached prefix match and appends only the new suffix when possible.
+/// 尝试从最近的缓存前缀匹配恢复一份已解析 Markdown 快照，并在可行时只追加新增后缀。
+fn incremental_markdown_content_from_cache(
+    block_cache: &BTreeMap<u64, CachedRenderedTranscriptBlock>,
+    prepared_source: &str,
+) -> Option<markdown::Content> {
+    let seed = block_cache
+        .values()
+        .filter_map(|cached_block| cached_block.markdown_parse.as_ref())
+        .filter(|cached_parse| {
+            prepared_source.len() > cached_parse.prepared_source.len()
+                && prepared_source.starts_with(cached_parse.prepared_source.as_str())
+        })
+        .max_by_key(|cached_parse| cached_parse.prepared_source.len())?;
+
+    let mut content = seed.content.clone();
+    let suffix = &prepared_source[seed.prepared_source.len()..];
+    content.push_str(suffix);
+    Some(content)
 }
 
 /// Computes one stable transcript-layout signature from the source document and render-affecting theme inputs.

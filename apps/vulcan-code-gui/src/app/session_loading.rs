@@ -101,7 +101,9 @@ impl VulcanWorkbench {
                 .await;
                 (session_id, result)
             },
-            |(session_id, result)| Message::SessionToolDetailsLoaded(session_id, result),
+            move |(session_id, result)| {
+                Message::SessionToolDetailsLoaded(session_id, turn_index, result)
+            },
         )
     }
 
@@ -127,6 +129,69 @@ impl VulcanWorkbench {
                 .into_iter()
                 .map(|turn_index| self.schedule_session_tool_detail_load(session_id, turn_index)),
         )
+    }
+
+    /// Returns whether the selected session should delay its very first transcript projection until the first batch of required tool-detail pages has arrived.
+    /// 返回当前已选会话是否应延迟首次转录投影，直到首批必要工具明细分页全部到齐。
+    pub(super) fn should_defer_initial_selected_session_projection(
+        &self,
+        session_id: SessionId,
+        turn_indices: &[i64],
+    ) -> bool {
+        self.selected_session()
+            .is_some_and(|session| session.id == session_id)
+            && !turn_indices.is_empty()
+            && match self.session_agent_view_documents.get(&session_id) {
+                Some(document) => document.blocks.is_empty(),
+                None => true,
+            }
+    }
+
+    /// Starts one deferred first-render tool-detail batch so the selected transcript waits for required detail rows before the first heavy projection.
+    /// 启动一组延迟首屏工具明细批次，使已选转录在首次重投影前等待必要明细行到齐。
+    pub(super) fn begin_session_initial_tool_detail_batch(
+        &mut self,
+        session_id: SessionId,
+        turn_indices: &[i64],
+    ) {
+        let total_turn_count = turn_indices.iter().copied().collect::<BTreeSet<_>>().len();
+        if total_turn_count == 0 {
+            self.session_initial_tool_detail_batches.remove(&session_id);
+            return;
+        }
+
+        self.session_initial_tool_detail_batches.insert(
+            session_id,
+            SessionInitialToolDetailBatchState {
+                total_turn_count,
+                completed_turn_indices: BTreeSet::new(),
+                failed_turn_count: 0,
+            },
+        );
+    }
+
+    /// Marks one deferred first-render tool-detail turn as finished and returns the completed batch snapshot once every required turn has completed.
+    /// 标记一项延迟首屏工具明细轮次已经结束，并在全部必要轮次完成后返回整批完成快照。
+    pub(super) fn finish_session_initial_tool_detail_turn(
+        &mut self,
+        session_id: SessionId,
+        turn_index: i64,
+        succeeded: bool,
+    ) -> Option<SessionInitialToolDetailBatchState> {
+        let Some(batch_state) = self.session_initial_tool_detail_batches.get_mut(&session_id) else {
+            return None;
+        };
+
+        let inserted = batch_state.completed_turn_indices.insert(turn_index);
+        if inserted && !succeeded {
+            batch_state.failed_turn_count += 1;
+        }
+
+        if batch_state.completed_turn_count() >= batch_state.total_turn_count {
+            return self.session_initial_tool_detail_batches.remove(&session_id);
+        }
+
+        None
     }
 
     /// Applies one lazily loaded session payload to live transcript and runtime caches.
@@ -237,7 +302,11 @@ impl VulcanWorkbench {
 
     /// Merges one on-demand tool-detail page into the already hydrated transcript cache.
     /// 将一页按需工具明细合并到已经水合的转录缓存中。
-    pub(super) fn apply_session_tool_detail_page(&mut self, page: SessionToolDetailPage) {
+    pub(super) fn apply_session_tool_detail_page(
+        &mut self,
+        page: SessionToolDetailPage,
+        refresh_agent_view_buffers: bool,
+    ) {
         let session_id = page.session_id;
         let _detail_cursor = (page.turn_index, page.earliest_ordinal, page.has_more_detail);
         let page_messages = page.messages;
@@ -271,6 +340,8 @@ impl VulcanWorkbench {
             .sort_by_key(|message| parse_unix_millis_text(&message.created_at).unwrap_or_default());
 
         self.prune_session_message_cache_to_limit(session_id);
-        self.refresh_session_agent_view_buffers(session_id);
+        if refresh_agent_view_buffers {
+            self.refresh_session_agent_view_buffers(session_id);
+        }
     }
 }

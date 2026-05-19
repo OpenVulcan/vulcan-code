@@ -1,6 +1,7 @@
 //! Render-cache state separated from live interaction state so long-document layout data can evolve independently.
 //! 与实时交互状态分离的渲染缓存状态，使长文档布局数据可以独立演进。
 
+use super::perf::TranscriptPerfTrace;
 use super::RendererParagraph;
 use super::scene::{
     CachedTableLayout, LaidOutFlowNode, LaidOutPanelNode, RenderedTranscriptDocument,
@@ -8,7 +9,29 @@ use super::scene::{
 };
 use crate::AgentViewDocument;
 use iced::Theme;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
+use vulcan_markdown as markdown;
+
+thread_local! {
+    /// Surface-scoped transcript render-cache stash that survives widget-state teardown during session switching.
+    /// 在会话切换导致组件状态销毁时仍可存活的按表面归属转录渲染缓存暂存区。
+    static STASHED_SURFACE_RENDER_CACHES: RefCell<BTreeMap<String, TranscriptRenderCache>> =
+        RefCell::new(BTreeMap::new());
+}
+
+/// Stores one reusable parsed Markdown snapshot aligned with one rendered transcript block.
+/// 存储一份与单个渲染转录区块对齐的可复用 Markdown 解析快照。
+#[derive(Debug, Clone)]
+pub(super) struct CachedRenderedMarkdownParse {
+    /// Prepared Markdown source string that was used to produce the parsed content snapshot.
+    /// 用于生成当前解析内容快照的预处理 Markdown 源文本。
+    pub(super) prepared_source: String,
+    /// Parsed Markdown content snapshot that can seed future incremental suffix appends.
+    /// 可为未来尾部增量追加提供种子的已解析 Markdown 内容快照。
+    pub(super) content: markdown::Content,
+}
 
 /// Stores the reusable rendered-node projection for one top-level transcript block.
 /// 存储单个顶层转录区块可复用的渲染节点投影。
@@ -29,6 +52,9 @@ pub(super) struct CachedRenderedTranscriptBlock {
     /// Synthetic link actions registered by this block.
     /// 当前区块注册的合成链接动作集合。
     pub(super) link_actions: BTreeMap<String, RenderedTranscriptLinkAction>,
+    /// Optional parsed Markdown snapshot retained only for incrementally growing Markdown blocks.
+    /// 仅为支持增量增长 Markdown 区块而保留的可选已解析快照。
+    pub(super) markdown_parse: Option<CachedRenderedMarkdownParse>,
 }
 
 /// Stores the heavy layout and paragraph caches used to render long transcript surfaces efficiently.
@@ -83,12 +109,20 @@ impl TranscriptRenderCache {
         document: &AgentViewDocument,
         app_theme: &Theme,
     ) -> bool {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "ensure_rendered_document",
+            format!("blocks={}", document.blocks.len()),
+        );
+        let mut phase_started_at = Instant::now();
         let signature =
             RenderedTranscriptDocument::layout_signature_for_agent_document(document, app_theme);
+        perf_trace.checkpoint("layout_signature_for_agent_document", phase_started_at);
         if self.rendered_document_signature == signature && self.rendered_document.is_some() {
+            perf_trace.finish();
             return false;
         }
 
+        phase_started_at = Instant::now();
         self.rendered_document = Some(
             RenderedTranscriptDocument::from_agent_document_with_block_cache_and_signature(
                 document,
@@ -97,8 +131,12 @@ impl TranscriptRenderCache {
                 signature,
             ),
         );
+        perf_trace.checkpoint("rebuild_rendered_document", phase_started_at);
         self.rendered_document_signature = signature;
+        phase_started_at = Instant::now();
         self.prune_rendered_blocks(document, app_theme);
+        perf_trace.checkpoint("prune_rendered_blocks", phase_started_at);
+        perf_trace.finish();
         true
     }
 
@@ -151,5 +189,85 @@ impl Default for TranscriptRenderCache {
             cached_signature: 0,
             cached_height: 1.0,
         }
+    }
+}
+
+/// Rebinds one live render cache to the provided surface key, stashing the previous cache and restoring any matching cached payload for the new surface.
+/// 将一个活动渲染缓存重新绑定到提供的表面键，暂存旧缓存并为新表面恢复任何匹配的已缓存载荷。
+pub(super) fn rebind_stashed_surface_render_cache(
+    render_cache: &mut TranscriptRenderCache,
+    bound_surface_cache_key: &mut Option<String>,
+    next_surface_cache_key: Option<&str>,
+) {
+    if bound_surface_cache_key.as_deref() == next_surface_cache_key {
+        return;
+    }
+
+    let next_surface_cache_key = next_surface_cache_key.map(ToOwned::to_owned);
+    STASHED_SURFACE_RENDER_CACHES.with(|stashed_caches| {
+        let mut stashed_caches = stashed_caches.borrow_mut();
+        if let Some(previous_surface_cache_key) = bound_surface_cache_key.take() {
+            stashed_caches.insert(previous_surface_cache_key, std::mem::take(render_cache));
+        }
+
+        if let Some(ref next_surface_cache_key) = next_surface_cache_key {
+            *render_cache = stashed_caches
+                .remove(next_surface_cache_key)
+                .unwrap_or_default();
+        } else {
+            *render_cache = TranscriptRenderCache::default();
+        }
+    });
+    *bound_surface_cache_key = next_surface_cache_key;
+}
+
+/// Stashes one live render cache under the provided surface key so a later widget instance can restore it after session switching.
+/// 使用提供的表面键暂存一份活动渲染缓存，以便稍后的组件实例在会话切换后恢复它。
+pub(super) fn stash_surface_render_cache(
+    render_cache: &mut TranscriptRenderCache,
+    bound_surface_cache_key: &mut Option<String>,
+) {
+    let Some(surface_cache_key) = bound_surface_cache_key.take() else {
+        return;
+    };
+
+    STASHED_SURFACE_RENDER_CACHES.with(|stashed_caches| {
+        stashed_caches
+            .borrow_mut()
+            .insert(surface_cache_key, std::mem::take(render_cache));
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        TranscriptRenderCache, rebind_stashed_surface_render_cache, stash_surface_render_cache,
+    };
+
+    /// Verifies one stashed surface render cache can be restored by a later widget instance bound to the same surface identifier.
+    /// 验证一份已暂存的表面渲染缓存可以被后续绑定到相同表面标识的组件实例恢复出来。
+    #[test]
+    fn stashed_surface_render_cache_round_trips() {
+        let unique_surface_id = String::from("surface:test:roundtrip");
+        let mut original_cache = TranscriptRenderCache::default();
+        original_cache.cached_signature = 42;
+        original_cache.cached_width = 777.0;
+        let mut original_surface_key = Some(unique_surface_id.clone());
+
+        stash_surface_render_cache(&mut original_cache, &mut original_surface_key);
+        assert!(original_surface_key.is_none());
+        assert_eq!(original_cache.cached_signature, 0);
+
+        let mut restored_cache = TranscriptRenderCache::default();
+        let mut restored_surface_key = None;
+        rebind_stashed_surface_render_cache(
+            &mut restored_cache,
+            &mut restored_surface_key,
+            Some(unique_surface_id.as_str()),
+        );
+
+        assert_eq!(restored_surface_key.as_deref(), Some(unique_surface_id.as_str()));
+        assert_eq!(restored_cache.cached_signature, 42);
+        assert_eq!(restored_cache.cached_width, 777.0);
     }
 }
