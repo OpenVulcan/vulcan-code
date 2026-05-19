@@ -6,6 +6,7 @@ mod configuration;
 mod context_menu;
 mod helpers;
 mod media_preview;
+pub(crate) mod model;
 mod oauth_flow;
 mod pending_prompt_queue;
 mod perf;
@@ -15,7 +16,6 @@ mod session_loading;
 mod session_projection;
 mod subagent_runtime;
 mod task_tree;
-#[path = "../ui/views/mod.rs"]
 mod views;
 
 use self::helpers::*;

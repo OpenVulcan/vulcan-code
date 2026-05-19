@@ -6,8 +6,6 @@ mod app_shell;
 mod attachments;
 mod compat;
 mod mcp;
-#[path = "app_shell/model.rs"]
-mod model;
 mod profiles;
 mod provider;
 mod runtime_support;
@@ -19,6 +17,7 @@ mod ui;
 mod workspace_store;
 
 pub(crate) use app_shell as app;
+pub(crate) use app_shell::model;
 pub(crate) use profiles::agent_profile;
 pub(crate) use attachments::{asset_index as attachment_asset_index, assets as attachment_assets};
 pub(crate) use compat::{
