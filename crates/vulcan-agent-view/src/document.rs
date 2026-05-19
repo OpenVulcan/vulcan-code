@@ -10,6 +10,107 @@ use std::collections::BTreeMap;
 /// 存储在单个扩展指令块上的属性映射。
 pub type AgentViewAttributes = BTreeMap<String, String>;
 
+/// Presentation kinds used by tool blocks so different host-managed tool results can evolve independent transcript renderers.
+/// 工具区块使用的展示种类，使不同宿主管理工具结果可以演进为彼此独立的转录渲染器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum AgentViewToolPresentationKind {
+    /// Generic tool card used by MCP, unknown skills, and any tool result without a dedicated presentation family.
+    /// 供 MCP、未知 skill 以及任何没有专属展示家族的工具结果使用的通用工具卡片。
+    Generic,
+    /// Dedicated task-session card used by host-managed delegate/task tool flows.
+    /// 供宿主管理的委派或任务工具流使用的专属 task-session 卡片。
+    TaskSession,
+    /// Dedicated generated-image tool card.
+    /// 专属图片生成工具卡片。
+    GeneratedImage,
+    /// Dedicated generated-video tool card.
+    /// 专属视频生成工具卡片。
+    GeneratedVideo,
+    /// Dedicated generated-audio tool card.
+    /// 专属音频生成工具卡片。
+    GeneratedAudio,
+    /// Dedicated generated-document tool card.
+    /// 专属文档生成工具卡片。
+    GeneratedDocument,
+}
+
+impl AgentViewToolPresentationKind {
+    /// Shared attribute key used to persist the presentation kind on tool blocks.
+    /// 用于在工具区块上持久化展示种类的共享属性键。
+    pub const ATTRIBUTE_KEY: &'static str = "tool-presentation-kind";
+
+    /// Returns the stable lowercase attribute value used for persistence and cross-layer routing.
+    /// 返回用于持久化与跨层路由的稳定小写属性值。
+    pub fn as_attribute_value(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::TaskSession => "task-session",
+            Self::GeneratedImage => "generated-image",
+            Self::GeneratedVideo => "generated-video",
+            Self::GeneratedAudio => "generated-audio",
+            Self::GeneratedDocument => "generated-document",
+        }
+    }
+
+    /// Parses one persisted attribute value into the corresponding presentation kind.
+    /// 将一条已持久化属性值解析为对应展示种类。
+    pub fn from_attribute_value(value: &str) -> Option<Self> {
+        match value.trim() {
+            "generic" => Some(Self::Generic),
+            "task-session" => Some(Self::TaskSession),
+            "generated-image" => Some(Self::GeneratedImage),
+            "generated-video" => Some(Self::GeneratedVideo),
+            "generated-audio" => Some(Self::GeneratedAudio),
+            "generated-document" => Some(Self::GeneratedDocument),
+            _ => None,
+        }
+    }
+
+    /// Writes the current presentation kind into the provided attribute map.
+    /// 将当前展示种类写入给定属性映射。
+    pub fn write_to_attributes(self, attributes: &mut AgentViewAttributes) {
+        attributes.insert(
+            Self::ATTRIBUTE_KEY.to_string(),
+            self.as_attribute_value().to_string(),
+        );
+    }
+
+    /// Reads the persisted or legacy presentation kind from one tool-block attribute map when it is available.
+    /// 当存在时，从单个工具区块属性映射中读取持久化或旧版兼容的展示种类。
+    pub fn from_attributes(attributes: &AgentViewAttributes) -> Option<Self> {
+        attributes
+            .get(Self::ATTRIBUTE_KEY)
+            .and_then(|value| Self::from_attribute_value(value))
+            .or_else(|| Self::from_legacy_attributes(attributes))
+    }
+
+    /// Resolves the effective presentation kind from one tool-block attribute map, defaulting to the generic tool card.
+    /// 从单个工具区块属性映射解析有效展示种类，并在缺失时回退到通用工具卡片。
+    pub fn resolve_from_attributes(attributes: &AgentViewAttributes) -> Self {
+        Self::from_attributes(attributes).unwrap_or(Self::Generic)
+    }
+
+    /// Reads the older string-based tool visual markers so pre-refactor transcripts still map into the new presentation families.
+    /// 读取旧版基于字符串的工具视觉标记，使重构前的转录仍可映射到新的展示家族。
+    fn from_legacy_attributes(attributes: &AgentViewAttributes) -> Option<Self> {
+        match attributes.get("tool-visual-kind").map(String::as_str) {
+            Some("task-session") => Some(Self::TaskSession),
+            Some("generated-media") => match attributes
+                .get("generated-media-kind")
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref()
+            {
+                Some("image") => Some(Self::GeneratedImage),
+                Some("video") => Some(Self::GeneratedVideo),
+                Some("audio") => Some(Self::GeneratedAudio),
+                Some("pdf") | Some("document") => Some(Self::GeneratedDocument),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 /// Top-level structured transcript document consumed by future agent-view renderers.
 /// 供后续 agent-view 渲染器消费的顶层结构化转录文档。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -458,6 +559,7 @@ mod tests {
 
     use super::{
         AgentViewAttributes, AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewDocument,
+        AgentViewToolPresentationKind,
     };
 
     /// Verifies that the selectable projection preserves Markdown syntax while still exposing directive titles.
@@ -482,5 +584,35 @@ mod tests {
         assert!(selectable_text.contains("**Markdown**"));
         assert!(selectable_text.contains("[工具调用] cargo check"));
         assert!(selectable_text.contains("cargo check -p vulcan-code-gui"));
+    }
+
+    /// Verifies that one persisted typed tool presentation attribute round-trips into the matching enum variant.
+    /// 验证一条已持久化的强类型工具展示属性可以往返解析为匹配的枚举变体。
+    #[test]
+    fn parses_persisted_tool_presentation_kind_attribute() {
+        let mut attributes = AgentViewAttributes::new();
+        AgentViewToolPresentationKind::GeneratedVideo.write_to_attributes(&mut attributes);
+
+        assert_eq!(
+            AgentViewToolPresentationKind::from_attributes(&attributes),
+            Some(AgentViewToolPresentationKind::GeneratedVideo)
+        );
+    }
+
+    /// Verifies that legacy string-based tool visual markers still map into the new generated-document presentation family.
+    /// 验证旧版基于字符串的工具视觉标记仍可映射到新的文档生成展示家族。
+    #[test]
+    fn maps_legacy_tool_visual_markers_to_typed_presentation_kind() {
+        let mut attributes = AgentViewAttributes::new();
+        attributes.insert(
+            String::from("tool-visual-kind"),
+            String::from("generated-media"),
+        );
+        attributes.insert(String::from("generated-media-kind"), String::from("pdf"));
+
+        assert_eq!(
+            AgentViewToolPresentationKind::from_attributes(&attributes),
+            Some(AgentViewToolPresentationKind::GeneratedDocument)
+        );
     }
 }

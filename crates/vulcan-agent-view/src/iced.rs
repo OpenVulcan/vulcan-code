@@ -47,6 +47,7 @@ use iced::advanced::widget::tree;
 use iced::advanced::{Shell, Widget, overlay};
 use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 /// Builds one selectable rendered transcript element from the provided structured agent document.
 /// 根据提供的结构化代理文档构建一个可选择的渲染转录元素。
@@ -57,7 +58,7 @@ pub fn view_selectable_rendered_transcript<'a, Message: 'a>(
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
     Element::new(SelectableTranscript::new(
-        document.clone(),
+        Rc::new(document.clone()),
         app_theme.clone(),
         on_drag_auto_scroll,
         on_interaction,
@@ -76,7 +77,7 @@ pub fn view_selectable_rendered_transcript_with_context_menu<'a, Message: 'a>(
 ) -> Element<'a, Message> {
     Element::new(
         SelectableTranscript::new(
-            document.clone(),
+            Rc::new(document.clone()),
             app_theme.clone(),
             on_drag_auto_scroll,
             on_interaction,
@@ -95,7 +96,7 @@ pub fn view_selectable_rendered_transcript_owned<'a, Message: 'a>(
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
     Element::new(SelectableTranscript::new(
-        document,
+        Rc::new(document),
         app_theme,
         on_drag_auto_scroll,
         on_interaction,
@@ -106,6 +107,28 @@ pub fn view_selectable_rendered_transcript_owned<'a, Message: 'a>(
 /// 构建一个启用宿主级右键菜单路由的拥有型可选择渲染转录元素。
 pub fn view_selectable_rendered_transcript_owned_with_context_menu<'a, Message: 'a>(
     document: AgentViewDocument,
+    app_theme: Theme,
+    surface_id: SelectableTranscriptSurfaceId,
+    command: Option<SelectableTranscriptCommand>,
+    on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
+    on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
+) -> Element<'a, Message> {
+    Element::new(
+        SelectableTranscript::new(
+            Rc::new(document),
+            app_theme,
+            on_drag_auto_scroll,
+            on_interaction,
+        )
+        .with_context_menu_surface(surface_id)
+        .with_command(command),
+    )
+}
+
+/// Builds one shared selectable rendered transcript element with host-level context-menu routing enabled so callers can reuse one prepared document snapshot across repeated GUI view passes.
+/// 构建一个启用宿主级右键菜单路由的共享可选择渲染转录元素，使调用方可以在重复界面刷新之间复用同一份已准备文档快照。
+pub fn view_selectable_rendered_transcript_shared_with_context_menu<'a, Message: 'a>(
+    document: Rc<AgentViewDocument>,
     app_theme: Theme,
     surface_id: SelectableTranscriptSurfaceId,
     command: Option<SelectableTranscriptCommand>,
@@ -124,7 +147,7 @@ pub fn view_selectable_rendered_transcript_owned_with_context_menu<'a, Message: 
 struct SelectableTranscript<'a, Message> {
     /// Structured source transcript document used to refresh the cached rendered model lazily inside widget state.
     /// 用于在组件状态内惰性刷新缓存渲染模型的结构化源转录文档。
-    document: AgentViewDocument,
+    document: Rc<AgentViewDocument>,
     /// Theme snapshot used by the lazy block renderer.
     /// 惰性区块渲染器使用的主题快照。
     app_theme: Theme,
@@ -149,7 +172,7 @@ impl<'a, Message> SelectableTranscript<'a, Message> {
     /// Creates one selectable transcript widget from a rendered transcript model.
     /// 根据一个渲染转录模型创建可选择转录组件。
     fn new(
-        document: AgentViewDocument,
+        document: Rc<AgentViewDocument>,
         app_theme: Theme,
         on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
         on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,

@@ -13,8 +13,8 @@ mod video_thumbnail;
 
 pub use document::{
     AgentViewAttributes, AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind,
-    AgentViewDocument, AgentViewMarkdownBlock, markdown_source_to_plain_text,
-    render_directive_source,
+    AgentViewDocument, AgentViewMarkdownBlock, AgentViewToolPresentationKind,
+    markdown_source_to_plain_text, render_directive_source,
 };
 pub use editor_core::{Cursor, Selection, TextBuffer, ViewState};
 pub use iced::{
@@ -24,6 +24,7 @@ pub use iced::{
     SelectableTranscriptInteraction, SelectableTranscriptSurfaceId,
     view_selectable_rendered_transcript,
     view_selectable_rendered_transcript_owned_with_context_menu,
+    view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,
 };
 pub use iced_style::{thinking_modal_backdrop_style, thinking_modal_card_style};

@@ -7,5 +7,6 @@ pub use vulcan_agent_view::{
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
     SelectableTranscriptInteraction, SelectableTranscriptSurfaceId,
     view_selectable_rendered_transcript_owned_with_context_menu,
+    view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,
 };

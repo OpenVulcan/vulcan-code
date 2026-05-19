@@ -1,6 +1,14 @@
 //! GUI-side adapters that map session transcripts into unified vulcan-agent-view documents.
 //! 将会话转录映射为统一 vulcan-agent-view 文档的图形界面适配器。
 
+mod tool_generated_audio;
+mod tool_generated_document;
+mod tool_generated_image;
+mod tool_generated_video;
+mod tool_generic;
+mod tool_shared;
+mod tool_task_session;
+
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::model::{SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde_json::Value;
@@ -8,7 +16,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use vulcan_agent_view::{
     AgentViewAttributes, AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind,
-    AgentViewDocument, parse_agent_view_document, render_directive_source,
+    AgentViewDocument, AgentViewToolPresentationKind, parse_agent_view_document,
+    render_directive_source,
 };
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -250,163 +259,25 @@ fn build_tool_record_block(
     kind: AgentViewDirectiveKind,
     message: &SessionMessageEntry,
 ) -> AgentViewDirectiveBlock {
-    let mut attributes = AgentViewAttributes::new();
-    attributes.insert(String::from("message-id"), message.id.clone());
-    if !message.created_at.trim().is_empty() {
-        attributes.insert(String::from("created-at"), message.created_at.clone());
-    }
-    if !message.title.trim().is_empty() {
-        attributes.insert(String::from("title"), message.title.clone());
-    }
-    if let Some(tool_display_state) = message
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("tool_display_state"))
-        .and_then(|value| value.as_str())
-        .filter(|state| !state.trim().is_empty())
-    {
-        attributes.insert(
-            String::from("tool-display-state"),
-            tool_display_state.to_string(),
-        );
-    }
-    if message.metadata.as_ref().is_some_and(|metadata| {
-        metadata.get("tool_name").and_then(Value::as_str) == Some("task")
-            || metadata.get("kind").and_then(Value::as_str) == Some("task_session")
-    }) {
-        attributes.insert(
-            String::from("tool-visual-kind"),
-            String::from("task-session"),
-        );
-    }
-    if let Some(task_session_id) = message
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("payload"))
-        .and_then(|payload| {
-            payload
-                .get("task_session_id")
-                .or_else(|| payload.get("task_id"))
-        })
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-    {
-        attributes.insert(String::from("task-session-id"), task_session_id.to_string());
-    }
-    if let Some(task_execution_status) = message
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("payload"))
-        .and_then(|payload| payload.get("execution_status"))
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-    {
-        attributes.insert(
-            String::from("task-session-execution-status"),
-            task_execution_status.to_string(),
-        );
-    }
-    if let Some(metadata) = message.metadata.as_ref() {
-        attach_generated_media_attributes(&mut attributes, metadata);
-    }
-    let raw_source = render_directive_source(&kind, &attributes, "");
-
-    AgentViewDirectiveBlock::new(kind, attributes, String::new(), raw_source, false)
-}
-
-/// Attaches one generated-media descriptor to tool-block attributes so the transcript renderer can build inline preview cards.
-/// 向工具区块属性附着一份生成媒体描述符，供转录渲染器构建内联预览卡片。
-fn attach_generated_media_attributes(attributes: &mut AgentViewAttributes, metadata: &Value) {
-    let Some(host_result) = resolved_host_result_from_tool_metadata(metadata) else {
-        return;
-    };
-    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
-        return;
-    }
-    let Some(outputs) = host_result
-        .get("payload")
-        .and_then(|payload| payload.get("outputs"))
-        .and_then(Value::as_array)
-    else {
-        return;
-    };
-    let Some(first_output) = outputs.first() else {
-        return;
-    };
-    let Some(kind) = first_output
-        .get("kind")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let Some(file_name) = first_output
-        .get("file_name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let Some(local_path) = first_output
-        .get("local_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    attributes.insert(
-        String::from("tool-visual-kind"),
-        String::from("generated-media"),
-    );
-    attributes.insert(String::from("generated-media-kind"), kind.to_string());
-    attributes.insert(
-        String::from("generated-media-file-name"),
-        file_name.to_string(),
-    );
-    attributes.insert(
-        String::from("generated-media-local-path"),
-        local_path.to_string(),
-    );
-    if let Some(preview_local_path) = first_output
-        .get("preview_local_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        attributes.insert(
-            String::from("generated-media-preview-local-path"),
-            preview_local_path.to_string(),
-        );
-    }
-    attributes.insert(
-        String::from("generated-media-count"),
-        outputs.len().to_string(),
-    );
-    if let Some(mime_type) = first_output
-        .get("mime_type")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        attributes.insert(
-            String::from("generated-media-mime-type"),
-            mime_type.to_string(),
-        );
-    }
-
-    /// Resolves the structured host-result payload stored on one tool transcript metadata object, accepting both nested and flattened runtime-event shapes.
-    /// 解析单条工具转录元数据中保存的结构化宿主结果载荷，同时兼容嵌套与扁平两种运行时事件形状。
-    fn resolved_host_result_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-        metadata
-            .get("host_result")
-            .filter(|value| value.is_object())
-            .or_else(|| {
-                (metadata.get("kind").is_some() && metadata.get("payload").is_some())
-                    .then_some(metadata)
-            })
+    match tool_shared::resolve_tool_presentation_kind(message) {
+        AgentViewToolPresentationKind::Generic => {
+            tool_generic::build_generic_tool_block(kind, message)
+        }
+        AgentViewToolPresentationKind::TaskSession => {
+            tool_task_session::build_task_session_tool_block(kind, message)
+        }
+        AgentViewToolPresentationKind::GeneratedImage => {
+            tool_generated_image::build_generated_image_tool_block(kind, message)
+        }
+        AgentViewToolPresentationKind::GeneratedVideo => {
+            tool_generated_video::build_generated_video_tool_block(kind, message)
+        }
+        AgentViewToolPresentationKind::GeneratedAudio => {
+            tool_generated_audio::build_generated_audio_tool_block(kind, message)
+        }
+        AgentViewToolPresentationKind::GeneratedDocument => {
+            tool_generated_document::build_generated_document_tool_block(kind, message)
+        }
     }
 }
 
@@ -478,6 +349,7 @@ fn build_runtime_tool_block(
 ) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("title"), runtime_event.title.clone());
+    AgentViewToolPresentationKind::Generic.write_to_attributes(&mut attributes);
     attributes.insert(
         String::from("runtime-kind"),
         runtime_event_kind_label(runtime_event.kind).to_string(),
@@ -548,7 +420,9 @@ mod tests {
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use serde_json::json;
-    use vulcan_agent_view::{AgentViewBlock, AgentViewDirectiveKind};
+    use vulcan_agent_view::{
+        AgentViewBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,
+    };
 
     /// Verifies that user prompts and thinking messages become directive blocks while assistant output keeps Markdown parsing.
     /// 验证用户提示与思考消息会变成指令区块，而助手输出仍保持 Markdown 解析能力。
@@ -780,7 +654,7 @@ mod tests {
                 if block.kind == AgentViewDirectiveKind::ToolCall
                     && block
                         .attributes
-                        .get("tool-visual-kind")
+                        .get(AgentViewToolPresentationKind::ATTRIBUTE_KEY)
                         .is_some_and(|value| value == "task-session")
                     && block
                         .attributes
@@ -827,12 +701,8 @@ mod tests {
                 if block.kind == AgentViewDirectiveKind::ToolCall
                     && block
                         .attributes
-                        .get("tool-visual-kind")
-                        .is_some_and(|value| value == "generated-media")
-                    && block
-                        .attributes
-                        .get("generated-media-kind")
-                        .is_some_and(|value| value == "image")
+                        .get(AgentViewToolPresentationKind::ATTRIBUTE_KEY)
+                        .is_some_and(|value| value == "generated-image")
                     && block
                         .attributes
                         .get("generated-media-local-path")

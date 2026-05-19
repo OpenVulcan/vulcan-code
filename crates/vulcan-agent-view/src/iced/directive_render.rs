@@ -1,6 +1,13 @@
 //! Directive-block rendering helpers for semantic transcript panels, inline thinking, and user-prompt chrome.
 //! 语义转录面板、内联思考与用户提示词外框共用的指令区块渲染辅助逻辑。
 
+mod tool_generated_audio;
+mod tool_generated_document;
+mod tool_generated_image;
+mod tool_generated_video;
+mod tool_generic;
+mod tool_task_session;
+
 use super::builder::RenderedTranscriptBuilder;
 use super::markdown_render::{
     build_multiline_diff_spans, render_markdown_items, render_markdown_source_with_table_fallback,
@@ -17,7 +24,7 @@ use super::scene::{
 use super::text_routing::build_agent_view_plain_text_spans;
 use crate::iced_theme as theme;
 use crate::resolve_video_thumbnail_preview;
-use crate::{AgentViewDirectiveBlock, AgentViewDirectiveKind};
+use crate::{AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind};
 use iced::advanced::text;
 use iced::font;
 use iced::widget::image::Handle as ImageHandle;
@@ -54,7 +61,8 @@ fn resolve_tool_directive_visuals(
     &'static str,
 )> {
     let palette = app_theme.palette();
-    let tool_visual_kind = block.attributes.get("tool-visual-kind").map(String::as_str);
+    let presentation_kind =
+        AgentViewToolPresentationKind::resolve_from_attributes(&block.attributes);
     let task_execution_status = block
         .attributes
         .get("task-session-execution-status")
@@ -62,7 +70,7 @@ fn resolve_tool_directive_visuals(
         .unwrap_or("running");
     match block.kind {
         AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
-            if tool_visual_kind == Some("task-session") =>
+            if presentation_kind == AgentViewToolPresentationKind::TaskSession =>
         {
             match task_execution_status {
                 "stopped" => Some((
@@ -420,18 +428,56 @@ fn render_compact_tool_modal_directive_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
-    if block.attributes.get("tool-visual-kind").map(String::as_str) == Some("generated-media") {
-        render_compact_tool_modal_summary_row(builder, block, markdown_settings, app_theme);
-        render_generated_media_directive_card(builder, block, app_theme);
-        return;
+    match AgentViewToolPresentationKind::resolve_from_attributes(&block.attributes) {
+        AgentViewToolPresentationKind::Generic => {
+            tool_generic::render_generic_tool_block(builder, block, markdown_settings, app_theme)
+        }
+        AgentViewToolPresentationKind::TaskSession => {
+            tool_task_session::render_task_session_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
+        }
+        AgentViewToolPresentationKind::GeneratedImage => {
+            tool_generated_image::render_generated_image_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
+        }
+        AgentViewToolPresentationKind::GeneratedVideo => {
+            tool_generated_video::render_generated_video_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
+        }
+        AgentViewToolPresentationKind::GeneratedAudio => {
+            tool_generated_audio::render_generated_audio_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
+        }
+        AgentViewToolPresentationKind::GeneratedDocument => {
+            tool_generated_document::render_generated_document_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
+        }
     }
-
-    render_compact_tool_modal_summary_row(builder, block, markdown_settings, app_theme);
 }
 
 /// Renders the compact clickable tool summary row shared by plain and media-producing tool blocks.
 /// 渲染普通工具与生成媒体工具共同使用的紧凑可点击工具摘要行。
-fn render_compact_tool_modal_summary_row(
+pub(super) fn render_compact_tool_modal_summary_row(
     builder: &mut RenderedTranscriptBuilder,
     block: &AgentViewDirectiveBlock,
     markdown_settings: markdown::Settings,
@@ -483,16 +529,23 @@ fn render_compact_tool_modal_summary_row(
     builder.pending_separator = Some("\n");
 }
 
-/// Renders one generated-media tool result as a dedicated inline media card after the tool summary row.
-/// 在工具摘要行之后，将一个生成媒体工具结果渲染为专用内联媒体卡片。
-fn render_generated_media_directive_card(
+/// Renders one generated-media tool result as a dedicated inline media card using caller-provided visual styling.
+/// 使用调用方提供的视觉样式，将一个生成媒体工具结果渲染为专用内联媒体卡片。
+pub(super) fn render_generated_media_card_with_style(
     builder: &mut RenderedTranscriptBuilder,
     block: &AgentViewDirectiveBlock,
-    app_theme: &Theme,
+    _app_theme: &Theme,
+    expected_kind: RenderedMediaKind,
+    title: String,
+    background: RenderedParagraphBackground,
+    accent_color: Color,
 ) {
     let Some(kind) = generated_media_kind_from_attributes(&block.attributes) else {
         return;
     };
+    if kind != expected_kind {
+        return;
+    }
     let Some(file_name) = block
         .attributes
         .get("generated-media-file-name")
@@ -518,41 +571,6 @@ fn render_generated_media_directive_card(
         .attributes
         .get("ui-generated-media-playing")
         .is_some_and(|value| value == "true");
-    let palette = app_theme.palette();
-    let (title, accent_color, background) = match kind {
-        RenderedMediaKind::Image => (
-            String::new(),
-            palette.primary.strong.color,
-            directive_background(
-                palette.primary.weak.color.scale_alpha(0.08),
-                palette.primary.strong.color.scale_alpha(0.18),
-            ),
-        ),
-        RenderedMediaKind::Audio => (
-            String::new(),
-            palette.success.strong.color,
-            directive_background(
-                palette.success.weak.color.scale_alpha(0.08),
-                palette.success.strong.color.scale_alpha(0.18),
-            ),
-        ),
-        RenderedMediaKind::Video => (
-            String::from("视频生成结果"),
-            palette.warning.strong.color,
-            directive_background(
-                palette.warning.weak.color.scale_alpha(0.08),
-                palette.warning.strong.color.scale_alpha(0.18),
-            ),
-        ),
-        RenderedMediaKind::Pdf => (
-            String::from("文档输出结果"),
-            palette.secondary.strong.color,
-            directive_background(
-                palette.secondary.weak.color.scale_alpha(0.08),
-                palette.secondary.strong.color.scale_alpha(0.18),
-            ),
-        ),
-    };
     let action_link_target = format!("vulcan-agent-view://generated-media/{local_path}");
     let action = match kind {
         RenderedMediaKind::Image => RenderedTranscriptLinkAction::OpenImagePreview {
@@ -610,25 +628,21 @@ fn render_generated_media_directive_card(
 
 /// Resolves the rendered media kind declared by one generated-media directive attribute map.
 /// 解析某个生成媒体指令属性映射声明的渲染媒体种类。
-fn generated_media_kind_from_attributes(
+pub(super) fn generated_media_kind_from_attributes(
     attributes: &crate::AgentViewAttributes,
 ) -> Option<RenderedMediaKind> {
-    match attributes
-        .get("generated-media-kind")
-        .map(|value| value.trim().to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("image") => Some(RenderedMediaKind::Image),
-        Some("audio") => Some(RenderedMediaKind::Audio),
-        Some("video") => Some(RenderedMediaKind::Video),
-        Some("pdf") | Some("document") => Some(RenderedMediaKind::Pdf),
+    match AgentViewToolPresentationKind::resolve_from_attributes(attributes) {
+        AgentViewToolPresentationKind::GeneratedImage => Some(RenderedMediaKind::Image),
+        AgentViewToolPresentationKind::GeneratedAudio => Some(RenderedMediaKind::Audio),
+        AgentViewToolPresentationKind::GeneratedVideo => Some(RenderedMediaKind::Video),
+        AgentViewToolPresentationKind::GeneratedDocument => Some(RenderedMediaKind::Pdf),
         _ => None,
     }
 }
 
 /// Reads the intrinsic width-height ratio of one local raster image file when the file is present and decodable.
 /// 当本地光栅图片文件存在且可解码时，读取其原始宽高比。
-fn local_image_aspect_ratio(local_path: &str) -> Option<f32> {
+pub(super) fn local_image_aspect_ratio(local_path: &str) -> Option<f32> {
     if !Path::new(local_path).is_file() {
         return None;
     }
@@ -1437,7 +1451,7 @@ mod tests {
     use crate::iced::builder::RenderedTranscriptBuilder;
     use crate::iced::scene::{RenderedMediaKind, RenderedTranscriptNode};
     use crate::iced_theme as theme;
-    use crate::{AgentViewAttributes, AgentViewDirectiveBlock};
+    use crate::{AgentViewAttributes, AgentViewDirectiveBlock, AgentViewToolPresentationKind};
     use iced::{Theme, color};
 
     /// Verifies that one running tool call renders its summary with multiple gradient colors so the in-flight state looks visually active.
@@ -1498,11 +1512,7 @@ mod tests {
             String::from("title"),
             String::from("调用 image_generation 工具"),
         );
-        attributes.insert(
-            String::from("tool-visual-kind"),
-            String::from("generated-media"),
-        );
-        attributes.insert(String::from("generated-media-kind"), String::from("audio"));
+        AgentViewToolPresentationKind::GeneratedAudio.write_to_attributes(&mut attributes);
         attributes.insert(
             String::from("generated-media-file-name"),
             String::from("demo.mp3"),
@@ -1535,5 +1545,45 @@ mod tests {
         assert_eq!(node.kind, RenderedMediaKind::Audio);
         assert!(!node.show_caption);
         assert!(node.is_active);
+    }
+
+    /// Verifies that legacy string-based generated-media attributes still route into the typed generated-audio renderer after the refactor.
+    /// 验证旧版基于字符串的 generated-media 属性在重构后仍能路由到强类型音频生成渲染器。
+    #[test]
+    fn generated_media_tool_card_keeps_legacy_attribute_compatibility() {
+        let mut builder = RenderedTranscriptBuilder::new(color!(0x4477AA), color!(0xE8EEF7));
+        let mut attributes = AgentViewAttributes::new();
+        attributes.insert(
+            String::from("title"),
+            String::from("调用 image_generation 工具"),
+        );
+        attributes.insert(
+            String::from("tool-visual-kind"),
+            String::from("generated-media"),
+        );
+        attributes.insert(String::from("generated-media-kind"), String::from("audio"));
+        attributes.insert(
+            String::from("generated-media-file-name"),
+            String::from("legacy.mp3"),
+        );
+        attributes.insert(
+            String::from("generated-media-local-path"),
+            String::from("D:/legacy.mp3"),
+        );
+        attributes.insert(String::from("generated-media-count"), String::from("1"));
+        let block = AgentViewDirectiveBlock::tool_call("{}", false, attributes);
+
+        render_directive_block(
+            &mut builder,
+            &block,
+            theme::markdown_settings(&Theme::Dark),
+            &Theme::Dark,
+        );
+
+        let Some(RenderedTranscriptNode::MediaCard(node)) = builder.nodes.get(1) else {
+            panic!("expected legacy media card after the tool summary row");
+        };
+        assert_eq!(node.kind, RenderedMediaKind::Audio);
+        assert_eq!(node.local_path, "D:/legacy.mp3");
     }
 }

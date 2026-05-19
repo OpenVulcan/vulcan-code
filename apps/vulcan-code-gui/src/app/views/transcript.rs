@@ -3,27 +3,8 @@
 
 use super::super::helpers::*;
 use super::*;
-use iced::widget::{column, lazy};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
-/// Dependency key used by lazy block-level transcript widgets in the main session transcript.
-/// 主会话转录中块级惰性转录组件使用的依赖键。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SessionTranscriptBlockLazyDependency {
-    /// Stable block identity that does not change just because a Markdown message is still streaming.
-    /// 稳定区块身份，不会仅因 Markdown 消息仍在流式输出而变化。
-    block_key: String,
-    /// Render-affecting signature of the prepared inline block snapshot.
-    /// 已准备内联区块快照的渲染相关签名。
-    block_signature: u64,
-    /// Visible theme signature used to rebuild cached block widgets after palette changes.
-    /// 可见主题签名，用于在调色板变化后重建缓存区块组件。
-    theme_signature: u64,
-    /// Host command revision targeting this block surface, or zero when no command applies.
-    /// 指向当前区块表面的宿主命令修订号；没有适用命令时为零。
-    command_revision: u64,
-}
+use iced::widget::column;
+use std::rc::Rc;
 
 /// Resolves one bounded image preview size that preserves the intrinsic aspect ratio while capping the preview height.
 /// 解析一个保留原始宽高比且限制最大高度的图片预览尺寸。
@@ -94,7 +75,7 @@ fn map_selectable_transcript_interaction(
 
 #[cfg(test)]
 mod tests {
-    use super::session_transcript_inline_render_block;
+    use super::session_transcript_prepare_inline_render_document;
 
     /// Verifies inline transcript tool blocks keep only summary metadata so heavy tool output never enters the main render tree.
     /// 验证内联转录工具区块只保留摘要元数据，确保重型工具输出永远不会进入主渲染树。
@@ -113,8 +94,11 @@ mod tests {
             ),
         );
 
-        let prepared_block = session_transcript_inline_render_block(&block);
-        let vulcan_agent_view::AgentViewBlock::Directive(prepared_directive) = prepared_block
+        let mut document = vulcan_agent_view::AgentViewDocument::new();
+        document.blocks.push(block);
+        session_transcript_prepare_inline_render_document(&mut document);
+
+        let vulcan_agent_view::AgentViewBlock::Directive(prepared_directive) = &document.blocks[0]
         else {
             panic!("tool block should stay a directive");
         };
@@ -126,6 +110,38 @@ mod tests {
             Some(&String::from("message-1"))
         );
     }
+
+    /// Verifies the main-surface inline document projection still keeps one unified selectable transcript sequence across neighboring blocks after tool bodies are stripped.
+    /// 验证主表面的内联文档投影在剥离工具正文后，仍会在相邻区块之间保留一份统一连续的可选择转录序列。
+    #[test]
+    fn inline_render_document_preserves_cross_block_selectable_sequence() {
+        let mut document = vulcan_agent_view::AgentViewDocument::new();
+        document.push_markdown("前置说明");
+        let mut attributes = vulcan_agent_view::AgentViewAttributes::new();
+        attributes.insert(String::from("title"), String::from("读取配置文件"));
+        document
+            .blocks
+            .push(vulcan_agent_view::AgentViewBlock::Directive(
+                vulcan_agent_view::AgentViewDirectiveBlock::new(
+                    vulcan_agent_view::AgentViewDirectiveKind::ToolResult,
+                    attributes,
+                    "大型工具正文",
+                    ":::tool-result title=\"读取配置文件\"\n大型工具正文\n:::",
+                    false,
+                ),
+            ));
+        document.push_markdown("后置说明");
+
+        session_transcript_prepare_inline_render_document(&mut document);
+        let selectable_document =
+            vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
+        let selected_text = selectable_document.selected_text(selectable_document.select_all());
+
+        assert!(selected_text.contains("前置说明"));
+        assert!(selected_text.contains("[工具结果] 读取配置文件"));
+        assert!(selected_text.contains("后置说明"));
+        assert!(!selected_text.contains("大型工具正文"));
+    }
 }
 
 /// Builds the stable surface identifier used by a selectable session transcript widget.
@@ -134,130 +150,42 @@ fn session_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptS
     SelectableTranscriptSurfaceId(format!("session:{session_id}"))
 }
 
-/// Builds the stable surface identifier used by one block-scoped selectable session transcript widget.
-/// 构建单个块级可选择会话转录组件使用的稳定表面标识。
-fn session_transcript_block_surface_id(
-    session_id: SessionId,
-    block_key: &str,
-) -> SelectableTranscriptSurfaceId {
-    SelectableTranscriptSurfaceId(format!("session:{session_id}:block:{block_key}"))
-}
-
-/// Builds the stable cache key for one block-scoped transcript widget, preferring durable message identity over changing Markdown text.
-/// 为单个块级转录组件构建稳定缓存键，优先使用持久消息身份而不是不断变化的 Markdown 文本。
-fn session_transcript_block_cache_key(
-    session_id: SessionId,
-    block_index: usize,
-    block: &vulcan_agent_view::AgentViewBlock,
-) -> String {
-    if let Some(message_id) = block
-        .attributes()
-        .get("message-id")
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return format!("session-{session_id}-message-{message_id}-block-{block_index}");
-    }
-
-    agent_view_block_id(session_id, block_index, block)
-}
-
-/// Builds one render-safe block snapshot for the main inline transcript, keeping heavy tool bodies out of the live tree.
-/// 为主转录内联界面构建一份渲染安全的区块快照，确保重型工具正文不会进入实时组件树。
-fn session_transcript_inline_render_block(
-    block: &vulcan_agent_view::AgentViewBlock,
-) -> vulcan_agent_view::AgentViewBlock {
+/// Rewrites one main-surface transcript block in place so heavy tool bodies stay out of the live render tree while the block keeps its identity and metadata.
+/// 原地改写单个主表面转录区块，使重型工具正文不会进入实时渲染树，同时保留区块身份与元数据。
+#[cfg(test)]
+fn session_transcript_prepare_inline_render_block(block: &mut vulcan_agent_view::AgentViewBlock) {
     let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
-        return block.clone();
+        return;
     };
     if !matches!(
         directive.kind,
         vulcan_agent_view::AgentViewDirectiveKind::ToolCall
             | vulcan_agent_view::AgentViewDirectiveKind::ToolResult
     ) {
-        return block.clone();
+        return;
     }
 
     let raw_source =
         vulcan_agent_view::render_directive_source(&directive.kind, &directive.attributes, "");
-    vulcan_agent_view::AgentViewBlock::Directive(vulcan_agent_view::AgentViewDirectiveBlock::new(
-        directive.kind.clone(),
-        directive.attributes.clone(),
-        "",
-        raw_source,
-        directive.collapsed_by_default,
-    ))
+    *block = vulcan_agent_view::AgentViewBlock::Directive(
+        vulcan_agent_view::AgentViewDirectiveBlock::new(
+            directive.kind.clone(),
+            directive.attributes.clone(),
+            "",
+            raw_source,
+            directive.collapsed_by_default,
+        ),
+    );
 }
 
-/// Computes one lightweight diagnostic signature for a block snapshot without pulling hidden tool bodies into the hash path.
-/// 计算单个区块快照的轻量诊断签名，同时避免隐藏工具正文进入哈希路径。
-fn session_transcript_block_debug_signature(block: &vulcan_agent_view::AgentViewBlock) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    match block {
-        vulcan_agent_view::AgentViewBlock::Directive(directive)
-            if matches!(
-                directive.kind,
-                vulcan_agent_view::AgentViewDirectiveKind::ToolCall
-                    | vulcan_agent_view::AgentViewDirectiveKind::ToolResult
-            ) =>
-        {
-            "tool-summary".hash(&mut hasher);
-            directive.kind.as_label().hash(&mut hasher);
-            for (key, value) in &directive.attributes {
-                key.hash(&mut hasher);
-                value.hash(&mut hasher);
-            }
-        }
-        _ => {
-            block.raw_source().hash(&mut hasher);
-            for (key, value) in block.attributes() {
-                key.hash(&mut hasher);
-                value.hash(&mut hasher);
-            }
-        }
-    }
-    hasher.finish()
-}
-
-/// Computes the visible theme signature used by block-level lazy transcript widgets.
-/// 计算块级惰性转录组件使用的可见主题签名。
-fn session_transcript_theme_signature(app_theme: &Theme) -> u64 {
-    let palette = app_theme.palette();
-    let mut hasher = DefaultHasher::new();
-
-    hash_session_transcript_color(palette.background.base.color, &mut hasher);
-    hash_session_transcript_color(palette.background.base.text, &mut hasher);
-    hash_session_transcript_color(palette.primary.weak.color, &mut hasher);
-    hash_session_transcript_color(palette.primary.strong.color, &mut hasher);
-    hash_session_transcript_color(palette.secondary.strong.color, &mut hasher);
-    hash_session_transcript_color(palette.success.strong.color, &mut hasher);
-    hash_session_transcript_color(palette.warning.strong.color, &mut hasher);
-    hash_session_transcript_color(palette.danger.strong.color, &mut hasher);
-
-    hasher.finish()
-}
-
-/// Hashes one transcript theme color into the provided hasher using exact floating-point bit patterns.
-/// 使用精确浮点位模式将一个转录主题颜色写入给定哈希器。
-fn hash_session_transcript_color(color: iced::Color, hasher: &mut DefaultHasher) {
-    color.r.to_bits().hash(hasher);
-    color.g.to_bits().hash(hasher);
-    color.b.to_bits().hash(hasher);
-    color.a.to_bits().hash(hasher);
-}
-
-/// Returns the command revision that targets one transcript block surface, if any.
-/// 返回指向单个转录区块表面的命令修订号；没有命中时返回零。
-fn session_transcript_block_command_revision(
-    surface_id: &SelectableTranscriptSurfaceId,
-    command: Option<&SelectableTranscriptCommand>,
-) -> u64 {
-    match command {
-        Some(SelectableTranscriptCommand::SelectAll {
-            surface_id: target_surface_id,
-            revision,
-        }) if target_surface_id == surface_id => *revision,
-        _ => 0,
+/// Rewrites the whole main-surface transcript document in place so heavy tool bodies remain modal-only while cross-block selection still uses one unified document.
+/// 原地改写整份主表面转录文档，使重型工具正文仍然只在弹层中可见，同时让跨块选择继续共享一份统一文档。
+#[cfg(test)]
+fn session_transcript_prepare_inline_render_document(
+    document: &mut vulcan_agent_view::AgentViewDocument,
+) {
+    for block in &mut document.blocks {
+        session_transcript_prepare_inline_render_block(block);
     }
 }
 
@@ -344,7 +272,7 @@ impl VulcanWorkbench {
 
         let base_surface: Element<'_, Message> =
             if self.agent_transcript_surface_mode == AgentTranscriptSurfaceMode::DetailCards {
-                self.view_main_canvas_segmented_transcript_stream(session_id)
+                self.view_main_canvas_unified_transcript_stream(session_id)
             } else {
                 self.view_selected_session_agent_document_surface(session_id)
             };
@@ -634,32 +562,41 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Builds the unified rendered transcript stream used for per-block inspection during the transition period.
-    /// 构建过渡期用于逐块检查的统一渲染转录流。
-    pub(super) fn view_main_canvas_segmented_transcript_stream(
+    /// Builds the main unified transcript stream using one shared selectable surface so cross-block selection and copy stay continuous while block-level caching remains internal to agent-view.
+    /// 使用一块共享可选择表面构建主统一转录流，使跨块选择与复制保持连续，同时让区块级缓存继续留在 agent-view 内部。
+    pub(super) fn view_main_canvas_unified_transcript_stream(
         &self,
         session_id: SessionId,
     ) -> Element<'_, Message> {
-        let Some(document) = self.session_agent_view_documents.get(&session_id) else {
+        let Some(document_cache) = self.session_inline_agent_view_documents.get(&session_id) else {
             return container(text("当前没有可渲染的统一输出块。").size(14))
                 .padding(14)
                 .height(Fill)
                 .into();
         };
-        let mut content_column = column![self.view_session_history_load_control(session_id)]
-            .spacing(10)
-            .width(Fill);
-
-        for (block_index, block) in document.blocks.iter().enumerate() {
-            content_column = content_column.push(self.view_session_agent_view_block(
+        let transcript_body = view_selectable_rendered_transcript_shared_with_context_menu::<Message>(
+            Rc::clone(&document_cache.document),
+            self.app_theme.clone(),
+            session_transcript_surface_id(session_id),
+            self.selectable_transcript_command.clone(),
+            move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
                 session_id,
-                block_index,
-                block,
-            ));
-        }
-
-        content_column =
-            content_column.push(space::vertical().height(self.transcript_bottom_spacer_height()));
+                request,
+            },
+            |interaction| {
+                map_selectable_transcript_interaction(
+                    interaction,
+                    Message::OpenSelectedSessionThinkingModal,
+                    Message::OpenSelectedSessionToolModal,
+                )
+            },
+        );
+        let content_column = column![
+            self.view_session_history_load_control(session_id),
+            transcript_body,
+            space::vertical().height(self.transcript_bottom_spacer_height()),
+        ]
+        .width(Fill);
 
         container(
             scrollable(content_column)
@@ -672,56 +609,6 @@ impl VulcanWorkbench {
         )
         .padding(14)
         .height(Fill)
-        .into()
-    }
-
-    /// Builds one independently cached transcript block widget for the segmented main transcript surface.
-    /// 为分块主转录表面构建一个拥有独立缓存的转录块组件。
-    fn view_session_agent_view_block<'a>(
-        &'a self,
-        session_id: SessionId,
-        block_index: usize,
-        block: &'a vulcan_agent_view::AgentViewBlock,
-    ) -> Element<'a, Message> {
-        let block_id = agent_view_block_id(session_id, block_index, block);
-        let block_key = session_transcript_block_cache_key(session_id, block_index, block);
-        let surface_id = session_transcript_block_surface_id(session_id, &block_key);
-        let mut decorated_block = session_transcript_inline_render_block(block);
-        self.decorate_agent_view_block_for_render(session_id, &block_id, &mut decorated_block);
-        let dependency = SessionTranscriptBlockLazyDependency {
-            block_key,
-            block_signature: session_transcript_block_debug_signature(&decorated_block),
-            theme_signature: session_transcript_theme_signature(&self.app_theme),
-            command_revision: session_transcript_block_command_revision(
-                &surface_id,
-                self.selectable_transcript_command.as_ref(),
-            ),
-        };
-        let app_theme = self.app_theme.clone();
-        let selectable_command = self.selectable_transcript_command.clone();
-
-        lazy(dependency, move |_| {
-            let mut block_document = vulcan_agent_view::AgentViewDocument::new();
-            block_document.blocks.push(decorated_block.clone());
-
-            view_selectable_rendered_transcript_owned_with_context_menu::<Message>(
-                block_document,
-                app_theme.clone(),
-                surface_id.clone(),
-                selectable_command.clone(),
-                move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
-                    session_id,
-                    request,
-                },
-                |interaction| {
-                    map_selectable_transcript_interaction(
-                        interaction,
-                        Message::OpenSelectedSessionThinkingModal,
-                        Message::OpenSelectedSessionToolModal,
-                    )
-                },
-            )
-        })
         .into()
     }
 

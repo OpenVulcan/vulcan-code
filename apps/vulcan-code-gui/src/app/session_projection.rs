@@ -3,11 +3,58 @@
 
 use super::*;
 
+/// Rewrites one inline transcript block in place so tool-card bodies stay modal-only while the visible main transcript keeps the same block identities and metadata.
+/// 原地改写单个内联转录区块，使工具卡正文只保留给弹层使用，同时让主转录继续沿用相同的区块身份与元数据。
+fn prepare_session_inline_render_block(block: &mut vulcan_agent_view::AgentViewBlock) {
+    let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
+        return;
+    };
+    if !matches!(
+        directive.kind,
+        vulcan_agent_view::AgentViewDirectiveKind::ToolCall
+            | vulcan_agent_view::AgentViewDirectiveKind::ToolResult
+    ) {
+        return;
+    }
+
+    let raw_source =
+        vulcan_agent_view::render_directive_source(&directive.kind, &directive.attributes, "");
+    *block = vulcan_agent_view::AgentViewBlock::Directive(
+        vulcan_agent_view::AgentViewDirectiveBlock::new(
+            directive.kind.clone(),
+            directive.attributes.clone(),
+            "",
+            raw_source,
+            directive.collapsed_by_default,
+        ),
+    );
+}
+
+/// Decorates and compacts the inline transcript suffix starting at the provided index so streaming updates refresh only the changed tail plus any suffix blocks whose stable GUI identifiers depend on block positions.
+/// 从给定索引开始装饰并压缩内联转录后缀，使流式更新只刷新变化尾部以及稳定图形界面标识依赖区块位置的后缀区块。
+fn decorate_and_prepare_inline_document_suffix(
+    workbench: &VulcanWorkbench,
+    session_id: SessionId,
+    document: &mut vulcan_agent_view::AgentViewDocument,
+    start_index: usize,
+) {
+    for block_index in start_index..document.blocks.len() {
+        let block = &mut document.blocks[block_index];
+        let block_id = agent_view_block_id(session_id, block_index, block);
+        workbench.decorate_agent_view_block_for_render(session_id, &block_id, block);
+        prepare_session_inline_render_block(block);
+    }
+}
+
 impl VulcanWorkbench {
     /// Returns whether one session already owns a complete cached transcript projection for the currently active transcript surface mode.
     /// 返回某个会话当前是否已经拥有与活动转录表面模式匹配的一整套缓存转录投影。
     pub(super) fn session_agent_view_projection_ready(&self, session_id: SessionId) -> bool {
-        if !self.session_agent_view_documents.contains_key(&session_id) {
+        if !self.session_agent_view_documents.contains_key(&session_id)
+            || !self
+                .session_inline_agent_view_documents
+                .contains_key(&session_id)
+        {
             return false;
         }
 
@@ -125,6 +172,61 @@ impl VulcanWorkbench {
             .remove(&session_id);
     }
 
+    /// Clears the cached prepared inline transcript snapshot for one session when the main rendered surface can no longer reuse it.
+    /// 当主渲染表面不再能复用某会话的内联转录快照时，清空其缓存。
+    pub(super) fn clear_session_inline_agent_view_document_cache(&mut self, session_id: SessionId) {
+        self.session_inline_agent_view_documents.remove(&session_id);
+    }
+
+    /// Rebuilds the prepared inline transcript snapshot reused by the main rendered surface so normal GUI view passes do not reclone and recompact the entire structural document.
+    /// 重建主渲染表面复用的内联转录快照，避免普通界面刷新时重新克隆并重新压缩整份结构化文档。
+    pub(super) fn refresh_session_inline_agent_view_document_cache(
+        &mut self,
+        session_id: SessionId,
+    ) {
+        let Some(mut document) = self.session_agent_view_documents.get(&session_id).cloned() else {
+            self.clear_session_inline_agent_view_document_cache(session_id);
+            return;
+        };
+
+        decorate_and_prepare_inline_document_suffix(self, session_id, &mut document, 0);
+        self.session_inline_agent_view_documents.insert(
+            session_id,
+            SessionInlineAgentViewDocumentCache {
+                document: Rc::new(document),
+            },
+        );
+    }
+
+    /// Refreshes only the cached inline transcript range owned by one changed message, then reapplies lightweight runtime decorations to the remaining suffix whose block positions may have shifted.
+    /// 仅刷新单条变更消息拥有的缓存内联转录范围，并对区块位置可能发生偏移的剩余后缀重新附着轻量运行时装饰。
+    pub(super) fn refresh_session_inline_agent_view_message_blocks(
+        &mut self,
+        session_id: SessionId,
+        start_index: usize,
+        replaced_block_count: usize,
+        replacement_blocks: &[vulcan_agent_view::AgentViewBlock],
+    ) {
+        let Some(mut cache) = self.session_inline_agent_view_documents.remove(&session_id) else {
+            self.refresh_session_inline_agent_view_document_cache(session_id);
+            return;
+        };
+
+        let document = Rc::make_mut(&mut cache.document);
+        let end_index = start_index.saturating_add(replaced_block_count);
+        if end_index > document.blocks.len() {
+            self.refresh_session_inline_agent_view_document_cache(session_id);
+            return;
+        }
+
+        document
+            .blocks
+            .splice(start_index..end_index, replacement_blocks.iter().cloned());
+        decorate_and_prepare_inline_document_suffix(self, session_id, document, start_index);
+        self.session_inline_agent_view_documents
+            .insert(session_id, cache);
+    }
+
     /// Stores one session-scoped last-provider-request preview buffer for the dedicated request tab.
     /// 为专用请求页签保存一份按会话归属的最后一次 Provider 请求预览缓冲区。
     pub(super) fn replace_session_last_api_request_preview(
@@ -149,6 +251,7 @@ impl VulcanWorkbench {
         if snapshot.document.blocks.is_empty() {
             self.clear_session_agent_view_text_buffers(session_id);
             self.session_agent_view_documents.remove(&session_id);
+            self.clear_session_inline_agent_view_document_cache(session_id);
             self.session_agent_view_block_collapsed.remove(&session_id);
             self.session_agent_view_follow_tail.remove(&session_id);
             self.refresh_active_modal_payloads_for_session(session_id);
@@ -158,6 +261,7 @@ impl VulcanWorkbench {
         self.sync_session_agent_view_block_collapsed_state(session_id, &snapshot.document);
         self.session_agent_view_documents
             .insert(session_id, snapshot.document);
+        self.refresh_session_inline_agent_view_document_cache(session_id);
 
         if self.should_materialize_session_agent_view_text_buffers(session_id) {
             self.session_agent_view_buffers.insert(
@@ -191,6 +295,7 @@ impl VulcanWorkbench {
         if document.blocks.is_empty() {
             self.clear_session_agent_view_text_buffers(session_id);
             self.session_agent_view_documents.remove(&session_id);
+            self.clear_session_inline_agent_view_document_cache(session_id);
             self.session_agent_view_block_collapsed.remove(&session_id);
             self.session_agent_view_follow_tail.remove(&session_id);
             return;
@@ -199,6 +304,7 @@ impl VulcanWorkbench {
         self.sync_session_agent_view_block_collapsed_state(session_id, &document);
         self.session_agent_view_documents
             .insert(session_id, document);
+        self.refresh_session_inline_agent_view_document_cache(session_id);
     }
 
     /// Refreshes only the agent-view blocks owned by one changed transcript message when the current surface can stay structural.
@@ -253,9 +359,17 @@ impl VulcanWorkbench {
             return false;
         }
 
+        let replacement_blocks = replacement_document.blocks;
+        let replaced_block_count = end_index - start_index;
         document
             .blocks
-            .splice(start_index..end_index, replacement_document.blocks);
+            .splice(start_index..end_index, replacement_blocks.clone());
+        self.refresh_session_inline_agent_view_message_blocks(
+            session_id,
+            start_index,
+            replaced_block_count,
+            &replacement_blocks,
+        );
         self.refresh_active_modal_payloads_for_session(session_id);
         true
     }

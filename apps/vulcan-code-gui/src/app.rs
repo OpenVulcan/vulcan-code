@@ -80,6 +80,7 @@ use crate::selectable_transcript::{
     SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
     SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptInteraction,
     SelectableTranscriptSurfaceId, view_selectable_rendered_transcript_owned_with_context_menu,
+    view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,
 };
 use crate::skills::{
@@ -117,6 +118,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vulcan_agent_view::{
@@ -833,6 +835,47 @@ fn merge_tool_display_messages(messages: Vec<SessionMessageEntry>) -> Vec<Sessio
             }
             _ => merged_messages.push(message),
         }
+    }
+
+    merged_messages
+}
+
+/// Merges one freshly projected conversation-state slice back into the already hydrated visible transcript window so older on-demand history rows are preserved instead of disappearing during live updates.
+/// 将一段新鲜投影出的 conversation-state 切片重新合并回已经水合的可见转录窗口，确保按需加载的旧历史行不会在实时更新期间消失。
+fn merge_projected_session_messages_into_existing_window(
+    existing_messages: &[SessionMessageEntry],
+    projected_messages: Vec<SessionMessageEntry>,
+) -> Vec<SessionMessageEntry> {
+    if existing_messages.is_empty() {
+        return projected_messages;
+    }
+    if projected_messages.is_empty() {
+        return existing_messages.to_vec();
+    }
+
+    let projected_by_id = projected_messages
+        .iter()
+        .cloned()
+        .map(|message| (message.id.clone(), message))
+        .collect::<BTreeMap<_, _>>();
+    let mut consumed_projected_ids = BTreeSet::new();
+    let mut merged_messages =
+        Vec::with_capacity(existing_messages.len().max(projected_messages.len()));
+
+    for existing_message in existing_messages {
+        if let Some(projected_message) = projected_by_id.get(&existing_message.id).cloned() {
+            consumed_projected_ids.insert(existing_message.id.clone());
+            merged_messages.push(projected_message);
+        } else {
+            merged_messages.push(existing_message.clone());
+        }
+    }
+
+    for projected_message in projected_messages {
+        if consumed_projected_ids.contains(&projected_message.id) {
+            continue;
+        }
+        merged_messages.push(projected_message);
     }
 
     merged_messages
@@ -2416,6 +2459,9 @@ pub struct VulcanWorkbench {
     /// Unified structured transcript documents keyed by visible session id.
     /// 以可见会话标识为键保存的统一结构化转录文档。
     session_agent_view_documents: BTreeMap<SessionId, vulcan_agent_view::AgentViewDocument>,
+    /// Prepared inline transcript snapshots keyed by visible session id and reused by the main rendered surface so normal GUI view passes do not deep-clone the full structural transcript tree.
+    /// 以可见会话标识为键保存的已准备内联转录快照，供主渲染表面复用，避免普通界面刷新时深拷贝整份结构化转录树。
+    session_inline_agent_view_documents: BTreeMap<SessionId, SessionInlineAgentViewDocumentCache>,
     /// Unified block collapsed states keyed by session id and stable block identifier.
     /// 以会话标识与稳定区块标识为键保存的统一块折叠状态。
     session_agent_view_block_collapsed: BTreeMap<SessionId, BTreeMap<String, bool>>,
@@ -2921,6 +2967,15 @@ struct WorkspaceHistorySearchPanelState {
     /// Optional active transcript highlight target retained after one search result has been resolved into the visible transcript.
     /// 某条搜索结果已经成功解析到可见转录后保留的可选活动高亮目标。
     active_highlight: Option<WorkspaceHistorySearchHighlightTarget>,
+}
+
+/// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
+/// 当某个内联思考区块被显式打开到转录上方时保留的居中弹层状态。
+#[derive(Debug, Clone)]
+struct SessionInlineAgentViewDocumentCache {
+    /// Shared prepared inline transcript document reused by the main session surface without recloning the full block tree on every GUI pass.
+    /// 主会话表面复用的共享内联转录文档快照，避免每次界面刷新都重新深拷贝整棵区块树。
+    document: Rc<vulcan_agent_view::AgentViewDocument>,
 }
 
 /// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
@@ -5839,6 +5894,7 @@ impl VulcanWorkbench {
             session_last_api_request_buffers: BTreeMap::new(),
             session_agent_view_selectable_documents: BTreeMap::new(),
             session_agent_view_documents: BTreeMap::new(),
+            session_inline_agent_view_documents: BTreeMap::new(),
             session_agent_view_block_collapsed: BTreeMap::new(),
             session_agent_view_follow_tail: BTreeMap::new(),
             session_agent_view_viewports: BTreeMap::new(),
@@ -6081,6 +6137,7 @@ impl VulcanWorkbench {
                 self.session_last_api_request_buffers.clear();
                 self.session_agent_view_selectable_documents.clear();
                 self.session_agent_view_documents.clear();
+                self.session_inline_agent_view_documents.clear();
                 self.session_agent_view_block_collapsed.clear();
                 self.session_agent_view_follow_tail.clear();
                 self.session_agent_view_viewports.clear();
@@ -10235,6 +10292,7 @@ impl VulcanWorkbench {
                     message_id: pending_navigation.message_id.clone(),
                 });
             self.workspace_history_search.pending_navigation = None;
+            self.refresh_session_inline_agent_view_document_cache(session_id);
             self.status_message = format!(
                 "已定位并高亮搜索命中：轮次 {} · 会话 {}。",
                 pending_navigation.turn_index,
@@ -10273,6 +10331,7 @@ impl VulcanWorkbench {
         {
             self.workspace_history_search.active_highlight = None;
             self.workspace_history_search.pending_navigation = None;
+            self.refresh_session_inline_agent_view_document_cache(session_id);
             self.status_message = String::from("已打开目标会话，但当前窗口中未恢复出该搜索命中。");
             return Task::none();
         }
@@ -10284,6 +10343,7 @@ impl VulcanWorkbench {
 
         self.workspace_history_search.active_highlight = None;
         self.workspace_history_search.pending_navigation = None;
+        self.refresh_session_inline_agent_view_document_cache(session_id);
         self.status_message = String::from("已加载完可见历史，但仍未定位到该搜索命中。");
         Task::none()
     }
@@ -11542,21 +11602,36 @@ impl VulcanWorkbench {
             .archived_sessions
             .iter()
             .any(|session| session.id == session_id);
+        let existing_messages = if session_is_archived {
+            self.archived_session_messages
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.session_messages
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let merged_messages = merge_projected_session_messages_into_existing_window(
+            &existing_messages,
+            projected_messages,
+        );
 
         if session_is_archived {
             self.session_messages.remove(&session_id);
-            if projected_messages.is_empty() {
+            if merged_messages.is_empty() {
                 self.archived_session_messages.remove(&session_id);
             } else {
                 self.archived_session_messages
-                    .insert(session_id, projected_messages);
+                    .insert(session_id, merged_messages);
             }
         } else {
             self.archived_session_messages.remove(&session_id);
-            if projected_messages.is_empty() {
+            if merged_messages.is_empty() {
                 self.session_messages.remove(&session_id);
             } else {
-                self.session_messages.insert(session_id, projected_messages);
+                self.session_messages.insert(session_id, merged_messages);
             }
         }
         self.rebuild_subagent_task_cache_for_session(session_id);
@@ -12462,6 +12537,7 @@ impl VulcanWorkbench {
         self.session_agent_view_selectable_documents
             .remove(&session_id);
         self.session_agent_view_documents.remove(&session_id);
+        self.session_inline_agent_view_documents.remove(&session_id);
         self.session_agent_view_block_collapsed.remove(&session_id);
         self.close_thinking_modal_for_session(session_id);
         self.close_tool_modal_for_session(session_id);
@@ -12541,6 +12617,7 @@ impl VulcanWorkbench {
         self.session_agent_view_raw_buffers.clear();
         self.session_agent_view_selectable_documents.clear();
         self.session_agent_view_documents.clear();
+        self.session_inline_agent_view_documents.clear();
         self.session_agent_view_block_collapsed.clear();
         self.session_agent_view_follow_tail.clear();
         self.session_agent_view_viewports.clear();
@@ -12655,6 +12732,7 @@ impl VulcanWorkbench {
         self.session_agent_view_raw_buffers.remove(&session_id);
         self.session_last_api_request_buffers.remove(&session_id);
         self.session_agent_view_documents.remove(&session_id);
+        self.session_inline_agent_view_documents.remove(&session_id);
         self.session_agent_view_block_collapsed.remove(&session_id);
         self.session_agent_view_follow_tail.remove(&session_id);
         self.session_agent_view_viewports.remove(&session_id);
@@ -13757,8 +13835,9 @@ mod tests {
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
         compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
         composer_visible_line_count, generated_attachments_from_tool_metadata,
-        merge_tool_display_messages, pending_prompt_dispatch_index,
-        prune_session_messages_to_limit, task_session_payload_from_tool_metadata,
+        merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
+        pending_prompt_dispatch_index, prune_session_messages_to_limit,
+        task_session_payload_from_tool_metadata,
     };
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
@@ -14056,6 +14135,74 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("running")
         );
+    }
+
+    /// Verifies syncing visible transcript rows from the canonical conversation state preserves already hydrated older history rows that are not part of the live runtime tail.
+    /// 验证从规范 conversation state 同步可见转录行时，会保留已水合但不属于当前运行时尾部的更早历史行。
+    #[test]
+    fn merge_projected_session_messages_preserves_hydrated_history_prefix() {
+        let existing_messages = vec![
+            SessionMessageEntry {
+                id: String::from("older-tool-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::from("调用历史工具"),
+                body: String::new(),
+                metadata: Some(json!({
+                    "tool_call_id": "older-call-1",
+                    "tool_display_state": "completed",
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("assistant-tail-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("旧尾部"),
+                metadata: None,
+                created_at: String::from("2"),
+            },
+        ];
+        let projected_messages = vec![
+            SessionMessageEntry {
+                id: String::from("assistant-tail-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("新尾部"),
+                metadata: None,
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("assistant-tail-2"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("最新输出"),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+        ];
+
+        let merged = merge_projected_session_messages_into_existing_window(
+            &existing_messages,
+            projected_messages,
+        );
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["older-tool-1", "assistant-tail-1", "assistant-tail-2"]
+        );
+        assert_eq!(merged[1].body, "新尾部");
+        assert_eq!(merged[2].body, "最新输出");
     }
 
     /// Verifies that main-transcript tool projections drop heavy bodies and retain only card metadata.
