@@ -207,7 +207,7 @@ fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
 #[test]
 fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
     let gui_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let bridge_path = gui_src_root.join("vulcan_tools_bridge.rs");
+    let bridge_path = gui_src_root.join("tooling").join("bridge.rs");
     let preparation_path = gui_src_root
         .join("agent_runtime")
         .join("execution_preparation.rs");
@@ -216,7 +216,7 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
         .join("runtime_stream_bootstrap_resources.rs");
 
     let bridge_source =
-        fs::read_to_string(&bridge_path).expect("vulcan_tools_bridge.rs should remain readable");
+        fs::read_to_string(&bridge_path).expect("tooling/bridge.rs should remain readable");
     let preparation_source = fs::read_to_string(&preparation_path)
         .expect("execution_preparation.rs should remain readable");
     let bootstrap_resources_source = fs::read_to_string(&bootstrap_resources_path)
@@ -224,17 +224,17 @@ fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
 
     assert!(
         !bridge_source.contains("McpRuntimeHandle"),
-        "vulcan_tools_bridge.rs must not reintroduce direct McpRuntimeHandle usage: {}",
+        "tooling/bridge.rs must not reintroduce direct McpRuntimeHandle usage: {}",
         bridge_path.display()
     );
     assert!(
         !bridge_source.contains("McpRuntimeToolView"),
-        "vulcan_tools_bridge.rs must not reintroduce legacy McpRuntimeToolView usage: {}",
+        "tooling/bridge.rs must not reintroduce legacy McpRuntimeToolView usage: {}",
         bridge_path.display()
     );
     assert!(
         bridge_source.contains("McpRuntimeToolBinding"),
-        "vulcan_tools_bridge.rs should continue consuming McpRuntimeToolBinding: {}",
+        "tooling/bridge.rs should continue consuming McpRuntimeToolBinding: {}",
         bridge_path.display()
     );
     assert!(
@@ -322,51 +322,52 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
 #[test]
 fn app_level_workbench_paths_do_not_manually_construct_mcp_runtime_access() {
     let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let app_path = src_root.join("app.rs");
-    let app_configuration_path = src_root.join("app").join("configuration.rs");
+    let app_path = src_root.join("app_shell").join("mod.rs");
+    let app_configuration_path = src_root.join("app_shell").join("configuration.rs");
 
-    let app_source = fs::read_to_string(&app_path).expect("app.rs should remain readable");
+    let app_source =
+        fs::read_to_string(&app_path).expect("app_shell/mod.rs should remain readable");
     let app_configuration_source = fs::read_to_string(&app_configuration_path)
-        .expect("app/configuration.rs should remain readable");
+        .expect("app_shell/configuration.rs should remain readable");
 
     assert!(
         app_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
-        "app.rs should retain MCP runtime state through the stable McpRuntimeAccess field: {}",
+        "app_shell/mod.rs should retain MCP runtime state through the stable McpRuntimeAccess field: {}",
         app_path.display()
     );
     assert!(
         !app_source.contains("mcp_runtime: Option<McpRuntimeHandle>"),
-        "app.rs must not keep the old raw McpRuntimeHandle field anymore: {}",
+        "app_shell/mod.rs must not keep the old raw McpRuntimeHandle field anymore: {}",
         app_path.display()
     );
     assert!(
         !app_source.contains("McpRuntimeHandle"),
-        "app.rs must not reintroduce raw McpRuntimeHandle knowledge at the workbench layer: {}",
+        "app_shell/mod.rs must not reintroduce raw McpRuntimeHandle knowledge at the workbench layer: {}",
         app_path.display()
     );
     assert!(
         app_source.contains("RuntimeFoundation::build_from_optional_mcp_access"),
-        "app.rs should build runtime foundations through the MCP access helper: {}",
+        "app_shell/mod.rs should build runtime foundations through the MCP access helper: {}",
         app_path.display()
     );
     assert!(
         !app_source.contains("from_configuration("),
-        "app.rs must not reintroduce the wide MCP from_configuration constructor path: {}",
+        "app_shell/mod.rs must not reintroduce the wide MCP from_configuration constructor path: {}",
         app_path.display()
     );
     assert!(
         !app_source.contains("McpRuntimeAccess::from_configuration"),
-        "app.rs must not manually assemble McpRuntimeAccess anymore: {}",
+        "app_shell/mod.rs must not manually assemble McpRuntimeAccess anymore: {}",
         app_path.display()
     );
     assert!(
         app_configuration_source.contains("RuntimeFoundation::build_from_optional_mcp_access"),
-        "app/configuration.rs should rebuild runtime foundations through the MCP access helper: {}",
+        "app_shell/configuration.rs should rebuild runtime foundations through the MCP access helper: {}",
         app_configuration_path.display()
     );
     assert!(
         !app_configuration_source.contains("McpRuntimeAccess::from_configuration"),
-        "app/configuration.rs must not manually assemble McpRuntimeAccess anymore: {}",
+        "app_shell/configuration.rs must not manually assemble McpRuntimeAccess anymore: {}",
         app_configuration_path.display()
     );
 }

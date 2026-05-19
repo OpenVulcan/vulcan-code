@@ -1,23 +1,41 @@
 //! Selectable rendered transcript widget used by the primary transcript surface.
 //! 主转录渲染表面使用的可选择渲染转录组件。
 
+#[path = "iced/render/builder.rs"]
 mod builder;
+#[path = "iced/interaction/context_menu.rs"]
 mod context_menu;
+#[path = "iced/markdown/directive_render/mod.rs"]
 mod directive_render;
+#[path = "iced/render/document_model.rs"]
 mod document_model;
+#[path = "iced/interaction/event_routing.rs"]
 mod event_routing;
+#[path = "iced/interaction/interaction.rs"]
 mod interaction;
+#[path = "iced/render/layout_engine.rs"]
 mod layout_engine;
+#[path = "iced/markdown/markdown_render.rs"]
 mod markdown_render;
+#[path = "iced/markdown/markdown_source.rs"]
 mod markdown_source;
+#[path = "iced/render/paint.rs"]
 mod paint;
+#[path = "iced/perf/mod.rs"]
 mod perf;
+#[path = "iced/render/render_cache.rs"]
 mod render_cache;
+#[path = "iced/render/scene.rs"]
 mod scene;
+#[path = "iced/surface/surface_state.rs"]
 mod surface_state;
+#[path = "iced/interaction/text_routing.rs"]
 mod text_routing;
+#[path = "iced/render/text_utils.rs"]
 mod text_utils;
+#[path = "iced/render/viewport_materialization.rs"]
 mod viewport_materialization;
+#[path = "iced/render/viewport_scene.rs"]
 mod viewport_scene;
 
 use self::context_menu::*;

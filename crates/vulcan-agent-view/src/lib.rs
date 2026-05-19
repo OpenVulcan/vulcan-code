@@ -4,8 +4,11 @@
 pub mod document;
 pub mod editor_core;
 pub mod iced;
+#[path = "surface/iced_style.rs"]
 pub mod iced_style;
+#[path = "surface/iced_surface.rs"]
 pub mod iced_surface;
+#[path = "surface/iced_theme.rs"]
 pub mod iced_theme;
 pub mod parser;
 pub mod selectable_document;

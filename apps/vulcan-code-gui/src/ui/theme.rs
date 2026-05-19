@@ -33,53 +33,53 @@ const BUNDLED_CJK_CODE_FONT_NAME: &str = "Noto Sans Mono CJK SC";
 
 /// Bundled UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置界面字体字节。
-const BUNDLED_UI_FONT_BYTES: &[u8] = include_bytes!("../resources/fonts/Roboto-Regular.ttf");
+const BUNDLED_UI_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Roboto-Regular.ttf");
 
 /// Bundled italic UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置斜体界面字体字节。
-const BUNDLED_UI_ITALIC_FONT_BYTES: &[u8] = include_bytes!("../resources/fonts/Roboto-Italic.ttf");
+const BUNDLED_UI_ITALIC_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Roboto-Italic.ttf");
 
 /// Bundled medium UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置中等字重界面字体字节。
-const BUNDLED_UI_MEDIUM_FONT_BYTES: &[u8] = include_bytes!("../resources/fonts/Roboto-Medium.ttf");
+const BUNDLED_UI_MEDIUM_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Roboto-Medium.ttf");
 
 /// Bundled medium italic UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置中等字重斜体界面字体字节。
 const BUNDLED_UI_MEDIUM_ITALIC_FONT_BYTES: &[u8] =
-    include_bytes!("../resources/fonts/Roboto-MediumItalic.ttf");
+    include_bytes!("../../resources/fonts/Roboto-MediumItalic.ttf");
 
 /// Bundled bold UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置粗体界面字体字节。
-const BUNDLED_UI_BOLD_FONT_BYTES: &[u8] = include_bytes!("../resources/fonts/Roboto-Bold.ttf");
+const BUNDLED_UI_BOLD_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Roboto-Bold.ttf");
 
 /// Bundled bold italic UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置粗斜体界面字体字节。
 const BUNDLED_UI_BOLD_ITALIC_FONT_BYTES: &[u8] =
-    include_bytes!("../resources/fonts/Roboto-BoldItalic.ttf");
+    include_bytes!("../../resources/fonts/Roboto-BoldItalic.ttf");
 
 /// Bundled fallback CJK UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置 CJK 兜底界面字体字节。
 const BUNDLED_CJK_UI_FONT_BYTES: &[u8] =
-    include_bytes!("../resources/fonts/NotoSansCJKsc-Regular.otf");
+    include_bytes!("../../resources/fonts/NotoSansCJKsc-Regular.otf");
 
 /// Bundled code font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置代码字体字节。
-const BUNDLED_CODE_FONT_BYTES: &[u8] = include_bytes!("../resources/fonts/VictorMono-Regular.ttf");
+const BUNDLED_CODE_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/VictorMono-Regular.ttf");
 
 /// Bundled italic code font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置斜体代码字体字节。
 const BUNDLED_CODE_ITALIC_FONT_BYTES: &[u8] =
-    include_bytes!("../resources/fonts/VictorMono-Italic.ttf");
+    include_bytes!("../../resources/fonts/VictorMono-Italic.ttf");
 
 /// Bundled CJK monospace code font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置 CJK 等宽代码字体字节。
 const BUNDLED_CJK_CODE_FONT_BYTES: &[u8] =
-    include_bytes!("../resources/fonts/NotoSansMonoCJKsc-Regular.ttf");
+    include_bytes!("../../resources/fonts/NotoSansMonoCJKsc-Regular.ttf");
 
 /// Bundled CJK monospace italic code font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置 CJK 等宽斜体代码字体字节。
 const BUNDLED_CJK_CODE_ITALIC_FONT_BYTES: &[u8] =
-    include_bytes!("../resources/fonts/NotoSansMonoCJKsc-Italic.ttf");
+    include_bytes!("../../resources/fonts/NotoSansMonoCJKsc-Italic.ttf");
 
 /// Returns the default application theme for the prototype.
 /// 返回原型应用的默认主题。

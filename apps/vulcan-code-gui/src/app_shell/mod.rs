@@ -9,10 +9,13 @@ mod media_preview;
 mod oauth_flow;
 mod pending_prompt_queue;
 mod perf;
+#[path = "../session/loading.rs"]
 mod session_loading;
+#[path = "../session/projection.rs"]
 mod session_projection;
 mod subagent_runtime;
 mod task_tree;
+#[path = "../ui/views/mod.rs"]
 mod views;
 
 use self::helpers::*;
@@ -137,7 +140,7 @@ use vulcan_markdown as markdown;
 
 /// Bundled SVG mark bytes used in the header.
 /// 头部区域使用的内置 SVG 标识字节。
-const LOGO_ASSET_BYTES: &[u8] = include_bytes!("../resources/vulcan-mark.svg");
+const LOGO_ASSET_BYTES: &[u8] = include_bytes!("../../resources/vulcan-mark.svg");
 
 /// Markdown quick guide rendered in the runtime inspector.
 /// 渲染在运行检查面板中的 Markdown 快速指引。
