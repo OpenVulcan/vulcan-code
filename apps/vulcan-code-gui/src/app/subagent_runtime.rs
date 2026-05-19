@@ -7,21 +7,26 @@ impl VulcanWorkbench {
     /// Rebuilds one session-scoped subagent task cache from persisted task tool-result metadata while preserving in-flight running entries.
     /// 根据持久化 task 工具结果元数据重建单个会话的子代理任务缓存，同时保留仍在运行中的活动条目。
     pub(super) fn rebuild_subagent_task_cache_for_session(&mut self, session_id: SessionId) {
-        let persisted_states = self
+        let detail_messages = self
+            .session_tool_detail_messages
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|messages| messages.values());
+        let projected_messages = self
             .session_messages
             .get(&session_id)
             .or_else(|| self.archived_session_messages.get(&session_id))
-            .map(|messages| {
-                messages
-                    .iter()
-                    .filter_map(|message| {
-                        message.metadata.as_ref().and_then(|metadata| {
-                            parse_subagent_task_panel_metadata(session_id, metadata)
-                        })
-                    })
-                    .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|messages| messages.iter());
+        let persisted_states = detail_messages
+            .chain(projected_messages)
+            .filter_map(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| parse_subagent_task_panel_metadata(session_id, metadata))
             })
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
 
         let previous_states = self
             .session_subagent_tasks
@@ -79,16 +84,28 @@ impl VulcanWorkbench {
         parent_session_id: SessionId,
         task_id: SessionId,
     ) -> Option<SubagentTaskPanelState> {
-        self.session_messages
+        self.session_tool_detail_messages
             .get(&parent_session_id)
-            .or_else(|| self.archived_session_messages.get(&parent_session_id))
             .and_then(|messages| {
-                messages.iter().rev().find_map(|message| {
+                messages.values().rev().find_map(|message| {
                     message.metadata.as_ref().and_then(|metadata| {
                         parse_subagent_task_panel_metadata(parent_session_id, metadata)
                             .filter(|state| state.task_id == task_id)
                     })
                 })
+            })
+            .or_else(|| {
+                self.session_messages
+                    .get(&parent_session_id)
+                    .or_else(|| self.archived_session_messages.get(&parent_session_id))
+                    .and_then(|messages| {
+                        messages.iter().rev().find_map(|message| {
+                            message.metadata.as_ref().and_then(|metadata| {
+                                parse_subagent_task_panel_metadata(parent_session_id, metadata)
+                                    .filter(|state| state.task_id == task_id)
+                            })
+                        })
+                    })
             })
     }
     /// Returns whether one cached child task is still truly running according to the shared runtime registry rather than the possibly stale UI metadata snapshot.
@@ -604,7 +621,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
         block_id: &str,
     ) -> Option<SessionId> {
-        let document = self.rendered_session_agent_view_document(session_id)?;
+        let document = self.session_agent_view_documents.get(&session_id)?;
         for (block_index, block) in document.blocks.iter().enumerate() {
             let candidate_block_id = agent_view_block_id(session_id, block_index, block);
             if candidate_block_id != block_id {
@@ -631,7 +648,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
         block_id: &str,
     ) -> Option<&SessionMessageEntry> {
-        let document = self.rendered_session_agent_view_document(session_id)?;
+        let document = self.session_agent_view_documents.get(&session_id)?;
         for (block_index, block) in document.blocks.iter().enumerate() {
             let candidate_block_id = agent_view_block_id(session_id, block_index, block);
             if candidate_block_id != block_id {
@@ -642,9 +659,22 @@ impl VulcanWorkbench {
                 return None;
             };
             let message_id = directive.attributes.get("message-id")?;
-            return self.session_message_entry(session_id, message_id);
+            return self
+                .full_tool_detail_message_entry(session_id, message_id)
+                .or_else(|| self.session_message_entry(session_id, message_id));
         }
 
         None
+    }
+
+    /// Resolves the full modal-facing tool message for one rendered tool block.
+    /// 解析单个已渲染工具区块对应的完整弹层工具消息。
+    pub(super) fn resolve_rendered_tool_modal_message_entry(
+        &self,
+        session_id: SessionId,
+        block_id: &str,
+    ) -> Option<SessionMessageEntry> {
+        let message = self.resolve_rendered_tool_message_entry(session_id, block_id)?;
+        Some(self.full_tool_modal_message_entry(session_id, message))
     }
 }

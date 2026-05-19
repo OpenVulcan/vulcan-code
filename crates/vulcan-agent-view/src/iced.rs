@@ -56,9 +56,9 @@ pub fn view_selectable_rendered_transcript<'a, Message: 'a>(
     on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let rendered_document = RenderedTranscriptDocument::from_agent_document(document, app_theme);
     Element::new(SelectableTranscript::new(
-        rendered_document,
+        document.clone(),
+        app_theme.clone(),
         on_drag_auto_scroll,
         on_interaction,
     ))
@@ -74,11 +74,15 @@ pub fn view_selectable_rendered_transcript_with_context_menu<'a, Message: 'a>(
     on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let rendered_document = RenderedTranscriptDocument::from_agent_document(document, app_theme);
     Element::new(
-        SelectableTranscript::new(rendered_document, on_drag_auto_scroll, on_interaction)
-            .with_context_menu_surface(surface_id)
-            .with_command(command),
+        SelectableTranscript::new(
+            document.clone(),
+            app_theme.clone(),
+            on_drag_auto_scroll,
+            on_interaction,
+        )
+        .with_context_menu_surface(surface_id)
+        .with_command(command),
     )
 }
 
@@ -90,9 +94,9 @@ pub fn view_selectable_rendered_transcript_owned<'a, Message: 'a>(
     on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let rendered_document = RenderedTranscriptDocument::from_agent_document(&document, &app_theme);
     Element::new(SelectableTranscript::new(
-        rendered_document,
+        document,
+        app_theme,
         on_drag_auto_scroll,
         on_interaction,
     ))
@@ -108,9 +112,8 @@ pub fn view_selectable_rendered_transcript_owned_with_context_menu<'a, Message: 
     on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
     on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
-    let rendered_document = RenderedTranscriptDocument::from_agent_document(&document, &app_theme);
     Element::new(
-        SelectableTranscript::new(rendered_document, on_drag_auto_scroll, on_interaction)
+        SelectableTranscript::new(document, app_theme, on_drag_auto_scroll, on_interaction)
             .with_context_menu_surface(surface_id)
             .with_command(command),
     )
@@ -119,9 +122,12 @@ pub fn view_selectable_rendered_transcript_owned_with_context_menu<'a, Message: 
 /// Custom widget keeping the rendered transcript selectable without falling back to a text editor surface.
 /// 在不退回文本编辑器表面的情况下保持渲染转录可选择的自定义组件。
 struct SelectableTranscript<'a, Message> {
-    /// Fully materialized rendered transcript model used for layout, hit-testing, and copy.
-    /// 用于布局、命中测试与复制的完整已物化渲染转录模型。
-    document: RenderedTranscriptDocument,
+    /// Structured source transcript document used to refresh the cached rendered model lazily inside widget state.
+    /// 用于在组件状态内惰性刷新缓存渲染模型的结构化源转录文档。
+    document: AgentViewDocument,
+    /// Theme snapshot used by the lazy block renderer.
+    /// 惰性区块渲染器使用的主题快照。
+    app_theme: Theme,
     /// Callback used to bubble drag auto-scroll intent back to the parent scroll container.
     /// 用于将拖拽自动滚动意图回传给父级滚动容器的回调。
     on_drag_auto_scroll: Box<dyn Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a>,
@@ -143,12 +149,14 @@ impl<'a, Message> SelectableTranscript<'a, Message> {
     /// Creates one selectable transcript widget from a rendered transcript model.
     /// 根据一个渲染转录模型创建可选择转录组件。
     fn new(
-        document: RenderedTranscriptDocument,
+        document: AgentViewDocument,
+        app_theme: Theme,
         on_drag_auto_scroll: impl Fn(Option<SelectableTranscriptDragAutoScroll>) -> Message + 'a,
         on_interaction: impl Fn(SelectableTranscriptInteraction) -> Message + 'a,
     ) -> Self {
         Self {
             document,
+            app_theme,
             on_drag_auto_scroll: Box::new(on_drag_auto_scroll),
             on_interaction: Box::new(on_interaction),
             context_menu_surface_id: None,
@@ -232,8 +240,14 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         limits: &layout::Limits,
     ) -> layout::Node {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+        state
+            .render_cache
+            .ensure_rendered_document(&self.document, &self.app_theme);
+        let Some(rendered_document) = state.render_cache.rendered_document.take() else {
+            return layout::Node::new(Size::new(1.0, 1.0));
+        };
         apply_selectable_transcript_command(
-            &self.document,
+            &rendered_document,
             state,
             self.context_menu_surface_id.as_ref(),
             self.command.as_ref(),
@@ -247,15 +261,21 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
 
         if state
             .render_cache
-            .matches_layout(self.document.layout_signature, available_width)
+            .matches_layout(rendered_document.layout_signature, available_width)
         {
+            state.render_cache.rendered_document = Some(rendered_document);
             return layout::Node::new(Size::new(
                 available_width,
                 state.render_cache.cached_height.max(1.0),
             ));
         }
-        let layout_height =
-            rebuild_layout_cache(&self.document, state, local_widget_bounds, available_width);
+        let layout_height = rebuild_layout_cache(
+            &rendered_document,
+            state,
+            local_widget_bounds,
+            available_width,
+        );
+        state.render_cache.rendered_document = Some(rendered_document);
 
         layout::Node::new(Size::new(available_width, layout_height))
     }
@@ -277,8 +297,16 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         }
 
         let state = tree.state.downcast_ref::<SelectableTranscriptState>();
-        let materialized_scene =
-            materialize_transcript_scene(&self.document, state, layout.bounds(), cursor, *viewport);
+        let Some(rendered_document) = state.render_cache.rendered_document() else {
+            return;
+        };
+        let materialized_scene = materialize_transcript_scene(
+            rendered_document,
+            state,
+            layout.bounds(),
+            cursor,
+            *viewport,
+        );
         draw_visible_transcript_content(renderer, defaults, &materialized_scene);
         let _ = app_theme;
     }
@@ -296,8 +324,14 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
+        state
+            .render_cache
+            .ensure_rendered_document(&self.document, &self.app_theme);
+        let Some(rendered_document) = state.render_cache.rendered_document.take() else {
+            return;
+        };
         handle_transcript_widget_event(
-            &self.document,
+            &rendered_document,
             self.on_drag_auto_scroll.as_ref(),
             self.on_interaction.as_ref(),
             self.context_menu_surface_id.as_ref(),
@@ -308,6 +342,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             shell,
             *_viewport,
         );
+        state.render_cache.rendered_document = Some(rendered_document);
     }
 
     /// Returns the mouse interaction shown while hovering the selectable transcript widget.
@@ -321,7 +356,10 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         _renderer: &Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<SelectableTranscriptState>();
-        transcript_mouse_interaction(&self.document, state, layout.bounds(), cursor)
+        let Some(rendered_document) = state.render_cache.rendered_document() else {
+            return mouse::Interaction::default();
+        };
+        transcript_mouse_interaction(rendered_document, state, layout.bounds(), cursor)
     }
 
     /// Returns the transcript context-menu overlay when one right-click menu is currently open.
@@ -336,6 +374,10 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
         let menu_state = state.context_menu.clone()?;
+        state
+            .render_cache
+            .ensure_rendered_document(&self.document, &self.app_theme);
+        let rendered_document = state.render_cache.rendered_document()?.clone();
         let translated_bounds = Rectangle::new(
             Point::new(
                 layout.bounds().x + translation.x,
@@ -344,13 +386,14 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             layout.bounds().size(),
         );
 
-        Some(build_context_menu_overlay(
+        let overlay = build_context_menu_overlay(
             state,
-            &self.document,
+            rendered_document,
             translated_bounds,
             menu_state,
             self.on_interaction.as_ref(),
-        ))
+        );
+        Some(overlay)
     }
 }
 

@@ -13,7 +13,9 @@ use super::scene::{
 use crate::iced_theme as theme;
 use iced::advanced::text;
 use iced::advanced::text::Paragraph as _;
-use iced::{Point, Rectangle, Size};
+use iced::{Background, Border, Color, Font, Padding, Point, Rectangle, Size};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 const TRANSCRIPT_VIEWPORT_OVERSCAN_Y: f32 = 240.0;
@@ -37,6 +39,136 @@ pub(super) fn count_rendered_paragraph_slots(document: &RenderedTranscriptDocume
         .sum()
 }
 
+/// Computes layout signatures aligned with visible flow nodes, excluding background panels.
+/// 计算与可见流式节点对齐的布局签名，并排除背景面板节点。
+fn flow_layout_signatures(
+    document: &RenderedTranscriptDocument,
+    local_widget_bounds: Rectangle,
+    available_width: f32,
+) -> Vec<u64> {
+    document
+        .nodes
+        .iter()
+        .filter_map(|node| flow_node_layout_signature(node, local_widget_bounds, available_width))
+        .collect()
+}
+
+/// Computes one layout signature for a visible flow node.
+/// 计算单个可见流式节点的布局签名。
+fn flow_node_layout_signature(
+    node: &RenderedTranscriptNode,
+    local_widget_bounds: Rectangle,
+    available_width: f32,
+) -> Option<u64> {
+    let mut hasher = DefaultHasher::new();
+
+    match node {
+        RenderedTranscriptNode::Panel(_) => None,
+        RenderedTranscriptNode::Collapsible(collapsible_node) => {
+            1_u8.hash(&mut hasher);
+            hash_paragraph_flow_layout_signature(
+                &collapsible_node.summary,
+                local_widget_bounds,
+                &mut hasher,
+            );
+            if let Some(body_node) = collapsible_node.body.as_ref() {
+                1_u8.hash(&mut hasher);
+                hash_paragraph_flow_layout_signature(body_node, local_widget_bounds, &mut hasher);
+            } else {
+                0_u8.hash(&mut hasher);
+            }
+            collapsible_node.collapsed.hash(&mut hasher);
+            collapsible_node.max_visible_lines.hash(&mut hasher);
+            hash_background(collapsible_node.body_background.background, &mut hasher);
+            hash_border(collapsible_node.body_background.border, &mut hasher);
+            Some(hasher.finish())
+        }
+        RenderedTranscriptNode::Paragraph(paragraph_node) => {
+            2_u8.hash(&mut hasher);
+            hash_paragraph_flow_layout_signature(paragraph_node, local_widget_bounds, &mut hasher);
+            Some(hasher.finish())
+        }
+        RenderedTranscriptNode::MediaCard(media_card_node) => {
+            3_u8.hash(&mut hasher);
+            format!("{:?}", media_card_node.kind).hash(&mut hasher);
+            media_card_node
+                .image_aspect_ratio
+                .map(f32::to_bits)
+                .hash(&mut hasher);
+            media_card_node.show_caption.hash(&mut hasher);
+            media_card_node.compact_style.hash(&mut hasher);
+            media_card_node.gap_before.to_bits().hash(&mut hasher);
+            media_card_node.gap_after.to_bits().hash(&mut hasher);
+            media_card_node.max_width_ratio.to_bits().hash(&mut hasher);
+            format!("{:?}", media_card_node.horizontal_placement).hash(&mut hasher);
+            available_width.to_bits().hash(&mut hasher);
+            Some(hasher.finish())
+        }
+        RenderedTranscriptNode::Table(table_node) => {
+            4_u8.hash(&mut hasher);
+            table_node.column_count.hash(&mut hasher);
+            table_node.row_count.hash(&mut hasher);
+            table_node.indent_left.to_bits().hash(&mut hasher);
+            table_node.gap_before.to_bits().hash(&mut hasher);
+            table_node.gap_after.to_bits().hash(&mut hasher);
+            hash_padding(table_node.cell_padding, &mut hasher);
+            hash_padding(table_node.outer_padding, &mut hasher);
+            color_signature_tuple(table_node.border_color).hash(&mut hasher);
+            hash_background(table_node.header_background, &mut hasher);
+            hash_background(table_node.body_background, &mut hasher);
+            table_node.quote_depth.hash(&mut hasher);
+            available_width.to_bits().hash(&mut hasher);
+            for cell in &table_node.cells {
+                cell.row_index.hash(&mut hasher);
+                cell.column_index.hash(&mut hasher);
+                format!("{:?}", cell.alignment).hash(&mut hasher);
+                cell.is_header.hash(&mut hasher);
+                hash_paragraph_flow_layout_signature(
+                    &cell.paragraph,
+                    local_widget_bounds,
+                    &mut hasher,
+                );
+            }
+            Some(hasher.finish())
+        }
+        RenderedTranscriptNode::Rule(rule_node) => {
+            5_u8.hash(&mut hasher);
+            rule_node.gap_before.to_bits().hash(&mut hasher);
+            rule_node.gap_after.to_bits().hash(&mut hasher);
+            color_signature_tuple(rule_node.color).hash(&mut hasher);
+            available_width.to_bits().hash(&mut hasher);
+            Some(hasher.finish())
+        }
+    }
+}
+
+/// Hashes one paragraph's layout-affecting inputs into the provided state.
+/// 将单个段落会影响布局的输入写入给定哈希状态。
+fn hash_paragraph_flow_layout_signature(
+    paragraph_node: &RenderedParagraphNode,
+    local_widget_bounds: Rectangle,
+    hasher: &mut DefaultHasher,
+) {
+    let text_bounds = Size::new(
+        paragraph_measurement_width(local_widget_bounds, paragraph_node),
+        f32::INFINITY,
+    );
+    renderer_paragraph_signature(paragraph_node, text_bounds, text::Alignment::Default)
+        .hash(hasher);
+    paragraph_node.gap_before.to_bits().hash(hasher);
+    paragraph_node.gap_after.to_bits().hash(hasher);
+    paragraph_node.fit_width_to_content.hash(hasher);
+    format!("{:?}", paragraph_node.horizontal_placement).hash(hasher);
+    paragraph_node.quote_depth.hash(hasher);
+    if let Some(background) = paragraph_node.background {
+        1_u8.hash(hasher);
+        hash_background(background.background, hasher);
+        hash_border(background.border, hasher);
+    } else {
+        0_u8.hash(hasher);
+    }
+}
+
 /// Rebuilds the full layout cache for the rendered transcript document at the provided width and returns the resulting flow height.
 /// 按给定宽度为渲染转录文档重建完整布局缓存，并返回生成后的流式总高度。
 pub(super) fn rebuild_layout_cache(
@@ -52,11 +184,31 @@ pub(super) fn rebuild_layout_cache(
         .iter()
         .filter(|node| matches!(node, RenderedTranscriptNode::Table(_)))
         .count();
+    let previous_paragraph_count = render_cache.paragraphs.len();
+    let previous_table_count = render_cache.table_layouts.len();
+    let width_matches =
+        render_cache.layout_ready && (render_cache.cached_width - available_width).abs() <= 0.5;
+    let new_flow_layout_signatures =
+        flow_layout_signatures(document, local_widget_bounds, available_width);
+    let reusable_flow_prefix_count = if width_matches
+        && previous_paragraph_count == paragraph_count
+        && previous_table_count == table_count
+    {
+        common_prefix_len(
+            &render_cache.flow_layout_signatures,
+            &new_flow_layout_signatures,
+        )
+    } else {
+        0
+    };
 
     if render_cache.paragraphs.len() != paragraph_count {
         render_cache.paragraphs = (0..paragraph_count)
             .map(|_| RendererParagraph::default())
             .collect();
+    }
+    if render_cache.paragraph_signatures.len() != paragraph_count {
+        render_cache.paragraph_signatures = vec![0; paragraph_count];
     }
 
     if render_cache.table_layouts.len() != table_count {
@@ -65,19 +217,33 @@ pub(super) fn rebuild_layout_cache(
             .collect();
     }
 
-    render_cache.flow_layouts.clear();
+    let previous_flow_layouts = std::mem::take(&mut render_cache.flow_layouts);
     render_cache.panel_layouts.clear();
 
     let mut paragraph_index = 0usize;
     let mut table_index = 0usize;
+    let mut flow_index = 0usize;
     let mut current_y = 0.0f32;
 
     for (node_index, node) in document.nodes.iter().enumerate() {
         match node {
             RenderedTranscriptNode::Panel(_) => {}
             RenderedTranscriptNode::Collapsible(collapsible_node) => {
+                if flow_index < reusable_flow_prefix_count {
+                    if let Some(reused_layout) = previous_flow_layouts.get(flow_index).cloned() {
+                        current_y = reused_layout.bottom_y();
+                        render_cache.flow_layouts.push(reused_layout);
+                        paragraph_index += 1 + usize::from(collapsible_node.body.is_some());
+                        flow_index += 1;
+                        continue;
+                    }
+                }
+
                 let summary_paragraph_index = paragraph_index;
-                render_cache.paragraphs[summary_paragraph_index] = build_renderer_paragraph(
+                ensure_cached_renderer_paragraph(
+                    &mut render_cache.paragraphs,
+                    &mut render_cache.paragraph_signatures,
+                    summary_paragraph_index,
                     &collapsible_node.summary,
                     Size::new(
                         paragraph_measurement_width(local_widget_bounds, &collapsible_node.summary),
@@ -88,7 +254,10 @@ pub(super) fn rebuild_layout_cache(
 
                 let body_paragraph_index = collapsible_node.body.as_ref().map(|body_node| {
                     let body_index = summary_paragraph_index + 1;
-                    render_cache.paragraphs[body_index] = build_renderer_paragraph(
+                    ensure_cached_renderer_paragraph(
+                        &mut render_cache.paragraphs,
+                        &mut render_cache.paragraph_signatures,
+                        body_index,
                         body_node,
                         Size::new(
                             paragraph_measurement_width(local_widget_bounds, body_node),
@@ -131,9 +300,23 @@ pub(super) fn rebuild_layout_cache(
 
                 current_y = flow_end_y;
                 paragraph_index += 1 + usize::from(body_paragraph_index.is_some());
+                flow_index += 1;
             }
             RenderedTranscriptNode::Paragraph(paragraph_node) => {
-                render_cache.paragraphs[paragraph_index] = build_renderer_paragraph(
+                if flow_index < reusable_flow_prefix_count {
+                    if let Some(reused_layout) = previous_flow_layouts.get(flow_index).cloned() {
+                        current_y = reused_layout.bottom_y();
+                        render_cache.flow_layouts.push(reused_layout);
+                        paragraph_index += 1;
+                        flow_index += 1;
+                        continue;
+                    }
+                }
+
+                ensure_cached_renderer_paragraph(
+                    &mut render_cache.paragraphs,
+                    &mut render_cache.paragraph_signatures,
+                    paragraph_index,
                     paragraph_node,
                     Size::new(
                         paragraph_measurement_width(local_widget_bounds, paragraph_node),
@@ -160,8 +343,18 @@ pub(super) fn rebuild_layout_cache(
 
                 current_y = flow_end_y;
                 paragraph_index += 1;
+                flow_index += 1;
             }
             RenderedTranscriptNode::MediaCard(media_card_node) => {
+                if flow_index < reusable_flow_prefix_count {
+                    if let Some(reused_layout) = previous_flow_layouts.get(flow_index).cloned() {
+                        current_y = reused_layout.bottom_y();
+                        render_cache.flow_layouts.push(reused_layout);
+                        flow_index += 1;
+                        continue;
+                    }
+                }
+
                 let measured_media_card = measure_rendered_media_card_node(
                     node_index,
                     media_card_node,
@@ -172,8 +365,20 @@ pub(super) fn rebuild_layout_cache(
                     .flow_layouts
                     .push(LaidOutFlowNode::MediaCard(measured_media_card));
                 current_y = measured_media_card.flow_end_y;
+                flow_index += 1;
             }
             RenderedTranscriptNode::Table(table_node) => {
+                if flow_index < reusable_flow_prefix_count {
+                    if let Some(reused_layout) = previous_flow_layouts.get(flow_index).cloned() {
+                        current_y = reused_layout.bottom_y();
+                        render_cache.flow_layouts.push(reused_layout);
+                        paragraph_index += table_node.cells.len();
+                        table_index += 1;
+                        flow_index += 1;
+                        continue;
+                    }
+                }
+
                 let (table_layout, _) = layout_rendered_table_node(
                     table_node,
                     &mut render_cache.paragraphs,
@@ -193,6 +398,11 @@ pub(super) fn rebuild_layout_cache(
 
                 paragraph_index = table_layout.paragraph_range.end;
                 render_cache.table_layouts[table_index] = table_layout;
+                for signature in &mut render_cache.paragraph_signatures
+                    [paragraph_index - table_node.cells.len()..paragraph_index]
+                {
+                    *signature = 0;
+                }
                 render_cache.flow_layouts.push(LaidOutFlowNode::Table(
                     super::scene::LaidOutTableNode {
                         node_index,
@@ -204,8 +414,18 @@ pub(super) fn rebuild_layout_cache(
 
                 current_y = flow_end_y;
                 table_index += 1;
+                flow_index += 1;
             }
             RenderedTranscriptNode::Rule(rule_node) => {
+                if flow_index < reusable_flow_prefix_count {
+                    if let Some(reused_layout) = previous_flow_layouts.get(flow_index).cloned() {
+                        current_y = reused_layout.bottom_y();
+                        render_cache.flow_layouts.push(reused_layout);
+                        flow_index += 1;
+                        continue;
+                    }
+                }
+
                 let rule_y = current_y + rule_node.gap_before;
                 let outer_bounds = Rectangle::new(
                     Point::new(0.0, rule_y),
@@ -222,6 +442,7 @@ pub(super) fn rebuild_layout_cache(
                 ));
 
                 current_y = flow_end_y;
+                flow_index += 1;
             }
         }
     }
@@ -246,9 +467,19 @@ pub(super) fn rebuild_layout_cache(
     render_cache.layout_ready = true;
     render_cache.cached_width = available_width;
     render_cache.cached_signature = document.layout_signature;
+    render_cache.flow_layout_signatures = new_flow_layout_signatures;
     render_cache.cached_height = current_y.max(1.0);
 
     render_cache.cached_height
+}
+
+/// Returns the shared prefix length of two signature slices.
+/// 返回两组签名切片的共享前缀长度。
+fn common_prefix_len(left: &[u64], right: &[u64]) -> usize {
+    left.iter()
+        .zip(right)
+        .take_while(|(left, right)| left == right)
+        .count()
 }
 
 /// Measures one inline generated-media card using fixed modality-specific chrome metrics.
@@ -637,6 +868,143 @@ pub(super) fn build_renderer_paragraph(
         ellipsis: text::Ellipsis::None,
         hint_factor: None,
     })
+}
+
+/// Reuses one renderer paragraph when its text, style, and measurement bounds are unchanged.
+/// 当段落文本、样式与测量边界未变化时复用已有渲染器段落。
+fn ensure_cached_renderer_paragraph(
+    paragraphs: &mut [RendererParagraph],
+    paragraph_signatures: &mut [u64],
+    paragraph_index: usize,
+    paragraph_node: &RenderedParagraphNode,
+    text_bounds: Size,
+    alignment: text::Alignment,
+) {
+    let paragraph_signature = renderer_paragraph_signature(paragraph_node, text_bounds, alignment);
+    if paragraph_signatures[paragraph_index] == paragraph_signature {
+        return;
+    }
+
+    paragraphs[paragraph_index] = build_renderer_paragraph(paragraph_node, text_bounds, alignment);
+    paragraph_signatures[paragraph_index] = paragraph_signature;
+}
+
+/// Computes the cache signature for one renderer paragraph slot.
+/// 计算单个渲染器段落槽位的缓存签名。
+fn renderer_paragraph_signature(
+    paragraph_node: &RenderedParagraphNode,
+    text_bounds: Size,
+    alignment: text::Alignment,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    paragraph_node.display_text.hash(&mut hasher);
+    text_bounds.width.to_bits().hash(&mut hasher);
+    text_bounds.height.to_bits().hash(&mut hasher);
+    paragraph_node.text_size.0.to_bits().hash(&mut hasher);
+    hash_line_height(paragraph_node.line_height, &mut hasher);
+    format!("{:?}", paragraph_node.wrapping).hash(&mut hasher);
+    format!("{:?}", alignment).hash(&mut hasher);
+    paragraph_node.indent_left.to_bits().hash(&mut hasher);
+    paragraph_node
+        .max_width_ratio
+        .map(f32::to_bits)
+        .hash(&mut hasher);
+    hash_padding(paragraph_node.inner_padding, &mut hasher);
+    paragraph_node.spans.len().hash(&mut hasher);
+    for span in &paragraph_node.spans {
+        hash_span(span, &mut hasher);
+    }
+
+    hasher.finish()
+}
+
+/// Hashes one rich text span into a renderer-paragraph cache signature.
+/// 将单个富文本片段写入渲染器段落缓存签名。
+fn hash_span(
+    span: &iced::widget::text::Span<'static, iced::widget::markdown::Uri, Font>,
+    hasher: &mut DefaultHasher,
+) {
+    span.text.as_ref().hash(hasher);
+    span.size.map(|size| size.0.to_bits()).hash(hasher);
+    if let Some(line_height) = span.line_height {
+        hash_line_height(line_height, hasher);
+    } else {
+        0_u8.hash(hasher);
+    }
+    span.font.hash(hasher);
+    span.color.map(color_signature_tuple).hash(hasher);
+    format!("{:?}", span.link).hash(hasher);
+    if let Some(highlight) = span.highlight {
+        hash_background(highlight.background, hasher);
+        hash_border(highlight.border, hasher);
+    } else {
+        0_u8.hash(hasher);
+    }
+    hash_padding(span.padding, hasher);
+    span.underline.hash(hasher);
+    span.strikethrough.hash(hasher);
+}
+
+/// Hashes one line-height value while preserving the relative-or-absolute variant.
+/// 对行高值进行哈希，并保留相对或绝对行高的变体差异。
+fn hash_line_height(line_height: text::LineHeight, hasher: &mut DefaultHasher) {
+    match line_height {
+        text::LineHeight::Relative(value) => {
+            1_u8.hash(hasher);
+            value.to_bits().hash(hasher);
+        }
+        text::LineHeight::Absolute(value) => {
+            2_u8.hash(hasher);
+            value.0.to_bits().hash(hasher);
+        }
+    }
+}
+
+/// Hashes one background value into a renderer cache signature.
+/// 将一个背景值写入渲染器缓存签名。
+fn hash_background(background: Background, hasher: &mut DefaultHasher) {
+    match background {
+        Background::Color(color) => {
+            1_u8.hash(hasher);
+            color_signature_tuple(color).hash(hasher);
+        }
+        Background::Gradient(gradient) => {
+            2_u8.hash(hasher);
+            format!("{gradient:?}").hash(hasher);
+        }
+    }
+}
+
+/// Hashes one border value into a renderer cache signature.
+/// 将一个边框值写入渲染器缓存签名。
+fn hash_border(border: Border, hasher: &mut DefaultHasher) {
+    color_signature_tuple(border.color).hash(hasher);
+    border.width.to_bits().hash(hasher);
+    border.radius.top_left.to_bits().hash(hasher);
+    border.radius.top_right.to_bits().hash(hasher);
+    border.radius.bottom_right.to_bits().hash(hasher);
+    border.radius.bottom_left.to_bits().hash(hasher);
+}
+
+/// Hashes one padding value into a renderer cache signature.
+/// 将一个内边距值写入渲染器缓存签名。
+fn hash_padding(padding: Padding, hasher: &mut DefaultHasher) {
+    padding.top.to_bits().hash(hasher);
+    padding.right.to_bits().hash(hasher);
+    padding.bottom.to_bits().hash(hasher);
+    padding.left.to_bits().hash(hasher);
+}
+
+/// Returns a hashable tuple that preserves one color's raw channel values.
+/// 返回保留颜色原始通道值的可哈希元组。
+fn color_signature_tuple(color: Color) -> (u32, u32, u32, u32) {
+    (
+        color.r.to_bits(),
+        color.g.to_bits(),
+        color.b.to_bits(),
+        color.a.to_bits(),
+    )
 }
 
 /// Returns the visible origin at which one paragraph should be drawn inside its padded background box.

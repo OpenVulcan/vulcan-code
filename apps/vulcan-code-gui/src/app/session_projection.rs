@@ -201,6 +201,65 @@ impl VulcanWorkbench {
             .insert(session_id, document);
     }
 
+    /// Refreshes only the agent-view blocks owned by one changed transcript message when the current surface can stay structural.
+    /// 当当前表面只需要结构化视图时，仅刷新单条转录消息拥有的 agent-view 区块。
+    pub(super) fn refresh_session_agent_view_message_blocks(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+    ) -> bool {
+        if self.should_materialize_session_agent_view_text_buffers(session_id) {
+            return false;
+        }
+
+        if self
+            .floating_streaming_thinking_sessions
+            .contains(&session_id)
+            && self
+                .streaming_thinking_message_ids
+                .get(&session_id)
+                .is_some_and(|active_message_id| active_message_id == message_id)
+        {
+            return true;
+        }
+
+        let Some(message) = self.session_message_entry(session_id, message_id).cloned() else {
+            return false;
+        };
+        let replacement_document = build_agent_view_document(std::slice::from_ref(&message), &[]);
+        let Some(document) = self.session_agent_view_documents.get_mut(&session_id) else {
+            return false;
+        };
+
+        let matching_indexes = document
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                block
+                    .attributes()
+                    .get("message-id")
+                    .is_some_and(|block_message_id| block_message_id == message_id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let (Some(start_index), Some(end_index)) = (
+            matching_indexes.first().copied(),
+            matching_indexes.last().map(|index| index + 1),
+        ) else {
+            return false;
+        };
+        if end_index - start_index != matching_indexes.len() {
+            return false;
+        }
+
+        document
+            .blocks
+            .splice(start_index..end_index, replacement_document.blocks);
+        self.refresh_active_modal_payloads_for_session(session_id);
+        true
+    }
+
     /// Rebuilds the selectable structured/raw transcript projections from the already cached structural document.
     /// 基于已经缓存好的结构化文档重建可选结构化/原文转录投影。
     pub(super) fn refresh_session_agent_view_text_buffers(&mut self, session_id: SessionId) {
@@ -671,12 +730,13 @@ impl VulcanWorkbench {
         session_id: SessionId,
         block_id: &str,
     ) -> Option<ModalSurfacePayload> {
-        let generated_attachments = self
-            .resolve_rendered_tool_message_entry(session_id, block_id)
+        let resolved_message = self.resolve_rendered_tool_modal_message_entry(session_id, block_id);
+        let generated_attachments = resolved_message
+            .as_ref()
             .and_then(|message| message.metadata.as_ref())
             .map(generated_attachments_from_tool_metadata)
             .unwrap_or_default();
-        if let Some(message) = self.resolve_rendered_tool_message_entry(session_id, block_id)
+        if let Some(message) = resolved_message.as_ref()
             && tool_display_message_is_task_session(message)
             && let Some(metadata) = message.metadata.as_ref()
             && let Some(task_id) = task_session_payload_from_tool_metadata(metadata)
@@ -695,6 +755,20 @@ impl VulcanWorkbench {
                     "当前子代理实时会话已不可恢复，这里展示最后一次持久化的 Markdown 返回摘要。",
                 ),
                 parse_agent_view_document(&markdown_body),
+                generated_attachments,
+            ));
+        }
+
+        if let Some(message) = resolved_message {
+            let title = if message.title.trim().is_empty() {
+                String::from("工具调用详情")
+            } else {
+                message.title.clone()
+            };
+            return Some(self.build_modal_surface_payload(
+                title,
+                String::from("这里会显示完整的工具调用参数、返回结果与宿主生成媒体。"),
+                parse_agent_view_document(&message.body),
                 generated_attachments,
             ));
         }

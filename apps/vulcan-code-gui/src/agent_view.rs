@@ -56,6 +56,19 @@ pub fn agent_view_block_id(
     block_index: usize,
     block: &AgentViewBlock,
 ) -> String {
+    if let AgentViewBlock::Directive(directive) = block
+        && matches!(
+            directive.kind,
+            AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+        )
+        && let Some(message_id) = directive
+            .attributes
+            .get("message-id")
+            .filter(|value| !value.trim().is_empty())
+    {
+        return format!("session-{session_id}-agent-view-tool-message-{message_id}");
+    }
+
     let mut hasher = DefaultHasher::new();
     block.raw_source().hash(&mut hasher);
 
@@ -296,9 +309,9 @@ fn build_tool_record_block(
     if let Some(metadata) = message.metadata.as_ref() {
         attach_generated_media_attributes(&mut attributes, metadata);
     }
-    let raw_source = render_directive_source(&kind, &attributes, &message.body);
+    let raw_source = render_directive_source(&kind, &attributes, "");
 
-    AgentViewDirectiveBlock::new(kind, attributes, message.body.clone(), raw_source, false)
+    AgentViewDirectiveBlock::new(kind, attributes, String::new(), raw_source, false)
 }
 
 /// Attaches one generated-media descriptor to tool-block attributes so the transcript renderer can build inline preview cards.
@@ -676,6 +689,8 @@ mod tests {
             &document.blocks[0],
             AgentViewBlock::Directive(block)
                 if block.kind == AgentViewDirectiveKind::ToolCall
+                    && block.body.is_empty()
+                    && !block.raw_source.contains("成功读取文件")
                     && block
                         .attributes
                         .get("tool-display-state")

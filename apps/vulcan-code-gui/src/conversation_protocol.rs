@@ -264,19 +264,22 @@ pub fn collect_host_visible_attachments(
     attachments
 }
 
-/// Appends one streamed body delta to the matching canonical session record and returns the updated body when found.
-/// 向匹配的规范会话记录追加一段流式正文增量，并在命中时返回更新后的正文。
+/// Appends one streamed body delta to the matching canonical session record and returns whether it was found.
+/// 向匹配的规范会话记录追加一段流式正文增量，并返回是否命中。
 pub fn append_record_body_delta(
     state: &mut SessionConversationState,
     record_id: &str,
     delta: &str,
-) -> Option<String> {
+) -> bool {
     let record = state
         .records
         .iter_mut()
-        .find(|record| record.id == record_id)?;
+        .find(|record| record.id == record_id);
+    let Some(record) = record else {
+        return false;
+    };
     record.body.push_str(delta);
-    Some(record.body.clone())
+    true
 }
 
 /// Rewrites the active canonical window using one compaction summary plus the retained recent tail.
@@ -944,6 +947,30 @@ mod tests {
         let projected = conversation_state_to_session_messages(&state);
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].metadata, Some(metadata));
+    }
+
+    /// Verifies streamed body deltas update records in place without returning a cloned growing body.
+    /// 验证流式正文增量会原地更新记录，而不会返回逐渐变大的正文克隆。
+    #[test]
+    fn append_record_body_delta_updates_in_place() {
+        let mut state = SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: String::from("assistant-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("助手"),
+                body: String::from("a"),
+                metadata: None,
+                created_at: String::from("1"),
+            }],
+            continuation: SessionProviderContinuationState::default(),
+        };
+
+        assert!(append_record_body_delta(&mut state, "assistant-1", "bc"));
+        assert!(!append_record_body_delta(&mut state, "missing", "x"));
+        assert_eq!(state.records[0].body, "abc");
     }
 
     /// Verifies visible user transcript metadata can recover canonical text and attachments during protocol replay after a session reload.

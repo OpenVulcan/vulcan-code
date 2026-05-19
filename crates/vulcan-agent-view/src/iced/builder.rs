@@ -30,9 +30,6 @@ pub(super) struct RenderedTranscriptBuilder {
     /// Next separator that should be inserted before the following text-bearing node.
     /// 下一个带文本节点之前应插入的分隔符。
     pub(super) pending_separator: Option<&'static str>,
-    /// Selection highlight color used by the final transcript widget.
-    /// 最终转录组件使用的选择高亮颜色。
-    pub(super) selection_color: Color,
     /// Default fallback text color.
     /// 默认回退文本颜色。
     pub(super) fallback_text_color: Color,
@@ -44,12 +41,11 @@ pub(super) struct RenderedTranscriptBuilder {
 impl RenderedTranscriptBuilder {
     /// Creates one rendered transcript builder with the provided selection and fallback colors.
     /// 使用提供的选择颜色与回退颜色创建一个渲染转录构建器。
-    pub(super) fn new(selection_color: Color, fallback_text_color: Color) -> Self {
+    pub(super) fn new(_selection_color: Color, fallback_text_color: Color) -> Self {
         Self {
             nodes: Vec::new(),
             full_text: String::new(),
             pending_separator: None,
-            selection_color,
             fallback_text_color,
             link_actions: BTreeMap::new(),
         }

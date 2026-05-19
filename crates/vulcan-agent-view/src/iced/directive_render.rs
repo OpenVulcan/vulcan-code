@@ -20,6 +20,7 @@ use crate::resolve_video_thumbnail_preview;
 use crate::{AgentViewDirectiveBlock, AgentViewDirectiveKind};
 use iced::advanced::text;
 use iced::font;
+use iced::widget::image::Handle as ImageHandle;
 use iced::widget::markdown;
 use iced::widget::text::Span;
 use iced::{Background, Border, Color, Font, Padding, Pixels, Theme};
@@ -420,10 +421,22 @@ fn render_compact_tool_modal_directive_block(
     app_theme: &Theme,
 ) {
     if block.attributes.get("tool-visual-kind").map(String::as_str) == Some("generated-media") {
+        render_compact_tool_modal_summary_row(builder, block, markdown_settings, app_theme);
         render_generated_media_directive_card(builder, block, app_theme);
         return;
     }
 
+    render_compact_tool_modal_summary_row(builder, block, markdown_settings, app_theme);
+}
+
+/// Renders the compact clickable tool summary row shared by plain and media-producing tool blocks.
+/// 渲染普通工具与生成媒体工具共同使用的紧凑可点击工具摘要行。
+fn render_compact_tool_modal_summary_row(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    markdown_settings: markdown::Settings,
+    app_theme: &Theme,
+) {
     let block_id = block
         .attributes
         .get("ui-block-id")
@@ -470,8 +483,8 @@ fn render_compact_tool_modal_directive_block(
     builder.pending_separator = Some("\n");
 }
 
-/// Renders one generated-media tool result as a dedicated inline media card instead of a plain tool row.
-/// 将一个生成媒体工具结果渲染为专用内联媒体卡片，而不是普通工具行。
+/// Renders one generated-media tool result as a dedicated inline media card after the tool summary row.
+/// 在工具摘要行之后，将一个生成媒体工具结果渲染为专用内联媒体卡片。
 fn render_generated_media_directive_card(
     builder: &mut RenderedTranscriptBuilder,
     block: &AgentViewDirectiveBlock,
@@ -565,6 +578,13 @@ fn render_generated_media_directive_card(
         ),
         _ => None,
     };
+    let preview_image_handle = match kind {
+        RenderedMediaKind::Image => Some(ImageHandle::from_path(local_path.to_string())),
+        RenderedMediaKind::Video => video_thumbnail_preview
+            .as_ref()
+            .map(|preview| preview.handle.clone()),
+        _ => None,
+    };
     let image_aspect_ratio = match kind {
         RenderedMediaKind::Image => local_image_aspect_ratio(local_path),
         RenderedMediaKind::Video => video_thumbnail_preview
@@ -577,9 +597,7 @@ fn render_generated_media_directive_card(
         title,
         file_name.to_string(),
         local_path.to_string(),
-        video_thumbnail_preview
-            .as_ref()
-            .map(|preview| preview.handle.clone()),
+        preview_image_handle,
         image_aspect_ratio,
         output_count,
         false,
@@ -1470,12 +1488,16 @@ mod tests {
         );
     }
 
-    /// Verifies generated-media tool cards suppress transcript-side captions and surface the active playback state through the rendered media node.
-    /// 验证生成媒体工具卡会隐藏转录侧说明文字，并通过渲染媒体节点暴露当前播放激活状态。
+    /// Verifies generated-media tool cards keep the clickable tool row before the media preview while preserving media playback state.
+    /// 验证生成媒体工具卡会在媒体预览前保留可点击工具行，同时保持媒体播放状态。
     #[test]
-    fn generated_media_tool_card_uses_minimal_chrome_and_playback_state() {
+    fn generated_media_tool_card_keeps_tool_summary_before_media_preview() {
         let mut builder = RenderedTranscriptBuilder::new(color!(0x4477AA), color!(0xE8EEF7));
         let mut attributes = AgentViewAttributes::new();
+        attributes.insert(
+            String::from("title"),
+            String::from("调用 image_generation 工具"),
+        );
         attributes.insert(
             String::from("tool-visual-kind"),
             String::from("generated-media"),
@@ -1503,8 +1525,12 @@ mod tests {
             &Theme::Dark,
         );
 
-        let Some(RenderedTranscriptNode::MediaCard(node)) = builder.nodes.first() else {
-            panic!("expected one media card node");
+        assert!(matches!(
+            builder.nodes.first(),
+            Some(RenderedTranscriptNode::Paragraph(_))
+        ));
+        let Some(RenderedTranscriptNode::MediaCard(node)) = builder.nodes.get(1) else {
+            panic!("expected media card after the tool summary row");
         };
         assert_eq!(node.kind, RenderedMediaKind::Audio);
         assert!(!node.show_caption);

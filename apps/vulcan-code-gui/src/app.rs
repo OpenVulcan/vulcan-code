@@ -79,7 +79,8 @@ use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
     SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
     SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptInteraction,
-    SelectableTranscriptSurfaceId, view_selectable_rendered_transcript_with_context_menu,
+    SelectableTranscriptSurfaceId, view_selectable_rendered_transcript_owned_with_context_menu,
+    view_selectable_rendered_transcript_with_context_menu,
 };
 use crate::skills::{
     CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
@@ -334,6 +335,10 @@ const SUBAGENT_NAVIGATION_ROW_GAP: f32 = 2.0;
 /// Shared animation tick used by drag-driven transcript auto-scroll while the pointer is kept outside the visible viewport.
 /// 当指针持续停留在可见视口之外时，拖拽驱动的转录自动滚动使用的共享动画 Tick。
 const TRANSCRIPT_DRAG_AUTO_SCROLL_TICK_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Shared coalescing tick used to keep streaming transcript tail-follow work bounded to frame cadence.
+/// 用于将流式转录尾部追随工作合并到帧节奏内的共享 Tick。
+const TRANSCRIPT_STREAM_FOLLOW_TAIL_TICK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Shared pointer overshoot dead zone used before drag auto-scroll begins accelerating the transcript viewport.
 /// 在拖拽自动滚动开始加速转录视口前使用的共享指针越界死区。
@@ -831,6 +836,201 @@ fn merge_tool_display_messages(messages: Vec<SessionMessageEntry>) -> Vec<Sessio
     }
 
     merged_messages
+}
+
+/// Returns whether one transcript message is a tool-detail row whose heavy body should stay out of the main UI projection.
+/// 返回一条转录消息是否为工具明细行，这类行的重型正文不应进入主界面投影。
+fn session_message_is_tool_detail(message: &SessionMessageEntry) -> bool {
+    matches!(
+        message.record_kind,
+        SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+    )
+}
+
+/// Builds the lightweight main-transcript projection for one tool-detail row while preserving its display metadata.
+/// 为单条工具明细行构建轻量主转录投影，同时保留展示所需元数据。
+fn compact_tool_detail_message_for_projection(
+    message: &SessionMessageEntry,
+) -> SessionMessageEntry {
+    if !session_message_is_tool_detail(message) {
+        return message.clone();
+    }
+
+    SessionMessageEntry {
+        id: message.id.clone(),
+        kind: message.kind,
+        record_kind: message.record_kind,
+        visible: message.visible,
+        title: message.title.clone(),
+        body: String::new(),
+        metadata: message
+            .metadata
+            .as_ref()
+            .and_then(compact_tool_detail_metadata_for_projection),
+        created_at: message.created_at.clone(),
+    }
+}
+
+/// Builds compact metadata for a visible tool card without carrying raw tool payloads through the render tree.
+/// 为可见工具卡构建紧凑元数据，避免原始工具载荷穿过渲染树。
+fn compact_tool_detail_metadata_for_projection(metadata: &Value) -> Option<Value> {
+    let source = metadata.as_object()?;
+    let mut compact = serde_json::Map::new();
+
+    for key in [
+        "tool_display_state",
+        "tool_call_id",
+        "tool_result_id",
+        "tool_name",
+        "name",
+        "title",
+        "display_title",
+        "kind",
+        "status",
+        "execution_status",
+        "run_state",
+        "task_id",
+        "session_id",
+        "parent_session_id",
+        "public_id",
+    ] {
+        insert_compact_metadata_field(&mut compact, source, key);
+    }
+
+    if let Some(payload) = source.get("payload").and_then(Value::as_object)
+        && let Some(compact_payload) = compact_task_session_payload_for_projection(payload)
+    {
+        compact.insert(String::from("payload"), compact_payload);
+    }
+
+    if let Some(arguments) = source.get("arguments").and_then(Value::as_object)
+        && let Some(compact_arguments) = compact_task_arguments_for_projection(arguments)
+    {
+        compact.insert(String::from("arguments"), compact_arguments);
+    }
+
+    if let Some(host_result) = resolved_host_result_from_tool_metadata(metadata)
+        .and_then(compact_generated_host_result_for_projection)
+    {
+        compact.insert(String::from("host_result"), host_result);
+    }
+
+    (!compact.is_empty()).then_some(Value::Object(compact))
+}
+
+/// Copies one small metadata field into the compact projection when it exists.
+/// 当小型元数据字段存在时，将其复制到紧凑投影中。
+fn insert_compact_metadata_field(
+    target: &mut serde_json::Map<String, Value>,
+    source: &serde_json::Map<String, Value>,
+    key: &str,
+) {
+    if let Some(value) = source.get(key) {
+        target.insert(key.to_string(), value.clone());
+    }
+}
+
+/// Builds the task-session payload subset needed by cards and subagent navigation.
+/// 构建卡片与子代理导航所需的 task-session 载荷子集。
+fn compact_task_session_payload_for_projection(
+    payload: &serde_json::Map<String, Value>,
+) -> Option<Value> {
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "task_session_id",
+        "task_id",
+        "display_title",
+        "execution_status",
+        "description",
+        "subagent",
+    ] {
+        insert_compact_metadata_field(&mut compact, payload, key);
+    }
+    insert_compact_preview_string_field(&mut compact, payload, "prompt", 240);
+    insert_compact_preview_string_field(&mut compact, payload, "result", 240);
+
+    (!compact.is_empty()).then_some(Value::Object(compact))
+}
+
+/// Builds the in-flight task arguments subset used before a task-session result exists.
+/// 构建 task-session 结果出现前用于展示的进行中任务参数子集。
+fn compact_task_arguments_for_projection(
+    arguments: &serde_json::Map<String, Value>,
+) -> Option<Value> {
+    let mut compact = serde_json::Map::new();
+    for key in ["task_id", "description", "subagent"] {
+        insert_compact_metadata_field(&mut compact, arguments, key);
+    }
+    insert_compact_preview_string_field(&mut compact, arguments, "prompt", 240);
+
+    (!compact.is_empty()).then_some(Value::Object(compact))
+}
+
+/// Copies one string field with a Unicode-safe preview cap into the compact projection.
+/// 将一个字符串字段按 Unicode 安全预览上限复制到紧凑投影中。
+fn insert_compact_preview_string_field(
+    target: &mut serde_json::Map<String, Value>,
+    source: &serde_json::Map<String, Value>,
+    key: &str,
+    max_chars: usize,
+) {
+    let Some(value) = source
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let compact_value =
+        crate::agent_runtime::provider_stream_projection::truncate_preview(value, max_chars);
+    target.insert(key.to_string(), Value::String(compact_value));
+}
+
+/// Preserves only generated-media host-result fields needed by inline cards and modal actions.
+/// 仅保留内联卡片与弹层动作所需的生成媒体宿主结果字段。
+fn compact_generated_host_result_for_projection(host_result: &Value) -> Option<Value> {
+    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
+        return None;
+    }
+    let outputs = host_result
+        .get("payload")
+        .and_then(|payload| payload.get("outputs"))
+        .and_then(Value::as_array)?;
+    let compact_outputs = outputs
+        .iter()
+        .filter_map(compact_generated_output_for_projection)
+        .collect::<Vec<_>>();
+    if compact_outputs.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "kind": "generated_attachments",
+        "payload": {
+            "outputs": compact_outputs,
+        },
+    }))
+}
+
+/// Preserves the small generated-output descriptor required to render and open produced media.
+/// 保留渲染和打开生成媒体所需的小型生成输出描述符。
+fn compact_generated_output_for_projection(output: &Value) -> Option<Value> {
+    let source = output.as_object()?;
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "kind",
+        "file_name",
+        "local_path",
+        "mime_type",
+        "byte_len",
+        "preview_local_path",
+        "asset_id",
+    ] {
+        insert_compact_metadata_field(&mut compact, source, key);
+    }
+
+    (!compact.is_empty()).then_some(Value::Object(compact))
 }
 
 /// Builds the visible transcript slice that should participate in one background agent-view projection refresh.
@@ -2065,6 +2265,9 @@ pub struct VulcanWorkbench {
     /// Session-scoped transcript messages rendered inside the main workbench output area.
     /// 渲染在主工作台输出区中的按会话归属消息转录集合。
     session_messages: BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    /// Session-scoped full tool-detail transcript rows kept outside the main render projection.
+    /// 独立于主渲染投影保存的按会话归属完整工具明细转录行。
+    session_tool_detail_messages: BTreeMap<SessionId, BTreeMap<String, SessionMessageEntry>>,
     /// Archived session summaries retained outside the visible workbench for later restoration.
     /// 保留在可见工作台之外、供后续恢复使用的归档会话摘要集合。
     archived_sessions: Vec<SessionSummary>,
@@ -2222,12 +2425,18 @@ pub struct VulcanWorkbench {
     /// Latest transcript scrollable viewport keyed by session id.
     /// 以会话标识为键保存的最新转录滚动视口。
     session_agent_view_viewports: BTreeMap<SessionId, scrollable::Viewport>,
+    /// Pending transcript tail-follow requests coalesced while streaming output is arriving.
+    /// 流式输出到达期间被合并处理的待执行转录尾部追随请求。
+    pending_transcript_follow_tail_session_ids: BTreeSet<SessionId>,
     /// Active drag auto-scroll state for the main rendered transcript surface.
     /// 主渲染转录表面的当前拖拽自动滚动状态。
     active_transcript_drag_auto_scroll: Option<ActiveTranscriptDragAutoScroll>,
     /// Latest floating thinking-overlay viewport keyed by session id.
     /// 以会话标识为键保存的最新浮动思考层视口。
     session_streaming_thinking_viewports: BTreeMap<SessionId, scrollable::Viewport>,
+    /// Pending floating thinking-overlay tail-follow requests coalesced while streaming thinking is arriving.
+    /// 流式思考到达期间被合并处理的待执行浮层尾部追随请求。
+    pending_thinking_overlay_follow_tail_session_ids: BTreeSet<SessionId>,
     /// Active drag auto-scroll state for the floating thinking overlay body.
     /// 流式思考浮层正文的当前拖拽自动滚动状态。
     active_thinking_overlay_drag_auto_scroll: Option<ActiveTranscriptDragAutoScroll>,
@@ -5087,6 +5296,9 @@ enum Message {
     /// Drives one drag auto-scroll tick for the main rendered transcript surface.
     /// 驱动主渲染转录表面的一次拖拽自动滚动 Tick。
     SelectedSessionTranscriptDragAutoScrollTick,
+    /// Drives one coalesced tail-follow tick for the main rendered transcript surface.
+    /// 驱动主渲染转录表面的一次合并尾部追随 Tick。
+    SelectedSessionTranscriptFollowTailTick,
     /// Records the current scroll viewport of the floating streaming-thinking overlay.
     /// 记录流式思考浮层的当前滚动视口状态。
     SelectedSessionThinkingOverlayScrolled {
@@ -5100,6 +5312,9 @@ enum Message {
     /// Drives one drag auto-scroll tick for the floating thinking overlay body.
     /// 驱动流式思考浮层正文的一次拖拽自动滚动 Tick。
     SelectedSessionThinkingOverlayDragAutoScrollTick,
+    /// Drives one coalesced tail-follow tick for the floating thinking overlay body.
+    /// 驱动流式思考浮层正文的一次合并尾部追随 Tick。
+    SelectedSessionThinkingOverlayFollowTailTick,
     /// Drives one centered thinking-modal animation tick while it is opening or closing.
     /// 在居中思考弹层打开或关闭期间驱动一次动画 Tick。
     ThinkingModalAnimationTick,
@@ -5574,6 +5789,7 @@ impl VulcanWorkbench {
             activities,
             activity_raw_buffers,
             session_messages: BTreeMap::new(),
+            session_tool_detail_messages: BTreeMap::new(),
             archived_sessions: Vec::new(),
             archived_session_messages: BTreeMap::new(),
             session_compactions: BTreeMap::new(),
@@ -5626,8 +5842,10 @@ impl VulcanWorkbench {
             session_agent_view_block_collapsed: BTreeMap::new(),
             session_agent_view_follow_tail: BTreeMap::new(),
             session_agent_view_viewports: BTreeMap::new(),
+            pending_transcript_follow_tail_session_ids: BTreeSet::new(),
             active_transcript_drag_auto_scroll: None,
             session_streaming_thinking_viewports: BTreeMap::new(),
+            pending_thinking_overlay_follow_tail_session_ids: BTreeSet::new(),
             active_thinking_overlay_drag_auto_scroll: None,
             agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
             session_run_phases: BTreeMap::new(),
@@ -5817,6 +6035,7 @@ impl VulcanWorkbench {
                 self.archived_task_projects.clear();
                 self.sessions.clear();
                 self.session_messages.clear();
+                self.session_tool_detail_messages.clear();
                 self.archived_sessions.clear();
                 self.archived_session_messages.clear();
                 self.session_compactions.clear();
@@ -5865,7 +6084,10 @@ impl VulcanWorkbench {
                 self.session_agent_view_block_collapsed.clear();
                 self.session_agent_view_follow_tail.clear();
                 self.session_agent_view_viewports.clear();
+                self.pending_transcript_follow_tail_session_ids.clear();
                 self.session_streaming_thinking_viewports.clear();
+                self.pending_thinking_overlay_follow_tail_session_ids
+                    .clear();
                 self.active_transcript_drag_auto_scroll = None;
                 self.active_thinking_overlay_drag_auto_scroll = None;
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
@@ -9199,6 +9421,9 @@ impl VulcanWorkbench {
             Message::SelectedSessionTranscriptDragAutoScrollTick => {
                 self.perform_transcript_drag_auto_scroll_tick()
             }
+            Message::SelectedSessionTranscriptFollowTailTick => {
+                self.perform_pending_transcript_tail_follow_tick()
+            }
             Message::SelectedSessionThinkingOverlayScrolled {
                 session_id,
                 viewport,
@@ -9217,6 +9442,9 @@ impl VulcanWorkbench {
             }
             Message::SelectedSessionThinkingOverlayDragAutoScrollTick => {
                 self.perform_thinking_overlay_drag_auto_scroll_tick()
+            }
+            Message::SelectedSessionThinkingOverlayFollowTailTick => {
+                self.perform_pending_thinking_overlay_tail_follow_tick()
             }
             Message::ThinkingModalAnimationTick => {
                 self.advance_thinking_modal_animation();
@@ -9787,10 +10015,9 @@ impl VulcanWorkbench {
                     }
                     ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
                         self.append_streaming_thinking_delta(session_id, &delta);
-                        Task::batch([
-                            self.maybe_follow_selected_session_transcript_tail(session_id),
-                            self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
-                        ])
+                        self.request_selected_session_transcript_tail_follow(session_id);
+                        self.request_selected_session_thinking_overlay_tail_follow(session_id);
+                        Task::none()
                     }
                     ExecutionStreamEvent::ThinkingCompleted { session_id } => {
                         self.dock_streaming_thinking_message(session_id);
@@ -9798,7 +10025,8 @@ impl VulcanWorkbench {
                     }
                     ExecutionStreamEvent::OutputDelta { session_id, delta } => {
                         self.append_streaming_output_delta(session_id, &delta);
-                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                        self.request_selected_session_transcript_tail_follow(session_id);
+                        Task::none()
                     }
                     ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
                         let detached_listener_task =
@@ -9821,10 +10049,9 @@ impl VulcanWorkbench {
                     ExecutionStreamEvent::Prepared(_) => Task::none(),
                     ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
                         self.append_streaming_thinking_delta(session_id, &delta);
-                        Task::batch([
-                            self.maybe_follow_selected_session_transcript_tail(session_id),
-                            self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
-                        ])
+                        self.request_selected_session_transcript_tail_follow(session_id);
+                        self.request_selected_session_thinking_overlay_tail_follow(session_id);
+                        Task::none()
                     }
                     ExecutionStreamEvent::ThinkingCompleted { session_id } => {
                         self.dock_streaming_thinking_message(session_id);
@@ -9832,7 +10059,8 @@ impl VulcanWorkbench {
                     }
                     ExecutionStreamEvent::OutputDelta { session_id, delta } => {
                         self.append_streaming_output_delta(session_id, &delta);
-                        self.maybe_follow_selected_session_transcript_tail(session_id)
+                        self.request_selected_session_transcript_tail_follow(session_id);
+                        Task::none()
                     }
                     ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
                         self.push_session_runtime_event(session_id, event);
@@ -11147,14 +11375,16 @@ impl VulcanWorkbench {
         );
         let created_at = current_unix_millis_text();
         let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
+        let projection_entry = compact_tool_detail_message_for_projection(&materialized_entry);
         self.dirty_session_message_ids.insert(session_id);
         self.append_session_record_to_conversation(session_id, &materialized_entry);
+        self.remember_tool_detail_message(session_id, &materialized_entry);
         self.session_message_raw_buffers.insert(
             message_id.clone(),
-            text_editor::Content::with_text(&materialized_entry.body),
+            text_editor::Content::with_text(&projection_entry.body),
         );
         let (markdown_content, markdown_buffer) =
-            parse_selectable_markdown_body(&materialized_entry.body, &self.app_theme);
+            parse_selectable_markdown_body(&projection_entry.body, &self.app_theme);
         self.session_message_markdown
             .insert(message_id.clone(), markdown_content);
         self.session_message_markdown_buffers
@@ -11184,6 +11414,83 @@ impl VulcanWorkbench {
             .or_else(|| self.archived_session_messages.get(&session_id))?
             .iter()
             .find(|message| message.id == message_id)
+    }
+
+    /// Stores every full tool-detail row from a message batch in the out-of-band detail cache.
+    /// 将一批消息中的完整工具明细行保存到带外详情缓存。
+    fn remember_tool_detail_messages(
+        &mut self,
+        session_id: SessionId,
+        messages: &[SessionMessageEntry],
+    ) {
+        for message in messages {
+            self.remember_tool_detail_message(session_id, message);
+        }
+    }
+
+    /// Stores one full tool-detail row outside the main UI projection when it carries hidden payload text.
+    /// 当单条工具明细行携带隐藏载荷文本时，将其保存到主界面投影之外。
+    fn remember_tool_detail_message(
+        &mut self,
+        session_id: SessionId,
+        message: &SessionMessageEntry,
+    ) {
+        if !session_message_is_tool_detail(message) {
+            return;
+        }
+        self.session_tool_detail_messages
+            .entry(session_id)
+            .or_default()
+            .insert(message.id.clone(), message.clone());
+    }
+
+    /// Returns the full tool-detail row for one session/message pair when it has been loaded or produced locally.
+    /// 当指定会话/消息对已经加载或本地产生时，返回对应完整工具明细行。
+    fn full_tool_detail_message_entry(
+        &self,
+        session_id: SessionId,
+        message_id: &str,
+    ) -> Option<&SessionMessageEntry> {
+        self.session_tool_detail_messages
+            .get(&session_id)?
+            .get(message_id)
+    }
+
+    /// Builds the full modal-facing tool row, merging a matching result back into its call row when the visible card is merged.
+    /// 构建面向弹层的完整工具行；当可见卡片已合并时，将匹配的返回结果重新合并到调用行中。
+    fn full_tool_modal_message_entry(
+        &self,
+        session_id: SessionId,
+        message: &SessionMessageEntry,
+    ) -> SessionMessageEntry {
+        let mut full_message = self
+            .full_tool_detail_message_entry(session_id, &message.id)
+            .cloned()
+            .unwrap_or_else(|| message.clone());
+        if full_message.record_kind != SessionMessageRecordKind::ToolCallOutput {
+            return full_message;
+        }
+
+        let Some(tool_call_id) = tool_display_message_call_id(&full_message) else {
+            return full_message;
+        };
+        let Some(result_message) = self
+            .session_tool_detail_messages
+            .get(&session_id)
+            .and_then(|messages| {
+                messages.values().find(|candidate| {
+                    candidate.record_kind == SessionMessageRecordKind::ToolResultOutput
+                        && tool_display_message_call_id(candidate).as_deref()
+                            == Some(tool_call_id.as_str())
+                })
+            })
+            .cloned()
+        else {
+            return full_message;
+        };
+
+        merge_tool_result_into_display_entry(&mut full_message, result_message);
+        full_message
     }
 
     /// Returns the session identifier that currently owns the visible transcript surface, whether it is the root session or one opened subagent panel.
@@ -11222,10 +11529,15 @@ impl VulcanWorkbench {
     /// Rebuilds one session transcript projection from canonical records and stores it in the visible or archived cache bucket.
     /// 根据规范记录重建单个会话的转录投影，并将其存入可见或归档缓存桶。
     fn sync_session_messages_from_conversation_state(&mut self, session_id: SessionId) {
-        let projected_messages = self
+        let full_projected_messages = self
             .session_runtime_state(session_id)
             .map(|state| conversation_state_to_session_messages(&state.conversation_state))
             .unwrap_or_default();
+        self.remember_tool_detail_messages(session_id, &full_projected_messages);
+        let projected_messages = full_projected_messages
+            .iter()
+            .map(compact_tool_detail_message_for_projection)
+            .collect::<Vec<_>>();
         let session_is_archived = self
             .archived_sessions
             .iter()
@@ -11250,30 +11562,33 @@ impl VulcanWorkbench {
         self.rebuild_subagent_task_cache_for_session(session_id);
     }
 
-    /// Refreshes the raw-text and Markdown caches for one projected transcript message after the canonical record changed.
-    /// 在规范记录发生变化后，刷新单条投影转录消息的原文与 Markdown 缓存。
-    fn refresh_session_message_projection_buffers(
+    /// Appends one streamed body delta directly into the already projected visible transcript row so live rendering does not need to rebuild the whole session message list first.
+    /// 直接将一段流式正文增量追加到已投影的可见转录行中，避免实时渲染先重建整份会话消息列表。
+    fn append_stream_delta_to_projected_session_message(
         &mut self,
         session_id: SessionId,
         message_id: &str,
-    ) {
-        let Some(message) = self.session_message_entry(session_id, message_id).cloned() else {
-            return;
-        };
-        self.session_message_raw_buffers.insert(
-            message_id.to_string(),
-            text_editor::Content::with_text(&message.body),
-        );
-        let (markdown_content, markdown_buffer) =
-            parse_selectable_markdown_body(&message.body, &self.app_theme);
-        self.session_message_markdown
-            .insert(message_id.to_string(), markdown_content);
-        self.session_message_markdown_buffers
-            .insert(message_id.to_string(), markdown_buffer);
+        delta: &str,
+    ) -> bool {
+        if let Some(messages) = self.session_messages.get_mut(&session_id)
+            && let Some(message) = messages.iter_mut().find(|message| message.id == message_id)
+        {
+            message.body.push_str(delta);
+            return true;
+        }
+
+        if let Some(messages) = self.archived_session_messages.get_mut(&session_id)
+            && let Some(message) = messages.iter_mut().find(|message| message.id == message_id)
+        {
+            message.body.push_str(delta);
+            return true;
+        }
+
+        false
     }
 
-    /// Appends one streamed body delta into an existing visible transcript message and refreshes its raw/Markdown caches.
-    /// 将一段流式正文增量追加到现有可见转录消息，并刷新其原文与 Markdown 缓存。
+    /// Appends one streamed body delta into an existing visible transcript message without rebuilding legacy per-message Markdown caches.
+    /// 将一段流式正文增量追加到现有可见转录消息，但不重建旧版逐消息 Markdown 缓存。
     fn append_stream_delta_to_session_message(
         &mut self,
         session_id: SessionId,
@@ -11282,15 +11597,17 @@ impl VulcanWorkbench {
     ) {
         self.ensure_session_conversation_state_loaded(session_id);
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        if append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta)
-            .is_none()
-        {
+        if !append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta) {
             return;
         }
         runtime_state.updated_at = current_unix_millis_text();
-        self.sync_session_messages_from_conversation_state(session_id);
-        self.refresh_session_message_projection_buffers(session_id, message_id);
-        self.refresh_session_agent_view_buffers(session_id);
+        self.dirty_session_message_ids.insert(session_id);
+        if !self.append_stream_delta_to_projected_session_message(session_id, message_id, delta) {
+            self.sync_session_messages_from_conversation_state(session_id);
+        }
+        if !self.refresh_session_agent_view_message_blocks(session_id, message_id) {
+            self.refresh_session_agent_view_buffers(session_id);
+        }
     }
 
     /// Ensures the session owns one visible thinking message and appends the incoming delta to it.
@@ -11994,7 +12311,16 @@ impl VulcanWorkbench {
             .session_messages
             .get(&session_id)
             .or_else(|| self.archived_session_messages.get(&session_id))
-            .cloned()
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|message| {
+                        self.full_tool_detail_message_entry(session_id, &message.id)
+                            .cloned()
+                            .unwrap_or_else(|| message.clone())
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         Task::perform(
@@ -12114,6 +12440,18 @@ impl VulcanWorkbench {
         }
 
         self.clear_session_message_view_caches(&removed_message_ids);
+        let remove_tool_detail_bucket =
+            if let Some(tool_details) = self.session_tool_detail_messages.get_mut(&session_id) {
+                for message_id in &removed_message_ids {
+                    tool_details.remove(message_id);
+                }
+                tool_details.is_empty()
+            } else {
+                false
+            };
+        if remove_tool_detail_bucket {
+            self.session_tool_detail_messages.remove(&session_id);
+        }
         self.markdown_session_message_ids.remove(&session_id);
         self.session_history_has_more.remove(&session_id);
         self.session_history_earliest_ordinals.remove(&session_id);
@@ -12153,6 +12491,7 @@ impl VulcanWorkbench {
         self.sessions = snapshot.sessions;
         self.archived_sessions = snapshot.archived_sessions;
         self.session_messages.clear();
+        self.session_tool_detail_messages.clear();
         self.archived_session_messages.clear();
         self.session_compactions = snapshot.session_compactions;
         self.archived_session_compactions = snapshot.archived_session_compactions;
@@ -12205,6 +12544,10 @@ impl VulcanWorkbench {
         self.session_agent_view_block_collapsed.clear();
         self.session_agent_view_follow_tail.clear();
         self.session_agent_view_viewports.clear();
+        self.pending_transcript_follow_tail_session_ids.clear();
+        self.session_streaming_thinking_viewports.clear();
+        self.pending_thinking_overlay_follow_tail_session_ids
+            .clear();
         self.sync_workspace_path_with_selected_session();
         self.workspace_path = normalize_workspace_path_text(&self.workspace_path);
         self.refresh_all_session_queued_steps();
@@ -12269,6 +12612,10 @@ impl VulcanWorkbench {
     fn clear_streaming_message_ids(&mut self, session_id: SessionId) {
         self.clear_transcript_drag_auto_scroll_for_session(session_id);
         self.clear_thinking_overlay_drag_auto_scroll(session_id);
+        self.pending_transcript_follow_tail_session_ids
+            .remove(&session_id);
+        self.pending_thinking_overlay_follow_tail_session_ids
+            .remove(&session_id);
         self.streaming_thinking_message_ids.remove(&session_id);
         self.floating_streaming_thinking_sessions
             .remove(&session_id);
@@ -12298,6 +12645,7 @@ impl VulcanWorkbench {
         self.markdown_session_message_ids.remove(&session_id);
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
+        self.session_tool_detail_messages.remove(&session_id);
         self.loading_session_agent_view_projection_ids
             .remove(&session_id);
         self.collapsed_runtime_event_ids.remove(&session_id);
@@ -12310,9 +12658,13 @@ impl VulcanWorkbench {
         self.session_agent_view_block_collapsed.remove(&session_id);
         self.session_agent_view_follow_tail.remove(&session_id);
         self.session_agent_view_viewports.remove(&session_id);
+        self.pending_transcript_follow_tail_session_ids
+            .remove(&session_id);
         self.session_streaming_thinking_follow_tail
             .remove(&session_id);
         self.session_streaming_thinking_viewports
+            .remove(&session_id);
+        self.pending_thinking_overlay_follow_tail_session_ids
             .remove(&session_id);
         self.floating_streaming_thinking_sessions
             .remove(&session_id);
@@ -12714,6 +13066,41 @@ impl VulcanWorkbench {
         operation::snap_to_end(transcript_scrollable_id(session_id))
     }
 
+    /// Records one streaming transcript tail-follow request so repeated token updates share one timed scroll operation.
+    /// 记录一次流式转录尾部追随请求，使重复 token 更新共享一次定时滚动操作。
+    fn request_selected_session_transcript_tail_follow(&mut self, session_id: SessionId) {
+        if self.active_transcript_surface_session_id() != Some(session_id) {
+            return;
+        }
+
+        if !self.session_agent_view_should_follow_tail(session_id) {
+            return;
+        }
+
+        self.pending_transcript_follow_tail_session_ids
+            .insert(session_id);
+    }
+
+    /// Applies one coalesced transcript tail-follow request for the currently visible transcript surface.
+    /// 为当前可见转录表面执行一次已合并的尾部追随请求。
+    fn perform_pending_transcript_tail_follow_tick(&mut self) -> Task<Message> {
+        let pending_session_ids =
+            std::mem::take(&mut self.pending_transcript_follow_tail_session_ids);
+        let Some(session_id) = self.active_transcript_surface_session_id() else {
+            return Task::none();
+        };
+
+        if !pending_session_ids.contains(&session_id) {
+            return Task::none();
+        }
+
+        if !self.session_agent_view_should_follow_tail(session_id) {
+            return Task::none();
+        }
+
+        operation::snap_to_end(transcript_scrollable_id(session_id))
+    }
+
     /// Updates the active drag auto-scroll state for the main rendered transcript surface.
     /// 更新主渲染转录表面的当前拖拽自动滚动状态。
     fn update_transcript_drag_auto_scroll_state(
@@ -12860,6 +13247,49 @@ impl VulcanWorkbench {
         session_id: SessionId,
     ) -> Task<Message> {
         if self.selected_session().map(|session| session.id) != Some(session_id) {
+            return Task::none();
+        }
+
+        if self.streaming_thinking_message(session_id).is_none() {
+            return Task::none();
+        }
+
+        if !self.session_streaming_thinking_should_follow_tail(session_id) {
+            return Task::none();
+        }
+
+        operation::snap_to_end(thinking_overlay_scrollable_id(session_id))
+    }
+
+    /// Records one streaming thinking-overlay tail-follow request so repeated token updates share one timed scroll operation.
+    /// 记录一次流式思考浮层尾部追随请求，使重复 token 更新共享一次定时滚动操作。
+    fn request_selected_session_thinking_overlay_tail_follow(&mut self, session_id: SessionId) {
+        if self.selected_session().map(|session| session.id) != Some(session_id) {
+            return;
+        }
+
+        if self.streaming_thinking_message(session_id).is_none() {
+            return;
+        }
+
+        if !self.session_streaming_thinking_should_follow_tail(session_id) {
+            return;
+        }
+
+        self.pending_thinking_overlay_follow_tail_session_ids
+            .insert(session_id);
+    }
+
+    /// Applies one coalesced floating thinking-overlay tail-follow request for the currently selected session.
+    /// 为当前选中会话执行一次已合并的流式思考浮层尾部追随请求。
+    fn perform_pending_thinking_overlay_tail_follow_tick(&mut self) -> Task<Message> {
+        let pending_session_ids =
+            std::mem::take(&mut self.pending_thinking_overlay_follow_tail_session_ids);
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            return Task::none();
+        };
+
+        if !pending_session_ids.contains(&session_id) {
             return Task::none();
         }
 
@@ -13325,10 +13755,10 @@ impl VulcanWorkbench {
 mod tests {
     use super::{
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
-        composer_text_has_submittable_content, composer_visible_line_count,
-        generated_attachments_from_tool_metadata, merge_tool_display_messages,
-        pending_prompt_dispatch_index, prune_session_messages_to_limit,
-        task_session_payload_from_tool_metadata,
+        compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
+        composer_visible_line_count, generated_attachments_from_tool_metadata,
+        merge_tool_display_messages, pending_prompt_dispatch_index,
+        prune_session_messages_to_limit, task_session_payload_from_tool_metadata,
     };
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
@@ -13625,6 +14055,50 @@ mod tests {
                 .and_then(|metadata| metadata.get("tool_display_state"))
                 .and_then(|value| value.as_str()),
             Some("running")
+        );
+    }
+
+    /// Verifies that main-transcript tool projections drop heavy bodies and retain only card metadata.
+    /// 验证主转录工具投影会移除重型正文，并仅保留卡片所需元数据。
+    #[test]
+    fn compact_tool_detail_projection_drops_hidden_payloads() {
+        let message = SessionMessageEntry {
+            id: String::from("tool-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("调用 read_file 工具"),
+            body: "x".repeat(200_000),
+            metadata: Some(json!({
+                "tool_call_id": "call-1",
+                "tool_display_state": "completed",
+                "host_result": {
+                    "kind": "raw_payload",
+                    "payload": "y".repeat(200_000)
+                },
+                "payload": {
+                    "task_id": "task-a",
+                    "prompt": "z".repeat(1000),
+                    "conversation_state": {"large": "z".repeat(200_000)}
+                }
+            })),
+            created_at: String::from("1"),
+        };
+
+        let projected = compact_tool_detail_message_for_projection(&message);
+
+        assert!(projected.body.is_empty());
+        let metadata = projected.metadata.expect("metadata should stay present");
+        assert_eq!(
+            metadata.get("tool_display_state").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(metadata.get("host_result").is_none());
+        assert!(
+            metadata
+                .get("payload")
+                .and_then(|payload| payload.get("conversation_state"))
+                .is_none()
         );
     }
 

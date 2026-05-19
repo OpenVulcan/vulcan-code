@@ -229,8 +229,12 @@ fn draw_rendered_media_card_node(
 
     match media_card_node.kind {
         RenderedMediaKind::Image => {
+            let image_handle = media_card_node
+                .preview_image_handle
+                .clone()
+                .unwrap_or_else(|| ImageHandle::from_path(media_card_node.local_path.clone()));
             renderer.draw_image(
-                image::Image::new(ImageHandle::from_path(media_card_node.local_path.clone())),
+                image::Image::new(image_handle),
                 preview_bounds,
                 scene.viewport,
             );

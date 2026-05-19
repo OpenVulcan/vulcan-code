@@ -8,84 +8,178 @@ use super::markdown_source::{
     normalize_markdown_source_for_transcript_display, prepare_markdown_source_for_rendering,
     raw_source_contains_markdown_table,
 };
+use super::render_cache::CachedRenderedTranscriptBlock;
 use super::scene::{
     PlainParagraphStyle, RenderContext, RenderedParagraphBackground, RenderedTranscriptDocument,
+    RenderedTranscriptNode,
 };
 use crate::iced_theme as theme;
-use crate::{AgentViewBlock, AgentViewDocument};
+use crate::{AgentViewBlock, AgentViewDirectiveKind, AgentViewDocument};
 use iced::{Background, Border, Color, Theme};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
 impl RenderedTranscriptDocument {
     /// Builds one rendered transcript model from the structured agent document.
     /// 根据结构化代理文档构建一份渲染转录模型。
+    #[cfg(test)]
     pub(super) fn from_agent_document(document: &AgentViewDocument, app_theme: &Theme) -> Self {
+        let mut block_cache = BTreeMap::new();
+        Self::from_agent_document_with_block_cache(document, app_theme, &mut block_cache)
+    }
+
+    /// Builds one rendered transcript model from block-level render caches, refreshing only changed blocks.
+    /// 基于区块级渲染缓存构建渲染转录模型，仅刷新已经变化的区块。
+    #[cfg(test)]
+    pub(super) fn from_agent_document_with_block_cache(
+        document: &AgentViewDocument,
+        app_theme: &Theme,
+        block_cache: &mut BTreeMap<u64, CachedRenderedTranscriptBlock>,
+    ) -> Self {
+        let layout_signature = Self::layout_signature_for_agent_document(document, app_theme);
+        Self::from_agent_document_with_block_cache_and_signature(
+            document,
+            app_theme,
+            block_cache,
+            layout_signature,
+        )
+    }
+
+    /// Builds one rendered transcript model using a caller-provided layout signature so long documents are not hashed twice.
+    /// 使用调用方提供的布局签名构建渲染转录模型，避免长文档被重复哈希。
+    pub(super) fn from_agent_document_with_block_cache_and_signature(
+        document: &AgentViewDocument,
+        app_theme: &Theme,
+        block_cache: &mut BTreeMap<u64, CachedRenderedTranscriptBlock>,
+        layout_signature: u64,
+    ) -> Self {
         let palette = app_theme.palette();
-        let markdown_settings = theme::markdown_settings(app_theme);
-        let layout_signature = compute_rendered_transcript_layout_signature(document, app_theme);
-        let mut builder = RenderedTranscriptBuilder::new(
-            palette.primary.weak.color.scale_alpha(0.28),
-            palette.background.base.text.scale_alpha(0.94),
-        );
+        let selection_color = palette.primary.weak.color.scale_alpha(0.28);
+        let fallback_text_color = palette.background.base.text.scale_alpha(0.94);
+        let mut nodes = Vec::new();
+        let mut full_text = String::new();
+        let mut full_text_char_count = 0usize;
+        let mut link_actions = BTreeMap::new();
 
         for block in &document.blocks {
-            let child_start_index = builder.node_count();
-            builder.begin_block();
+            let block_signature = Self::block_render_signature_for_agent_block(block, app_theme);
+            let cached_block = block_cache.entry(block_signature).or_insert_with(|| {
+                render_agent_view_block(
+                    block_signature,
+                    block,
+                    app_theme,
+                    selection_color,
+                    fallback_text_color,
+                )
+            });
+            debug_assert_eq!(cached_block.signature, block_signature);
 
-            match block {
-                AgentViewBlock::Markdown(markdown_block) => {
-                    let prepared_source =
-                        prepare_markdown_source_for_rendering(&markdown_block.raw_source);
-                    if raw_source_contains_markdown_table(&prepared_source) {
-                        render_markdown_source_with_table_fallback(
-                            &mut builder,
-                            &prepared_source,
-                            PlainParagraphStyle::flow(markdown_settings.text_size),
-                            markdown_settings,
-                            app_theme,
-                        );
-                    } else {
-                        let normalized_source =
-                            normalize_markdown_source_for_transcript_display(&prepared_source);
-                        let markdown_content =
-                            iced::widget::markdown::Content::parse(&normalized_source);
-                        render_markdown_items(
-                            &mut builder,
-                            markdown_content.items(),
-                            RenderContext::default(),
-                            markdown_settings,
-                            app_theme,
-                        );
-                    }
-                }
-                AgentViewBlock::Directive(directive_block) => {
-                    render_directive_block(
-                        &mut builder,
-                        directive_block,
-                        markdown_settings,
-                        app_theme,
-                    );
-                }
+            let separator = if full_text.is_empty() || cached_block.full_text.trim().is_empty() {
+                ""
+            } else {
+                "\n\n"
+            };
+            let separator_char_count = separator.chars().count();
+            let block_char_offset = full_text_char_count + separator_char_count;
+            if !separator.is_empty() {
+                full_text.push_str(separator);
             }
+            full_text.push_str(&cached_block.full_text);
+            full_text_char_count = block_char_offset + cached_block.full_text_char_count;
 
-            if block_has_workspace_history_search_hit_marker(block) {
-                let child_node_count = builder.node_count().saturating_sub(child_start_index);
-                builder.insert_panel(
-                    child_start_index,
-                    child_node_count,
-                    workspace_history_search_hit_background(app_theme),
-                );
-            }
+            nodes.extend(cached_block.nodes.iter().cloned().map(|mut node| {
+                shift_rendered_node_char_ranges(&mut node, block_char_offset);
+                node
+            }));
+            link_actions.extend(cached_block.link_actions.clone());
         }
 
         Self {
-            nodes: builder.nodes,
-            full_text: builder.full_text,
-            selection_color: builder.selection_color,
-            link_actions: builder.link_actions,
+            nodes,
+            full_text,
+            selection_color,
+            link_actions,
             layout_signature,
         }
+    }
+
+    /// Computes the full-document layout signature used by render and layout caches.
+    /// 计算渲染与布局缓存使用的整份文档布局签名。
+    pub(super) fn layout_signature_for_agent_document(
+        document: &AgentViewDocument,
+        app_theme: &Theme,
+    ) -> u64 {
+        compute_rendered_transcript_layout_signature(document, app_theme)
+    }
+
+    /// Computes the render signature for one top-level agent-view block.
+    /// 计算单个顶层 agent-view 区块的渲染签名。
+    pub(super) fn block_render_signature_for_agent_block(
+        block: &AgentViewBlock,
+        app_theme: &Theme,
+    ) -> u64 {
+        compute_rendered_transcript_block_signature(block, app_theme)
+    }
+}
+
+/// Renders one top-level agent block into a block-local cached rendered projection.
+/// 将单个顶层代理区块渲染为区块局部的可缓存渲染投影。
+fn render_agent_view_block(
+    signature: u64,
+    block: &AgentViewBlock,
+    app_theme: &Theme,
+    selection_color: Color,
+    fallback_text_color: Color,
+) -> CachedRenderedTranscriptBlock {
+    let markdown_settings = theme::markdown_settings(app_theme);
+    let mut builder = RenderedTranscriptBuilder::new(selection_color, fallback_text_color);
+    let child_start_index = builder.node_count();
+    builder.begin_block();
+
+    match block {
+        AgentViewBlock::Markdown(markdown_block) => {
+            let prepared_source = prepare_markdown_source_for_rendering(&markdown_block.raw_source);
+            if raw_source_contains_markdown_table(&prepared_source) {
+                render_markdown_source_with_table_fallback(
+                    &mut builder,
+                    &prepared_source,
+                    PlainParagraphStyle::flow(markdown_settings.text_size),
+                    markdown_settings,
+                    app_theme,
+                );
+            } else {
+                let normalized_source =
+                    normalize_markdown_source_for_transcript_display(&prepared_source);
+                let markdown_content = iced::widget::markdown::Content::parse(&normalized_source);
+                render_markdown_items(
+                    &mut builder,
+                    markdown_content.items(),
+                    RenderContext::default(),
+                    markdown_settings,
+                    app_theme,
+                );
+            }
+        }
+        AgentViewBlock::Directive(directive_block) => {
+            render_directive_block(&mut builder, directive_block, markdown_settings, app_theme);
+        }
+    }
+
+    if block_has_workspace_history_search_hit_marker(block) {
+        let child_node_count = builder.node_count().saturating_sub(child_start_index);
+        builder.insert_panel(
+            child_start_index,
+            child_node_count,
+            workspace_history_search_hit_background(app_theme),
+        );
+    }
+
+    CachedRenderedTranscriptBlock {
+        signature,
+        full_text_char_count: builder.full_text.chars().count(),
+        nodes: builder.nodes,
+        full_text: builder.full_text,
+        link_actions: builder.link_actions,
     }
 }
 
@@ -108,11 +202,81 @@ fn compute_rendered_transcript_layout_signature(
     hash_render_color(palette.secondary.strong.color, &mut hasher);
 
     for block in &document.blocks {
-        block.raw_source().hash(&mut hasher);
+        hash_agent_view_block_layout_identity(block, &mut hasher);
         hash_block_attributes(block, &mut hasher);
     }
 
     hasher.finish()
+}
+
+/// Computes one stable rendered-block signature from the source block and render-affecting theme inputs.
+/// 根据源区块与影响渲染的主题输入计算稳定的区块渲染签名。
+fn compute_rendered_transcript_block_signature(block: &AgentViewBlock, app_theme: &Theme) -> u64 {
+    let markdown_settings = theme::markdown_settings(app_theme);
+    let palette = app_theme.palette();
+    let mut hasher = DefaultHasher::new();
+
+    markdown_settings.text_size.0.to_bits().hash(&mut hasher);
+    hash_render_color(palette.background.base.color, &mut hasher);
+    hash_render_color(palette.background.base.text, &mut hasher);
+    hash_render_color(palette.primary.weak.color, &mut hasher);
+    hash_render_color(palette.primary.strong.color, &mut hasher);
+    hash_render_color(palette.secondary.strong.color, &mut hasher);
+    hash_agent_view_block_layout_identity(block, &mut hasher);
+    hash_block_attributes(block, &mut hasher);
+
+    hasher.finish()
+}
+
+/// Hashes the render-visible identity of one agent-view block, excluding hidden compact-tool bodies.
+/// 哈希单个 agent-view 区块的渲染可见身份，并排除隐藏的紧凑工具正文。
+fn hash_agent_view_block_layout_identity(block: &AgentViewBlock, hasher: &mut DefaultHasher) {
+    match block {
+        AgentViewBlock::Directive(directive)
+            if matches!(
+                directive.kind,
+                AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+            ) =>
+        {
+            "compact-tool".hash(hasher);
+            directive.kind.as_label().hash(hasher);
+        }
+        _ => block.raw_source().hash(hasher),
+    }
+}
+
+/// Shifts all global character ranges inside one rendered node by the provided document-level offset.
+/// 按给定的文档级偏移平移单个渲染节点内部的所有全局字符范围。
+fn shift_rendered_node_char_ranges(node: &mut RenderedTranscriptNode, char_offset: usize) {
+    match node {
+        RenderedTranscriptNode::Panel(_) => {}
+        RenderedTranscriptNode::Collapsible(collapsible_node) => {
+            shift_paragraph_char_range(&mut collapsible_node.summary, char_offset);
+            if let Some(body) = collapsible_node.body.as_mut() {
+                shift_paragraph_char_range(body, char_offset);
+            }
+        }
+        RenderedTranscriptNode::Paragraph(paragraph_node) => {
+            shift_paragraph_char_range(paragraph_node, char_offset);
+        }
+        RenderedTranscriptNode::MediaCard(_) => {}
+        RenderedTranscriptNode::Table(table_node) => {
+            for cell in &mut table_node.cells {
+                shift_paragraph_char_range(&mut cell.paragraph, char_offset);
+            }
+        }
+        RenderedTranscriptNode::Rule(_) => {}
+    }
+}
+
+/// Shifts one rendered paragraph's document-global character range by the provided offset.
+/// 按给定偏移平移单个渲染段落的文档全局字符范围。
+fn shift_paragraph_char_range(
+    paragraph_node: &mut super::scene::RenderedParagraphNode,
+    char_offset: usize,
+) {
+    paragraph_node.global_char_range = (paragraph_node.global_char_range.start + char_offset)
+        ..(paragraph_node.global_char_range.end + char_offset);
 }
 
 /// Returns whether one rendered block should receive the transient workspace-history search-hit panel treatment.

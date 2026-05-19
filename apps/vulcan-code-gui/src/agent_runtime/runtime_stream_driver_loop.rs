@@ -8,9 +8,93 @@ use crate::agent_runtime::runtime_stream_finalize::{
     build_failure_terminal_events, build_success_terminal_events,
 };
 use crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch;
+use crate::model::SessionId;
 use crate::provider_config::ProviderConfigurationFile;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
+use std::time::Duration;
+
+/// GUI-facing stream delta flush cadence used to avoid repainting the full workbench for every provider token.
+/// 面向图形界面的流式增量刷新节奏，用于避免每个 Provider token 都触发整窗重绘。
+const RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Accumulates adjacent visible stream deltas while preserving non-delta event ordering.
+/// 在保留非增量事件顺序的同时，合并相邻的可见流式增量。
+#[derive(Default)]
+struct ExecutionStreamDeltaCoalescer {
+    /// Pending visible thinking delta for the current flush window.
+    /// 当前刷新窗口内等待发出的可见思考增量。
+    pending_thinking_delta: Option<(SessionId, String)>,
+    /// Pending visible output delta for the current flush window.
+    /// 当前刷新窗口内等待发出的可见输出增量。
+    pending_output_delta: Option<(SessionId, String)>,
+}
+
+impl ExecutionStreamDeltaCoalescer {
+    /// Returns whether no visible delta is waiting for the next GUI flush.
+    /// 返回当前是否没有等待下一次图形界面刷新的可见增量。
+    fn is_empty(&self) -> bool {
+        self.pending_thinking_delta.is_none() && self.pending_output_delta.is_none()
+    }
+
+    /// Adds one execution event and returns any ordered events that must be emitted before it.
+    /// 添加一个执行事件，并返回在它之前必须按顺序发出的事件集合。
+    fn push_event(&mut self, event: ExecutionStreamEvent) -> Vec<ExecutionStreamEvent> {
+        match event {
+            ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                if self.pending_output_delta.is_none() {
+                    if let Some((pending_session_id, pending_delta)) =
+                        self.pending_thinking_delta.as_mut()
+                        && *pending_session_id == session_id
+                    {
+                        pending_delta.push_str(&delta);
+                        return Vec::new();
+                    }
+                }
+
+                let flushed_events = self.flush();
+                self.pending_thinking_delta = Some((session_id, delta));
+                flushed_events
+            }
+            ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                if self.pending_thinking_delta.is_none() {
+                    if let Some((pending_session_id, pending_delta)) =
+                        self.pending_output_delta.as_mut()
+                        && *pending_session_id == session_id
+                    {
+                        pending_delta.push_str(&delta);
+                        return Vec::new();
+                    }
+                }
+
+                let flushed_events = self.flush();
+                self.pending_output_delta = Some((session_id, delta));
+                flushed_events
+            }
+            other_event => {
+                let mut flushed_events = self.flush();
+                flushed_events.push(other_event);
+                flushed_events
+            }
+        }
+    }
+
+    /// Drains all pending visible deltas as ordered execution events.
+    /// 将所有等待发出的可见增量按顺序提取为执行事件。
+    fn flush(&mut self) -> Vec<ExecutionStreamEvent> {
+        let mut events = Vec::new();
+
+        if let Some((session_id, delta)) = self.pending_thinking_delta.take() {
+            events.push(ExecutionStreamEvent::ThinkingDelta { session_id, delta });
+        }
+
+        if let Some((session_id, delta)) = self.pending_output_delta.take() {
+            events.push(ExecutionStreamEvent::OutputDelta { session_id, delta });
+        }
+
+        events
+    }
+}
 
 /// Drives one prepared runtime-stream launch payload and yields provider delta and terminal events in order.
 /// 驱动一份已准备完成的运行时流启动载荷，并按顺序产出 Provider 增量与终态事件。
@@ -47,13 +131,62 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             resolved_tool_definitions,
         );
 
-        while let Some(item) = provider_stream.next().await {
+        let mut delta_coalescer = ExecutionStreamDeltaCoalescer::default();
+        let mut next_delta_flush_at =
+            tokio::time::Instant::now() + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+
+        loop {
+            let item = if delta_coalescer.is_empty() {
+                provider_stream.next().await
+            } else {
+                match tokio::time::timeout_at(next_delta_flush_at, provider_stream.next()).await {
+                    Ok(item) => item,
+                    Err(_) => {
+                        for event in delta_coalescer.flush() {
+                            yield event;
+                        }
+                        next_delta_flush_at = tokio::time::Instant::now()
+                            + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+                        continue;
+                    }
+                }
+            };
+
+            let Some(item) = item else {
+                break;
+            };
+
             for event in process_provider_stream_delta(session_id, &mut stream_state, item) {
-                yield event;
+                let was_empty = delta_coalescer.is_empty();
+                let flushed_events = delta_coalescer.push_event(event);
+                let starts_new_flush_window =
+                    (was_empty || !flushed_events.is_empty()) && !delta_coalescer.is_empty();
+
+                for flushed_event in flushed_events {
+                    yield flushed_event;
+                }
+
+                if starts_new_flush_window {
+                    next_delta_flush_at = tokio::time::Instant::now()
+                        + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+                }
             }
+
+            if !delta_coalescer.is_empty() && tokio::time::Instant::now() >= next_delta_flush_at {
+                for event in delta_coalescer.flush() {
+                    yield event;
+                }
+                next_delta_flush_at =
+                    tokio::time::Instant::now() + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+            }
+
             if stream_state.has_terminal_error() {
                 break;
             }
+        }
+
+        for event in delta_coalescer.flush() {
+            yield event;
         }
 
         if let Some(error) = stream_state.take_terminal_error() {
@@ -81,5 +214,80 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         ) {
             yield event;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Runtime stream driver-loop tests for GUI-facing delta coalescing.
+    //! 面向图形界面增量合并的运行时流驱动循环测试。
+
+    use super::*;
+    use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+    use uuid::Uuid;
+
+    /// Verifies adjacent output deltas for the same session are merged into one GUI event.
+    /// 验证同一会话的相邻输出增量会合并为一个图形界面事件。
+    #[test]
+    fn coalescer_merges_adjacent_output_deltas_for_same_session() {
+        let session_id = Uuid::nil();
+        let mut coalescer = ExecutionStreamDeltaCoalescer::default();
+
+        assert!(
+            coalescer
+                .push_event(ExecutionStreamEvent::OutputDelta {
+                    session_id,
+                    delta: String::from("hello"),
+                })
+                .is_empty()
+        );
+        assert!(
+            coalescer
+                .push_event(ExecutionStreamEvent::OutputDelta {
+                    session_id,
+                    delta: String::from(" world"),
+                })
+                .is_empty()
+        );
+
+        let flushed_events = coalescer.flush();
+        assert_eq!(flushed_events.len(), 1);
+        assert!(matches!(
+            &flushed_events[0],
+            ExecutionStreamEvent::OutputDelta { delta, .. } if delta == "hello world"
+        ));
+    }
+
+    /// Verifies non-delta events force pending text to flush before the structural event is emitted.
+    /// 验证非增量事件会先冲刷待发文本，再按顺序发出结构化事件。
+    #[test]
+    fn coalescer_flushes_pending_output_before_runtime_event() {
+        let session_id = Uuid::nil();
+        let mut coalescer = ExecutionStreamDeltaCoalescer::default();
+
+        assert!(
+            coalescer
+                .push_event(ExecutionStreamEvent::OutputDelta {
+                    session_id,
+                    delta: String::from("partial"),
+                })
+                .is_empty()
+        );
+
+        let flushed_events = coalescer.push_event(ExecutionStreamEvent::RuntimeEvent {
+            session_id,
+            event: RuntimeEvent::new(RuntimeEventKind::ToolStarted, "tool", "started"),
+        });
+
+        assert_eq!(flushed_events.len(), 2);
+        assert!(matches!(
+            &flushed_events[0],
+            ExecutionStreamEvent::OutputDelta { delta, .. } if delta == "partial"
+        ));
+        assert!(matches!(
+            &flushed_events[1],
+            ExecutionStreamEvent::RuntimeEvent { event, .. }
+                if event.kind == RuntimeEventKind::ToolStarted
+        ));
     }
 }

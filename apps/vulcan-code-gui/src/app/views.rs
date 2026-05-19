@@ -4405,6 +4405,24 @@ impl VulcanWorkbench {
                 Subscription::none()
             };
 
+        let transcript_follow_tail_subscription =
+            if self.pending_transcript_follow_tail_session_ids.is_empty() {
+                Subscription::none()
+            } else {
+                iced::time::every(TRANSCRIPT_STREAM_FOLLOW_TAIL_TICK_INTERVAL)
+                    .map(|_| Message::SelectedSessionTranscriptFollowTailTick)
+            };
+
+        let thinking_overlay_follow_tail_subscription = if self
+            .pending_thinking_overlay_follow_tail_session_ids
+            .is_empty()
+        {
+            Subscription::none()
+        } else {
+            iced::time::every(TRANSCRIPT_STREAM_FOLLOW_TAIL_TICK_INTERVAL)
+                .map(|_| Message::SelectedSessionThinkingOverlayFollowTailTick)
+        };
+
         let thinking_modal_animation_subscription = if self
             .active_thinking_modal
             .as_ref()
@@ -4428,6 +4446,8 @@ impl VulcanWorkbench {
             iced::event::listen_with(Self::map_window_pointer_event),
             transcript_drag_auto_scroll_subscription,
             thinking_overlay_drag_auto_scroll_subscription,
+            transcript_follow_tail_subscription,
+            thinking_overlay_follow_tail_subscription,
             thinking_modal_animation_subscription,
         ])
     }

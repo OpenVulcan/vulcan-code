@@ -151,9 +151,15 @@ impl VulcanWorkbench {
             .archived_sessions
             .iter()
             .any(|session| session.id == session_id);
+        self.remember_tool_detail_messages(session_id, &snapshot.messages);
+        let projected_messages = snapshot
+            .messages
+            .iter()
+            .map(compact_tool_detail_message_for_projection)
+            .collect::<Vec<_>>();
         if session_is_archived {
             self.archived_session_messages
-                .insert(session_id, snapshot.messages);
+                .insert(session_id, projected_messages);
             self.archived_session_compactions
                 .insert(session_id, snapshot.compactions);
             if let Some(runtime_state) = snapshot.runtime_state {
@@ -161,7 +167,7 @@ impl VulcanWorkbench {
                     .insert(session_id, runtime_state);
             }
         } else {
-            self.session_messages.insert(session_id, snapshot.messages);
+            self.session_messages.insert(session_id, projected_messages);
             self.session_compactions
                 .insert(session_id, snapshot.compactions);
             if let Some(runtime_state) = snapshot.runtime_state {
@@ -180,10 +186,12 @@ impl VulcanWorkbench {
     /// 将一页更早转录历史追加到已水合会话缓存的头部。
     pub(super) fn apply_older_session_history_page(&mut self, page: SessionHistoryPage) {
         let session_id = page.session_id;
-        if page.messages.is_empty() {
+        let page_messages = page.messages;
+        if page_messages.is_empty() {
             self.session_history_has_more.remove(&session_id);
             return;
         }
+        self.remember_tool_detail_messages(session_id, &page_messages);
 
         let session_is_archived = self
             .archived_sessions
@@ -200,10 +208,10 @@ impl VulcanWorkbench {
             .iter()
             .map(|message| message.id.clone())
             .collect::<BTreeSet<_>>();
-        let mut older_messages = page
-            .messages
+        let mut older_messages = page_messages
             .into_iter()
             .filter(|message| !existing_ids.contains(&message.id))
+            .map(|message| compact_tool_detail_message_for_projection(&message))
             .collect::<Vec<_>>();
         older_messages.append(messages);
         *messages = older_messages;
@@ -232,9 +240,11 @@ impl VulcanWorkbench {
     pub(super) fn apply_session_tool_detail_page(&mut self, page: SessionToolDetailPage) {
         let session_id = page.session_id;
         let _detail_cursor = (page.turn_index, page.earliest_ordinal, page.has_more_detail);
-        if page.messages.is_empty() {
+        let page_messages = page.messages;
+        if page_messages.is_empty() {
             return;
         }
+        self.remember_tool_detail_messages(session_id, &page_messages);
 
         let session_is_archived = self
             .archived_sessions
@@ -252,9 +262,10 @@ impl VulcanWorkbench {
             .map(|message| message.id.clone())
             .collect::<BTreeSet<_>>();
         messages.extend(
-            page.messages
+            page_messages
                 .into_iter()
-                .filter(|message| !existing_ids.contains(&message.id)),
+                .filter(|message| !existing_ids.contains(&message.id))
+                .map(|message| compact_tool_detail_message_for_projection(&message)),
         );
         messages
             .sort_by_key(|message| parse_unix_millis_text(&message.created_at).unwrap_or_default());

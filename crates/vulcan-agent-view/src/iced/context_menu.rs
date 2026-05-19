@@ -293,7 +293,7 @@ pub(super) fn shortcut_matches_select_all(
 /// 构建一个锚定到转录组件的浮动右键菜单覆盖层元素。
 pub(super) fn build_context_menu_overlay<'a, Message>(
     state: &'a mut SelectableTranscriptState,
-    document: &'a RenderedTranscriptDocument,
+    document: RenderedTranscriptDocument,
     widget_bounds: Rectangle,
     menu_state: TranscriptContextMenuState,
     on_interaction: &'a dyn Fn(SelectableTranscriptInteraction) -> Message,
@@ -315,7 +315,7 @@ struct SelectableTranscriptContextMenuOverlay<'a, Message> {
     state: &'a mut SelectableTranscriptState,
     /// Rendered transcript document used to copy selected text and compute the full character span.
     /// 用于复制选中文本并计算全文字符跨度的渲染转录文档。
-    document: &'a RenderedTranscriptDocument,
+    document: RenderedTranscriptDocument,
     /// Absolute widget bounds used to clamp the menu overlay inside the transcript surface.
     /// 用于将菜单浮层钳制在转录表面内部的绝对组件边界。
     widget_bounds: Rectangle,
@@ -472,7 +472,7 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
                         execute_transcript_context_menu_action(
                             action,
                             self.state,
-                            self.document,
+                            &self.document,
                             self.on_interaction,
                             shell,
                         );
