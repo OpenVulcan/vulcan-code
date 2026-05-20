@@ -885,7 +885,9 @@ impl VulcanWorkbench {
                 ),
                 false,
             );
-            if composer_text_has_submittable_content(&prompt_entry.prompt) {
+            if composer_text_has_submittable_content(&prompt_entry.prompt)
+                && self.session_user_turn_count(session_id) == 1
+            {
                 let _ = self.maybe_generate_session_title_from_prompt(
                     session_id,
                     prompt_entry.prompt.as_str(),

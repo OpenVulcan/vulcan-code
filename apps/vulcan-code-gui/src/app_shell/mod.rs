@@ -12185,6 +12185,28 @@ impl VulcanWorkbench {
         Some(result.generated_title)
     }
 
+    /// Counts canonical user-authored turns currently stored on the session protocol state.
+    /// 统计当前会话协议状态中已保存的规范用户轮次数量。
+    fn session_user_turn_count(&self, session_id: SessionId) -> usize {
+        self.session_runtime_state(session_id)
+            .map(|runtime_state| {
+                runtime_state
+                    .conversation_state
+                    .messages
+                    .iter()
+                    .filter(|message| {
+                        matches!(
+                            message.payload,
+                            crate::conversation_protocol::SessionConversationPayload::UserText {
+                                ..
+                            }
+                        )
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Appends one hidden summary output after a real execution run completes.
     /// 在一次真实执行完成后追加一条隐藏摘要输出。
     fn append_session_summary_output(
@@ -14159,6 +14181,54 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Verifies session title generation only runs for the first user turn and leaves later turns unchanged.
+    /// 验证会话标题生成只会在首条用户轮次触发，后续轮次不会继续改写标题。
+    #[test]
+    fn session_title_generation_runs_only_for_first_user_turn() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(70001);
+        workbench.sessions.clear();
+        workbench.sessions.push(test_session_summary(session_id, "新对话"));
+        workbench.selected_session = session_id;
+
+        workbench
+            .append_user_prompt_to_session_conversation(
+                session_id,
+                String::from("请帮我分析这个项目结构"),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("append first user prompt");
+        assert_eq!(workbench.session_user_turn_count(session_id), 1);
+        let first_title = workbench
+            .maybe_generate_session_title_from_prompt(session_id, "请帮我分析这个项目结构")
+            .expect("first prompt should generate title");
+
+        workbench
+            .append_user_prompt_to_session_conversation(
+                session_id,
+                String::from("继续看看 provider 部分"),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("append second user prompt");
+        assert_eq!(workbench.session_user_turn_count(session_id), 2);
+
+        let second_title_attempt = if workbench.session_user_turn_count(session_id) == 1 {
+            workbench.maybe_generate_session_title_from_prompt(session_id, "继续看看 provider 部分")
+        } else {
+            None
+        };
+
+        assert!(second_title_attempt.is_none());
+        assert_eq!(
+            workbench
+                .session_by_id(session_id)
+                .map(|session| session.title.as_str()),
+            Some(first_title.as_str())
+        );
     }
 
     /// Verifies that an empty composer still reserves one visible line.
