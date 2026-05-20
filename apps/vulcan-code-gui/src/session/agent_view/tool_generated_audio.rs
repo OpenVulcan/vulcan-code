@@ -4,6 +4,7 @@
 use super::tool_shared::{
     build_base_tool_attributes, build_tool_directive_block, generated_attachment_descriptor,
 };
+use super::AgentViewBuildOptions;
 use crate::model::SessionMessageEntry;
 use vulcan_agent_view::{
     AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,
@@ -14,9 +15,13 @@ use vulcan_agent_view::{
 pub(crate) fn build_generated_audio_tool_block(
     kind: AgentViewDirectiveKind,
     message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
 ) -> AgentViewDirectiveBlock {
-    let mut attributes =
-        build_base_tool_attributes(message, AgentViewToolPresentationKind::GeneratedAudio);
+    let mut attributes = build_base_tool_attributes(
+        message,
+        AgentViewToolPresentationKind::GeneratedAudio,
+        options,
+    );
     if let Some(metadata) = message.metadata.as_ref()
         && let Some(descriptor) = generated_attachment_descriptor(metadata, "audio")
     {

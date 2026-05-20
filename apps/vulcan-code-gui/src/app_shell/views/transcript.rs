@@ -99,7 +99,10 @@ fn map_selectable_transcript_interaction(
 
 #[cfg(test)]
 mod tests {
+    use crate::AppLocale;
+    use crate::model::SessionId;
     use super::session_transcript_prepare_inline_render_document;
+    use super::session_transcript_surface_id;
 
     /// Verifies inline transcript tool blocks keep only summary metadata so heavy tool output never enters the main render tree.
     /// 验证内联转录工具区块只保留摘要元数据，确保重型工具输出永远不会进入主渲染树。
@@ -166,12 +169,27 @@ mod tests {
         assert!(selected_text.contains("后置说明"));
         assert!(!selected_text.contains("大型工具正文"));
     }
+
+    /// Verifies transcript surface identifiers are locale-scoped so a GUI language switch cannot reuse stale render-cache payloads.
+    /// 验证转录表面标识会绑定当前语言，确保界面语言切换后不会复用过期渲染缓存。
+    #[test]
+    fn transcript_surface_id_changes_with_locale() {
+        let session_id = SessionId::default();
+
+        assert_ne!(
+            session_transcript_surface_id(session_id, AppLocale::ZhCn),
+            session_transcript_surface_id(session_id, AppLocale::EnUs)
+        );
+    }
 }
 
 /// Builds the stable surface identifier used by a selectable session transcript widget.
 /// 构建可选择会话转录组件使用的稳定表面标识。
-fn session_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
-    SelectableTranscriptSurfaceId(format!("session:{session_id}"))
+fn session_transcript_surface_id(
+    session_id: SessionId,
+    locale: AppLocale,
+) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!("session:{}:{}", locale.as_str(), session_id))
 }
 
 /// Rewrites one main-surface transcript block in place so heavy tool bodies stay out of the live render tree while the block keeps its identity and metadata.
@@ -215,20 +233,37 @@ fn session_transcript_prepare_inline_render_document(
 
 /// Builds the stable surface identifier used by a centered thinking-modal transcript widget.
 /// 构建居中思考弹层转录组件使用的稳定表面标识。
-fn thinking_modal_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
-    SelectableTranscriptSurfaceId(format!("thinking-modal:{session_id}"))
+fn thinking_modal_transcript_surface_id(
+    session_id: SessionId,
+    locale: AppLocale,
+) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!(
+        "thinking-modal:{}:{}",
+        locale.as_str(),
+        session_id
+    ))
 }
 
 /// Builds the stable surface identifier used by a streaming thinking-overlay transcript widget.
 /// 构建流式思考浮层转录组件使用的稳定表面标识。
-fn thinking_overlay_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
-    SelectableTranscriptSurfaceId(format!("thinking-overlay:{session_id}"))
+fn thinking_overlay_transcript_surface_id(
+    session_id: SessionId,
+    locale: AppLocale,
+) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!(
+        "thinking-overlay:{}:{}",
+        locale.as_str(),
+        session_id
+    ))
 }
 
 /// Builds the stable surface identifier used by a selectable tool-modal transcript widget.
 /// 构建可选择工具弹层转录组件使用的稳定表面标识。
-fn tool_modal_transcript_surface_id(session_id: SessionId) -> SelectableTranscriptSurfaceId {
-    SelectableTranscriptSurfaceId(format!("tool-modal:{session_id}"))
+fn tool_modal_transcript_surface_id(
+    session_id: SessionId,
+    locale: AppLocale,
+) -> SelectableTranscriptSurfaceId {
+    SelectableTranscriptSurfaceId(format!("tool-modal:{}:{}", locale.as_str(), session_id))
 }
 
 impl VulcanWorkbench {
@@ -242,8 +277,8 @@ impl VulcanWorkbench {
         let Some(session_id) = self.selected_session().map(|session| session.id) else {
             return container(
                 column![
-                    text("尚未选择会话").size(18),
-                    text("先在左侧会话列表中选中一个会话，会话内容会显示在这里。").size(13),
+                    text(self.t(I18nKey::TranscriptNoSessionSelectedTitle)).size(18),
+                    text(self.t(I18nKey::TranscriptNoSessionSelectedHint)).size(13),
                 ]
                 .spacing(8)
                 .align_x(iced::Alignment::Center),
@@ -259,7 +294,7 @@ impl VulcanWorkbench {
         {
             return container(
                 column![
-                    text("正在载入会话").size(18),
+                    text(self.t(I18nKey::TranscriptLoadingSessionTitle)).size(18),
                     text(progress_detail).size(13),
                     container(progress_bar(0.0..=1.0, progress_value)).width(Fill),
                 ]
@@ -282,8 +317,8 @@ impl VulcanWorkbench {
         if !has_any_document_content {
             return container(
                 column![
-                    text("尚未开始执行").size(18),
-                    text("输入任务并开始执行后，当前会话的输出会显示在这里。").size(13),
+                    text(self.t(I18nKey::TranscriptNotStartedTitle)).size(18),
+                    text(self.t(I18nKey::TranscriptInputHint)).size(13),
                 ]
                 .spacing(8)
                 .align_x(iced::Alignment::Center),
@@ -348,9 +383,9 @@ impl VulcanWorkbench {
         let is_history_loading = self.loading_older_session_history_ids.contains(&session_id);
         let has_more_history = self.session_history_has_more.contains(&session_id);
         let label = if is_history_loading {
-            "正在加载更早历史..."
+            self.t(I18nKey::TranscriptLoadingOlderHistory)
         } else {
-            "加载更早 30 轮"
+            self.t(I18nKey::TranscriptLoadOlderHistory)
         };
         let mut load_button = button(text(label).size(12))
             .padding([7, 12])
@@ -394,7 +429,7 @@ impl VulcanWorkbench {
                 view_selectable_rendered_transcript_owned_with_context_menu::<Message>(
                     document,
                     self.app_theme.clone(),
-                    session_transcript_surface_id(session_id),
+                    session_transcript_surface_id(session_id, self.current_locale()),
                     self.selectable_transcript_command.clone(),
                     move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
                         session_id,
@@ -442,12 +477,10 @@ impl VulcanWorkbench {
         }
 
         let helper_text = match state.run_state {
-            SubagentTaskRunState::Running => "子代理正在执行，面板会在任务结束后展示完整转录。",
-            SubagentTaskRunState::Stopped => {
-                "子代理已停止，当前保留截至停止时的上下文、思考与输出片段。"
-            }
-            SubagentTaskRunState::Completed => "子代理已结束，但当前没有可回看的转录内容。",
-            SubagentTaskRunState::Failed => "子代理已失败，当前仅保留失败摘要。",
+            SubagentTaskRunState::Running => self.t(I18nKey::TranscriptSubagentRunningHint),
+            SubagentTaskRunState::Stopped => self.t(I18nKey::TranscriptSubagentStoppedHint),
+            SubagentTaskRunState::Completed => self.t(I18nKey::TranscriptSubagentCompletedHint),
+            SubagentTaskRunState::Failed => self.t(I18nKey::TranscriptSubagentFailedHint),
         };
         let status_label = super::subagent_run_state_badge_label(state.run_state);
         let title = state.subagent_label.clone();
@@ -561,7 +594,7 @@ impl VulcanWorkbench {
             .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
             .style(style::transcript_jump_to_bottom_button_style)
             .on_press(Message::JumpSelectedSessionTranscriptToBottom),
-            "回到底部",
+            text(self.t(I18nKey::TranscriptJumpToBottom)),
             tooltip::Position::Top,
         )
         .style(container::rounded_box);
@@ -609,7 +642,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
     ) -> Element<'_, Message> {
         let Some(document_cache) = self.session_inline_agent_view_documents.get(&session_id) else {
-            return container(text("当前没有可渲染的统一输出块。").size(14))
+            return container(text(self.t(I18nKey::TranscriptNoRenderableBlocks)).size(14))
                 .padding(14)
                 .height(Fill)
                 .into();
@@ -617,7 +650,7 @@ impl VulcanWorkbench {
         let transcript_body = view_selectable_rendered_transcript_shared_with_context_menu::<Message>(
             Rc::clone(&document_cache.document),
             self.app_theme.clone(),
-            session_transcript_surface_id(session_id),
+            session_transcript_surface_id(session_id, self.current_locale()),
             self.selectable_transcript_command.clone(),
             move |request| Message::SelectedSessionTranscriptDragAutoScrollChanged {
                 session_id,
@@ -783,7 +816,7 @@ impl VulcanWorkbench {
                 self.session_last_api_request_buffers.get(&session_id),
                 Message::SelectedSessionDocumentApiRequestAction
                     as fn(text_editor::Action) -> Message,
-                String::from("当前还没有真实 API 请求快照。"),
+                self.t(I18nKey::TranscriptNoApiRequestSnapshot),
             ),
         };
 
@@ -830,7 +863,7 @@ impl VulcanWorkbench {
             &self.app_theme,
             progress,
             thinking_overlay_scrollable_id(session_id),
-            thinking_modal_transcript_surface_id(session_id),
+            thinking_modal_transcript_surface_id(session_id, self.current_locale()),
             self.selectable_transcript_command.clone(),
             move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
                 session_id,
@@ -873,7 +906,7 @@ impl VulcanWorkbench {
             &self.app_theme,
             progress,
             tool_modal_scrollable_id(session_id),
-            tool_modal_transcript_surface_id(session_id),
+            tool_modal_transcript_surface_id(session_id, self.current_locale()),
             self.selectable_transcript_command.clone(),
             |_| Message::Noop,
             |interaction| {
@@ -910,7 +943,7 @@ impl VulcanWorkbench {
         let transcript_body = view_selectable_rendered_transcript_with_context_menu::<Message>(
             &modal_state.payload.document,
             &self.app_theme,
-            tool_modal_transcript_surface_id(session_id),
+            tool_modal_transcript_surface_id(session_id, self.current_locale()),
             self.selectable_transcript_command.clone(),
             |_| Message::Noop,
             |interaction| {
@@ -925,7 +958,7 @@ impl VulcanWorkbench {
             column![
                 generated_cards,
                 rule::horizontal(1),
-                text("原始工具返回").size(12),
+                text(self.t(I18nKey::TranscriptOriginalToolResult)).size(12),
                 transcript_body,
             ]
             .spacing(14)
@@ -1007,7 +1040,7 @@ impl VulcanWorkbench {
         attachments: &[ConversationAttachment],
     ) -> Element<'_, Message> {
         let cards = attachments.iter().fold(
-            column![text("生成结果").size(12)].spacing(12),
+            column![text(self.t(I18nKey::TranscriptGeneratedResultsTitle)).size(12)].spacing(12),
             |column, attachment| column.push(self.view_generated_tool_modal_card(attachment)),
         );
         container(cards).padding([4, 0]).width(Fill).into()
@@ -1051,7 +1084,7 @@ impl VulcanWorkbench {
                 ) else {
                     return self.view_generated_tool_modal_icon_preview(
                         lucide::video().size(28).line_height(1.0).into(),
-                        "当前视频可使用系统默认播放器打开，或直接定位到文件位置。",
+                        self.t(I18nKey::TranscriptVideoPreviewHint),
                     );
                 };
                 let preview_size =
@@ -1075,28 +1108,28 @@ impl VulcanWorkbench {
             }
             ConversationAttachmentKind::Image => self.view_generated_tool_modal_icon_preview(
                 lucide::image().size(28).line_height(1.0).into(),
-                "图片文件已生成，可使用下方操作继续查看。",
+                self.t(I18nKey::TranscriptImagePreviewHint),
             ),
             ConversationAttachmentKind::Audio => self.view_generated_tool_modal_icon_preview(
                 lucide::volume_two().size(28).line_height(1.0).into(),
-                "点击下方播放按钮即可直接播放当前音频，再次点击会停止。",
+                self.t(I18nKey::TranscriptAudioPreviewHint),
             ),
             ConversationAttachmentKind::Pdf => self.view_generated_tool_modal_icon_preview(
                 lucide::file_text().size(28).line_height(1.0).into(),
-                "当前文档可直接打开，或定位到文件位置。",
+                self.t(I18nKey::TranscriptDocumentPreviewHint),
             ),
         };
         let open_label = match attachment.kind {
-            ConversationAttachmentKind::Image => "预览图片",
+            ConversationAttachmentKind::Image => self.t(I18nKey::TranscriptPreviewImageAction),
             ConversationAttachmentKind::Audio => {
                 if self.is_generated_audio_playing_local_path(&attachment.local_path) {
-                    "停止播放"
+                    self.t(I18nKey::TranscriptStopPlaybackAction)
                 } else {
-                    "播放音频"
+                    self.t(I18nKey::TranscriptPlayAudioAction)
                 }
             }
-            ConversationAttachmentKind::Video => "打开视频",
-            ConversationAttachmentKind::Pdf => "打开文档",
+            ConversationAttachmentKind::Video => self.t(I18nKey::TranscriptOpenVideoAction),
+            ConversationAttachmentKind::Pdf => self.t(I18nKey::TranscriptOpenDocumentAction),
         };
         let meta_line = match attachment.byte_len {
             Some(byte_len) => format!(
@@ -1118,7 +1151,7 @@ impl VulcanWorkbench {
             _ => Message::OpenGeneratedAttachmentWithDefaultApp(attachment.local_path.clone()),
         };
         let secondary_copy_button: Element<'_, Message> = match attachment.kind {
-            ConversationAttachmentKind::Image => button(text("复制图片").size(12))
+            ConversationAttachmentKind::Image => button(text(self.t(I18nKey::TranscriptCopyImageAction)).size(12))
                 .padding([6, 10])
                 .style(style::subtle_panel_button_style)
                 .on_press(Message::CopyGeneratedImageToClipboard {
@@ -1126,7 +1159,7 @@ impl VulcanWorkbench {
                     local_path: attachment.local_path.clone(),
                 })
                 .into(),
-            _ => button(text("复制路径").size(12))
+            _ => button(text(self.t(I18nKey::TranscriptCopyPathAction)).size(12))
                 .padding([6, 10])
                 .style(style::subtle_panel_button_style)
                 .on_press(Message::CopyGeneratedAttachmentPath(
@@ -1150,7 +1183,7 @@ impl VulcanWorkbench {
                         .style(style::subtle_panel_button_style)
                         .on_press(primary_action),
                     secondary_copy_button,
-                    button(text("定位文件").size(12))
+                    button(text(self.t(I18nKey::TranscriptRevealFileAction)).size(12))
                         .padding([6, 10])
                         .style(style::subtle_panel_button_style)
                         .on_press(Message::RevealGeneratedAttachmentInFolder(
@@ -1173,7 +1206,7 @@ impl VulcanWorkbench {
     fn view_generated_tool_modal_icon_preview<'a>(
         &self,
         icon: Element<'a, Message>,
-        helper_text: &'a str,
+        helper_text: String,
     ) -> Element<'a, Message> {
         container(
             column![icon, text(helper_text).size(12)]
@@ -1202,7 +1235,15 @@ impl VulcanWorkbench {
         }
 
         let message = self.streaming_thinking_message(session_id)?.clone();
-        let mut document = build_agent_view_document(std::slice::from_ref(&message), &[]);
+        let build_options = AgentViewBuildOptions {
+            locale: self.current_locale(),
+            ..AgentViewBuildOptions::default()
+        };
+        let mut document = build_agent_view_document_with_options(
+            std::slice::from_ref(&message),
+            &[],
+            &build_options,
+        );
         let block = document.blocks.get_mut(0)?;
         let block_id = agent_view_block_id(session_id, 0, block);
         self.decorate_agent_view_block_for_render(session_id, &block_id, block);
@@ -1211,11 +1252,11 @@ impl VulcanWorkbench {
         Some(
             container(view_thinking_overlay_surface_with_context_menu(
                 title,
-                String::from("运行中思考会先停留在这里，完成后再回收到主会话。"),
+                self.t(I18nKey::TranscriptThinkingOverlayHint),
                 &document,
                 &self.app_theme,
                 thinking_overlay_scrollable_id(session_id),
-                thinking_overlay_transcript_surface_id(session_id),
+                thinking_overlay_transcript_surface_id(session_id, self.current_locale()),
                 self.selectable_transcript_command.clone(),
                 move |request| Message::SelectedSessionThinkingOverlayDragAutoScrollChanged {
                     session_id,

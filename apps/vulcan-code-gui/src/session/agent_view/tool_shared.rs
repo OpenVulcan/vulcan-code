@@ -8,6 +8,8 @@ use vulcan_agent_view::{
     AgentViewToolPresentationKind, render_directive_source,
 };
 
+use super::AgentViewBuildOptions;
+
 /// One compact generated-attachment descriptor extracted from tool metadata for a dedicated transcript presentation family.
 /// 为专属转录展示家族从工具元数据中提取出的一条紧凑生成附件描述符。
 pub(crate) struct GeneratedAttachmentDescriptor {
@@ -61,14 +63,15 @@ pub(crate) fn resolve_tool_presentation_kind(
 pub(crate) fn build_base_tool_attributes(
     message: &SessionMessageEntry,
     presentation_kind: AgentViewToolPresentationKind,
+    options: &AgentViewBuildOptions,
 ) -> AgentViewAttributes {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
     if !message.created_at.trim().is_empty() {
         attributes.insert(String::from("created-at"), message.created_at.clone());
     }
-    if !message.title.trim().is_empty() {
-        attributes.insert(String::from("title"), message.title.clone());
+    if let Some(title) = super::localized_message_title(message, options) {
+        attributes.insert(String::from("title"), title);
     }
     if let Some(tool_display_state) = message
         .metadata

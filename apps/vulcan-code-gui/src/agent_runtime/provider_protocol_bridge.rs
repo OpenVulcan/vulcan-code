@@ -111,11 +111,11 @@ pub(crate) fn format_host_tool_result_runtime_detail(
     model_output: &str,
 ) -> String {
     let normalized_output = if model_output.trim().is_empty() {
-        String::from("（空结果）")
+        String::from("(empty result)")
     } else {
         model_output.trim().to_string()
     };
-    format!("## 返回标识\n\n`{tool_result_id}`\n\n## 工具返回\n\n{normalized_output}")
+    format!("## Result ID\n\n`{tool_result_id}`\n\n## Tool Result\n\n{normalized_output}")
 }
 
 /// Converts one `vulcan-core` provider-turn delta into the GUI-facing runtime delta shape without changing the semantic payload.
@@ -186,7 +186,7 @@ pub(crate) fn build_openai_compatible_turn_response(
 pub(crate) fn format_tool_call_runtime_detail(tool_name: &str, arguments: &Value) -> String {
     let pretty_arguments =
         serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
-    format!("## 调用工具\n\n`{tool_name}`\n\n## 调用参数\n\n```json\n{pretty_arguments}\n```")
+    format!("## Tool Call\n\n`{tool_name}`\n\n## Arguments\n\n```json\n{pretty_arguments}\n```")
 }
 
 /// Builds one structured runtime-event metadata payload for a completed tool result while preserving host-side metadata fields.

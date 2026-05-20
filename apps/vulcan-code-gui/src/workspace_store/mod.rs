@@ -37,7 +37,8 @@ pub use persistence::{
     persist_workspace_snapshot,
 };
 pub use session_load::{
-    load_session_history_page, load_session_hydration_snapshot, load_session_tool_detail_page,
+    load_complete_session_tool_detail_turn, load_session_history_page,
+    load_session_hydration_snapshot,
 };
 
 #[cfg(test)]
@@ -74,6 +75,9 @@ pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
 /// Search-result page size used by the lightweight per-session history search.
 /// 单会话轻量历史搜索使用的搜索结果页大小。
 pub const SESSION_HISTORY_SEARCH_RESULT_LIMIT: usize = 20;
+/// Maximum characters retained from one user-provided history-search query.
+/// 单条用户提供的历史搜索词允许保留的最大字符数。
+pub const SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS: usize = 512;
 /// Stable global index name used by controller-managed workspace-history FTS search.
 /// 控制器托管工作台历史 FTS 搜索使用的稳定全局索引名。
 const WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME: &str = "workspace_history_search_all";
@@ -1541,7 +1545,7 @@ fn normalize_sqlite_fts_literal_terms(query: &str) -> Vec<String> {
     // 仅保留分词器友好的字面字符，这样 `50 TOPS (NPU)` 一类粘贴文本就不会触发 FTS 语法解析。
     let mut terms = Vec::new();
     let mut current = String::new();
-    for ch in query.chars() {
+    for ch in query.chars().take(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS) {
         if sqlite_fts_query_char_is_literal(ch) {
             current.push(ch);
         } else {
@@ -2676,6 +2680,20 @@ mod tests {
         assert_eq!(
             normalize_session_history_search_query("AND (GPU) NEAR NPU OR"),
             "and GPU near NPU or"
+        );
+    }
+
+    /// Verifies that oversized pasted history-search text is bounded before FTS parsing.
+    /// 验证超长粘贴历史搜索文本会在进入 FTS 解析前被限制长度。
+    #[test]
+    fn normalize_session_history_search_query_limits_pasted_text() {
+        let query = "a".repeat(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS + 64);
+
+        assert_eq!(
+            normalize_session_history_search_query(&query)
+                .chars()
+                .count(),
+            SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS
         );
     }
 

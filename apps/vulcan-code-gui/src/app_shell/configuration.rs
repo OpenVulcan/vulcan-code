@@ -4,6 +4,7 @@
 use super::helpers::*;
 use super::*;
 use crate::ai_tool_configuration;
+use crate::AppLocale;
 use crate::context_budget::{ContextCompactionPolicy, build_context_budget_fingerprint};
 use crate::provider_capabilities::{
     ResolvedModelCapabilities, resolve_effective_model_capabilities, resolve_model_capabilities,
@@ -21,6 +22,16 @@ impl VulcanWorkbench {
         config
             .workbench_reasoning_effort
             .unwrap_or(WorkbenchReasoningEffort::Medium)
+    }
+
+    /// Resolves the remembered initial GUI locale from persisted configuration and falls back to Simplified Chinese when no prior selection exists.
+    /// 从持久化配置解析已记忆的初始图形界面语言；当不存在历史选择时回退到简体中文。
+    pub(super) fn resolve_initial_locale(config: &ProviderConfigurationFile) -> AppLocale {
+        config
+            .ui_locale
+            .as_deref()
+            .and_then(AppLocale::parse)
+            .unwrap_or_default()
     }
 
     /// Resolves the initial provider picker choice using the persisted configuration and supported catalog order.
@@ -424,6 +435,14 @@ impl VulcanWorkbench {
     pub(super) fn persist_workbench_reasoning_effort_preference(&mut self) -> Result<(), String> {
         self.provider_configuration.workbench_reasoning_effort =
             Some(self.workbench_reasoning_effort_preference);
+        provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
+    /// Persists the currently selected GUI locale back into the shared provider configuration file.
+    /// 将当前选中的图形界面语言持久化回共享供应商配置文件。
+    pub(super) fn persist_locale_preference(&mut self) -> Result<(), String> {
+        self.provider_configuration.ui_locale =
+            Some(self.language_manager.current_locale().as_str().to_string());
         provider_config::save_configuration_file(&self.provider_configuration)
     }
 

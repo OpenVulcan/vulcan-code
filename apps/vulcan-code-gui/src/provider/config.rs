@@ -4272,6 +4272,10 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub workbench_reasoning_effort: Option<ReasoningEffortLevel>,
+    /// Remembered GUI locale identifier selected by the user.
+    /// 由用户选择并记忆的图形界面语言标识。
+    #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
+    pub ui_locale: Option<String>,
     /// Persisted provider map keyed by provider identifier.
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -5773,6 +5777,23 @@ mod tests {
             restored.workbench_reasoning_effort,
             Some(ReasoningEffortLevel::High)
         );
+    }
+
+    /// Verifies the persisted GUI locale keeps the stable `uiLocale` field name and round-trips through the shared provider configuration file.
+    /// 验证持久化图形界面语言会保持稳定的 `uiLocale` 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
+    #[test]
+    fn provider_configuration_round_trips_ui_locale() {
+        let config = ProviderConfigurationFile {
+            ui_locale: Some(String::from("en-US")),
+            ..ProviderConfigurationFile::default()
+        };
+
+        let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+        assert_eq!(value.get("uiLocale"), Some(&json!("en-US")));
+
+        let restored: ProviderConfigurationFile =
+            serde_json::from_value(value).expect("provider configuration must deserialize");
+        assert_eq!(restored.ui_locale.as_deref(), Some("en-US"));
     }
 
     /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.

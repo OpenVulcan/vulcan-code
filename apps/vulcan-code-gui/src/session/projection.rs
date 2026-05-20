@@ -109,6 +109,7 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
+        let locale = self.current_locale();
 
         Task::perform(
             async move {
@@ -122,6 +123,7 @@ impl VulcanWorkbench {
                         visible_messages,
                         runtime_events,
                         active_streaming_output_message_id,
+                        locale,
                     )
                 });
                 task.await
@@ -324,6 +326,7 @@ impl VulcanWorkbench {
             self.streaming_output_message_ids
                 .get(&session_id)
                 .map(String::as_str),
+            self.current_locale(),
         );
         let document =
             build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
@@ -384,6 +387,7 @@ impl VulcanWorkbench {
                 .get(&session_id)
                 .filter(|active_message_id| active_message_id.as_str() == message_id)
                 .map(String::as_str),
+            self.current_locale(),
         );
         let replacement_document = build_agent_view_document_with_options(
             std::slice::from_ref(&message),
@@ -639,7 +643,8 @@ impl VulcanWorkbench {
             return None;
         }
 
-        let build_options = agent_view_build_options_for_streaming_output(None);
+        let build_options =
+            agent_view_build_options_for_streaming_output(None, self.current_locale());
         let mut document = build_agent_view_document_with_options(&messages, &[], &build_options);
         for (block_index, block) in document.blocks.iter_mut().enumerate() {
             let block_id = agent_view_block_id(state.task_id, block_index, block);
@@ -714,7 +719,10 @@ impl VulcanWorkbench {
                 .insert(String::from("ui-thinking-surface"), String::from("inline"));
             directive.attributes.insert(
                 String::from("ui-thinking-title"),
-                build_thinking_title(&directive.body, "子代理思考"),
+                build_thinking_title(
+                    &directive.body,
+                    &self.t(I18nKey::TranscriptSubagentThinking),
+                ),
             );
         }
     }
@@ -822,7 +830,7 @@ impl VulcanWorkbench {
             .get("message-id")
             .and_then(|message_id| self.session_thinking_duration_millis(session_id, message_id))
             .map(format_thinking_duration_label)
-            .unwrap_or_else(|| String::from("未知时长"));
+            .unwrap_or_else(|| self.t(I18nKey::CommonUnknownDuration));
         build_thinking_title(&directive.body, &duration_label)
     }
 
@@ -881,7 +889,7 @@ impl VulcanWorkbench {
             .get(&session_id)
             .is_some_and(|document| !document.blocks.is_empty());
         if self.loading_session_ids.contains(&session_id) && !has_cached_document {
-            return Some((0.38, String::from("正在载入会话正文与运行时快照，请稍候。")));
+            return Some((0.38, self.t(I18nKey::StatusSessionLoading)));
         }
 
         if let Some(batch_state) = self.session_initial_tool_detail_batches.get(&session_id)
@@ -889,17 +897,27 @@ impl VulcanWorkbench {
         {
             let progress_value = 0.42 + batch_state.completion_ratio() * 0.28;
             let progress_detail = if batch_state.failed_turn_count == 0 {
-                format!(
-                    "正在补载工具明细（{}/{}），随后将一次性生成完整会话视图。",
-                    batch_state.completed_turn_count(),
-                    batch_state.total_turn_count
+                self.tf(
+                    I18nKey::StatusToolDetailLoading,
+                    &[
+                        I18nArg::named(
+                            "completed_count",
+                            batch_state.completed_turn_count().to_string(),
+                        ),
+                        I18nArg::named("total_count", batch_state.total_turn_count.to_string()),
+                    ],
                 )
             } else {
-                format!(
-                    "正在补载工具明细（{}/{}，失败 {}），随后将一次性生成完整会话视图。",
-                    batch_state.completed_turn_count(),
-                    batch_state.total_turn_count,
-                    batch_state.failed_turn_count
+                self.tf(
+                    I18nKey::StatusToolDetailLoadingWithFailures,
+                    &[
+                        I18nArg::named(
+                            "completed_count",
+                            batch_state.completed_turn_count().to_string(),
+                        ),
+                        I18nArg::named("total_count", batch_state.total_turn_count.to_string()),
+                        I18nArg::named("failed_count", batch_state.failed_turn_count.to_string()),
+                    ],
                 )
             };
             return Some((progress_value, progress_detail));
@@ -912,7 +930,7 @@ impl VulcanWorkbench {
         {
             return Some((
                 0.76,
-                String::from("正在构建会话视图与可选文本投影，请稍候。"),
+                self.t(I18nKey::StatusProjectionBuilding),
             ));
         }
 
@@ -931,7 +949,7 @@ impl VulcanWorkbench {
 
         Some(self.build_modal_surface_payload(
             title,
-            String::from("点击会话内思考标题可再次打开这里查看完整内容。"),
+            self.t(I18nKey::TranscriptThinkingModalHint),
             document,
             Vec::new(),
         ))
@@ -959,15 +977,13 @@ impl VulcanWorkbench {
             && let Some(markdown_body) = task_session_modal_markdown_from_tool_metadata(metadata)
         {
             let title = if message.title.trim().is_empty() {
-                String::from("子代理返回摘要")
+                self.t(I18nKey::TranscriptSubagentResultSummaryTitle)
             } else {
                 message.title.clone()
             };
             return Some(self.build_modal_surface_payload(
                 title,
-                String::from(
-                    "当前子代理实时会话已不可恢复，这里展示最后一次持久化的 Markdown 返回摘要。",
-                ),
+                self.t(I18nKey::TranscriptSubagentResultSummaryHint),
                 parse_agent_view_document(&markdown_body),
                 generated_attachments,
             ));
@@ -975,13 +991,13 @@ impl VulcanWorkbench {
 
         if let Some(message) = resolved_message {
             let title = if message.title.trim().is_empty() {
-                String::from("工具调用详情")
+                self.t(I18nKey::TranscriptToolModalTitle)
             } else {
                 message.title.clone()
             };
             return Some(self.build_modal_surface_payload(
                 title,
-                String::from("这里会显示完整的工具调用参数、返回结果与宿主生成媒体。"),
+                self.t(I18nKey::TranscriptToolModalHint),
                 parse_agent_view_document(&message.body),
                 generated_attachments,
             ));
@@ -992,7 +1008,7 @@ impl VulcanWorkbench {
 
         Some(self.build_modal_surface_payload(
             title,
-            String::from("这里会显示完整的工具调用参数、返回结果与宿主生成媒体。"),
+            self.t(I18nKey::TranscriptToolModalHint),
             document,
             generated_attachments,
         ))

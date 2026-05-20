@@ -43,7 +43,7 @@ use self::event_routing::*;
 use self::layout_engine::*;
 use self::paint::*;
 use self::perf::TranscriptPerfTrace;
-use self::render_cache::rebind_stashed_surface_render_cache;
+use self::render_cache::{clear_stashed_surface_render_caches, rebind_stashed_surface_render_cache};
 use self::scene::*;
 use self::surface_state::*;
 pub use self::surface_state::{
@@ -70,6 +70,12 @@ use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vect
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Instant;
+
+/// Clears every stashed surface-scoped transcript render cache retained across widget teardown.
+/// 清空所有跨组件销毁保留的按表面归属转录渲染缓存。
+pub fn clear_selectable_transcript_render_cache_stash() {
+    clear_stashed_surface_render_caches();
+}
 
 /// Builds one selectable rendered transcript element from the provided structured agent document.
 /// 根据提供的结构化代理文档构建一个可选择的渲染转录元素。

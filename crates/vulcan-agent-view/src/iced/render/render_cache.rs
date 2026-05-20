@@ -21,6 +21,14 @@ thread_local! {
         RefCell::new(BTreeMap::new());
 }
 
+/// Clears all stashed surface-scoped render caches so future transcript widgets must rebuild from fresh state.
+/// 清空所有按表面归属暂存的渲染缓存，使后续转录组件必须从全新状态重建。
+pub(super) fn clear_stashed_surface_render_caches() {
+    STASHED_SURFACE_RENDER_CACHES.with(|stashed_caches| {
+        stashed_caches.borrow_mut().clear();
+    });
+}
+
 /// Stores one reusable parsed Markdown snapshot aligned with one rendered transcript block.
 /// 存储一份与单个渲染转录区块对齐的可复用 Markdown 解析快照。
 #[derive(Debug, Clone)]
@@ -241,7 +249,8 @@ pub(super) fn stash_surface_render_cache(
 #[cfg(test)]
 mod tests {
     use super::{
-        TranscriptRenderCache, rebind_stashed_surface_render_cache, stash_surface_render_cache,
+        TranscriptRenderCache, clear_stashed_surface_render_caches,
+        rebind_stashed_surface_render_cache, stash_surface_render_cache,
     };
 
     /// Verifies one stashed surface render cache can be restored by a later widget instance bound to the same surface identifier.
@@ -269,5 +278,29 @@ mod tests {
         assert_eq!(restored_surface_key.as_deref(), Some(unique_surface_id.as_str()));
         assert_eq!(restored_cache.cached_signature, 42);
         assert_eq!(restored_cache.cached_width, 777.0);
+    }
+
+    /// Verifies clearing the stashed surface cache forces later bindings to start from a cold render-cache state.
+    /// 验证清空暂存表面缓存后，后续绑定会强制回到冷启动渲染缓存状态。
+    #[test]
+    fn clearing_stashed_surface_render_caches_discards_old_entries() {
+        let unique_surface_id = String::from("surface:test:clear");
+        let mut original_cache = TranscriptRenderCache::default();
+        original_cache.cached_signature = 99;
+        let mut original_surface_key = Some(unique_surface_id.clone());
+
+        stash_surface_render_cache(&mut original_cache, &mut original_surface_key);
+        clear_stashed_surface_render_caches();
+
+        let mut restored_cache = TranscriptRenderCache::default();
+        let mut restored_surface_key = None;
+        rebind_stashed_surface_render_cache(
+            &mut restored_cache,
+            &mut restored_surface_key,
+            Some(unique_surface_id.as_str()),
+        );
+
+        assert_eq!(restored_surface_key.as_deref(), Some(unique_surface_id.as_str()));
+        assert_eq!(restored_cache.cached_signature, 0);
     }
 }

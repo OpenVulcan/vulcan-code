@@ -75,8 +75,8 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Schedules one tool-detail page load for a specific conversation turn.
-    /// 为指定对话轮次调度一页工具明细加载。
+    /// Schedules one complete tool-detail load for a specific conversation turn.
+    /// 为指定对话轮次调度一次完整工具明细加载。
     pub(super) fn schedule_session_tool_detail_load(
         &mut self,
         session_id: SessionId,
@@ -91,12 +91,10 @@ impl VulcanWorkbench {
 
         Task::perform(
             async move {
-                let result = workspace_store::load_session_tool_detail_page(
+                let result = workspace_store::load_complete_session_tool_detail_turn(
                     controller_runtime,
                     session_id,
                     turn_index,
-                    None,
-                    SESSION_TOOL_DETAIL_PAGE_LIMIT,
                 )
                 .await;
                 (session_id, result)

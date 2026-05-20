@@ -339,8 +339,8 @@ impl VulcanWorkbench {
                 .on_right_press(Message::Noop);
                 let loading_card = container(
                     column![
-                        text("正在载入 Vulcan Code").size(26),
-                        text("正在准备 vldb 数据平面、LuaSkills 与工作台状态。").size(14),
+                        text(self.t(I18nKey::StartupLoadingTitle)).size(26),
+                        text(self.t(I18nKey::StartupLoadingSubtitle)).size(14),
                         text(message).size(13),
                     ]
                     .spacing(10),
@@ -376,9 +376,9 @@ impl VulcanWorkbench {
                 .on_right_press(Message::Noop);
                 let failure_card = container(
                     column![
-                        text("vldb 数据平面初始化失败").size(24),
+                        text(self.t(I18nKey::StartupDataPlaneInitFailedTitle)).size(24),
                         text(message).size(13),
-                        button("重新初始化")
+                        button(text(self.t(I18nKey::CommonRetry)))
                             .style(button::primary)
                             .on_press(Message::BeginStartupBootstrap),
                     ]
@@ -435,7 +435,7 @@ impl VulcanWorkbench {
         .on_press(Message::CloseWorkbenchModelPicker);
         let option_list: Element<'_, Message> = if filtered_choices.is_empty() {
             container(
-                container(text("没有匹配的模型。").size(14))
+                container(text(self.t(I18nKey::WorkbenchModelPickerNoMatches)).size(14))
                     .width(Fill)
                     .height(Fill)
                     .center(Fill),
@@ -520,9 +520,9 @@ impl VulcanWorkbench {
         };
         let modal_card = container(
             column![
-                row![text("选择模型").size(20), space::horizontal(), close_button,].align_y(Center),
+                row![text(self.t(I18nKey::WorkbenchModelPickerTitle)).size(20), space::horizontal(), close_button,].align_y(Center),
                 text_input(
-                    "输入模型或供应商进行过滤",
+                    &self.t(I18nKey::WorkbenchModelPickerFilterPlaceholder),
                     &self.workbench_model_picker_filter
                 )
                 .id(WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID)
@@ -880,7 +880,7 @@ impl VulcanWorkbench {
         .padding(4)
         .style(style::workbench_image_preview_floating_toolbar_style);
         let preview_hint = container(
-            text("左键拖动平移，滚轮滚动，Ctrl + 滚轮按鼠标位置缩放，中键还原；点击遮罩或按 Esc 关闭。")
+            text(self.t(I18nKey::WorkbenchImagePreviewHint))
                 .size(12)
                 .color(palette.background.base.text.scale_alpha(0.72)),
         )
@@ -922,7 +922,7 @@ impl VulcanWorkbench {
                 )
                 .width(24)
                 .center_y(Fill),
-                text("图片预览").size(16),
+                text(self.t(I18nKey::WorkbenchImagePreviewTitle)).size(16),
                 container(
                     text(modal.file_name.as_str())
                         .size(12)
@@ -1001,13 +1001,25 @@ impl VulcanWorkbench {
 
         let scope_label = self.workspace_history_search_scope_label();
         let scope_button_label = if self.workspace_history_search.project_picker_open {
-            format!("范围：{scope_label}  ▲")
+            format!(
+                "{}  ▲",
+                self.tf(
+                    I18nKey::HistorySearchScopePrefix,
+                    &[I18nArg::named("scope_label", scope_label.as_str())],
+                )
+            )
         } else {
-            format!("范围：{scope_label}  ▼")
+            format!(
+                "{}  ▼",
+                self.tf(
+                    I18nKey::HistorySearchScopePrefix,
+                    &[I18nArg::named("scope_label", scope_label.as_str())],
+                )
+            )
         };
         let search_input_row = row![
             text_input(
-                "搜索用户提问与 AI 最终回复",
+                &self.t(I18nKey::HistorySearchFilterPlaceholder),
                 &self.workspace_history_search.query
             )
             .id(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
@@ -1016,9 +1028,9 @@ impl VulcanWorkbench {
             .padding([10, 12])
             .width(Fill),
             button(text(if self.workspace_history_search.loading {
-                "搜索中"
+                self.t(I18nKey::HistorySearchSearching)
             } else {
-                "搜索"
+                self.t(I18nKey::HistorySearchSearchAction)
             }))
             .padding([8, 14])
             .style(style::subtle_panel_button_style)
@@ -1032,7 +1044,7 @@ impl VulcanWorkbench {
         .align_y(Center);
 
         let mut modal_body = column![
-            row![text("搜索历史").size(20), space::horizontal(), close_button].align_y(Center),
+            row![text(self.t(I18nKey::HistorySearchTitle)).size(20), space::horizontal(), close_button].align_y(Center),
             search_input_row,
             row![
                 button(text(scope_button_label).size(12))
@@ -1040,7 +1052,7 @@ impl VulcanWorkbench {
                     .style(style::subtle_panel_button_style)
                     .on_press(Message::ToggleWorkspaceHistorySearchProjectPicker),
                 space::horizontal().width(Fill),
-                text("仅检索活跃项目").size(11),
+                text(self.t(I18nKey::HistorySearchActiveProjectsOnly)).size(11),
             ]
             .spacing(8)
             .align_y(Center),
@@ -1051,7 +1063,7 @@ impl VulcanWorkbench {
             let scope_options = self.filtered_workspace_history_search_scope_options();
             let scope_picker: Element<'_, Message> = if scope_options.is_empty() {
                 container(
-                    container(text("没有匹配的项目范围。").size(13))
+                    container(text(self.t(I18nKey::HistorySearchNoProjectMatches)).size(13))
                         .width(Fill)
                         .height(Fill)
                         .center(Fill),
@@ -1086,7 +1098,7 @@ impl VulcanWorkbench {
                 container(
                     column![
                         text_input(
-                            "输入项目名或路径过滤，回车选择首项",
+                            &self.t(I18nKey::HistorySearchProjectFilterPlaceholder),
                             &self.workspace_history_search.project_filter
                         )
                         .id(WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID)
@@ -1106,7 +1118,7 @@ impl VulcanWorkbench {
             && !self.workspace_history_search.loading_more
         {
             container(
-                container(text("正在按 BM25 排序搜索工作台历史...").size(14))
+                container(text(self.t(I18nKey::HistorySearchLoading)).size(14))
                     .width(Fill)
                     .height(Fill)
                     .center(Fill),
@@ -1120,7 +1132,15 @@ impl VulcanWorkbench {
                 .into()
         } else if let Some(error) = self.workspace_history_search.error.as_ref() {
             container(
-                container(text(format!("搜索失败：{error}")).size(14))
+                container(
+                    text(
+                        self.tf(
+                            I18nKey::HistorySearchFailedWithError,
+                            &[I18nArg::named("error", error.as_str())],
+                        )
+                    )
+                    .size(14)
+                )
                     .width(Fill)
                     .height(Fill)
                     .center(Fill),
@@ -1131,7 +1151,7 @@ impl VulcanWorkbench {
         } else {
             container(
                 container(
-                    text("输入关键词后回车搜索。仅检索用户提问、AI 最终回复，并默认按 BM25 相关性排序。")
+                    text(self.t(I18nKey::HistorySearchHint))
                         .size(14),
                 )
                 .width(Fill)
@@ -1328,7 +1348,7 @@ impl VulcanWorkbench {
         &self,
         panel: MainDisplayPanel,
     ) -> Element<'_, Message> {
-        let tooltip_label = format!("{}（Ctrl+{}）", panel.label(), panel.shortcut_digit());
+        let tooltip_label = panel.localized_shortcut_hint(self.current_locale());
         let is_active = self.active_main_panel == panel;
 
         tooltip(
@@ -3215,14 +3235,14 @@ impl VulcanWorkbench {
     pub(super) fn view_example_panel(&self) -> Element<'_, Message> {
         let panel_header = row![
             column![
-                text(MainDisplayPanel::Example.section_title()).size(22),
-                text(MainDisplayPanel::Example.description()).size(13),
+                text(MainDisplayPanel::Example.localized_section_title(self.current_locale())).size(22),
+                text(MainDisplayPanel::Example.localized_description(self.current_locale())).size(13),
             ]
             .spacing(4),
             space::horizontal(),
             action_button(
-                "新建会话",
-                "创建一个新的探索会话用于承载额外任务。",
+                self.t(I18nKey::WorkbenchNewSessionAction),
+                self.t(I18nKey::WorkbenchNewSessionHint),
                 Message::CreateSession,
             ),
         ]
@@ -3277,7 +3297,7 @@ impl VulcanWorkbench {
             _ => Vec::new(),
         };
         let content_rows = if panel_rows.is_empty() {
-            column![text("空面板").size(14)].spacing(8)
+            column![text(self.t(I18nKey::WorkbenchEmptyPanel)).size(14)].spacing(8)
         } else {
             panel_rows
                 .into_iter()
@@ -3289,14 +3309,14 @@ impl VulcanWorkbench {
             column![].spacing(0)
         } else {
             summary.warnings.iter().fold(
-                column![text("运行时告警").size(14)].spacing(6),
+                column![text(self.t(I18nKey::WorkbenchRuntimeWarnings)).size(14)].spacing(6),
                 |column, warning| column.push(text(format!("• {warning}")).size(12)),
             )
         };
         container(
             column![
-                text(panel.section_title()).size(24),
-                text(panel.description()).size(13),
+                text(panel.localized_section_title(self.current_locale())).size(24),
+                text(panel.localized_description(self.current_locale())).size(13),
                 text(format!(
                     "激活代理：{} ({}) · 激活模型：{}",
                     summary.active_agent_name, summary.active_agent_id, summary.active_model
@@ -3331,8 +3351,8 @@ impl VulcanWorkbench {
     pub(super) fn view_luaskills_panel(&self) -> Element<'_, Message> {
         let panel_header = container(
             column![
-                text(MainDisplayPanel::LuaSkills.section_title()).size(22),
-                text(MainDisplayPanel::LuaSkills.description()).size(13),
+                text(MainDisplayPanel::LuaSkills.localized_section_title(self.current_locale())).size(22),
+                text(MainDisplayPanel::LuaSkills.localized_description(self.current_locale())).size(13),
             ]
             .spacing(4),
         )
@@ -3468,8 +3488,8 @@ impl VulcanWorkbench {
     pub(super) fn view_agents_panel(&self) -> Element<'_, Message> {
         let panel_header = container(
             column![
-                text(MainDisplayPanel::Agents.section_title()).size(22),
-                text(MainDisplayPanel::Agents.description()).size(13),
+                text(MainDisplayPanel::Agents.localized_section_title(self.current_locale())).size(22),
+                text(MainDisplayPanel::Agents.localized_description(self.current_locale())).size(13),
             ]
             .spacing(4),
         )
@@ -3878,11 +3898,13 @@ impl VulcanWorkbench {
     pub(super) fn view_settings_panel(&self) -> Element<'_, Message> {
         let navigation_width = self.main_task_panel_width.clamp(260.0, 340.0);
         let mut header_title_column =
-            column![text(self.selected_settings_section.title()).size(26)]
+            column![text(self.selected_settings_section.localized_title(self.current_locale())).size(26)]
                 .spacing(6)
                 .width(Fill);
-        let header_description = self.selected_settings_section.description().trim();
-        if !header_description.is_empty() {
+        let header_description = self
+            .selected_settings_section
+            .localized_description(self.current_locale());
+        if !header_description.trim().is_empty() {
             header_title_column = header_title_column.push(
                 text(header_description).size(13).color(
                     self.app_theme
@@ -5678,29 +5700,41 @@ impl VulcanWorkbench {
                 .step(0.05)
                 .into()
         } else {
-            text("已关闭显式温度覆盖，当前将完全使用供应商或模型默认设置。")
+            text(self.t(I18nKey::SettingsTemperatureDisabledNotice))
                 .size(12)
                 .into()
         };
 
         container(
             column![
-                text("运行参数").size(18),
-                text("当前对话模型选择已移到对话面板顶部，这里只保留主题与运行参数。").size(12),
+                text(self.t(I18nKey::SettingsRuntimeParametersTitle)).size(18),
+                text(self.t(I18nKey::SettingsRuntimeParametersDescription)).size(12),
+                text(self.t(I18nKey::CommonLanguageLabel)).size(12),
+                pick_list(
+                    self.language_manager.available_locales(),
+                    Some(self.current_locale()),
+                    Message::LocaleSelected
+                )
+                .width(Fill)
+                .placeholder(self.t(I18nKey::SettingsLanguagePlaceholder)),
+                text(self.t(I18nKey::CommonThemeLabel)).size(12),
                 pick_list(
                     Theme::ALL,
                     Some(self.app_theme.clone()),
                     Message::ThemeSelected
                 )
                 .width(Fill)
-                .placeholder("选择主题"),
+                .placeholder(self.t(I18nKey::SettingsThemePlaceholder)),
                 checkbox(self.temperature_enabled)
-                    .label("显式传递温度参数")
+                    .label(self.t(I18nKey::SettingsTemperatureToggle))
                     .on_toggle(Message::TemperatureEnabledToggled),
                 text(if self.temperature_enabled {
-                    format!("温度：{:.2}", self.temperature)
+                    self.tf(
+                        I18nKey::SettingsTemperatureValueEnabled,
+                        &[I18nArg::named("temperature", format!("{:.2}", self.temperature))],
+                    )
                 } else {
-                    String::from("温度：使用模型默认值（不传此参数）")
+                    self.t(I18nKey::SettingsTemperatureValueDefault)
                 }),
                 temperature_control,
             ]
@@ -5716,18 +5750,18 @@ impl VulcanWorkbench {
     pub(super) fn view_policy_controls_card(&self) -> Element<'_, Message> {
         container(
             column![
-                text("工程策略").size(18),
+                text(self.t(I18nKey::SettingsPolicyTitle)).size(18),
                 checkbox(self.generate_plan)
-                    .label("复杂任务优先生成计划文件")
+                    .label(self.t(I18nKey::SettingsPolicyGeneratePlan))
                     .on_toggle(Message::GeneratePlanToggled),
                 checkbox(self.run_cargo_check)
-                    .label("执行前运行 cargo check")
+                    .label(self.t(I18nKey::SettingsPolicyRunCargoCheck))
                     .on_toggle(Message::RunCargoCheckToggled),
                 checkbox(self.persist_memory)
-                    .label("保留执行记忆与操作轨迹")
+                    .label(self.t(I18nKey::SettingsPolicyPersistMemory))
                     .on_toggle(Message::PersistMemoryToggled),
                 toggler(self.auto_approve)
-                    .label("自动批准低风险变更")
+                    .label(self.t(I18nKey::SettingsPolicyAutoApprove))
                     .on_toggle(Message::AutoApproveToggled),
             ]
             .spacing(12),
@@ -5742,10 +5776,10 @@ impl VulcanWorkbench {
     pub(super) fn view_integration_guide_card(&self) -> Element<'_, Message> {
         container(
             column![
-                text("集成指引").size(18),
+                text(self.t(I18nKey::SettingsIntegrationGuideTitle)).size(18),
                 self.view_workbench_markdown_body(
                     Some(&self.quick_guide_markdown_buffer),
-                    QUICK_GUIDE_MARKDOWN.to_string(),
+                    self.localized_quick_guide_markdown(),
                     Message::QuickGuideMarkdownAction,
                 ),
             ]
@@ -5762,8 +5796,8 @@ impl VulcanWorkbench {
         container(
             self.activities.iter().enumerate().fold(
                 column![
-                    text("运行日志").size(18),
-                    text("日志正文支持直接框选与复制。").size(12),
+                    text(self.t(I18nKey::SettingsActivityLogTitle)).size(18),
+                    text(self.t(I18nKey::SettingsActivityLogHint)).size(12),
                 ]
                 .spacing(8),
                 |list, (index, entry)| list.push(self.view_activity_card(index, entry)),

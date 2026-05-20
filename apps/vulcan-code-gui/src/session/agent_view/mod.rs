@@ -10,6 +10,7 @@ mod tool_shared;
 mod tool_task_session;
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::{AppLocale, I18nArg, I18nKey, format_for_locale, text_for_locale};
 use crate::model::{SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
@@ -41,10 +42,14 @@ pub struct AgentViewBuildOptions {
     /// Visible assistant-output message id that is still actively receiving streaming deltas and should therefore keep only its last Markdown block mutable.
     /// 当前仍在接收流式增量、因此只应让其最后一个 Markdown 区块保持可变的可见助手输出消息标识。
     pub active_streaming_output_message_id: Option<String>,
+    /// GUI locale used to localize transcript-owned labels while building directive metadata.
+    /// 构建指令元数据时用于本地化转录自有标签的图形界面语言。
+    pub locale: AppLocale,
 }
 
 /// Builds one unified agent-view document from the visible session transcript and runtime events.
 /// 根据可见会话转录与运行时事件构建一份统一 agent-view 文档。
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_agent_view_document(
     messages: &[SessionMessageEntry],
     runtime_events: &[RuntimeEvent],
@@ -137,15 +142,16 @@ fn append_session_message_blocks(
 ) {
     match (message.kind, message.record_kind) {
         (SessionMessageKind::User, _) => {
-            document.push_directive(build_user_prompt_block(message));
+            document.push_directive(build_user_prompt_block(message, options));
         }
         (_, SessionMessageRecordKind::ThinkingOutput) => {
-            document.push_directive(build_thinking_block(message));
+            document.push_directive(build_thinking_block(message, options));
         }
         (_, SessionMessageRecordKind::ToolCallOutput) => {
             document.push_directive(build_tool_record_block(
                 AgentViewDirectiveKind::ToolCall,
                 message,
+                options,
             ));
         }
         (_, SessionMessageRecordKind::ToolResultOutput) => {
@@ -160,7 +166,7 @@ fn append_session_message_blocks(
             } else {
                 AgentViewDirectiveKind::ToolResult
             };
-            document.push_directive(build_tool_record_block(tool_kind, message));
+            document.push_directive(build_tool_record_block(tool_kind, message, options));
         }
         (SessionMessageKind::Error, _) => {
             document.push_directive(build_error_notice_block(message));
@@ -273,14 +279,17 @@ fn push_streaming_markdown_segment(
 
 /// Builds one user-prompt directive block from the visible session message.
 /// 根据可见会话消息构建一条用户提示词指令区块。
-fn build_user_prompt_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
+fn build_user_prompt_block(
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
     if !message.created_at.trim().is_empty() {
         attributes.insert(String::from("created-at"), message.created_at.clone());
     }
-    if !message.title.trim().is_empty() {
-        attributes.insert(String::from("title"), message.title.clone());
+    if let Some(title) = localized_message_title(message, options) {
+        attributes.insert(String::from("title"), title);
     }
     if let Some(metadata) = message.metadata.as_ref() {
         attach_user_prompt_image_attributes(&mut attributes, metadata);
@@ -340,15 +349,18 @@ fn attach_user_prompt_image_attributes(attributes: &mut AgentViewAttributes, met
 
 /// Builds one thinking directive block from the visible session message.
 /// 根据可见会话消息构建一条思考指令区块。
-fn build_thinking_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
+fn build_thinking_block(
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
     attributes.insert(String::from("collapsed"), String::from("true"));
     if !message.created_at.trim().is_empty() {
         attributes.insert(String::from("created-at"), message.created_at.clone());
     }
-    if !message.title.trim().is_empty() {
-        attributes.insert(String::from("title"), message.title.clone());
+    if let Some(title) = localized_message_title(message, options) {
+        attributes.insert(String::from("title"), title);
     }
     let raw_source = render_directive_source(
         &AgentViewDirectiveKind::Thinking,
@@ -370,25 +382,26 @@ fn build_thinking_block(message: &SessionMessageEntry) -> AgentViewDirectiveBloc
 fn build_tool_record_block(
     kind: AgentViewDirectiveKind,
     message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
 ) -> AgentViewDirectiveBlock {
     match tool_shared::resolve_tool_presentation_kind(message) {
         AgentViewToolPresentationKind::Generic => {
-            tool_generic::build_generic_tool_block(kind, message)
+            tool_generic::build_generic_tool_block(kind, message, options)
         }
         AgentViewToolPresentationKind::TaskSession => {
-            tool_task_session::build_task_session_tool_block(kind, message)
+            tool_task_session::build_task_session_tool_block(kind, message, options)
         }
         AgentViewToolPresentationKind::GeneratedImage => {
-            tool_generated_image::build_generated_image_tool_block(kind, message)
+            tool_generated_image::build_generated_image_tool_block(kind, message, options)
         }
         AgentViewToolPresentationKind::GeneratedVideo => {
-            tool_generated_video::build_generated_video_tool_block(kind, message)
+            tool_generated_video::build_generated_video_tool_block(kind, message, options)
         }
         AgentViewToolPresentationKind::GeneratedAudio => {
-            tool_generated_audio::build_generated_audio_tool_block(kind, message)
+            tool_generated_audio::build_generated_audio_tool_block(kind, message, options)
         }
         AgentViewToolPresentationKind::GeneratedDocument => {
-            tool_generated_document::build_generated_document_tool_block(kind, message)
+            tool_generated_document::build_generated_document_tool_block(kind, message, options)
         }
     }
 }
@@ -412,6 +425,170 @@ fn build_error_notice_block(message: &SessionMessageEntry) -> AgentViewDirective
         raw_source,
         false,
     )
+}
+
+/// Resolves the localized display title that should be attached to one visible transcript message while building agent-view directives.
+/// 构建 agent-view 指令时，解析应附着到单条可见转录消息上的本地化显示标题。
+fn localized_message_title(
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) -> Option<String> {
+    match (message.kind, message.record_kind) {
+        (SessionMessageKind::User, _) => Some(text_for_locale(options.locale, I18nKey::TranscriptUserPrompt)),
+        (_, SessionMessageRecordKind::ThinkingOutput) => {
+            Some(text_for_locale(options.locale, I18nKey::TranscriptThinking))
+        }
+        (_, SessionMessageRecordKind::AssistantOutput) => {
+            Some(text_for_locale(options.locale, I18nKey::TranscriptOutput))
+        }
+        (_, SessionMessageRecordKind::ToolCallOutput) => {
+            localized_tool_call_title(message, options.locale).or_else(|| non_empty_title(message))
+        }
+        (_, SessionMessageRecordKind::ToolResultOutput) => {
+            localized_tool_result_title(message, options.locale).or_else(|| non_empty_title(message))
+        }
+        _ => non_empty_title(message),
+    }
+}
+
+/// Returns one cloned non-empty message title when the source message already owns a stable explicit headline.
+/// 当源消息已经持有一条稳定显式标题时，返回一份克隆后的非空消息标题。
+fn non_empty_title(message: &SessionMessageEntry) -> Option<String> {
+    let trimmed = message.title.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Resolves one localized tool-call title using normalized metadata first and then legacy persisted title patterns as compatibility fallback.
+/// 优先使用规范化元数据并在需要时回退到旧版持久化标题模式，解析一条本地化工具调用标题。
+fn localized_tool_call_title(message: &SessionMessageEntry, locale: AppLocale) -> Option<String> {
+    let tool_name = tool_name_from_message(message)?;
+    Some(format_for_locale(
+        locale,
+        I18nKey::TranscriptToolCallWithName,
+        &[I18nArg::named("tool_name", tool_name)],
+    ))
+}
+
+/// Resolves one localized tool-result title, including generated-media summaries and generic named tool results.
+/// 解析一条本地化工具返回标题，覆盖生成媒体摘要与通用具名工具返回两类情况。
+fn localized_tool_result_title(
+    message: &SessionMessageEntry,
+    locale: AppLocale,
+) -> Option<String> {
+    if let Some(metadata) = message.metadata.as_ref()
+        && let Some(generated_title) = generated_attachment_title_from_metadata(metadata, locale)
+    {
+        return Some(generated_title);
+    }
+
+    if let Some(tool_name) = tool_name_from_message(message) {
+        return Some(format_for_locale(
+            locale,
+            I18nKey::TranscriptToolResultWithName,
+            &[I18nArg::named("tool_name", tool_name)],
+        ));
+    }
+
+    if message.title.trim().is_empty() || title_looks_like_generic_tool_result(&message.title) {
+        return Some(text_for_locale(locale, I18nKey::TranscriptToolResult));
+    }
+
+    None
+}
+
+/// Extracts the best-effort tool name from structured metadata or from legacy persisted titles.
+/// 从结构化元数据或旧版持久化标题中提取最佳努力的工具名称。
+fn tool_name_from_message(message: &SessionMessageEntry) -> Option<String> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| parse_tool_name_from_title(&message.title))
+}
+
+/// Parses one legacy persisted tool headline into a best-effort tool name for locale-sensitive re-rendering.
+/// 将一条旧版持久化工具标题解析为最佳努力工具名称，以便在语言切换时重新渲染。
+fn parse_tool_name_from_title(title: &str) -> Option<String> {
+    let trimmed = title.trim();
+    if let Some(tool_name) = trimmed
+        .strip_prefix("调用 ")
+        .and_then(|value| value.strip_suffix(" 工具"))
+    {
+        let normalized = tool_name.trim();
+        return (!normalized.is_empty()).then(|| normalized.to_string());
+    }
+    if let Some(tool_name) = trimmed.strip_prefix("工具返回 ") {
+        let normalized = tool_name.trim();
+        return (!normalized.is_empty()).then(|| normalized.to_string());
+    }
+    if let Some(tool_name) = trimmed.strip_prefix("Call ") {
+        let normalized = tool_name.trim();
+        return (!normalized.is_empty()).then(|| normalized.to_string());
+    }
+    if let Some(tool_name) = trimmed.strip_prefix("Tool Result ") {
+        let normalized = tool_name.trim();
+        return (!normalized.is_empty()).then(|| normalized.to_string());
+    }
+
+    None
+}
+
+/// Returns whether one persisted title only represents a generic tool-result label and should therefore be re-localized.
+/// 返回某条持久化标题是否仅代表通用工具返回标签，从而应该被重新本地化。
+fn title_looks_like_generic_tool_result(title: &str) -> bool {
+    matches!(
+        title.trim(),
+        "工具返回" | "Tool Result" | "Raw Tool Result"
+    )
+}
+
+/// Resolves one localized generated-media title from tool metadata when the current tool result represents generated attachments.
+/// 当当前工具返回代表生成附件时，从工具元数据解析一条本地化生成媒体标题。
+fn generated_attachment_title_from_metadata(
+    metadata: &Value,
+    locale: AppLocale,
+) -> Option<String> {
+    let host_result = tool_shared::resolved_host_result_from_tool_metadata(metadata)?;
+    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
+        return None;
+    }
+
+    let outputs = host_result
+        .get("payload")
+        .and_then(|payload| payload.get("outputs"))
+        .and_then(Value::as_array)?;
+    let first_kind = outputs
+        .first()?
+        .get("kind")
+        .and_then(Value::as_str)?
+        .trim()
+        .to_ascii_lowercase();
+
+    let base_key = match first_kind.as_str() {
+        "image" => I18nKey::TranscriptGeneratedImage,
+        "audio" => I18nKey::TranscriptGeneratedAudio,
+        "video" => I18nKey::TranscriptGeneratedVideo,
+        "pdf" | "document" => I18nKey::TranscriptGeneratedDocument,
+        _ => return None,
+    };
+    let base_label = text_for_locale(locale, base_key);
+
+    if outputs.len() <= 1 {
+        Some(base_label)
+    } else {
+        Some(format_for_locale(
+            locale,
+            I18nKey::TranscriptGeneratedCountSuffix,
+            &[
+                I18nArg::named("base_label", base_label),
+                I18nArg::named("count", outputs.len().to_string()),
+            ],
+        ))
+    }
 }
 
 /// Appends the block contributed by one runtime event into the target document.
@@ -528,7 +705,10 @@ mod tests {
     //! Targeted adapter tests that validate the GUI transcript-to-document mapping rules.
     //! 验证 GUI 转录到文档映射规则的定向适配器测试。
 
-    use super::{build_agent_view_document, build_agent_view_document_with_options, AgentViewBuildOptions};
+    use super::{
+        build_agent_view_document, build_agent_view_document_with_options, AgentViewBuildOptions,
+    };
+    use crate::AppLocale;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use serde_json::json;
@@ -838,6 +1018,7 @@ mod tests {
         }];
         let options = AgentViewBuildOptions {
             active_streaming_output_message_id: Some(String::from("assistant-stream-1")),
+            ..AgentViewBuildOptions::default()
         };
         let document = build_agent_view_document_with_options(&messages, &[], &options);
 
@@ -868,6 +1049,70 @@ mod tests {
                         .attributes
                         .get("streaming-segment")
                         .is_some_and(|value| value == "active-tail")
+        ));
+    }
+
+    /// Verifies directive titles switch to the requested locale so transcript-owned labels are not frozen to one persisted language.
+    /// 验证指令标题会切换到请求语言，从而避免转录自有标签被冻结为单一持久化语言。
+    #[test]
+    fn directive_titles_follow_requested_locale() {
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("Open the file."),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("thinking-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ThinkingOutput,
+                visible: true,
+                title: String::from("思考"),
+                body: String::from("Plan the edit."),
+                metadata: None,
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("tool-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回"),
+                body: String::from("done"),
+                metadata: Some(json!({
+                    "tool_name": "read_file",
+                })),
+                created_at: String::from("3"),
+            },
+        ];
+        let options = AgentViewBuildOptions {
+            locale: AppLocale::EnUs,
+            ..AgentViewBuildOptions::default()
+        };
+        let document = build_agent_view_document_with_options(&messages, &[], &options);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.attributes.get("title").is_some_and(|value| value == "User Prompt")
+        ));
+        assert!(matches!(
+            &document.blocks[1],
+            AgentViewBlock::Directive(block)
+                if block.attributes.get("title").is_some_and(|value| value == "Thinking")
+        ));
+        assert!(matches!(
+            &document.blocks[2],
+            AgentViewBlock::Directive(block)
+                if block
+                    .attributes
+                    .get("title")
+                    .is_some_and(|value| value == "Tool Result read_file")
         ));
     }
 }

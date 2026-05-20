@@ -5,6 +5,7 @@ mod agent_runtime;
 mod app_shell;
 mod attachments;
 mod compat;
+mod i18n;
 mod mcp;
 mod profiles;
 mod provider;
@@ -24,6 +25,9 @@ pub(crate) use compat::{
     image_understanding as image_understanding_compat,
     media_generation as media_generation_compat,
     web_search as web_search_compat,
+};
+pub(crate) use i18n::{
+    AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale,
 };
 pub(crate) use provider::ai_tool_configuration;
 pub(crate) use provider::catalog::ai_capability_provider_catalog;

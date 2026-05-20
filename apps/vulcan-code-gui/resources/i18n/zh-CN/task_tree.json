@@ -1,0 +1,8 @@
+{
+  "task_tree.no_sessions": "暂无对话",
+  "task_tree.add_project_from_folder": "从文件夹添加项目",
+  "task_tree.archived_badge": "已归档",
+  "task_tree.archived_project": "归档项目",
+  "task_tree.archived_session": "归档会话",
+  "task_tree.permanent_delete_prompt": "将彻底删除{subject_label} `{title}`，此操作不可恢复。"
+}

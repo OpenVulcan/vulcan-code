@@ -1043,14 +1043,16 @@ pub(super) fn custom_window_platform_settings() -> window::settings::PlatformSpe
 
 /// Renders a tooltip-enabled secondary action button.
 /// 渲染带提示信息的次级动作按钮。
-pub(super) fn action_button<'a>(
-    label: &'a str,
-    hint: &'a str,
+pub(super) fn action_button(
+    label: impl Into<String>,
+    hint: impl Into<String>,
     on_press: Message,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
+    let label = label.into();
+    let hint = hint.into();
     tooltip(
-        button(label).padding([10, 14]).on_press(on_press),
-        hint,
+        button(text(label)).padding([10, 14]).on_press(on_press),
+        text(hint),
         tooltip::Position::Bottom,
     )
     .style(container::rounded_box)

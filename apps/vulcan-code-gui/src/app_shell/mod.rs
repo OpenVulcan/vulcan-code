@@ -34,7 +34,7 @@ use crate::agent_runtime::{
 };
 use crate::agent_view::{
     agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_document_raw_source,
-    build_agent_view_document, build_agent_view_document_with_options, AgentViewBuildOptions,
+    build_agent_view_document_with_options, AgentViewBuildOptions,
 };
 use crate::ai_tool_configuration::{self, AiToolConfigurationLoadSource};
 use crate::attachment_asset_index::{
@@ -80,11 +80,13 @@ use crate::provider_config::{
     PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
     ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption, WebSearchRoutingMode,
 };
+use crate::{AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale};
 use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
     SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
     SelectableTranscriptDragAutoScrollDirection, SelectableTranscriptInteraction,
-    SelectableTranscriptSurfaceId, view_selectable_rendered_transcript_owned_with_context_menu,
+    SelectableTranscriptSurfaceId, clear_selectable_transcript_render_cache_stash,
+    view_selectable_rendered_transcript_owned_with_context_menu,
     view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,
 };
@@ -97,9 +99,10 @@ use crate::theme::{self, ThemePaletteExt};
 use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
-    self, SESSION_HISTORY_SEARCH_RESULT_LIMIT, SESSION_TOOL_DETAIL_PAGE_LIMIT,
+    self, SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS, SESSION_HISTORY_SEARCH_RESULT_LIMIT,
     SESSION_TRANSCRIPT_WINDOW_LIMIT, SessionHistoryPage, SessionHydrationSnapshot,
-    SessionMaintenanceReport, SessionToolDetailPage, WorkspaceHistorySearchPage, WorkspaceSnapshot,
+    SessionMaintenanceReport, SessionToolDetailPage, WorkspaceHistorySearchPage,
+    WorkspaceSnapshot,
 };
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
@@ -141,22 +144,6 @@ use vulcan_markdown as markdown;
 /// Bundled SVG mark bytes used in the header.
 /// 头部区域使用的内置 SVG 标识字节。
 const LOGO_ASSET_BYTES: &[u8] = include_bytes!("../../resources/vulcan-mark.svg");
-
-/// Markdown quick guide rendered in the runtime inspector.
-/// 渲染在运行检查面板中的 Markdown 快速指引。
-const QUICK_GUIDE_MARKDOWN: &str = r#"
-# AI Coding Foundation
-
-- 左侧用于管理工作区、扫描项目与会话队列。
-- 中间用于输入 Prompt、组织执行模式并预览补丁代码。
-- 右侧用于调整模型、运行策略、主题与工程检查项。
-
-## 下一阶段建议
-
-1. 接入文件树与差异面板。
-2. 接入真实命令执行与终端流。
-3. 接入流式推理与多 Agent 编排。
-"#;
 
 /// Maximum number of queued follow-up prompts retained per session before new manual submissions are rejected.
 /// 每个会话在拒绝新的手动提交之前最多保留的排队跟进提示词数量。
@@ -1103,10 +1090,12 @@ fn visible_session_messages_for_agent_view_projection(
 /// 为单个会话构建图形界面侧 agent-view 投影选项，并仅让当前活跃流式输出保持可变。
 fn agent_view_build_options_for_streaming_output(
     active_streaming_output_message_id: Option<&str>,
+    locale: AppLocale,
 ) -> AgentViewBuildOptions {
     AgentViewBuildOptions {
         active_streaming_output_message_id: active_streaming_output_message_id
             .map(str::to_string),
+        locale,
     }
 }
 
@@ -1117,9 +1106,12 @@ fn build_session_agent_view_projection_snapshot(
     messages: Vec<SessionMessageEntry>,
     runtime_events: Vec<RuntimeEvent>,
     active_streaming_output_message_id: Option<String>,
+    locale: AppLocale,
 ) -> SessionAgentViewProjectionSnapshot {
-    let build_options =
-        agent_view_build_options_for_streaming_output(active_streaming_output_message_id.as_deref());
+    let build_options = agent_view_build_options_for_streaming_output(
+        active_streaming_output_message_id.as_deref(),
+        locale,
+    );
     let document = build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
     let selectable_document =
         vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
@@ -1899,6 +1891,40 @@ fn parse_subagent_task_prompt_metadata(metadata: &Value) -> Option<String> {
 /// 返回某段剪贴板文本载荷是否应启用提示词粘贴动作。
 fn composer_clipboard_text_is_pastable(text: Option<&str>) -> bool {
     text.is_some_and(|value| !value.is_empty())
+}
+
+/// Sanitizes pasted workspace-history search text into one bounded single-line query.
+/// 将粘贴的工作台历史搜索文本清洗为一条有界单行查询。
+fn sanitize_workspace_history_search_query_input(query: &str) -> String {
+    let mut sanitized =
+        String::with_capacity(query.len().min(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS));
+    let mut retained_chars = 0usize;
+    let mut pending_space = false;
+
+    for ch in query.chars() {
+        if retained_chars >= SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS {
+            break;
+        }
+
+        if ch.is_whitespace() || ch.is_control() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+
+        if pending_space {
+            sanitized.push(' ');
+            retained_chars += 1;
+            pending_space = false;
+            if retained_chars >= SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS {
+                break;
+            }
+        }
+
+        sanitized.push(ch);
+        retained_chars += 1;
+    }
+
+    sanitized
 }
 
 /// One undo snapshot retained for the composer editor.
@@ -2760,6 +2786,9 @@ pub struct VulcanWorkbench {
     /// Active visual theme.
     /// 当前使用的视觉主题。
     app_theme: Theme,
+    /// Stateful GUI language manager used to resolve localized text and switch locales at runtime.
+    /// 用于解析本地化文本并在运行时切换语言的有状态图形界面语言管理器。
+    language_manager: LanguageManager,
     /// Whether the runtime controls should send an explicit temperature argument.
     /// 运行参数控制区是否应显式发送温度参数。
     temperature_enabled: bool,
@@ -3998,52 +4027,67 @@ enum MainDisplayPanel {
 }
 
 impl MainDisplayPanel {
-    /// Returns the user-facing label shown in the top-level panel switcher.
-    /// 返回展示在顶层面板切换入口中的面向用户标签。
-    const fn label(self) -> &'static str {
+    /// Returns the localization key backing the top-level panel label.
+    /// 返回顶层面板标签对应的本地化键。
+    const fn label_key(self) -> I18nKey {
         match self {
-            Self::Main => "工作台",
-            Self::PromptSkills => "技能（常规）",
-            Self::LuaSkills => "技能（LuaSkills）",
-            Self::Automation => "自动化",
-            Self::Agents => "代理",
-            Self::Plugins => "插件",
-            Self::VulcanMemoryMesh => "VulcanMemoryMesh",
-            Self::Example => "示例面板",
-            Self::Settings => "设置",
+            Self::Main => I18nKey::WorkbenchPanelMainLabel,
+            Self::PromptSkills => I18nKey::WorkbenchPanelPromptSkillsLabel,
+            Self::LuaSkills => I18nKey::WorkbenchPanelLuaSkillsLabel,
+            Self::Automation => I18nKey::WorkbenchPanelAutomationLabel,
+            Self::Agents => I18nKey::WorkbenchPanelAgentsLabel,
+            Self::Plugins => I18nKey::WorkbenchPanelPluginsLabel,
+            Self::VulcanMemoryMesh => I18nKey::WorkbenchPanelMemoryMeshLabel,
+            Self::Example => I18nKey::WorkbenchPanelExampleLabel,
+            Self::Settings => I18nKey::WorkbenchPanelSettingsLabel,
         }
     }
 
-    /// Returns the contextual caption shown beside the top-level panel switcher.
-    /// 返回展示在顶层面板切换器旁侧的上下文说明文本。
-    const fn description(self) -> &'static str {
+    /// Returns the localization key backing the top-level panel description.
+    /// 返回顶层面板说明文案对应的本地化键。
+    const fn description_key(self) -> I18nKey {
         match self {
-            Self::Main => "承载任务抽屉与主工作区，是后续 AI Coding 主入口所在位置。",
-            Self::PromptSkills => "承载常规提示词模板、技能节点与后续编排入口的占位面板。",
-            Self::LuaSkills => "承载 LuaSkills 技能目录、配置与执行入口的占位面板。",
-            Self::Automation => "承载自动化任务、定时策略与唤醒流程的占位面板。",
-            Self::Agents => "集中管理用户自定义主代理，并与按模型路由的系统默认代理协同工作。",
-            Self::Plugins => "承载插件能力、扩展安装与版本管理的占位面板。",
-            Self::VulcanMemoryMesh => "承载记忆网格、关联记忆与长期上下文能力的占位面板。",
-            Self::Example => "承载当前工作区主体与交互示例，便于持续重构布局。",
-            Self::Settings => "集中呈现模型、能力与运行设置，不混入全局动作。",
+            Self::Main => I18nKey::WorkbenchPanelMainDescription,
+            Self::PromptSkills => I18nKey::WorkbenchPanelPromptSkillsDescription,
+            Self::LuaSkills => I18nKey::WorkbenchPanelLuaSkillsDescription,
+            Self::Automation => I18nKey::WorkbenchPanelAutomationDescription,
+            Self::Agents => I18nKey::WorkbenchPanelAgentsDescription,
+            Self::Plugins => I18nKey::WorkbenchPanelPluginsDescription,
+            Self::VulcanMemoryMesh => I18nKey::WorkbenchPanelMemoryMeshDescription,
+            Self::Example => I18nKey::WorkbenchPanelExampleDescription,
+            Self::Settings => I18nKey::WorkbenchPanelSettingsDescription,
         }
     }
 
-    /// Returns the local title rendered inside one top-level panel body.
-    /// 返回渲染在某个顶层面板主体内部的局部标题。
-    const fn section_title(self) -> &'static str {
-        match self {
-            Self::Main => "工作台",
-            Self::PromptSkills => "技能（常规）",
-            Self::LuaSkills => "技能（LuaSkills）",
-            Self::Automation => "自动化",
-            Self::Agents => "代理",
-            Self::Plugins => "插件",
-            Self::VulcanMemoryMesh => "VulcanMemoryMesh",
-            Self::Example => "示例面板",
-            Self::Settings => "设置",
-        }
+    /// Returns the localized label shown in the top-level panel switcher.
+    /// 返回展示在顶层面板切换入口中的本地化标签。
+    fn localized_label(self, locale: AppLocale) -> String {
+        text_for_locale(locale, self.label_key())
+    }
+
+    /// Returns the localized contextual caption shown beside the top-level panel switcher.
+    /// 返回展示在顶层面板切换器旁侧的本地化说明文本。
+    fn localized_description(self, locale: AppLocale) -> String {
+        text_for_locale(locale, self.description_key())
+    }
+
+    /// Returns the localized title rendered inside one top-level panel body.
+    /// 返回渲染在某个顶层面板主体内部的本地化标题。
+    fn localized_section_title(self, locale: AppLocale) -> String {
+        self.localized_label(locale)
+    }
+
+    /// Returns the localized tooltip copy including the keyboard shortcut.
+    /// 返回包含键盘快捷键的本地化提示文案。
+    fn localized_shortcut_hint(self, locale: AppLocale) -> String {
+        format_for_locale(
+            locale,
+            I18nKey::WorkbenchPanelShortcutHint,
+            &[
+                I18nArg::named("label", self.localized_label(locale)),
+                I18nArg::named("digit", self.shortcut_digit()),
+            ],
+        )
     }
 
     /// Returns the keyboard shortcut digit used by one top-level panel.
@@ -4132,60 +4176,96 @@ enum SettingsSection {
 }
 
 impl SettingsSection {
-    /// Returns the compact tree label rendered in the left settings navigation.
-    /// 返回渲染在左侧设置导航中的紧凑树标签。
-    const fn label(self) -> &'static str {
+    /// Returns the localization key backing the compact settings-tree label.
+    /// 返回设置树紧凑标签对应的本地化键。
+    const fn label_key(self) -> I18nKey {
         match self {
-            Self::ModelProviders => "模型供应商",
-            Self::ModelList => "模型列表",
-            Self::RuntimeDiagnostics => "运行与诊断",
-            Self::AiCapabilityVendors => "能力供应商",
-            Self::AiCapabilityWebSearch => "联网搜索",
-            Self::AiCapabilityUnderstandImage => "图像理解",
-            Self::AiCapabilityUnderstandVideo => "视频理解",
-            Self::AiCapabilityUnderstandAudio => "音频理解",
-            Self::AiCapabilityImageGeneration => "图像生成",
-            Self::AiCapabilityVideoGeneration => "视频生成",
-            Self::AiCapabilitySpeechSynthesis => "语音合成",
-            Self::AiCapabilityMusicGeneration => "音乐生成",
-            Self::AiCapabilityMusicCover => "音乐翻唱",
-            Self::McpServers => "MCP 配置",
-            Self::ArchivedRestore => "归档恢复",
-        }
-    }
-
-    /// Returns the settings-page title rendered above the selected section content.
-    /// 返回渲染在所选分区内容上方的设置页标题。
-    const fn title(self) -> &'static str {
-        self.label()
-    }
-
-    /// Returns one concise description for the selected settings section.
-    /// 返回所选设置分区的一句简洁说明。
-    const fn description(self) -> &'static str {
-        match self {
-            Self::ModelProviders => {
-                "管理对话模型供应商接入配置，并通过配置动作进入模型启用草稿页。"
+            Self::ModelProviders => I18nKey::SettingsSectionModelProvidersLabel,
+            Self::ModelList => I18nKey::SettingsSectionModelListLabel,
+            Self::RuntimeDiagnostics => I18nKey::SettingsSectionRuntimeDiagnosticsLabel,
+            Self::AiCapabilityVendors => I18nKey::SettingsSectionAiCapabilityVendorsLabel,
+            Self::AiCapabilityWebSearch => I18nKey::SettingsSectionAiCapabilityWebSearchLabel,
+            Self::AiCapabilityUnderstandImage => {
+                I18nKey::SettingsSectionAiCapabilityUnderstandImageLabel
             }
-            Self::ModelList => "管理已启用模型与模型能力覆盖。",
-            Self::RuntimeDiagnostics => "集中查看运行参数、执行运行时、工程策略、指引与日志。",
-            Self::AiCapabilityVendors => "先在这里配置共享能力供应商凭据，后续各能力页直接复用。",
-            Self::AiCapabilityWebSearch => "管理统一 web-search 的默认路由、启用接口与顺序。",
-            Self::AiCapabilityUnderstandImage => "为不具备原生视觉的模型补齐图片理解能力。",
             Self::AiCapabilityUnderstandVideo => {
-                "预留未来的视频理解入口；当前仅提供配置入口与路由占位。"
+                I18nKey::SettingsSectionAiCapabilityUnderstandVideoLabel
             }
             Self::AiCapabilityUnderstandAudio => {
-                "预留未来的音频理解入口；当前仅提供配置入口与路由占位。"
+                I18nKey::SettingsSectionAiCapabilityUnderstandAudioLabel
             }
-            Self::AiCapabilityImageGeneration => "配置可供对话模型调用的图片生成目标与顺序。",
-            Self::AiCapabilityVideoGeneration => "配置可供对话模型调用的视频生成目标与顺序。",
-            Self::AiCapabilitySpeechSynthesis => "配置文本转语音与语音合成目标与顺序。",
-            Self::AiCapabilityMusicGeneration => "配置音乐生成目标与默认顺序。",
-            Self::AiCapabilityMusicCover => "配置音乐翻唱目标与默认顺序。",
-            Self::McpServers => "管理 MCP Server、OAuth 授权与连接参数。",
-            Self::ArchivedRestore => "在设置页恢复已经归档的项目与会话。",
+            Self::AiCapabilityImageGeneration => {
+                I18nKey::SettingsSectionAiCapabilityImageGenerationLabel
+            }
+            Self::AiCapabilityVideoGeneration => {
+                I18nKey::SettingsSectionAiCapabilityVideoGenerationLabel
+            }
+            Self::AiCapabilitySpeechSynthesis => {
+                I18nKey::SettingsSectionAiCapabilitySpeechSynthesisLabel
+            }
+            Self::AiCapabilityMusicGeneration => {
+                I18nKey::SettingsSectionAiCapabilityMusicGenerationLabel
+            }
+            Self::AiCapabilityMusicCover => I18nKey::SettingsSectionAiCapabilityMusicCoverLabel,
+            Self::McpServers => I18nKey::SettingsSectionMcpServersLabel,
+            Self::ArchivedRestore => I18nKey::SettingsSectionArchivedRestoreLabel,
         }
+    }
+
+    /// Returns the localization key backing the selected settings-section description.
+    /// 返回所选设置分区说明文案对应的本地化键。
+    const fn description_key(self) -> I18nKey {
+        match self {
+            Self::ModelProviders => I18nKey::SettingsSectionModelProvidersDescription,
+            Self::ModelList => I18nKey::SettingsSectionModelListDescription,
+            Self::RuntimeDiagnostics => I18nKey::SettingsSectionRuntimeDiagnosticsDescription,
+            Self::AiCapabilityVendors => I18nKey::SettingsSectionAiCapabilityVendorsDescription,
+            Self::AiCapabilityWebSearch => I18nKey::SettingsSectionAiCapabilityWebSearchDescription,
+            Self::AiCapabilityUnderstandImage => {
+                I18nKey::SettingsSectionAiCapabilityUnderstandImageDescription
+            }
+            Self::AiCapabilityUnderstandVideo => {
+                I18nKey::SettingsSectionAiCapabilityUnderstandVideoDescription
+            }
+            Self::AiCapabilityUnderstandAudio => {
+                I18nKey::SettingsSectionAiCapabilityUnderstandAudioDescription
+            }
+            Self::AiCapabilityImageGeneration => {
+                I18nKey::SettingsSectionAiCapabilityImageGenerationDescription
+            }
+            Self::AiCapabilityVideoGeneration => {
+                I18nKey::SettingsSectionAiCapabilityVideoGenerationDescription
+            }
+            Self::AiCapabilitySpeechSynthesis => {
+                I18nKey::SettingsSectionAiCapabilitySpeechSynthesisDescription
+            }
+            Self::AiCapabilityMusicGeneration => {
+                I18nKey::SettingsSectionAiCapabilityMusicGenerationDescription
+            }
+            Self::AiCapabilityMusicCover => {
+                I18nKey::SettingsSectionAiCapabilityMusicCoverDescription
+            }
+            Self::McpServers => I18nKey::SettingsSectionMcpServersDescription,
+            Self::ArchivedRestore => I18nKey::SettingsSectionArchivedRestoreDescription,
+        }
+    }
+
+    /// Returns the localized compact tree label rendered in the left settings navigation.
+    /// 返回渲染在左侧设置导航中的本地化紧凑树标签。
+    fn localized_label(self, locale: AppLocale) -> String {
+        text_for_locale(locale, self.label_key())
+    }
+
+    /// Returns the localized settings-page title rendered above the selected section content.
+    /// 返回渲染在所选分区内容上方的本地化设置页标题。
+    fn localized_title(self, locale: AppLocale) -> String {
+        self.localized_label(locale)
+    }
+
+    /// Returns one localized concise description for the selected settings section.
+    /// 返回所选设置分区的一句本地化简洁说明。
+    fn localized_description(self, locale: AppLocale) -> String {
+        text_for_locale(locale, self.description_key())
     }
 
     /// Returns whether the current section belongs to the collapsible AI capability subtree.
@@ -5231,6 +5311,9 @@ enum Message {
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
+    /// Application locale selected from the pick list.
+    /// 从下拉选择框中选择了应用语言。
+    LocaleSelected(AppLocale),
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
@@ -5605,6 +5688,53 @@ struct DiffPreviewPayload {
 }
 
 impl VulcanWorkbench {
+    /// Returns the currently active GUI locale selected by the user.
+    /// 返回用户当前选中的图形界面语言。
+    fn current_locale(&self) -> AppLocale {
+        self.language_manager.current_locale()
+    }
+
+    /// Resolves one localized plain text using the current GUI locale.
+    /// 使用当前图形界面语言解析一条普通本地化文本。
+    fn t(&self, key: I18nKey) -> String {
+        self.language_manager.text(key)
+    }
+
+    /// Resolves one localized formatted text using the current GUI locale and named arguments.
+    /// 使用当前图形界面语言与命名参数解析一条带格式的本地化文本。
+    fn tf(&self, key: I18nKey, args: &[I18nArg<'_>]) -> String {
+        self.language_manager.format(key, args)
+    }
+
+    /// Returns the localized quick-guide Markdown source rendered in the runtime inspector card.
+    /// 返回渲染在运行检查卡片中的本地化 Markdown 快速指引源码。
+    fn localized_quick_guide_markdown(&self) -> String {
+        self.t(I18nKey::GuideQuickMarkdown)
+    }
+
+    /// Rebuilds the quick-guide selectable Markdown buffer after locale or theme changes.
+    /// 在语言或主题发生变化后重建快速指引的可选择 Markdown 缓冲区。
+    fn rebuild_quick_guide_markdown_buffer(&mut self) {
+        let markdown_source = self.localized_quick_guide_markdown();
+        let parsed = markdown::Content::parse(&markdown_source);
+        self.quick_guide_markdown_buffer = text_editor::Content::with_text(
+            &build_selectable_markdown_text(&markdown_source, &parsed, &self.app_theme),
+        );
+    }
+
+    /// Rebuilds every cached session transcript projection so locale-sensitive labels refresh immediately after a GUI language change.
+    /// 重建全部已缓存会话转录投影，使依赖语言的标签在界面语言切换后立即刷新。
+    fn refresh_all_session_agent_view_localizations(&mut self) {
+        let session_ids = self
+            .session_messages
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.refresh_session_agent_view_buffers(session_id);
+        }
+    }
+
     /// Builds the initial state, seeded UI data, and pane layout.
     /// 构建初始状态、种子界面数据与面板布局。
     fn new() -> (Self, Task<Message>) {
@@ -5819,9 +5949,11 @@ impl VulcanWorkbench {
         let placeholder_diff_panel = WorkspaceDiffPanel::placeholder();
         let (main_window_id, open_main_window) = window::open(main_window_settings());
         let app_theme = theme::default_theme();
-        let quick_guide = markdown::Content::parse(QUICK_GUIDE_MARKDOWN);
+        let language_manager = LanguageManager::new(Self::resolve_initial_locale(&provider_configuration));
+        let quick_guide_source = language_manager.text(I18nKey::GuideQuickMarkdown);
+        let quick_guide = markdown::Content::parse(&quick_guide_source);
         let quick_guide_markdown_buffer = text_editor::Content::with_text(
-            &build_selectable_markdown_text(QUICK_GUIDE_MARKDOWN, &quick_guide, &app_theme),
+            &build_selectable_markdown_text(&quick_guide_source, &quick_guide, &app_theme),
         );
 
         let startup_controller_configuration = controller_configuration.clone();
@@ -5965,7 +6097,7 @@ impl VulcanWorkbench {
             active_runs: BTreeMap::new(),
             next_run_id: 1,
             startup_lifecycle: StartupLifecycle::Bootstrapping {
-                message: String::from("正在初始化 vldb 数据平面，请稍候。"),
+                message: language_manager.text(I18nKey::StatusInitializingDataPlane),
             },
             controller_runtime: None,
             luaskills_runtime: None,
@@ -6042,6 +6174,7 @@ impl VulcanWorkbench {
             workbench_model_picker_scroll_offset: 0.0,
             workbench_model_picker_viewport_height: WORKBENCH_MODEL_PICKER_LIST_HEIGHT,
             app_theme,
+            language_manager: language_manager.clone(),
             temperature_enabled: false,
             temperature: 0.25,
             context_usage: 0.0,
@@ -6050,7 +6183,7 @@ impl VulcanWorkbench {
             run_cargo_check: true,
             persist_memory: true,
             auto_approve: false,
-            status_message: String::from("正在初始化 vldb 数据平面。"),
+            status_message: language_manager.text(I18nKey::StatusInitializingDataPlane),
         };
 
         let _ = application.reconcile_workbench_reasoning_effort_for_active_model();
@@ -6130,9 +6263,9 @@ impl VulcanWorkbench {
             Message::Noop => Task::none(),
             Message::BeginStartupBootstrap => {
                 self.startup_lifecycle = StartupLifecycle::Bootstrapping {
-                    message: String::from("正在初始化 vldb 数据平面，请稍候。"),
+                    message: self.t(I18nKey::StatusInitializingDataPlane),
                 };
-                self.status_message = String::from("正在初始化 vldb 数据平面。");
+                self.status_message = self.t(I18nKey::StatusInitializingDataPlane);
                 self.controller_runtime = None;
                 self.luaskills_runtime = None;
                 if let Some(runtime_access) = self.mcp_runtime.take() {
@@ -6232,9 +6365,9 @@ impl VulcanWorkbench {
                         });
                         self.controller_runtime = Some(report.handle);
                         self.startup_lifecycle = StartupLifecycle::Bootstrapping {
-                            message: String::from("正在初始化 LuaSkills 运行时，请稍候。"),
+                            message: self.t(I18nKey::StatusInitializingLuaSkills),
                         };
-                        self.status_message = String::from("正在初始化 LuaSkills 运行时。");
+                        self.status_message = self.t(I18nKey::StatusInitializingLuaSkills);
 
                         return Task::perform(
                             luaskills_runtime::bootstrap_luaskills_runtime(
@@ -6378,8 +6511,7 @@ impl VulcanWorkbench {
                                     session_id,
                                     &tool_detail_turn_indices,
                                 );
-                                self.status_message =
-                                    String::from("当前会话正文已到位，正在补载工具明细以生成完整视图。");
+                                self.status_message = self.t(I18nKey::StatusProjectionBuilding);
                                 return Task::batch([
                                     maintenance_task,
                                     self.schedule_session_tool_detail_loads(
@@ -6391,7 +6523,7 @@ impl VulcanWorkbench {
 
                             let continue_search_navigation =
                                 self.maybe_continue_workspace_history_search_navigation(session_id);
-                            self.status_message = String::from("当前会话正文已按需加载完成。");
+                            self.status_message = self.t(I18nKey::StatusSessionHydrated);
                             return Task::batch([
                                 maintenance_task,
                                 self.schedule_session_agent_view_projection_refresh_if_needed(
@@ -6462,7 +6594,7 @@ impl VulcanWorkbench {
                     Ok(page) => {
                         let tool_detail_turn_indices = page.tool_detail_turn_indices.clone();
                         self.apply_older_session_history_page(page);
-                        self.status_message = String::from("已加载更早一段会话历史。");
+                        self.status_message = self.t(I18nKey::StatusOlderHistoryLoaded);
                         return Task::batch([
                             self.schedule_session_tool_detail_loads(
                                 session_id,
@@ -6993,35 +7125,13 @@ impl VulcanWorkbench {
             Message::MainDisplayPanelSelected(panel) => {
                 self.active_main_panel = panel;
                 self.composer_drag_hover_labels.clear();
-                self.status_message = match panel {
-                    MainDisplayPanel::Main => {
-                        String::from("已切换到工作台，当前聚焦任务抽屉与主工作区。")
-                    }
-                    MainDisplayPanel::PromptSkills => {
-                        String::from("已切换到技能（常规）面板，当前显示占位内容。")
-                    }
-                    MainDisplayPanel::LuaSkills => String::from(
-                        "已切换到技能（LuaSkills）面板，当前聚焦技能目录与生命周期管理。",
-                    ),
-                    MainDisplayPanel::Automation => {
-                        String::from("已切换到自动化面板，当前显示占位内容。")
-                    }
-                    MainDisplayPanel::Agents => {
-                        String::from("已切换到代理面板，可在此管理用户自定义 Agent。")
-                    }
-                    MainDisplayPanel::Plugins => {
-                        String::from("已切换到插件面板，当前显示占位内容。")
-                    }
-                    MainDisplayPanel::VulcanMemoryMesh => {
-                        String::from("已切换到 VulcanMemoryMesh 面板，当前显示占位内容。")
-                    }
-                    MainDisplayPanel::Example => {
-                        String::from("已切换到示例面板，主工作区主体现以独立面板形式展示。")
-                    }
-                    MainDisplayPanel::Settings => {
-                        String::from("已切换到设置面板，当前聚焦模型与能力配置。")
-                    }
-                };
+                self.status_message = self.tf(
+                    I18nKey::StatusMainPanelSwitched,
+                    &[I18nArg::named(
+                        "panel_label",
+                        panel.localized_label(self.current_locale()),
+                    )],
+                );
 
                 if panel == MainDisplayPanel::LuaSkills
                     && self.luaskills_catalog.is_none()
@@ -7616,7 +7726,13 @@ impl VulcanWorkbench {
                 if section.belongs_to_model_settings() {
                     self.settings_model_tree_expanded = true;
                 }
-                self.status_message = format!("当前设置分区已切换到“{}”。", section.title());
+                self.status_message = self.tf(
+                    I18nKey::StatusSettingsSectionSwitched,
+                    &[I18nArg::named(
+                        "section_title",
+                        section.localized_title(self.current_locale()),
+                    )],
+                );
                 Task::none()
             }
             Message::ToggleModelSettingsTree => {
@@ -9039,7 +9155,36 @@ impl VulcanWorkbench {
             }
             Message::ThemeSelected(theme) => {
                 self.app_theme = theme.clone();
-                self.status_message = format!("应用主题已切换为 {}。", theme);
+                self.rebuild_quick_guide_markdown_buffer();
+                self.status_message = self.tf(
+                    I18nKey::StatusThemeChanged,
+                    &[I18nArg::named("theme_name", theme.to_string())],
+                );
+                Task::none()
+            }
+            Message::LocaleSelected(locale) => {
+                self.language_manager.set_locale(locale);
+                clear_selectable_transcript_render_cache_stash();
+                self.rebuild_quick_guide_markdown_buffer();
+                self.refresh_all_session_agent_view_localizations();
+                match self.persist_locale_preference() {
+                    Ok(()) => {
+                        self.status_message = self.tf(
+                            I18nKey::StatusLocaleChanged,
+                            &[I18nArg::named("locale_name", locale.native_name())],
+                        );
+                    }
+                    Err(error) => {
+                        self.status_message = format!(
+                            "{} {}",
+                            self.tf(
+                                I18nKey::StatusLocaleChanged,
+                                &[I18nArg::named("locale_name", locale.native_name())],
+                            ),
+                            error
+                        );
+                    }
+                }
                 Task::none()
             }
             Message::QuickGuideMarkdownAction(action) => {
@@ -9153,7 +9298,10 @@ impl VulcanWorkbench {
                     .map(|session| session.title.clone())
                     .unwrap_or_else(|| String::from("未知会话"));
 
-                self.status_message = format!("当前会话已切换为：{selected_title}。");
+                self.status_message = self.tf(
+                    I18nKey::StatusSessionSwitched,
+                    &[I18nArg::named("selected_title", selected_title.as_str())],
+                );
                 let projection_task =
                     self.schedule_session_agent_view_projection_refresh_if_needed(session_id);
                 Task::batch([
@@ -9364,15 +9512,15 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
                 if self.loading_older_session_history_ids.contains(&session_id) {
-                    self.status_message = String::from("更早会话历史正在加载中。");
+                    self.status_message = self.t(I18nKey::StatusOlderHistoryLoadingInProgress);
                     return Task::none();
                 }
                 if !self.session_history_has_more.contains(&session_id) {
-                    self.status_message = String::from("当前会话没有更多可加载历史。");
+                    self.status_message = self.t(I18nKey::StatusNoMoreOlderHistory);
                     return Task::none();
                 }
 
-                self.status_message = String::from("正在加载更早一段会话历史。");
+                self.status_message = self.t(I18nKey::StatusOlderHistoryLoading);
                 self.schedule_older_session_history_load(session_id)
             }
             Message::OpenWorkspaceHistorySearchPanel => self.open_workspace_history_search_panel(),
@@ -9383,7 +9531,8 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WorkspaceHistorySearchQueryChanged(query) => {
-                self.workspace_history_search.query = query;
+                self.workspace_history_search.query =
+                    sanitize_workspace_history_search_query_input(&query);
                 self.workspace_history_search.error = None;
                 if self.workspace_history_search.query.trim().is_empty() {
                     self.workspace_history_search.results = None;
@@ -9393,14 +9542,14 @@ impl VulcanWorkbench {
             }
             Message::SubmitWorkspaceHistorySearch => {
                 if self.workspace_history_search.loading {
-                    self.status_message = String::from("工作台历史搜索正在进行中。");
+                    self.status_message = self.t(I18nKey::StatusHistorySearchInProgress);
                     return Task::none();
                 }
                 let query = self.workspace_history_search.query.trim();
                 if query.is_empty() {
                     self.workspace_history_search.results = None;
                     self.workspace_history_search.error = None;
-                    self.status_message = String::from("请输入要搜索的历史关键词。");
+                    self.status_message = self.t(I18nKey::StatusHistorySearchEmptyQuery);
                     return self.open_workspace_history_search_panel();
                 }
 
@@ -9408,30 +9557,29 @@ impl VulcanWorkbench {
                 self.workspace_history_search.project_picker_open = false;
                 self.workspace_history_search.project_filter.clear();
                 self.workspace_history_search.error = None;
-                self.status_message = String::from("正在搜索工作台历史。");
+                self.status_message = self.t(I18nKey::StatusHistorySearchStarted);
                 self.schedule_workspace_history_search(false)
             }
             Message::LoadMoreWorkspaceHistorySearchResults => {
                 if self.workspace_history_search.loading {
-                    self.status_message = String::from("工作台历史搜索正在进行中。");
+                    self.status_message = self.t(I18nKey::StatusHistorySearchInProgress);
                     return Task::none();
                 }
                 let Some(current_page) = self.workspace_history_search.results.as_ref() else {
-                    self.status_message = String::from("当前还没有可继续加载的搜索结果。");
+                    self.status_message = self.t(I18nKey::StatusHistorySearchNoMoreResults);
                     return Task::none();
                 };
                 if !current_page.has_more {
-                    self.status_message = String::from("当前搜索结果已经全部加载完成。");
+                    self.status_message = self.t(I18nKey::StatusHistorySearchAllLoaded);
                     return Task::none();
                 }
                 if self.workspace_history_search.query.trim() != current_page.query {
-                    self.status_message =
-                        String::from("搜索词已变更，请先重新搜索，再继续加载更多结果。");
+                    self.status_message = self.t(I18nKey::StatusHistorySearchQueryChanged);
                     return Task::none();
                 }
 
                 self.workspace_history_search.error = None;
-                self.status_message = String::from("正在继续加载更多工作台历史结果。");
+                self.status_message = self.t(I18nKey::StatusHistorySearchLoadMoreStarted);
                 self.schedule_workspace_history_search(true)
             }
             Message::WorkspaceHistorySearchLoaded { append, result } => {
@@ -9493,8 +9641,13 @@ impl VulcanWorkbench {
                                 .as_ref()
                                 .map(|merged_page| merged_page.total_hits)
                                 .unwrap_or(loaded_count);
-                            self.status_message = format!(
-                                "已继续加载 {hit_count} 条结果，当前共显示 {loaded_count}/{total_hits} 条 BM25 命中。"
+                            self.status_message = self.tf(
+                                I18nKey::StatusHistorySearchLoadMoreCompleted,
+                                &[
+                                    I18nArg::named("hit_count", hit_count.to_string()),
+                                    I18nArg::named("loaded_count", loaded_count.to_string()),
+                                    I18nArg::named("total_hits", total_hits.to_string()),
+                                ],
                             );
                         } else {
                             self.workspace_history_search.results =
@@ -9506,13 +9659,18 @@ impl VulcanWorkbench {
                                     next_offset,
                                     has_more,
                                 });
-                            self.status_message =
-                                format!("工作台历史搜索完成，找到 {total_hits} 条 BM25 命中。");
+                            self.status_message = self.tf(
+                                I18nKey::StatusHistorySearchCompleted,
+                                &[I18nArg::named("total_hits", total_hits.to_string())],
+                            );
                         }
                     }
                     Err(error) => {
                         self.workspace_history_search.error = Some(error.clone());
-                        self.status_message = format!("工作台历史搜索失败：{error}");
+                        self.status_message = self.tf(
+                            I18nKey::StatusHistorySearchFailed,
+                            &[I18nArg::named("error", error.as_str())],
+                        );
                         self.push_activity(ActivityLevel::Warning, "工作台历史搜索失败", error);
                     }
                 }
@@ -12348,7 +12506,11 @@ impl VulcanWorkbench {
             let assistant_output = report
                 .assistant_output
                 .clone()
-                .unwrap_or_else(|| String::from("模型已完成执行，但未返回可见文本输出。"));
+                .unwrap_or_else(|| {
+                    String::from(
+                        "The model completed the run but did not return visible text output.",
+                    )
+                });
 
             if thinking_output.is_some()
                 && !self
@@ -14023,20 +14185,23 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
-        compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
-        composer_visible_line_count, generated_attachments_from_tool_metadata,
+        Message, VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
+        build_background_legacy_maintenance_queue, compact_tool_detail_message_for_projection,
+        composer_text_has_submittable_content, composer_visible_line_count,
+        generated_attachments_from_tool_metadata,
         merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
         pending_prompt_dispatch_index, prune_session_messages_to_limit,
-        task_session_payload_from_tool_metadata,
+        sanitize_workspace_history_search_query_input, task_session_payload_from_tool_metadata,
     };
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
-        SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionState,
-        SessionSummary,
+        SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
+        SessionRuntimeStateEntry, SessionState, SessionSummary,
     };
+    use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
     use iced::widget::text_editor;
     use serde_json::{Value, json};
+    use vulcan_agent_view::AgentViewBlock;
     use vulcan_core::types::ConversationAttachmentKind;
 
     /// Builds a compact session summary for queue-related unit tests.
@@ -14075,6 +14240,30 @@ mod tests {
         }
     }
 
+    /// Builds a compact comparable fingerprint for one transcript window so tests can detect unintended locale-driven mutation without requiring serde support.
+    /// 为单份转录窗口构建紧凑可比指纹，使测试无需依赖 serde 支持也能发现语言驱动的意外变更。
+    fn message_window_fingerprint(messages: &[SessionMessageEntry]) -> Vec<String> {
+        messages
+            .iter()
+            .map(|message| {
+                format!(
+                    "{}|{:?}|{:?}|{}|{}|{}|{}",
+                    message.id,
+                    message.kind,
+                    message.record_kind,
+                    message.visible,
+                    message.title,
+                    message.body,
+                    message
+                        .metadata
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default()
+                )
+            })
+            .collect()
+    }
+
     /// Verifies that an empty composer still reserves one visible line.
     /// 验证空提示词编辑器仍会保留一条可见逻辑行。
     #[test]
@@ -14091,6 +14280,24 @@ mod tests {
         let buffer = text_editor::Content::with_text("第一行\n");
 
         assert_eq!(composer_visible_line_count(&buffer, 420.0), 2);
+    }
+
+    /// Verifies that pasted workspace-history search text is flattened and bounded before rendering.
+    /// 验证粘贴的工作台历史搜索文本在渲染前会被压平并限制长度。
+    #[test]
+    fn sanitize_workspace_history_search_query_input_limits_pasted_text() {
+        let pasted = format!(
+            "第一行\n\t第二行 {}",
+            "x".repeat(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS + 64)
+        );
+        let sanitized = sanitize_workspace_history_search_query_input(&pasted);
+
+        assert!(sanitized.starts_with("第一行 第二行 "));
+        assert!(!sanitized.contains('\n'));
+        assert_eq!(
+            sanitized.chars().count(),
+            SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS
+        );
     }
 
     /// Verifies that one long logical line expands into multiple visible lines when the composer width becomes narrow enough.
@@ -14148,6 +14355,103 @@ mod tests {
         let queue = build_background_legacy_maintenance_queue(&visible_sessions, &[]);
 
         assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![session_id]);
+    }
+
+    /// Verifies switching GUI locale only rebuilds transcript projections and never mutates canonical context state or persisted transcript rows.
+    /// 验证切换图形界面语言只会重建转录投影，不会改动规范上下文状态或已持久化转录行。
+    #[test]
+    fn locale_refresh_rebuilds_projection_without_mutating_context_state() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(7001);
+        workbench.sessions.clear();
+        workbench.sessions.push(test_session_summary(session_id, "Locale Test"));
+        workbench.selected_session = session_id;
+
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("请继续检查当前输出。"),
+                metadata: Some(json!({
+                    "canonical_user_text": "Please continue checking the current output."
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("tool-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回"),
+                body: String::from("## Tool Result\n\nRead completed."),
+                metadata: Some(json!({
+                    "tool_name": "read_file",
+                    "tool_call_id": "call-1",
+                })),
+                created_at: String::from("2"),
+            },
+        ];
+        let conversation_state =
+            crate::conversation_protocol::conversation_state_from_session_messages(&messages);
+        workbench.session_messages.insert(session_id, messages);
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                conversation_state,
+                updated_at: String::from("1"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        workbench.refresh_session_agent_view_buffers(session_id);
+        let messages_before = message_window_fingerprint(
+            workbench.session_messages.get(&session_id).unwrap(),
+        );
+        let conversation_before = serde_json::to_value(
+            &workbench
+                .session_runtime_state
+                .get(&session_id)
+                .unwrap()
+                .conversation_state,
+        )
+        .expect("serialize canonical conversation before locale refresh");
+
+        let _ = workbench.update(Message::LocaleSelected(crate::AppLocale::EnUs));
+
+        let messages_after = message_window_fingerprint(
+            workbench.session_messages.get(&session_id).unwrap(),
+        );
+        let conversation_after = serde_json::to_value(
+            &workbench
+                .session_runtime_state
+                .get(&session_id)
+                .unwrap()
+                .conversation_state,
+        )
+        .expect("serialize canonical conversation after locale refresh");
+        assert_eq!(messages_after, messages_before);
+        assert_eq!(conversation_after, conversation_before);
+
+        let rendered = workbench
+            .rendered_session_agent_view_document(session_id)
+            .expect("rebuilt rendered document after locale refresh");
+        let rendered_titles = rendered
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                AgentViewBlock::Directive(directive) => {
+                    directive.attributes.get("title").cloned()
+                }
+                AgentViewBlock::Markdown(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(rendered_titles.iter().any(|title| title == "User Prompt"));
+        assert!(rendered_titles
+            .iter()
+            .any(|title| title == "Tool Result read_file"));
     }
 
     /// Verifies Anthropic queue dispatch prefers delegated completion callbacks over user-authored follow-ups once background subagents have fully settled.

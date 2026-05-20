@@ -1,0 +1,15 @@
+{
+  "common.cancel": "取消",
+  "common.close": "关闭",
+  "common.confirm": "确认",
+  "common.delete": "删除",
+  "common.language_label": "界面语言",
+  "common.loading": "加载中",
+  "common.pinned": "置顶",
+  "common.project": "项目",
+  "common.retry": "重试",
+  "common.search": "搜索",
+  "common.theme_label": "界面主题",
+  "common.unknown_duration": "未知时长",
+  "guide.quick_markdown": "# AI Coding Foundation\n\n- 左侧用于管理工作区、扫描项目与会话队列。\n- 中间用于输入 Prompt、组织执行模式并预览补丁代码。\n- 右侧用于调整模型、运行策略、主题与工程检查项。\n\n## 下一阶段建议\n\n1. 接入文件树与差异面板。\n2. 接入真实命令执行与终端流。\n3. 接入流式推理与多 Agent 编排。\n"
+}

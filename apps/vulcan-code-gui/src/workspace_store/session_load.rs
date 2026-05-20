@@ -139,6 +139,54 @@ pub async fn load_session_tool_detail_page(
     })
 }
 
+/// Loads the complete persisted tool-detail stream for one conversation turn by walking every paged slice until no older tool rows remain.
+/// 通过遍历每一页持久化分页切片直到不存在更早工具行，为单个对话轮次加载完整的工具明细流。
+pub async fn load_complete_session_tool_detail_turn(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    turn_index: i64,
+) -> Result<SessionToolDetailPage, String> {
+    let mut before_ordinal = None;
+    let mut aggregated_messages = Vec::new();
+    let mut earliest_ordinal = None;
+
+    loop {
+        let page = load_session_tool_detail_page(
+            controller.clone(),
+            session_id,
+            turn_index,
+            before_ordinal,
+            SESSION_TOOL_DETAIL_PAGE_LIMIT,
+        )
+        .await?;
+        let page_earliest_ordinal = page.earliest_ordinal;
+        earliest_ordinal = page_earliest_ordinal.or(earliest_ordinal);
+
+        if page.messages.is_empty() {
+            break;
+        }
+
+        merge_tool_detail_page_into_aggregate(&mut aggregated_messages, page.messages);
+
+        if !page.has_more_detail
+            || page_earliest_ordinal.is_none()
+            || page_earliest_ordinal == before_ordinal
+        {
+            break;
+        }
+
+        before_ordinal = page_earliest_ordinal;
+    }
+
+    Ok(SessionToolDetailPage {
+        session_id,
+        turn_index,
+        messages: aggregated_messages,
+        earliest_ordinal,
+        has_more_detail: false,
+    })
+}
+
 /// Queries one bounded transcript window for a single session, ordered newest-first at SQL level.
 /// 查询单个会话的一段有界转录窗口，SQL 层按新到旧排序。
 async fn query_session_message_window_rows(
@@ -222,6 +270,91 @@ fn loaded_message_turn_count(message_rows: &[StoredSessionMessageRow]) -> usize 
         .map(|row| row.turn_index)
         .collect::<BTreeSet<_>>()
         .len()
+}
+
+/// Prepends one older tool-detail page into the aggregate turn snapshot while preserving ascending display order and stable message identifiers.
+/// 将一页更早的工具明细预置到聚合轮次快照前方，同时保持正序展示与稳定消息标识。
+fn merge_tool_detail_page_into_aggregate(
+    aggregate: &mut Vec<SessionMessageEntry>,
+    page_messages: Vec<SessionMessageEntry>,
+) {
+    if aggregate.is_empty() {
+        *aggregate = page_messages;
+        return;
+    }
+
+    let existing_ids = aggregate
+        .iter()
+        .map(|message| message.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut older_messages = page_messages
+        .into_iter()
+        .filter(|message| !existing_ids.contains(&message.id))
+        .collect::<Vec<_>>();
+    older_messages.append(aggregate);
+    *aggregate = older_messages;
+}
+
+#[cfg(test)]
+mod tool_detail_aggregation_tests {
+    use super::*;
+
+    /// Verifies that older tool-detail pages are prepended ahead of newer pages so the final aggregate stays in ascending transcript order.
+    /// 验证更早工具明细分页会被预置到较新分页之前，确保最终聚合结果保持转录正序。
+    #[test]
+    fn merge_tool_detail_page_into_aggregate_prepends_older_rows() {
+        let mut aggregate = vec![
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-3", "body-3")
+                .with_runtime_metadata("tool-3", "3"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-4", "body-4")
+                .with_runtime_metadata("tool-4", "4"),
+        ];
+        let older_page = vec![
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-1", "body-1")
+                .with_runtime_metadata("tool-1", "1"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-2", "body-2")
+                .with_runtime_metadata("tool-2", "2"),
+        ];
+
+        merge_tool_detail_page_into_aggregate(&mut aggregate, older_page);
+
+        assert_eq!(
+            aggregate
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tool-1", "tool-2", "tool-3", "tool-4"]
+        );
+    }
+
+    /// Verifies that repeated rows from overlapping tool-detail pages are deduplicated while preserving the earliest-first aggregate order.
+    /// 验证来自重叠工具明细分页的重复消息会被去重，同时保持聚合结果的先早后晚顺序。
+    #[test]
+    fn merge_tool_detail_page_into_aggregate_deduplicates_repeated_rows() {
+        let mut aggregate = vec![
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-3", "body-3")
+                .with_runtime_metadata("tool-3", "3"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-4", "body-4")
+                .with_runtime_metadata("tool-4", "4"),
+        ];
+        let older_page = vec![
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-2", "body-2")
+                .with_runtime_metadata("tool-2", "2"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "tool-3", "stale-body-3")
+                .with_runtime_metadata("tool-3", "3"),
+        ];
+
+        merge_tool_detail_page_into_aggregate(&mut aggregate, older_page);
+
+        assert_eq!(
+            aggregate
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tool-2", "tool-3", "tool-4"]
+        );
+        assert_eq!(aggregate[1].body, "body-3");
+    }
 }
 
 /// Queries and rebuilds chunked message bodies for one already-bounded transcript window.

@@ -233,7 +233,9 @@ impl VulcanCoreController {
             let skipped_result = ToolInvocationResult {
                 tool_call_id: request.tool_call_id.clone(),
                 tool_name: request.tool_name.clone(),
-                model_output: String::from("工具调用已由宿主策略跳过。"),
+                model_output: String::from(
+                    "Tool execution was skipped by the host policy.",
+                ),
                 host_result: Some(json!({
                     "tool_call_id": request.tool_call_id,
                     "tool_name": request.tool_name,
@@ -1334,11 +1336,12 @@ mod tests {
             assert!(executor.executed_requests().is_empty());
             assert!(matches!(
                 &controller.snapshot().messages[2].payload,
-                ConversationPayload::ToolResult { text, .. } if text == "工具调用已由宿主策略跳过。"
+                ConversationPayload::ToolResult { text, .. }
+                    if text == "Tool execution was skipped by the host policy."
             ));
             assert!(controller.snapshot().records.iter().any(|record| {
                 record.title == "调用 blocked_tool 工具"
-                    && record.body == "工具调用已由宿主策略跳过。"
+                    && record.body == "Tool execution was skipped by the host policy."
             }));
         });
     }

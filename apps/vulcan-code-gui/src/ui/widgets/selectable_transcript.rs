@@ -2,6 +2,7 @@
 //! agent-view 转录渲染器的兼容性转发导出。
 
 pub use vulcan_agent_view::{
+    clear_selectable_transcript_render_cache_stash,
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
     SelectableTranscriptContextMenuMediaTarget, SelectableTranscriptContextMenuRequest,
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,

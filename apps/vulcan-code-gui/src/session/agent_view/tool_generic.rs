@@ -2,6 +2,7 @@
 //! 供 MCP、未知工具以及兜底工具行使用的通用工具转录投影。
 
 use super::tool_shared::{build_base_tool_attributes, build_tool_directive_block};
+use super::AgentViewBuildOptions;
 use crate::model::SessionMessageEntry;
 use vulcan_agent_view::{
     AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,
@@ -12,7 +13,12 @@ use vulcan_agent_view::{
 pub(crate) fn build_generic_tool_block(
     kind: AgentViewDirectiveKind,
     message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
 ) -> AgentViewDirectiveBlock {
-    let attributes = build_base_tool_attributes(message, AgentViewToolPresentationKind::Generic);
+    let attributes = build_base_tool_attributes(
+        message,
+        AgentViewToolPresentationKind::Generic,
+        options,
+    );
     build_tool_directive_block(kind, attributes)
 }

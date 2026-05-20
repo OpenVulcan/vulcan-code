@@ -21,6 +21,7 @@ pub use document::{
 };
 pub use editor_core::{Cursor, Selection, TextBuffer, ViewState};
 pub use iced::{
+    clear_selectable_transcript_render_cache_stash,
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
     SelectableTranscriptContextMenuMediaTarget, SelectableTranscriptContextMenuRequest,
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,

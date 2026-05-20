@@ -17,7 +17,7 @@ impl VulcanWorkbench {
 
         if has_pinned {
             tree = tree
-                .push(self.view_main_task_group_label("置顶", false))
+                .push(self.view_main_task_group_label(self.t(I18nKey::CommonPinned), false))
                 .push(
                     pinned_projects.fold(column![].spacing(1).width(Fill), |column, project| {
                         column.push(self.view_main_task_project_tree_row(project))
@@ -28,7 +28,7 @@ impl VulcanWorkbench {
         }
 
         tree = tree
-            .push(self.view_main_task_group_label("项目", true))
+            .push(self.view_main_task_group_label(self.t(I18nKey::CommonProject), true))
             .push(
                 regular_projects.fold(column![].spacing(1).width(Fill), |column, project| {
                     column.push(self.view_main_task_project_tree_row(project))
@@ -47,23 +47,26 @@ impl VulcanWorkbench {
         confirmation: &ArchivedDeleteConfirmationState,
     ) -> Element<'_, Message> {
         let subject_label = match &confirmation.target {
-            ArchivedDeleteTarget::Project(_) => "归档项目",
-            ArchivedDeleteTarget::Session(_) => "归档会话",
+            ArchivedDeleteTarget::Project(_) => self.t(I18nKey::TaskTreeArchivedProject),
+            ArchivedDeleteTarget::Session(_) => self.t(I18nKey::TaskTreeArchivedSession),
         };
 
         container(
             column![
-                text(format!(
-                    "将彻底删除{} `{}`，此操作不可恢复。",
-                    subject_label, confirmation.title
+                text(self.tf(
+                    I18nKey::TaskTreePermanentDeletePrompt,
+                    &[
+                        I18nArg::named("subject_label", subject_label),
+                        I18nArg::named("title", confirmation.title.as_str()),
+                    ],
                 ))
                 .size(13),
                 row![
-                    button("取消")
+                    button(text(self.t(I18nKey::CommonCancel)))
                         .padding([8, 12])
                         .style(button::secondary)
                         .on_press(Message::CancelPermanentDeleteArchivedItem),
-                    button("确认删除")
+                    button(text(self.t(I18nKey::CommonDelete)))
                         .padding([8, 12])
                         .style(button::danger)
                         .on_press(Message::ConfirmPermanentDeleteArchivedItem),
@@ -83,7 +86,7 @@ impl VulcanWorkbench {
     /// 构建展示在项目树内部的紧凑分区标签。
     pub(super) fn view_main_task_group_label(
         &self,
-        label: &'static str,
+        label: String,
         show_add_project_button: bool,
     ) -> Element<'_, Message> {
         let trailing_action: Element<'_, Message> = if show_add_project_button {
@@ -93,7 +96,7 @@ impl VulcanWorkbench {
                     Message::AddTaskProjectFromFolder,
                     true,
                 ),
-                text("从文件夹添加项目"),
+                text(self.t(I18nKey::TaskTreeAddProjectFromFolder)),
                 tooltip::Position::Bottom,
             )
             .style(container::rounded_box)
@@ -383,7 +386,7 @@ impl VulcanWorkbench {
         let has_visible_sessions = !project.session_ids.is_empty();
 
         if !has_visible_sessions {
-            return container(text("暂无对话").size(13).style(|theme: &Theme| {
+            return container(text(self.t(I18nKey::TaskTreeNoSessions)).size(13).style(|theme: &Theme| {
                 iced::widget::text::Style {
                     color: Some(
                         theme
@@ -551,7 +554,7 @@ impl VulcanWorkbench {
                 row![
                     folder_icon,
                     project_label,
-                    text("已归档").size(12).style(|theme: &Theme| {
+                    text(self.t(I18nKey::TaskTreeArchivedBadge)).size(12).style(|theme: &Theme| {
                         iced::widget::text::Style {
                             color: Some(
                                 theme
@@ -618,7 +621,7 @@ impl VulcanWorkbench {
                     Self::view_main_task_session_status_icon(session.status),
                     session_label,
                     space::horizontal(),
-                    text("已归档").size(12).style(|theme: &Theme| {
+                    text(self.t(I18nKey::TaskTreeArchivedBadge)).size(12).style(|theme: &Theme| {
                         iced::widget::text::Style {
                             color: Some(
                                 theme

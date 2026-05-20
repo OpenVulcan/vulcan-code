@@ -4,6 +4,7 @@
 use super::tool_shared::{
     build_base_tool_attributes, build_tool_directive_block, generated_attachment_descriptor,
 };
+use super::AgentViewBuildOptions;
 use crate::model::SessionMessageEntry;
 use vulcan_agent_view::{
     AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,
@@ -14,9 +15,13 @@ use vulcan_agent_view::{
 pub(crate) fn build_generated_document_tool_block(
     kind: AgentViewDirectiveKind,
     message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
 ) -> AgentViewDirectiveBlock {
-    let mut attributes =
-        build_base_tool_attributes(message, AgentViewToolPresentationKind::GeneratedDocument);
+    let mut attributes = build_base_tool_attributes(
+        message,
+        AgentViewToolPresentationKind::GeneratedDocument,
+        options,
+    );
     if let Some(metadata) = message.metadata.as_ref()
         && let Some(descriptor) = generated_attachment_descriptor(metadata, "document")
             .or_else(|| generated_attachment_descriptor(metadata, "pdf"))

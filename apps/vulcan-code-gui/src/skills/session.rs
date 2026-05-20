@@ -212,16 +212,16 @@ impl ExploreSkill {
     fn execute(&self, input: ExploreSkillInput<'_>) -> SessionDerivedRecord {
         let body = if let Some(project) = input.project {
             format!(
-                "当前会话绑定到项目 `{}`，根目录为 `{}`，后续 explore/triage 将优先围绕该目录展开。",
+                "This session is bound to project `{}` with root directory `{}`. Future explore and triage steps should prioritize that scope.",
                 project.title, project.path
             )
         } else if let Some(project_id) = input.project_id {
             format!(
-                "当前会话绑定到项目标识 `{project_id}`，但项目详情暂未加载，后续 explore/triage 将在工作区内兜底。"
+                "This session is bound to project id `{project_id}`, but the project details are not loaded yet. Future explore and triage steps should fall back to the workspace scope."
             )
         } else {
             format!(
-                "当前会话未绑定到显式项目目录，后续 explore/triage 将围绕工作区 `{}` 展开。",
+                "This session is not bound to an explicit project directory. Future explore and triage steps should operate within workspace `{}`.",
                 input.workspace_path
             )
         };
@@ -229,7 +229,7 @@ impl ExploreSkill {
         SessionDerivedRecord {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ExploreOutput,
-            title: String::from("Explore 输出"),
+            title: String::from("Explore Context"),
             body,
         }
     }
@@ -250,24 +250,24 @@ impl SummarySkill {
                 .assistant_output
                 .as_deref()
                 .map(|output| truncate_preview_lines(output, 3, 220))
-                .unwrap_or_else(|| String::from("模型本轮未返回可见文本输出。"));
-            format!("本轮执行成功完成。输出摘要：{output_preview}")
+                .unwrap_or_else(|| String::from("The model did not return visible text output for this run."));
+            format!("The execution finished successfully. Output summary: {output_preview}")
         } else {
             format!(
-                "本轮执行失败。错误摘要：{}",
+                "The execution failed. Error summary: {}",
                 input
                     .report
                     .error
                     .as_deref()
                     .map(|error| truncate_preview_lines(error, 2, 180))
-                    .unwrap_or_else(|| String::from("未知错误"))
+                    .unwrap_or_else(|| String::from("Unknown error"))
             )
         };
 
         SessionDerivedRecord {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::SummaryOutput,
-            title: String::from("Summary 输出"),
+            title: String::from("Execution Summary"),
             body,
         }
     }
@@ -329,9 +329,9 @@ impl CompactionSkill {
             summary_record: SessionDerivedRecord {
                 kind: SessionMessageKind::Assistant,
                 record_kind: SessionMessageRecordKind::CompactionSummary,
-                title: String::from("上下文压缩摘要"),
+                title: String::from("Context Compaction Summary"),
                 body: format!(
-                    "以下内容用于后续上下文重建，用户界面默认隐藏。\n\n{}",
+                    "The following summary is retained for future context reconstruction and stays hidden in the default UI.\n\n{}",
                     summary_body
                 ),
             },
@@ -451,17 +451,8 @@ fn estimate_text_tokens(text: &str) -> usize {
 /// Builds one compaction summary line and optionally prunes old tool-output bodies.
 /// 构建单条压缩摘要行，并可选剪枝旧工具输出正文。
 fn compaction_summary_line_for_message(message: &SessionMessageEntry, prune_tools: bool) -> String {
-    let label = match message.record_kind {
-        SessionMessageRecordKind::Transcript => message.kind.label(),
-        SessionMessageRecordKind::ThinkingOutput => "THINKING",
-        SessionMessageRecordKind::AssistantOutput => "OUTPUT",
-        SessionMessageRecordKind::ToolCallOutput => "TOOL_CALL",
-        SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
-        SessionMessageRecordKind::SummaryOutput => "SUMMARY",
-        SessionMessageRecordKind::ExploreOutput => "EXPLORE",
-        SessionMessageRecordKind::CompactionSummary => "COMPACTION",
-        SessionMessageRecordKind::TitleOutput => "TITLE",
-    };
+    let label = canonical_compaction_message_label(message);
+    let title = canonical_compaction_message_title(message);
     let preview = if prune_tools
         && matches!(
             message.record_kind,
@@ -472,7 +463,90 @@ fn compaction_summary_line_for_message(message: &SessionMessageEntry, prune_tool
         truncate_preview_lines(&message.body, 1, 88)
     };
 
-    format!("{} · {}：{}", label, message.title, preview)
+    if title == label {
+        format!("{label}: {preview}")
+    } else {
+        format!("{label} · {title}: {preview}")
+    }
+}
+
+/// Resolves the stable English label used for model-facing compaction summaries.
+/// 解析供面向模型的压缩摘要使用的稳定英文标签。
+fn canonical_compaction_message_label(message: &SessionMessageEntry) -> &'static str {
+    match message.record_kind {
+        SessionMessageRecordKind::Transcript => message.kind.label(),
+        SessionMessageRecordKind::ThinkingOutput => "THINKING",
+        SessionMessageRecordKind::AssistantOutput => "OUTPUT",
+        SessionMessageRecordKind::ToolCallOutput => "TOOL_CALL",
+        SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
+        SessionMessageRecordKind::SummaryOutput => "SUMMARY",
+        SessionMessageRecordKind::ExploreOutput => "EXPLORE",
+        SessionMessageRecordKind::CompactionSummary => "COMPACTION",
+        SessionMessageRecordKind::TitleOutput => "TITLE",
+    }
+}
+
+/// Resolves the stable English headline used for model-facing compaction summaries without depending on GUI locale.
+/// 解析供面向模型的压缩摘要使用的稳定英文标题，并且不依赖图形界面语言。
+fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
+    match message.record_kind {
+        SessionMessageRecordKind::Transcript => match message.kind {
+            SessionMessageKind::User => String::from("User Prompt"),
+            SessionMessageKind::Assistant => String::from("Assistant Message"),
+            SessionMessageKind::Error => String::from("System Error"),
+        },
+        SessionMessageRecordKind::ThinkingOutput => String::from("Thinking"),
+        SessionMessageRecordKind::AssistantOutput => String::from("Output"),
+        SessionMessageRecordKind::ToolCallOutput => canonical_tool_summary_title(message, "Tool Call"),
+        SessionMessageRecordKind::ToolResultOutput => {
+            canonical_tool_summary_title(message, "Tool Result")
+        }
+        SessionMessageRecordKind::SummaryOutput => String::from("Execution Summary"),
+        SessionMessageRecordKind::ExploreOutput => String::from("Explore Context"),
+        SessionMessageRecordKind::CompactionSummary => String::from("Context Compaction Summary"),
+        SessionMessageRecordKind::TitleOutput => String::from("Title Update"),
+    }
+}
+
+/// Builds a stable English tool summary title from normalized metadata first and legacy persisted titles second.
+/// 优先根据规范化元数据、其次根据旧版持久化标题构建稳定英文工具摘要标题。
+fn canonical_tool_summary_title(message: &SessionMessageEntry, prefix: &str) -> String {
+    let tool_name = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_name"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| legacy_tool_name_from_title(&message.title));
+
+    tool_name
+        .map(|tool_name| format!("{prefix} {tool_name}"))
+        .unwrap_or_else(|| prefix.to_string())
+}
+
+/// Extracts a best-effort tool name from legacy persisted transcript headlines.
+/// 从旧版持久化转录标题中提取最佳努力工具名称。
+fn legacy_tool_name_from_title(title: &str) -> Option<String> {
+    let trimmed = title.trim();
+    if let Some(tool_name) = trimmed
+        .strip_prefix("调用 ")
+        .and_then(|value| value.strip_suffix(" 工具"))
+    {
+        return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
+    }
+    if let Some(tool_name) = trimmed.strip_prefix("工具返回 ") {
+        return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
+    }
+    if let Some(tool_name) = trimmed.strip_prefix("Tool Call ") {
+        return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
+    }
+    if let Some(tool_name) = trimmed.strip_prefix("Tool Result ") {
+        return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
+    }
+
+    None
 }
 
 /// Builds a compact user-facing title from the latest prompt and drops surrounding decoration.
@@ -684,8 +758,31 @@ mod tests {
         let record = skill.execute(SummarySkillInput { report: &report });
 
         assert_eq!(record.record_kind, SessionMessageRecordKind::SummaryOutput);
-        assert!(record.body.contains("输出摘要：这是给用户的最终输出。"));
+        assert!(record.body.contains("Output summary: 这是给用户的最终输出。"));
         assert!(!record.body.contains("准备摘要"));
         assert!(!record.body.contains("会话：#"));
+    }
+
+    /// Verifies compaction summaries always use stable English structure even when source transcript titles are localized for the GUI.
+    /// 验证即使源转录标题为了图形界面而本地化，压缩摘要仍会始终使用稳定英文结构。
+    #[test]
+    fn compaction_summary_line_uses_canonical_english_titles() {
+        let message = SessionMessageEntry {
+            id: String::from("tool-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回"),
+            body: String::from("## Tool Result\n\nRead completed."),
+            metadata: Some(serde_json::json!({
+                "tool_name": "read_file"
+            })),
+            created_at: String::from("1"),
+        };
+
+        let line = compaction_summary_line_for_message(&message, false);
+
+        assert!(line.starts_with("TOOL_RESULT · Tool Result read_file:"));
+        assert!(!line.contains("工具返回"));
     }
 }

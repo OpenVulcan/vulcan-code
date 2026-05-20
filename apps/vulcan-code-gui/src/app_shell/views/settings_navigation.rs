@@ -27,7 +27,8 @@ impl VulcanWorkbench {
     /// Builds the collapsible left navigation tree used by the dedicated settings workspace.
     /// 构建独立设置工作区使用的可折叠左侧导航树。
     pub(super) fn view_settings_navigation_tree(&self) -> Element<'_, Message> {
-        let mut navigation = column![self.view_main_task_group_label("设置", false)]
+        let mut navigation =
+            column![self.view_main_task_group_label(self.t(I18nKey::SettingsRootTitle), false)]
             .spacing(1)
             .width(Fill);
         navigation = navigation.push(self.view_settings_navigation_model_group_button());
@@ -99,7 +100,7 @@ impl VulcanWorkbench {
             container(
                 row![
                     container(folder_icon).width(16).center_y(Fill),
-                    text("模型设置")
+                    text(self.t(I18nKey::SettingsModelGroupTitle))
                         .size(14)
                         .wrapping(iced::advanced::text::Wrapping::None),
                     space::horizontal(),
@@ -226,7 +227,7 @@ impl VulcanWorkbench {
         let icon = self.view_settings_navigation_icon(section, false);
         self.view_tree_navigation_button_row(
             icon,
-            section.label().to_string(),
+            section.localized_label(self.current_locale()),
             None,
             None,
             is_selected,
@@ -253,7 +254,7 @@ impl VulcanWorkbench {
             container(
                 row![
                     container(folder_icon).width(16).center_y(Fill),
-                    text("能力扩展")
+                    text(self.t(I18nKey::SettingsAiCapabilityGroupTitle))
                         .size(14)
                         .wrapping(iced::advanced::text::Wrapping::None),
                     space::horizontal(),
@@ -290,7 +291,7 @@ impl VulcanWorkbench {
         let icon = self.view_settings_navigation_icon(section, true);
         self.view_tree_navigation_button_row(
             icon,
-            section.label().to_string(),
+            section.localized_label(self.current_locale()),
             None,
             None,
             is_selected,
@@ -409,19 +410,19 @@ impl VulcanWorkbench {
 
         let mut content = column![
             row![
-                text("归档恢复").size(18),
+                text(self.t(I18nKey::SettingsArchivedRestoreTitle)).size(18),
                 space::horizontal(),
-                text("归档内容只在这里展示，主会话树不再显示。").size(12),
+                text(self.t(I18nKey::SettingsArchivedRestoreHint)).size(12),
             ]
             .align_y(Center)
         ]
         .spacing(12);
 
         if self.archived_task_projects.is_empty() && standalone_archived_sessions.is_empty() {
-            content = content.push(text("当前没有归档项目或归档会话。").size(13));
+            content = content.push(text(self.t(I18nKey::SettingsArchivedRestoreEmpty)).size(13));
         } else {
             if !self.archived_task_projects.is_empty() {
-                content = content.push(text("归档项目").size(14)).push(
+                content = content.push(text(self.t(I18nKey::SettingsArchivedProjectsTitle)).size(14)).push(
                     self.archived_task_projects
                         .iter()
                         .fold(column![].spacing(1).width(Fill), |column, project| {
@@ -431,7 +432,7 @@ impl VulcanWorkbench {
             }
 
             if !standalone_archived_sessions.is_empty() {
-                content = content.push(text("独立归档会话").size(14)).push(
+                content = content.push(text(self.t(I18nKey::SettingsArchivedStandaloneSessionsTitle)).size(14)).push(
                     standalone_archived_sessions.into_iter().fold(
                         column![].spacing(1).width(Fill),
                         |column, session| {
