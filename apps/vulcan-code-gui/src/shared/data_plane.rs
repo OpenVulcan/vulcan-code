@@ -27,7 +27,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 5;
+pub const APP_SCHEMA_VERSION: i64 = 6;
 
 /// One-shot metadata key that marks the non-compatible session reset required by the protocol refactor.
 /// 标记协议重构所需一次性不兼容会话清理已经完成的元数据键。
@@ -293,6 +293,18 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE session_runtime_state ADD COLUMN continuation_json TEXT;",
     )
     .await?;
+    ensure_optional_session_compaction_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_compactions ADD COLUMN source_until_turn_index INTEGER;",
+    )
+    .await?;
+    ensure_optional_session_compaction_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_compactions ADD COLUMN retained_tail_start_turn_index INTEGER;",
+    )
+    .await?;
     ensure_optional_session_message_column(
         client,
         sqlite_binding_id,
@@ -308,6 +320,16 @@ async fn ensure_application_schema_migrations(
 /// Applies one idempotent session-message column migration and ignores duplicate-column failures.
 /// 执行一条幂等会话消息列迁移，并忽略重复列失败。
 async fn ensure_optional_session_message_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
+    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+}
+
+/// Executes one idempotent session-compaction column migration and ignores duplicate-column failures.
+/// 执行一条幂等会话压缩列迁移，并忽略重复列失败。
+async fn ensure_optional_session_compaction_column(
     client: &ControllerClient,
     sqlite_binding_id: &str,
     statement: &str,
@@ -573,7 +595,9 @@ CREATE TABLE IF NOT EXISTS session_compactions (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     source_until_message_id TEXT,
+    source_until_turn_index INTEGER,
     context_start_message_id TEXT,
+    retained_tail_start_turn_index INTEGER,
     summary_message_id TEXT,
     created_at TEXT NOT NULL
 );

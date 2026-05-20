@@ -33,6 +33,8 @@ pub enum I18nKey {
     SettingsRuntimeParametersDescription,
     SettingsRootTitle,
     SettingsLanguagePlaceholder,
+    SettingsSessionTranscriptTurnPageSizeLabel,
+    SettingsSessionTranscriptTurnPageSizePlaceholder,
     SettingsModelGroupTitle,
     SettingsThemePlaceholder,
     SettingsTemperatureToggle,
@@ -228,6 +230,12 @@ impl I18nKey {
             Self::SettingsRuntimeParametersDescription => "settings.runtime_parameters_description",
             Self::SettingsRootTitle => "settings.root_title",
             Self::SettingsLanguagePlaceholder => "settings.language_placeholder",
+            Self::SettingsSessionTranscriptTurnPageSizeLabel => {
+                "settings.session_transcript_turn_page_size_label"
+            }
+            Self::SettingsSessionTranscriptTurnPageSizePlaceholder => {
+                "settings.session_transcript_turn_page_size_placeholder"
+            }
             Self::SettingsModelGroupTitle => "settings.model_group_title",
             Self::SettingsThemePlaceholder => "settings.theme_placeholder",
             Self::SettingsTemperatureToggle => "settings.temperature_toggle",

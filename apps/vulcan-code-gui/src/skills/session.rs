@@ -128,9 +128,12 @@ pub struct CompactionSkillInput<'a> {
     /// Owning session identifier.
     /// 所属会话标识。
     pub session_id: SessionId,
-    /// Full transcript history for the session.
-    /// 该会话的完整转录历史。
+    /// Context-participating transcript history for the current compaction window.
+    /// 当前压缩窗口参与上下文的转录历史。
     pub messages: &'a [SessionMessageEntry],
+    /// Full transcript history for the session in persisted order so compaction metadata can keep stable absolute turn indexes.
+    /// 以持久化顺序提供的完整会话转录历史，用于让压缩元数据保留稳定的绝对轮次索引。
+    pub all_messages: &'a [SessionMessageEntry],
     /// Runtime-state snapshot used to resolve the current context start point.
     /// 用于解析当前上下文起点的运行时状态快照。
     pub runtime_state: &'a SessionRuntimeStateEntry,
@@ -149,6 +152,12 @@ pub struct CompactionSkillResult {
     /// Optional source tail message identifier covered by the new summary.
     /// 新摘要覆盖的可选源历史尾消息标识。
     pub source_until_message_id: Option<String>,
+    /// Optional last user-turn index covered by the compaction source window.
+    /// 被压缩源窗口覆盖的可选最后一个用户轮次索引。
+    pub source_until_turn_index: Option<i64>,
+    /// Optional first retained user-turn index kept verbatim after the compaction rewrite.
+    /// 压缩改写后按原样保留的可选第一个用户轮次索引。
+    pub retained_tail_start_turn_index: Option<i64>,
     /// Stable compaction identifier prepared by the skill.
     /// 技能预先生成的稳定压缩标识。
     pub compaction_id: String,
@@ -164,7 +173,9 @@ impl CompactionSkillResult {
         SessionCompactionEntry {
             id: self.compaction_id.clone(),
             source_until_message_id: self.source_until_message_id.clone(),
+            source_until_turn_index: self.source_until_turn_index,
             context_start_message_id: Some(summary_message_id.clone()),
+            retained_tail_start_turn_index: self.retained_tail_start_turn_index,
             summary_message_id: Some(summary_message_id),
             created_at: self.created_at.clone(),
         }
@@ -318,6 +329,12 @@ impl CompactionSkill {
 
         let compaction_source = &context_candidates[..retained_tail_start];
         let source_until_message_id = compaction_source.last().map(|message| message.id.clone());
+        let source_until_turn_index = source_until_message_id
+            .as_deref()
+            .and_then(|message_id| absolute_turn_index_for_message(input.all_messages, message_id));
+        let retained_tail_start_turn_index = context_candidates
+            .get(retained_tail_start)
+            .and_then(|message| absolute_turn_index_for_message(input.all_messages, &message.id));
         let summary_body = compaction_source
             .iter()
             .map(|message| compaction_summary_line_for_message(message, input.policy.prune))
@@ -336,10 +353,32 @@ impl CompactionSkill {
                 ),
             },
             source_until_message_id,
+            source_until_turn_index,
+            retained_tail_start_turn_index,
             compaction_id: format!("session-{}-compaction-{created_at}", input.session_id),
             created_at,
         })
     }
+}
+
+/// Resolves the absolute persisted user-turn index for one transcript message identifier by replaying user-turn boundaries over the full session transcript history.
+/// 通过在完整会话转录历史上重放用户轮次边界，解析某条转录消息标识对应的绝对持久化用户轮次索引。
+fn absolute_turn_index_for_message(
+    messages: &[SessionMessageEntry],
+    message_id: &str,
+) -> Option<i64> {
+    let mut current_turn_index = -1_i64;
+
+    for message in messages {
+        if matches!(message.kind, SessionMessageKind::User) {
+            current_turn_index = current_turn_index.saturating_add(1);
+        }
+        if message.id == message_id {
+            return Some(current_turn_index.max(0));
+        }
+    }
+
+    None
 }
 
 /// Selects the first context message that should remain verbatim after compaction.

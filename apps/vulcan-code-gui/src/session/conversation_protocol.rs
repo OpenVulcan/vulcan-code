@@ -634,8 +634,101 @@ fn session_message_to_protocol_message(
                 },
             })
         }
+        _ if message.contributes_to_context()
+            && matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolCallOutput
+            ) =>
+        {
+            tool_call_session_message_to_protocol_message(message)
+        }
+        _ if message.contributes_to_context()
+            && matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolResultOutput
+            ) =>
+        {
+            tool_result_session_message_to_protocol_message(message)
+        }
         _ => None,
     }
+}
+
+/// Rebuilds one canonical assistant tool-call message from a persisted transcript row when the full conversation-state JSON is not available.
+/// 当完整会话状态 JSON 不可用时，从一条持久化转录行重建一条规范助手工具调用消息。
+fn tool_call_session_message_to_protocol_message(
+    message: &SessionMessageEntry,
+) -> Option<SessionConversationMessage> {
+    let metadata = message.metadata.as_ref()?;
+    let tool_name = metadata.get("tool_name").and_then(Value::as_str)?.trim();
+    if tool_name.is_empty() {
+        return None;
+    }
+    let arguments = metadata
+        .get("arguments")
+        .cloned()
+        .or_else(|| serde_json::from_str::<Value>(message.body.trim()).ok())
+        .unwrap_or(Value::Object(serde_json::Map::new()));
+    let tool_call_id = metadata
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    Some(SessionConversationMessage {
+        id: message.id.clone(),
+        payload: SessionConversationPayload::Assistant {
+            text: String::new(),
+            reasoning: String::new(),
+            provider_message_id: None,
+            provider_message_state: None,
+            usage: None,
+            tool_calls: vec![SessionConversationToolCall {
+                id: tool_call_id
+                    .clone()
+                    .unwrap_or_else(|| message.id.clone()),
+                tool_call_id,
+                tool_name: tool_name.to_string(),
+                arguments,
+            }],
+        },
+    })
+}
+
+/// Rebuilds one canonical tool-result message from a persisted transcript row when the full conversation-state JSON is not available.
+/// 当完整会话状态 JSON 不可用时，从一条持久化转录行重建一条规范工具结果消息。
+fn tool_result_session_message_to_protocol_message(
+    message: &SessionMessageEntry,
+) -> Option<SessionConversationMessage> {
+    let metadata = message.metadata.as_ref();
+    let tool_call_id = metadata
+        .and_then(|payload| payload.get("tool_call_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let tool_result_id = metadata
+        .and_then(|payload| payload.get("tool_result_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            tool_call_id
+                .as_deref()
+                .map(|tool_call_id| format!("tool-result-{tool_call_id}"))
+        })
+        .unwrap_or_else(|| message.id.clone());
+
+    Some(SessionConversationMessage {
+        id: message.id.clone(),
+        payload: SessionConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text: message.body.clone(),
+        },
+    })
 }
 
 /// Resolves the canonical user-text payload stored for one visible user transcript message, falling back to the rendered body for older rows.
@@ -947,6 +1040,72 @@ mod tests {
         let projected = conversation_state_to_session_messages(&state);
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].metadata, Some(metadata));
+    }
+
+    /// Verifies fallback protocol reconstruction keeps one tool-call plus tool-result chain replayable when the persisted full conversation-state payload is unavailable.
+    /// 验证在缺失持久化完整会话状态载荷时，回退协议重建仍会保留一条可回放的工具调用加工具结果链。
+    #[test]
+    fn conversation_state_from_session_messages_replays_tool_chain() {
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("请读取 Cargo.toml"),
+                metadata: Some(json!({
+                    "canonical_user_text": "请读取 Cargo.toml"
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("tool-call-row"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::from("调用 read_file 工具"),
+                body: String::from("{\"path\":\"Cargo.toml\"}"),
+                metadata: Some(json!({
+                    "tool_call_id": "call-1",
+                    "tool_name": "read_file",
+                    "arguments": { "path": "Cargo.toml" }
+                })),
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("tool-result-row"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回"),
+                body: String::from("name = \"vulcan-code\""),
+                metadata: Some(json!({
+                    "tool_call_id": "call-1",
+                    "tool_result_id": "tool-result-call-1"
+                })),
+                created_at: String::from("3"),
+            },
+        ];
+
+        let rebuilt = conversation_state_from_session_messages(&messages);
+
+        assert_eq!(rebuilt.messages.len(), 3);
+        assert!(matches!(
+            &rebuilt.messages[1].payload,
+            SessionConversationPayload::Assistant { tool_calls, .. }
+                if tool_calls.len() == 1
+                    && tool_calls[0].tool_name == "read_file"
+                    && tool_calls[0].tool_call_id.as_deref() == Some("call-1")
+                    && tool_calls[0].arguments == json!({ "path": "Cargo.toml" })
+        ));
+        assert!(matches!(
+            &rebuilt.messages[2].payload,
+            SessionConversationPayload::ToolResult { tool_result_id, tool_call_id, text }
+                if tool_result_id == "tool-result-call-1"
+                    && tool_call_id.as_deref() == Some("call-1")
+                    && text == "name = \"vulcan-code\""
+        ));
     }
 
     /// Verifies streamed body deltas update records in place without returning a cloned growing body.

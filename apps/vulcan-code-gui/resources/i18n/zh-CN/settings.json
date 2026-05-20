@@ -3,6 +3,8 @@
   "settings.runtime_parameters_description": "当前对话模型选择已移到对话面板顶部，这里只保留主题与运行参数。",
   "settings.root_title": "设置",
   "settings.language_placeholder": "选择语言",
+  "settings.session_transcript_turn_page_size_label": "启动会话分页轮次",
+  "settings.session_transcript_turn_page_size_placeholder": "选择每页轮次数",
   "settings.model_group_title": "模型设置",
   "settings.theme_placeholder": "选择主题",
   "settings.temperature_toggle": "显式传递温度参数",

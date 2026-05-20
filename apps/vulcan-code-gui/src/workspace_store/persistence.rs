@@ -12,7 +12,6 @@ pub async fn maintain_hydrated_session_storage(
 ) -> Result<SessionMaintenanceReport, String> {
     let legacy_chunk_migration =
         migrate_legacy_oversized_session_messages(&controller, session_id).await?;
-    clear_session_runtime_conversation_state_json(&controller, session_id).await?;
 
     let upserted_message_count = messages.len();
     let mut message_batch_params = Vec::new();
@@ -53,7 +52,7 @@ pub async fn maintain_hydrated_session_storage(
     Ok(SessionMaintenanceReport {
         session_id,
         upserted_message_count,
-        cleared_runtime_state_json: true,
+        runtime_state_persistence_ok: true,
         legacy_chunk_migration,
     })
 }
@@ -66,12 +65,11 @@ pub async fn maintain_legacy_session_storage(
 ) -> Result<SessionMaintenanceReport, String> {
     let legacy_chunk_migration =
         migrate_legacy_oversized_session_messages(&controller, session_id).await?;
-    clear_session_runtime_conversation_state_json(&controller, session_id).await?;
 
     Ok(SessionMaintenanceReport {
         session_id,
         upserted_message_count: 0,
-        cleared_runtime_state_json: true,
+        runtime_state_persistence_ok: true,
         legacy_chunk_migration,
     })
 }
@@ -954,10 +952,12 @@ INSERT INTO session_compactions (
     id,
     session_id,
     source_until_message_id,
+    source_until_turn_index,
     context_start_message_id,
+    retained_tail_start_turn_index,
     summary_message_id,
     created_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
 "#,
         batch_params,
         "写入会话压缩节点失败",
@@ -1445,7 +1445,9 @@ fn push_session_compaction_batch_rows(
                     ControllerSqliteValue::String(entry.id.clone()),
                     ControllerSqliteValue::String(session.id.to_string()),
                     optional_sqlite_string(&entry.source_until_message_id),
+                    optional_sqlite_i64(entry.source_until_turn_index),
                     optional_sqlite_string(&entry.context_start_message_id),
+                    optional_sqlite_i64(entry.retained_tail_start_turn_index),
                     optional_sqlite_string(&entry.summary_message_id),
                     ControllerSqliteValue::String(non_empty_timestamp_text(&entry.created_at)),
                 ]);
@@ -1474,7 +1476,9 @@ pub(super) fn push_session_runtime_state_batch_rows(
                 optional_sqlite_string(&serialize_provider_usage_to_json(
                     entry.last_provider_usage.as_ref(),
                 )),
-                ControllerSqliteValue::Null,
+                optional_sqlite_string(&serialize_session_conversation_state_to_json(
+                    &entry.conversation_state,
+                )),
                 optional_sqlite_string(&serialize_session_continuation_to_json(
                     &entry.conversation_state.continuation,
                 )),
@@ -1506,28 +1510,6 @@ async fn delete_session_scoped_rows(
     execute_sqlite_batch_safely(controller, table_name, &statement, params, error_prefix).await?;
 
     Ok(())
-}
-
-/// Clears the legacy full conversation-state JSON for one hydrated session without reading it first.
-/// 在不预读旧大字段的前提下清理单个已水合会话的旧完整会话状态 JSON。
-async fn clear_session_runtime_conversation_state_json(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<(), String> {
-    execute_sqlite_batch_safely(
-        controller,
-        "session_runtime_state",
-        session_runtime_conversation_state_cleanup_statement(),
-        vec![vec![ControllerSqliteValue::String(session_id.to_string())]],
-        "清理旧会话运行时完整状态失败",
-    )
-    .await
-}
-
-/// Returns the SQL used to null out legacy full conversation-state payloads after hydration.
-/// 返回会话水合后用于清空旧完整会话状态载荷的 SQL。
-pub(super) fn session_runtime_conversation_state_cleanup_statement() -> &'static str {
-    "UPDATE session_runtime_state SET conversation_state_json = NULL WHERE session_id = ?1;"
 }
 
 /// Deletes chunk rows for the provided message identifiers before those messages are upserted.

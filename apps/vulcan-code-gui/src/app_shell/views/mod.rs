@@ -5717,6 +5717,14 @@ impl VulcanWorkbench {
                 )
                 .width(Fill)
                 .placeholder(self.t(I18nKey::SettingsLanguagePlaceholder)),
+                text(self.t(I18nKey::SettingsSessionTranscriptTurnPageSizeLabel)).size(12),
+                pick_list(
+                    SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS,
+                    Some(self.session_transcript_turn_page_size),
+                    Message::SessionTranscriptTurnPageSizeSelected
+                )
+                .width(Fill)
+                .placeholder(self.t(I18nKey::SettingsSessionTranscriptTurnPageSizePlaceholder)),
                 text(self.t(I18nKey::CommonThemeLabel)).size(12),
                 pick_list(
                     Theme::ALL,

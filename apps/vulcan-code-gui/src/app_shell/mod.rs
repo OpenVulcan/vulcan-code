@@ -78,7 +78,8 @@ use crate::provider_config::{
     PersistedControllerConfiguration, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
     PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedProviderEntry,
     PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
-    ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption, WebSearchRoutingMode,
+    ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
+    SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS, WebSearchRoutingMode,
 };
 use crate::{AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale};
 use crate::selectable_transcript::{
@@ -100,8 +101,8 @@ use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
     self, SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS, SESSION_HISTORY_SEARCH_RESULT_LIMIT,
-    SESSION_TRANSCRIPT_WINDOW_LIMIT, SessionHistoryPage, SessionHydrationSnapshot,
-    SessionMaintenanceReport, SessionToolDetailPage, WorkspaceHistorySearchPage,
+    SessionHistoryPage, SessionHydrationSnapshot,
+    SessionMaintenanceReport, WorkspaceHistorySearchPage,
     WorkspaceSnapshot,
 };
 use iced::widget::operation;
@@ -2162,39 +2163,6 @@ pub fn run() -> iced::Result {
     .run()
 }
 
-/// Deferred first-render tool-detail batch state kept for one cold-open session.
-/// 为单个冷启动会话保留的延迟首屏工具明细批次状态。
-#[derive(Debug, Clone, Default)]
-struct SessionInitialToolDetailBatchState {
-    /// Total distinct turns whose tool-detail pages must finish before the first transcript projection should appear.
-    /// 首次转录投影出现前必须完成工具明细补载的总去重轮次数量。
-    total_turn_count: usize,
-    /// Turn indices already completed, regardless of success or empty payload.
-    /// 无论成功还是空载荷都已经完成处理的轮次索引集合。
-    completed_turn_indices: BTreeSet<i64>,
-    /// Number of completed turn-detail loads that failed and were skipped before the first render.
-    /// 首次渲染前已经失败并跳过的轮次明细加载数量。
-    failed_turn_count: usize,
-}
-
-impl SessionInitialToolDetailBatchState {
-    /// Returns the completed turn count currently recorded by this deferred batch.
-    /// 返回当前延迟批次已经记录完成的轮次数量。
-    fn completed_turn_count(&self) -> usize {
-        self.completed_turn_indices.len()
-    }
-
-    /// Returns the normalized completion ratio for the deferred batch progress indicator.
-    /// 返回用于延迟批次进度提示的标准化完成比例。
-    fn completion_ratio(&self) -> f32 {
-        if self.total_turn_count == 0 {
-            1.0
-        } else {
-            self.completed_turn_count() as f32 / self.total_turn_count as f32
-        }
-    }
-}
-
 /// Root state for the AI coding desktop workbench.
 /// AI 编程桌面工作台的根状态。
 pub struct VulcanWorkbench {
@@ -2423,9 +2391,6 @@ pub struct VulcanWorkbench {
     /// Session identifiers currently materializing the heavy unified agent-view projections on a background worker thread.
     /// 当前正在后台工作线程中物化较重统一 agent-view 投影的会话标识集合。
     loading_session_agent_view_projection_ids: BTreeSet<SessionId>,
-    /// Session-scoped deferred first-render tool-detail batches used to avoid rendering one half-hydrated transcript before required details arrive.
-    /// 按会话保存的延迟首屏工具明细批次状态，用于避免在必要明细到齐前先渲染半水合转录。
-    session_initial_tool_detail_batches: BTreeMap<SessionId, SessionInitialToolDetailBatchState>,
     /// Earliest loaded transcript ordinal for each hydrated session.
     /// 每个已水合会话当前已加载的最早转录序号。
     session_history_earliest_ordinals: BTreeMap<SessionId, i64>,
@@ -2789,6 +2754,9 @@ pub struct VulcanWorkbench {
     /// Stateful GUI language manager used to resolve localized text and switch locales at runtime.
     /// 用于解析本地化文本并在运行时切换语言的有状态图形界面语言管理器。
     language_manager: LanguageManager,
+    /// Startup transcript turn-page size selected by the user and shared by initial hydration plus manual history paging.
+    /// 由用户选择并被启动水合与手动历史分页共享的启动转录轮次分页大小。
+    session_transcript_turn_page_size: usize,
     /// Whether the runtime controls should send an explicit temperature argument.
     /// 运行参数控制区是否应显式发送温度参数。
     temperature_enabled: bool,
@@ -4551,9 +4519,6 @@ enum Message {
     /// Applies one older transcript page loaded before the current session window.
     /// 应用在当前会话窗口之前加载的一页更早转录历史。
     OlderSessionHistoryLoaded(SessionId, Result<SessionHistoryPage, String>),
-    /// Applies one lazily loaded tool-detail page for a hydrated session together with the requested turn index.
-    /// 应用已水合会话的一页懒加载工具明细，并携带对应请求轮次索引。
-    SessionToolDetailsLoaded(SessionId, i64, Result<SessionToolDetailPage, String>),
     /// Applies the completed legacy-storage maintenance result for one hydrated session.
     /// 应用单个已水合会话的旧存储维护结果。
     SessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
@@ -5314,6 +5279,9 @@ enum Message {
     /// Application locale selected from the pick list.
     /// 从下拉选择框中选择了应用语言。
     LocaleSelected(AppLocale),
+    /// Startup transcript turn-page size selected from the settings pick list.
+    /// 从设置下拉选择框中选中了启动转录轮次分页大小。
+    SessionTranscriptTurnPageSizeSelected(usize),
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
@@ -5934,6 +5902,8 @@ impl VulcanWorkbench {
             .unwrap_or_default();
         let initial_workbench_reasoning_effort =
             Self::resolve_initial_workbench_reasoning_effort(&provider_configuration);
+        let initial_session_transcript_turn_page_size =
+            Self::resolve_initial_session_transcript_turn_page_size(&provider_configuration);
         let runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access(
             &provider_configuration,
             &agent_profile_catalog,
@@ -6044,7 +6014,6 @@ impl VulcanWorkbench {
             dirty_session_message_ids: BTreeSet::new(),
             loading_session_ids: BTreeSet::new(),
             loading_session_agent_view_projection_ids: BTreeSet::new(),
-            session_initial_tool_detail_batches: BTreeMap::new(),
             session_history_earliest_ordinals: BTreeMap::new(),
             session_history_has_more: BTreeSet::new(),
             loading_older_session_history_ids: BTreeSet::new(),
@@ -6175,6 +6144,7 @@ impl VulcanWorkbench {
             workbench_model_picker_viewport_height: WORKBENCH_MODEL_PICKER_LIST_HEIGHT,
             app_theme,
             language_manager: language_manager.clone(),
+            session_transcript_turn_page_size: initial_session_transcript_turn_page_size,
             temperature_enabled: false,
             temperature: 0.25,
             context_usage: 0.0,
@@ -6292,7 +6262,6 @@ impl VulcanWorkbench {
                 self.dirty_session_payload_ids.clear();
                 self.dirty_session_message_ids.clear();
                 self.loading_session_ids.clear();
-                self.session_initial_tool_detail_batches.clear();
                 self.session_history_earliest_ordinals.clear();
                 self.session_history_has_more.clear();
                 self.loading_older_session_history_ids.clear();
@@ -6493,12 +6462,6 @@ impl VulcanWorkbench {
                 self.loading_session_ids.remove(&session_id);
                 match result {
                     Ok(snapshot) => {
-                        let tool_detail_turn_indices = snapshot.tool_detail_turn_indices.clone();
-                        let defer_initial_projection = self
-                            .should_defer_initial_selected_session_projection(
-                                session_id,
-                                &tool_detail_turn_indices,
-                            );
                         self.apply_session_hydration_snapshot(snapshot);
                         let maintenance_task =
                             self.schedule_session_storage_maintenance(session_id);
@@ -6506,21 +6469,6 @@ impl VulcanWorkbench {
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
                         {
-                            if defer_initial_projection {
-                                self.begin_session_initial_tool_detail_batch(
-                                    session_id,
-                                    &tool_detail_turn_indices,
-                                );
-                                self.status_message = self.t(I18nKey::StatusProjectionBuilding);
-                                return Task::batch([
-                                    maintenance_task,
-                                    self.schedule_session_tool_detail_loads(
-                                        session_id,
-                                        &tool_detail_turn_indices,
-                                    ),
-                                ]);
-                            }
-
                             let continue_search_navigation =
                                 self.maybe_continue_workspace_history_search_navigation(session_id);
                             self.status_message = self.t(I18nKey::StatusSessionHydrated);
@@ -6528,10 +6476,6 @@ impl VulcanWorkbench {
                                 maintenance_task,
                                 self.schedule_session_agent_view_projection_refresh_if_needed(
                                     session_id,
-                                ),
-                                self.schedule_session_tool_detail_loads(
-                                    session_id,
-                                    &tool_detail_turn_indices,
                                 ),
                                 self.maybe_follow_selected_session_transcript_tail(session_id),
                                 self.maybe_follow_selected_session_thinking_overlay_tail(
@@ -6592,14 +6536,9 @@ impl VulcanWorkbench {
                 self.loading_older_session_history_ids.remove(&session_id);
                 match result {
                     Ok(page) => {
-                        let tool_detail_turn_indices = page.tool_detail_turn_indices.clone();
                         self.apply_older_session_history_page(page);
                         self.status_message = self.t(I18nKey::StatusOlderHistoryLoaded);
                         return Task::batch([
-                            self.schedule_session_tool_detail_loads(
-                                session_id,
-                                &tool_detail_turn_indices,
-                            ),
                             self.maybe_continue_workspace_history_search_navigation(session_id),
                         ]);
                     }
@@ -6611,77 +6550,17 @@ impl VulcanWorkbench {
 
                 Task::none()
             }
-            Message::SessionToolDetailsLoaded(session_id, turn_index, result) => {
-                let defer_initial_projection = self
-                    .session_initial_tool_detail_batches
-                    .contains_key(&session_id);
-                match result {
-                    Ok(page) => {
-                        self.apply_session_tool_detail_page(page, !defer_initial_projection);
-                        let maintenance_task =
-                            self.schedule_session_storage_maintenance(session_id);
-                        if let Some(batch_state) = self.finish_session_initial_tool_detail_turn(
-                            session_id,
-                            turn_index,
-                            true,
-                        ) {
-                            self.status_message = if batch_state.failed_turn_count == 0 {
-                                String::from("当前会话工具明细已补载完成，正在构建完整视图。")
-                            } else {
-                                format!(
-                                    "当前会话工具明细已补载完成，但有 {} 项失败，正在构建可用视图。",
-                                    batch_state.failed_turn_count
-                                )
-                            };
-                            return Task::batch([
-                                maintenance_task,
-                                self.schedule_session_agent_view_projection_refresh_if_needed(
-                                    session_id,
-                                ),
-                            ]);
-                        }
-
-                        let follow_task = if self
-                            .selected_session()
-                            .is_some_and(|session| session.id == session_id)
-                        {
-                            self.maybe_follow_selected_session_transcript_tail(session_id)
-                        } else {
-                            Task::none()
-                        };
-                        return Task::batch([maintenance_task, follow_task]);
-                    }
-                    Err(error) => {
-                        let completed_batch = self.finish_session_initial_tool_detail_turn(
-                            session_id,
-                            turn_index,
-                            false,
-                        );
-                        self.push_activity(ActivityLevel::Warning, "工具明细加载失败", error);
-                        if let Some(batch_state) = completed_batch {
-                            self.status_message = format!(
-                                "当前会话工具明细补载已结束，其中 {} 项失败，正在构建可用视图。",
-                                batch_state.failed_turn_count
-                            );
-                            return self
-                                .schedule_session_agent_view_projection_refresh_if_needed(
-                                    session_id,
-                                );
-                        }
-                    }
-                }
-
-                Task::none()
-            }
             Message::SessionMaintenanceFinished(session_id, result) => {
                 match result {
                     Ok(report) => {
-                        if report.session_id != session_id || !report.cleared_runtime_state_json {
+                        if report.session_id != session_id
+                            || !report.runtime_state_persistence_ok
+                        {
                             self.push_activity(
                                 ActivityLevel::Warning,
                                 "会话旧数据维护结果异常",
                                 format!(
-                                    "维护报告与请求会话不一致或旧状态清理未确认，message_count={}",
+                                    "维护报告与请求会话不一致或运行时状态持久化未确认，message_count={}",
                                     report.upserted_message_count
                                 ),
                             );
@@ -9187,6 +9066,27 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::SessionTranscriptTurnPageSizeSelected(turn_limit) => {
+                if !SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS.contains(&turn_limit)
+                    || self.session_transcript_turn_page_size == turn_limit
+                {
+                    return Task::none();
+                }
+
+                self.session_transcript_turn_page_size = turn_limit;
+                match self.persist_session_transcript_turn_page_size_preference() {
+                    Ok(()) => {
+                        self.status_message =
+                            format!("启动会话分页已切换为每页 {turn_limit} 个完整轮次。");
+                    }
+                    Err(error) => {
+                        self.status_message = format!(
+                            "启动会话分页已切换为每页 {turn_limit} 个完整轮次，但保存配置失败：{error}"
+                        );
+                    }
+                }
+                Task::none()
+            }
             Message::QuickGuideMarkdownAction(action) => {
                 if !action.is_edit() {
                     self.quick_guide_markdown_buffer.perform(action);
@@ -10595,9 +10495,6 @@ impl VulcanWorkbench {
         }
 
         if self.loading_session_ids.contains(&session_id)
-            || self
-                .session_initial_tool_detail_batches
-                .contains_key(&session_id)
             || self.loading_older_session_history_ids.contains(&session_id)
         {
             return Task::none();
@@ -10892,7 +10789,6 @@ impl VulcanWorkbench {
             self.dirty_session_payload_ids.remove(&session_id);
             self.dirty_session_message_ids.remove(&session_id);
             self.loading_session_ids.remove(&session_id);
-            self.session_initial_tool_detail_batches.remove(&session_id);
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
@@ -10928,7 +10824,6 @@ impl VulcanWorkbench {
             self.dirty_session_payload_ids.remove(&session_id);
             self.dirty_session_message_ids.remove(&session_id);
             self.loading_session_ids.remove(&session_id);
-            self.session_initial_tool_detail_batches.remove(&session_id);
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
@@ -12608,6 +12503,8 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
+        let full_session_messages =
+            conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
         let Some(context_budget) = self.resolve_session_context_budget_snapshot(
             session_id,
             &runtime_state_snapshot,
@@ -12624,6 +12521,7 @@ impl VulcanWorkbench {
                 .run_compaction_skill(CompactionSkillInput {
                     session_id,
                     messages: &messages,
+                    all_messages: &full_session_messages,
                     runtime_state: &runtime_state_snapshot,
                     policy: ContextCompactionPolicy::default(),
                 })
@@ -12926,13 +12824,12 @@ impl VulcanWorkbench {
         self.archived_session_runtime_state = snapshot.archived_session_runtime_state;
         self.hydrated_session_ids = snapshot.hydrated_session_ids;
         self.dirty_session_payload_ids.clear();
-        self.dirty_session_message_ids.clear();
-        self.loading_session_ids.clear();
-        self.loading_session_agent_view_projection_ids.clear();
-        self.session_initial_tool_detail_batches.clear();
-        self.session_history_earliest_ordinals.clear();
-        self.session_history_has_more.clear();
-        self.loading_older_session_history_ids.clear();
+                self.dirty_session_message_ids.clear();
+                self.loading_session_ids.clear();
+                self.loading_session_agent_view_projection_ids.clear();
+                self.session_history_earliest_ordinals.clear();
+                self.session_history_has_more.clear();
+                self.loading_older_session_history_ids.clear();
         self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
         self.reset_background_legacy_session_maintenance_queue();
         self.pending_archived_delete_confirmation = None;
@@ -13077,7 +12974,6 @@ impl VulcanWorkbench {
         self.session_tool_detail_messages.remove(&session_id);
         self.loading_session_agent_view_projection_ids
             .remove(&session_id);
-        self.session_initial_tool_detail_batches.remove(&session_id);
         self.collapsed_runtime_event_ids.remove(&session_id);
         self.markdown_runtime_event_ids.remove(&session_id);
         self.remove_runtime_event_raw_buffers(session_id);
@@ -14185,8 +14081,9 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        Message, VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
-        build_background_legacy_maintenance_queue, compact_tool_detail_message_for_projection,
+        VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
+        build_background_legacy_maintenance_queue, clear_selectable_transcript_render_cache_stash,
+        compact_tool_detail_message_for_projection,
         composer_text_has_submittable_content, composer_visible_line_count,
         generated_attachments_from_tool_metadata,
         merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
@@ -14419,7 +14316,10 @@ mod tests {
         )
         .expect("serialize canonical conversation before locale refresh");
 
-        let _ = workbench.update(Message::LocaleSelected(crate::AppLocale::EnUs));
+        workbench.language_manager.set_locale(crate::AppLocale::EnUs);
+        clear_selectable_transcript_render_cache_stash();
+        workbench.rebuild_quick_guide_markdown_buffer();
+        workbench.refresh_all_session_agent_view_localizations();
 
         let messages_after = message_window_fingerprint(
             workbench.session_messages.get(&session_id).unwrap(),

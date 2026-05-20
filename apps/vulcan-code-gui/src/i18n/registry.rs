@@ -150,6 +150,8 @@ impl LanguageRegistry {
                 I18nKey::SettingsRuntimeParametersDescription,
                 I18nKey::SettingsRootTitle,
                 I18nKey::SettingsLanguagePlaceholder,
+                I18nKey::SettingsSessionTranscriptTurnPageSizeLabel,
+                I18nKey::SettingsSessionTranscriptTurnPageSizePlaceholder,
                 I18nKey::SettingsModelGroupTitle,
                 I18nKey::SettingsThemePlaceholder,
                 I18nKey::SettingsTemperatureToggle,

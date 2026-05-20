@@ -4257,6 +4257,25 @@ impl PersistedControllerConfiguration {
     }
 }
 
+/// Stable transcript turn-page size options exposed by the settings page.
+/// 设置页面暴露的稳定转录轮次分页选项集合。
+pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS: [usize; 4] = [20, 30, 40, 50];
+
+/// Default transcript turn-page size used when the shared configuration file does not specify an override.
+/// 当共享配置文件未指定覆盖值时使用的默认转录轮次分页大小。
+pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT: usize = 30;
+
+/// Normalizes one persisted transcript turn-page size to the supported fixed presets.
+/// 将一条持久化转录轮次分页大小归一化为受支持的固定预设。
+pub fn normalize_session_transcript_turn_page_size(value: Option<usize>) -> usize {
+    let normalized = value.unwrap_or(SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT);
+    if SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS.contains(&normalized) {
+        normalized
+    } else {
+        SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT
+    }
+}
+
 /// Root provider configuration file saved in the Vulcan home directory.
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -4276,6 +4295,13 @@ pub struct ProviderConfigurationFile {
     /// 由用户选择并记忆的图形界面语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<String>,
+    /// Remembered startup transcript page size expressed in complete user turns.
+    /// 以完整用户轮次表示的已记忆启动转录分页大小。
+    #[serde(
+        rename = "sessionTranscriptTurnPageSize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_transcript_turn_page_size: Option<usize>,
     /// Persisted provider map keyed by provider identifier.
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -5794,6 +5820,23 @@ mod tests {
         let restored: ProviderConfigurationFile =
             serde_json::from_value(value).expect("provider configuration must deserialize");
         assert_eq!(restored.ui_locale.as_deref(), Some("en-US"));
+    }
+
+    /// Verifies the persisted transcript turn-page size keeps the stable `sessionTranscriptTurnPageSize` field name and round-trips through the shared provider configuration file.
+    /// 验证持久化转录轮次分页大小会保持稳定的 `sessionTranscriptTurnPageSize` 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
+    #[test]
+    fn provider_configuration_round_trips_session_transcript_turn_page_size() {
+        let config = ProviderConfigurationFile {
+            session_transcript_turn_page_size: Some(40),
+            ..ProviderConfigurationFile::default()
+        };
+
+        let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+        assert_eq!(value.get("sessionTranscriptTurnPageSize"), Some(&json!(40)));
+
+        let restored: ProviderConfigurationFile =
+            serde_json::from_value(value).expect("provider configuration must deserialize");
+        assert_eq!(restored.session_transcript_turn_page_size, Some(40));
     }
 
     /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.

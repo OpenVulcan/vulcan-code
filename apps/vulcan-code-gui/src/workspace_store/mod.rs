@@ -36,10 +36,7 @@ pub use persistence::{
     permanently_delete_archived_project, permanently_delete_archived_session,
     persist_workspace_snapshot,
 };
-pub use session_load::{
-    load_complete_session_tool_detail_turn, load_session_history_page,
-    load_session_hydration_snapshot,
-};
+pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 
 #[cfg(test)]
 use self::persistence::{
@@ -48,7 +45,6 @@ use self::persistence::{
     prepare_session_message_body_for_storage, push_session_message_rows_for_session,
     push_session_runtime_state_batch_rows, session_message_chunk_upsert_statement,
     session_message_is_workspace_history_search_indexable, session_message_upsert_statement,
-    session_runtime_conversation_state_cleanup_statement,
 };
 
 /// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.
@@ -66,9 +62,12 @@ const SQLITE_ROW_FRAME_OVERHEAD_BYTES: usize = 256;
 /// Conservative per-value structure overhead for typed SQLite scalar values.
 /// 类型化 SQLite 标量值按字段估算的保守结构开销。
 const SQLITE_VALUE_FRAME_OVERHEAD_BYTES: usize = 48;
-/// First transcript turn-window size used when opening a session lazily.
-/// 懒加载打开会话时使用的首屏转录轮次数。
-pub const SESSION_TRANSCRIPT_WINDOW_LIMIT: usize = 30;
+/// Maximum transcript turn-page size supported by storage-side lazy transcript paging queries.
+/// 存储侧懒加载转录分页查询支持的最大轮次分页大小。
+pub const SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT: usize = 50;
+/// Number of complete turns kept visible before the latest compaction boundary when the startup transcript page would otherwise stop too late.
+/// 当启动转录分页本应停得过晚时，在最近压缩边界之前仍需额外保留的完整轮次数量。
+pub const SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT: usize = 5;
 /// Tool-detail page size used when a specific turn asks for its tool rows.
 /// 指定轮次请求工具明细行时使用的分页大小。
 pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
@@ -185,6 +184,9 @@ pub struct SessionHydrationSnapshot {
     /// Recent transcript messages restored in ascending display order.
     /// 按展示正序恢复出的最近转录消息。
     pub messages: Vec<SessionMessageEntry>,
+    /// Complete tool-detail rows belonging to the loaded transcript turns, used to keep transcript rows and tool payloads hydrated together.
+    /// 归属于本次已加载转录轮次的完整工具明细行，用于让转录正文与工具载荷同步完成水合。
+    pub tool_detail_messages: Vec<SessionMessageEntry>,
     /// Hidden compaction checkpoints scoped to this session.
     /// 归属于该会话的隐藏压缩检查点。
     pub compactions: Vec<SessionCompactionEntry>,
@@ -197,9 +199,6 @@ pub struct SessionHydrationSnapshot {
     /// Whether older transcript rows probably still exist before the current window.
     /// 当前窗口之前是否大概率仍存在更早的转录行。
     pub has_more_history: bool,
-    /// Loaded turn indices that still own tool-call or tool-result rows outside the main transcript window and should therefore request tool-detail hydration.
-    /// 当前已加载窗口中仍拥有主转录窗口外工具调用或工具结果行、因此需要补拉工具明细的轮次索引集合。
-    pub tool_detail_turn_indices: Vec<i64>,
 }
 
 /// One older transcript page loaded before an already hydrated session window.
@@ -212,15 +211,15 @@ pub struct SessionHistoryPage {
     /// Older transcript messages restored in ascending display order.
     /// 按展示正序恢复出的更早转录消息。
     pub messages: Vec<SessionMessageEntry>,
+    /// Complete tool-detail rows belonging to this older transcript page, loaded together with the visible turns.
+    /// 归属于当前更早转录页的完整工具明细行，并与可见轮次一同加载完成。
+    pub tool_detail_messages: Vec<SessionMessageEntry>,
     /// Earliest loaded ordinal after this page is merged.
     /// 合并该页后已加载的最早序号。
     pub earliest_ordinal: Option<i64>,
     /// Whether more older transcript rows probably still exist.
     /// 是否大概率仍存在更多更早的转录行。
     pub has_more_history: bool,
-    /// Loaded turn indices inside this older page that still own tool-call or tool-result rows outside the visible transcript rows.
-    /// 当前更早历史页中仍拥有可见转录窗口外工具调用或工具结果行的轮次索引集合。
-    pub tool_detail_turn_indices: Vec<i64>,
 }
 
 /// Workspace-scoped BM25 search results returned for one left-panel history query.
@@ -290,12 +289,6 @@ pub struct WorkspaceHistorySearchHit {
 /// 为单个对话轮次按需加载的一页工具明细。
 #[derive(Debug, Clone)]
 pub struct SessionToolDetailPage {
-    /// Session identifier owning this tool-detail page.
-    /// 拥有该工具明细页的会话标识。
-    pub session_id: SessionId,
-    /// Conversation turn whose tool details were loaded.
-    /// 本次加载工具明细所属的对话轮次。
-    pub turn_index: i64,
     /// Tool-call and tool-result messages restored in ascending display order.
     /// 按展示正序恢复出的工具调用与工具结果消息。
     pub messages: Vec<SessionMessageEntry>,
@@ -317,9 +310,9 @@ pub struct SessionMaintenanceReport {
     /// Number of currently loaded transcript messages upserted through the new storage path.
     /// 通过新存储路径重新 upsert 的当前已加载转录消息数量。
     pub upserted_message_count: usize,
-    /// Whether the legacy full conversation-state column was cleared successfully.
-    /// 旧版完整会话状态列是否已成功清理。
-    pub cleared_runtime_state_json: bool,
+    /// Whether runtime-state persistence stayed internally consistent during the maintenance pass.
+    /// 本次维护过程中运行时状态持久化是否保持了内部一致性。
+    pub runtime_state_persistence_ok: bool,
     /// Legacy oversized inline-message migration summary for this maintenance pass.
     /// 本次维护中旧版超大内联消息迁移的结果摘要。
     pub legacy_chunk_migration: SessionLegacyChunkMigrationReport,
@@ -571,9 +564,17 @@ struct StoredCompactionRow {
     /// Optional source tail message identifier.
     /// 可选的源历史尾消息标识。
     source_until_message_id: Option<String>,
+    /// Optional absolute source tail turn index.
+    /// 可选的绝对源历史尾轮次索引。
+    #[serde(default)]
+    source_until_turn_index: Option<i64>,
     /// Optional rebuilt context start message identifier.
     /// 可选的新上下文起始消息标识。
     context_start_message_id: Option<String>,
+    /// Optional absolute retained-tail start turn index.
+    /// 可选的绝对保留尾部起始轮次索引。
+    #[serde(default)]
+    retained_tail_start_turn_index: Option<i64>,
     /// Optional hidden summary message identifier.
     /// 可选的隐藏摘要消息标识。
     summary_message_id: Option<String>,
@@ -611,6 +612,10 @@ struct StoredRuntimeStateRow {
     /// 可选的持久化 Provider 用量载荷。
     #[serde(default)]
     provider_usage_json: Option<String>,
+    /// Optional persisted full canonical conversation-state payload.
+    /// 可选的持久化完整规范会话状态载荷。
+    #[serde(default)]
+    conversation_state_json: Option<String>,
     /// Optional persisted lightweight provider continuation payload.
     /// 可选的持久化轻量 Provider continuation 载荷。
     #[serde(default)]
@@ -698,7 +703,10 @@ pub async fn load_workspace_snapshot(
                 .as_deref()
                 .and_then(parse_session_ui_state_from_json)
                 .unwrap_or_default(),
-            conversation_state: conversation_state_with_continuation(row.continuation_json),
+            conversation_state: persisted_conversation_state_or_continuation(
+                row.conversation_state_json,
+                row.continuation_json,
+            ),
             last_provider_usage: row
                 .provider_usage_json
                 .as_deref()
@@ -1159,7 +1167,7 @@ async fn query_session_runtime_state_shell_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -1275,7 +1283,9 @@ fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompaction
     SessionCompactionEntry {
         id: row.id,
         source_until_message_id: row.source_until_message_id,
+        source_until_turn_index: row.source_until_turn_index,
         context_start_message_id: row.context_start_message_id,
+        retained_tail_start_turn_index: row.retained_tail_start_turn_index,
         summary_message_id: row.summary_message_id,
         created_at: row.created_at,
     }
@@ -1295,27 +1305,16 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             .as_deref()
             .and_then(parse_session_ui_state_from_json)
             .unwrap_or_default(),
-        conversation_state: conversation_state_with_continuation(row.continuation_json),
+        conversation_state: persisted_conversation_state_or_continuation(
+            row.conversation_state_json,
+            row.continuation_json,
+        ),
         last_provider_usage: row
             .provider_usage_json
             .as_deref()
             .and_then(parse_provider_usage_from_json),
         updated_at: row.updated_at,
     }
-}
-
-/// Seeds runtime conversation records from the recent transcript window when no full state was loaded.
-/// 当未加载完整状态时，基于最近转录窗口为运行时会话补齐记录。
-fn runtime_state_with_recent_records(
-    mut runtime_state: SessionRuntimeStateEntry,
-    messages: &[SessionMessageEntry],
-) -> SessionRuntimeStateEntry {
-    if runtime_state.conversation_state.records.is_empty() && !messages.is_empty() {
-        let continuation = runtime_state.conversation_state.continuation.clone();
-        runtime_state.conversation_state = conversation_state_from_session_messages(messages);
-        runtime_state.conversation_state.continuation = continuation;
-    }
-    runtime_state
 }
 
 /// Builds a minimal conversation state from one persisted continuation payload.
@@ -1330,6 +1329,17 @@ fn conversation_state_with_continuation(
             .unwrap_or_default(),
         ..SessionConversationState::default()
     }
+}
+
+/// Restores one persisted canonical conversation state when available and otherwise falls back to the lightweight continuation-only payload.
+/// 在可用时恢复一条持久化规范会话状态，否则回退到仅包含轻量 continuation 的载荷。
+fn persisted_conversation_state_or_continuation(
+    conversation_state_json: Option<String>,
+    continuation_json: Option<String>,
+) -> SessionConversationState {
+    parse_session_conversation_state_from_json(conversation_state_json.as_deref()).unwrap_or_else(
+        || conversation_state_with_continuation(continuation_json),
+    )
 }
 
 /// Parses one persisted session identifier back into the in-memory UUID session key.
@@ -1904,6 +1914,12 @@ fn parse_session_continuation_from_json(value: &str) -> Option<SessionProviderCo
     serde_json::from_str(value).ok()
 }
 
+/// Parses one persisted canonical conversation-state JSON payload into the typed runtime structure.
+/// 将一条持久化规范会话状态 JSON 载荷解析为带类型的运行时结构。
+fn parse_session_conversation_state_from_json(value: Option<&str>) -> Option<SessionConversationState> {
+    value.and_then(|payload| serde_json::from_str(payload).ok())
+}
+
 /// Serializes one typed transcript UI-state structure into the persisted JSON payload when needed.
 /// 在需要时将一条带类型的转录界面状态结构序列化为持久化 JSON 载荷。
 fn serialize_session_ui_state_to_json(state: &SessionTranscriptUiState) -> Option<String> {
@@ -1927,6 +1943,24 @@ fn serialize_session_continuation_to_json(
         None
     } else {
         serde_json::to_string(continuation).ok()
+    }
+}
+
+/// Serializes one typed canonical conversation state into the persisted JSON payload when it still carries messages or records.
+/// 当规范会话状态仍携带消息或记录时，将其序列化为持久化 JSON 载荷。
+fn serialize_session_conversation_state_to_json(
+    conversation_state: &SessionConversationState,
+) -> Option<String> {
+    if conversation_state.messages.is_empty()
+        && conversation_state.records.is_empty()
+        && conversation_state.continuation.provider_id.is_none()
+        && conversation_state.continuation.model_id.is_none()
+        && conversation_state.continuation.last_provider_message_id.is_none()
+        && conversation_state.continuation.updated_at.is_none()
+    {
+        None
+    } else {
+        serde_json::to_string(conversation_state).ok()
     }
 }
 
@@ -1985,6 +2019,14 @@ fn optional_sqlite_string(value: &Option<String>) -> ControllerSqliteValue {
     value
         .as_ref()
         .map(|value| ControllerSqliteValue::String(value.clone()))
+        .unwrap_or(ControllerSqliteValue::Null)
+}
+
+/// Converts one optional 64-bit integer into the nullable SQLite value expected by the controller SDK.
+/// 将一个可选 64 位整数转换为控制器 SDK 期望的可空 SQLite 值。
+fn optional_sqlite_i64(value: Option<i64>) -> ControllerSqliteValue {
+    value
+        .map(ControllerSqliteValue::Int64)
         .unwrap_or(ControllerSqliteValue::Null)
 }
 
@@ -2845,17 +2887,6 @@ mod tests {
         );
     }
 
-    /// Verifies that legacy runtime cleanup nulls the large column without selecting it.
-    /// 验证旧运行态清理会直接置空大字段而不会查询该字段。
-    #[test]
-    fn runtime_state_cleanup_statement_nulls_legacy_conversation_json() {
-        let statement = session_runtime_conversation_state_cleanup_statement();
-
-        assert!(statement.contains("conversation_state_json = NULL"));
-        assert!(statement.contains("WHERE session_id = ?1"));
-        assert!(!statement.to_ascii_uppercase().contains("SELECT"));
-    }
-
     /// Verifies that visible pending prompt-panel rows keep the transcript UI state persistable across restarts.
     /// 验证可见待发送提示词面板行会让转录界面状态跨重启保持可持久化。
     #[test]
@@ -2883,10 +2914,10 @@ mod tests {
         assert_eq!(parsed.pending_prompt_panel_queue[0].prompt, "继续排队消息");
     }
 
-    /// Verifies that lightweight runtime persistence keeps continuation separate from large records.
-    /// 验证轻量运行时持久化会将 continuation 与大型记录分离保存。
+    /// Verifies that runtime persistence now keeps the full canonical conversation state payload alongside the lightweight continuation cursor.
+    /// 验证运行时持久化现在会保留完整规范会话状态载荷，同时继续保存轻量 continuation 游标。
     #[test]
-    fn runtime_state_rows_store_continuation_without_full_conversation_state() {
+    fn runtime_state_rows_store_full_canonical_conversation_state() {
         let session_id = SessionId::from_u128(43);
         let session = SessionSummary::new(
             session_id,
@@ -2928,13 +2959,17 @@ mod tests {
         push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
 
         assert_eq!(rows.len(), 1);
-        assert!(matches!(rows[0][8], ControllerSqliteValue::Null));
+        let conversation_state_json = match &rows[0][8] {
+            ControllerSqliteValue::String(value) => value,
+            other => panic!("expected conversation-state JSON string, got {other:?}"),
+        };
+        assert!(conversation_state_json.contains("record-1"));
+        assert!(conversation_state_json.contains("大型正文"));
         let continuation_json = match &rows[0][9] {
             ControllerSqliteValue::String(value) => value,
             other => panic!("expected continuation JSON string, got {other:?}"),
         };
         assert!(continuation_json.contains("resp-1"));
-        assert!(!continuation_json.contains("大型正文"));
     }
 
     /// Verifies that rebuilding runtime state from recent messages preserves provider continuation.
@@ -2964,7 +2999,10 @@ mod tests {
             created_at: String::from("1"),
         }];
 
-        let rebuilt = runtime_state_with_recent_records(runtime_state, &messages);
+        let continuation = runtime_state.conversation_state.continuation.clone();
+        let mut rebuilt = runtime_state;
+        rebuilt.conversation_state = conversation_state_from_session_messages(&messages);
+        rebuilt.conversation_state.continuation = continuation;
 
         assert_eq!(rebuilt.conversation_state.records.len(), 1);
         assert_eq!(

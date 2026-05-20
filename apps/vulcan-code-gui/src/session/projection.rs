@@ -141,9 +141,6 @@ impl VulcanWorkbench {
     ) -> Task<Message> {
         if session_id.is_nil()
             || !self.hydrated_session_ids.contains(&session_id)
-            || self
-                .session_initial_tool_detail_batches
-                .contains_key(&session_id)
             || self.session_agent_view_projection_ready(session_id)
         {
             return Task::none();
@@ -890,37 +887,6 @@ impl VulcanWorkbench {
             .is_some_and(|document| !document.blocks.is_empty());
         if self.loading_session_ids.contains(&session_id) && !has_cached_document {
             return Some((0.38, self.t(I18nKey::StatusSessionLoading)));
-        }
-
-        if let Some(batch_state) = self.session_initial_tool_detail_batches.get(&session_id)
-            && !has_cached_document
-        {
-            let progress_value = 0.42 + batch_state.completion_ratio() * 0.28;
-            let progress_detail = if batch_state.failed_turn_count == 0 {
-                self.tf(
-                    I18nKey::StatusToolDetailLoading,
-                    &[
-                        I18nArg::named(
-                            "completed_count",
-                            batch_state.completed_turn_count().to_string(),
-                        ),
-                        I18nArg::named("total_count", batch_state.total_turn_count.to_string()),
-                    ],
-                )
-            } else {
-                self.tf(
-                    I18nKey::StatusToolDetailLoadingWithFailures,
-                    &[
-                        I18nArg::named(
-                            "completed_count",
-                            batch_state.completed_turn_count().to_string(),
-                        ),
-                        I18nArg::named("total_count", batch_state.total_turn_count.to_string()),
-                        I18nArg::named("failed_count", batch_state.failed_turn_count.to_string()),
-                    ],
-                )
-            };
-            return Some((progress_value, progress_detail));
         }
 
         if self

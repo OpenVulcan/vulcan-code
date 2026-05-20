@@ -10,53 +10,63 @@ pub async fn load_session_hydration_snapshot(
     session_id: SessionId,
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
-    let requested_limit = requested_limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT);
-    let (message_rows, effective_limit) = query_session_message_window_rows_with_retry(
-        &controller,
-        session_id,
-        None,
-        requested_limit,
-    )
-    .await?;
-    let mut message_rows = message_rows;
-    message_rows.sort_by_key(|row| row.ordinal);
-    let loaded_turn_count = loaded_message_turn_count(&message_rows);
-    let tool_detail_turn_indices =
-        query_tool_detail_turn_indices_for_turns(&controller, session_id, &message_rows).await?;
-    let generated_media_rows =
-        query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
-            .await?;
-    let earliest_ordinal =
-        merge_generated_media_rows_into_transcript_window(&mut message_rows, generated_media_rows);
-    let has_more_history =
-        loaded_turn_count >= effective_limit && earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
-    let messages =
-        hydrate_transcript_window_messages(&controller, session_id, message_rows).await?;
+    let requested_limit = requested_limit
+        .max(1)
+        .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
     let compactions = query_session_compaction_rows_for_session(&controller, session_id)
         .await?
         .into_iter()
         .map(stored_compaction_row_to_entry)
         .collect::<Vec<_>>();
-    let runtime_state = query_session_runtime_state_shell_row(&controller, session_id)
-        .await?
-        .map(stored_runtime_state_row_to_entry)
-        .map(|runtime_state| runtime_state_with_recent_records(runtime_state, &messages))
-        .or_else(|| {
-            (!messages.is_empty()).then(|| SessionRuntimeStateEntry {
-                conversation_state: conversation_state_from_session_messages(&messages),
-                updated_at: current_unix_millis_text(),
-                ..SessionRuntimeStateEntry::default()
-            })
-        });
+    let runtime_state_row = query_session_runtime_state_row(&controller, session_id).await?;
+    let target_turn_count = resolve_initial_hydration_turn_count(
+        &controller,
+        session_id,
+        requested_limit,
+        &compactions,
+        runtime_state_row.as_ref(),
+    )
+    .await?;
+    let (message_rows, has_more_history) = query_session_message_window_rows_until_turn_target(
+        &controller,
+        session_id,
+        target_turn_count,
+        requested_limit,
+    )
+    .await?;
+    let mut message_rows = message_rows;
+    message_rows.sort_by_key(|row| row.ordinal);
+    let tool_detail_turn_indices =
+        query_tool_detail_turn_indices_for_turns(&controller, session_id, &message_rows).await?;
+    let tool_detail_messages = load_complete_tool_detail_messages_for_turns(
+        &controller,
+        session_id,
+        &tool_detail_turn_indices,
+    )
+    .await?;
+    let generated_media_rows =
+        query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
+            .await?;
+    let earliest_ordinal =
+        merge_generated_media_rows_into_transcript_window(&mut message_rows, generated_media_rows);
+    let messages =
+        hydrate_transcript_window_messages(&controller, session_id, message_rows).await?;
+    let runtime_state = hydrate_session_runtime_state(
+        &controller,
+        session_id,
+        runtime_state_row,
+        &messages,
+    )
+    .await?;
 
     Ok(SessionHydrationSnapshot {
         session_id,
         messages,
+        tool_detail_messages,
         compactions,
         runtime_state,
         earliest_ordinal,
         has_more_history,
-        tool_detail_turn_indices,
     })
 }
 
@@ -68,7 +78,9 @@ pub async fn load_session_history_page(
     before_ordinal: i64,
     requested_limit: usize,
 ) -> Result<SessionHistoryPage, String> {
-    let requested_limit = requested_limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT);
+    let requested_limit = requested_limit
+        .max(1)
+        .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
     let (message_rows, effective_limit) = query_session_message_window_rows_with_retry(
         &controller,
         session_id,
@@ -81,6 +93,12 @@ pub async fn load_session_history_page(
     let loaded_turn_count = loaded_message_turn_count(&message_rows);
     let tool_detail_turn_indices =
         query_tool_detail_turn_indices_for_turns(&controller, session_id, &message_rows).await?;
+    let tool_detail_messages = load_complete_tool_detail_messages_for_turns(
+        &controller,
+        session_id,
+        &tool_detail_turn_indices,
+    )
+    .await?;
     let generated_media_rows =
         query_generated_media_tool_result_rows_for_turns(&controller, session_id, &message_rows)
             .await?;
@@ -94,9 +112,9 @@ pub async fn load_session_history_page(
     Ok(SessionHistoryPage {
         session_id,
         messages,
+        tool_detail_messages,
         earliest_ordinal,
         has_more_history,
-        tool_detail_turn_indices,
     })
 }
 
@@ -131,8 +149,6 @@ pub async fn load_session_tool_detail_page(
         .collect::<Vec<_>>();
 
     Ok(SessionToolDetailPage {
-        session_id,
-        turn_index,
         messages,
         earliest_ordinal,
         has_more_detail,
@@ -179,8 +195,6 @@ pub async fn load_complete_session_tool_detail_turn(
     }
 
     Ok(SessionToolDetailPage {
-        session_id,
-        turn_index,
         messages: aggregated_messages,
         earliest_ordinal,
         has_more_detail: false,
@@ -196,7 +210,7 @@ async fn query_session_message_window_rows(
     limit: usize,
 ) -> Result<Vec<StoredSessionMessageRow>, String> {
     let session_id_text = session_id.to_string();
-    let limit = limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT) as i64;
+    let limit = limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT) as i64;
     let (statement, params) = if let Some(before_ordinal) = before_ordinal {
         (
             r#"
@@ -550,7 +564,7 @@ async fn query_session_compaction_rows_for_session(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT c.id, c.source_until_message_id, c.context_start_message_id, c.summary_message_id, c.created_at
+SELECT c.id, c.source_until_message_id, c.source_until_turn_index, c.context_start_message_id, c.retained_tail_start_turn_index, c.summary_message_id, c.created_at
 FROM session_compactions AS c
 WHERE c.session_id = ?1
 ORDER BY c.created_at ASC;
@@ -563,9 +577,9 @@ ORDER BY c.created_at ASC;
     decode_query_rows::<StoredCompactionRow>(&result.json_data)
 }
 
-/// Queries lightweight runtime-state metadata for one session without the large canonical conversation JSON.
-/// 查询单个会话不含大型规范会话 JSON 的轻量运行时状态元数据。
-async fn query_session_runtime_state_shell_row(
+/// Queries the full runtime-state row for one hydrated session, including the persisted canonical conversation-state payload when available.
+/// 查询单个已水合会话的完整运行时状态行，并在可用时包含持久化规范会话状态载荷。
+async fn query_session_runtime_state_row(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<Option<StoredRuntimeStateRow>, String> {
@@ -575,7 +589,7 @@ async fn query_session_runtime_state_shell_row(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.updated_at
 FROM session_runtime_state AS r
 WHERE r.session_id = ?1
 LIMIT 1;
@@ -583,7 +597,7 @@ LIMIT 1;
             vec![ControllerSqliteValue::String(session_id.to_string())],
         )
         .await
-        .map_err(|error| format!("查询会话运行时状态失败：{error}"))?;
+        .map_err(|error| format!("查询会话完整运行时状态失败：{error}"))?;
 
     Ok(
         decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)?
@@ -600,7 +614,9 @@ async fn query_session_message_window_rows_with_retry(
     before_ordinal: Option<i64>,
     requested_limit: usize,
 ) -> Result<(Vec<StoredSessionMessageRow>, usize), String> {
-    let mut effective_limit = requested_limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_LIMIT);
+    let mut effective_limit = requested_limit
+        .max(1)
+        .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
     // Defer legacy migration until a real frame-size failure proves it is needed on the hot path.
     // 将旧版迁移延后到真实帧大小失败后再执行，避免热路径每次切换会话都多一次查询。
     let mut attempted_legacy_migration = false;
@@ -645,6 +661,55 @@ async fn query_session_message_window_rows_with_retry(
             }
         }
     }
+}
+
+/// Queries transcript pages repeatedly until the requested number of complete turns has been loaded or no older history remains.
+/// 反复查询转录分页，直到已加载到请求数量的完整轮次，或数据库中已不存在更早历史。
+async fn query_session_message_window_rows_until_turn_target(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    target_turn_count: usize,
+    page_turn_limit: usize,
+) -> Result<(Vec<StoredSessionMessageRow>, bool), String> {
+    let normalized_page_turn_limit = page_turn_limit
+        .max(1)
+        .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
+    let normalized_target_turn_count = target_turn_count.max(normalized_page_turn_limit);
+    let mut before_ordinal = None;
+    let mut aggregated_rows = Vec::new();
+    let mut aggregated_ids = BTreeSet::new();
+    let has_more_history = loop {
+        let (page_rows, effective_limit) = query_session_message_window_rows_with_retry(
+            controller,
+            session_id,
+            before_ordinal,
+            normalized_page_turn_limit,
+        )
+        .await?;
+        let mut page_rows = page_rows;
+        page_rows.sort_by_key(|row| row.ordinal);
+        let page_turn_count = loaded_message_turn_count(&page_rows);
+        let page_earliest_ordinal = page_rows.first().map(|row| row.ordinal);
+        let page_has_more_history = page_turn_count >= effective_limit
+            && page_earliest_ordinal.is_some_and(|ordinal| ordinal > 0);
+
+        for row in page_rows {
+            if aggregated_ids.insert(row.id.clone()) {
+                aggregated_rows.push(row);
+            }
+        }
+
+        aggregated_rows.sort_by_key(|row| row.ordinal);
+        if loaded_message_turn_count(&aggregated_rows) >= normalized_target_turn_count
+            || !page_has_more_history
+        {
+            break page_has_more_history;
+        }
+
+        before_ordinal = page_earliest_ordinal;
+    };
+
+    Ok((aggregated_rows, has_more_history))
 }
 
 /// Queries one tool-detail window with progressive limit reduction when gRPC frame limits are hit.
@@ -796,7 +861,7 @@ async fn query_generated_media_tool_result_rows_for_turns(
     let session_id_text = session_id.to_string();
     let turn_indices = turn_indices.into_iter().collect::<Vec<_>>();
     let mut rows = Vec::new();
-    for chunk in turn_indices.chunks(SESSION_TRANSCRIPT_WINDOW_LIMIT) {
+    for chunk in turn_indices.chunks(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT) {
         let placeholders = (2..=chunk.len() + 1)
             .map(|index| format!("?{index}"))
             .collect::<Vec<_>>()
@@ -855,7 +920,7 @@ async fn query_tool_detail_turn_indices_for_turns(
     let session_id_text = session_id.to_string();
     let turn_indices = turn_indices.into_iter().collect::<Vec<_>>();
     let mut hydrated_tool_turn_indices = Vec::new();
-    for chunk in turn_indices.chunks(SESSION_TRANSCRIPT_WINDOW_LIMIT) {
+    for chunk in turn_indices.chunks(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT) {
         let placeholders = (2..=chunk.len() + 1)
             .map(|index| format!("?{index}"))
             .collect::<Vec<_>>()
@@ -892,6 +957,31 @@ ORDER BY m.turn_index ASC;
     Ok(hydrated_tool_turn_indices)
 }
 
+/// Loads every complete tool-detail message stream required by the provided turn indices so transcript hydration and tool payload hydration stay in sync.
+/// 为给定轮次索引加载全部完整工具明细消息流，确保转录正文水合与工具载荷水合同步完成。
+async fn load_complete_tool_detail_messages_for_turns(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    turn_indices: &[i64],
+) -> Result<Vec<SessionMessageEntry>, String> {
+    if turn_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut hydrated_messages = Vec::new();
+    for turn_index in turn_indices {
+        let page = load_complete_session_tool_detail_turn(
+            controller.clone(),
+            session_id,
+            *turn_index,
+        )
+        .await?;
+        hydrated_messages.extend(page.messages);
+    }
+
+    Ok(hydrated_messages)
+}
+
 /// Hydrates one transcript window into display entries while avoiding chunk fetches for synthetic media-only tool-result rows.
 /// 将一个转录窗口水合为展示消息，同时避免为合成的仅媒体工具结果行加载正文分片。
 async fn hydrate_transcript_window_messages(
@@ -916,6 +1006,200 @@ async fn hydrate_transcript_window_messages(
         .into_iter()
         .map(|row| stored_session_message_row_to_entry(row, &message_body_chunks))
         .collect())
+}
+
+/// Resolves the startup hydration turn target by taking the larger value between the configured page size and the overlap required to expose five turns before the active compaction boundary.
+/// 通过取“配置分页大小”和“为暴露活动压缩边界前五轮所需的重叠范围”中的较大值，解析启动水合轮次目标。
+async fn resolve_initial_hydration_turn_count(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    requested_turn_count: usize,
+    compactions: &[SessionCompactionEntry],
+    runtime_state_row: Option<&StoredRuntimeStateRow>,
+) -> Result<usize, String> {
+    let mut effective_turn_count = requested_turn_count.max(1);
+    let Some(boundary_turn_index) =
+        active_compaction_overlap_boundary_turn_index(compactions, runtime_state_row)
+    else {
+        return Ok(effective_turn_count);
+    };
+    let Some(latest_turn_index) = query_session_latest_turn_index(controller, session_id).await?
+    else {
+        return Ok(effective_turn_count);
+    };
+    let overlap_turn_count = SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT as i64;
+    let earliest_required_turn_index =
+        boundary_turn_index.saturating_sub(overlap_turn_count).max(0);
+    let turns_needed = latest_turn_index
+        .saturating_sub(earliest_required_turn_index)
+        .saturating_add(1) as usize;
+    effective_turn_count = effective_turn_count.max(turns_needed);
+    Ok(effective_turn_count)
+}
+
+/// Resolves the active compaction overlap boundary from persisted runtime-state metadata and checkpoint rows.
+/// 根据持久化运行时状态元数据与检查点行解析当前活动压缩重叠边界。
+fn active_compaction_overlap_boundary_turn_index(
+    compactions: &[SessionCompactionEntry],
+    runtime_state_row: Option<&StoredRuntimeStateRow>,
+) -> Option<i64> {
+    let active_compaction = runtime_state_row
+        .and_then(|row| row.last_compaction_id.as_deref())
+        .and_then(|compaction_id| compactions.iter().find(|entry| entry.id == compaction_id))
+        .or_else(|| compactions.last())?;
+
+    active_compaction
+        .retained_tail_start_turn_index
+        .or_else(|| active_compaction.source_until_turn_index.map(|turn_index| turn_index + 1))
+}
+
+/// Queries the latest persisted user-turn index for one session so startup hydration can expand directly to the required overlap boundary.
+/// 查询单个会话最新的持久化用户轮次索引，使启动水合能够直接扩展到所需的重叠边界。
+async fn query_session_latest_turn_index(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<Option<i64>, String> {
+    #[derive(Debug, Deserialize)]
+    struct SessionLatestTurnIndexRow {
+        /// Optional latest persisted turn index.
+        /// 可选的最新持久化轮次索引。
+        latest_turn_index: Option<i64>,
+    }
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT MAX(turn_index) AS latest_turn_index
+FROM session_messages
+WHERE session_id = ?1;
+"#,
+            vec![ControllerSqliteValue::String(session_id.to_string())],
+        )
+        .await
+        .map_err(|error| format!("查询会话最新轮次索引失败：{error}"))?;
+    let row = decode_query_rows::<SessionLatestTurnIndexRow>(&result.json_data)?
+        .into_iter()
+        .next();
+    Ok(row.and_then(|entry| entry.latest_turn_index))
+}
+
+/// Restores the hydrated runtime state for one session, preferring the persisted canonical conversation state and falling back to a full session replay only when the large payload is still missing.
+/// 为单个会话恢复已水合运行时状态，优先使用持久化规范会话状态，并仅在大载荷仍缺失时回退到完整会话重放。
+async fn hydrate_session_runtime_state(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    runtime_state_row: Option<StoredRuntimeStateRow>,
+    recent_messages: &[SessionMessageEntry],
+) -> Result<Option<SessionRuntimeStateEntry>, String> {
+    let runtime_state = if let Some(row) = runtime_state_row {
+        let mut runtime_state = stored_runtime_state_row_to_entry(row);
+        if runtime_state.conversation_state.records.is_empty()
+            && runtime_state.conversation_state.messages.is_empty()
+        {
+            let continuation = runtime_state.conversation_state.continuation.clone();
+            runtime_state.conversation_state =
+                load_full_session_conversation_state(controller, session_id)
+                    .await?
+                    .unwrap_or_else(|| {
+                        let mut rebuilt = conversation_state_from_session_messages(recent_messages);
+                        rebuilt.continuation = continuation.clone();
+                        rebuilt
+                    });
+            if runtime_state.conversation_state.continuation.provider_id.is_none() {
+                runtime_state.conversation_state.continuation = continuation;
+            }
+        }
+        Some(runtime_state)
+    } else {
+        load_full_session_conversation_state(controller, session_id)
+            .await?
+            .or_else(|| {
+                (!recent_messages.is_empty())
+                    .then(|| conversation_state_from_session_messages(recent_messages))
+            })
+            .map(|conversation_state| SessionRuntimeStateEntry {
+                conversation_state,
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            })
+    };
+
+    Ok(runtime_state)
+}
+
+/// Loads the full canonical conversation state for one session by replaying all persisted message rows in bounded turn chunks when no prebuilt conversation-state payload is available.
+/// 当预构建规范会话状态载荷不可用时，通过按轮次分块重放全部持久化消息行为单个会话加载完整规范会话状态。
+async fn load_full_session_conversation_state(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<Option<SessionConversationState>, String> {
+    let Some(latest_turn_index) = query_session_latest_turn_index(controller, session_id).await?
+    else {
+        return Ok(None);
+    };
+
+    let mut all_rows = Vec::new();
+    let chunk_span = SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT as i64;
+    let mut start_turn_index = 0_i64;
+    while start_turn_index <= latest_turn_index {
+        let end_turn_index =
+            (start_turn_index + chunk_span - 1).min(latest_turn_index);
+        all_rows.extend(
+            query_session_message_rows_for_turn_range(
+                controller,
+                session_id,
+                start_turn_index,
+                end_turn_index,
+            )
+            .await?,
+        );
+        start_turn_index = end_turn_index.saturating_add(1);
+    }
+
+    if all_rows.is_empty() {
+        return Ok(None);
+    }
+
+    all_rows.sort_by_key(|row| row.ordinal);
+    all_rows.dedup_by(|left, right| left.id == right.id);
+    let messages = hydrate_transcript_window_messages(controller, session_id, all_rows).await?;
+    Ok((!messages.is_empty()).then(|| conversation_state_from_session_messages(&messages)))
+}
+
+/// Queries all persisted session-message rows for one inclusive user-turn range while preserving original ordinal order.
+/// 在保持原始序号顺序的前提下，查询某个闭区间用户轮次范围内的全部持久化会话消息行。
+async fn query_session_message_rows_for_turn_range(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    start_turn_index: i64,
+    end_turn_index: i64,
+) -> Result<Vec<StoredSessionMessageRow>, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT m.id, m.ordinal, m.role, m.kind, m.visible, m.turn_index, m.content, m.meta_json, m.created_at
+FROM session_messages AS m
+WHERE m.session_id = ?1
+  AND m.turn_index >= ?2
+  AND m.turn_index <= ?3
+ORDER BY m.ordinal ASC;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::Int64(start_turn_index),
+                ControllerSqliteValue::Int64(end_turn_index),
+            ],
+        )
+        .await
+        .map_err(|error| format!("查询会话完整转录轮次范围失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionMessageRow>(&result.json_data)
 }
 
 #[cfg(test)]

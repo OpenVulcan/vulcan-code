@@ -3,6 +3,8 @@
   "settings.runtime_parameters_description": "The current conversation model picker now lives at the top of the conversation panel; only theme and runtime controls remain here.",
   "settings.root_title": "Settings",
   "settings.language_placeholder": "Select language",
+  "settings.session_transcript_turn_page_size_label": "Startup transcript page turns",
+  "settings.session_transcript_turn_page_size_placeholder": "Select turns per page",
   "settings.model_group_title": "Model Settings",
   "settings.theme_placeholder": "Select theme",
   "settings.temperature_toggle": "Send an explicit temperature parameter",

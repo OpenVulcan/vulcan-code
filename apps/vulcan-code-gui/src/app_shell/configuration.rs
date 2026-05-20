@@ -11,6 +11,7 @@ use crate::provider_capabilities::{
 };
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
+    normalize_session_transcript_turn_page_size,
 };
 
 impl VulcanWorkbench {
@@ -32,6 +33,14 @@ impl VulcanWorkbench {
             .as_deref()
             .and_then(AppLocale::parse)
             .unwrap_or_default()
+    }
+
+    /// Resolves the remembered startup transcript turn-page size from persisted configuration and falls back to the shared default preset when no prior selection exists.
+    /// 从持久化配置解析已记忆的启动转录轮次分页大小；当不存在历史选择时回退到共享默认预设。
+    pub(super) fn resolve_initial_session_transcript_turn_page_size(
+        config: &ProviderConfigurationFile,
+    ) -> usize {
+        normalize_session_transcript_turn_page_size(config.session_transcript_turn_page_size)
     }
 
     /// Resolves the initial provider picker choice using the persisted configuration and supported catalog order.
@@ -443,6 +452,16 @@ impl VulcanWorkbench {
     pub(super) fn persist_locale_preference(&mut self) -> Result<(), String> {
         self.provider_configuration.ui_locale =
             Some(self.language_manager.current_locale().as_str().to_string());
+        provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
+    /// Persists the currently selected startup transcript turn-page size back into the shared provider configuration file.
+    /// 将当前选中的启动转录轮次分页大小持久化回共享 Provider 配置文件。
+    pub(super) fn persist_session_transcript_turn_page_size_preference(
+        &mut self,
+    ) -> Result<(), String> {
+        self.provider_configuration.session_transcript_turn_page_size =
+            Some(self.session_transcript_turn_page_size);
         provider_config::save_configuration_file(&self.provider_configuration)
     }
 

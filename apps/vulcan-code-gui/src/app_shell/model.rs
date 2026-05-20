@@ -506,8 +506,6 @@ impl SessionMessageRecordKind {
             Self::TitleOutput
                 | Self::ThinkingOutput
                 | Self::SummaryOutput
-                | Self::ToolCallOutput
-                | Self::ToolResultOutput
         )
     }
 
@@ -633,9 +631,15 @@ pub struct SessionCompactionEntry {
     /// Last source message included by the compaction input window.
     /// 被本次压缩输入窗口覆盖的最后一条源消息标识。
     pub source_until_message_id: Option<String>,
+    /// Last source user-turn index included by the compaction input window.
+    /// 被本次压缩输入窗口覆盖的最后一个源用户轮次索引。
+    pub source_until_turn_index: Option<i64>,
     /// First message identifier that should be used when rebuilding the next context window.
     /// 重建下一轮上下文窗口时应作为起点的第一条消息标识。
     pub context_start_message_id: Option<String>,
+    /// First retained user-turn index that stayed verbatim after the compaction rewrite.
+    /// 压缩改写后仍按原样保留的第一个用户轮次索引。
+    pub retained_tail_start_turn_index: Option<i64>,
     /// Hidden summary message emitted by the compaction step.
     /// 压缩步骤输出的隐藏摘要消息标识。
     pub summary_message_id: Option<String>,
