@@ -522,6 +522,7 @@ fn canonical_compaction_message_label(message: &SessionMessageEntry) -> &'static
         SessionMessageRecordKind::ExploreOutput => "EXPLORE",
         SessionMessageRecordKind::CompactionSummary => "COMPACTION",
         SessionMessageRecordKind::TitleOutput => "TITLE",
+        SessionMessageRecordKind::TurnTerminated => "TERMINATED",
     }
 }
 
@@ -544,6 +545,7 @@ fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
         SessionMessageRecordKind::ExploreOutput => String::from("Explore Context"),
         SessionMessageRecordKind::CompactionSummary => String::from("Context Compaction Summary"),
         SessionMessageRecordKind::TitleOutput => String::from("Title Update"),
+        SessionMessageRecordKind::TurnTerminated => String::from("Turn Terminated"),
     }
 }
 

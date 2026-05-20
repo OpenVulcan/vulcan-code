@@ -101,7 +101,8 @@ fn session_record_to_core_record_kind(
         | SessionMessageRecordKind::ToolResultOutput => CoreTranscriptRecordKind::Visible,
         SessionMessageRecordKind::ThinkingOutput
         | SessionMessageRecordKind::TitleOutput
-        | SessionMessageRecordKind::SummaryOutput => CoreTranscriptRecordKind::Hidden,
+        | SessionMessageRecordKind::SummaryOutput
+        | SessionMessageRecordKind::TurnTerminated => CoreTranscriptRecordKind::Hidden,
         SessionMessageRecordKind::ExploreOutput => CoreTranscriptRecordKind::ProjectionOnly,
         SessionMessageRecordKind::CompactionSummary => CoreTranscriptRecordKind::Checkpoint,
     }

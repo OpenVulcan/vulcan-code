@@ -479,6 +479,9 @@ pub enum SessionMessageRecordKind {
     /// Hidden compaction summary used as the new context anchor.
     /// 作为新上下文锚点使用的隐藏压缩摘要。
     CompactionSummary,
+    /// Hidden terminated-turn marker used to close one interrupted or failed turn without a summary.
+    /// 用于闭合一轮被中断或失败且没有 summary 的隐藏终止标记。
+    TurnTerminated,
 }
 
 impl SessionMessageRecordKind {
@@ -495,6 +498,7 @@ impl SessionMessageRecordKind {
             Self::SummaryOutput => "summary-output",
             Self::ExploreOutput => "explore-output",
             Self::CompactionSummary => "compaction-summary",
+            Self::TurnTerminated => "turn-terminated",
         }
     }
 
@@ -506,11 +510,13 @@ impl SessionMessageRecordKind {
             Self::TitleOutput
                 | Self::ThinkingOutput
                 | Self::SummaryOutput
+                | Self::TurnTerminated
         )
     }
 
     /// Parses one persisted text key back into the durable record kind enum.
     /// 将一条持久化文本键解析回持久化记录类型枚举。
+    #[allow(dead_code)]
     pub fn from_persisted_key(value: &str) -> Self {
         match value {
             "thinking-output" => Self::ThinkingOutput,
@@ -521,6 +527,7 @@ impl SessionMessageRecordKind {
             "summary-output" => Self::SummaryOutput,
             "explore-output" => Self::ExploreOutput,
             "compaction-summary" => Self::CompactionSummary,
+            "turn-terminated" => Self::TurnTerminated,
             _ => Self::Transcript,
         }
     }
@@ -528,7 +535,7 @@ impl SessionMessageRecordKind {
 
 /// Structured message entry shown inside one workbench session transcript.
 /// 展示在某个工作台会话转录区中的结构化消息项。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMessageEntry {
     /// Stable message identifier stored in SQLite and referenced by compaction checkpoints.
     /// 存储在 SQLite 中并被压缩检查点引用的稳定消息标识。
@@ -623,7 +630,7 @@ impl SessionMessageEntry {
 
 /// Hidden compaction checkpoint bound to one session transcript.
 /// 绑定到单个会话转录流的隐藏压缩检查点。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCompactionEntry {
     /// Stable compaction identifier.
     /// 稳定的压缩标识。
@@ -876,7 +883,7 @@ impl SessionTranscriptUiState {
 
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionRuntimeStateEntry {
     /// Last active agent identifier used by the session.
     /// 最近一次被该会话使用的激活代理标识。

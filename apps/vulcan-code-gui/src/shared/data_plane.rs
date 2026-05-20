@@ -27,11 +27,11 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 6;
+pub const APP_SCHEMA_VERSION: i64 = 7;
 
 /// One-shot metadata key that marks the non-compatible session reset required by the protocol refactor.
 /// 标记协议重构所需一次性不兼容会话清理已经完成的元数据键。
-const SESSION_PROTOCOL_RESET_MARKER_KEY: &str = "session-protocol-v3-reset";
+const SESSION_PROTOCOL_RESET_MARKER_KEY: &str = "session-protocol-v4-reset";
 
 /// Long-lived controller handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面持有的长生命周期控制器句柄。
@@ -311,9 +311,52 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE session_messages ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 0;",
     )
     .await?;
+    ensure_optional_session_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE sessions ADD COLUMN latest_turn_index INTEGER NOT NULL DEFAULT -1;",
+    )
+    .await?;
+    ensure_optional_session_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE sessions ADD COLUMN latest_event_seq INTEGER NOT NULL DEFAULT -1;",
+    )
+    .await?;
     ensure_session_message_chunk_table(client, sqlite_binding_id).await?;
     ensure_workspace_history_search_state_table(client, sqlite_binding_id).await?;
     ensure_session_message_turn_index(client, sqlite_binding_id).await?;
+    ensure_session_event_turn_index_table(client, sqlite_binding_id).await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN event_id TEXT;",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN role TEXT NOT NULL DEFAULT 'assistant';",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN created_at TEXT NOT NULL DEFAULT '';",
+    )
+    .await?;
     ensure_protocol_reset_applied(client, sqlite_binding_id).await
 }
 
@@ -327,9 +370,29 @@ async fn ensure_optional_session_message_column(
     ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
 }
 
+/// Applies one idempotent session column migration and ignores duplicate-column failures.
+/// 执行一条幂等会话列迁移，并忽略重复列失败。
+async fn ensure_optional_session_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
+    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+}
+
 /// Executes one idempotent session-compaction column migration and ignores duplicate-column failures.
 /// 执行一条幂等会话压缩列迁移，并忽略重复列失败。
 async fn ensure_optional_session_compaction_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
+    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+}
+
+/// Applies one idempotent workspace-history search document column migration and ignores duplicate-column failures.
+/// 执行一条幂等工作台历史搜索文档列迁移，并忽略重复列失败。
+async fn ensure_optional_workspace_history_search_doc_column(
     client: &ControllerClient,
     sqlite_binding_id: &str,
     statement: &str,
@@ -390,6 +453,25 @@ async fn ensure_session_message_turn_index(
         )
         .await
         .map_err(|error| format!("执行会话消息轮次索引迁移失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Ensures the canonical session turn-index table exists for event-store hydration, paging, and context reconstruction.
+/// 确保规范会话 turn 索引表已经存在，以支持事件流水合、分页与上下文重建。
+async fn ensure_session_event_turn_index_table(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+) -> Result<(), String> {
+    client
+        .execute_sqlite_script_typed(
+            APP_SPACE_ID,
+            sqlite_binding_id,
+            session_event_turn_index_schema_script(),
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("执行会话事件 turn 索引结构迁移失败：{error}"))?;
 
     Ok(())
 }
@@ -567,6 +649,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title_source TEXT NOT NULL DEFAULT 'generated',
     archived INTEGER NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    latest_turn_index INTEGER NOT NULL DEFAULT -1,
+    latest_event_seq INTEGER NOT NULL DEFAULT -1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -588,6 +672,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_session_messages_session_ordinal
 ON session_messages(session_id, ordinal);
 
 {session_message_chunk_schema}
+{session_event_turn_index_schema}
 
 {workspace_history_search_state_schema}
 
@@ -627,6 +712,7 @@ ON session_compactions(session_id, created_at DESC);
 "#,
         schema_version = APP_SCHEMA_VERSION,
         session_message_chunk_schema = session_message_chunk_schema_script(),
+        session_event_turn_index_schema = session_event_turn_index_schema_script(),
         workspace_history_search_state_schema = workspace_history_search_state_schema_script()
     )
 }
@@ -654,13 +740,42 @@ ON session_message_chunks(session_id, message_id, chunk_index);
 fn workspace_history_search_state_schema_script() -> String {
     r#"
 CREATE TABLE IF NOT EXISTS workspace_history_search_docs (
-    message_id TEXT PRIMARY KEY REFERENCES session_messages(id) ON DELETE CASCADE,
+    message_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    event_id TEXT,
+    turn_index INTEGER NOT NULL DEFAULT 0,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'assistant',
+    created_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_history_search_docs_session
 ON workspace_history_search_docs(session_id, project_id);
+"#
+    .to_string()
+}
+
+/// Builds the canonical session turn-index schema mirrored from the file-backed event store.
+/// 构建与文件化事件存储镜像同步的规范会话 turn 索引结构。
+fn session_event_turn_index_schema_script() -> String {
+    r#"
+CREATE TABLE IF NOT EXISTS session_turn_index (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    turn_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    start_seq INTEGER NOT NULL,
+    end_seq INTEGER NOT NULL,
+    turn_state TEXT NOT NULL,
+    summary_message_id TEXT,
+    PRIMARY KEY(session_id, turn_index)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_turn_index_session_turn_id
+ON session_turn_index(session_id, turn_id);
+
+CREATE INDEX IF NOT EXISTS idx_session_turn_index_session_seq
+ON session_turn_index(session_id, start_seq, end_seq);
 "#
     .to_string()
 }

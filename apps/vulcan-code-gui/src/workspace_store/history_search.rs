@@ -99,15 +99,15 @@ SELECT
     p.name AS project_name,
     s.id AS session_id,
     s.title AS session_title,
-    m.id AS message_id,
-    m.ordinal,
-    m.turn_index,
-    m.role,
-    m.created_at
-FROM session_messages AS m
-INNER JOIN sessions AS s ON s.id = m.session_id
-INNER JOIN projects AS p ON p.id = s.project_id
-WHERE m.id IN ({placeholders})
+    d.message_id,
+    d.ordinal,
+    d.turn_index,
+    d.role,
+    d.created_at
+FROM workspace_history_search_docs AS d
+INNER JOIN sessions AS s ON s.id = d.session_id
+INNER JOIN projects AS p ON p.id = d.project_id
+WHERE d.message_id IN ({placeholders})
   AND s.archived = 0
   AND p.archived = 0;
 "#

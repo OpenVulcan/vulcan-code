@@ -1,6 +1,8 @@
 //! Controller-backed persistence helpers for projects, sessions, transcript history, and hidden context nodes.
 //! 项目、会话、转录历史与隐藏上下文节点的控制器持久化辅助模块。
 
+#![allow(dead_code)]
+
 use crate::conversation_protocol::{
     SessionConversationState, SessionProviderContinuationState,
     conversation_state_from_session_messages,
@@ -26,9 +28,12 @@ use vldb_controller_client::{
 mod history_search;
 mod persistence;
 mod session_load;
+mod event_store;
 
-use self::persistence::{
-    migrate_legacy_oversized_session_messages, session_has_legacy_oversized_message_candidates,
+use self::event_store::{
+    SessionEventStorePersistResult, clear_all_session_event_stores, load_session_event_store,
+    load_session_event_store_compactions, load_session_event_store_runtime_state,
+    persist_session_event_store, remove_session_event_store,
 };
 pub use history_search::search_workspace_history;
 pub use persistence::{
@@ -535,6 +540,21 @@ struct WorkspaceHistorySearchDocumentUpsert {
     /// Stable project identifier used to route the document into its project index.
     /// 用于将文档路由到所属项目索引的稳定项目标识。
     project_id: String,
+    /// Stable canonical event identifier backing the indexed document.
+    /// 作为索引文档后端来源的稳定规范事件标识。
+    event_id: String,
+    /// Stable turn index used by transcript paging and search-hit reconstruction.
+    /// 被转录分页与搜索命中重建使用的稳定轮次索引。
+    turn_index: i64,
+    /// Stable event sequence used as the persisted ordinal-like anchor.
+    /// 作为持久化类 ordinal 锚点使用的稳定事件序号。
+    ordinal: i64,
+    /// Persisted role label used to rebuild the high-level message kind.
+    /// 用于重建高层消息类型的持久化角色标签。
+    role: String,
+    /// Created-at timestamp stored beside the search projection.
+    /// 与搜索投影一同保存的创建时间戳。
+    created_at: String,
     /// Final transcript body indexed by controller-managed FTS search.
     /// 由控制器托管 FTS 搜索建立索引的最终转录正文。
     content: String,
@@ -895,6 +915,7 @@ async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result
             app_sqlite_binding_id(controller),
             r#"
 DELETE FROM workspace_history_search_docs;
+DELETE FROM session_turn_index;
 DELETE FROM session_runtime_state;
 DELETE FROM session_compactions;
 DELETE FROM session_message_chunks;
@@ -906,6 +927,7 @@ DELETE FROM projects;
         )
         .await
         .map_err(|error| format!("清理旧原型工作台数据失败：{error}"))?;
+    clear_all_session_event_stores()?;
 
     let index_names = query_workspace_history_search_index_names(controller).await?;
     drop_workspace_history_search_indexes(controller, &index_names, "清理工作台历史搜索索引失败")
@@ -2959,12 +2981,7 @@ mod tests {
         push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
 
         assert_eq!(rows.len(), 1);
-        let conversation_state_json = match &rows[0][8] {
-            ControllerSqliteValue::String(value) => value,
-            other => panic!("expected conversation-state JSON string, got {other:?}"),
-        };
-        assert!(conversation_state_json.contains("record-1"));
-        assert!(conversation_state_json.contains("大型正文"));
+        assert!(matches!(&rows[0][8], ControllerSqliteValue::Null));
         let continuation_json = match &rows[0][9] {
             ControllerSqliteValue::String(value) => value,
             other => panic!("expected continuation JSON string, got {other:?}"),

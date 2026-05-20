@@ -1987,6 +1987,31 @@ enum WorkbenchNoticeConfirmAction {
         /// 完成确认后将被移除的稳定 MCP 服务器标识。
         server_id: String,
     },
+    /// Rebuilds one session whose canonical event-store files are missing while preserving the visible title.
+    /// 在保留可见标题的前提下重建一条规范事件文件已丢失的会话。
+    RebuildMissingSession {
+        /// Stable session identifier whose persisted body files are missing.
+        /// 持久化正文文件已丢失的稳定会话标识。
+        session_id: SessionId,
+    },
+}
+
+/// Returns whether one session-hydration error is caused by missing canonical event-store files on disk.
+/// 返回某条会话水合错误是否由磁盘上缺失规范事件存储文件导致。
+fn session_event_store_missing_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    let mentions_session_store = normalized.contains(".vulcan\\code\\sessions")
+        || normalized.contains(".vulcan/code/sessions")
+        || normalized.contains("manifest.json")
+        || normalized.contains("events/000001.jsonl")
+        || normalized.contains("events\\000001.jsonl");
+    let is_not_found = normalized.contains("os error 3")
+        || normalized.contains("os error 2")
+        || normalized.contains("系统找不到指定的路径")
+        || normalized.contains("the system cannot find the path specified")
+        || normalized.contains("no such file or directory")
+        || normalized.contains("找不到指定的路径");
+    mentions_session_store && is_not_found
 }
 
 /// Reusable blocking notice modal state shared by acknowledgement and confirmation prompts.
@@ -6493,6 +6518,26 @@ impl VulcanWorkbench {
                         ]);
                     }
                     Err(error) => {
+                        if session_event_store_missing_error(&error) {
+                            let session_title = self
+                                .sessions
+                                .iter()
+                                .chain(self.archived_sessions.iter())
+                                .find(|session| session.id == session_id)
+                                .map(|session| session.title.clone())
+                                .unwrap_or_else(|| format!("会话 {session_id}"));
+                            self.show_workbench_confirmation_modal(
+                                "会话正文已丢失",
+                                format!(
+                                    "会话 `{session_title}` 的正文文件已经丢失，当前无法继续加载。\n\n是否按“新会话”状态重建当前会话？重建后会保留原标题，但原有正文与工具记录将不会恢复。"
+                                ),
+                                "重建会话",
+                                "暂不处理",
+                                WorkbenchNoticeConfirmAction::RebuildMissingSession {
+                                    session_id,
+                                },
+                            );
+                        }
                         self.status_message = format!("当前会话正文加载失败：{error}");
                         self.push_activity(ActivityLevel::Warning, "当前会话正文加载失败", error);
                     }
@@ -10674,6 +10719,9 @@ impl VulcanWorkbench {
             WorkbenchNoticeConfirmAction::RemoveMcpServerConfiguration { server_id } => {
                 self.remove_mcp_server_configuration_after_confirmation(&server_id)
             }
+            WorkbenchNoticeConfirmAction::RebuildMissingSession { session_id } => {
+                self.rebuild_missing_session_after_confirmation(session_id)
+            }
         }
     }
 
@@ -10749,6 +10797,72 @@ impl VulcanWorkbench {
                 Task::none()
             }
         }
+    }
+
+    /// Rebuilds one session whose canonical event-store files are missing by clearing loaded payloads while preserving the existing title row.
+    /// 通过清理已加载载荷并保留现有标题行，重建一条规范事件文件已丢失的会话。
+    fn rebuild_missing_session_after_confirmation(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        let session_is_archived = self
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id);
+        let session_title = self
+            .sessions
+            .iter()
+            .chain(self.archived_sessions.iter())
+            .find(|session| session.id == session_id)
+            .map(|session| session.title.clone())
+            .unwrap_or_else(|| format!("会话 {session_id}"));
+
+        self.clear_session_transcript_view_state(session_id);
+        if session_is_archived {
+            self.archived_session_messages.insert(session_id, Vec::new());
+            self.archived_session_compactions.insert(session_id, Vec::new());
+            self.archived_session_runtime_state
+                .insert(session_id, SessionRuntimeStateEntry::default());
+            self.session_messages.remove(&session_id);
+            self.session_compactions.remove(&session_id);
+            self.session_runtime_state.remove(&session_id);
+        } else {
+            self.session_messages.insert(session_id, Vec::new());
+            self.session_compactions.insert(session_id, Vec::new());
+            self.session_runtime_state
+                .insert(session_id, SessionRuntimeStateEntry::default());
+            self.archived_session_messages.remove(&session_id);
+            self.archived_session_compactions.remove(&session_id);
+            self.archived_session_runtime_state.remove(&session_id);
+        }
+        self.loading_session_ids.remove(&session_id);
+        self.loading_older_session_history_ids.remove(&session_id);
+        self.session_history_earliest_ordinals.remove(&session_id);
+        self.session_history_has_more.remove(&session_id);
+        if self
+            .workspace_history_search
+            .results
+            .as_ref()
+            .is_some_and(|page| page.hits.iter().any(|hit| hit.session_id == session_id))
+        {
+            self.workspace_history_search.results = None;
+            self.workspace_history_search.loading = false;
+            self.workspace_history_search.loading_more = false;
+        }
+        self.dirty_session_payload_ids.insert(session_id);
+        self.dirty_session_message_ids.insert(session_id);
+        self.hydrated_session_ids.insert(session_id);
+        self.session_run_phases
+            .insert(session_id, SessionRunPhase::Idle);
+        self.refresh_session_queued_steps(session_id);
+        self.status_message = format!("会话 `{session_title}` 的正文文件已按新会话状态重建，并保留原标题。");
+
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+            self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
+        ])
     }
 
     /// Returns whether one session already exists inside the visible or archived project tree bindings.
@@ -12220,6 +12334,24 @@ impl VulcanWorkbench {
         self.push_session_derived_record(session_id, derived_record);
     }
 
+    /// Appends one hidden terminated-turn marker after an interrupted, stopped, or failed execution branch closes without a summary.
+    /// 在一次被打断、被停止或失败且没有摘要的执行分支结束后追加隐藏终止轮次标记。
+    fn append_session_turn_terminated(
+        &mut self,
+        session_id: SessionId,
+        body: impl Into<String>,
+    ) {
+        self.push_session_derived_record(
+            session_id,
+            SessionDerivedRecord {
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnTerminated,
+                title: String::from("Turn Terminated"),
+                body: body.into(),
+            },
+        );
+    }
+
     /// Updates the runtime-state snapshot for the session from the latest execution preparation.
     /// 根据最近一次执行准备结果更新该会话的运行时状态快照。
     fn update_session_runtime_identity_from_preparation(
@@ -12493,13 +12625,19 @@ impl VulcanWorkbench {
                 "执行失败",
                 error.clone(),
             );
+            self.append_session_turn_terminated(
+                session_id,
+                format!("The run terminated without a summary. Error detail: {error}"),
+            );
             self.set_session_run_phase(session_id, SessionRunPhase::Failed);
             self.status_message = error.clone();
             self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
         }
 
         self.refresh_session_queued_steps(session_id);
-        self.append_session_summary_output(session_id, &report);
+        if report.is_success() {
+            self.append_session_summary_output(session_id, &report);
+        }
         self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
@@ -14110,6 +14248,7 @@ mod tests {
         generated_attachments_from_tool_metadata,
         merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
         pending_prompt_dispatch_index, prune_session_messages_to_limit,
+        session_event_store_missing_error,
         sanitize_workspace_history_search_query_input, task_session_payload_from_tool_metadata,
     };
     use crate::model::{
@@ -14229,6 +14368,15 @@ mod tests {
                 .map(|session| session.title.as_str()),
             Some(first_title.as_str())
         );
+    }
+
+    /// Verifies missing event-store file errors are recognized so the workbench can offer a rebuild path instead of only showing a passive status line.
+    /// 验证缺失事件存储文件错误能够被识别，从而让工作台提供重建路径，而不是只显示被动状态栏报错。
+    #[test]
+    fn session_event_store_missing_error_detects_manifest_not_found() {
+        let error = "读取 JSON 文档失败（C:\\Users\\20000\\.vulcan\\code\\sessions\\project\\session\\manifest.json）：系统找不到指定的路径。 (os error 3)";
+        assert!(session_event_store_missing_error(error));
+        assert!(!session_event_store_missing_error("解析 JSON 文档失败：unexpected eof"));
     }
 
     /// Verifies that an empty composer still reserves one visible line.
