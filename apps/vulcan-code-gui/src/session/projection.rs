@@ -100,10 +100,8 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
-        let active_streaming_output_message_id = self
-            .streaming_output_message_ids
-            .get(&session_id)
-            .cloned();
+        let active_streaming_output_message_id =
+            self.streaming_output_message_ids.get(&session_id).cloned();
         let runtime_events = self
             .session_runtime_events
             .get(&session_id)
@@ -364,8 +362,8 @@ impl VulcanWorkbench {
             .contains(&session_id)
             && self
                 .streaming_thinking_message_ids
-            .get(&session_id)
-            .is_some_and(|active_message_id| active_message_id == message_id)
+                .get(&session_id)
+                .is_some_and(|active_message_id| active_message_id == message_id)
         {
             perf_trace.finish();
             return true;
@@ -894,10 +892,7 @@ impl VulcanWorkbench {
             .contains(&session_id)
             && !has_cached_document
         {
-            return Some((
-                0.76,
-                self.t(I18nKey::StatusProjectionBuilding),
-            ));
+            return Some((0.76, self.t(I18nKey::StatusProjectionBuilding)));
         }
 
         None

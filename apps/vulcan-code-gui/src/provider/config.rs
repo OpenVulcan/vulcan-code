@@ -5526,12 +5526,12 @@ mod tests {
         ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
         ProviderModelDiscoveryKind, ProviderRuntimeKind, ProviderUsageCaptureConfig,
         ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-        SupportedProviderDefinition,
-        WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
-        apply_provider_reasoning_model_overrides, catalog_model_choices, effective_model_choices,
-        extract_models_from_array, filter_remote_model_choices, merge_embedded_model_metadata,
-        merge_refreshed_models, normalize_provider_configuration_for_save, persist_remote_models,
-        remote_models_url, supported_provider_by_id,
+        SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
+        WebSearchRoutingMode, apply_provider_reasoning_model_overrides, catalog_model_choices,
+        effective_model_choices, extract_models_from_array, filter_remote_model_choices,
+        merge_embedded_model_metadata, merge_refreshed_models,
+        normalize_provider_configuration_for_save, persist_remote_models, remote_models_url,
+        supported_provider_by_id,
     };
     use serde_json::{Map as JsonMap, json};
     use std::collections::{BTreeMap, BTreeSet};

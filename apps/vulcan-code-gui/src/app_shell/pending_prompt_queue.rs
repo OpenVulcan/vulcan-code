@@ -840,6 +840,29 @@ impl VulcanWorkbench {
             return Task::none();
         }
         self.ensure_session_conversation_state_loaded(session_id);
+        let owning_project_id = self
+            .session_by_id(session_id)
+            .and_then(|session| session.project_id.clone())
+            .filter(|project_id| !project_id.trim().is_empty());
+        if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion
+            && let (Some(project_id), Some(runtime_state)) = (
+                owning_project_id.as_deref(),
+                self.session_runtime_state(session_id).cloned(),
+            )
+            && let Err(error) = crate::workspace_store::snapshot_session_context_before_user_prompt(
+                project_id,
+                session_id,
+                &runtime_state,
+            )
+        {
+            if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
+                let _ = self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
+            }
+            self.release_prompt_entry_transient_attachment_refs(session_id, &prompt_entry);
+            self.show_workbench_notice_modal("上下文快照失败", error.clone());
+            self.status_message = format!("无法冻结上一轮真实上下文快照：{error}");
+            return Task::none();
+        }
 
         let execution_mode = if self.selected_agent_requires_plan_mode() {
             ExecutionMode::Plan
@@ -864,6 +887,22 @@ impl VulcanWorkbench {
             self.show_workbench_notice_modal("附件无法发送", error.clone());
             self.status_message = error;
             return Task::none();
+        }
+        if let (Some(project_id), Some(runtime_state)) = (
+            owning_project_id.as_deref(),
+            self.session_runtime_state(session_id).cloned(),
+        ) && let Err(error) = crate::workspace_store::persist_session_context_current_document(
+            project_id,
+            session_id,
+            &runtime_state,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "当前上下文持久化失败",
+                format!(
+                    "会话 `{session_title}` 的当前上下文未能立即写入独立文件，但内存态执行仍会继续：{error}"
+                ),
+            );
         }
         if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
             let _ = self.remove_session_pending_prompt_entry(session_id, panel_entry_id);
@@ -1062,6 +1101,7 @@ impl VulcanWorkbench {
             session_id,
             &terminated_message_id,
             SessionTurnStatsStatus::Stopped,
+            None,
         );
         self.push_activity(
             ActivityLevel::Warning,
@@ -1129,6 +1169,7 @@ impl VulcanWorkbench {
                 session_id,
                 &terminated_message_id,
                 SessionTurnStatsStatus::Stopped,
+                None,
             );
             self.push_activity(
                 ActivityLevel::Warning,

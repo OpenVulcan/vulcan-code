@@ -1,10 +1,10 @@
 //! Dedicated task-session tool transcript projection helpers.
 //! 专属 task-session 工具转录投影辅助逻辑。
 
+use super::AgentViewBuildOptions;
 use super::tool_shared::{
     build_base_tool_attributes, build_tool_directive_block, task_session_payload,
 };
-use super::AgentViewBuildOptions;
 use crate::model::SessionMessageEntry;
 use vulcan_agent_view::{
     AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,
@@ -17,11 +17,8 @@ pub(crate) fn build_task_session_tool_block(
     message: &SessionMessageEntry,
     options: &AgentViewBuildOptions,
 ) -> AgentViewDirectiveBlock {
-    let mut attributes = build_base_tool_attributes(
-        message,
-        AgentViewToolPresentationKind::TaskSession,
-        options,
-    );
+    let mut attributes =
+        build_base_tool_attributes(message, AgentViewToolPresentationKind::TaskSession, options);
     if let Some(task_session_id) = task_session_payload(message)
         .and_then(|payload| {
             payload

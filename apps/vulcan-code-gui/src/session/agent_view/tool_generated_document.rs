@@ -1,10 +1,10 @@
 //! Dedicated generated-document tool transcript projection helpers.
 //! 专属文档生成工具转录投影辅助逻辑。
 
+use super::AgentViewBuildOptions;
 use super::tool_shared::{
     build_base_tool_attributes, build_tool_directive_block, generated_attachment_descriptor,
 };
-use super::AgentViewBuildOptions;
 use crate::model::SessionMessageEntry;
 use vulcan_agent_view::{
     AgentViewDirectiveBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,

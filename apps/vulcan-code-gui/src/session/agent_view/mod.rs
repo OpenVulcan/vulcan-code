@@ -10,21 +10,20 @@ mod tool_shared;
 mod tool_task_session;
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::{AppLocale, I18nArg, I18nKey, format_for_locale, text_for_locale};
 use crate::model::{
-    SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-    SessionTurnStats,
+    SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionTurnStats,
 };
+use crate::{AppLocale, I18nArg, I18nKey, format_for_locale, text_for_locale};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use vulcan_markdown::transcript::split_streaming_markdown_source;
 use vulcan_agent_view::{
     AgentViewAttributes, AgentViewBlock, AgentViewDirectiveBlock, AgentViewDirectiveKind,
     AgentViewDocument, AgentViewMarkdownBlock, AgentViewToolPresentationKind,
     parse_agent_view_document, render_directive_source,
 };
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_markdown::transcript::split_streaming_markdown_source;
 
 /// Stable attribute key used to tag Markdown blocks produced from sealed streaming segments.
 /// 用于标记由已封口流式片段生成 Markdown 区块的稳定属性键。
@@ -57,7 +56,11 @@ pub fn build_agent_view_document(
     messages: &[SessionMessageEntry],
     runtime_events: &[RuntimeEvent],
 ) -> AgentViewDocument {
-    build_agent_view_document_with_options(messages, runtime_events, &AgentViewBuildOptions::default())
+    build_agent_view_document_with_options(
+        messages,
+        runtime_events,
+        &AgentViewBuildOptions::default(),
+    )
 }
 
 /// Builds one unified agent-view document from the visible session transcript and runtime events using explicit GUI-side projection options.
@@ -204,10 +207,19 @@ fn build_turn_stats_block(
         .cloned()
         .and_then(|value| serde_json::from_value::<SessionTurnStats>(value).ok())
     {
-        attributes.insert(String::from("turn-stats-status"), turn_stats.status.label().to_string());
-        attributes.insert(String::from("turn-stats-summary"), turn_stats.summary_line());
+        attributes.insert(
+            String::from("turn-stats-status"),
+            turn_stats.status.label().to_string(),
+        );
+        attributes.insert(
+            String::from("turn-stats-summary"),
+            turn_stats.summary_line(),
+        );
         if let Some(duration_ms) = turn_stats.duration_ms {
-            attributes.insert(String::from("turn-stats-duration-ms"), duration_ms.to_string());
+            attributes.insert(
+                String::from("turn-stats-duration-ms"),
+                duration_ms.to_string(),
+            );
         }
     }
     if let Some(title) = localized_message_title(message, options) {
@@ -290,7 +302,10 @@ fn append_streaming_markdown_document(
         );
     }
 
-    if let Some(active_tail) = partition.active_tail.filter(|segment| !segment.trim().is_empty()) {
+    if let Some(active_tail) = partition
+        .active_tail
+        .filter(|segment| !segment.trim().is_empty())
+    {
         push_streaming_markdown_segment(
             document,
             active_tail,
@@ -317,12 +332,9 @@ fn push_streaming_markdown_segment(
         attributes.insert(String::from("message-id"), message_id.to_string());
     }
 
-    document
-        .blocks
-        .push(AgentViewBlock::Markdown(AgentViewMarkdownBlock::new_with_attributes(
-            raw_source,
-            attributes,
-        )));
+    document.blocks.push(AgentViewBlock::Markdown(
+        AgentViewMarkdownBlock::new_with_attributes(raw_source, attributes),
+    ));
 }
 
 /// Builds one user-prompt directive block from the visible session message.
@@ -482,7 +494,10 @@ fn localized_message_title(
     options: &AgentViewBuildOptions,
 ) -> Option<String> {
     match (message.kind, message.record_kind) {
-        (SessionMessageKind::User, _) => Some(text_for_locale(options.locale, I18nKey::TranscriptUserPrompt)),
+        (SessionMessageKind::User, _) => Some(text_for_locale(
+            options.locale,
+            I18nKey::TranscriptUserPrompt,
+        )),
         (_, SessionMessageRecordKind::ThinkingOutput) => {
             Some(text_for_locale(options.locale, I18nKey::TranscriptThinking))
         }
@@ -493,7 +508,8 @@ fn localized_message_title(
             localized_tool_call_title(message, options.locale).or_else(|| non_empty_title(message))
         }
         (_, SessionMessageRecordKind::ToolResultOutput) => {
-            localized_tool_result_title(message, options.locale).or_else(|| non_empty_title(message))
+            localized_tool_result_title(message, options.locale)
+                .or_else(|| non_empty_title(message))
         }
         (_, SessionMessageRecordKind::TurnStats) => Some(String::from("Turn Stats")),
         _ => non_empty_title(message),
@@ -520,10 +536,7 @@ fn localized_tool_call_title(message: &SessionMessageEntry, locale: AppLocale) -
 
 /// Resolves one localized tool-result title, including generated-media summaries and generic named tool results.
 /// 解析一条本地化工具返回标题，覆盖生成媒体摘要与通用具名工具返回两类情况。
-fn localized_tool_result_title(
-    message: &SessionMessageEntry,
-    locale: AppLocale,
-) -> Option<String> {
+fn localized_tool_result_title(message: &SessionMessageEntry, locale: AppLocale) -> Option<String> {
     if let Some(metadata) = message.metadata.as_ref()
         && let Some(generated_title) = generated_attachment_title_from_metadata(metadata, locale)
     {
@@ -589,18 +602,12 @@ fn parse_tool_name_from_title(title: &str) -> Option<String> {
 /// Returns whether one persisted title only represents a generic tool-result label and should therefore be re-localized.
 /// 返回某条持久化标题是否仅代表通用工具返回标签，从而应该被重新本地化。
 fn title_looks_like_generic_tool_result(title: &str) -> bool {
-    matches!(
-        title.trim(),
-        "工具返回" | "Tool Result" | "Raw Tool Result"
-    )
+    matches!(title.trim(), "工具返回" | "Tool Result" | "Raw Tool Result")
 }
 
 /// Resolves one localized generated-media title from tool metadata when the current tool result represents generated attachments.
 /// 当当前工具返回代表生成附件时，从工具元数据解析一条本地化生成媒体标题。
-fn generated_attachment_title_from_metadata(
-    metadata: &Value,
-    locale: AppLocale,
-) -> Option<String> {
+fn generated_attachment_title_from_metadata(metadata: &Value, locale: AppLocale) -> Option<String> {
     let host_result = tool_shared::resolved_host_result_from_tool_metadata(metadata)?;
     if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
         return None;
@@ -755,7 +762,7 @@ mod tests {
     //! 验证 GUI 转录到文档映射规则的定向适配器测试。
 
     use super::{
-        build_agent_view_document, build_agent_view_document_with_options, AgentViewBuildOptions,
+        AgentViewBuildOptions, build_agent_view_document, build_agent_view_document_with_options,
     };
     use crate::AppLocale;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};

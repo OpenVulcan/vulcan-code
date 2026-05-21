@@ -80,7 +80,9 @@ impl TranscriptPerfTrace {
         let phases = self
             .phases
             .iter()
-            .map(|(phase_label, duration)| format!("{phase_label}={:.2}ms", duration.as_secs_f64() * 1000.0))
+            .map(|(phase_label, duration)| {
+                format!("{phase_label}={:.2}ms", duration.as_secs_f64() * 1000.0)
+            })
             .collect::<Vec<_>>()
             .join(", ");
         println!(

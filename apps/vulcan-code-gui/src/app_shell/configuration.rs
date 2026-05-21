@@ -3,8 +3,8 @@
 
 use super::helpers::*;
 use super::*;
-use crate::ai_tool_configuration;
 use crate::AppLocale;
+use crate::ai_tool_configuration;
 use crate::context_budget::{ContextCompactionPolicy, build_context_budget_fingerprint};
 use crate::provider_capabilities::{
     ResolvedModelCapabilities, resolve_effective_model_capabilities, resolve_model_capabilities,
@@ -460,8 +460,8 @@ impl VulcanWorkbench {
     pub(super) fn persist_session_transcript_turn_page_size_preference(
         &mut self,
     ) -> Result<(), String> {
-        self.provider_configuration.session_transcript_turn_page_size =
-            Some(self.session_transcript_turn_page_size);
+        self.provider_configuration
+            .session_transcript_turn_page_size = Some(self.session_transcript_turn_page_size);
         provider_config::save_configuration_file(&self.provider_configuration)
     }
 

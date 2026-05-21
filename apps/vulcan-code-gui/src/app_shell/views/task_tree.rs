@@ -386,18 +386,20 @@ impl VulcanWorkbench {
         let has_visible_sessions = !project.session_ids.is_empty();
 
         if !has_visible_sessions {
-            return container(text(self.t(I18nKey::TaskTreeNoSessions)).size(13).style(|theme: &Theme| {
-                iced::widget::text::Style {
-                    color: Some(
-                        theme
-                            .extended_palette()
-                            .background
-                            .base
-                            .text
-                            .scale_alpha(0.45),
-                    ),
-                }
-            }))
+            return container(text(self.t(I18nKey::TaskTreeNoSessions)).size(13).style(
+                |theme: &Theme| {
+                    iced::widget::text::Style {
+                        color: Some(
+                            theme
+                                .extended_palette()
+                                .background
+                                .base
+                                .text
+                                .scale_alpha(0.45),
+                        ),
+                    }
+                },
+            ))
             .padding(iced::Padding {
                 top: 2.0,
                 right: 2.0,
@@ -554,18 +556,20 @@ impl VulcanWorkbench {
                 row![
                     folder_icon,
                     project_label,
-                    text(self.t(I18nKey::TaskTreeArchivedBadge)).size(12).style(|theme: &Theme| {
-                        iced::widget::text::Style {
-                            color: Some(
-                                theme
-                                    .extended_palette()
-                                    .background
-                                    .base
-                                    .text
-                                    .scale_alpha(0.45),
-                            ),
-                        }
-                    }),
+                    text(self.t(I18nKey::TaskTreeArchivedBadge))
+                        .size(12)
+                        .style(|theme: &Theme| {
+                            iced::widget::text::Style {
+                                color: Some(
+                                    theme
+                                        .extended_palette()
+                                        .background
+                                        .base
+                                        .text
+                                        .scale_alpha(0.45),
+                                ),
+                            }
+                        }),
                 ]
                 .spacing(8)
                 .align_y(Center),
@@ -621,18 +625,20 @@ impl VulcanWorkbench {
                     Self::view_main_task_session_status_icon(session.status),
                     session_label,
                     space::horizontal(),
-                    text(self.t(I18nKey::TaskTreeArchivedBadge)).size(12).style(|theme: &Theme| {
-                        iced::widget::text::Style {
-                            color: Some(
-                                theme
-                                    .extended_palette()
-                                    .background
-                                    .base
-                                    .text
-                                    .scale_alpha(0.45),
-                            ),
-                        }
-                    }),
+                    text(self.t(I18nKey::TaskTreeArchivedBadge))
+                        .size(12)
+                        .style(|theme: &Theme| {
+                            iced::widget::text::Style {
+                                color: Some(
+                                    theme
+                                        .extended_palette()
+                                        .background
+                                        .base
+                                        .text
+                                        .scale_alpha(0.45),
+                                ),
+                            }
+                        }),
                 ]
                 .spacing(8)
                 .align_y(Center),

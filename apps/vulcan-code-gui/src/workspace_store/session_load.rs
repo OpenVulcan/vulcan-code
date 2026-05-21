@@ -3,8 +3,8 @@
 
 #![allow(dead_code)]
 
-use super::*;
 use super::event_store::PersistedSessionEventRow;
+use super::*;
 
 /// Lightweight persisted session locator row used to resolve the file-backed event store.
 /// 用于解析文件化事件存储的轻量持久化会话定位行。
@@ -65,10 +65,9 @@ pub async fn load_session_hydration_snapshot(
         runtime_state_row.as_ref(),
         locator.as_ref(),
     );
-    let turn_rows = query_session_turn_rows(&controller, session_id, None, target_turn_count).await?;
-    let has_more_history = turn_rows
-        .first()
-        .is_some_and(|row| row.turn_index > 0);
+    let turn_rows =
+        query_session_turn_rows(&controller, session_id, None, target_turn_count).await?;
+    let has_more_history = turn_rows.first().is_some_and(|row| row.turn_index > 0);
     let (messages, tool_detail_messages, earliest_ordinal, full_messages) =
         load_event_store_window_messages(&locator, session_id, &turn_rows)?;
     let runtime_state = hydrate_session_runtime_state(
@@ -109,9 +108,7 @@ pub async fn load_session_history_page(
         requested_limit,
     )
     .await?;
-    let has_more_history = turn_rows
-        .first()
-        .is_some_and(|row| row.turn_index > 0);
+    let has_more_history = turn_rows.first().is_some_and(|row| row.turn_index > 0);
     let (messages, tool_detail_messages, earliest_ordinal, _) =
         load_event_store_window_messages(&locator, session_id, &turn_rows)?;
 
@@ -150,7 +147,8 @@ pub async fn load_session_tool_detail_page(
         .filter(|row| {
             matches!(
                 row.record_kind,
-                SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+                SessionMessageRecordKind::ToolCallOutput
+                    | SessionMessageRecordKind::ToolResultOutput
             )
         })
         .collect::<Vec<_>>();
@@ -168,8 +166,7 @@ pub async fn load_session_tool_detail_page(
         tool_messages
     };
     let earliest_ordinal = page_rows.first().map(|row| row.seq);
-    let has_more_detail = total_count > requested_limit
-        && earliest_ordinal.is_some();
+    let has_more_detail = total_count > requested_limit && earliest_ordinal.is_some();
 
     Ok(SessionToolDetailPage {
         messages: page_rows
@@ -204,7 +201,8 @@ pub async fn load_complete_session_tool_detail_turn(
         .filter(|row| {
             matches!(
                 row.record_kind,
-                SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+                SessionMessageRecordKind::ToolCallOutput
+                    | SessionMessageRecordKind::ToolResultOutput
             )
         })
         .collect::<Vec<_>>();
@@ -238,9 +236,11 @@ async fn query_session_event_store_locator(
         .await
         .map_err(|error| format!("查询会话事件存储定位信息失败：{error}"))?;
 
-    Ok(decode_query_rows::<StoredSessionEventStoreLocatorRow>(&result.json_data)?
-        .into_iter()
-        .next())
+    Ok(
+        decode_query_rows::<StoredSessionEventStoreLocatorRow>(&result.json_data)?
+            .into_iter()
+            .next(),
+    )
 }
 
 /// Queries one session-scoped runtime-state row persisted in SQLite.
@@ -439,6 +439,17 @@ async fn hydrate_session_runtime_state(
     let runtime_state_cache =
         load_session_event_store_runtime_state(locator.project_id.as_str(), session_id)
             .unwrap_or_default();
+    let current_context_document = match load_session_event_store_context_current(
+        locator.project_id.as_str(),
+        session_id,
+    ) {
+        Ok(document) => document,
+        Err(_) => load_latest_session_event_store_context_snapshot(
+            locator.project_id.as_str(),
+            session_id,
+        )?
+        .map(|snapshot| snapshot.context),
+    };
     let mut runtime_state = runtime_state_row
         .map(stored_runtime_state_row_to_entry)
         .unwrap_or_default();
@@ -466,22 +477,31 @@ async fn hydrate_session_runtime_state(
     } else {
         runtime_state_cache.updated_at
     };
-    runtime_state.conversation_state = conversation_state_from_session_messages(full_messages);
-    runtime_state.conversation_state.continuation = if runtime_state_cache
-        .continuation
-        .provider_id
-        .is_some()
-        || runtime_state_cache.continuation.model_id.is_some()
-        || runtime_state_cache
-            .continuation
-            .last_provider_message_id
-            .is_some()
-        || runtime_state_cache.continuation.updated_at.is_some()
-    {
-        runtime_state_cache.continuation
-    } else {
-        runtime_state.conversation_state.continuation
-    };
+    runtime_state.conversation_state = current_context_document
+        .as_ref()
+        .map(|document| document.conversation_state.clone())
+        .unwrap_or_else(|| conversation_state_from_session_messages(full_messages));
+    runtime_state.last_compaction_id = current_context_document
+        .as_ref()
+        .and_then(|document| document.last_compaction_id.clone())
+        .or(runtime_state.last_compaction_id);
+    runtime_state.context_start_message_id = current_context_document
+        .as_ref()
+        .and_then(|document| document.context_start_message_id.clone())
+        .or(runtime_state.context_start_message_id);
+    runtime_state.conversation_state.continuation =
+        if runtime_state_cache.continuation.provider_id.is_some()
+            || runtime_state_cache.continuation.model_id.is_some()
+            || runtime_state_cache
+                .continuation
+                .last_provider_message_id
+                .is_some()
+            || runtime_state_cache.continuation.updated_at.is_some()
+        {
+            runtime_state_cache.continuation
+        } else {
+            runtime_state.conversation_state.continuation
+        };
 
     Ok(Some(runtime_state))
 }
@@ -500,13 +520,16 @@ fn resolve_initial_hydration_turn_count(
     else {
         return effective_turn_count;
     };
-    let Some(latest_turn_index) = locator.map(|row| row.latest_turn_index).filter(|value| *value >= 0)
+    let Some(latest_turn_index) = locator
+        .map(|row| row.latest_turn_index)
+        .filter(|value| *value >= 0)
     else {
         return effective_turn_count;
     };
     let overlap_turn_count = SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT as i64;
-    let earliest_required_turn_index =
-        boundary_turn_index.saturating_sub(overlap_turn_count).max(0);
+    let earliest_required_turn_index = boundary_turn_index
+        .saturating_sub(overlap_turn_count)
+        .max(0);
     let turns_needed = latest_turn_index
         .saturating_sub(earliest_required_turn_index)
         .saturating_add(1) as usize;
@@ -527,7 +550,11 @@ fn active_compaction_overlap_boundary_turn_index(
 
     active_compaction
         .retained_tail_start_turn_index
-        .or_else(|| active_compaction.source_until_turn_index.map(|turn_index| turn_index + 1))
+        .or_else(|| {
+            active_compaction
+                .source_until_turn_index
+                .map(|turn_index| turn_index + 1)
+        })
 }
 
 /// Converts one persisted event row into the in-memory transcript entry shape.
@@ -553,6 +580,7 @@ mod tests {
     //! 面向事件流会话的转录水合行为测试。
 
     use super::*;
+    use crate::conversation_protocol::append_assistant_text_message;
 
     /// Builds one transcript message entry for session-load regression tests.
     /// 为会话加载回归测试构建一条转录消息项。
@@ -580,7 +608,8 @@ mod tests {
     fn load_event_store_window_messages_keeps_tool_rows_visible() {
         let project_id = "session-load-project";
         let session_id = SessionId::from_u128(42);
-        remove_session_event_store(project_id, session_id).expect("cleanup test session event-store");
+        remove_session_event_store(project_id, session_id)
+            .expect("cleanup test session event-store");
 
         let session = SessionSummary::new(
             session_id,
@@ -637,14 +666,118 @@ mod tests {
         assert!(messages.iter().any(|message| message.id == "call-1"));
         assert!(messages.iter().any(|message| message.id == "result-1"));
         assert_eq!(tool_detail_messages.len(), 2);
-        assert!(tool_detail_messages
-            .iter()
-            .all(|message| matches!(
-                message.record_kind,
-                SessionMessageRecordKind::ToolCallOutput
-                    | SessionMessageRecordKind::ToolResultOutput
-            )));
+        assert!(tool_detail_messages.iter().all(|message| matches!(
+            message.record_kind,
+            SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+        )));
 
         remove_session_event_store(project_id, session_id).expect("cleanup persisted test session");
+    }
+
+    /// Verifies that hydration prefers the persisted current-context document instead of rebuilding the active conversation only from transcript rows.
+    /// 验证水合时会优先使用持久化当前上下文文档，而不是只根据转录行重建活动会话状态。
+    #[test]
+    fn hydrate_session_runtime_state_prefers_current_context_document() {
+        let project_id = "hydrate-context-project";
+        let session_id = SessionId::from_u128(99);
+        remove_session_event_store(project_id, session_id).expect("cleanup hydrate store");
+
+        let session = SessionSummary::new(
+            session_id,
+            Some(String::from(project_id)),
+            String::from("水合上下文测试"),
+            String::new(),
+            SessionState::Draft,
+            0,
+            0,
+            String::from("刚刚"),
+        );
+        let transcript_messages = vec![test_message(
+            "user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "仅转录消息",
+        )];
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_assistant_text_message(
+            &mut runtime_state.conversation_state,
+            String::from("assistant-ctx"),
+            String::from("当前上下文正文"),
+        );
+        runtime_state.context_start_message_id = Some(String::from("summary-ctx"));
+
+        persist_session_event_store(&session, &transcript_messages, Some(&runtime_state), &[])
+            .expect("persist hydrate context store");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread tokio runtime");
+        let hydrated = runtime
+            .block_on(hydrate_session_runtime_state(
+                Some(&StoredSessionEventStoreLocatorRow {
+                    project_id: String::from(project_id),
+                    latest_turn_index: 0,
+                }),
+                session_id,
+                None,
+                &transcript_messages,
+            ))
+        .expect("hydrate runtime state")
+        .expect("expected hydrated runtime state");
+
+        assert_eq!(hydrated.conversation_state.messages.len(), 1);
+        assert_eq!(
+            hydrated.context_start_message_id.as_deref(),
+            Some("summary-ctx")
+        );
+        remove_session_event_store(project_id, session_id).expect("cleanup hydrate event-store");
+    }
+
+    /// Verifies that hydration falls back to the latest snapshot when the current-context document is unreadable.
+    /// 验证当当前上下文文档不可读时，水合过程会回退到最近的上下文快照。
+    #[test]
+    fn hydrate_session_runtime_state_falls_back_to_latest_snapshot() {
+        let project_id = "hydrate-snapshot-fallback";
+        let session_id = SessionId::from_u128(119);
+        remove_session_event_store(project_id, session_id).expect("cleanup fallback store");
+
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_assistant_text_message(
+            &mut runtime_state.conversation_state,
+            String::from("assistant-snapshot"),
+            String::from("快照上下文正文"),
+        );
+        runtime_state.updated_at = String::from("777");
+        snapshot_session_context_before_user_prompt(project_id, session_id, &runtime_state)
+            .expect("capture fallback snapshot");
+        let current_path = crate::data_plane::application_data_root()
+            .join("sessions")
+            .join(project_id)
+            .join(session_id.to_string())
+            .join("context")
+            .join("current.json");
+        std::fs::write(&current_path, "{invalid-json")
+            .expect("write invalid current context document");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread tokio runtime");
+        let hydrated = runtime
+            .block_on(hydrate_session_runtime_state(
+                Some(&StoredSessionEventStoreLocatorRow {
+                    project_id: String::from(project_id),
+                    latest_turn_index: 0,
+                }),
+                session_id,
+                None,
+                &[],
+            ))
+            .expect("hydrate runtime state from snapshot")
+            .expect("expected hydrated runtime state from snapshot");
+
+        assert_eq!(hydrated.conversation_state.messages.len(), 1);
+        remove_session_event_store(project_id, session_id).expect("cleanup fallback event-store");
     }
 }

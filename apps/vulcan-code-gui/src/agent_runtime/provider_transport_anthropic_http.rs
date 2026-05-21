@@ -219,7 +219,9 @@ fn anthropic_usage_to_snapshot(usage: &AnthropicUsage) -> Option<CoreProviderUsa
         reasoning_tokens: None,
         total_tokens: Some((usage._input_tokens.saturating_add(usage._output_tokens)) as usize),
         cached_input_tokens: usage._cache_read_input_tokens.map(|value| value as usize),
-        cache_creation_input_tokens: usage._cache_creation_input_tokens.map(|value| value as usize),
+        cache_creation_input_tokens: usage
+            ._cache_creation_input_tokens
+            .map(|value| value as usize),
     };
     snapshot.has_any_tokens().then_some(snapshot)
 }

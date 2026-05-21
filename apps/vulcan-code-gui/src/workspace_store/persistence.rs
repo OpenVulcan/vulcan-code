@@ -26,12 +26,8 @@ pub async fn maintain_hydrated_session_storage(
         runtime_state.as_ref(),
         &compactions,
     )?;
-    persist_single_session_event_store_projection(
-        &controller,
-        &session_summary,
-        &persist_result,
-    )
-    .await?;
+    persist_single_session_event_store_projection(&controller, &session_summary, &persist_result)
+        .await?;
 
     Ok(SessionMaintenanceReport {
         session_id,
@@ -449,12 +445,10 @@ ORDER BY c.created_at ASC;
         .await
         .map_err(|error| format!("查询会话压缩检查点失败：{error}"))?;
 
-    Ok(
-        decode_query_rows::<StoredCompactionRow>(&result.json_data)?
-            .into_iter()
-            .map(stored_compaction_row_to_entry)
-            .collect(),
-    )
+    Ok(decode_query_rows::<StoredCompactionRow>(&result.json_data)?
+        .into_iter()
+        .map(stored_compaction_row_to_entry)
+        .collect())
 }
 
 /// Queries one persisted runtime-state entry so single-session maintenance can mirror the small runtime cache beside the event stream.
@@ -479,10 +473,12 @@ LIMIT 1;
         .await
         .map_err(|error| format!("查询会话运行时状态失败：{error}"))?;
 
-    Ok(decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)?
-        .into_iter()
-        .next()
-        .map(stored_runtime_state_row_to_entry))
+    Ok(
+        decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)?
+            .into_iter()
+            .next()
+            .map(stored_runtime_state_row_to_entry),
+    )
 }
 
 /// Mirrors one already persisted event-store rewrite back into SQLite indexes for single-session maintenance.
@@ -1204,11 +1200,8 @@ async fn upsert_session_event_search_documents(
     let documents = persisted_results
         .iter()
         .flat_map(|(_, result)| {
-            result
-                .search_documents
-                .iter()
-                .cloned()
-                .map(|document| WorkspaceHistorySearchDocumentUpsert {
+            result.search_documents.iter().cloned().map(|document| {
+                WorkspaceHistorySearchDocumentUpsert {
                     message_id: document.document_id,
                     session_id: document.session_id,
                     project_id: document.project_id,
@@ -1218,7 +1211,8 @@ async fn upsert_session_event_search_documents(
                     role: document.role,
                     created_at: document.created_at,
                     content: document.content,
-                })
+                }
+            })
         })
         .collect::<Vec<_>>();
     upsert_workspace_history_search_documents(controller, documents).await

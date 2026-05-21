@@ -13,6 +13,7 @@ pub(crate) fn build_preparation_failure_report(
     ExecutionRunReport::failure(
         session_id,
         None,
+        0,
         Vec::new(),
         Vec::new(),
         Vec::new(),

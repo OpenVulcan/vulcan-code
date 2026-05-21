@@ -164,9 +164,7 @@ fn update_hover_tooltip_state<Message>(
 ) {
     let next_tooltip = cursor
         .position_over(widget_bounds)
-        .and_then(|position| {
-            hovered_turn_stats_tooltip(document, state, widget_bounds, position)
-        });
+        .and_then(|position| hovered_turn_stats_tooltip(document, state, widget_bounds, position));
     if state.hover_tooltip == next_tooltip {
         return;
     }

@@ -99,10 +99,10 @@ fn map_selectable_transcript_interaction(
 
 #[cfg(test)]
 mod tests {
-    use crate::AppLocale;
-    use crate::model::SessionId;
     use super::session_transcript_prepare_inline_render_document;
     use super::session_transcript_surface_id;
+    use crate::AppLocale;
+    use crate::model::SessionId;
 
     /// Verifies inline transcript tool blocks keep only summary metadata so heavy tool output never enters the main render tree.
     /// 验证内联转录工具区块只保留摘要元数据，确保重型工具输出永远不会进入主渲染树。
@@ -237,11 +237,7 @@ fn thinking_modal_transcript_surface_id(
     session_id: SessionId,
     locale: AppLocale,
 ) -> SelectableTranscriptSurfaceId {
-    SelectableTranscriptSurfaceId(format!(
-        "thinking-modal:{}:{}",
-        locale.as_str(),
-        session_id
-    ))
+    SelectableTranscriptSurfaceId(format!("thinking-modal:{}:{}", locale.as_str(), session_id))
 }
 
 /// Builds the stable surface identifier used by a streaming thinking-overlay transcript widget.
@@ -342,7 +338,8 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
 
-        if let Some(overlay) = self.view_selected_session_rendered_transcript_fade_overlay(session_id)
+        if let Some(overlay) =
+            self.view_selected_session_rendered_transcript_fade_overlay(session_id)
         {
             layered_surfaces.push(overlay);
         }
@@ -1151,14 +1148,16 @@ impl VulcanWorkbench {
             _ => Message::OpenGeneratedAttachmentWithDefaultApp(attachment.local_path.clone()),
         };
         let secondary_copy_button: Element<'_, Message> = match attachment.kind {
-            ConversationAttachmentKind::Image => button(text(self.t(I18nKey::TranscriptCopyImageAction)).size(12))
-                .padding([6, 10])
-                .style(style::subtle_panel_button_style)
-                .on_press(Message::CopyGeneratedImageToClipboard {
-                    file_name: attachment.file_name.clone(),
-                    local_path: attachment.local_path.clone(),
-                })
-                .into(),
+            ConversationAttachmentKind::Image => {
+                button(text(self.t(I18nKey::TranscriptCopyImageAction)).size(12))
+                    .padding([6, 10])
+                    .style(style::subtle_panel_button_style)
+                    .on_press(Message::CopyGeneratedImageToClipboard {
+                        file_name: attachment.file_name.clone(),
+                        local_path: attachment.local_path.clone(),
+                    })
+                    .into()
+            }
             _ => button(text(self.t(I18nKey::TranscriptCopyPathAction)).size(12))
                 .padding([6, 10])
                 .style(style::subtle_panel_button_style)

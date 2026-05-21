@@ -6,8 +6,8 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use mp4::{MediaType, Mp4Reader, TrackType};
 use rust_h264::decoder::{Frame, OrderedDecoder};
 use rust_h264::nal::{parse_annex_b, parse_avcc};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Cursor};
@@ -87,8 +87,9 @@ pub fn resolve_video_thumbnail_preview(
         };
     }
 
-    if let Some(cached_preview) =
-        load_persisted_video_thumbnail_preview(Path::new(normalized_path)).ok().flatten()
+    if let Some(cached_preview) = load_persisted_video_thumbnail_preview(Path::new(normalized_path))
+        .ok()
+        .flatten()
     {
         cache
             .lock()
@@ -317,15 +318,14 @@ fn load_persisted_video_thumbnail_preview(
             error
         )
     })?;
-    let image = image::load_from_memory_with_format(&png_bytes, ImageFormat::Png).map_err(
-        |error| {
+    let image =
+        image::load_from_memory_with_format(&png_bytes, ImageFormat::Png).map_err(|error| {
             format!(
                 "解码视频缩略图缓存 `{}` 失败：{}。",
                 cache_path.display(),
                 error
             )
-        },
-    )?;
+        })?;
     let width = image.width().max(1);
     let height = image.height().max(1);
     Ok(Some(VideoThumbnailPreview {

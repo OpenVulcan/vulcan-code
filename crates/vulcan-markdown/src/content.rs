@@ -45,8 +45,13 @@
 //! ```
 use iced::advanced::text as advanced_text;
 use iced::font::{self, Font};
-use iced::widget::{self, checkbox, column, container, rich_text, row, rule, scrollable, span, text};
-use iced::{Color, Element, Length, Padding, Pixels, Theme, alignment, border, color, padding, theme::palette};
+use iced::widget::{
+    self, checkbox, column, container, rich_text, row, rule, scrollable, span, text,
+};
+use iced::{
+    Color, Element, Length, Padding, Pixels, Theme, alignment, border, color, padding,
+    theme::palette,
+};
 
 use std::borrow::BorrowMut;
 use std::cell::{Cell, RefCell};
@@ -1533,13 +1538,16 @@ where
 {
     let table = iced::widget::table(
         columns.iter().enumerate().map(move |(i, column)| {
-            iced::widget::table::column(items(viewer, settings, &column.header), move |row: &Row| {
-                if let Some(cells) = row.cells.get(i) {
-                    items(viewer, settings, cells)
-                } else {
-                    text("").into()
-                }
-            })
+            iced::widget::table::column(
+                items(viewer, settings, &column.header),
+                move |row: &Row| {
+                    if let Some(cells) = row.cells.get(i) {
+                        items(viewer, settings, cells)
+                    } else {
+                        text("").into()
+                    }
+                },
+            )
             .align_x(match column.alignment {
                 pulldown_cmark::Alignment::None | pulldown_cmark::Alignment::Left => {
                     alignment::Horizontal::Left

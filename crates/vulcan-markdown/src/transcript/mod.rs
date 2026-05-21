@@ -68,7 +68,8 @@ fn collect_top_level_block_ranges(markdown: &str) -> Vec<Range<usize>> {
     let mut block_depth = 0usize;
     let mut current_start = None::<usize>;
 
-    for (event, source) in Parser::new_ext(markdown, transcript_partition_options()).into_offset_iter()
+    for (event, source) in
+        Parser::new_ext(markdown, transcript_partition_options()).into_offset_iter()
     {
         match event {
             Event::Start(tag) if is_structural_block_tag(&tag) => {

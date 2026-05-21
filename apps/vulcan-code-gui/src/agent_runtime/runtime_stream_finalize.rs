@@ -69,6 +69,7 @@ pub(crate) fn build_output_completed_event(normalized_output: &str) -> RuntimeEv
 pub(crate) fn build_failure_execution_report(
     session_id: SessionId,
     preparation: ExecutionPreparation,
+    provider_request_count: usize,
     mcp_discovery_rows: Vec<String>,
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
@@ -78,6 +79,7 @@ pub(crate) fn build_failure_execution_report(
     ExecutionRunReport::failure(
         session_id,
         Some(preparation),
+        provider_request_count,
         mcp_discovery_rows,
         mcp_discovery_errors,
         warnings,
@@ -94,6 +96,7 @@ pub(crate) fn build_success_execution_report(
     thinking_output: Option<String>,
     assistant_output: String,
     conversation_state: Option<SessionConversationState>,
+    provider_request_count: usize,
     mcp_discovery_rows: Vec<String>,
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
@@ -105,6 +108,7 @@ pub(crate) fn build_success_execution_report(
         thinking_output,
         assistant_output,
         conversation_state,
+        provider_request_count,
         mcp_discovery_rows,
         mcp_discovery_errors,
         warnings,
@@ -137,6 +141,7 @@ pub(crate) fn build_failure_terminal_events(
         build_failure_execution_report(
             session_id,
             preparation,
+            stream_state.provider_request_count(),
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -176,6 +181,7 @@ pub(crate) fn build_success_terminal_events(
             normalize_optional_stream_output(stream_state.thinking_visible_output().to_string()),
             normalized_output,
             stream_state.take_final_conversation_state(),
+            stream_state.provider_request_count(),
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,

@@ -37,11 +37,13 @@ const BUNDLED_UI_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Robot
 
 /// Bundled italic UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置斜体界面字体字节。
-const BUNDLED_UI_ITALIC_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Roboto-Italic.ttf");
+const BUNDLED_UI_ITALIC_FONT_BYTES: &[u8] =
+    include_bytes!("../../resources/fonts/Roboto-Italic.ttf");
 
 /// Bundled medium UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置中等字重界面字体字节。
-const BUNDLED_UI_MEDIUM_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/Roboto-Medium.ttf");
+const BUNDLED_UI_MEDIUM_FONT_BYTES: &[u8] =
+    include_bytes!("../../resources/fonts/Roboto-Medium.ttf");
 
 /// Bundled medium italic UI font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置中等字重斜体界面字体字节。
@@ -64,7 +66,8 @@ const BUNDLED_CJK_UI_FONT_BYTES: &[u8] =
 
 /// Bundled code font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置代码字体字节。
-const BUNDLED_CODE_FONT_BYTES: &[u8] = include_bytes!("../../resources/fonts/VictorMono-Regular.ttf");
+const BUNDLED_CODE_FONT_BYTES: &[u8] =
+    include_bytes!("../../resources/fonts/VictorMono-Regular.ttf");
 
 /// Bundled italic code font bytes loaded from the application resources directory.
 /// 从应用资源目录加载的内置斜体代码字体字节。

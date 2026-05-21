@@ -561,7 +561,9 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
     }
 }
 
-impl<Message> overlay::Overlay<Message, Theme, Renderer> for SelectableTranscriptHoverTooltipOverlay {
+impl<Message> overlay::Overlay<Message, Theme, Renderer>
+    for SelectableTranscriptHoverTooltipOverlay
+{
     /// Lays out the hover tooltip using one clamped floating rectangle that covers the transcript surface.
     /// 使用一个覆盖转录表面的钳制浮动矩形对悬浮提示进行布局。
     fn layout(&mut self, _renderer: &Renderer, bounds: Size) -> layout::Node {
@@ -692,8 +694,8 @@ fn transcript_hover_tooltip_bounds(
         + title_line_count * 18.0
         + TRANSCRIPT_HOVER_TOOLTIP_TITLE_GAP
         + body_line_count * 18.0;
-    let max_x =
-        (widget_bounds.x + widget_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_WIDTH).max(widget_bounds.x);
+    let max_x = (widget_bounds.x + widget_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_WIDTH)
+        .max(widget_bounds.x);
     let max_y = (widget_bounds.y + widget_bounds.height - height).max(widget_bounds.y);
     let x = (tooltip_state.anchor_position.x + 14.0).clamp(widget_bounds.x, max_x);
     let y = (tooltip_state.anchor_position.y + 14.0).clamp(widget_bounds.y, max_y);

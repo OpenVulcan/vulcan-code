@@ -66,7 +66,11 @@ fn flow_node_layout_signature(
         RenderedTranscriptNode::Panel(_) => None,
         RenderedTranscriptNode::Collapsible(collapsible_node) => {
             1_u8.hash(&mut hasher);
-            hash_paragraph_flow_layout_signature(&collapsible_node.summary, local_widget_bounds, &mut hasher);
+            hash_paragraph_flow_layout_signature(
+                &collapsible_node.summary,
+                local_widget_bounds,
+                &mut hasher,
+            );
             if let Some(body_node) = collapsible_node.body.as_ref() {
                 1_u8.hash(&mut hasher);
                 hash_paragraph_flow_layout_signature(body_node, local_widget_bounds, &mut hasher);
@@ -116,7 +120,8 @@ fn hash_paragraph_flow_layout_signature(
         paragraph_measurement_width(local_widget_bounds, paragraph_node),
         f32::INFINITY,
     );
-    renderer_paragraph_signature(paragraph_node, text_bounds, text::Alignment::Default).hash(hasher);
+    renderer_paragraph_signature(paragraph_node, text_bounds, text::Alignment::Default)
+        .hash(hasher);
     paragraph_node.gap_before.to_bits().hash(hasher);
     paragraph_node.gap_after.to_bits().hash(hasher);
     paragraph_node.fit_width_to_content.hash(hasher);

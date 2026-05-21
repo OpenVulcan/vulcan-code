@@ -95,10 +95,18 @@ struct OpenAiCompatibleStreamingDelta {
     /// 可选的助手文本增量。
     #[serde(default)]
     content: Option<String>,
+    /// Optional plaintext reasoning delta exposed by providers that follow the OpenRouter/OpenAI `reasoning` alias.
+    /// 采用 OpenRouter/OpenAI `reasoning` 别名的 Provider 暴露的可选纯文本思考增量。
+    #[serde(default)]
+    reasoning: Option<String>,
     /// Optional hidden reasoning delta carried by some OpenAI-compatible providers.
     /// 某些 OpenAI 兼容 Provider 携带的可选隐藏思考增量。
     #[serde(default)]
     reasoning_content: Option<String>,
+    /// Optional structured reasoning payload exposed by providers that stream `reasoning_details`.
+    /// 流式返回 `reasoning_details` 的 Provider 暴露的可选结构化思考载荷。
+    #[serde(default)]
+    reasoning_details: Option<Value>,
     /// Streamed tool-call fragments.
     /// 流式工具调用碎片集合。
     #[serde(default)]
@@ -163,6 +171,81 @@ struct OpenAiCompatibleStreamingChunk {
     /// 可选的 Provider 用量载荷。
     #[serde(default)]
     usage: Option<OpenAiCompatibleUsage>,
+}
+
+/// Extracts one visible reasoning delta from the current OpenAI-compatible stream payload while preserving provider field-precedence semantics.
+/// 在保留 Provider 字段优先级语义的前提下，从当前 OpenAI 兼容流载荷中提取一段可见思考增量。
+fn extract_openai_compatible_reasoning_delta(
+    delta: &OpenAiCompatibleStreamingDelta,
+) -> Option<String> {
+    if delta.reasoning_content.is_some() {
+        return delta.reasoning_content.clone();
+    }
+
+    if delta.reasoning.is_some() {
+        return delta.reasoning.clone();
+    }
+
+    delta
+        .reasoning_details
+        .as_ref()
+        .map(flatten_openai_compatible_reasoning_details)
+}
+
+/// Flattens one OpenAI-compatible `reasoning_details` payload into transcript-visible plaintext while skipping opaque items.
+/// 将一份 OpenAI 兼容 `reasoning_details` 载荷压平成转录可见纯文本，并跳过不透明条目。
+fn flatten_openai_compatible_reasoning_details(details: &Value) -> String {
+    let mut parts = Vec::new();
+    collect_openai_compatible_reasoning_detail_text(details, &mut parts);
+    parts.join("\n")
+}
+
+/// Collects visible text recursively from one OpenAI-compatible reasoning-details fragment using the common `text` and `summary` shapes.
+/// 使用常见的 `text` 与 `summary` 结构，从单个 OpenAI 兼容 reasoning-details 片段中递归收集可见文本。
+fn collect_openai_compatible_reasoning_detail_text(value: &Value, parts: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_openai_compatible_reasoning_detail_text(item, parts);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(text) = object.get("text").and_then(Value::as_str) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+            }
+            if let Some(summary) = object.get("summary") {
+                collect_openai_compatible_reasoning_detail_text(summary, parts);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Restores explicit provider-native reasoning replay fields that were deserialized into dedicated struct members instead of the flattened catch-all map.
+/// 恢复那些被反序列化到专用结构成员、因此未进入扁平化兜底映射的 Provider 原生思考回放字段。
+fn merge_openai_compatible_reasoning_replay_fields(
+    fields: &mut JsonMap<String, Value>,
+    delta: &OpenAiCompatibleStreamingDelta,
+) {
+    if let Some(reasoning) = delta.reasoning.clone() {
+        fields
+            .entry(String::from("reasoning"))
+            .or_insert(Value::String(reasoning));
+    }
+    if let Some(reasoning_details) = delta.reasoning_details.clone() {
+        fields
+            .entry(String::from("reasoning_details"))
+            .or_insert(reasoning_details);
+    }
 }
 
 /// Default ordered OpenAI-compatible terminal usage sources used when one provider definition does not declare an explicit override.
@@ -371,8 +454,8 @@ where
     let mut finalized_tool_calls = Vec::new();
     let mut final_usage = None::<CoreProviderUsageSnapshot>;
     let mut provider_visible_assistant_fields = JsonMap::new();
-    let mut saw_reasoning_content_field = false;
-    let mut raw_reasoning_content = String::new();
+    let mut saw_reasoning_field = false;
+    let mut raw_reasoning_text = String::new();
     let usage_policy = resolve_openai_compatible_streaming_usage_policy(provider_id);
 
     while let Some(event_result) = events.next().await {
@@ -417,8 +500,8 @@ where
         );
 
         if let Some(reasoning) = choice.reasoning {
-            saw_reasoning_content_field = true;
-            raw_reasoning_content.push_str(&reasoning);
+            saw_reasoning_field = true;
+            raw_reasoning_text.push_str(&reasoning);
             if !reasoning.is_empty() {
                 assistant_reasoning.push_str(&reasoning);
                 forward_openai_compatible_delta(
@@ -450,7 +533,7 @@ where
     let provider_message_state = build_openai_compatible_provider_message_state(
         &assistant_text,
         &finalized_tool_calls,
-        saw_reasoning_content_field.then_some(raw_reasoning_content),
+        saw_reasoning_field.then_some(raw_reasoning_text),
         provider_visible_assistant_fields,
     );
     let mut assistant_content = Vec::new();
@@ -540,7 +623,8 @@ fn build_openai_compatible_request_payload(
         current_prompt,
         interleaved_reasoning,
     } = request;
-    let usage_policy = resolve_openai_compatible_streaming_usage_policy(snapshot.provider_id.as_str());
+    let usage_policy =
+        resolve_openai_compatible_streaming_usage_policy(snapshot.provider_id.as_str());
 
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
@@ -615,7 +699,10 @@ fn ensure_openai_compatible_stream_usage_requested(
     stream_options
         .entry(String::from("include_usage"))
         .or_insert(Value::Bool(true));
-    payload.insert(String::from("stream_options"), Value::Object(stream_options));
+    payload.insert(
+        String::from("stream_options"),
+        Value::Object(stream_options),
+    );
 }
 
 /// Converts one canonical core message into one OpenAI-compatible request message and replays provider-native interleaved state only when the active model explicitly declares compatible support.
@@ -826,17 +913,25 @@ fn normalize_openai_compatible_chunk_with_policy(
         chunk.id.clone(),
         extract_openai_compatible_terminal_usage(&chunk, usage_policy),
         &chunk.choices,
-        |choice| CompatibleChoiceData {
-            finish_reason: if choice.finish_reason == Some(OpenAiCompatibleFinishReason::ToolCalls)
-            {
-                CompatibleFinishReason::ToolCalls
-            } else {
-                CompatibleFinishReason::Other
-            },
-            text: choice.delta.content.clone(),
-            reasoning: choice.delta.reasoning_content.clone(),
-            provider_visible_assistant_fields: choice.delta.additional_fields.clone(),
-            tool_calls: tool_call_chunks(&choice.delta.tool_calls),
+        |choice| {
+            let mut provider_visible_assistant_fields = choice.delta.additional_fields.clone();
+            merge_openai_compatible_reasoning_replay_fields(
+                &mut provider_visible_assistant_fields,
+                &choice.delta,
+            );
+            CompatibleChoiceData {
+                finish_reason: if choice.finish_reason
+                    == Some(OpenAiCompatibleFinishReason::ToolCalls)
+                {
+                    CompatibleFinishReason::ToolCalls
+                } else {
+                    CompatibleFinishReason::Other
+                },
+                text: choice.delta.content.clone(),
+                reasoning: extract_openai_compatible_reasoning_delta(&choice.delta),
+                provider_visible_assistant_fields,
+                tool_calls: tool_call_chunks(&choice.delta.tool_calls),
+            }
         },
     ))
 }
@@ -873,7 +968,10 @@ fn extract_openai_compatible_terminal_usage(
         let usage = match source {
             OpenAiCompatibleStreamingUsageSource::TopLevelEmptyChoicesChunk => {
                 if chunk.choices.is_empty() {
-                    chunk.usage.clone().and_then(openai_compatible_usage_to_snapshot)
+                    chunk
+                        .usage
+                        .clone()
+                        .and_then(openai_compatible_usage_to_snapshot)
                 } else {
                     None
                 }
@@ -884,7 +982,10 @@ fn extract_openai_compatible_terminal_usage(
                     .iter()
                     .any(|choice| choice.finish_reason.is_some())
                 {
-                    chunk.usage.clone().and_then(openai_compatible_usage_to_snapshot)
+                    chunk
+                        .usage
+                        .clone()
+                        .and_then(openai_compatible_usage_to_snapshot)
                 } else {
                     None
                 }
@@ -897,7 +998,10 @@ fn extract_openai_compatible_terminal_usage(
                 .and_then(openai_compatible_usage_to_snapshot),
         };
 
-        if usage.as_ref().is_some_and(CoreProviderUsageSnapshot::has_any_tokens) {
+        if usage
+            .as_ref()
+            .is_some_and(CoreProviderUsageSnapshot::has_any_tokens)
+        {
             return usage;
         }
     }
@@ -910,10 +1014,10 @@ fn extract_openai_compatible_terminal_usage(
 fn build_openai_compatible_provider_message_state(
     assistant_text: &str,
     finalized_tool_calls: &[CoreConversationToolCall],
-    reasoning_content: Option<String>,
+    flattened_reasoning_text: Option<String>,
     mut provider_visible_fields: JsonMap<String, Value>,
 ) -> Option<Value> {
-    if provider_visible_fields.is_empty() && reasoning_content.is_none() {
+    if provider_visible_fields.is_empty() && flattened_reasoning_text.is_none() {
         return None;
     }
 
@@ -927,7 +1031,11 @@ fn build_openai_compatible_provider_message_state(
             Value::String(assistant_text.to_string()),
         );
     }
-    if let Some(reasoning_content) = reasoning_content {
+    if let Some(reasoning_content) = flattened_reasoning_text.filter(|_| {
+        !provider_visible_fields.contains_key("reasoning_content")
+            && !provider_visible_fields.contains_key("reasoning")
+            && !provider_visible_fields.contains_key("reasoning_details")
+    }) {
         provider_visible_fields.insert(
             String::from("reasoning_content"),
             Value::String(reasoning_content),
@@ -1133,11 +1241,14 @@ fn forward_openai_compatible_delta<S>(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_openai_compatible_request_payload, normalize_openai_compatible_chunk};
+    use super::{
+        build_openai_compatible_provider_message_state, build_openai_compatible_request_payload,
+        normalize_openai_compatible_chunk,
+    };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use crate::provider_config::{ModelInterleavedCapability, ModelInterleavedField};
-    use serde_json::json;
+    use serde_json::{Map as JsonMap, json};
     use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::{
         ConversationAttachment, ConversationAttachmentKind,
@@ -1361,13 +1472,9 @@ mod tests {
             interleaved_reasoning: None,
         };
 
-        let payload = build_openai_compatible_request_payload(
-            "deepseek-v4-pro",
-            request,
-            &[],
-            true,
-        )
-        .expect("payload should build");
+        let payload =
+            build_openai_compatible_request_payload("deepseek-v4-pro", request, &[], true)
+                .expect("payload should build");
 
         assert_eq!(payload["stream"], true);
         assert_eq!(payload["stream_options"]["include_usage"], true);
@@ -1439,10 +1546,112 @@ mod tests {
         )
         .expect("chunk should parse");
 
-        let usage = chunk.usage.expect("terminal choice usage should be captured");
+        let usage = chunk
+            .usage
+            .expect("terminal choice usage should be captured");
         assert_eq!(usage.input_tokens, Some(128));
         assert_eq!(usage.output_tokens, Some(32));
         assert_eq!(usage.total_tokens, Some(160));
+    }
+
+    /// Verifies OpenRouter-style OpenAI-compatible chunks map the plaintext `reasoning` alias into visible thinking output and raw replay state.
+    /// 验证 OpenRouter 风格 OpenAI 兼容块会把纯文本 `reasoning` 别名映射到可见思考输出与原始回放状态。
+    #[test]
+    fn normalize_chunk_reads_reasoning_alias_and_preserves_replay_field() {
+        let chunk = normalize_openai_compatible_chunk(
+            "openrouter",
+            "OpenRouter",
+            r#"{
+                "id":"resp_1",
+                "choices":[
+                    {
+                        "delta":{
+                            "reasoning":"先检查目录。",
+                            "content":"已完成。"
+                        },
+                        "finish_reason":"stop"
+                    }
+                ]
+            }"#,
+        )
+        .expect("chunk should parse");
+
+        let choice = chunk.choice.expect("choice should exist");
+        assert_eq!(choice.reasoning.as_deref(), Some("先检查目录。"));
+        assert_eq!(choice.text.as_deref(), Some("已完成。"));
+        assert_eq!(
+            choice.provider_visible_assistant_fields["reasoning"],
+            json!("先检查目录。")
+        );
+    }
+
+    /// Verifies OpenRouter-style structured `reasoning_details` payloads flatten into visible thinking text while remaining intact for native replay.
+    /// 验证 OpenRouter 风格结构化 `reasoning_details` 载荷会压平成可见思考文本，同时保持原样供原生回放使用。
+    #[test]
+    fn normalize_chunk_flattens_reasoning_details_and_preserves_structured_payload() {
+        let chunk = normalize_openai_compatible_chunk(
+            "openrouter",
+            "OpenRouter",
+            r#"{
+                "id":"resp_1",
+                "choices":[
+                    {
+                        "delta":{
+                            "reasoning_details":[
+                                { "type":"summary", "text":"先检查目录。" },
+                                {
+                                    "type":"summary",
+                                    "summary":[
+                                        { "text":"再汇总结果。" }
+                                    ]
+                                }
+                            ]
+                        },
+                        "finish_reason":"stop"
+                    }
+                ]
+            }"#,
+        )
+        .expect("chunk should parse");
+
+        let choice = chunk.choice.expect("choice should exist");
+        assert_eq!(
+            choice.reasoning.as_deref(),
+            Some("先检查目录。\n再汇总结果。")
+        );
+        assert_eq!(
+            choice.provider_visible_assistant_fields["reasoning_details"][1]["summary"][0]["text"],
+            json!("再汇总结果。")
+        );
+    }
+
+    /// Verifies provider message replay does not synthesize a duplicate `reasoning_content` field when one native reasoning field is already preserved.
+    /// 验证当原生思考字段已经被保留时，Provider 消息回放不会再额外合成重复的 `reasoning_content` 字段。
+    #[test]
+    fn provider_message_state_avoids_duplicate_textual_reasoning_field() {
+        let state = build_openai_compatible_provider_message_state(
+            "已完成。",
+            &[],
+            Some(String::from("先检查目录。\n再汇总结果。")),
+            JsonMap::from_iter([(
+                String::from("reasoning_details"),
+                json!([
+                    { "type": "summary", "text": "先检查目录。" },
+                    { "type": "summary", "text": "再汇总结果。" }
+                ]),
+            )]),
+        )
+        .expect("provider message state should exist");
+
+        let assistant_message = state["assistant_message"]
+            .as_object()
+            .expect("assistant message should be one object");
+        assert!(assistant_message.get("reasoning_content").is_none());
+        assert_eq!(assistant_message["content"], json!("已完成。"));
+        assert_eq!(
+            assistant_message["reasoning_details"][0]["text"],
+            json!("先检查目录。")
+        );
     }
 
     /// Verifies OpenAI-compatible transports keep parallel tool results as separate `tool` messages instead of borrowing Anthropic-only coalescing behavior.

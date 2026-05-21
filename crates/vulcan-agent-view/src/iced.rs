@@ -43,7 +43,9 @@ use self::event_routing::*;
 use self::layout_engine::*;
 use self::paint::*;
 use self::perf::TranscriptPerfTrace;
-use self::render_cache::{clear_stashed_surface_render_caches, rebind_stashed_surface_render_cache};
+use self::render_cache::{
+    clear_stashed_surface_render_caches, rebind_stashed_surface_render_cache,
+};
 use self::scene::*;
 use self::surface_state::*;
 pub use self::surface_state::{
@@ -485,7 +487,10 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             return Some(overlay);
         }
         let hover_tooltip = state.hover_tooltip.clone()?;
-        Some(build_hover_tooltip_overlay(hover_tooltip, translated_bounds))
+        Some(build_hover_tooltip_overlay(
+            hover_tooltip,
+            translated_bounds,
+        ))
     }
 }
 

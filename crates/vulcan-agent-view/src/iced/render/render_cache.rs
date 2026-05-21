@@ -1,8 +1,8 @@
 //! Render-cache state separated from live interaction state so long-document layout data can evolve independently.
 //! 与实时交互状态分离的渲染缓存状态，使长文档布局数据可以独立演进。
 
-use super::perf::TranscriptPerfTrace;
 use super::RendererParagraph;
+use super::perf::TranscriptPerfTrace;
 use super::scene::{
     CachedTableLayout, LaidOutFlowNode, LaidOutPanelNode, RenderedTranscriptDocument,
     RenderedTranscriptLinkAction, RenderedTranscriptNode,
@@ -275,7 +275,10 @@ mod tests {
             Some(unique_surface_id.as_str()),
         );
 
-        assert_eq!(restored_surface_key.as_deref(), Some(unique_surface_id.as_str()));
+        assert_eq!(
+            restored_surface_key.as_deref(),
+            Some(unique_surface_id.as_str())
+        );
         assert_eq!(restored_cache.cached_signature, 42);
         assert_eq!(restored_cache.cached_width, 777.0);
     }
@@ -300,7 +303,10 @@ mod tests {
             Some(unique_surface_id.as_str()),
         );
 
-        assert_eq!(restored_surface_key.as_deref(), Some(unique_surface_id.as_str()));
+        assert_eq!(
+            restored_surface_key.as_deref(),
+            Some(unique_surface_id.as_str())
+        );
         assert_eq!(restored_cache.cached_signature, 0);
     }
 }

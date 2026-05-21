@@ -261,7 +261,9 @@ impl SummarySkill {
                 .assistant_output
                 .as_deref()
                 .map(|output| truncate_preview_lines(output, 3, 220))
-                .unwrap_or_else(|| String::from("The model did not return visible text output for this run."));
+                .unwrap_or_else(|| {
+                    String::from("The model did not return visible text output for this run.")
+                });
             format!("The execution finished successfully. Output summary: {output_preview}")
         } else {
             format!(
@@ -538,7 +540,9 @@ fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
         },
         SessionMessageRecordKind::ThinkingOutput => String::from("Thinking"),
         SessionMessageRecordKind::AssistantOutput => String::from("Output"),
-        SessionMessageRecordKind::ToolCallOutput => canonical_tool_summary_title(message, "Tool Call"),
+        SessionMessageRecordKind::ToolCallOutput => {
+            canonical_tool_summary_title(message, "Tool Call")
+        }
         SessionMessageRecordKind::ToolResultOutput => {
             canonical_tool_summary_title(message, "Tool Result")
         }
@@ -791,6 +795,7 @@ mod tests {
             assistant_output: Some(String::from("这是给用户的最终输出。")),
             thinking_output: None,
             conversation_state: None,
+            provider_request_count: 0,
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),
@@ -801,7 +806,11 @@ mod tests {
         let record = skill.execute(SummarySkillInput { report: &report });
 
         assert_eq!(record.record_kind, SessionMessageRecordKind::SummaryOutput);
-        assert!(record.body.contains("Output summary: 这是给用户的最终输出。"));
+        assert!(
+            record
+                .body
+                .contains("Output summary: 这是给用户的最终输出。")
+        );
         assert!(!record.body.contains("准备摘要"));
         assert!(!record.body.contains("会话：#"));
     }

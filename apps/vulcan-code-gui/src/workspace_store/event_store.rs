@@ -24,6 +24,18 @@ const SESSION_EVENT_RUNTIME_STATE_FILE_NAME: &str = "runtime_state.json";
 /// Stable checkpoint directory name stored beside the session manifest.
 /// 与会话 manifest 并列保存的稳定检查点目录名称。
 const SESSION_EVENT_CHECKPOINT_DIRECTORY_NAME: &str = "checkpoints";
+/// Stable context directory name stored beside the session manifest.
+/// 与会话 manifest 并列保存的稳定上下文目录名称。
+const SESSION_EVENT_CONTEXT_DIRECTORY_NAME: &str = "context";
+/// Stable current-context file name stored inside the context directory.
+/// 保存于上下文目录内部的稳定当前上下文文件名。
+const SESSION_EVENT_CONTEXT_CURRENT_FILE_NAME: &str = "current.json";
+/// Stable snapshot directory name stored inside the context directory.
+/// 保存于上下文目录内部的稳定快照目录名称。
+const SESSION_EVENT_CONTEXT_SNAPSHOT_DIRECTORY_NAME: &str = "snapshots";
+/// Maximum number of historical context snapshots retained for one session.
+/// 单个会话最多保留的历史上下文快照数量。
+const SESSION_EVENT_CONTEXT_SNAPSHOT_RETAIN_LIMIT: usize = 5;
 
 /// Compact manifest written beside one persisted session event stream.
 /// 与单个持久化会话事件流一同写入的紧凑 manifest。
@@ -58,7 +70,16 @@ pub(super) struct SessionEventStoreManifest {
     pub runtime_state_file: String,
     /// Relative checkpoint document paths retained by the manifest.
     /// 由 manifest 保留的检查点文档相对路径集合。
+    #[serde(default)]
     pub checkpoint_files: Vec<String>,
+    /// Relative current-context file path retained by the manifest.
+    /// 由 manifest 保留的当前上下文文件相对路径。
+    #[serde(default = "default_context_current_relative_path")]
+    pub context_current_file: String,
+    /// Relative context-snapshot directory retained by the manifest.
+    /// 由 manifest 保留的上下文快照目录相对路径。
+    #[serde(default = "default_context_snapshot_directory_relative_path")]
+    pub context_snapshot_dir: String,
     /// Creation timestamp captured for the manifest.
     /// 为 manifest 捕获的创建时间戳。
     pub created_at: String,
@@ -98,6 +119,57 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// Update timestamp captured for the runtime-state cache.
     /// 为运行时状态缓存捕获的更新时间戳。
     pub updated_at: String,
+}
+
+/// Canonical current-context document persisted beside one session event stream.
+/// 与单个会话事件流并列持久化保存的规范当前上下文文档。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct SessionEventStoreContextDocument {
+    /// Stable session identifier owning the current context.
+    /// 拥有当前上下文的稳定会话标识。
+    pub session_id: String,
+    /// Stable project identifier owning the current context.
+    /// 拥有当前上下文的稳定项目标识。
+    pub project_id: String,
+    /// Optional latest active compaction identifier mirrored into the current context.
+    /// 镜像进入当前上下文的可选最近活动压缩标识。
+    pub last_compaction_id: Option<String>,
+    /// Optional context-start message identifier mirrored into the current context.
+    /// 镜像进入当前上下文的可选上下文起始消息标识。
+    pub context_start_message_id: Option<String>,
+    /// Unix-millis text describing when the current context was last refreshed.
+    /// 描述当前上下文最近刷新时间的 Unix 毫秒文本。
+    pub updated_at: String,
+    /// Canonical runtime conversation state used by future model requests.
+    /// 被未来模型请求使用的规范运行时会话状态。
+    pub conversation_state: SessionConversationState,
+}
+
+/// Historical context snapshot captured immediately before one new user prompt enters the current context.
+/// 在一条新的用户提示进入当前上下文之前立即捕获的历史上下文快照。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct SessionEventStoreContextSnapshotDocument {
+    /// Stable snapshot identifier derived from capture time and randomness.
+    /// 根据捕获时间与随机因子派生出的稳定快照标识。
+    pub snapshot_id: String,
+    /// Stable session identifier owning the snapshot.
+    /// 拥有该快照的稳定会话标识。
+    pub session_id: String,
+    /// Stable project identifier owning the snapshot.
+    /// 拥有该快照的稳定项目标识。
+    pub project_id: String,
+    /// Stable capture reason used by future context-management workflows.
+    /// 被未来上下文管理工作流使用的稳定捕获原因。
+    pub reason: String,
+    /// Unix-millis text describing when the snapshot was captured.
+    /// 描述该快照何时被捕获的 Unix 毫秒文本。
+    pub created_at: String,
+    /// Unix-millis text copied from the source current-context document.
+    /// 从源当前上下文文档复制而来的 Unix 毫秒文本。
+    pub source_updated_at: String,
+    /// Frozen context document copied from the previous current-context state.
+    /// 从上一份当前上下文状态复制出的冻结上下文文档。
+    pub context: SessionEventStoreContextDocument,
 }
 
 /// File-backed compaction checkpoint document persisted beside the canonical event stream.
@@ -272,13 +344,19 @@ pub(super) fn persist_session_event_store(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("持久化会话事件存储失败：会话 `{}` 缺少项目归属。", session.id))?;
+        .ok_or_else(|| {
+            format!(
+                "持久化会话事件存储失败：会话 `{}` 缺少项目归属。",
+                session.id
+            )
+        })?;
     let store_dir = session_event_store_dir(project_id, session.id);
     recreate_session_store_directory(&store_dir)?;
     let events_path = session_event_segment_path(&store_dir);
     let runtime_state_path = session_event_runtime_state_path(&store_dir);
     let blob_dir = session_event_blob_dir(&store_dir);
     let checkpoint_dir = session_event_checkpoint_dir(&store_dir);
+    let context_current_path = session_event_context_current_path(&store_dir);
     fs::create_dir_all(&blob_dir).map_err(|error| {
         format!(
             "创建会话事件 blob 目录失败（{}）：{error}",
@@ -300,6 +378,12 @@ pub(super) fn persist_session_event_store(
         .map(runtime_state_to_store_document)
         .unwrap_or_default();
     write_runtime_state_document(&runtime_state_path, &runtime_state_document)?;
+    let context_document = runtime_state
+        .map(|runtime_state| {
+            runtime_state_to_context_document(project_id, session.id, runtime_state)
+        })
+        .unwrap_or_else(|| session_messages_to_context_document(project_id, session.id, messages));
+    write_context_document(&context_current_path, &context_document)?;
     let checkpoint_files = write_compaction_checkpoint_documents(&checkpoint_dir, compactions)?;
 
     let latest_turn_index = turn_rows.last().map(|row| row.turn_index).unwrap_or(-1);
@@ -315,6 +399,8 @@ pub(super) fn persist_session_event_store(
         event_segments: vec![String::from(SESSION_EVENT_SEGMENT_RELATIVE_PATH)],
         runtime_state_file: String::from(SESSION_EVENT_RUNTIME_STATE_FILE_NAME),
         checkpoint_files,
+        context_current_file: default_context_current_relative_path(),
+        context_snapshot_dir: default_context_snapshot_directory_relative_path(),
         created_at: current_unix_millis_text(),
         updated_at: current_unix_millis_text(),
     };
@@ -335,6 +421,7 @@ pub(super) fn load_session_event_store(
     session_id: SessionId,
 ) -> Result<SessionEventStoreLoadResult, String> {
     let store_dir = session_event_store_dir(project_id, session_id);
+    ensure_session_event_store_manifest_if_recoverable(project_id, session_id)?;
     let manifest_path = session_event_manifest_path(&store_dir);
     let manifest = read_json_file::<SessionEventStoreManifest>(&manifest_path)?;
     let events_path = session_event_segment_path(&store_dir);
@@ -355,6 +442,115 @@ pub(super) fn load_session_event_store_runtime_state(
     read_json_file::<SessionEventStoreRuntimeState>(&path)
 }
 
+/// Loads the canonical current-context document stored beside one session event stream.
+/// 加载保存在单个会话事件流旁边的规范当前上下文文档。
+pub(super) fn load_session_event_store_context_current(
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<Option<SessionEventStoreContextDocument>, String> {
+    let path = session_event_context_current_path(&session_event_store_dir(project_id, session_id));
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_json_file::<SessionEventStoreContextDocument>(&path).map(Some)
+}
+
+/// Loads the newest available context snapshot document for one session.
+/// 加载单个会话当前可用的最新上下文快照文档。
+pub(super) fn load_latest_session_event_store_context_snapshot(
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<Option<SessionEventStoreContextSnapshotDocument>, String> {
+    let snapshot_dir =
+        session_event_context_snapshot_dir(&session_event_store_dir(project_id, session_id));
+    if !snapshot_dir.exists() {
+        return Ok(None);
+    }
+    let mut entries = fs::read_dir(&snapshot_dir)
+        .map_err(|error| {
+            format!(
+                "读取会话上下文快照目录失败（{}）：{error}",
+                snapshot_dir.display()
+            )
+        })?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    entries.reverse();
+    for entry in entries {
+        if let Ok(snapshot) =
+            read_json_file::<SessionEventStoreContextSnapshotDocument>(&entry.path())
+        {
+            return Ok(Some(snapshot));
+        }
+    }
+    Ok(None)
+}
+
+/// Persists the latest canonical current-context document for one session immediately.
+/// 立即持久化单个会话的最近规范当前上下文文档。
+pub(crate) fn persist_session_event_store_context_current(
+    project_id: &str,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    let store_dir = session_event_store_dir(project_id, session_id);
+    fs::create_dir_all(&store_dir).map_err(|error| {
+        format!(
+            "创建会话事件存储目录失败（{}）：{error}",
+            store_dir.display()
+        )
+    })?;
+    ensure_minimal_session_event_store_manifest(project_id, session_id)?;
+    let path = session_event_context_current_path(&store_dir);
+    let document = runtime_state_to_context_document(project_id, session_id, runtime_state);
+    write_context_document(&path, &document)
+}
+
+/// Captures a historical context snapshot immediately before one new user prompt mutates the current context.
+/// 在一条新的用户提示词改变当前上下文之前立即捕获一份历史上下文快照。
+pub(crate) fn snapshot_session_event_store_context_before_user_prompt(
+    project_id: &str,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    let current_document = runtime_state_to_context_document(project_id, session_id, runtime_state);
+    if context_document_is_empty(&current_document) {
+        return Ok(());
+    }
+
+    let store_dir = session_event_store_dir(project_id, session_id);
+    ensure_minimal_session_event_store_manifest(project_id, session_id)?;
+    let snapshot_dir = session_event_context_snapshot_dir(&store_dir);
+    fs::create_dir_all(&snapshot_dir).map_err(|error| {
+        format!(
+            "创建会话上下文快照目录失败（{}）：{error}",
+            snapshot_dir.display()
+        )
+    })?;
+    let created_at = current_unix_millis_text();
+    let snapshot_id = format!(
+        "snapshot-{created_at}-{}",
+        sanitize_file_component(Uuid::new_v4().to_string().as_str())
+    );
+    let snapshot = SessionEventStoreContextSnapshotDocument {
+        snapshot_id: snapshot_id.clone(),
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        reason: String::from("before_user_prompt"),
+        created_at: created_at.clone(),
+        source_updated_at: current_document.updated_at.clone(),
+        context: current_document,
+    };
+    write_json_file(
+        &session_event_context_snapshot_path(&snapshot_dir, &snapshot_id),
+        &snapshot,
+    )?;
+    prune_session_event_store_context_snapshots(&snapshot_dir)?;
+    Ok(())
+}
+
 /// Loads the compaction checkpoints persisted beside one session event stream.
 /// 加载保存在单个会话事件流旁边的压缩检查点集合。
 pub(super) fn load_session_event_store_compactions(
@@ -362,6 +558,7 @@ pub(super) fn load_session_event_store_compactions(
     session_id: SessionId,
 ) -> Result<Vec<SessionCompactionEntry>, String> {
     let store_dir = session_event_store_dir(project_id, session_id);
+    ensure_session_event_store_manifest_if_recoverable(project_id, session_id)?;
     let manifest_path = session_event_manifest_path(&store_dir);
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -404,8 +601,9 @@ pub(super) fn remove_session_event_store(
 pub(super) fn clear_all_session_event_stores() -> Result<(), String> {
     let root = session_event_store_root();
     if root.exists() {
-        fs::remove_dir_all(&root)
-            .map_err(|error| format!("删除会话事件存储根目录失败（{}）：{error}", root.display()))?;
+        fs::remove_dir_all(&root).map_err(|error| {
+            format!("删除会话事件存储根目录失败（{}）：{error}", root.display())
+        })?;
     }
     Ok(())
 }
@@ -428,6 +626,65 @@ fn runtime_state_to_store_document(
     }
 }
 
+/// Converts one runtime-state entry into the persisted current-context document shape.
+/// 将单条运行时状态项转换为持久化当前上下文文档结构。
+fn runtime_state_to_context_document(
+    project_id: &str,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> SessionEventStoreContextDocument {
+    SessionEventStoreContextDocument {
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        last_compaction_id: runtime_state.last_compaction_id.clone(),
+        context_start_message_id: runtime_state.context_start_message_id.clone(),
+        updated_at: non_empty_timestamp_text(&runtime_state.updated_at),
+        conversation_state: runtime_state.conversation_state.clone(),
+    }
+}
+
+/// Converts one transcript message slice into the fallback current-context document shape.
+/// 将一段转录消息切片转换为兜底当前上下文文档结构。
+fn session_messages_to_context_document(
+    project_id: &str,
+    session_id: SessionId,
+    messages: &[SessionMessageEntry],
+) -> SessionEventStoreContextDocument {
+    SessionEventStoreContextDocument {
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        last_compaction_id: None,
+        context_start_message_id: None,
+        updated_at: current_unix_millis_text(),
+        conversation_state: conversation_state_from_session_messages(messages),
+    }
+}
+
+/// Returns whether one current-context document still carries no meaningful runtime context.
+/// 返回一份当前上下文文档是否仍然不携带任何有意义的运行时上下文。
+fn context_document_is_empty(document: &SessionEventStoreContextDocument) -> bool {
+    document.conversation_state.messages.is_empty()
+        && document.conversation_state.records.is_empty()
+        && document
+            .conversation_state
+            .continuation
+            .provider_id
+            .is_none()
+        && document.conversation_state.continuation.model_id.is_none()
+        && document
+            .conversation_state
+            .continuation
+            .last_provider_message_id
+            .is_none()
+        && document
+            .conversation_state
+            .continuation
+            .updated_at
+            .is_none()
+        && document.last_compaction_id.is_none()
+        && document.context_start_message_id.is_none()
+}
+
 /// Writes all compaction checkpoint documents for one session store rewrite and returns the relative file list captured by the manifest.
 /// 为一次会话存储重写写入全部压缩检查点文档，并返回供 manifest 记录的相对文件列表。
 fn write_compaction_checkpoint_documents(
@@ -447,9 +704,7 @@ fn write_compaction_checkpoint_documents(
 
 /// Converts one in-memory compaction entry into the file-backed checkpoint document shape.
 /// 将单条内存压缩检查点转换为文件化检查点文档结构。
-fn checkpoint_entry_to_document(
-    entry: &SessionCompactionEntry,
-) -> ContextCompactionCheckpoint {
+fn checkpoint_entry_to_document(entry: &SessionCompactionEntry) -> ContextCompactionCheckpoint {
     ContextCompactionCheckpoint {
         id: entry.id.clone(),
         source_until_message_id: entry.source_until_message_id.clone(),
@@ -463,9 +718,7 @@ fn checkpoint_entry_to_document(
 
 /// Converts one file-backed checkpoint document into the in-memory compaction entry shape.
 /// 将单条文件化检查点文档转换为内存压缩检查点结构。
-fn checkpoint_document_to_entry(
-    document: ContextCompactionCheckpoint,
-) -> SessionCompactionEntry {
+fn checkpoint_document_to_entry(document: ContextCompactionCheckpoint) -> SessionCompactionEntry {
     SessionCompactionEntry {
         id: document.id,
         source_until_message_id: document.source_until_message_id,
@@ -500,11 +753,9 @@ fn build_persisted_session_event_rows(
     let mut turn_closed_waiting_for_stats = false;
 
     for (position, message) in messages.iter().enumerate() {
-        let next_is_turn_stats = messages
-            .get(position + 1)
-            .is_some_and(|next_message| {
-                next_message.record_kind == SessionMessageRecordKind::TurnStats
-            });
+        let next_is_turn_stats = messages.get(position + 1).is_some_and(|next_message| {
+            next_message.record_kind == SessionMessageRecordKind::TurnStats
+        });
         let opens_turn = session_message_starts_new_event_turn(message);
         if opens_turn && !active_turn_open {
             active_turn_index = active_turn_index.saturating_add(1);
@@ -606,7 +857,11 @@ fn build_persisted_session_event_rows(
             if !active_turn_open && !turn_closed_waiting_for_stats {
                 continue;
             }
-            let persisted_end_seq = if turn_closed_waiting_for_stats { seq } else { seq };
+            let persisted_end_seq = if turn_closed_waiting_for_stats {
+                seq
+            } else {
+                seq
+            };
             turn_rows.push(SessionTurnIndexPersistenceRow {
                 turn_id,
                 turn_index: active_turn_index,
@@ -630,6 +885,57 @@ fn write_session_manifest(path: &Path, manifest: &SessionEventStoreManifest) -> 
     write_json_file(path, manifest)
 }
 
+/// Ensures a recoverable session store always owns a minimal manifest before lazy loaders require it.
+/// 确保可恢复的会话存储在懒加载器依赖之前始终拥有最小 manifest。
+fn ensure_session_event_store_manifest_if_recoverable(
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let store_dir = session_event_store_dir(project_id, session_id);
+    let manifest_path = session_event_manifest_path(&store_dir);
+    if manifest_path.exists() || !session_event_store_has_recoverable_payload(&store_dir) {
+        return Ok(());
+    }
+    ensure_minimal_session_event_store_manifest(project_id, session_id)
+}
+
+/// Ensures one concrete session store has a minimal manifest even before the first full transcript rewrite lands.
+/// 确保单个具体会话存储即使在首次完整转录重写落地前也具备最小 manifest。
+fn ensure_minimal_session_event_store_manifest(
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let store_dir = session_event_store_dir(project_id, session_id);
+    let manifest_path = session_event_manifest_path(&store_dir);
+    if manifest_path.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(&store_dir).map_err(|error| {
+        format!(
+            "创建最小会话事件存储目录失败（{}）：{error}",
+            store_dir.display()
+        )
+    })?;
+    let now = current_unix_millis_text();
+    let manifest = SessionEventStoreManifest {
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        title: String::new(),
+        title_source: String::from("generated"),
+        latest_turn_index: -1,
+        latest_event_seq: -1,
+        active_checkpoint_id: None,
+        event_segments: vec![String::from(SESSION_EVENT_SEGMENT_RELATIVE_PATH)],
+        runtime_state_file: String::from(SESSION_EVENT_RUNTIME_STATE_FILE_NAME),
+        checkpoint_files: Vec::new(),
+        context_current_file: default_context_current_relative_path(),
+        context_snapshot_dir: default_context_snapshot_directory_relative_path(),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    write_session_manifest(&manifest_path, &manifest)
+}
+
 /// Writes one runtime-state cache document as formatted JSON.
 /// 以格式化 JSON 写入单个运行时状态缓存文档。
 fn write_runtime_state_document(
@@ -637,6 +943,15 @@ fn write_runtime_state_document(
     runtime_state: &SessionEventStoreRuntimeState,
 ) -> Result<(), String> {
     write_json_file(path, runtime_state)
+}
+
+/// Writes one current-context document as formatted JSON.
+/// 以格式化 JSON 写入单个当前上下文文档。
+fn write_context_document(
+    path: &Path,
+    context: &SessionEventStoreContextDocument,
+) -> Result<(), String> {
+    write_json_file(path, context)
 }
 
 /// Writes one whole JSONL event stream and externalizes oversized bodies into blob files.
@@ -648,14 +963,15 @@ fn write_session_event_rows(
 ) -> Result<(), String> {
     if let Some(parent) = events_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "创建会话事件流父目录失败（{}）：{error}",
-                parent.display()
-            )
+            format!("创建会话事件流父目录失败（{}）：{error}", parent.display())
         })?;
     }
-    let file = fs::File::create(events_path)
-        .map_err(|error| format!("创建会话事件流文件失败（{}）：{error}", events_path.display()))?;
+    let file = fs::File::create(events_path).map_err(|error| {
+        format!(
+            "创建会话事件流文件失败（{}）：{error}",
+            events_path.display()
+        )
+    })?;
     let mut writer = BufWriter::new(file);
     for row in rows {
         let stored_row = externalize_event_body_if_needed(blob_dir, row)?;
@@ -664,13 +980,16 @@ fn write_session_event_rows(
         writer
             .write_all(line.as_bytes())
             .map_err(|error| format!("写入会话事件行失败（{}）：{error}", events_path.display()))?;
-        writer
-            .write_all(b"\n")
-            .map_err(|error| format!("写入会话事件换行失败（{}）：{error}", events_path.display()))?;
+        writer.write_all(b"\n").map_err(|error| {
+            format!("写入会话事件换行失败（{}）：{error}", events_path.display())
+        })?;
     }
-    writer
-        .flush()
-        .map_err(|error| format!("刷新会话事件流文件失败（{}）：{error}", events_path.display()))
+    writer.flush().map_err(|error| {
+        format!(
+            "刷新会话事件流文件失败（{}）：{error}",
+            events_path.display()
+        )
+    })
 }
 
 /// Reads the full JSONL event stream and restores blob-backed bodies eagerly.
@@ -682,13 +1001,21 @@ fn read_session_event_rows(
     if !events_path.exists() {
         return Ok(Vec::new());
     }
-    let file = fs::File::open(events_path)
-        .map_err(|error| format!("打开会话事件流文件失败（{}）：{error}", events_path.display()))?;
+    let file = fs::File::open(events_path).map_err(|error| {
+        format!(
+            "打开会话事件流文件失败（{}）：{error}",
+            events_path.display()
+        )
+    })?;
     let reader = BufReader::new(file);
     let mut rows = Vec::new();
     for line in reader.lines() {
-        let line =
-            line.map_err(|error| format!("读取会话事件流文本行失败（{}）：{error}", events_path.display()))?;
+        let line = line.map_err(|error| {
+            format!(
+                "读取会话事件流文本行失败（{}）：{error}",
+                events_path.display()
+            )
+        })?;
         if line.trim().is_empty() {
             continue;
         }
@@ -726,11 +1053,8 @@ fn externalize_event_body_if_needed(
             blob_path.display()
         )
     })?;
-    stored_row.body = truncate_preview_lines(
-        row.body.as_str(),
-        12,
-        SESSION_EVENT_INLINE_PREVIEW_CHARS,
-    );
+    stored_row.body =
+        truncate_preview_lines(row.body.as_str(), 12, SESSION_EVENT_INLINE_PREVIEW_CHARS);
     stored_row.body_blob_path = Some(blob_name);
     Ok(stored_row)
 }
@@ -773,11 +1097,40 @@ fn event_row_is_workspace_history_search_indexable(message: &SessionMessageEntry
 /// 在完整重写前重建单个具体会话存储目录。
 fn recreate_session_store_directory(store_dir: &Path) -> Result<(), String> {
     if store_dir.exists() {
-        fs::remove_dir_all(store_dir)
-            .map_err(|error| format!("删除旧会话事件存储目录失败（{}）：{error}", store_dir.display()))?;
+        fs::remove_dir_all(store_dir).map_err(|error| {
+            format!(
+                "删除旧会话事件存储目录失败（{}）：{error}",
+                store_dir.display()
+            )
+        })?;
     }
-    fs::create_dir_all(store_dir)
-        .map_err(|error| format!("创建会话事件存储目录失败（{}）：{error}", store_dir.display()))
+    fs::create_dir_all(store_dir).map_err(|error| {
+        format!(
+            "创建会话事件存储目录失败（{}）：{error}",
+            store_dir.display()
+        )
+    })
+}
+
+/// Returns whether one session store directory still contains durable payload worthy of manifest self-healing.
+/// 返回单个会话存储目录是否仍包含值得进行 manifest 自愈的持久化载荷。
+fn session_event_store_has_recoverable_payload(store_dir: &Path) -> bool {
+    session_event_segment_path(store_dir).exists()
+        || session_event_runtime_state_path(store_dir).exists()
+        || session_event_context_current_path(store_dir).exists()
+        || directory_has_json_files(&session_event_context_snapshot_dir(store_dir))
+        || directory_has_json_files(&session_event_checkpoint_dir(store_dir))
+}
+
+/// Returns whether one directory exists and currently contains at least one JSON file.
+/// 返回某个目录是否存在且当前至少包含一个 JSON 文件。
+fn directory_has_json_files(path: &Path) -> bool {
+    fs::read_dir(path)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
 }
 
 /// Returns the stable root directory used by all session event stores.
@@ -824,6 +1177,59 @@ fn session_event_runtime_state_path(store_dir: &Path) -> PathBuf {
     store_dir.join(SESSION_EVENT_RUNTIME_STATE_FILE_NAME)
 }
 
+/// Returns the stable context directory used by one concrete session event store.
+/// 返回单个具体会话事件存储使用的稳定上下文目录。
+fn session_event_context_dir(store_dir: &Path) -> PathBuf {
+    store_dir.join(SESSION_EVENT_CONTEXT_DIRECTORY_NAME)
+}
+
+/// Returns the stable current-context document path used by one concrete session event store.
+/// 返回单个具体会话事件存储使用的稳定当前上下文文档路径。
+fn session_event_context_current_path(store_dir: &Path) -> PathBuf {
+    session_event_context_dir(store_dir).join(SESSION_EVENT_CONTEXT_CURRENT_FILE_NAME)
+}
+
+/// Returns the stable snapshot directory used by one concrete session event store.
+/// 返回单个具体会话事件存储使用的稳定快照目录。
+fn session_event_context_snapshot_dir(store_dir: &Path) -> PathBuf {
+    session_event_context_dir(store_dir).join(SESSION_EVENT_CONTEXT_SNAPSHOT_DIRECTORY_NAME)
+}
+
+/// Returns the stable path used by one concrete context snapshot document.
+/// 返回单个具体上下文快照文档使用的稳定路径。
+fn session_event_context_snapshot_path(snapshot_dir: &Path, snapshot_id: &str) -> PathBuf {
+    snapshot_dir.join(format!("{snapshot_id}.json"))
+}
+
+/// Removes old snapshot documents so each session keeps only the latest bounded context history.
+/// 移除旧的快照文档，以便每个会话只保留最近的有界上下文历史。
+fn prune_session_event_store_context_snapshots(snapshot_dir: &Path) -> Result<(), String> {
+    let mut entries = fs::read_dir(snapshot_dir)
+        .map_err(|error| {
+            format!(
+                "读取会话上下文快照目录失败（{}）：{error}",
+                snapshot_dir.display()
+            )
+        })?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    entries.reverse();
+    for stale_entry in entries
+        .into_iter()
+        .skip(SESSION_EVENT_CONTEXT_SNAPSHOT_RETAIN_LIMIT)
+    {
+        fs::remove_file(stale_entry.path()).map_err(|error| {
+            format!(
+                "删除旧会话上下文快照失败（{}）：{error}",
+                stale_entry.path().display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Returns one deterministic checkpoint file name derived from the checkpoint creation timestamp and identifier.
 /// 返回一个根据检查点创建时间与标识派生出的确定性 checkpoint 文件名。
 fn checkpoint_file_name(entry: &SessionCompactionEntry) -> String {
@@ -861,11 +1267,12 @@ where
     T: Serialize,
 {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("创建 JSON 文档父目录失败（{}）：{error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("创建 JSON 文档父目录失败（{}）：{error}", parent.display())
+        })?;
     }
-    let payload =
-        serde_json::to_string_pretty(value).map_err(|error| format!("序列化 JSON 文档失败：{error}"))?;
+    let payload = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("序列化 JSON 文档失败：{error}"))?;
     fs::write(path, payload.as_bytes())
         .map_err(|error| format!("写入 JSON 文档失败（{}）：{error}", path.display()))
 }
@@ -898,12 +1305,33 @@ fn sanitize_file_component(value: &str) -> String {
         .collect()
 }
 
+/// Returns the default relative current-context path persisted in the session manifest.
+/// 返回持久化在会话 manifest 中的默认当前上下文相对路径。
+fn default_context_current_relative_path() -> String {
+    format!(
+        "{}/{}",
+        SESSION_EVENT_CONTEXT_DIRECTORY_NAME, SESSION_EVENT_CONTEXT_CURRENT_FILE_NAME
+    )
+}
+
+/// Returns the default relative context-snapshot directory persisted in the session manifest.
+/// 返回持久化在会话 manifest 中的默认上下文快照目录相对路径。
+fn default_context_snapshot_directory_relative_path() -> String {
+    format!(
+        "{}/{}",
+        SESSION_EVENT_CONTEXT_DIRECTORY_NAME, SESSION_EVENT_CONTEXT_SNAPSHOT_DIRECTORY_NAME
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! Event-store tests covering turn-boundary semantics and blob externalization.
     //! 事件存储测试，覆盖 turn 边界语义与 blob 外置行为。
 
     use super::*;
+    use crate::conversation_protocol::{
+        append_assistant_text_message, append_user_text_message,
+    };
 
     /// Builds one transcript message entry for event-store turn-building tests.
     /// 为事件存储 turn 构建测试创建一条转录消息项。
@@ -1123,5 +1551,137 @@ mod tests {
             Some("summary-2")
         );
         remove_session_event_store(project_id, session.id).expect("cleanup persisted event-store");
+    }
+
+    /// Verifies that the current-context document round-trips through the event store and prefers runtime canonical state over transcript reconstruction.
+    /// 验证当前上下文文档可以在事件存储中往返，并优先保留运行时规范状态而不是转录重建结果。
+    #[test]
+    fn current_context_round_trips_through_event_store_files() {
+        let project_id = "project-context";
+        let session_id = SessionId::from_u128(77);
+        remove_session_event_store(project_id, session_id).expect("cleanup context store");
+        let session = SessionSummary::new(
+            session_id,
+            Some(String::from(project_id)),
+            String::from("上下文测试"),
+            String::new(),
+            SessionState::Draft,
+            0,
+            0,
+            String::from("刚刚"),
+        );
+        let mut runtime_state = SessionRuntimeStateEntry {
+            last_compaction_id: Some(String::from("cp-1")),
+            context_start_message_id: Some(String::from("summary-1")),
+            updated_at: String::from("123"),
+            ..SessionRuntimeStateEntry::default()
+        };
+        append_assistant_text_message(
+            &mut runtime_state.conversation_state,
+            String::from("assistant-1"),
+            String::from("规范上下文正文"),
+        );
+
+        persist_session_event_store(&session, &[], Some(&runtime_state), &[])
+            .expect("persist context event store");
+        let loaded = load_session_event_store_context_current(project_id, session_id)
+            .expect("load current context")
+            .expect("expected current context document");
+
+        assert_eq!(loaded.last_compaction_id.as_deref(), Some("cp-1"));
+        assert_eq!(
+            loaded.context_start_message_id.as_deref(),
+            Some("summary-1")
+        );
+        assert_eq!(loaded.conversation_state.messages.len(), 1);
+        remove_session_event_store(project_id, session_id).expect("cleanup context event-store");
+    }
+
+    /// Verifies that persisting the standalone current-context document also materializes a minimal manifest for future hydration.
+    /// 验证持久化独立当前上下文文档时也会生成最小 manifest，供后续水合使用。
+    #[test]
+    fn persisting_current_context_materializes_minimal_manifest() {
+        let project_id = "project-minimal-manifest";
+        let session_id = SessionId::from_u128(79);
+        remove_session_event_store(project_id, session_id).expect("cleanup minimal manifest store");
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_assistant_text_message(
+            &mut runtime_state.conversation_state,
+            String::from("assistant-ctx"),
+            String::from("上下文正文"),
+        );
+
+        persist_session_event_store_context_current(project_id, session_id, &runtime_state)
+            .expect("persist standalone current context");
+        let manifest_path =
+            session_event_manifest_path(&session_event_store_dir(project_id, session_id));
+        assert!(manifest_path.exists());
+        let loaded =
+            load_session_event_store(project_id, session_id).expect("load event store after current-only persist");
+        assert!(loaded.rows.is_empty());
+        remove_session_event_store(project_id, session_id).expect("cleanup minimal manifest store");
+    }
+
+    /// Verifies that context snapshots are retained only for the latest five user-turn boundaries.
+    /// 验证上下文快照只会为最近五个用户轮次边界保留历史副本。
+    #[test]
+    fn context_snapshot_capture_prunes_to_latest_five_files() {
+        let project_id = "project-snapshot";
+        let session_id = SessionId::from_u128(88);
+        remove_session_event_store(project_id, session_id).expect("cleanup snapshot store");
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_user_text_message(
+            &mut runtime_state.conversation_state,
+            String::from("user-1"),
+            String::from("历史上下文"),
+            Vec::new(),
+        );
+
+        for _ in 0..7 {
+            snapshot_session_event_store_context_before_user_prompt(
+                project_id,
+                session_id,
+                &runtime_state,
+            )
+            .expect("snapshot before prompt");
+        }
+
+        let snapshot_dir =
+            session_event_context_snapshot_dir(&session_event_store_dir(project_id, session_id));
+        let snapshot_count = fs::read_dir(&snapshot_dir)
+            .expect("read snapshot dir")
+            .filter_map(Result::ok)
+            .count();
+        assert_eq!(snapshot_count, SESSION_EVENT_CONTEXT_SNAPSHOT_RETAIN_LIMIT);
+        remove_session_event_store(project_id, session_id).expect("cleanup snapshot event-store");
+    }
+
+    /// Verifies that the latest readable context snapshot can be recovered even when older snapshots are still present.
+    /// 验证即使仍保留更早快照，也可以恢复最新且可读的上下文快照。
+    #[test]
+    fn load_latest_context_snapshot_returns_most_recent_snapshot() {
+        let project_id = "project-latest-snapshot";
+        let session_id = SessionId::from_u128(109);
+        remove_session_event_store(project_id, session_id).expect("cleanup latest snapshot store");
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_user_text_message(
+            &mut runtime_state.conversation_state,
+            String::from("user-1"),
+            String::from("历史上下文"),
+            Vec::new(),
+        );
+
+        snapshot_session_event_store_context_before_user_prompt(project_id, session_id, &runtime_state)
+            .expect("capture first snapshot");
+        runtime_state.updated_at = String::from("999");
+        snapshot_session_event_store_context_before_user_prompt(project_id, session_id, &runtime_state)
+            .expect("capture second snapshot");
+
+        let snapshot = load_latest_session_event_store_context_snapshot(project_id, session_id)
+            .expect("load latest snapshot")
+            .expect("expected latest snapshot document");
+
+        assert_eq!(snapshot.source_updated_at, "999");
+        remove_session_event_store(project_id, session_id).expect("cleanup latest snapshot store");
     }
 }

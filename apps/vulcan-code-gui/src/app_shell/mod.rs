@@ -33,8 +33,8 @@ use crate::agent_runtime::{
     ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind, stream_runtime_run,
 };
 use crate::agent_view::{
-    agent_view_block_collapsed_by_default, agent_view_block_id, agent_view_document_raw_source,
-    build_agent_view_document_with_options, AgentViewBuildOptions,
+    AgentViewBuildOptions, agent_view_block_collapsed_by_default, agent_view_block_id,
+    agent_view_document_raw_source, build_agent_view_document_with_options,
 };
 use crate::ai_tool_configuration::{self, AiToolConfigurationLoadSource};
 use crate::attachment_asset_index::{
@@ -69,8 +69,8 @@ use crate::model::{
     PendingPromptWebSearchOverride, PendingSessionPromptEntry, PendingSessionPromptSource,
     SessionCompactionEntry, SessionComposerDraftState, SessionId, SessionMessageEntry,
     SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, SessionTurnStats,
-    SessionTurnStatsStatus, TaskProjectSummary,
+    SessionState, SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
+    TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;
@@ -82,7 +82,6 @@ use crate::provider_config::{
     ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
     SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS, WebSearchRoutingMode,
 };
-use crate::{AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale};
 use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
     SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
@@ -102,10 +101,10 @@ use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
     self, SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS, SESSION_HISTORY_SEARCH_RESULT_LIMIT,
-    SessionHistoryPage, SessionHydrationSnapshot,
-    SessionMaintenanceReport, WorkspaceHistorySearchPage,
-    WorkspaceSnapshot,
+    SessionHistoryPage, SessionHydrationSnapshot, SessionMaintenanceReport,
+    WorkspaceHistorySearchPage, WorkspaceSnapshot,
 };
+use crate::{AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale};
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
@@ -841,6 +840,7 @@ fn build_session_turn_stats_from_state(
     conversation_state: &crate::conversation_protocol::SessionConversationState,
     closing_record_id: &str,
     status: SessionTurnStatsStatus,
+    provider_request_count_override: Option<usize>,
 ) -> Option<SessionTurnStats> {
     let records = &conversation_state.records;
     let closing_index = records
@@ -879,9 +879,11 @@ fn build_session_turn_stats_from_state(
                 && record.record_kind == SessionMessageRecordKind::Transcript
         })
         .count();
-    let turn_start_message_index =
-        canonical_turn_start_message_index(conversation_state, visible_user_record_count_before_turn)
-            .unwrap_or(0);
+    let turn_start_message_index = canonical_turn_start_message_index(
+        conversation_state,
+        visible_user_record_count_before_turn,
+    )
+    .unwrap_or(0);
     let turn_messages = &conversation_state.messages[turn_start_message_index..];
 
     let mut stats = SessionTurnStats {
@@ -911,8 +913,7 @@ fn build_session_turn_stats_from_state(
                     stats.provider_call_count = stats.provider_call_count.saturating_add(1);
                 }
                 if stats.tool_call_count == 0 {
-                    stats.tool_call_count =
-                        stats.tool_call_count.saturating_add(tool_calls.len());
+                    stats.tool_call_count = stats.tool_call_count.saturating_add(tool_calls.len());
                 }
                 let Some(usage) = usage.as_ref() else {
                     continue;
@@ -926,29 +927,36 @@ fn build_session_turn_stats_from_state(
                 stats.reasoning_tokens = stats
                     .reasoning_tokens
                     .saturating_add(usage.reasoning_tokens.unwrap_or(0));
-                stats.total_tokens = stats
-                    .total_tokens
-                    .saturating_add(
-                        usage.total_tokens.unwrap_or_else(|| {
-                            usage.input_tokens.unwrap_or(0)
+                stats.total_tokens =
+                    stats
+                        .total_tokens
+                        .saturating_add(usage.total_tokens.unwrap_or_else(|| {
+                            usage
+                                .input_tokens
+                                .unwrap_or(0)
                                 .saturating_add(usage.output_tokens.unwrap_or(0))
                                 .saturating_add(usage.reasoning_tokens.unwrap_or(0))
-                        }),
-                    );
+                        }));
                 if let Some(cached_input_tokens) = usage.cached_input_tokens {
                     let accumulated = stats.cached_input_tokens.unwrap_or(0);
-                    stats.cached_input_tokens = Some(accumulated.saturating_add(cached_input_tokens));
+                    stats.cached_input_tokens =
+                        Some(accumulated.saturating_add(cached_input_tokens));
                 }
                 if let Some(cache_creation_input_tokens) = usage.cache_creation_input_tokens {
                     let accumulated = stats.cache_creation_input_tokens.unwrap_or(0);
-                    stats.cache_creation_input_tokens = Some(
-                        accumulated.saturating_add(cache_creation_input_tokens),
-                    );
+                    stats.cache_creation_input_tokens =
+                        Some(accumulated.saturating_add(cache_creation_input_tokens));
                 }
             }
             crate::conversation_protocol::SessionConversationPayload::ToolResult { .. }
             | crate::conversation_protocol::SessionConversationPayload::UserText { .. } => {}
         }
+    }
+
+    if let Some(provider_request_count_override) = provider_request_count_override
+        && provider_request_count_override > 0
+    {
+        stats.provider_call_count = provider_request_count_override;
     }
 
     let started_at = turn_records
@@ -994,6 +1002,22 @@ fn canonical_turn_start_message_index(
     conversation_state: &crate::conversation_protocol::SessionConversationState,
     visible_user_record_count_before_turn: usize,
 ) -> Option<usize> {
+    let user_message_indexes = canonical_user_message_indexes_for_turn_mapping(conversation_state);
+    if user_message_indexes.is_empty() {
+        return None;
+    }
+
+    user_message_indexes
+        .get(visible_user_record_count_before_turn)
+        .copied()
+        .or_else(|| user_message_indexes.last().copied())
+}
+
+/// Returns the canonical user-message indexes used to align visible transcript turns back onto the canonical conversation window.
+/// 返回用于将可见转录轮次重新对齐到规范会话窗口上的规范用户消息下标集合。
+fn canonical_user_message_indexes_for_turn_mapping(
+    conversation_state: &crate::conversation_protocol::SessionConversationState,
+) -> Vec<usize> {
     let user_message_indexes = conversation_state
         .messages
         .iter()
@@ -1006,14 +1030,26 @@ fn canonical_turn_start_message_index(
             .then_some(index)
         })
         .collect::<Vec<_>>();
-    if user_message_indexes.is_empty() {
-        return None;
-    }
+    let protocol_user_indexes = conversation_state
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(
+                message.payload,
+                crate::conversation_protocol::SessionConversationPayload::UserText { .. }
+            )
+            .then_some((&message.id, index))
+        })
+        .filter(|(message_id, _)| message_id.contains("-protocol-user-"))
+        .map(|(_, index)| index)
+        .collect::<Vec<_>>();
 
-    user_message_indexes
-        .get(visible_user_record_count_before_turn)
-        .copied()
-        .or_else(|| user_message_indexes.last().copied())
+    if protocol_user_indexes.is_empty() {
+        user_message_indexes
+    } else {
+        protocol_user_indexes
+    }
 }
 
 /// Counts unique tool-call records inside the current turn using transcript metadata so UI projection ids never affect the final statistic.
@@ -1322,8 +1358,7 @@ fn agent_view_build_options_for_streaming_output(
     locale: AppLocale,
 ) -> AgentViewBuildOptions {
     AgentViewBuildOptions {
-        active_streaming_output_message_id: active_streaming_output_message_id
-            .map(str::to_string),
+        active_streaming_output_message_id: active_streaming_output_message_id.map(str::to_string),
         locale,
     }
 }
@@ -1341,7 +1376,8 @@ fn build_session_agent_view_projection_snapshot(
         active_streaming_output_message_id.as_deref(),
         locale,
     );
-    let document = build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
+    let document =
+        build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
     let selectable_document =
         vulcan_agent_view::AgentViewSelectableDocument::from_document(&document);
     let selectable_text = selectable_document.buffer().to_string();
@@ -5946,11 +5982,7 @@ impl VulcanWorkbench {
     /// Rebuilds every cached session transcript projection so locale-sensitive labels refresh immediately after a GUI language change.
     /// 重建全部已缓存会话转录投影，使依赖语言的标签在界面语言切换后立即刷新。
     fn refresh_all_session_agent_view_localizations(&mut self) {
-        let session_ids = self
-            .session_messages
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+        let session_ids = self.session_messages.keys().copied().collect::<Vec<_>>();
         for session_id in session_ids {
             self.refresh_session_agent_view_buffers(session_id);
         }
@@ -6172,7 +6204,8 @@ impl VulcanWorkbench {
         let placeholder_diff_panel = WorkspaceDiffPanel::placeholder();
         let (main_window_id, open_main_window) = window::open(main_window_settings());
         let app_theme = theme::default_theme();
-        let language_manager = LanguageManager::new(Self::resolve_initial_locale(&provider_configuration));
+        let language_manager =
+            LanguageManager::new(Self::resolve_initial_locale(&provider_configuration));
         let quick_guide_source = language_manager.text(I18nKey::GuideQuickMarkdown);
         let quick_guide = markdown::Content::parse(&quick_guide_source);
         let quick_guide_markdown_buffer = text_editor::Content::with_text(
@@ -6812,7 +6845,7 @@ impl VulcanWorkbench {
                         self.apply_older_session_history_page(page);
                         self.status_message = self.t(I18nKey::StatusOlderHistoryLoaded);
                         return Task::batch([
-                            self.maybe_continue_workspace_history_search_navigation(session_id),
+                            self.maybe_continue_workspace_history_search_navigation(session_id)
                         ]);
                     }
                     Err(error) => {
@@ -6826,9 +6859,7 @@ impl VulcanWorkbench {
             Message::SessionMaintenanceFinished(session_id, result) => {
                 match result {
                     Ok(report) => {
-                        if report.session_id != session_id
-                            || !report.runtime_state_persistence_ok
-                        {
+                        if report.session_id != session_id || !report.runtime_state_persistence_ok {
                             self.push_activity(
                                 ActivityLevel::Warning,
                                 "会话旧数据维护结果异常",
@@ -11128,8 +11159,10 @@ impl VulcanWorkbench {
 
         self.clear_session_transcript_view_state(session_id);
         if session_is_archived {
-            self.archived_session_messages.insert(session_id, Vec::new());
-            self.archived_session_compactions.insert(session_id, Vec::new());
+            self.archived_session_messages
+                .insert(session_id, Vec::new());
+            self.archived_session_compactions
+                .insert(session_id, Vec::new());
             self.archived_session_runtime_state
                 .insert(session_id, SessionRuntimeStateEntry::default());
             self.session_messages.remove(&session_id);
@@ -11164,7 +11197,8 @@ impl VulcanWorkbench {
         self.session_run_phases
             .insert(session_id, SessionRunPhase::Idle);
         self.refresh_session_queued_steps(session_id);
-        self.status_message = format!("会话 `{session_title}` 的正文文件已按新会话状态重建，并保留原标题。");
+        self.status_message =
+            format!("会话 `{session_title}` 的正文文件已按新会话状态重建，并保留原标题。");
 
         Task::batch([
             self.persist_workspace_snapshot_task(),
@@ -12668,12 +12702,17 @@ impl VulcanWorkbench {
         session_id: SessionId,
         closing_record_id: &str,
         status: SessionTurnStatsStatus,
+        provider_request_count_override: Option<usize>,
     ) -> Option<String> {
         let conversation_state = self
             .session_runtime_state(session_id)
             .map(|runtime_state| runtime_state.conversation_state.clone())?;
-        let turn_stats =
-            build_session_turn_stats_from_state(&conversation_state, closing_record_id, status)?;
+        let turn_stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            status,
+            provider_request_count_override,
+        )?;
         let metadata = serde_json::to_value(json!({
             "turn_stats": turn_stats,
         }))
@@ -12891,14 +12930,9 @@ impl VulcanWorkbench {
                 .clone()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
-            let assistant_output = report
-                .assistant_output
-                .clone()
-                .unwrap_or_else(|| {
-                    String::from(
-                        "The model completed the run but did not return visible text output.",
-                    )
-                });
+            let assistant_output = report.assistant_output.clone().unwrap_or_else(|| {
+                String::from("The model completed the run but did not return visible text output.")
+            });
 
             if thinking_output.is_some()
                 && !self
@@ -12972,6 +13006,7 @@ impl VulcanWorkbench {
                 session_id,
                 &terminated_message_id,
                 SessionTurnStatsStatus::Failed,
+                Some(report.provider_request_count),
             );
             self.set_session_run_phase(session_id, SessionRunPhase::Failed);
             self.status_message = error.clone();
@@ -12985,6 +13020,7 @@ impl VulcanWorkbench {
                 session_id,
                 &summary_message_id,
                 SessionTurnStatsStatus::Completed,
+                Some(report.provider_request_count),
             );
         }
         self.maybe_compact_session_history(session_id);
@@ -13333,12 +13369,12 @@ impl VulcanWorkbench {
         self.archived_session_runtime_state = snapshot.archived_session_runtime_state;
         self.hydrated_session_ids = snapshot.hydrated_session_ids;
         self.dirty_session_payload_ids.clear();
-                self.dirty_session_message_ids.clear();
-                self.loading_session_ids.clear();
-                self.loading_session_agent_view_projection_ids.clear();
-                self.session_history_earliest_ordinals.clear();
-                self.session_history_has_more.clear();
-                self.loading_older_session_history_ids.clear();
+        self.dirty_session_message_ids.clear();
+        self.loading_session_ids.clear();
+        self.loading_session_agent_view_projection_ids.clear();
+        self.session_history_earliest_ordinals.clear();
+        self.session_history_has_more.clear();
+        self.loading_older_session_history_ids.clear();
         self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
         self.reset_background_legacy_session_maintenance_queue();
         self.pending_archived_delete_confirmation = None;
@@ -14591,15 +14627,14 @@ impl VulcanWorkbench {
 mod tests {
     use super::{
         VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
-        build_session_turn_stats_from_state,
-        build_background_legacy_maintenance_queue, clear_selectable_transcript_render_cache_stash,
-        compact_tool_detail_message_for_projection,
+        build_background_legacy_maintenance_queue, build_session_turn_stats_from_state,
+        clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
         composer_text_has_submittable_content, composer_visible_line_count,
         generated_attachments_from_tool_metadata,
         merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
         pending_prompt_dispatch_index, prune_session_messages_to_limit,
-        session_event_store_missing_error,
-        sanitize_workspace_history_search_query_input, task_session_payload_from_tool_metadata,
+        sanitize_workspace_history_search_query_input, session_event_store_missing_error,
+        task_session_payload_from_tool_metadata,
     };
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
@@ -14679,7 +14714,9 @@ mod tests {
         let (mut workbench, _task) = VulcanWorkbench::new();
         let session_id = SessionId::from_u128(70001);
         workbench.sessions.clear();
-        workbench.sessions.push(test_session_summary(session_id, "新对话"));
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "新对话"));
         workbench.selected_session = session_id;
 
         workbench
@@ -14726,7 +14763,9 @@ mod tests {
     fn session_event_store_missing_error_detects_manifest_not_found() {
         let error = "读取 JSON 文档失败（C:\\Users\\20000\\.vulcan\\code\\sessions\\project\\session\\manifest.json）：系统找不到指定的路径。 (os error 3)";
         assert!(session_event_store_missing_error(error));
-        assert!(!session_event_store_missing_error("解析 JSON 文档失败：unexpected eof"));
+        assert!(!session_event_store_missing_error(
+            "解析 JSON 文档失败：unexpected eof"
+        ));
     }
 
     /// Verifies that an empty composer still reserves one visible line.
@@ -14829,7 +14868,9 @@ mod tests {
         let (mut workbench, _task) = VulcanWorkbench::new();
         let session_id = SessionId::from_u128(7001);
         workbench.sessions.clear();
-        workbench.sessions.push(test_session_summary(session_id, "Locale Test"));
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "Locale Test"));
         workbench.selected_session = session_id;
 
         let messages = vec![
@@ -14872,9 +14913,8 @@ mod tests {
         );
 
         workbench.refresh_session_agent_view_buffers(session_id);
-        let messages_before = message_window_fingerprint(
-            workbench.session_messages.get(&session_id).unwrap(),
-        );
+        let messages_before =
+            message_window_fingerprint(workbench.session_messages.get(&session_id).unwrap());
         let conversation_before = serde_json::to_value(
             &workbench
                 .session_runtime_state
@@ -14884,14 +14924,15 @@ mod tests {
         )
         .expect("serialize canonical conversation before locale refresh");
 
-        workbench.language_manager.set_locale(crate::AppLocale::EnUs);
+        workbench
+            .language_manager
+            .set_locale(crate::AppLocale::EnUs);
         clear_selectable_transcript_render_cache_stash();
         workbench.rebuild_quick_guide_markdown_buffer();
         workbench.refresh_all_session_agent_view_localizations();
 
-        let messages_after = message_window_fingerprint(
-            workbench.session_messages.get(&session_id).unwrap(),
-        );
+        let messages_after =
+            message_window_fingerprint(workbench.session_messages.get(&session_id).unwrap());
         let conversation_after = serde_json::to_value(
             &workbench
                 .session_runtime_state
@@ -14910,16 +14951,16 @@ mod tests {
             .blocks
             .iter()
             .filter_map(|block| match block {
-                AgentViewBlock::Directive(directive) => {
-                    directive.attributes.get("title").cloned()
-                }
+                AgentViewBlock::Directive(directive) => directive.attributes.get("title").cloned(),
                 AgentViewBlock::Markdown(_) => None,
             })
             .collect::<Vec<_>>();
         assert!(rendered_titles.iter().any(|title| title == "User Prompt"));
-        assert!(rendered_titles
-            .iter()
-            .any(|title| title == "Tool Result read_file"));
+        assert!(
+            rendered_titles
+                .iter()
+                .any(|title| title == "Tool Result read_file")
+        );
     }
 
     /// Verifies Anthropic queue dispatch prefers delegated completion callbacks over user-authored follow-ups once background subagents have fully settled.
@@ -15240,12 +15281,14 @@ mod tests {
                             cached_input_tokens: Some(64),
                             cache_creation_input_tokens: None,
                         }),
-                        tool_calls: vec![crate::conversation_protocol::SessionConversationToolCall {
-                            id: String::from("tool-call-1"),
-                            tool_call_id: Some(String::from("call-1")),
-                            tool_name: String::from("read_file"),
-                            arguments: json!({"path": "README.md"}),
-                        }],
+                        tool_calls: vec![
+                            crate::conversation_protocol::SessionConversationToolCall {
+                                id: String::from("tool-call-1"),
+                                tool_call_id: Some(String::from("call-1")),
+                                tool_name: String::from("read_file"),
+                                arguments: json!({"path": "README.md"}),
+                            },
+                        ],
                     },
                 },
             ],
@@ -15288,6 +15331,7 @@ mod tests {
             &conversation_state,
             "summary-1",
             SessionTurnStatsStatus::Completed,
+            None,
         )
         .expect("turn stats should build");
 
@@ -15439,6 +15483,7 @@ mod tests {
             &conversation_state,
             "summary-1",
             SessionTurnStatsStatus::Completed,
+            None,
         )
         .expect("turn stats should build");
 
@@ -15446,6 +15491,230 @@ mod tests {
         assert_eq!(stats.tool_call_count, 2);
         assert_eq!(stats.total_tokens, 184);
         assert_eq!(stats.cached_input_tokens, Some(32));
+    }
+
+    /// Verifies turn statistics prefer the exact provider request count captured by the runtime report instead of counting assistant payload segments.
+    /// 验证轮次统计会优先采用运行时报告捕获到的精确 Provider 请求次数，而不是按助手载荷片段数量计数。
+    #[test]
+    fn turn_stats_prefer_exact_provider_request_count_override() {
+        let conversation_state = crate::conversation_protocol::SessionConversationState {
+            messages: vec![
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("protocol-user-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                        text: String::from("介绍下你自己"),
+                        attachments: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("provider-assistant-thinking"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::new(),
+                        reasoning: String::from("先简短介绍自己。"),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("provider-assistant-output"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::from("我是 VulcanCode。"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
+                        usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                            input_tokens: Some(100),
+                            output_tokens: Some(40),
+                            reasoning_tokens: Some(8),
+                            total_tokens: Some(148),
+                            cached_input_tokens: None,
+                            cache_creation_input_tokens: None,
+                        }),
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            records: vec![
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-user-1"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户"),
+                    body: String::from("介绍下你自己"),
+                    metadata: None,
+                    created_at: String::from("1000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-assistant-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::AssistantOutput,
+                    visible: true,
+                    title: String::from("输出"),
+                    body: String::from("我是 VulcanCode。"),
+                    metadata: None,
+                    created_at: String::from("2000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("summary-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("Summary"),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("3000"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            "summary-1",
+            SessionTurnStatsStatus::Completed,
+            Some(1),
+        )
+        .expect("turn stats should build");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.total_tokens, 148);
+    }
+
+    /// Verifies turn-statistics alignment ignores one legacy duplicated `user-message-*` node when the canonical window already contains host-owned `protocol-user-*` anchors.
+    /// 验证当规范窗口已包含宿主拥有的 `protocol-user-*` 锚点时，轮次统计对齐会忽略旧版重复的 `user-message-*` 节点。
+    #[test]
+    fn turn_stats_ignore_legacy_duplicate_core_user_message_when_protocol_users_exist() {
+        let conversation_state = crate::conversation_protocol::SessionConversationState {
+            messages: vec![
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("session-1-protocol-user-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                        text: String::from("随便输出一段内容"),
+                        attachments: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("assistant-hidden-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::from("标题生成说明"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("user-message-legacy-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                        text: String::from("随便输出一段内容"),
+                        attachments: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("assistant-message-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::from("Hello"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
+                        usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                            input_tokens: Some(8926),
+                            output_tokens: Some(29),
+                            reasoning_tokens: Some(0),
+                            total_tokens: Some(8955),
+                            cached_input_tokens: Some(0),
+                            cache_creation_input_tokens: None,
+                        }),
+                        tool_calls: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("session-1-protocol-user-2"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                        text: String::from("再输出一段内容呢"),
+                        attachments: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("assistant-message-2"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::from("第二段输出"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-2")),
+                        provider_message_state: None,
+                        usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                            input_tokens: Some(8946),
+                            output_tokens: Some(42),
+                            reasoning_tokens: Some(0),
+                            total_tokens: Some(8988),
+                            cached_input_tokens: Some(8832),
+                            cache_creation_input_tokens: None,
+                        }),
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            records: vec![
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-user-1"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户"),
+                    body: String::from("随便输出一段内容"),
+                    metadata: None,
+                    created_at: String::from("1000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("summary-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("Summary"),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("2000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-user-2"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户"),
+                    body: String::from("再输出一段内容呢"),
+                    metadata: None,
+                    created_at: String::from("3000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("summary-2"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("Summary"),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("4000"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            "summary-2",
+            SessionTurnStatsStatus::Completed,
+            Some(1),
+        )
+        .expect("turn stats should build");
+
+        assert_eq!(stats.input_tokens, 8946);
+        assert_eq!(stats.output_tokens, 42);
+        assert_eq!(stats.total_tokens, 8988);
+        assert_eq!(stats.cached_input_tokens, Some(8832));
     }
 
     /// Verifies that dedicated `task` tool cards use the robot dispatch title and upgrade from running to completed when the result arrives.

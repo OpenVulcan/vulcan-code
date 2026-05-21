@@ -221,7 +221,9 @@ impl I18nKey {
             Self::HistorySearchHint => "history_search.hint",
             Self::HistorySearchLoading => "history_search.loading",
             Self::HistorySearchNoProjectMatches => "history_search.no_project_matches",
-            Self::HistorySearchProjectFilterPlaceholder => "history_search.project_filter_placeholder",
+            Self::HistorySearchProjectFilterPlaceholder => {
+                "history_search.project_filter_placeholder"
+            }
             Self::HistorySearchScopePrefix => "history_search.scope_prefix",
             Self::HistorySearchSearchAction => "history_search.search_action",
             Self::HistorySearchSearching => "history_search.searching",
@@ -247,7 +249,9 @@ impl I18nKey {
             Self::SettingsArchivedRestoreEmpty => "settings.archived_restore_empty",
             Self::SettingsArchivedRestoreHint => "settings.archived_restore_hint",
             Self::SettingsArchivedRestoreTitle => "settings.archived_restore_title",
-            Self::SettingsArchivedStandaloneSessionsTitle => "settings.archived_standalone_sessions_title",
+            Self::SettingsArchivedStandaloneSessionsTitle => {
+                "settings.archived_standalone_sessions_title"
+            }
             Self::SettingsPolicyTitle => "settings.policy_title",
             Self::SettingsPolicyGeneratePlan => "settings.policy_generate_plan",
             Self::SettingsPolicyRunCargoCheck => "settings.policy_run_cargo_check",
@@ -266,7 +270,9 @@ impl I18nKey {
             Self::StatusHistorySearchEmptyQuery => "status.history_search_empty_query",
             Self::StatusHistorySearchFailed => "status.history_search_failed",
             Self::StatusHistorySearchInProgress => "status.history_search_in_progress",
-            Self::StatusHistorySearchLoadMoreCompleted => "status.history_search_load_more_completed",
+            Self::StatusHistorySearchLoadMoreCompleted => {
+                "status.history_search_load_more_completed"
+            }
             Self::StatusHistorySearchLoadMoreStarted => "status.history_search_load_more_started",
             Self::StatusHistorySearchNoMoreResults => "status.history_search_no_more_results",
             Self::StatusHistorySearchQueryChanged => "status.history_search_query_changed",
@@ -324,14 +330,18 @@ impl I18nKey {
             Self::TranscriptSubagentCompletedHint => "transcript.subagent_completed_hint",
             Self::TranscriptSubagentFailedHint => "transcript.subagent_failed_hint",
             Self::TranscriptSubagentResultSummaryHint => "transcript.subagent_result_summary_hint",
-            Self::TranscriptSubagentResultSummaryTitle => "transcript.subagent_result_summary_title",
+            Self::TranscriptSubagentResultSummaryTitle => {
+                "transcript.subagent_result_summary_title"
+            }
             Self::TranscriptSubagentRunningHint => "transcript.subagent_running_hint",
             Self::TranscriptSubagentStoppedHint => "transcript.subagent_stopped_hint",
             Self::TranscriptToolModalTitle => "transcript.tool_modal_title",
             Self::TranscriptToolModalHint => "transcript.tool_modal_hint",
             Self::WorkbenchImagePreviewHint => "workbench.image_preview_hint",
             Self::WorkbenchImagePreviewTitle => "workbench.image_preview_title",
-            Self::WorkbenchModelPickerFilterPlaceholder => "workbench.model_picker_filter_placeholder",
+            Self::WorkbenchModelPickerFilterPlaceholder => {
+                "workbench.model_picker_filter_placeholder"
+            }
             Self::WorkbenchModelPickerNoMatches => "workbench.model_picker_no_matches",
             Self::WorkbenchModelPickerTitle => "workbench.model_picker_title",
             Self::WorkbenchNewSessionAction => "workbench.new_session_action",
@@ -342,7 +352,9 @@ impl I18nKey {
             Self::WorkbenchPanelMainLabel => "workbench.panel_main_label",
             Self::WorkbenchPanelMainDescription => "workbench.panel_main_description",
             Self::WorkbenchPanelPromptSkillsLabel => "workbench.panel_prompt_skills_label",
-            Self::WorkbenchPanelPromptSkillsDescription => "workbench.panel_prompt_skills_description",
+            Self::WorkbenchPanelPromptSkillsDescription => {
+                "workbench.panel_prompt_skills_description"
+            }
             Self::WorkbenchPanelLuaSkillsLabel => "workbench.panel_luaskills_label",
             Self::WorkbenchPanelLuaSkillsDescription => "workbench.panel_luaskills_description",
             Self::WorkbenchPanelAutomationLabel => "workbench.panel_automation_label",
@@ -359,35 +371,85 @@ impl I18nKey {
             Self::WorkbenchPanelSettingsDescription => "workbench.panel_settings_description",
             Self::WorkbenchSelectModel => "workbench.select_model",
             Self::SettingsSectionModelProvidersLabel => "settings.section_model_providers_label",
-            Self::SettingsSectionModelProvidersDescription => "settings.section_model_providers_description",
+            Self::SettingsSectionModelProvidersDescription => {
+                "settings.section_model_providers_description"
+            }
             Self::SettingsSectionModelListLabel => "settings.section_model_list_label",
             Self::SettingsSectionModelListDescription => "settings.section_model_list_description",
-            Self::SettingsSectionRuntimeDiagnosticsLabel => "settings.section_runtime_diagnostics_label",
-            Self::SettingsSectionRuntimeDiagnosticsDescription => "settings.section_runtime_diagnostics_description",
-            Self::SettingsSectionAiCapabilityVendorsLabel => "settings.section_ai_capability_vendors_label",
-            Self::SettingsSectionAiCapabilityVendorsDescription => "settings.section_ai_capability_vendors_description",
-            Self::SettingsSectionAiCapabilityWebSearchLabel => "settings.section_ai_capability_web_search_label",
-            Self::SettingsSectionAiCapabilityWebSearchDescription => "settings.section_ai_capability_web_search_description",
-            Self::SettingsSectionAiCapabilityUnderstandImageLabel => "settings.section_ai_capability_understand_image_label",
-            Self::SettingsSectionAiCapabilityUnderstandImageDescription => "settings.section_ai_capability_understand_image_description",
-            Self::SettingsSectionAiCapabilityUnderstandVideoLabel => "settings.section_ai_capability_understand_video_label",
-            Self::SettingsSectionAiCapabilityUnderstandVideoDescription => "settings.section_ai_capability_understand_video_description",
-            Self::SettingsSectionAiCapabilityUnderstandAudioLabel => "settings.section_ai_capability_understand_audio_label",
-            Self::SettingsSectionAiCapabilityUnderstandAudioDescription => "settings.section_ai_capability_understand_audio_description",
-            Self::SettingsSectionAiCapabilityImageGenerationLabel => "settings.section_ai_capability_image_generation_label",
-            Self::SettingsSectionAiCapabilityImageGenerationDescription => "settings.section_ai_capability_image_generation_description",
-            Self::SettingsSectionAiCapabilityVideoGenerationLabel => "settings.section_ai_capability_video_generation_label",
-            Self::SettingsSectionAiCapabilityVideoGenerationDescription => "settings.section_ai_capability_video_generation_description",
-            Self::SettingsSectionAiCapabilitySpeechSynthesisLabel => "settings.section_ai_capability_speech_synthesis_label",
-            Self::SettingsSectionAiCapabilitySpeechSynthesisDescription => "settings.section_ai_capability_speech_synthesis_description",
-            Self::SettingsSectionAiCapabilityMusicGenerationLabel => "settings.section_ai_capability_music_generation_label",
-            Self::SettingsSectionAiCapabilityMusicGenerationDescription => "settings.section_ai_capability_music_generation_description",
-            Self::SettingsSectionAiCapabilityMusicCoverLabel => "settings.section_ai_capability_music_cover_label",
-            Self::SettingsSectionAiCapabilityMusicCoverDescription => "settings.section_ai_capability_music_cover_description",
+            Self::SettingsSectionRuntimeDiagnosticsLabel => {
+                "settings.section_runtime_diagnostics_label"
+            }
+            Self::SettingsSectionRuntimeDiagnosticsDescription => {
+                "settings.section_runtime_diagnostics_description"
+            }
+            Self::SettingsSectionAiCapabilityVendorsLabel => {
+                "settings.section_ai_capability_vendors_label"
+            }
+            Self::SettingsSectionAiCapabilityVendorsDescription => {
+                "settings.section_ai_capability_vendors_description"
+            }
+            Self::SettingsSectionAiCapabilityWebSearchLabel => {
+                "settings.section_ai_capability_web_search_label"
+            }
+            Self::SettingsSectionAiCapabilityWebSearchDescription => {
+                "settings.section_ai_capability_web_search_description"
+            }
+            Self::SettingsSectionAiCapabilityUnderstandImageLabel => {
+                "settings.section_ai_capability_understand_image_label"
+            }
+            Self::SettingsSectionAiCapabilityUnderstandImageDescription => {
+                "settings.section_ai_capability_understand_image_description"
+            }
+            Self::SettingsSectionAiCapabilityUnderstandVideoLabel => {
+                "settings.section_ai_capability_understand_video_label"
+            }
+            Self::SettingsSectionAiCapabilityUnderstandVideoDescription => {
+                "settings.section_ai_capability_understand_video_description"
+            }
+            Self::SettingsSectionAiCapabilityUnderstandAudioLabel => {
+                "settings.section_ai_capability_understand_audio_label"
+            }
+            Self::SettingsSectionAiCapabilityUnderstandAudioDescription => {
+                "settings.section_ai_capability_understand_audio_description"
+            }
+            Self::SettingsSectionAiCapabilityImageGenerationLabel => {
+                "settings.section_ai_capability_image_generation_label"
+            }
+            Self::SettingsSectionAiCapabilityImageGenerationDescription => {
+                "settings.section_ai_capability_image_generation_description"
+            }
+            Self::SettingsSectionAiCapabilityVideoGenerationLabel => {
+                "settings.section_ai_capability_video_generation_label"
+            }
+            Self::SettingsSectionAiCapabilityVideoGenerationDescription => {
+                "settings.section_ai_capability_video_generation_description"
+            }
+            Self::SettingsSectionAiCapabilitySpeechSynthesisLabel => {
+                "settings.section_ai_capability_speech_synthesis_label"
+            }
+            Self::SettingsSectionAiCapabilitySpeechSynthesisDescription => {
+                "settings.section_ai_capability_speech_synthesis_description"
+            }
+            Self::SettingsSectionAiCapabilityMusicGenerationLabel => {
+                "settings.section_ai_capability_music_generation_label"
+            }
+            Self::SettingsSectionAiCapabilityMusicGenerationDescription => {
+                "settings.section_ai_capability_music_generation_description"
+            }
+            Self::SettingsSectionAiCapabilityMusicCoverLabel => {
+                "settings.section_ai_capability_music_cover_label"
+            }
+            Self::SettingsSectionAiCapabilityMusicCoverDescription => {
+                "settings.section_ai_capability_music_cover_description"
+            }
             Self::SettingsSectionMcpServersLabel => "settings.section_mcp_servers_label",
-            Self::SettingsSectionMcpServersDescription => "settings.section_mcp_servers_description",
+            Self::SettingsSectionMcpServersDescription => {
+                "settings.section_mcp_servers_description"
+            }
             Self::SettingsSectionArchivedRestoreLabel => "settings.section_archived_restore_label",
-            Self::SettingsSectionArchivedRestoreDescription => "settings.section_archived_restore_description",
+            Self::SettingsSectionArchivedRestoreDescription => {
+                "settings.section_archived_restore_description"
+            }
             Self::TaskTreeNoSessions => "task_tree.no_sessions",
             Self::TaskTreeAddProjectFromFolder => "task_tree.add_project_from_folder",
             Self::TaskTreeArchivedBadge => "task_tree.archived_badge",
@@ -407,10 +469,14 @@ impl I18nKey {
             Self::HistorySearchScopePrefix => &["scope_label"],
             Self::SettingsTemperatureValueEnabled => &["temperature"],
             Self::StatusToolDetailLoading => &["completed_count", "total_count"],
-            Self::StatusToolDetailLoadingWithFailures => &["completed_count", "total_count", "failed_count"],
+            Self::StatusToolDetailLoadingWithFailures => {
+                &["completed_count", "total_count", "failed_count"]
+            }
             Self::StatusHistorySearchCompleted => &["total_hits"],
             Self::StatusHistorySearchFailed => &["error"],
-            Self::StatusHistorySearchLoadMoreCompleted => &["hit_count", "loaded_count", "total_hits"],
+            Self::StatusHistorySearchLoadMoreCompleted => {
+                &["hit_count", "loaded_count", "total_hits"]
+            }
             Self::StatusSessionSwitched => &["selected_title"],
             Self::TranscriptToolResultWithName => &["tool_name"],
             Self::TranscriptToolCallWithName => &["tool_name"],

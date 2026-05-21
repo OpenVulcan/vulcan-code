@@ -25,15 +25,20 @@ use vldb_controller_client::{
     ControllerSqliteSearchFtsHit, ControllerSqliteTokenizerMode, ControllerSqliteValue,
 };
 
+mod event_store;
 mod history_search;
 mod persistence;
 mod session_load;
-mod event_store;
 
 use self::event_store::{
     SessionEventStorePersistResult, clear_all_session_event_stores, load_session_event_store,
-    load_session_event_store_compactions, load_session_event_store_runtime_state,
+    load_session_event_store_compactions, load_session_event_store_context_current,
+    load_session_event_store_runtime_state, load_latest_session_event_store_context_snapshot,
     persist_session_event_store, remove_session_event_store,
+};
+pub(crate) use self::event_store::{
+    persist_session_event_store_context_current as persist_session_context_current_document,
+    snapshot_session_event_store_context_before_user_prompt as snapshot_session_context_before_user_prompt,
 };
 pub use history_search::search_workspace_history;
 pub use persistence::{
@@ -1359,9 +1364,8 @@ fn persisted_conversation_state_or_continuation(
     conversation_state_json: Option<String>,
     continuation_json: Option<String>,
 ) -> SessionConversationState {
-    parse_session_conversation_state_from_json(conversation_state_json.as_deref()).unwrap_or_else(
-        || conversation_state_with_continuation(continuation_json),
-    )
+    parse_session_conversation_state_from_json(conversation_state_json.as_deref())
+        .unwrap_or_else(|| conversation_state_with_continuation(continuation_json))
 }
 
 /// Parses one persisted session identifier back into the in-memory UUID session key.
@@ -1938,7 +1942,9 @@ fn parse_session_continuation_from_json(value: &str) -> Option<SessionProviderCo
 
 /// Parses one persisted canonical conversation-state JSON payload into the typed runtime structure.
 /// 将一条持久化规范会话状态 JSON 载荷解析为带类型的运行时结构。
-fn parse_session_conversation_state_from_json(value: Option<&str>) -> Option<SessionConversationState> {
+fn parse_session_conversation_state_from_json(
+    value: Option<&str>,
+) -> Option<SessionConversationState> {
     value.and_then(|payload| serde_json::from_str(payload).ok())
 }
 
@@ -1977,7 +1983,10 @@ fn serialize_session_conversation_state_to_json(
         && conversation_state.records.is_empty()
         && conversation_state.continuation.provider_id.is_none()
         && conversation_state.continuation.model_id.is_none()
-        && conversation_state.continuation.last_provider_message_id.is_none()
+        && conversation_state
+            .continuation
+            .last_provider_message_id
+            .is_none()
         && conversation_state.continuation.updated_at.is_none()
     {
         None

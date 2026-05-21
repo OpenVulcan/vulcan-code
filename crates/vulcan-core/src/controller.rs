@@ -233,9 +233,7 @@ impl VulcanCoreController {
             let skipped_result = ToolInvocationResult {
                 tool_call_id: request.tool_call_id.clone(),
                 tool_name: request.tool_name.clone(),
-                model_output: String::from(
-                    "Tool execution was skipped by the host policy.",
-                ),
+                model_output: String::from("Tool execution was skipped by the host policy."),
                 host_result: Some(json!({
                     "tool_call_id": request.tool_call_id,
                     "tool_name": request.tool_name,
@@ -318,7 +316,9 @@ impl VulcanCoreController {
             return Err(error);
         }
 
-        self.append_user_turn(trimmed_prompt);
+        if self.should_append_user_turn(trimmed_prompt) {
+            self.append_user_turn(trimmed_prompt);
+        }
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
 
@@ -404,7 +404,9 @@ impl VulcanCoreController {
             return Err(error);
         }
 
-        self.append_user_turn(trimmed_prompt);
+        if self.should_append_user_turn(trimmed_prompt) {
+            self.append_user_turn(trimmed_prompt);
+        }
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
 
@@ -554,6 +556,18 @@ impl VulcanCoreController {
             created_at: timestamp,
         });
         message_id
+    }
+
+    /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
+    /// 返回控制器当前是否仍需追加一条新的用户回合，而不是复用宿主已预播种的最新用户提示词。
+    fn should_append_user_turn(&self, prompt: &str) -> bool {
+        !matches!(
+            self.snapshot.messages.last(),
+            Some(ConversationMessage {
+                payload: ConversationPayload::UserText { text, .. },
+                ..
+            }) if text.trim() == prompt
+        )
     }
 
     /// Appends one provider assistant turn into the canonical message window and the durable record stream.
@@ -1287,6 +1301,70 @@ mod tests {
                     && provider_message_id.as_deref() == Some("resp-stream-1")
                     && tool_calls.is_empty()
             ));
+        });
+    }
+
+    /// Reuses the host-preseeded latest user prompt during streaming execution so the canonical snapshot does not duplicate one turn boundary.
+    /// 在流式执行期间复用宿主预播种的最新用户提示词，从而避免规范快照重复记录同一轮次边界。
+    #[test]
+    fn run_user_turn_streaming_reuses_host_preseeded_user_prompt() {
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let adapter = MockStreamingProviderAdapter::new(vec![(
+                vec![ProviderTurnDelta::Output {
+                    delta: String::from("已完成分析。"),
+                }],
+                ProviderTurnResponse {
+                    assistant_text: String::from("已完成分析。"),
+                    assistant_reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-stream-2")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    continuation: None,
+                    usage: None,
+                },
+            )]);
+            let executor = MockToolExecutor::new();
+            let mut controller = VulcanCoreController::new(
+                build_test_config(2),
+                ConversationSnapshot {
+                    messages: vec![ConversationMessage {
+                        id: String::from("host-user-1"),
+                        payload: ConversationPayload::UserText {
+                            text: String::from("请先分析文件"),
+                            attachments: Vec::new(),
+                        },
+                    }],
+                    records: vec![ConversationRecord {
+                        id: String::from("host-user-record-1"),
+                        role: TranscriptRole::User,
+                        record_kind: TranscriptRecordKind::Visible,
+                        visible: true,
+                        title: String::from("用户输入"),
+                        body: String::from("请先分析文件"),
+                        metadata: None,
+                        created_at: String::from("1000"),
+                    }],
+                    continuation: ProviderContinuation::default(),
+                },
+            );
+
+            let result = controller
+                .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "请先分析文件")
+                .await
+                .expect("run streaming user turn");
+
+            assert_eq!(result.provider_turns_executed, 1);
+            assert_eq!(controller.snapshot().messages.len(), 2);
+            assert_eq!(
+                controller
+                    .snapshot()
+                    .messages
+                    .iter()
+                    .filter(|message| matches!(message.payload, ConversationPayload::UserText { .. }))
+                    .count(),
+                1
+            );
         });
     }
 

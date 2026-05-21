@@ -13,8 +13,8 @@ use iced::advanced::text;
 use iced::font;
 use iced::widget::text::Span;
 use iced::{Background, Border, Color, Font, Padding, Pixels, Theme};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -685,7 +685,10 @@ fn table_signature_seed(
 
 /// Hashes one rich text span into the provided stable signature state.
 /// 将单个富文本片段写入给定稳定签名状态。
-fn hash_span(span: &iced::widget::text::Span<'static, markdown::Uri, Font>, hasher: &mut DefaultHasher) {
+fn hash_span(
+    span: &iced::widget::text::Span<'static, markdown::Uri, Font>,
+    hasher: &mut DefaultHasher,
+) {
     span.text.as_ref().hash(hasher);
     span.size.map(|size| size.0.to_bits()).hash(hasher);
     if let Some(line_height) = span.line_height {

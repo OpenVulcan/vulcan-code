@@ -685,9 +685,7 @@ fn tool_call_session_message_to_protocol_message(
             provider_message_state: None,
             usage: None,
             tool_calls: vec![SessionConversationToolCall {
-                id: tool_call_id
-                    .clone()
-                    .unwrap_or_else(|| message.id.clone()),
+                id: tool_call_id.clone().unwrap_or_else(|| message.id.clone()),
                 tool_call_id,
                 tool_name: tool_name.to_string(),
                 arguments,

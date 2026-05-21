@@ -595,6 +595,15 @@ fn current_unix_epoch_millis() -> u128 {
 /// Returns the stable application data root used for controller-backed state files.
 /// 返回控制器承载状态文件使用的稳定应用数据根目录。
 pub fn application_data_root() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir()
+            .join("vulcan-code-gui-tests")
+            .join(std::process::id().to_string())
+    }
+
+    #[cfg(not(test))]
+    {
     let home = dirs::home_dir().unwrap_or_else(|| {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -602,6 +611,7 @@ pub fn application_data_root() -> PathBuf {
     });
 
     home.join(".vulcan").join("code")
+    }
 }
 
 /// Ensures the parent directory of one target file exists.

@@ -285,6 +285,9 @@ pub struct ExecutionRunReport {
     /// Canonical conversation state returned from the final host-controlled controller run when execution succeeds.
     /// 当执行成功时由最终宿主控制器运行返回的规范会话状态。
     pub conversation_state: Option<SessionConversationState>,
+    /// Number of real provider requests dispatched while this run was active.
+    /// 本次运行期间真实发出的 Provider 请求次数。
+    pub provider_request_count: usize,
     /// Successful MCP discovery summary rows collected during the run.
     /// 运行期间收集到的 MCP 成功发现摘要行集合。
     pub mcp_discovery_rows: Vec<String>,
@@ -311,6 +314,7 @@ impl ExecutionRunReport {
         thinking_output: Option<String>,
         assistant_output: String,
         conversation_state: Option<SessionConversationState>,
+        provider_request_count: usize,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -322,6 +326,7 @@ impl ExecutionRunReport {
             assistant_output: Some(assistant_output),
             thinking_output,
             conversation_state,
+            provider_request_count,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -335,6 +340,7 @@ impl ExecutionRunReport {
     pub(crate) fn failure(
         session_id: SessionId,
         preparation: Option<ExecutionPreparation>,
+        provider_request_count: usize,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -347,6 +353,7 @@ impl ExecutionRunReport {
             assistant_output: None,
             thinking_output: None,
             conversation_state: None,
+            provider_request_count,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,

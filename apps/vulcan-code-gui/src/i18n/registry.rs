@@ -313,10 +313,9 @@ impl LanguageRegistry {
                 I18nKey::StatusSettingsSectionSwitched,
                 I18nKey::StatusThemeChanged,
             ] {
-                let value = pack
-                    .entries
-                    .get(key.as_str())
-                    .unwrap_or_else(|| panic!("missing key {} for {}", key.as_str(), locale.as_str()));
+                let value = pack.entries.get(key.as_str()).unwrap_or_else(|| {
+                    panic!("missing key {} for {}", key.as_str(), locale.as_str())
+                });
                 let discovered = extract_placeholders(value);
                 let expected = key.placeholders().iter().copied().collect::<BTreeSet<_>>();
                 assert_eq!(

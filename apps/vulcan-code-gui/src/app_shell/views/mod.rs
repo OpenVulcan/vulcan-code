@@ -520,7 +520,12 @@ impl VulcanWorkbench {
         };
         let modal_card = container(
             column![
-                row![text(self.t(I18nKey::WorkbenchModelPickerTitle)).size(20), space::horizontal(), close_button,].align_y(Center),
+                row![
+                    text(self.t(I18nKey::WorkbenchModelPickerTitle)).size(20),
+                    space::horizontal(),
+                    close_button,
+                ]
+                .align_y(Center),
                 text_input(
                     &self.t(I18nKey::WorkbenchModelPickerFilterPlaceholder),
                     &self.workbench_model_picker_filter
@@ -1044,7 +1049,12 @@ impl VulcanWorkbench {
         .align_y(Center);
 
         let mut modal_body = column![
-            row![text(self.t(I18nKey::HistorySearchTitle)).size(20), space::horizontal(), close_button].align_y(Center),
+            row![
+                text(self.t(I18nKey::HistorySearchTitle)).size(20),
+                space::horizontal(),
+                close_button
+            ]
+            .align_y(Center),
             search_input_row,
             row![
                 button(text(scope_button_label).size(12))
@@ -1133,30 +1143,25 @@ impl VulcanWorkbench {
         } else if let Some(error) = self.workspace_history_search.error.as_ref() {
             container(
                 container(
-                    text(
-                        self.tf(
-                            I18nKey::HistorySearchFailedWithError,
-                            &[I18nArg::named("error", error.as_str())],
-                        )
-                    )
-                    .size(14)
+                    text(self.tf(
+                        I18nKey::HistorySearchFailedWithError,
+                        &[I18nArg::named("error", error.as_str())],
+                    ))
+                    .size(14),
                 )
-                    .width(Fill)
-                    .height(Fill)
-                    .center(Fill),
+                .width(Fill)
+                .height(Fill)
+                .center(Fill),
             )
             .width(Fill)
             .height(WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT)
             .into()
         } else {
             container(
-                container(
-                    text(self.t(I18nKey::HistorySearchHint))
-                        .size(14),
-                )
-                .width(Fill)
-                .height(Fill)
-                .center(Fill),
+                container(text(self.t(I18nKey::HistorySearchHint)).size(14))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
             )
             .width(Fill)
             .height(WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT)
@@ -3235,8 +3240,10 @@ impl VulcanWorkbench {
     pub(super) fn view_example_panel(&self) -> Element<'_, Message> {
         let panel_header = row![
             column![
-                text(MainDisplayPanel::Example.localized_section_title(self.current_locale())).size(22),
-                text(MainDisplayPanel::Example.localized_description(self.current_locale())).size(13),
+                text(MainDisplayPanel::Example.localized_section_title(self.current_locale()))
+                    .size(22),
+                text(MainDisplayPanel::Example.localized_description(self.current_locale()))
+                    .size(13),
             ]
             .spacing(4),
             space::horizontal(),
@@ -3351,8 +3358,10 @@ impl VulcanWorkbench {
     pub(super) fn view_luaskills_panel(&self) -> Element<'_, Message> {
         let panel_header = container(
             column![
-                text(MainDisplayPanel::LuaSkills.localized_section_title(self.current_locale())).size(22),
-                text(MainDisplayPanel::LuaSkills.localized_description(self.current_locale())).size(13),
+                text(MainDisplayPanel::LuaSkills.localized_section_title(self.current_locale()))
+                    .size(22),
+                text(MainDisplayPanel::LuaSkills.localized_description(self.current_locale()))
+                    .size(13),
             ]
             .spacing(4),
         )
@@ -3488,8 +3497,10 @@ impl VulcanWorkbench {
     pub(super) fn view_agents_panel(&self) -> Element<'_, Message> {
         let panel_header = container(
             column![
-                text(MainDisplayPanel::Agents.localized_section_title(self.current_locale())).size(22),
-                text(MainDisplayPanel::Agents.localized_description(self.current_locale())).size(13),
+                text(MainDisplayPanel::Agents.localized_section_title(self.current_locale()))
+                    .size(22),
+                text(MainDisplayPanel::Agents.localized_description(self.current_locale()))
+                    .size(13),
             ]
             .spacing(4),
         )
@@ -3897,10 +3908,15 @@ impl VulcanWorkbench {
     /// 构建设置面板内容，并且不再增加额外的外层边框层级。
     pub(super) fn view_settings_panel(&self) -> Element<'_, Message> {
         let navigation_width = self.main_task_panel_width.clamp(260.0, 340.0);
-        let mut header_title_column =
-            column![text(self.selected_settings_section.localized_title(self.current_locale())).size(26)]
-                .spacing(6)
-                .width(Fill);
+        let mut header_title_column = column![
+            text(
+                self.selected_settings_section
+                    .localized_title(self.current_locale())
+            )
+            .size(26)
+        ]
+        .spacing(6)
+        .width(Fill);
         let header_description = self
             .selected_settings_section
             .localized_description(self.current_locale());
@@ -5739,7 +5755,10 @@ impl VulcanWorkbench {
                 text(if self.temperature_enabled {
                     self.tf(
                         I18nKey::SettingsTemperatureValueEnabled,
-                        &[I18nArg::named("temperature", format!("{:.2}", self.temperature))],
+                        &[I18nArg::named(
+                            "temperature",
+                            format!("{:.2}", self.temperature),
+                        )],
                     )
                 } else {
                     self.t(I18nKey::SettingsTemperatureValueDefault)

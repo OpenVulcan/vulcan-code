@@ -29,8 +29,8 @@ impl VulcanWorkbench {
     pub(super) fn view_settings_navigation_tree(&self) -> Element<'_, Message> {
         let mut navigation =
             column![self.view_main_task_group_label(self.t(I18nKey::SettingsRootTitle), false)]
-            .spacing(1)
-            .width(Fill);
+                .spacing(1)
+                .width(Fill);
         navigation = navigation.push(self.view_settings_navigation_model_group_button());
         if self.settings_model_tree_expanded {
             navigation = navigation
@@ -422,24 +422,26 @@ impl VulcanWorkbench {
             content = content.push(text(self.t(I18nKey::SettingsArchivedRestoreEmpty)).size(13));
         } else {
             if !self.archived_task_projects.is_empty() {
-                content = content.push(text(self.t(I18nKey::SettingsArchivedProjectsTitle)).size(14)).push(
-                    self.archived_task_projects
-                        .iter()
-                        .fold(column![].spacing(1).width(Fill), |column, project| {
-                            column.push(self.view_archived_task_project_row(project))
-                        }),
-                );
+                content =
+                    content
+                        .push(text(self.t(I18nKey::SettingsArchivedProjectsTitle)).size(14))
+                        .push(self.archived_task_projects.iter().fold(
+                            column![].spacing(1).width(Fill),
+                            |column, project| {
+                                column.push(self.view_archived_task_project_row(project))
+                            },
+                        ));
             }
 
             if !standalone_archived_sessions.is_empty() {
-                content = content.push(text(self.t(I18nKey::SettingsArchivedStandaloneSessionsTitle)).size(14)).push(
-                    standalone_archived_sessions.into_iter().fold(
+                content = content
+                    .push(text(self.t(I18nKey::SettingsArchivedStandaloneSessionsTitle)).size(14))
+                    .push(standalone_archived_sessions.into_iter().fold(
                         column![].spacing(1).width(Fill),
                         |column, session| {
                             column.push(self.view_archived_task_session_tree_row(session))
                         },
-                    ),
-                );
+                    ));
             }
         }
 

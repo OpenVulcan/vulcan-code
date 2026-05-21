@@ -21,12 +21,11 @@ pub use document::{
 };
 pub use editor_core::{Cursor, Selection, TextBuffer, ViewState};
 pub use iced::{
-    clear_selectable_transcript_render_cache_stash,
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
     SelectableTranscriptContextMenuMediaTarget, SelectableTranscriptContextMenuRequest,
     SelectableTranscriptDragAutoScroll, SelectableTranscriptDragAutoScrollDirection,
     SelectableTranscriptInteraction, SelectableTranscriptSurfaceId,
-    view_selectable_rendered_transcript,
+    clear_selectable_transcript_render_cache_stash, view_selectable_rendered_transcript,
     view_selectable_rendered_transcript_owned_with_context_menu,
     view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,

@@ -35,6 +35,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Latest structured request snapshot captured before the most recent provider request.
     /// 最近一次 Provider 请求发出前捕获到的最新结构化请求快照。
     latest_request_snapshot: Option<CoreProviderRequestSnapshot>,
+    /// Number of real provider requests observed during the current runtime stream.
+    /// 当前运行时流期间观测到的真实 Provider 请求次数。
+    provider_request_count: usize,
     /// Final canonical conversation state returned by the provider loop, if it has arrived.
     /// 如果已经收到，则保存 Provider 循环返回的最终规范会话状态。
     final_conversation_state: Option<SessionConversationState>,
@@ -54,6 +57,7 @@ impl RuntimeStreamDeltaState {
             assistant_output: String::new(),
             thinking_completed_emitted: false,
             latest_request_snapshot: None,
+            provider_request_count: 0,
             final_conversation_state: None,
             terminal_error: None,
         }
@@ -75,6 +79,12 @@ impl RuntimeStreamDeltaState {
     /// 返回流式执行期间最近一次捕获到的结构化请求快照（如果存在）。
     pub(crate) fn latest_request_snapshot(&self) -> Option<&CoreProviderRequestSnapshot> {
         self.latest_request_snapshot.as_ref()
+    }
+
+    /// Returns the number of real provider requests captured during the stream so far.
+    /// 返回截至当前流式执行期间已经捕获到的真实 Provider 请求次数。
+    pub(crate) const fn provider_request_count(&self) -> usize {
+        self.provider_request_count
     }
 
     /// Returns the normalized visible thinking output accumulated so far.
@@ -202,6 +212,7 @@ pub(crate) fn process_provider_stream_delta(
     match item {
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
             state.latest_request_snapshot = Some(snapshot);
+            state.provider_request_count = state.provider_request_count.saturating_add(1);
             Vec::new()
         }
         Ok(ProviderStreamDelta::Thinking(delta)) => state
