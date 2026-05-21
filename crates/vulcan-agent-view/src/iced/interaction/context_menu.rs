@@ -697,8 +697,10 @@ fn transcript_hover_tooltip_bounds(
     let max_x = (widget_bounds.x + widget_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_WIDTH)
         .max(widget_bounds.x);
     let max_y = (widget_bounds.y + widget_bounds.height - height).max(widget_bounds.y);
-    let x = (widget_bounds.x + tooltip_state.anchor_position.x + 14.0).clamp(widget_bounds.x, max_x);
-    let y = (widget_bounds.y + tooltip_state.anchor_position.y + 14.0).clamp(widget_bounds.y, max_y);
+    let x =
+        (widget_bounds.x + tooltip_state.anchor_position.x + 14.0).clamp(widget_bounds.x, max_x);
+    let y =
+        (widget_bounds.y + tooltip_state.anchor_position.y + 14.0).clamp(widget_bounds.y, max_y);
     Rectangle::new(
         Point::new(x, y),
         Size::new(TRANSCRIPT_HOVER_TOOLTIP_WIDTH, height.max(72.0)),

@@ -604,13 +604,13 @@ pub fn application_data_root() -> PathBuf {
 
     #[cfg(not(test))]
     {
-    let home = dirs::home_dir().unwrap_or_else(|| {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .to_path_buf()
-    });
+        let home = dirs::home_dir().unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .to_path_buf()
+        });
 
-    home.join(".vulcan").join("code")
+        home.join(".vulcan").join("code")
     }
 }
 

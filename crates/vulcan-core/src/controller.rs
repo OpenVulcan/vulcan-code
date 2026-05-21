@@ -1361,7 +1361,10 @@ mod tests {
                     .snapshot()
                     .messages
                     .iter()
-                    .filter(|message| matches!(message.payload, ConversationPayload::UserText { .. }))
+                    .filter(|message| matches!(
+                        message.payload,
+                        ConversationPayload::UserText { .. }
+                    ))
                     .count(),
                 1
             );

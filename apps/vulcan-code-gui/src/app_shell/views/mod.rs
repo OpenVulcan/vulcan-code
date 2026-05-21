@@ -4675,13 +4675,13 @@ impl VulcanWorkbench {
             Subscription::none()
         };
 
-        let runtime_progress_animation_subscription =
-            if self.has_runtime_progress_animation_work() {
-                iced::time::every(SESSION_RUNTIME_PROGRESS_TICK_INTERVAL)
-                    .map(|_| Message::SessionRuntimeProgressTick)
-            } else {
-                Subscription::none()
-            };
+        let runtime_progress_animation_subscription = if self.has_runtime_progress_animation_work()
+        {
+            iced::time::every(SESSION_RUNTIME_PROGRESS_TICK_INTERVAL)
+                .map(|_| Message::SessionRuntimeProgressTick)
+        } else {
+            Subscription::none()
+        };
 
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
@@ -5949,6 +5949,22 @@ impl VulcanWorkbench {
                 )
                 .width(Fill)
                 .placeholder(self.t(I18nKey::SettingsSessionTranscriptTurnPageSizePlaceholder)),
+                text(match self.current_locale() {
+                    AppLocale::ZhCn => "默认命令 Shell",
+                    AppLocale::EnUs => "Default Command Shell",
+                })
+                .size(12),
+                pick_list(
+                    self.command_shell_picker_choices(),
+                    self.selected_command_shell_picker_choice(),
+                    Message::CommandShellPreferenceSelected
+                )
+                .width(Fill)
+                .placeholder(match self.current_locale() {
+                    AppLocale::ZhCn => "选择默认命令 Shell",
+                    AppLocale::EnUs => "Choose a default command shell",
+                }),
+                text(self.command_shell_support_summary()).size(12),
                 text(self.t(I18nKey::CommonThemeLabel)).size(12),
                 pick_list(
                     Theme::ALL,

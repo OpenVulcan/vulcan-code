@@ -356,6 +356,7 @@ impl AgentRuntimeConfig {
             .iter()
             .map(|(id, entry)| (id.clone(), runtime_tool_policy_from_persisted(id, entry)))
             .collect::<BTreeMap<_, _>>();
+        let tool_policies = merge_runtime_default_tool_policies(tool_policies);
 
         let configured_mcp_server_ids = config.mcp.servers.keys().cloned().collect::<Vec<_>>();
         let enabled_mcp_server_ids = config
@@ -403,19 +404,6 @@ pub fn ensure_runtime_defaults(config: &mut ProviderConfigurationFile) -> bool {
     changed |= ensure_default_skill(config, "automation.scheduler", default_automation_skill());
     changed |= ensure_default_skill(config, "memorymesh.recall", default_memory_skill());
 
-    changed |= ensure_default_tool_policy(
-        config,
-        DEFAULT_SAFE_TOOL_POLICY_ID,
-        default_safe_tool_policy(),
-    );
-    changed |= ensure_default_tool_policy(
-        config,
-        ANALYSIS_SAFE_TOOL_POLICY_ID,
-        default_analysis_tool_policy(),
-    );
-    changed |=
-        ensure_default_tool_policy(config, LUA_SAFE_TOOL_POLICY_ID, default_lua_tool_policy());
-
     changed
 }
 
@@ -435,6 +423,21 @@ fn runtime_tool_policy_from_persisted(
     }
 }
 
+/// Merges runtime-only reserved tool-policy defaults without mutating the persisted configuration file.
+/// 合并仅存在于运行时的保留工具策略默认值，同时不改写持久化配置文件。
+fn merge_runtime_default_tool_policies(
+    mut persisted: BTreeMap<String, RuntimeToolPolicyDefinition>,
+) -> BTreeMap<String, RuntimeToolPolicyDefinition> {
+    for definition in [
+        default_safe_runtime_tool_policy(),
+        default_analysis_runtime_tool_policy(),
+        default_lua_runtime_tool_policy(),
+    ] {
+        persisted.entry(definition.id.clone()).or_insert(definition);
+    }
+    persisted
+}
+
 /// Inserts a default skill definition only when the given identifier is absent.
 /// 仅当给定标识不存在时插入默认技能定义。
 fn ensure_default_skill(
@@ -450,18 +453,42 @@ fn ensure_default_skill(
     }
 }
 
-/// Inserts a default tool policy only when the given identifier is absent.
-/// 仅当给定标识不存在时插入默认工具策略。
-fn ensure_default_tool_policy(
-    config: &mut ProviderConfigurationFile,
-    id: &str,
-    entry: PersistedToolPolicyEntry,
-) -> bool {
-    if config.tool_policies.contains_key(id) {
-        false
-    } else {
-        config.tool_policies.insert(id.to_string(), entry);
-        true
+/// Builds the runtime-only default safe tool policy used when the persisted configuration omits the reserved entry.
+/// 构建当持久化配置缺失保留条目时使用的仅运行时默认安全工具策略。
+fn default_safe_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
+    RuntimeToolPolicyDefinition {
+        id: String::from(DEFAULT_SAFE_TOOL_POLICY_ID),
+        name: String::from("默认安全策略"),
+        allow_all_native: true,
+        native_tools: Vec::new(),
+        mcp_servers: Vec::new(),
+        mcp_tools: Vec::new(),
+    }
+}
+
+/// Builds the runtime-only analysis tool policy used when the persisted configuration omits the reserved entry.
+/// 构建当持久化配置缺失保留条目时使用的仅运行时分析工具策略。
+fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
+    RuntimeToolPolicyDefinition {
+        id: String::from(ANALYSIS_SAFE_TOOL_POLICY_ID),
+        name: String::from("分析只读策略"),
+        allow_all_native: false,
+        native_tools: vec![String::from("shell_command"), String::from("shell_session")],
+        mcp_servers: Vec::new(),
+        mcp_tools: Vec::new(),
+    }
+}
+
+/// Builds the runtime-only Lua tool policy used when the persisted configuration omits the reserved entry.
+/// 构建当持久化配置缺失保留条目时使用的仅运行时 Lua 工具策略。
+fn default_lua_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
+    RuntimeToolPolicyDefinition {
+        id: String::from(LUA_SAFE_TOOL_POLICY_ID),
+        name: String::from("Lua 定向策略"),
+        allow_all_native: false,
+        native_tools: vec![String::from("shell_command"), String::from("shell_session")],
+        mcp_servers: Vec::new(),
+        mcp_tools: Vec::new(),
     }
 }
 
@@ -520,49 +547,6 @@ fn default_memory_skill() -> PersistedSkillEntry {
         trigger_signals: vec![String::from("memory.recall")],
         emitted_signal: Some(String::from("memory.ready")),
         confidence_delta: Some(0.02),
-    }
-}
-
-/// Builds the default safe tool policy.
-/// 构建默认安全工具策略。
-fn default_safe_tool_policy() -> PersistedToolPolicyEntry {
-    PersistedToolPolicyEntry {
-        name: Some(String::from("默认安全策略")),
-        allow_all_native: true,
-        native_tools: Vec::new(),
-        mcp_servers: Vec::new(),
-        mcp_tools: Vec::new(),
-    }
-}
-
-/// Builds the default analysis-oriented read-only tool policy.
-/// 构建默认的分析定向只读工具策略。
-fn default_analysis_tool_policy() -> PersistedToolPolicyEntry {
-    PersistedToolPolicyEntry {
-        name: Some(String::from("分析只读策略")),
-        allow_all_native: false,
-        native_tools: vec![
-            String::from("native_workspace_describe"),
-            String::from("native_registry_list_skills"),
-            String::from("native_mcp_list_servers"),
-        ],
-        mcp_servers: Vec::new(),
-        mcp_tools: Vec::new(),
-    }
-}
-
-/// Builds the default Lua-oriented tool policy.
-/// 构建默认的 Lua 定向工具策略。
-fn default_lua_tool_policy() -> PersistedToolPolicyEntry {
-    PersistedToolPolicyEntry {
-        name: Some(String::from("Lua 定向策略")),
-        allow_all_native: false,
-        native_tools: vec![
-            String::from("native_workspace_describe"),
-            String::from("native_registry_list_skills"),
-        ],
-        mcp_servers: Vec::new(),
-        mcp_tools: Vec::new(),
     }
 }
 
@@ -774,9 +758,12 @@ fn read_non_empty_prompt_file(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentRuntimeConfig, EXPLORE_AGENT_ID, PLAN_AGENT_ID};
+    use super::{
+        ANALYSIS_SAFE_TOOL_POLICY_ID, AgentRuntimeConfig, DEFAULT_SAFE_TOOL_POLICY_ID,
+        EXPLORE_AGENT_ID, LUA_SAFE_TOOL_POLICY_ID, PLAN_AGENT_ID, ensure_runtime_defaults,
+    };
     use crate::agent_profile::AgentProfileCatalog;
-    use crate::provider_config::ProviderConfigurationFile;
+    use crate::provider_config::{PersistedToolPolicyEntry, ProviderConfigurationFile};
 
     /// Verifies that the runtime seed always exposes the first-class plan and explore agents.
     /// 验证运行时种子始终会暴露一等的 plan 与 explore 代理。
@@ -812,5 +799,109 @@ mod tests {
             AgentRuntimeConfig::from_sources(&ProviderConfigurationFile::default(), &catalog);
 
         assert_eq!(runtime_config.active_agent_id, PLAN_AGENT_ID);
+    }
+
+    /// Verifies that runtime projection injects reserved tool-policy defaults in memory when the persisted configuration omits them.
+    /// 验证当持久化配置缺失保留工具策略时，运行时投影会在内存中注入这些默认策略。
+    #[test]
+    fn runtime_config_injects_reserved_tool_policy_defaults_in_memory() {
+        let runtime_config = AgentRuntimeConfig::from_sources(
+            &ProviderConfigurationFile::default(),
+            &AgentProfileCatalog::default(),
+        );
+
+        let default_safe = runtime_config
+            .tool_policies
+            .get(DEFAULT_SAFE_TOOL_POLICY_ID)
+            .expect("default-safe runtime policy should exist");
+        assert!(default_safe.allow_all_native);
+
+        let analysis_safe = runtime_config
+            .tool_policies
+            .get(ANALYSIS_SAFE_TOOL_POLICY_ID)
+            .expect("analysis-safe runtime policy should exist");
+        assert_eq!(
+            analysis_safe.native_tools,
+            vec![String::from("shell_command"), String::from("shell_session")]
+        );
+
+        let lua_safe = runtime_config
+            .tool_policies
+            .get(LUA_SAFE_TOOL_POLICY_ID)
+            .expect("lua-safe runtime policy should exist");
+        assert_eq!(
+            lua_safe.native_tools,
+            vec![String::from("shell_command"), String::from("shell_session")]
+        );
+    }
+
+    /// Verifies that persisted reserved tool policies override runtime-only defaults instead of being merged or rewritten.
+    /// 验证持久化的保留工具策略会覆盖仅运行时默认值，而不会被合并或改写。
+    #[test]
+    fn runtime_config_prefers_persisted_reserved_tool_policy_entries() {
+        let mut config = ProviderConfigurationFile::default();
+        config.tool_policies.insert(
+            String::from(DEFAULT_SAFE_TOOL_POLICY_ID),
+            PersistedToolPolicyEntry {
+                name: Some(String::from("用户默认策略")),
+                allow_all_native: false,
+                native_tools: vec![String::from("shell_command")],
+                mcp_servers: Vec::new(),
+                mcp_tools: Vec::new(),
+            },
+        );
+
+        let runtime_config =
+            AgentRuntimeConfig::from_sources(&config, &AgentProfileCatalog::default());
+        let default_safe = runtime_config
+            .tool_policies
+            .get(DEFAULT_SAFE_TOOL_POLICY_ID)
+            .expect("persisted default-safe runtime policy should exist");
+
+        assert_eq!(default_safe.name, "用户默认策略");
+        assert!(!default_safe.allow_all_native);
+        assert_eq!(
+            default_safe.native_tools,
+            vec![String::from("shell_command")]
+        );
+    }
+
+    /// Verifies runtime default seeding does not auto-create tool policies because policy content must stay under explicit user control.
+    /// 验证运行时默认注入不会自动创建工具策略，因为策略内容必须保持在用户显式控制之下。
+    #[test]
+    fn runtime_defaults_do_not_seed_tool_policies() {
+        let mut config = ProviderConfigurationFile::default();
+
+        assert!(ensure_runtime_defaults(&mut config));
+        assert!(config.tool_policies.is_empty());
+    }
+
+    /// Verifies runtime default seeding leaves existing tool-policy entries untouched so user-authored policy state is never silently rewritten.
+    /// 验证运行时默认注入会保持现有工具策略条目不变，避免静默改写用户自定义策略状态。
+    #[test]
+    fn runtime_defaults_leave_existing_tool_policies_untouched() {
+        let mut config = ProviderConfigurationFile::default();
+        config.tool_policies.insert(
+            String::from("custom-policy"),
+            PersistedToolPolicyEntry {
+                name: Some(String::from("自定义策略")),
+                allow_all_native: false,
+                native_tools: vec![String::from("shell_command")],
+                mcp_servers: vec![String::from("server-a")],
+                mcp_tools: vec![String::from("tool-a")],
+            },
+        );
+
+        assert!(ensure_runtime_defaults(&mut config));
+
+        let policy = config
+            .tool_policies
+            .get("custom-policy")
+            .expect("custom tool policy should remain");
+        assert_eq!(policy.name.as_deref(), Some("自定义策略"));
+        assert!(!policy.allow_all_native);
+        assert_eq!(policy.native_tools, vec![String::from("shell_command")]);
+        assert_eq!(policy.mcp_servers, vec![String::from("server-a")]);
+        assert_eq!(policy.mcp_tools, vec![String::from("tool-a")]);
     }
 }

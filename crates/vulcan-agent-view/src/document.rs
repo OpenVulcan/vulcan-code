@@ -17,6 +17,12 @@ pub enum AgentViewToolPresentationKind {
     /// Generic tool card used by MCP, unknown skills, and any tool result without a dedicated presentation family.
     /// 供 MCP、未知 skill 以及任何没有专属展示家族的工具结果使用的通用工具卡片。
     Generic,
+    /// Dedicated one-shot command-run card used by host-managed shell-command results.
+    /// 供宿主管理 shell-command 结果使用的专属一次性命令执行卡片。
+    CommandRun,
+    /// Dedicated command-session card used by host-managed shell-session results.
+    /// 供宿主管理 shell-session 结果使用的专属命令会话卡片。
+    CommandSession,
     /// Dedicated task-session card used by host-managed delegate/task tool flows.
     /// 供宿主管理的委派或任务工具流使用的专属 task-session 卡片。
     TaskSession,
@@ -44,6 +50,8 @@ impl AgentViewToolPresentationKind {
     pub fn as_attribute_value(self) -> &'static str {
         match self {
             Self::Generic => "generic",
+            Self::CommandRun => "command-run",
+            Self::CommandSession => "command-session",
             Self::TaskSession => "task-session",
             Self::GeneratedImage => "generated-image",
             Self::GeneratedVideo => "generated-video",
@@ -57,6 +65,8 @@ impl AgentViewToolPresentationKind {
     pub fn from_attribute_value(value: &str) -> Option<Self> {
         match value.trim() {
             "generic" => Some(Self::Generic),
+            "command-run" => Some(Self::CommandRun),
+            "command-session" => Some(Self::CommandSession),
             "task-session" => Some(Self::TaskSession),
             "generated-image" => Some(Self::GeneratedImage),
             "generated-video" => Some(Self::GeneratedVideo),
@@ -94,6 +104,8 @@ impl AgentViewToolPresentationKind {
     /// 读取旧版基于字符串的工具视觉标记，使重构前的转录仍可映射到新的展示家族。
     fn from_legacy_attributes(attributes: &AgentViewAttributes) -> Option<Self> {
         match attributes.get("tool-visual-kind").map(String::as_str) {
+            Some("command-run") => Some(Self::CommandRun),
+            Some("command-session") => Some(Self::CommandSession),
             Some("task-session") => Some(Self::TaskSession),
             Some("generated-media") => match attributes
                 .get("generated-media-kind")
@@ -596,6 +608,19 @@ mod tests {
         assert_eq!(
             AgentViewToolPresentationKind::from_attributes(&attributes),
             Some(AgentViewToolPresentationKind::GeneratedVideo)
+        );
+    }
+
+    /// Verifies that the new command-session presentation kind can round-trip through persisted attributes.
+    /// 验证新的 command-session 展示种类可以通过持久化属性完成往返解析。
+    #[test]
+    fn parses_command_session_tool_presentation_kind_attribute() {
+        let mut attributes = AgentViewAttributes::new();
+        AgentViewToolPresentationKind::CommandSession.write_to_attributes(&mut attributes);
+
+        assert_eq!(
+            AgentViewToolPresentationKind::from_attributes(&attributes),
+            Some(AgentViewToolPresentationKind::CommandSession)
         );
     }
 

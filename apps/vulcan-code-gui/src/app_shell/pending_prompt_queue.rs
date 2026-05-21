@@ -980,6 +980,7 @@ impl VulcanWorkbench {
                 self.luaskills_runtime.clone(),
                 self.mcp_runtime.clone(),
                 self.runtime_foundation.task_runtime(),
+                self.runtime_foundation.command_session_runtime(),
                 request_for_run,
             ),
             move |event| Message::RunExecutionStreamEvent { run_id, event },

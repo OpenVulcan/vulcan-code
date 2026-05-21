@@ -445,17 +445,15 @@ async fn hydrate_session_runtime_state(
     let runtime_state_cache =
         load_session_event_store_runtime_state(locator.project_id.as_str(), session_id)
             .unwrap_or_default();
-    let current_context_document = match load_session_event_store_context_current(
-        locator.project_id.as_str(),
-        session_id,
-    ) {
-        Ok(document) => document,
-        Err(_) => load_latest_session_event_store_context_snapshot(
-            locator.project_id.as_str(),
-            session_id,
-        )?
-        .map(|snapshot| snapshot.context),
-    };
+    let current_context_document =
+        match load_session_event_store_context_current(locator.project_id.as_str(), session_id) {
+            Ok(document) => document,
+            Err(_) => load_latest_session_event_store_context_snapshot(
+                locator.project_id.as_str(),
+                session_id,
+            )?
+            .map(|snapshot| snapshot.context),
+        };
     let mut runtime_state = runtime_state_row
         .map(stored_runtime_state_row_to_entry)
         .unwrap_or_default();
@@ -528,7 +526,8 @@ fn restore_hydration_window_from_runtime_state_if_empty(
     let Some(runtime_state) = runtime_state else {
         return;
     };
-    let rebuilt_messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+    let rebuilt_messages =
+        conversation_state_to_session_messages(&runtime_state.conversation_state);
     if rebuilt_messages.is_empty() {
         return;
     }
@@ -763,8 +762,8 @@ mod tests {
                 None,
                 &transcript_messages,
             ))
-        .expect("hydrate runtime state")
-        .expect("expected hydrated runtime state");
+            .expect("hydrate runtime state")
+            .expect("expected hydrated runtime state");
 
         assert_eq!(hydrated.conversation_state.messages.len(), 1);
         assert_eq!(
@@ -826,21 +825,20 @@ mod tests {
     #[test]
     fn restore_hydration_window_from_runtime_state_if_empty_rebuilds_visible_messages() {
         let mut runtime_state = SessionRuntimeStateEntry::default();
-        runtime_state.conversation_state =
-            conversation_state_from_session_messages(&[
-                test_message(
-                    "user-1",
-                    SessionMessageKind::User,
-                    SessionMessageRecordKind::Transcript,
-                    "启动后要能看到我",
-                ),
-                test_message(
-                    "assistant-1",
-                    SessionMessageKind::Assistant,
-                    SessionMessageRecordKind::AssistantOutput,
-                    "当然可以",
-                ),
-            ]);
+        runtime_state.conversation_state = conversation_state_from_session_messages(&[
+            test_message(
+                "user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "启动后要能看到我",
+            ),
+            test_message(
+                "assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "当然可以",
+            ),
+        ]);
 
         let mut messages = Vec::new();
         let mut tool_detail_messages = Vec::new();

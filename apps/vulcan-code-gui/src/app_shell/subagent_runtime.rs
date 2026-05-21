@@ -677,4 +677,27 @@ impl VulcanWorkbench {
         let message = self.resolve_rendered_tool_message_entry(session_id, block_id)?;
         Some(self.full_tool_modal_message_entry(session_id, message))
     }
+
+    /// Resolves the rendered attribute map for one visible tool block so richer modal surfaces can reuse routing metadata without reparsing persisted JSON.
+    /// 解析单个可见工具区块的已渲染属性映射，使更丰富的弹层表面能够复用路由元数据，而无需重新解析持久化 JSON。
+    pub(super) fn resolve_rendered_tool_block_attributes(
+        &self,
+        session_id: SessionId,
+        block_id: &str,
+    ) -> Option<vulcan_agent_view::AgentViewAttributes> {
+        let document = self.session_agent_view_documents.get(&session_id)?;
+        for (block_index, block) in document.blocks.iter().enumerate() {
+            let candidate_block_id = agent_view_block_id(session_id, block_index, block);
+            if candidate_block_id != block_id {
+                continue;
+            }
+
+            let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
+                return None;
+            };
+            return Some(directive.attributes.clone());
+        }
+
+        None
+    }
 }

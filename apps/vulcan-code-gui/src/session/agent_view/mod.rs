@@ -1,6 +1,8 @@
 //! GUI-side adapters that map session transcripts into unified vulcan-agent-view documents.
 //! 将会话转录映射为统一 vulcan-agent-view 文档的图形界面适配器。
 
+mod tool_command_run;
+mod tool_command_session;
 mod tool_generated_audio;
 mod tool_generated_document;
 mod tool_generated_image;
@@ -447,6 +449,12 @@ fn build_tool_record_block(
     match tool_shared::resolve_tool_presentation_kind(message) {
         AgentViewToolPresentationKind::Generic => {
             tool_generic::build_generic_tool_block(kind, message, options)
+        }
+        AgentViewToolPresentationKind::CommandRun => {
+            tool_command_run::build_command_run_tool_block(kind, message, options)
+        }
+        AgentViewToolPresentationKind::CommandSession => {
+            tool_command_session::build_command_session_tool_block(kind, message, options)
         }
         AgentViewToolPresentationKind::TaskSession => {
             tool_task_session::build_task_session_tool_block(kind, message, options)
@@ -1060,7 +1068,121 @@ mod tests {
                     && block
                         .attributes
                         .get("task-session-execution-status")
+                .is_some_and(|value| value == "completed")
+        ));
+    }
+
+    /// Verifies that one command-run tool card carries the dedicated visual family and command execution attributes needed by the GUI summary row.
+    /// 验证一张 command-run 工具卡会携带 GUI 摘要行所需的专属展示家族与命令执行属性。
+    #[test]
+    fn command_run_tool_card_exposes_visual_and_command_attributes() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("command-result-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回 shell_command"),
+            body: String::from("命令执行完成。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-command-1",
+                "tool_name": "shell_command",
+                "tool_display_state": "completed",
+                "kind": "command_run",
+                "payload": {
+                    "command": "cargo check -p vulcan-code-gui",
+                    "cwd": "D:/openvulcan/vulcan-code",
+                    "shell": "powershell",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "duration_ms": 1234,
+                    "stdout_bytes": 256,
+                    "stderr_bytes": 0,
+                    "combined_output_overflowed": false,
+                },
+            })),
+            created_at: String::from("2"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::ToolCall
+                    && block
+                        .attributes
+                        .get(AgentViewToolPresentationKind::ATTRIBUTE_KEY)
+                        .is_some_and(|value| value == "command-run")
+                    && block
+                        .attributes
+                        .get("command-run-status")
                         .is_some_and(|value| value == "completed")
+                    && block
+                        .attributes
+                        .get("command-shell")
+                        .is_some_and(|value| value == "powershell")
+                    && block
+                        .attributes
+                        .get("command-text")
+                        .is_some_and(|value| value == "cargo check -p vulcan-code-gui")
+        ));
+    }
+
+    /// Verifies that one command-session tool card carries the dedicated visual family and command-session routing attributes needed by the GUI summary row.
+    /// 验证一张 command-session 工具卡会携带 GUI 摘要行所需的专属展示家族与命令会话路由属性。
+    #[test]
+    fn command_session_tool_card_exposes_visual_and_session_attributes() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("command-session-result-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回 shell_session"),
+            body: String::from("命令会话仍在运行。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-command-session-1",
+                "tool_name": "shell_session",
+                "tool_display_state": "completed",
+                "kind": "command_session",
+                "payload": {
+                    "action": "read",
+                    "owner_session_id": "00000000-0000-0000-0000-000000000010",
+                    "command_session_id": "00000000-0000-0000-0000-000000000011",
+                    "command": "npm test",
+                    "cwd": "D:/openvulcan/vulcan-code",
+                    "shell": "powershell",
+                    "status": "running",
+                    "last_seq": 8,
+                    "stdout_bytes": 512,
+                    "stderr_bytes": 32,
+                    "returned_chunk_count": 2,
+                    "has_more": true,
+                    "output_overflowed": false,
+                },
+            })),
+            created_at: String::from("2"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::ToolCall
+                    && block
+                        .attributes
+                        .get(AgentViewToolPresentationKind::ATTRIBUTE_KEY)
+                        .is_some_and(|value| value == "command-session")
+                    && block
+                        .attributes
+                        .get("command-session-id")
+                        .is_some_and(|value| value == "00000000-0000-0000-0000-000000000011")
+                    && block
+                        .attributes
+                        .get("command-session-action")
+                        .is_some_and(|value| value == "read")
+                    && block
+                        .attributes
+                        .get("command-session-status")
+                        .is_some_and(|value| value == "running")
         ));
     }
 

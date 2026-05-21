@@ -27,12 +27,15 @@ use crate::agent_runtime::config::{
     EXPLORE_AGENT_ID, PLAN_AGENT_ID, WORKSPACE_COORDINATOR_AGENT_ID,
 };
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::provider_protocol_bridge::{
+    attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
+};
+use crate::agent_runtime::provider_stream_projection::is_provider_tool_boundary_runtime_event;
 use crate::agent_runtime::task_runtime::DetachedTaskRuntimeEvent;
 use crate::agent_runtime::{
     self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
     ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind, stream_runtime_run,
 };
-use crate::agent_runtime::provider_stream_projection::is_provider_tool_boundary_runtime_event;
 use crate::agent_view::{
     AgentViewBuildOptions, agent_view_block_collapsed_by_default, agent_view_block_id,
     agent_view_document_raw_source, build_agent_view_document_with_options,
@@ -98,6 +101,8 @@ use crate::skills::{
 };
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
+use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
+use crate::tooling::shell_host::HostCommandShell;
 use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
@@ -1229,9 +1234,30 @@ fn compact_tool_detail_metadata_for_projection(metadata: &Value) -> Option<Value
     }
 
     if let Some(host_result) = resolved_host_result_from_tool_metadata(metadata)
-        .and_then(compact_generated_host_result_for_projection)
+        .and_then(compact_host_result_for_projection)
     {
-        compact.insert(String::from("host_result"), host_result);
+        if source.get("host_result").is_some() {
+            compact.insert(String::from("host_result"), host_result.clone());
+        }
+        if source.get("kind").is_some() && source.get("payload").is_some() {
+            if let Some(kind) = host_result.get("kind") {
+                compact.insert(String::from("kind"), kind.clone());
+            }
+            if let Some(payload) = host_result.get("payload") {
+                compact.insert(String::from("payload"), payload.clone());
+                if compact.get("status").is_none()
+                    && let Some(status) = payload.get("status")
+                {
+                    compact.insert(String::from("status"), status.clone());
+                }
+            }
+        } else if compact.get("status").is_none()
+            && let Some(status) = host_result
+                .get("payload")
+                .and_then(|payload| payload.get("status"))
+        {
+            compact.insert(String::from("status"), status.clone());
+        }
     }
 
     (!compact.is_empty()).then_some(Value::Object(compact))
@@ -1306,12 +1332,20 @@ fn insert_compact_preview_string_field(
     target.insert(key.to_string(), Value::String(compact_value));
 }
 
+/// Preserves only the host-result subsets still needed by inline cards and modal actions after heavy tool payloads are stripped from the main transcript projection.
+/// 在主转录投影剥离重型工具载荷后，仅保留内联卡片与弹层动作仍然需要的宿主结果子集。
+fn compact_host_result_for_projection(host_result: &Value) -> Option<Value> {
+    match host_result.get("kind").and_then(Value::as_str) {
+        Some("generated_attachments") => compact_generated_host_result_for_projection(host_result),
+        Some("command_run") => compact_command_run_host_result_for_projection(host_result),
+        Some("command_session") => compact_command_session_host_result_for_projection(host_result),
+        _ => None,
+    }
+}
+
 /// Preserves only generated-media host-result fields needed by inline cards and modal actions.
 /// 仅保留内联卡片与弹层动作所需的生成媒体宿主结果字段。
 fn compact_generated_host_result_for_projection(host_result: &Value) -> Option<Value> {
-    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
-        return None;
-    }
     let outputs = host_result
         .get("payload")
         .and_then(|payload| payload.get("outputs"))
@@ -1330,6 +1364,76 @@ fn compact_generated_host_result_for_projection(host_result: &Value) -> Option<V
             "outputs": compact_outputs,
         },
     }))
+}
+
+/// Preserves the command-run payload subset required by dedicated command execution cards and tool modals.
+/// 保留专属命令执行卡片与工具弹层所需的 command-run 载荷子集。
+fn compact_command_run_host_result_for_projection(host_result: &Value) -> Option<Value> {
+    let source_payload = host_result.get("payload").and_then(Value::as_object)?;
+    let mut compact_payload = serde_json::Map::new();
+    for key in [
+        "command",
+        "cwd",
+        "shell",
+        "status",
+        "failure_reason",
+        "exit_code",
+        "duration_ms",
+        "stdout_bytes",
+        "stderr_bytes",
+        "combined_output_overflowed",
+    ] {
+        insert_compact_metadata_field(&mut compact_payload, source_payload, key);
+    }
+    if compact_payload.is_empty() {
+        return None;
+    }
+
+    Some(Value::Object(serde_json::Map::from_iter([
+        (
+            String::from("kind"),
+            Value::String(String::from("command_run")),
+        ),
+        (String::from("payload"), Value::Object(compact_payload)),
+    ])))
+}
+
+/// Preserves the command-session payload subset required by dedicated command-session cards and tool modals.
+/// 保留专属命令会话卡片与工具弹层所需的 command-session 载荷子集。
+fn compact_command_session_host_result_for_projection(host_result: &Value) -> Option<Value> {
+    let source_payload = host_result.get("payload").and_then(Value::as_object)?;
+    let mut compact_payload = serde_json::Map::new();
+    for key in [
+        "action",
+        "owner_session_id",
+        "command_session_id",
+        "command",
+        "cwd",
+        "shell",
+        "status",
+        "failure_reason",
+        "exit_code",
+        "last_seq",
+        "stdout_bytes",
+        "stderr_bytes",
+        "returned_chunk_count",
+        "bytes_written",
+        "has_more",
+        "output_overflowed",
+    ] {
+        insert_compact_metadata_field(&mut compact_payload, source_payload, key);
+    }
+    if compact_payload.is_empty() {
+        return None;
+    }
+
+    Some(Value::Object(serde_json::Map::from_iter([
+        (
+            String::from("kind"),
+            Value::String(String::from("command_session")),
+        ),
+        (String::from("payload"), Value::Object(compact_payload)),
+    ])))
 }
 
 /// Preserves the small generated-output descriptor required to render and open produced media.
@@ -1602,6 +1706,173 @@ fn subagent_run_state_badge_label(run_state: SubagentTaskRunState) -> &'static s
         SubagentTaskRunState::Completed => "✅ 完成",
         SubagentTaskRunState::Failed => "❌ 失败",
     }
+}
+
+/// Returns the emoji-prefixed badge label for one command-run execution status string.
+/// 返回单条命令执行状态字符串对应的 emoji 前缀徽标文案。
+fn command_run_status_badge_label(status: &str) -> &'static str {
+    match status.trim() {
+        "running" => "🔄 运行中",
+        "completed" => "✅ 已完成",
+        "failed" => "❌ 失败",
+        "timed_out" => "⏱️ 已超时",
+        _ => "⌘ 命令结果",
+    }
+}
+
+/// Returns the emoji-prefixed badge label for one command-session lifecycle status string.
+/// 返回单条命令会话生命周期状态字符串对应的 emoji 前缀徽标文案。
+fn command_session_status_badge_label(status: &str) -> &'static str {
+    match status.trim() {
+        "running" => "🔄 运行中",
+        "completed" => "✅ 已完成",
+        "failed" => "❌ 失败",
+        "stopped" => "⏹️ 已停止",
+        _ => "⌨ 命令会话",
+    }
+}
+
+/// Returns the compact human-facing label for one shell-session action string.
+/// 返回单条 shell-session 动作字符串对应的紧凑用户可见标签。
+fn command_session_action_label(action: &str) -> &'static str {
+    match action.trim() {
+        "start" => "启动",
+        "read" => "读取",
+        "write" => "写入",
+        "stop" => "停止",
+        _ => "未知动作",
+    }
+}
+
+/// Parses one optional boolean-like transcript attribute into a concrete boolean value.
+/// 将一条可选类布尔转录属性解析为确定布尔值。
+fn parse_agent_view_attribute_bool(value: Option<&String>) -> Option<bool> {
+    match value.map(String::as_str).map(str::trim) {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    }
+}
+
+/// Parses one optional transcript attribute into an unsigned 64-bit integer.
+/// 将一条可选转录属性解析为无符号 64 位整数。
+fn parse_agent_view_attribute_u64(value: Option<&String>) -> Option<u64> {
+    value
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+/// Parses one optional transcript attribute into a signed 32-bit integer.
+/// 将一条可选转录属性解析为有符号 32 位整数。
+fn parse_agent_view_attribute_i32(value: Option<&String>) -> Option<i32> {
+    value
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<i32>().ok())
+}
+
+/// Parses one optional transcript attribute into a stable session identifier.
+/// 将一条可选转录属性解析为稳定会话标识。
+fn parse_agent_view_attribute_session_id(value: Option<&String>) -> Option<SessionId> {
+    value
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| SessionId::parse_str(value).ok())
+}
+
+/// Copies one non-empty transcript attribute into an owned optional string field.
+/// 将一条非空转录属性复制为拥有所有权的可选字符串字段。
+fn cloned_agent_view_attribute(
+    attributes: &vulcan_agent_view::AgentViewAttributes,
+    key: &str,
+) -> Option<String> {
+    attributes
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Builds the richer tool-modal presentation metadata from one rendered tool-block attribute map.
+/// 根据单个已渲染工具区块属性映射构建增强的工具弹层展示元数据。
+fn tool_modal_presentation_from_agent_view_attributes(
+    attributes: &vulcan_agent_view::AgentViewAttributes,
+) -> ToolModalPresentation {
+    match vulcan_agent_view::AgentViewToolPresentationKind::resolve_from_attributes(attributes) {
+        vulcan_agent_view::AgentViewToolPresentationKind::CommandRun => {
+            command_run_tool_modal_summary_from_agent_view_attributes(attributes)
+                .map(ToolModalPresentation::CommandRun)
+                .unwrap_or(ToolModalPresentation::Generic)
+        }
+        vulcan_agent_view::AgentViewToolPresentationKind::CommandSession => {
+            command_session_tool_modal_summary_from_agent_view_attributes(attributes)
+                .map(ToolModalPresentation::CommandSession)
+                .unwrap_or(ToolModalPresentation::Generic)
+        }
+        _ => ToolModalPresentation::Generic,
+    }
+}
+
+/// Builds one command-run tool-modal summary from rendered transcript block attributes.
+/// 根据已渲染转录区块属性构建一份命令执行工具弹层摘要。
+fn command_run_tool_modal_summary_from_agent_view_attributes(
+    attributes: &vulcan_agent_view::AgentViewAttributes,
+) -> Option<CommandRunToolModalSummary> {
+    let status = cloned_agent_view_attribute(attributes, "command-run-status")?;
+    Some(CommandRunToolModalSummary {
+        status,
+        shell: cloned_agent_view_attribute(attributes, "command-shell"),
+        working_directory: cloned_agent_view_attribute(attributes, "command-working-directory"),
+        command_text: cloned_agent_view_attribute(attributes, "command-text"),
+        failure_reason: cloned_agent_view_attribute(attributes, "command-failure-reason"),
+        exit_code: parse_agent_view_attribute_i32(attributes.get("command-exit-code")),
+        duration_ms: parse_agent_view_attribute_u64(attributes.get("command-duration-ms")),
+        stdout_bytes: parse_agent_view_attribute_u64(attributes.get("command-stdout-bytes")),
+        stderr_bytes: parse_agent_view_attribute_u64(attributes.get("command-stderr-bytes")),
+        output_overflowed: parse_agent_view_attribute_bool(
+            attributes.get("command-output-overflowed"),
+        )
+        .unwrap_or(false),
+    })
+}
+
+/// Builds one command-session tool-modal summary from rendered transcript block attributes.
+/// 根据已渲染转录区块属性构建一份命令会话工具弹层摘要。
+fn command_session_tool_modal_summary_from_agent_view_attributes(
+    attributes: &vulcan_agent_view::AgentViewAttributes,
+) -> Option<CommandSessionToolModalSummary> {
+    let command_session_id =
+        parse_agent_view_attribute_session_id(attributes.get("command-session-id"))?;
+    let status = cloned_agent_view_attribute(attributes, "command-session-status")?;
+    Some(CommandSessionToolModalSummary {
+        command_session_id,
+        action: cloned_agent_view_attribute(attributes, "command-session-action"),
+        status,
+        shell: cloned_agent_view_attribute(attributes, "command-shell"),
+        working_directory: cloned_agent_view_attribute(attributes, "command-working-directory"),
+        command_text: cloned_agent_view_attribute(attributes, "command-text"),
+        failure_reason: cloned_agent_view_attribute(attributes, "command-failure-reason"),
+        exit_code: parse_agent_view_attribute_i32(attributes.get("command-exit-code")),
+        last_seq: parse_agent_view_attribute_u64(attributes.get("command-last-seq")),
+        stdout_bytes: parse_agent_view_attribute_u64(attributes.get("command-stdout-bytes")),
+        stderr_bytes: parse_agent_view_attribute_u64(attributes.get("command-stderr-bytes")),
+        returned_chunk_count: parse_agent_view_attribute_u64(
+            attributes.get("command-session-returned-chunk-count"),
+        ),
+        bytes_written: parse_agent_view_attribute_u64(
+            attributes.get("command-session-bytes-written"),
+        ),
+        has_more: parse_agent_view_attribute_bool(attributes.get("command-session-has-more")),
+        output_overflowed: parse_agent_view_attribute_bool(
+            attributes.get("command-output-overflowed"),
+        )
+        .unwrap_or(false),
+    })
 }
 
 /// Builds one compact human-facing task-session label from the optional task description and subagent name.
@@ -1938,14 +2209,13 @@ fn normalize_tool_display_message(mut message: SessionMessageEntry) -> SessionMe
             .and_then(Value::as_str)
             .filter(|tool_name| !tool_name.trim().is_empty())
         {
-            let display_state =
-                tool_display_state_for_message(message.record_kind, Some(metadata));
+            let display_state = tool_display_state_for_message(message.record_kind, Some(metadata));
             message.title = human_tool_display_title(tool_name, display_state);
         }
     }
-    let display_state = tool_display_state_for_message(message.record_kind, message.metadata.as_ref());
-    message.metadata =
-        attach_tool_display_state_metadata(message.metadata.take(), display_state);
+    let display_state =
+        tool_display_state_for_message(message.record_kind, message.metadata.as_ref());
+    message.metadata = attach_tool_display_state_metadata(message.metadata.take(), display_state);
     message
 }
 
@@ -1957,8 +2227,10 @@ fn merge_tool_result_into_display_entry(
 ) {
     let tool_result_was_task_session = tool_display_message_is_task_session(&tool_result_message);
     let tool_result_title = tool_result_message.title.clone();
-    let merged_display_state =
-        tool_display_state_for_message(tool_result_message.record_kind, tool_result_message.metadata.as_ref());
+    let merged_display_state = tool_display_state_for_message(
+        tool_result_message.record_kind,
+        tool_result_message.metadata.as_ref(),
+    );
     existing.record_kind = SessionMessageRecordKind::ToolCallOutput;
     existing.body = merge_tool_display_body(&existing.body, &tool_result_message.body);
     existing.metadata =
@@ -2095,10 +2367,7 @@ fn tool_metadata_represents_failed_result(metadata: &Value) -> bool {
             .and_then(|payload| payload.get("status"))
             .and_then(Value::as_str)
             == Some("failed")
-        || metadata
-            .get("status")
-            .and_then(Value::as_str)
-            == Some("failed")
+        || metadata.get("status").and_then(Value::as_str) == Some("failed")
 }
 
 /// Builds one stable human-facing title for a tool execution card from the tool name and display state.
@@ -2124,6 +2393,76 @@ fn attach_tool_display_state_metadata(metadata: Option<Value>, state: &str) -> O
         Value::String(state.to_string()),
     );
     Some(Value::Object(metadata_object))
+}
+
+/// Builds the human-facing Markdown body appended to the transcript after one GUI-initiated command-session stop succeeds.
+/// 构建在一次 GUI 发起的命令会话停止成功后追加到转录中的人类可读 Markdown 正文。
+fn build_command_session_stop_result_body(snapshot: &CommandSessionSnapshot) -> String {
+    let leading_summary = match snapshot.status {
+        CommandSessionStatus::Stopped => "命令会话已按用户请求停止。",
+        CommandSessionStatus::Failed => "命令会话在停止过程中进入失败状态。",
+        CommandSessionStatus::Completed => "命令会话在停止请求完成前已经自然结束。",
+        CommandSessionStatus::Running => "命令会话停止请求已发出，但当前快照仍显示为运行中。",
+    };
+    let mut body = format!(
+        "## 命令会话停止\n\n{leading_summary}\n\n- 会话 ID: `{}`\n- 命令: `{}`\n- Shell: `{}`\n- 工作目录: `{}`\n- 最终状态: `{}`\n- 退出码: `{}`\n- stdout: `{}` bytes\n- stderr: `{}` bytes\n- last_seq: `{}`",
+        snapshot.command_session_id,
+        snapshot.command,
+        snapshot.shell_label,
+        snapshot.cwd.display(),
+        snapshot.status.as_str(),
+        snapshot
+            .exit_code
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("-")),
+        snapshot.stdout_bytes,
+        snapshot.stderr_bytes,
+        snapshot.last_seq,
+    );
+    if let Some(failure_reason) = snapshot
+        .failure_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body.push_str(&format!("\n- 失败原因: `{failure_reason}`"));
+    }
+    body
+}
+
+/// Builds one runtime-like tool-result metadata object for a GUI-initiated command-session stop so transcript persistence stays structurally aligned with provider-emitted tool results.
+/// 为 GUI 发起的命令会话停止构建一份类运行时工具结果元数据对象，使转录持久化在结构上与 Provider 发出的工具结果保持一致。
+fn build_command_session_stop_result_metadata(
+    tool_call_id: &str,
+    snapshot: &CommandSessionSnapshot,
+) -> Option<Value> {
+    let tool_result_id = format!(
+        "tool-result-manual-stop-{tool_call_id}-{}",
+        current_unix_millis_text()
+    );
+    let host_metadata = json!({
+        "kind": "command_session",
+        "payload": {
+            "action": "stop",
+            "owner_session_id": snapshot.owner_session_id.to_string(),
+            "command_session_id": snapshot.command_session_id.to_string(),
+            "command": snapshot.command,
+            "cwd": snapshot.cwd.display().to_string(),
+            "shell": snapshot.shell_label,
+            "status": snapshot.status.as_str(),
+            "exit_code": snapshot.exit_code,
+            "failure_reason": snapshot.failure_reason,
+            "stdout_bytes": snapshot.stdout_bytes,
+            "stderr_bytes": snapshot.stderr_bytes,
+            "last_seq": snapshot.last_seq,
+            "has_more": false,
+            "output_overflowed": false,
+        },
+    });
+    attach_tool_name_to_runtime_metadata(
+        build_tool_result_runtime_metadata(tool_call_id, &tool_result_id, Some(&host_metadata)),
+        "shell_session",
+    )
 }
 
 /// Parses one UUID-like session identifier text into the local `SessionId` type when the input is non-empty and valid.
@@ -3386,8 +3725,148 @@ struct SessionInlineAgentViewDocumentCache {
     document: Rc<vulcan_agent_view::AgentViewDocument>,
 }
 
-/// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
-/// 当某个内联思考区块被显式打开到转录上方时保留的居中弹层状态。
+/// Summary data rendered by the dedicated command-run tool modal surface.
+/// 命令执行专属工具弹层表面渲染的摘要数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandRunToolModalSummary {
+    /// Lifecycle status reported by the host-managed one-shot command execution.
+    /// 宿主管理的一次性命令执行上报的生命周期状态。
+    status: String,
+    /// Optional shell label used by the execution launcher.
+    /// 执行启动器使用的可选 shell 标签。
+    shell: Option<String>,
+    /// Optional working-directory text shown to the user.
+    /// 展示给用户的可选工作目录文本。
+    working_directory: Option<String>,
+    /// Optional original command text requested by the caller.
+    /// 调用方请求的可选原始命令文本。
+    command_text: Option<String>,
+    /// Optional failure summary synthesized by the host runtime.
+    /// 宿主运行时综合生成的可选失败摘要。
+    failure_reason: Option<String>,
+    /// Optional process exit code captured after completion.
+    /// 完成后捕获到的可选进程退出码。
+    exit_code: Option<i32>,
+    /// Optional duration spent by the command execution in milliseconds.
+    /// 命令执行耗时的可选毫秒数。
+    duration_ms: Option<u64>,
+    /// Optional decoded stdout byte count accumulated by the execution.
+    /// 执行过程中累计的可选解码后标准输出字节数。
+    stdout_bytes: Option<u64>,
+    /// Optional decoded stderr byte count accumulated by the execution.
+    /// 执行过程中累计的可选解码后标准错误字节数。
+    stderr_bytes: Option<u64>,
+    /// Whether the combined text output had to be truncated for rendering.
+    /// 合并文本输出是否因渲染限制而被截断。
+    output_overflowed: bool,
+}
+
+/// Summary data rendered by the dedicated command-session tool modal surface.
+/// 命令会话专属工具弹层表面渲染的摘要数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandSessionToolModalSummary {
+    /// Stable command-session identifier owned by the host runtime.
+    /// 由宿主运行时持有的稳定命令会话标识。
+    command_session_id: SessionId,
+    /// Most recent shell-session action represented by the transcript card.
+    /// 当前转录卡片所代表的最近一次 shell-session 动作。
+    action: Option<String>,
+    /// Current lifecycle status shown by the transcript card or live GUI override.
+    /// 由转录卡片或 GUI 实时覆盖展示的当前生命周期状态。
+    status: String,
+    /// Optional shell label used by the session launcher.
+    /// 会话启动器使用的可选 shell 标签。
+    shell: Option<String>,
+    /// Optional working-directory text shown to the user.
+    /// 展示给用户的可选工作目录文本。
+    working_directory: Option<String>,
+    /// Optional original command text requested by the caller.
+    /// 调用方请求的可选原始命令文本。
+    command_text: Option<String>,
+    /// Optional failure summary synthesized by the host runtime.
+    /// 宿主运行时综合生成的可选失败摘要。
+    failure_reason: Option<String>,
+    /// Optional process exit code captured after the process terminated.
+    /// 进程终止后捕获到的可选退出码。
+    exit_code: Option<i32>,
+    /// Optional highest buffered output sequence number currently known.
+    /// 当前已知的可选最高缓冲输出序号。
+    last_seq: Option<u64>,
+    /// Optional decoded stdout byte count accumulated so far.
+    /// 当前累计的可选解码后标准输出字节数。
+    stdout_bytes: Option<u64>,
+    /// Optional decoded stderr byte count accumulated so far.
+    /// 当前累计的可选解码后标准错误字节数。
+    stderr_bytes: Option<u64>,
+    /// Optional number of chunks returned by the most recent read action.
+    /// 最近一次读取动作返回的可选分片数量。
+    returned_chunk_count: Option<u64>,
+    /// Optional byte count written by the most recent write action.
+    /// 最近一次写入动作写入的可选字节数。
+    bytes_written: Option<u64>,
+    /// Optional flag indicating unread buffered chunks still remain.
+    /// 表示是否仍有未读缓冲分片残留的可选标记。
+    has_more: Option<bool>,
+    /// Whether rendered output text had to be truncated.
+    /// 渲染输出文本是否被截断。
+    output_overflowed: bool,
+}
+
+/// High-level tool-modal presentation family derived from one rendered transcript block.
+/// 从单个已渲染转录区块派生出的高层工具弹层展示家族。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ToolModalPresentation {
+    /// Generic modal that only renders the transcript detail document.
+    /// 仅渲染转录详情文档的通用弹层。
+    Generic,
+    /// Dedicated modal enriched with one-shot command execution summary fields.
+    /// 携带一次性命令执行摘要字段的专属弹层。
+    CommandRun(CommandRunToolModalSummary),
+    /// Dedicated modal enriched with long-lived command-session summary fields.
+    /// 携带长生命周期命令会话摘要字段的专属弹层。
+    CommandSession(CommandSessionToolModalSummary),
+}
+
+impl ToolModalPresentation {
+    /// Returns the embedded command-session summary when this modal presentation targets a host-managed shell session.
+    /// 当该弹层展示针对宿主管理 shell 会话时，返回其内嵌的命令会话摘要。
+    fn command_session_summary(&self) -> Option<&CommandSessionToolModalSummary> {
+        match self {
+            Self::CommandSession(summary) => Some(summary),
+            _ => None,
+        }
+    }
+
+    /// Returns the mutable embedded command-session summary when this modal presentation targets a host-managed shell session.
+    /// 当该弹层展示针对宿主管理 shell 会话时，返回其可变的内嵌命令会话摘要。
+    fn command_session_summary_mut(&mut self) -> Option<&mut CommandSessionToolModalSummary> {
+        match self {
+            Self::CommandSession(summary) => Some(summary),
+            _ => None,
+        }
+    }
+
+    /// Applies one live runtime snapshot onto the command-session summary so GUI stop actions can update the modal immediately.
+    /// 将一份实时运行时快照应用到命令会话摘要上，使 GUI 停止动作可以立即更新弹层。
+    fn apply_command_session_snapshot(&mut self, snapshot: &CommandSessionSnapshot) -> bool {
+        let Some(summary) = self.command_session_summary_mut() else {
+            return false;
+        };
+        if summary.command_session_id != snapshot.command_session_id {
+            return false;
+        }
+        summary.status = snapshot.status.as_str().to_string();
+        summary.exit_code = snapshot.exit_code;
+        summary.failure_reason = snapshot.failure_reason.clone();
+        summary.stdout_bytes = Some(snapshot.stdout_bytes as u64);
+        summary.stderr_bytes = Some(snapshot.stderr_bytes as u64);
+        summary.last_seq = Some(snapshot.last_seq);
+        true
+    }
+}
+
+/// Centered modal payload reused by both thinking and tool surfaces.
+/// 由思考弹层与工具弹层共同复用的居中弹层载荷。
 #[derive(Debug, Clone)]
 struct ModalSurfacePayload {
     /// Stable title rendered in the modal header without needing to rebuild it on every animation tick.
@@ -3405,6 +3884,9 @@ struct ModalSurfacePayload {
     /// Stable hash used by lazy body rendering so heavy transcript content only rebuilds when payload really changes.
     /// 供惰性正文渲染使用的稳定哈希，使重型转录内容仅在载荷真正变化时重建。
     document_signature: u64,
+    /// Optional richer presentation metadata used by specialized tool modals such as command-run and command-session.
+    /// 专属命令执行与命令会话等特殊工具弹层使用的可选增强展示元数据。
+    tool_modal_presentation: ToolModalPresentation,
 }
 
 /// Centered modal state retained while one inline thinking block is explicitly opened above the transcript.
@@ -3447,6 +3929,9 @@ struct ToolModalState {
     /// Stable snapshot payload reused across animation ticks.
     /// 跨动画帧复用的稳定快照载荷。
     payload: ModalSurfacePayload,
+    /// Whether one GUI-initiated stop request is currently in flight for the opened command-session modal.
+    /// 当前已打开的命令会话弹层是否存在一条由 GUI 发起且仍在进行中的停止请求。
+    command_session_stop_in_flight: bool,
 }
 
 /// Lifecycle states used by one cached subagent task panel.
@@ -3850,6 +4335,26 @@ struct AgentChoice {
 impl std::fmt::Display for AgentChoice {
     /// Renders the user-facing label of one agent picker item.
     /// 渲染单个代理选择项的面向用户标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+/// Pick-list choice representing one configurable default command shell policy.
+/// 表示一条可配置默认命令 shell 策略的下拉选择项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandShellPickerChoice {
+    /// Optional explicit shell selected by the user; `None` means system auto resolution.
+    /// 用户选择的可选显式 shell；`None` 表示系统自动解析。
+    shell: Option<HostCommandShell>,
+    /// Human-readable display label rendered inside the settings picker.
+    /// 渲染在设置选择器中的人类可读显示标签。
+    label: String,
+}
+
+impl std::fmt::Display for CommandShellPickerChoice {
+    /// Renders the user-facing label of one default command shell picker item.
+    /// 渲染单个默认命令 shell 选择项的面向用户标签。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.label)
     }
@@ -5978,6 +6483,9 @@ enum Message {
     /// Startup transcript turn-page size selected from the settings pick list.
     /// 从设置下拉选择框中选中了启动转录轮次分页大小。
     SessionTranscriptTurnPageSizeSelected(usize),
+    /// Default command shell policy selected from the settings pick list.
+    /// 从设置下拉选择框中选中了默认命令 shell 策略。
+    CommandShellPreferenceSelected(CommandShellPickerChoice),
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
@@ -6044,6 +6552,12 @@ enum Message {
     /// Stops the currently opened running subagent task without aborting the parent session.
     /// 停止当前已打开的运行中子代理任务，而不影响父会话。
     StopSelectedSubagentTask,
+    /// Stops the currently opened running command session from the dedicated tool modal.
+    /// 在专属工具弹层中停止当前已打开且仍在运行的命令会话。
+    StopSelectedCommandSession,
+    /// Reports the completion of one GUI-initiated command-session stop request.
+    /// 回传一条由 GUI 发起的命令会话停止请求的完成结果。
+    SelectedCommandSessionStopFinished(Result<CommandSessionSnapshot, String>),
     /// Returns from the currently opened subagent task panel back to the parent session transcript.
     /// 从当前已打开的子代理任务面板返回父会话转录视图。
     ReturnToSelectedSessionTranscript,
@@ -7184,11 +7698,10 @@ impl VulcanWorkbench {
                             ]);
                         }
 
-                        return Task::batch([
-                            self.schedule_session_agent_view_projection_refresh_if_needed(
+                        return Task::batch([self
+                            .schedule_session_agent_view_projection_refresh_if_needed(
                                 session_id,
-                            ),
-                        ]);
+                            )]);
                     }
                     Err(error) => {
                         if session_event_store_missing_error(&error) {
@@ -8914,15 +9427,16 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WorkbenchOpenRouterEndpointSelected(selection) => {
-                let result =
-                    self.set_active_workbench_openrouter_endpoint_route(selection.clone());
+                let result = self.set_active_workbench_openrouter_endpoint_route(selection.clone());
                 self.workbench_openrouter_endpoint_picker =
                     WorkbenchOpenRouterEndpointPickerState::default();
                 match result {
                     Ok(()) => {
                         self.status_message = selection
                             .as_ref()
-                            .map(|route| format!("已切换 OpenRouter 二级供应商：{}", route.provider_name))
+                            .map(|route| {
+                                format!("已切换 OpenRouter 二级供应商：{}", route.provider_name)
+                            })
                             .unwrap_or_else(|| String::from("已切换为 OpenRouter 自动路由。"));
                     }
                     Err(error) => {
@@ -9832,6 +10346,29 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::CommandShellPreferenceSelected(choice) => {
+                let current_raw = self
+                    .provider_configuration
+                    .default_command_shell
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_ascii_lowercase());
+                let next_raw = choice.shell.map(|shell| shell.id().to_string());
+                if current_raw == next_raw {
+                    return Task::none();
+                }
+
+                match self.persist_default_command_shell_preference(choice.shell) {
+                    Ok(status_message) => {
+                        self.status_message = status_message;
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
             Message::QuickGuideMarkdownAction(action) => {
                 if !action.is_edit() {
                     self.quick_guide_markdown_buffer.perform(action);
@@ -10083,6 +10620,68 @@ impl VulcanWorkbench {
                         Task::none()
                     }
                 }
+            }
+            Message::StopSelectedCommandSession => {
+                let Some((owner_session_id, command_session_id)) =
+                    self.active_command_session_modal_stop_target()
+                else {
+                    self.status_message = String::from("当前没有可停止的命令会话弹层。");
+                    return Task::none();
+                };
+                let Some(modal_state) = self.active_tool_modal.as_mut() else {
+                    self.status_message = String::from("当前没有可停止的命令会话弹层。");
+                    return Task::none();
+                };
+                if modal_state.command_session_stop_in_flight {
+                    self.status_message = String::from("命令会话停止请求已经发出，请稍候。");
+                    return Task::none();
+                }
+                modal_state.command_session_stop_in_flight = true;
+                let command_session_runtime = self.runtime_foundation.command_session_runtime();
+                Task::perform(
+                    async move {
+                        command_session_runtime
+                            .stop_session(owner_session_id, command_session_id, None)
+                            .await
+                    },
+                    Message::SelectedCommandSessionStopFinished,
+                )
+            }
+            Message::SelectedCommandSessionStopFinished(result) => {
+                let active_modal_session_id = self
+                    .active_tool_modal
+                    .as_ref()
+                    .map(|modal_state| modal_state.session_id);
+                let command_tool_call_id = self.active_command_session_modal_tool_call_id();
+                if let Some(modal_state) = self.active_tool_modal.as_mut() {
+                    modal_state.command_session_stop_in_flight = false;
+                    if let Ok(snapshot) = result.as_ref() {
+                        modal_state
+                            .payload
+                            .tool_modal_presentation
+                            .apply_command_session_snapshot(snapshot);
+                    }
+                }
+                match result {
+                    Ok(snapshot) => {
+                        let tool_call_id = command_tool_call_id.unwrap_or_else(|| {
+                            format!("gui-command-session-{}", snapshot.command_session_id)
+                        });
+                        let transcript_session_id =
+                            active_modal_session_id.unwrap_or(snapshot.owner_session_id);
+                        self.append_command_session_stop_result_message(
+                            transcript_session_id,
+                            &tool_call_id,
+                            &snapshot,
+                        );
+                        self.status_message =
+                            format!("命令会话 `{}` 已停止。", snapshot.command_session_id);
+                    }
+                    Err(error) => {
+                        self.status_message = format!("停止命令会话失败：{error}");
+                    }
+                }
+                Task::none()
             }
             Message::ReturnToSelectedSessionTranscript => {
                 let parent_session_id = self.selected_session().map(|session| session.id);
@@ -13217,8 +13816,10 @@ impl VulcanWorkbench {
         runtime_state.active_agent_id = Some(preparation.agent_id.clone());
         runtime_state.active_provider_id = Some(preparation.model_blueprint.provider_id.clone());
         runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
-        runtime_state.active_openrouter_endpoint_route =
-            preparation.model_blueprint.openrouter_endpoint_route.clone();
+        runtime_state.active_openrouter_endpoint_route = preparation
+            .model_blueprint
+            .openrouter_endpoint_route
+            .clone();
         runtime_state.updated_at = current_unix_millis_text();
     }
 
@@ -14187,8 +14788,10 @@ impl VulcanWorkbench {
                 };
 
                 self.seal_streaming_message_segments(session_id);
-                let display_state =
-                    tool_display_state_for_message(SessionMessageRecordKind::ToolResultOutput, event.metadata.as_ref());
+                let display_state = tool_display_state_for_message(
+                    SessionMessageRecordKind::ToolResultOutput,
+                    event.metadata.as_ref(),
+                );
                 let result_title = self
                     .session_tool_call_message_ids
                     .get(&session_id)
@@ -14206,11 +14809,16 @@ impl VulcanWorkbench {
                                         .and_then(Value::as_str)
                                         .filter(|tool_name| !tool_name.trim().is_empty());
                                     tool_name
-                                        .map(|tool_name| human_tool_display_title(tool_name, display_state))
+                                        .map(|tool_name| {
+                                            human_tool_display_title(tool_name, display_state)
+                                        })
                                         .unwrap_or_else(|| {
                                             let call_title = message.title.trim();
                                             if call_title.is_empty() {
-                                                human_tool_display_title(&tool_call_id, display_state)
+                                                human_tool_display_title(
+                                                    &tool_call_id,
+                                                    display_state,
+                                                )
                                             } else {
                                                 call_title.to_string()
                                             }
@@ -14362,7 +14970,10 @@ impl VulcanWorkbench {
     /// Returns the localized lightweight request-progress hint shown before the first visible provider delta arrives.
     /// 返回在首个可见 Provider 增量到来前展示的本地化轻量请求进度提示。
     fn session_requesting_progress_text(&self, session_id: SessionId) -> Option<String> {
-        if !self.pending_provider_response_sessions.contains(&session_id) {
+        if !self
+            .pending_provider_response_sessions
+            .contains(&session_id)
+        {
             return None;
         }
         let suffix = self.runtime_progress_ellipsis();
@@ -14381,7 +14992,9 @@ impl VulcanWorkbench {
     ) -> Option<String> {
         let active_message_id = self.streaming_thinking_message_ids.get(&session_id)?;
         if active_message_id != message_id
-            || !self.floating_streaming_thinking_sessions.contains(&session_id)
+            || !self
+                .floating_streaming_thinking_sessions
+                .contains(&session_id)
         {
             return None;
         }
@@ -14753,6 +15366,7 @@ impl VulcanWorkbench {
             phase: ThinkingModalPhase::Opening,
             started_at: Instant::now(),
             payload,
+            command_session_stop_in_flight: false,
         });
     }
 
@@ -14800,6 +15414,53 @@ impl VulcanWorkbench {
         {
             self.active_tool_modal = None;
         }
+    }
+
+    /// Returns the owner/session identifiers of the currently opened running command-session modal when one exists.
+    /// 当存在时，返回当前已打开且仍在运行的命令会话弹层对应的归属会话标识与命令会话标识。
+    fn active_command_session_modal_stop_target(&self) -> Option<(SessionId, SessionId)> {
+        let modal_state = self.active_tool_modal.as_ref()?;
+        let summary = modal_state
+            .payload
+            .tool_modal_presentation
+            .command_session_summary()?;
+        (summary.status == "running")
+            .then_some((modal_state.session_id, summary.command_session_id))
+    }
+
+    /// Returns the stable tool-call identifier associated with the currently opened command-session modal when one can still be recovered from the rendered transcript block.
+    /// 当仍能从已渲染转录区块恢复时，返回当前已打开命令会话弹层关联的稳定工具调用标识。
+    fn active_command_session_modal_tool_call_id(&self) -> Option<String> {
+        let modal_state = self.active_tool_modal.as_ref()?;
+        self.resolve_rendered_tool_modal_message_entry(
+            modal_state.session_id,
+            &modal_state.block_id,
+        )
+        .and_then(|message| tool_display_message_call_id(&message))
+    }
+
+    /// Appends one GUI-originated command-session stop result back into the canonical transcript so later reloads and modal rebuilds can observe the same terminal fact.
+    /// 将一条源自 GUI 的命令会话停止结果追加回规范转录，使后续重载与弹层重建都能观测到同一终态事实。
+    fn append_command_session_stop_result_message(
+        &mut self,
+        session_id: SessionId,
+        tool_call_id: &str,
+        snapshot: &CommandSessionSnapshot,
+    ) -> String {
+        let display_state = if snapshot.status == CommandSessionStatus::Failed {
+            "failed"
+        } else {
+            "completed"
+        };
+        self.push_visible_session_record_message_with_metadata(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolResultOutput,
+            human_tool_display_title("shell_session", display_state),
+            build_command_session_stop_result_body(snapshot),
+            build_command_session_stop_result_metadata(tool_call_id, snapshot),
+            false,
+        )
     }
 
     /// Advances the centered thinking modal animation and removes the modal once the closing phase completes.
@@ -15152,27 +15813,30 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
-        build_background_legacy_maintenance_queue, build_session_turn_stats_from_state,
+        CommandSessionToolModalSummary, ToolModalPresentation, VulcanWorkbench,
+        anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
+        build_command_session_stop_result_metadata, build_session_turn_stats_from_state,
         clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
         composer_text_has_submittable_content, composer_visible_line_count,
         format_openrouter_percentage, format_openrouter_price_per_mtokens,
-        format_openrouter_throughput_tokens_per_second,
-        generated_attachments_from_tool_metadata,
+        format_openrouter_throughput_tokens_per_second, generated_attachments_from_tool_metadata,
         merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
         pending_prompt_dispatch_index, prune_session_messages_to_limit,
         sanitize_workspace_history_search_query_input, session_event_store_missing_error,
-        task_session_payload_from_tool_metadata, value_as_f64,
+        task_session_payload_from_tool_metadata,
+        tool_modal_presentation_from_agent_view_attributes, value_as_f64,
     };
+    use crate::app_shell::markdown;
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
         SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
         SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
     };
+    use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
     use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
-    use crate::app_shell::markdown;
     use iced::widget::text_editor;
     use serde_json::{Value, json};
+    use std::path::PathBuf;
     use vulcan_agent_view::AgentViewBlock;
     use vulcan_core::types::ConversationAttachmentKind;
 
@@ -15234,6 +15898,127 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Verifies command-session transcript attributes can be reconstructed into the richer tool-modal presentation metadata.
+    /// 验证命令会话转录属性可以重建为更丰富的工具弹层展示元数据。
+    #[test]
+    fn tool_modal_presentation_parses_command_session_attributes() {
+        let mut attributes = vulcan_agent_view::AgentViewAttributes::new();
+        attributes.insert(
+            String::from("tool-presentation-kind"),
+            String::from("command-session"),
+        );
+        attributes.insert(
+            String::from("command-session-id"),
+            String::from("00000000-0000-0000-0000-000000000111"),
+        );
+        attributes.insert(
+            String::from("command-session-status"),
+            String::from("running"),
+        );
+        attributes.insert(String::from("command-session-action"), String::from("read"));
+        attributes.insert(String::from("command-shell"), String::from("powershell"));
+        attributes.insert(
+            String::from("command-working-directory"),
+            String::from("D:\\openvulcan\\vulcan-code"),
+        );
+        attributes.insert(
+            String::from("command-text"),
+            String::from("cargo test -p vulcan-code-gui"),
+        );
+        attributes.insert(String::from("command-last-seq"), String::from("17"));
+        attributes.insert(String::from("command-stdout-bytes"), String::from("1024"));
+        attributes.insert(String::from("command-stderr-bytes"), String::from("32"));
+        attributes.insert(
+            String::from("command-session-returned-chunk-count"),
+            String::from("4"),
+        );
+        attributes.insert(
+            String::from("command-session-bytes-written"),
+            String::from("12"),
+        );
+        attributes.insert(
+            String::from("command-session-has-more"),
+            String::from("true"),
+        );
+        attributes.insert(
+            String::from("command-output-overflowed"),
+            String::from("false"),
+        );
+
+        let presentation = tool_modal_presentation_from_agent_view_attributes(&attributes);
+        let ToolModalPresentation::CommandSession(summary) = presentation else {
+            panic!("expected command-session modal presentation");
+        };
+
+        assert_eq!(
+            summary.command_session_id,
+            SessionId::parse_str("00000000-0000-0000-0000-000000000111")
+                .expect("parse command session id")
+        );
+        assert_eq!(summary.status, "running");
+        assert_eq!(summary.action.as_deref(), Some("read"));
+        assert_eq!(summary.shell.as_deref(), Some("powershell"));
+        assert_eq!(summary.last_seq, Some(17));
+        assert_eq!(summary.stdout_bytes, Some(1024));
+        assert_eq!(summary.stderr_bytes, Some(32));
+        assert_eq!(summary.returned_chunk_count, Some(4));
+        assert_eq!(summary.bytes_written, Some(12));
+        assert_eq!(summary.has_more, Some(true));
+        assert!(!summary.output_overflowed);
+    }
+
+    /// Verifies GUI-applied command-session snapshots update the modal metadata immediately after a local stop action.
+    /// 验证 GUI 应用命令会话快照后，会在本地停止动作完成后立即更新弹层元数据。
+    #[test]
+    fn tool_modal_presentation_applies_command_session_snapshot() {
+        let command_session_id = SessionId::parse_str("00000000-0000-0000-0000-000000000222")
+            .expect("parse command session id");
+        let mut presentation =
+            ToolModalPresentation::CommandSession(CommandSessionToolModalSummary {
+                command_session_id,
+                action: Some(String::from("read")),
+                status: String::from("running"),
+                shell: Some(String::from("powershell")),
+                working_directory: Some(String::from("D:\\openvulcan\\vulcan-code")),
+                command_text: Some(String::from("ping 127.0.0.1")),
+                failure_reason: None,
+                exit_code: None,
+                last_seq: Some(3),
+                stdout_bytes: Some(24),
+                stderr_bytes: Some(0),
+                returned_chunk_count: Some(1),
+                bytes_written: None,
+                has_more: Some(true),
+                output_overflowed: false,
+            });
+        let snapshot = CommandSessionSnapshot {
+            command_session_id,
+            owner_session_id: SessionId::parse_str("00000000-0000-0000-0000-000000000001")
+                .expect("parse owner session id"),
+            command: String::from("ping 127.0.0.1"),
+            shell_label: String::from("powershell"),
+            cwd: PathBuf::from("D:\\openvulcan\\vulcan-code"),
+            status: CommandSessionStatus::Stopped,
+            exit_code: Some(1),
+            failure_reason: Some(String::from("stopped by user")),
+            stdout_bytes: 256,
+            stderr_bytes: 8,
+            last_seq: 11,
+        };
+
+        assert!(presentation.apply_command_session_snapshot(&snapshot));
+        let ToolModalPresentation::CommandSession(summary) = presentation else {
+            panic!("expected command-session modal presentation");
+        };
+        assert_eq!(summary.status, "stopped");
+        assert_eq!(summary.exit_code, Some(1));
+        assert_eq!(summary.failure_reason.as_deref(), Some("stopped by user"));
+        assert_eq!(summary.stdout_bytes, Some(256));
+        assert_eq!(summary.stderr_bytes, Some(8));
+        assert_eq!(summary.last_seq, Some(11));
+        assert_eq!(summary.action.as_deref(), Some("read"));
     }
 
     /// Verifies session title generation only runs for the first user turn and leaves later turns unchanged.
@@ -15827,6 +16612,205 @@ mod tests {
                 .get("payload")
                 .and_then(|payload| payload.get("conversation_state"))
                 .is_none()
+        );
+    }
+
+    /// Verifies compact tool projections preserve the command-session payload subset required by the dedicated command-session transcript cards after canonical records are rebuilt.
+    /// 验证紧凑工具投影在规范记录重建后，仍会保留专属命令会话转录卡片所需的 command-session 载荷子集。
+    #[test]
+    fn compact_tool_detail_projection_preserves_command_session_payload() {
+        let message = SessionMessageEntry {
+            id: String::from("tool-command-session-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("调用 shell_session 工具"),
+            body: String::from("命令会话读取完成。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-command-session-1",
+                "tool_name": "shell_session",
+                "kind": "command_session",
+                "payload": {
+                    "action": "read",
+                    "owner_session_id": "00000000-0000-0000-0000-000000000010",
+                    "command_session_id": "00000000-0000-0000-0000-000000000011",
+                    "command": "cargo test -p vulcan-code-gui",
+                    "cwd": "D:/openvulcan/vulcan-code",
+                    "shell": "powershell",
+                    "status": "running",
+                    "last_seq": 9,
+                    "stdout_bytes": 512,
+                    "stderr_bytes": 12,
+                    "returned_chunk_count": 2,
+                    "has_more": true,
+                    "output_overflowed": false
+                },
+                "host_result": {
+                    "kind": "command_session",
+                    "payload": {
+                        "action": "read",
+                        "owner_session_id": "00000000-0000-0000-0000-000000000010",
+                        "command_session_id": "00000000-0000-0000-0000-000000000011",
+                        "command": "cargo test -p vulcan-code-gui",
+                        "cwd": "D:/openvulcan/vulcan-code",
+                        "shell": "powershell",
+                        "status": "running",
+                        "last_seq": 9,
+                        "stdout_bytes": 512,
+                        "stderr_bytes": 12,
+                        "returned_chunk_count": 2,
+                        "has_more": true,
+                        "output_overflowed": false
+                    }
+                }
+            })),
+            created_at: String::from("1"),
+        };
+
+        let projected = compact_tool_detail_message_for_projection(&message);
+        let metadata = projected.metadata.expect("metadata should stay present");
+
+        assert!(projected.body.is_empty());
+        assert_eq!(
+            metadata.get("kind").and_then(Value::as_str),
+            Some("command_session")
+        );
+        assert_eq!(
+            metadata
+                .get("payload")
+                .and_then(|payload| payload.get("command_session_id"))
+                .and_then(Value::as_str),
+            Some("00000000-0000-0000-0000-000000000011")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("action"))
+                .and_then(Value::as_str),
+            Some("read")
+        );
+    }
+
+    /// Verifies compact tool projections preserve the command-run payload subset required by the dedicated command execution transcript cards.
+    /// 验证紧凑工具投影会保留专属命令执行转录卡片所需的 command-run 载荷子集。
+    #[test]
+    fn compact_tool_detail_projection_preserves_command_run_payload() {
+        let message = SessionMessageEntry {
+            id: String::from("tool-command-run-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("调用 shell_command 工具"),
+            body: String::from("命令执行完成。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-command-run-1",
+                "tool_name": "shell_command",
+                "kind": "command_run",
+                "payload": {
+                    "command": "cargo check -p vulcan-code-gui",
+                    "cwd": "D:/openvulcan/vulcan-code",
+                    "shell": "powershell",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "duration_ms": 1024,
+                    "stdout_bytes": 4096,
+                    "stderr_bytes": 0,
+                    "combined_output_overflowed": false
+                },
+                "host_result": {
+                    "kind": "command_run",
+                    "payload": {
+                        "command": "cargo check -p vulcan-code-gui",
+                        "cwd": "D:/openvulcan/vulcan-code",
+                        "shell": "powershell",
+                        "status": "completed",
+                        "exit_code": 0,
+                        "duration_ms": 1024,
+                        "stdout_bytes": 4096,
+                        "stderr_bytes": 0,
+                        "combined_output_overflowed": false
+                    }
+                }
+            })),
+            created_at: String::from("1"),
+        };
+
+        let projected = compact_tool_detail_message_for_projection(&message);
+        let metadata = projected.metadata.expect("metadata should stay present");
+
+        assert!(projected.body.is_empty());
+        assert_eq!(
+            metadata.get("kind").and_then(Value::as_str),
+            Some("command_run")
+        );
+        assert_eq!(
+            metadata
+                .get("payload")
+                .and_then(|payload| payload.get("command"))
+                .and_then(Value::as_str),
+            Some("cargo check -p vulcan-code-gui")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("duration_ms"))
+                .and_then(Value::as_u64),
+            Some(1024)
+        );
+    }
+
+    /// Verifies GUI-generated command-session stop metadata keeps the same nested and flattened host-result structure as provider-originated tool results.
+    /// 验证 GUI 生成的命令会话停止元数据会保留与 Provider 原生工具结果相同的嵌套和扁平宿主结果结构。
+    #[test]
+    fn command_session_stop_result_metadata_keeps_runtime_shape() {
+        let snapshot = CommandSessionSnapshot {
+            command_session_id: SessionId::parse_str("00000000-0000-0000-0000-000000000321")
+                .expect("parse command session id"),
+            owner_session_id: SessionId::parse_str("00000000-0000-0000-0000-000000000123")
+                .expect("parse owner session id"),
+            command: String::from("cargo test -p vulcan-code-gui"),
+            shell_label: String::from("powershell"),
+            cwd: PathBuf::from("D:\\openvulcan\\vulcan-code"),
+            status: CommandSessionStatus::Stopped,
+            exit_code: Some(1),
+            failure_reason: Some(String::from("stopped by user")),
+            stdout_bytes: 2048,
+            stderr_bytes: 16,
+            last_seq: 27,
+        };
+
+        let metadata =
+            build_command_session_stop_result_metadata("call-command-session-1", &snapshot)
+                .expect("metadata should exist");
+
+        assert_eq!(
+            metadata.get("tool_call_id").and_then(Value::as_str),
+            Some("call-command-session-1")
+        );
+        assert_eq!(
+            metadata.get("tool_name").and_then(Value::as_str),
+            Some("shell_session")
+        );
+        assert_eq!(
+            metadata.get("kind").and_then(Value::as_str),
+            Some("command_session")
+        );
+        assert_eq!(
+            metadata
+                .get("payload")
+                .and_then(|payload| payload.get("action"))
+                .and_then(Value::as_str),
+            Some("stop")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("command_session_id"))
+                .and_then(Value::as_str),
+            Some("00000000-0000-0000-0000-000000000321")
         );
     }
 
@@ -16473,7 +17457,9 @@ mod tests {
             created_at: String::from("1"),
         }];
         let hidden_conversation_state =
-            crate::conversation_protocol::conversation_state_from_session_messages(&hidden_messages);
+            crate::conversation_protocol::conversation_state_from_session_messages(
+                &hidden_messages,
+            );
         workbench
             .session_messages
             .insert(hidden_session_id, hidden_messages);
@@ -16556,17 +17542,16 @@ mod tests {
                 ..SessionRuntimeStateEntry::default()
             },
         );
-        workbench.session_message_raw_buffers.insert(
+        workbench
+            .session_message_raw_buffers
+            .insert(message_id.clone(), text_editor::Content::with_text("hello"));
+        workbench.session_message_markdown.insert(
             message_id.clone(),
-            text_editor::Content::with_text("hello"),
+            markdown::Content::parse_transcript("hello"),
         );
         workbench
-            .session_message_markdown
-            .insert(message_id.clone(), markdown::Content::parse_transcript("hello"));
-        workbench.session_message_markdown_buffers.insert(
-            message_id.clone(),
-            text_editor::Content::with_text("hello"),
-        );
+            .session_message_markdown_buffers
+            .insert(message_id.clone(), text_editor::Content::with_text("hello"));
         workbench.refresh_session_agent_view_buffers(session_id);
 
         workbench.append_stream_delta_to_session_message(session_id, &message_id, " world");
@@ -16577,11 +17562,21 @@ mod tests {
                 .map(|message| message.body.as_str()),
             Some("hello world")
         );
-        assert!(workbench.session_agent_view_documents.contains_key(&session_id));
-        assert!(workbench.session_message_raw_buffers.contains_key(&message_id));
+        assert!(
+            workbench
+                .session_agent_view_documents
+                .contains_key(&session_id)
+        );
+        assert!(
+            workbench
+                .session_message_raw_buffers
+                .contains_key(&message_id)
+        );
         assert!(workbench.session_message_markdown.contains_key(&message_id));
-        assert!(workbench
-            .session_message_markdown_buffers
-            .contains_key(&message_id));
+        assert!(
+            workbench
+                .session_message_markdown_buffers
+                .contains_key(&message_id)
+        );
     }
 }

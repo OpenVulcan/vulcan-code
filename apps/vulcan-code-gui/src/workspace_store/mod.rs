@@ -31,10 +31,11 @@ mod persistence;
 mod session_load;
 
 use self::event_store::{
-    SessionEventStorePersistResult, clear_all_session_event_stores, load_session_event_store,
+    SessionEventStorePersistResult, clear_all_session_event_stores,
+    load_latest_session_event_store_context_snapshot, load_session_event_store,
     load_session_event_store_compactions, load_session_event_store_context_current,
-    load_session_event_store_runtime_state, load_latest_session_event_store_context_snapshot,
-    persist_session_event_store, remove_session_event_store,
+    load_session_event_store_runtime_state, persist_session_event_store,
+    remove_session_event_store,
 };
 pub(crate) use self::event_store::{
     persist_session_event_store_context_current as persist_session_context_current_document,

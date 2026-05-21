@@ -1,7 +1,6 @@
-//! Host-side LuaSkills tool-result rendering helpers with unified truncate and page behavior.
-//! 宿主侧 LuaSkills 工具结果渲染辅助模块，统一处理截断与分页行为。
+//! Host-side tool-result rendering helpers with unified truncate and page behavior.
+//! 宿主侧工具结果渲染辅助模块，统一处理截断与分页行为。
 
-use luaskills::{RuntimeInvocationResult, ToolOverflowMode};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +9,39 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod templates;
 
 use templates::{load_template_text, render_page_default, render_template_text};
+
+/// Stable host-owned overflow mode reused by native and Lua-backed tool rendering.
+/// 供原生工具与 Lua 工具共同复用的稳定宿主超限模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostToolOverflowMode {
+    /// Truncate the visible content to fit the current tool-result budget.
+    /// 将可见内容截断到当前工具结果预算范围内。
+    Truncate,
+    /// Persist the full content into one spill file and expose safe page reads.
+    /// 将完整内容落入超限文件并暴露安全分页读取能力。
+    Page,
+}
+
+/// Unified host-side text render input shared by native and Lua-backed tool results.
+/// 由原生工具与 Lua 工具结果共享的统一宿主文本渲染输入。
+#[derive(Debug, Clone)]
+pub struct HostTextRenderInput {
+    /// Raw text content produced by the tool before host overflow handling.
+    /// 工具在宿主超限处理前产出的原始文本内容。
+    pub content: String,
+    /// Optional overflow mode requested by the producing runtime.
+    /// 产出运行时请求使用的可选超限模式。
+    pub overflow_mode: Option<HostToolOverflowMode>,
+    /// Optional explicit overflow-template hint.
+    /// 可选的显式超限模板提示。
+    pub template_hint: Option<String>,
+    /// Stable byte count captured by the producing runtime.
+    /// 由产出运行时记录的稳定字节数。
+    pub content_bytes: usize,
+    /// Stable line count captured by the producing runtime.
+    /// 由产出运行时记录的稳定行数。
+    pub content_lines: usize,
+}
 
 /// Unified English error returned when even one single line cannot fit the current host budget.
 /// 当连单行内容都无法放入当前宿主预算时返回的统一英文错误提示。
@@ -36,8 +68,8 @@ pub struct HostRenderOptions {
     pub template_resources_root: Option<PathBuf>,
 }
 
-/// Host-side budget snapshot used when rendering one LuaSkills invocation result for AI consumption.
-/// 为 AI 消费渲染单次 LuaSkills 调用结果时使用的宿主侧预算快照。
+/// Host-side budget snapshot used when rendering one tool result for AI consumption.
+/// 为 AI 消费渲染单次工具调用结果时使用的宿主侧预算快照。
 #[derive(Debug, Clone)]
 pub struct ToolResultBudgetSnapshot {
     /// Effective inline tool-result budget used for the immediate AI-visible return payload.
@@ -60,8 +92,8 @@ pub struct EffectiveBudgetScope {
     pub lines: i64,
 }
 
-/// Final overflow mode chosen by the host after reading the runtime invocation result.
-/// 宿主读取运行时调用结果后选出的最终超限模式。
+/// Final overflow mode chosen by the host after reading the tool render input.
+/// 宿主读取工具渲染输入后选出的最终超限模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OverflowMode {
     Truncate,
@@ -99,10 +131,10 @@ struct OverflowChunk {
     byte_count: usize,
 }
 
-/// Render one LuaSkills invocation result into the final AI-visible text according to the host policy.
-/// 按宿主策略把单次 LuaSkills 调用结果渲染成最终面向 AI 的可见文本。
+/// Render one tool text payload into the final AI-visible text according to the host policy.
+/// 按宿主策略把单次工具文本载荷渲染成最终面向 AI 的可见文本。
 pub fn render_tool_result_text(
-    output: &RuntimeInvocationResult,
+    output: &HostTextRenderInput,
     skill_name: Option<&str>,
     client_budget: &ToolResultBudgetSnapshot,
     render_options: &HostRenderOptions,
@@ -118,15 +150,15 @@ pub fn render_tool_result_text(
     }
 }
 
-/// Resolve the final host overflow policy from the runtime result and tool metadata.
-/// 根据运行时结果与工具元数据解析最终宿主超限策略。
+/// Resolve the final host overflow policy from the render input and tool metadata.
+/// 根据渲染输入与工具元数据解析最终宿主超限策略。
 fn resolve_overflow_policy(
     _skill_name: Option<&str>,
-    output: &RuntimeInvocationResult,
+    output: &HostTextRenderInput,
 ) -> OverflowPolicy {
     let mode = match output.overflow_mode {
-        Some(ToolOverflowMode::Page) => OverflowMode::Page,
-        Some(ToolOverflowMode::Truncate) | None => OverflowMode::Truncate,
+        Some(HostToolOverflowMode::Page) => OverflowMode::Page,
+        Some(HostToolOverflowMode::Truncate) | None => OverflowMode::Truncate,
     };
 
     OverflowPolicy {
@@ -151,7 +183,7 @@ fn resolve_template_name(explicit_template_name: Option<&str>, mode: OverflowMod
 /// Render the final truncate-mode text, returning the raw content when it already fits the host budget.
 /// 渲染最终截断模式文本；若原文已满足宿主预算则直接返回原文。
 fn render_truncate_text(
-    output: &RuntimeInvocationResult,
+    output: &HostTextRenderInput,
     skill_name: Option<&str>,
     policy: &OverflowPolicy,
     client_budget: &ToolResultBudgetSnapshot,
@@ -187,7 +219,7 @@ fn render_truncate_text(
 /// Render the final page-mode text, creating one project-scoped spill file and safe read directory when needed.
 /// 渲染最终分页模式文本，并在需要时创建项目级超限文件与安全读取目录。
 fn render_page_text(
-    output: &RuntimeInvocationResult,
+    output: &HostTextRenderInput,
     skill_name: Option<&str>,
     policy: &OverflowPolicy,
     client_budget: &ToolResultBudgetSnapshot,
@@ -257,7 +289,7 @@ fn render_page_text(
 
 /// Decide whether the original content already fits inside the current budget and can bypass host overflow handling.
 /// 判断原始内容是否已经满足当前预算，从而绕过宿主超限处理。
-fn content_fits_budget(output: &RuntimeInvocationResult, budget: &EffectiveBudgetScope) -> bool {
+fn content_fits_budget(output: &HostTextRenderInput, budget: &EffectiveBudgetScope) -> bool {
     let within_bytes = output.content_bytes <= budget.bytes as usize;
     let within_lines = budget.lines <= 0 || output.content_lines <= budget.lines as usize;
     within_bytes && within_lines

@@ -483,7 +483,10 @@ impl VulcanWorkbench {
             }
         }
 
-        if let Some(cache) = self.session_inline_agent_view_documents.get_mut(&session_id) {
+        if let Some(cache) = self
+            .session_inline_agent_view_documents
+            .get_mut(&session_id)
+        {
             let document = Rc::make_mut(&mut cache.document);
             for block in &mut document.blocks {
                 let Some(block_message_id) = block.attributes().get("message-id") else {
@@ -872,10 +875,9 @@ impl VulcanWorkbench {
                     self.session_streaming_thinking_progress_title(session_id, message_id)
                 })
                 .unwrap_or_else(|| self.session_thinking_title(session_id, directive));
-            directive.attributes.insert(
-                String::from("ui-inline-thinking-title"),
-                inline_title,
-            );
+            directive
+                .attributes
+                .insert(String::from("ui-inline-thinking-title"), inline_title);
             directive.attributes.insert(
                 String::from("ui-thinking-title"),
                 self.session_thinking_title(session_id, directive),
@@ -983,6 +985,7 @@ impl VulcanWorkbench {
             self.t(I18nKey::TranscriptThinkingModalHint),
             document,
             Vec::new(),
+            ToolModalPresentation::Generic,
         ))
     }
 
@@ -993,6 +996,10 @@ impl VulcanWorkbench {
         session_id: SessionId,
         block_id: &str,
     ) -> Option<ModalSurfacePayload> {
+        let tool_modal_presentation = self
+            .resolve_rendered_tool_block_attributes(session_id, block_id)
+            .map(|attributes| tool_modal_presentation_from_agent_view_attributes(&attributes))
+            .unwrap_or(ToolModalPresentation::Generic);
         let resolved_message = self.resolve_rendered_tool_modal_message_entry(session_id, block_id);
         let generated_attachments = resolved_message
             .as_ref()
@@ -1017,6 +1024,7 @@ impl VulcanWorkbench {
                 self.t(I18nKey::TranscriptSubagentResultSummaryHint),
                 parse_agent_view_document(&markdown_body),
                 generated_attachments,
+                tool_modal_presentation,
             ));
         }
 
@@ -1031,6 +1039,7 @@ impl VulcanWorkbench {
                 self.t(I18nKey::TranscriptToolModalHint),
                 parse_agent_view_document(&message.body),
                 generated_attachments,
+                tool_modal_presentation,
             ));
         }
 
@@ -1042,6 +1051,7 @@ impl VulcanWorkbench {
             self.t(I18nKey::TranscriptToolModalHint),
             document,
             generated_attachments,
+            tool_modal_presentation,
         ))
     }
 
@@ -1053,6 +1063,7 @@ impl VulcanWorkbench {
         helper_text: String,
         document: vulcan_agent_view::AgentViewDocument,
         generated_attachments: Vec<ConversationAttachment>,
+        tool_modal_presentation: ToolModalPresentation,
     ) -> ModalSurfacePayload {
         ModalSurfacePayload {
             title,
@@ -1060,6 +1071,7 @@ impl VulcanWorkbench {
             generated_attachments,
             document_signature: self.hash_agent_view_document(&document),
             document,
+            tool_modal_presentation,
         }
     }
 

@@ -6,7 +6,8 @@ use crate::project_temp_maintenance;
 use crate::provider_config::{PersistedControllerConfiguration, PersistedControllerProcessMode};
 use crate::runtime_assets;
 use crate::tool_result_format::{
-    EffectiveBudgetScope, HostRenderOptions, ToolResultBudgetSnapshot, render_tool_result_text,
+    EffectiveBudgetScope, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
+    ToolResultBudgetSnapshot, render_tool_result_text,
 };
 use iced::futures::channel::oneshot;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
@@ -756,7 +757,29 @@ pub fn render_luaskills_invocation_result_text(
         template_resources_root: Some(handle.runtime_root.join("resources")),
     };
 
-    render_tool_result_text(result, skill_name, &client_budget, &render_options)
+    render_tool_result_text(
+        &host_text_render_input_from_runtime_result(result),
+        skill_name,
+        &client_budget,
+        &render_options,
+    )
+}
+
+/// Convert one LuaSkills runtime result into the host-owned generic text render input.
+/// 将单条 LuaSkills 运行时结果转换为宿主自有的通用文本渲染输入。
+fn host_text_render_input_from_runtime_result(
+    result: &RuntimeInvocationResult,
+) -> HostTextRenderInput {
+    HostTextRenderInput {
+        content: result.content.clone(),
+        overflow_mode: result.overflow_mode.map(|mode| match mode {
+            luaskills::ToolOverflowMode::Truncate => HostToolOverflowMode::Truncate,
+            luaskills::ToolOverflowMode::Page => HostToolOverflowMode::Page,
+        }),
+        template_hint: result.template_hint.clone(),
+        content_bytes: result.content_bytes,
+        content_lines: result.content_lines,
+    }
 }
 
 /// Build one default LuaSkills invocation context used by host-managed tool calls.

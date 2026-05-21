@@ -13,7 +13,7 @@ use crate::mcp::{
     configured_mcp_runtime_access,
 };
 use crate::provider_config::ProviderConfigurationFile;
-use crate::tooling::{NativeToolCatalog, build_native_tool_catalog};
+use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -81,6 +81,9 @@ pub struct RuntimeFoundation {
     /// Shared resumable task runtime reused across turns and child task chains.
     /// 在多轮执行与子任务链之间复用的共享可恢复任务运行时。
     task_runtime: Arc<TaskRuntime>,
+    /// Shared command-session runtime reused across turns so long-lived shell sessions can survive execution refreshes.
+    /// 在多轮执行之间复用的共享命令会话运行时，使长生命周期 shell 会话能够穿越执行刷新继续存活。
+    command_session_runtime: Arc<CommandSessionRuntime>,
 }
 
 impl RuntimeFoundation {
@@ -100,14 +103,15 @@ impl RuntimeFoundation {
         )
     }
 
-    /// Builds the host runtime foundation while reusing an existing shared task runtime so in-flight subagent sessions remain controllable across runtime refreshes.
-    /// 构建宿主运行时基础架构时复用一份既有共享任务运行时，确保运行中子代理会话在运行时刷新后仍可被控制。
-    pub fn build_from_optional_mcp_access_with_task_runtime(
+    /// Builds the host runtime foundation while reusing existing shared task and command-session runtimes so child tasks and shell sessions stay controllable across runtime refreshes.
+    /// 构建宿主运行时基础架构时复用既有共享任务运行时与命令会话运行时，确保子任务与 shell 会话在运行时刷新后仍可被控制。
+    pub fn build_from_optional_mcp_access_with_runtimes(
         config: &ProviderConfigurationFile,
         agent_profile_catalog: &AgentProfileCatalog,
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         mcp_runtime_access: Option<McpRuntimeAccess>,
         task_runtime: Arc<TaskRuntime>,
+        command_session_runtime: Arc<CommandSessionRuntime>,
     ) -> Self {
         Self::build_with_task_runtime(
             config,
@@ -115,6 +119,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             mcp_runtime_access.unwrap_or_else(|| configured_mcp_runtime_access(config)),
             task_runtime,
+            command_session_runtime,
         )
     }
 
@@ -132,6 +137,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             mcp_runtime_access,
             Arc::new(TaskRuntime::new()),
+            Arc::new(CommandSessionRuntime::new()),
         )
     }
 
@@ -143,9 +149,14 @@ impl RuntimeFoundation {
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         mcp_runtime_access: McpRuntimeAccess,
         task_runtime: Arc<TaskRuntime>,
+        command_session_runtime: Arc<CommandSessionRuntime>,
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
-        let native_tools = build_native_tool_catalog(&runtime_config);
+        let native_tools = build_native_tool_catalog(
+            &runtime_config,
+            config.default_command_shell.as_deref(),
+            Arc::clone(&command_session_runtime),
+        );
         let mut warnings = Vec::new();
         let luaskills_tools = match luaskills_runtime.as_ref() {
             Some(handle) => match list_luaskills_tool_entries(handle) {
@@ -165,6 +176,7 @@ impl RuntimeFoundation {
             mcp_runtime_access,
             warnings,
             task_runtime,
+            command_session_runtime,
         }
     }
 
@@ -265,6 +277,12 @@ impl RuntimeFoundation {
     /// 返回当前基础架构使用的共享可恢复任务运行时。
     pub fn task_runtime(&self) -> Arc<TaskRuntime> {
         Arc::clone(&self.task_runtime)
+    }
+
+    /// Returns the shared command-session runtime used by the current foundation.
+    /// 返回当前基础架构使用的共享命令会话运行时。
+    pub fn command_session_runtime(&self) -> Arc<CommandSessionRuntime> {
+        Arc::clone(&self.command_session_runtime)
     }
 
     /// Returns lightweight tool-policy rows for UI placeholder surfaces.
@@ -423,10 +441,10 @@ fn resolve_agent_native_tools(
             }
         } else {
             warnings.push(format!(
-                "代理 `{}` 引用了不存在的工具策略 `{}`。",
+                "代理 `{}` 引用了不存在的工具策略 `{}`，因此不会暴露任何原生工具。",
                 definition.name, policy_id
             ));
-            available_native_tool_ids.iter().cloned().collect()
+            Vec::new()
         }
     } else {
         available_native_tool_ids.iter().cloned().collect()
@@ -469,5 +487,51 @@ fn optional_non_empty_string_set(values: &[String]) -> Option<BTreeSet<String>> 
         None
     } else {
         Some(values.iter().cloned().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_agent_native_tools;
+    use crate::agent_runtime::config::{
+        RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Verifies that referencing one missing tool policy blocks native-tool exposure instead of silently falling back to a full-open default.
+    /// 验证当代理引用缺失的工具策略时，原生工具暴露会被阻断，而不是静默退回到完全放开的默认行为。
+    #[test]
+    fn missing_tool_policy_blocks_native_tool_resolution() {
+        let definition = RuntimeAgentDefinition {
+            id: String::from("agent-a"),
+            name: String::from("Agent A"),
+            kind: RuntimeAgentKind::Worker,
+            description: String::from("worker"),
+            system_prompt: String::new(),
+            skill_ids: Vec::new(),
+            native_tools: Vec::new(),
+            mcp_tools: Vec::new(),
+            delegates: Vec::new(),
+            tool_policy: Some(String::from("missing-policy")),
+            routes: Vec::new(),
+            fallback_delegate: None,
+            model: None,
+            temperature: None,
+            max_turns: None,
+        };
+        let available_native_tool_ids =
+            BTreeSet::from([String::from("shell_command"), String::from("shell_session")]);
+        let mut warnings = Vec::new();
+
+        let resolved = resolve_agent_native_tools(
+            &definition,
+            &BTreeMap::<String, RuntimeToolPolicyDefinition>::new(),
+            &available_native_tool_ids,
+            &mut warnings,
+        );
+
+        assert!(resolved.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("不会暴露任何原生工具"));
     }
 }

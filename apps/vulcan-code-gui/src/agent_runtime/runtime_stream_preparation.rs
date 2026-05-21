@@ -15,6 +15,7 @@ use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::{PersistedAiToolConfiguration, ProviderConfigurationFile};
+use crate::tooling::CommandSessionRuntime;
 use std::sync::Arc;
 
 /// Prepared runtime-launch input captured after foundation construction and execution-preparation validation have both succeeded.
@@ -63,6 +64,7 @@ pub(crate) fn prepare_runtime_launch_input(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
     let resources = build_runtime_preparation_resources(
@@ -71,6 +73,7 @@ pub(crate) fn prepare_runtime_launch_input(
         luaskills_runtime,
         mcp_runtime_access,
         task_runtime,
+        command_session_runtime,
         request,
     );
     let preparation = match prepare_execution(

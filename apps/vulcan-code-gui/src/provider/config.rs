@@ -4392,6 +4392,13 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_transcript_turn_page_size: Option<usize>,
+    /// Remembered default command shell selected by the user to override host-side `auto` resolution.
+    /// 由用户选择并记忆、用于覆盖宿主侧 `auto` 解析的默认命令 shell。
+    #[serde(
+        rename = "defaultCommandShell",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_command_shell: Option<String>,
     /// Remembered OpenRouter endpoint route selections keyed by the exact OpenRouter model identifier.
     /// 以精确 OpenRouter 模型标识为键记忆的 OpenRouter 端点路由选择集合。
     #[serde(
@@ -4706,7 +4713,9 @@ pub fn set_openrouter_endpoint_route_for_model(
 ) {
     let model_id = model_id.into();
     if let Some(selection) = selection.filter(|selection| !selection.is_empty()) {
-        config.openrouter_endpoint_routes.insert(model_id, selection);
+        config
+            .openrouter_endpoint_routes
+            .insert(model_id, selection);
     } else {
         config.openrouter_endpoint_routes.remove(model_id.as_str());
     }
@@ -5965,6 +5974,23 @@ mod tests {
         let restored: ProviderConfigurationFile =
             serde_json::from_value(value).expect("provider configuration must deserialize");
         assert_eq!(restored.session_transcript_turn_page_size, Some(40));
+    }
+
+    /// Verifies the persisted default command shell keeps the stable `defaultCommandShell` field name and round-trips through the shared provider configuration file.
+    /// 验证持久化默认命令 shell 会保持稳定的 `defaultCommandShell` 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
+    #[test]
+    fn provider_configuration_round_trips_default_command_shell() {
+        let config = ProviderConfigurationFile {
+            default_command_shell: Some(String::from("pwsh")),
+            ..ProviderConfigurationFile::default()
+        };
+
+        let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+        assert_eq!(value.get("defaultCommandShell"), Some(&json!("pwsh")));
+
+        let restored: ProviderConfigurationFile =
+            serde_json::from_value(value).expect("provider configuration must deserialize");
+        assert_eq!(restored.default_command_shell.as_deref(), Some("pwsh"));
     }
 
     /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.

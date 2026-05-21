@@ -10,6 +10,7 @@ use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::{McpRuntimeAccess, configured_mcp_runtime_access};
 use crate::provider_config::ProviderConfigurationFile;
+use crate::tooling::CommandSessionRuntime;
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
 use std::sync::Arc;
@@ -22,6 +23,7 @@ pub fn stream_runtime_run(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime: Option<McpRuntimeAccess>,
     task_runtime: Arc<TaskRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
@@ -31,6 +33,7 @@ pub fn stream_runtime_run(
         luaskills_runtime,
         mcp_runtime_access,
         task_runtime,
+        command_session_runtime,
         request,
     )
 }
@@ -43,6 +46,7 @@ fn stream_runtime_run_with_access(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
@@ -52,6 +56,7 @@ fn stream_runtime_run_with_access(
             luaskills_runtime.clone(),
             mcp_runtime_access,
             task_runtime,
+            command_session_runtime,
             request,
         ).await {
             Ok(launch) => launch,

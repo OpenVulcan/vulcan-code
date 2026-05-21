@@ -936,6 +936,12 @@ impl VulcanWorkbench {
             .as_ref()
             .filter(|modal_state| modal_state.session_id == session_id)?;
         let progress = thinking_modal_progress(modal_state.started_at, modal_state.phase);
+        if !matches!(
+            modal_state.payload.tool_modal_presentation,
+            ToolModalPresentation::Generic
+        ) {
+            return Some(self.view_command_tool_modal_surface(session_id, modal_state, progress));
+        }
         if !modal_state.payload.generated_attachments.is_empty() {
             return Some(self.view_generated_tool_modal_surface(session_id, modal_state, progress));
         }
@@ -960,6 +966,386 @@ impl VulcanWorkbench {
             |_| Message::Noop,
             Message::CloseSelectedSessionToolModal,
         ))
+    }
+
+    /// Builds the dedicated command-centric tool modal that surfaces live command metadata above the raw transcript detail.
+    /// 构建命令专属工具弹层，在原始转录详情上方展示实时命令元数据。
+    fn view_command_tool_modal_surface(
+        &self,
+        session_id: SessionId,
+        modal_state: &ToolModalState,
+        progress: f32,
+    ) -> Element<'_, Message> {
+        let reveal_progress = progress.clamp(0.0, 1.0);
+        let vertical_inset = 22.0 + (1.0 - reveal_progress) * 6.0;
+        let header_secondary = self
+            .app_theme
+            .palette()
+            .background
+            .base
+            .text
+            .scale_alpha(0.54 + reveal_progress * 0.24);
+        let transcript_body = view_selectable_rendered_transcript_with_context_menu::<Message>(
+            &modal_state.payload.document,
+            &self.app_theme,
+            tool_modal_transcript_surface_id(session_id, self.current_locale()),
+            self.selectable_transcript_command.clone(),
+            |_| Message::Noop,
+            |interaction| {
+                map_selectable_transcript_interaction(
+                    interaction,
+                    Message::OpenSelectedSessionThinkingModal,
+                    Message::OpenSelectedSessionToolModal,
+                )
+            },
+        );
+        let command_summary = self.view_command_tool_modal_summary_section(modal_state);
+        let modal_body = scrollable(
+            column![
+                command_summary,
+                rule::horizontal(1),
+                text(self.t(I18nKey::TranscriptOriginalToolResult)).size(12),
+                transcript_body,
+            ]
+            .spacing(14)
+            .width(Fill),
+        )
+        .id(tool_modal_scrollable_id(session_id))
+        .height(Fill);
+        let modal_panel = container(
+            column![
+                row![
+                    column![
+                        text(modal_state.payload.title.clone()).size(18),
+                        text(modal_state.payload.helper_text.clone())
+                            .size(12)
+                            .style(move |_theme: &Theme| iced::widget::text::Style {
+                                color: Some(header_secondary),
+                            }),
+                    ]
+                    .spacing(4),
+                    space::horizontal(),
+                    button(text("✕").size(14))
+                        .padding([4, 8])
+                        .style(button::text)
+                        .on_press(Message::CloseSelectedSessionToolModal),
+                ]
+                .align_y(Center),
+                rule::horizontal(1),
+                container(modal_body).padding([4, 0]).height(Fill),
+            ]
+            .spacing(12),
+        )
+        .padding([16, 18])
+        .width(Fill)
+        .height(Fill)
+        .style(move |theme| vulcan_agent_view::thinking_modal_card_style(theme, progress));
+        let backdrop = mouse_area(
+            container(space())
+                .width(Fill)
+                .height(Fill)
+                .style(move |theme| {
+                    vulcan_agent_view::thinking_modal_backdrop_style(theme, progress)
+                }),
+        )
+        .on_press(Message::CloseSelectedSessionToolModal);
+        let centered_modal = column![
+            space::vertical().height(FillPortion(15)),
+            row![
+                space::horizontal().width(FillPortion(15)),
+                opaque(
+                    container(modal_panel)
+                        .width(FillPortion(70))
+                        .height(FillPortion(70))
+                ),
+                space::horizontal().width(FillPortion(15)),
+            ]
+            .width(Fill)
+            .height(FillPortion(70)),
+            space::vertical().height(FillPortion(15)),
+        ]
+        .width(Fill)
+        .height(Fill)
+        .padding([vertical_inset, 20.0]);
+
+        opaque(
+            stack([
+                Element::from(backdrop),
+                Element::from(container(centered_modal).width(Fill).height(Fill)),
+            ])
+            .width(Fill)
+            .height(Fill),
+        )
+        .into()
+    }
+
+    /// Builds the command metadata summary section rendered at the top of the dedicated command tool modal.
+    /// 构建展示在专属命令工具弹层顶部的命令元数据摘要区。
+    fn view_command_tool_modal_summary_section(
+        &self,
+        modal_state: &ToolModalState,
+    ) -> Element<'_, Message> {
+        match &modal_state.payload.tool_modal_presentation {
+            ToolModalPresentation::CommandRun(summary) => {
+                let summary_column = column![
+                    row![
+                        self.view_command_tool_modal_badge(
+                            command_run_status_badge_label(&summary.status).to_string(),
+                        ),
+                        space::horizontal(),
+                    ]
+                    .align_y(Center),
+                    self.view_command_tool_modal_fact_block(
+                        "命令",
+                        summary
+                            .command_text
+                            .clone()
+                            .unwrap_or_else(|| String::from("未提供")),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "工作目录",
+                        summary
+                            .working_directory
+                            .clone()
+                            .unwrap_or_else(|| String::from("未提供")),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "Shell",
+                        summary
+                            .shell
+                            .clone()
+                            .unwrap_or_else(|| String::from("未提供")),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "执行摘要",
+                        format!(
+                            "退出码：{} · 用时：{} · stdout：{} · stderr：{}",
+                            summary
+                                .exit_code
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .duration_ms
+                                .map(|value| format!("{value} ms"))
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .stdout_bytes
+                                .map(|value| format!("{value} B"))
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .stderr_bytes
+                                .map(|value| format!("{value} B"))
+                                .unwrap_or_else(|| String::from("-")),
+                        ),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "输出状态",
+                        if summary.output_overflowed {
+                            String::from("输出已分页或截断，请以下方原始结果为准。")
+                        } else {
+                            String::from("输出完整保留在当前工具结果中。")
+                        },
+                    ),
+                ];
+                let summary_column =
+                    if let Some(failure_reason) = summary
+                        .failure_reason
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        summary_column.push(self.view_command_tool_modal_fact_block(
+                            "失败原因",
+                            failure_reason.to_string(),
+                        ))
+                    } else {
+                        summary_column
+                    };
+                container(summary_column.spacing(10))
+                    .padding([4, 0])
+                    .width(Fill)
+                    .into()
+            }
+            ToolModalPresentation::CommandSession(summary) => {
+                let mut status_row = row![
+                    self.view_command_tool_modal_badge(
+                        command_session_status_badge_label(&summary.status).to_string(),
+                    ),
+                    space::horizontal(),
+                ]
+                .align_y(Center);
+                if let Some(action) = summary
+                    .action
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    status_row = status_row.push(self.view_command_tool_modal_badge(format!(
+                        "最近动作：{}",
+                        command_session_action_label(action)
+                    )));
+                }
+                if modal_state.command_session_stop_in_flight {
+                    status_row = status_row.push(
+                        container(text("正在停止命令会话...").size(12))
+                            .padding([6, 10])
+                            .style(container::rounded_box),
+                    );
+                } else if summary.status == "running" {
+                    status_row = status_row.push(self.view_command_tool_modal_stop_button());
+                }
+                let summary_column = column![
+                    status_row,
+                    self.view_command_tool_modal_fact_block(
+                        "命令会话 ID",
+                        summary.command_session_id.to_string(),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "命令",
+                        summary
+                            .command_text
+                            .clone()
+                            .unwrap_or_else(|| String::from("未提供")),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "工作目录",
+                        summary
+                            .working_directory
+                            .clone()
+                            .unwrap_or_else(|| String::from("未提供")),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "Shell",
+                        summary
+                            .shell
+                            .clone()
+                            .unwrap_or_else(|| String::from("未提供")),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "会话摘要",
+                        format!(
+                            "last_seq：{} · stdout：{} · stderr：{} · 最近读取：{} · 最近写入：{}",
+                            summary
+                                .last_seq
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .stdout_bytes
+                                .map(|value| format!("{value} B"))
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .stderr_bytes
+                                .map(|value| format!("{value} B"))
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .returned_chunk_count
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| String::from("-")),
+                            summary
+                                .bytes_written
+                                .map(|value| format!("{value} B"))
+                                .unwrap_or_else(|| String::from("-")),
+                        ),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "输出状态",
+                        match (summary.has_more, summary.output_overflowed) {
+                            (Some(true), true) => {
+                                String::from("仍有未读输出，且当前展示结果已经发生分页或截断。")
+                            }
+                            (Some(true), false) => {
+                                String::from("仍有未读输出，建议继续通过命令会话工具读取。")
+                            }
+                            (Some(false), true) => {
+                                String::from("当前展示结果已经分页或截断，请以下方原始结果为准。")
+                            }
+                            _ => String::from("当前展示结果已与最近一次命令会话快照对齐。"),
+                        },
+                    ),
+                ];
+                let summary_column =
+                    if let Some(failure_reason) = summary
+                        .failure_reason
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        summary_column.push(self.view_command_tool_modal_fact_block(
+                            "失败原因",
+                            failure_reason.to_string(),
+                        ))
+                    } else {
+                        summary_column
+                    };
+                container(summary_column.spacing(10))
+                    .padding([4, 0])
+                    .width(Fill)
+                    .into()
+            }
+            ToolModalPresentation::Generic => container(space()).width(Fill).into(),
+        }
+    }
+
+    /// Builds one compact rounded badge used by the command tool modal status row.
+    /// 构建命令工具弹层状态行使用的紧凑圆角徽标。
+    fn view_command_tool_modal_badge(&self, label: String) -> Element<'_, Message> {
+        container(text(label).size(12))
+            .padding([6, 10])
+            .style(container::rounded_box)
+            .into()
+    }
+
+    /// Builds one dedicated stop button used by the running command-session modal.
+    /// 构建运行中命令会话弹层使用的专用停止按钮。
+    fn view_command_tool_modal_stop_button(&self) -> Element<'_, Message> {
+        let button = button(
+            row![
+                codicon::debug_stop().size(14).line_height(1.0),
+                text("停止会话").size(13),
+            ]
+            .spacing(6)
+            .align_y(Center),
+        )
+        .padding([6, 10])
+        .style(move |theme, status| {
+            style::workbench_composer_trigger_button_style(theme, status, true)
+        })
+        .on_press(Message::StopSelectedCommandSession);
+
+        tooltip(button, "停止当前命令会话", tooltip::Position::Bottom)
+            .style(container::rounded_box)
+            .into()
+    }
+
+    /// Builds one labeled fact block used by the command tool modal summary section.
+    /// 构建命令工具弹层摘要区使用的一条带标签信息块。
+    fn view_command_tool_modal_fact_block<'a>(
+        &self,
+        label: &'a str,
+        value: String,
+    ) -> Element<'a, Message> {
+        container(
+            column![
+                text(label)
+                    .size(11)
+                    .style(|theme: &Theme| iced::widget::text::Style {
+                        color: Some(
+                            theme
+                                .extended_palette()
+                                .background
+                                .base
+                                .text
+                                .scale_alpha(0.62),
+                        ),
+                    }),
+                text(value).size(13).width(Fill),
+            ]
+            .spacing(4),
+        )
+        .padding([10, 12])
+        .width(Fill)
+        .style(container::rounded_box)
+        .into()
     }
 
     /// Builds the richer generated-media tool modal that keeps preview cards and the raw transcript detail inside one shared centered surface.

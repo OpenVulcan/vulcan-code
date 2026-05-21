@@ -14,6 +14,7 @@ use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
+use crate::tooling::CommandSessionRuntime;
 use std::sync::Arc;
 
 /// Builds one fully prepared runtime-stream launch payload or one terminal preparation-failure report.
@@ -24,6 +25,7 @@ pub(crate) async fn prepare_runtime_stream_launch(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     let prepared_launch_input = prepare_runtime_launch_input(
@@ -32,6 +34,7 @@ pub(crate) async fn prepare_runtime_stream_launch(
         luaskills_runtime,
         mcp_runtime_access,
         task_runtime,
+        command_session_runtime,
         request,
     )?;
     build_runtime_stream_launch_from_prepared_input(prepared_launch_input).await

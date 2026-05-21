@@ -20,6 +20,7 @@ use crate::media_generation_compat::{
     execute_configured_music_cover, execute_configured_music_generation,
     execute_configured_speech_synthesis, execute_configured_video_generation,
 };
+use crate::project_temp_maintenance;
 use crate::provider_config::{
     AiToolKind, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID, MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID,
     MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, PersistedAiToolConfiguration,
@@ -27,8 +28,9 @@ use crate::provider_config::{
     VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
 };
 use crate::tooling::{
-    NativeToolCatalog, NativeToolDescriptor, allocate_unique_public_tool_name,
-    build_direct_public_tool_name, build_prefixed_public_tool_name,
+    NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest,
+    allocate_unique_public_tool_name, build_direct_public_tool_name,
+    build_prefixed_public_tool_name,
 };
 use crate::web_search_compat::{
     configured_web_search_parameters_schema, execute_configured_web_search,
@@ -106,19 +108,32 @@ pub fn build_vulcan_tools_manager(
         occupied_public_tool_ids.insert(descriptor.id.clone());
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
+        let workspace_root_for_context = workspace_root.clone();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema: definition.args_schema.clone(),
             ai_visible: definition.descriptor.ai_visible,
             plan_policy: native_plan_policy(&definition.descriptor),
-            invoke: std::sync::Arc::new(move |args, _session_id| {
+            invoke: std::sync::Arc::new(move |args, session_id| {
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
+                let workspace_root = workspace_root_for_context.clone();
                 Box::pin(async move {
                     catalog
-                        .invoke(&tool_id, args)
+                        .invoke(
+                            &tool_id,
+                            NativeToolExecutionRequest {
+                                arguments: args,
+                                session_id: session_id
+                                    .as_deref()
+                                    .and_then(|value| Uuid::parse_str(value).ok()),
+                                spill_root: workspace_root.as_deref().and_then(|path| {
+                                    project_temp_maintenance::ensure_project_temp_dir(path).ok()
+                                }),
+                                workspace_root,
+                            },
+                        )
                         .await
-                        .map(VulcanToolInvocationResult::from_model_output)
                         .map_err(|error| error.to_string())
                 })
             }),

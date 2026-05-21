@@ -1334,9 +1334,7 @@ mod tests {
     //! 事件存储测试，覆盖 turn 边界语义与 blob 外置行为。
 
     use super::*;
-    use crate::conversation_protocol::{
-        append_assistant_text_message, append_user_text_message,
-    };
+    use crate::conversation_protocol::{append_assistant_text_message, append_user_text_message};
 
     /// Builds one transcript message entry for event-store turn-building tests.
     /// 为事件存储 turn 构建测试创建一条转录消息项。
@@ -1621,8 +1619,8 @@ mod tests {
         let manifest_path =
             session_event_manifest_path(&session_event_store_dir(project_id, session_id));
         assert!(manifest_path.exists());
-        let loaded =
-            load_session_event_store(project_id, session_id).expect("load event store after current-only persist");
+        let loaded = load_session_event_store(project_id, session_id)
+            .expect("load event store after current-only persist");
         assert!(loaded.rows.is_empty());
         remove_session_event_store(project_id, session_id).expect("cleanup minimal manifest store");
     }
@@ -1676,11 +1674,19 @@ mod tests {
             Vec::new(),
         );
 
-        snapshot_session_event_store_context_before_user_prompt(project_id, session_id, &runtime_state)
-            .expect("capture first snapshot");
+        snapshot_session_event_store_context_before_user_prompt(
+            project_id,
+            session_id,
+            &runtime_state,
+        )
+        .expect("capture first snapshot");
         runtime_state.updated_at = String::from("999");
-        snapshot_session_event_store_context_before_user_prompt(project_id, session_id, &runtime_state)
-            .expect("capture second snapshot");
+        snapshot_session_event_store_context_before_user_prompt(
+            project_id,
+            session_id,
+            &runtime_state,
+        )
+        .expect("capture second snapshot");
 
         let snapshot = load_latest_session_event_store_context_snapshot(project_id, session_id)
             .expect("load latest snapshot")

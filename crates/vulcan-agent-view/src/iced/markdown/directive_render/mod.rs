@@ -1,6 +1,8 @@
 //! Directive-block rendering helpers for semantic transcript panels, inline thinking, and user-prompt chrome.
 //! 语义转录面板、内联思考与用户提示词外框共用的指令区块渲染辅助逻辑。
 
+mod tool_command_run;
+mod tool_command_session;
 mod tool_generated_audio;
 mod tool_generated_document;
 mod tool_generated_image;
@@ -66,7 +68,117 @@ fn resolve_tool_directive_visuals(
         .get("task-session-execution-status")
         .map(String::as_str)
         .unwrap_or("running");
+    let command_status = block
+        .attributes
+        .get("command-run-status")
+        .or_else(|| block.attributes.get("command-session-status"))
+        .map(String::as_str)
+        .unwrap_or("running");
+    let command_session_action = block
+        .attributes
+        .get("command-session-action")
+        .map(String::as_str)
+        .unwrap_or("read");
     match block.kind {
+        AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+            if presentation_kind == AgentViewToolPresentationKind::CommandRun =>
+        {
+            match command_status {
+                "failed" => Some((
+                    "⌘",
+                    iced::color!(0xFFD6D1),
+                    directive_background(
+                        palette.danger.weak.color.scale_alpha(0.10),
+                        palette.danger.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "命令执行",
+                )),
+                "timed_out" => Some((
+                    "⌘",
+                    iced::color!(0xFBE6B8),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.warning.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "命令执行",
+                )),
+                "completed" => Some((
+                    "⌘",
+                    iced::color!(0xD7F6E6),
+                    directive_background(
+                        palette.success.weak.color.scale_alpha(0.10),
+                        palette.success.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "命令执行",
+                )),
+                _ => Some((
+                    "⌘",
+                    iced::color!(0xFFE4B8),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.warning.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "命令执行",
+                )),
+            }
+        }
+        AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+            if presentation_kind == AgentViewToolPresentationKind::CommandSession =>
+        {
+            let fallback_title = match command_session_action {
+                "start" => "命令会话",
+                "write" => "命令会话",
+                "read" => "命令会话",
+                "stop" => "命令会话",
+                _ => "命令会话",
+            };
+            match command_status {
+                "failed" => Some((
+                    "⌨",
+                    iced::color!(0xFFD6D1),
+                    directive_background(
+                        palette.danger.weak.color.scale_alpha(0.10),
+                        palette.danger.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    fallback_title,
+                )),
+                "stopped" => Some((
+                    "⌨",
+                    iced::color!(0xF3E0BA),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.background.strong.color.scale_alpha(0.22),
+                    ),
+                    palette.background.base.text,
+                    fallback_title,
+                )),
+                "completed" => Some((
+                    "⌨",
+                    iced::color!(0xD7F6E6),
+                    directive_background(
+                        palette.success.weak.color.scale_alpha(0.10),
+                        palette.success.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    fallback_title,
+                )),
+                _ => Some((
+                    "⌨",
+                    iced::color!(0xFFE4B8),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.warning.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    fallback_title,
+                )),
+            }
+        }
         AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
             if presentation_kind == AgentViewToolPresentationKind::TaskSession =>
         {
@@ -450,6 +562,22 @@ fn render_compact_tool_modal_directive_block(
     match AgentViewToolPresentationKind::resolve_from_attributes(&block.attributes) {
         AgentViewToolPresentationKind::Generic => {
             tool_generic::render_generic_tool_block(builder, block, markdown_settings, app_theme)
+        }
+        AgentViewToolPresentationKind::CommandRun => {
+            tool_command_run::render_command_run_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
+        }
+        AgentViewToolPresentationKind::CommandSession => {
+            tool_command_session::render_command_session_tool_block(
+                builder,
+                block,
+                markdown_settings,
+                app_theme,
+            )
         }
         AgentViewToolPresentationKind::TaskSession => {
             tool_task_session::render_task_session_tool_block(

@@ -8,6 +8,7 @@ use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
+use crate::tooling::CommandSessionRuntime;
 use std::sync::Arc;
 
 /// Resource bundle captured before execution preparation begins.
@@ -32,14 +33,16 @@ pub(crate) fn build_runtime_preparation_resources(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_task_runtime(
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
         config,
         agent_profile_catalog,
         luaskills_runtime.clone(),
         Some(mcp_runtime_access),
         task_runtime,
+        command_session_runtime,
     );
 
     RuntimePreparationResources {

@@ -13,6 +13,7 @@ use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
     normalize_session_transcript_turn_page_size,
 };
+use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
 
 impl VulcanWorkbench {
     /// Resolves the remembered initial workbench reasoning preference from persisted configuration and falls back to the shared medium preset when no prior selection exists.
@@ -41,6 +42,125 @@ impl VulcanWorkbench {
         config: &ProviderConfigurationFile,
     ) -> usize {
         normalize_session_transcript_turn_page_size(config.session_transcript_turn_page_size)
+    }
+
+    /// Builds the current host shell-support snapshot from persisted configuration and live host detection.
+    /// 根据持久化配置与当前宿主检测结果构建当前 shell 支持快照。
+    pub(super) fn command_shell_support(&self) -> HostCommandShellSupport {
+        HostCommandShellSupport::from_configured_default_id(
+            self.provider_configuration.default_command_shell.as_deref(),
+        )
+    }
+
+    /// Builds the default-command-shell picker choices rendered in runtime settings.
+    /// 构建渲染在运行时设置中的默认命令 shell 下拉选项。
+    pub(super) fn command_shell_picker_choices(&self) -> Vec<CommandShellPickerChoice> {
+        let shell_support = self.command_shell_support();
+        let auto_label = shell_support
+            .auto_shell()
+            .map(|entry| entry.shell.display_label())
+            .unwrap_or_else(|| match self.current_locale() {
+                AppLocale::ZhCn => "未检测到可用 shell",
+                AppLocale::EnUs => "No shell detected",
+            });
+        let auto_choice = CommandShellPickerChoice {
+            shell: None,
+            label: match self.current_locale() {
+                AppLocale::ZhCn => format!("系统自动（当前：{auto_label}）"),
+                AppLocale::EnUs => format!("System auto (current: {auto_label})"),
+            },
+        };
+
+        std::iter::once(auto_choice)
+            .chain(
+                shell_support
+                    .supported_shells()
+                    .iter()
+                    .map(|entry| CommandShellPickerChoice {
+                        shell: Some(entry.shell),
+                        label: entry.shell.display_label().to_string(),
+                    }),
+            )
+            .collect()
+    }
+
+    /// Returns the currently selected default-command-shell picker choice derived from persisted configuration.
+    /// 返回根据持久化配置解析出的当前默认命令 shell 下拉选择项。
+    pub(super) fn selected_command_shell_picker_choice(&self) -> Option<CommandShellPickerChoice> {
+        let selected_shell = self
+            .provider_configuration
+            .default_command_shell
+            .as_deref()
+            .and_then(HostCommandShell::parse);
+
+        self.command_shell_picker_choices()
+            .into_iter()
+            .find(|choice| choice.shell == selected_shell)
+            .or_else(|| {
+                self.command_shell_picker_choices()
+                    .into_iter()
+                    .find(|choice| choice.shell.is_none())
+            })
+    }
+
+    /// Builds the host-shell support summary rendered below the settings picker.
+    /// 构建渲染在设置选择器下方的宿主 shell 支持摘要。
+    pub(super) fn command_shell_support_summary(&self) -> String {
+        let shell_support = self.command_shell_support();
+        let supported = if shell_support.supported_shells().is_empty() {
+            match self.current_locale() {
+                AppLocale::ZhCn => String::from("未检测到可用命令行工具。"),
+                AppLocale::EnUs => String::from("No command shells were detected on this host."),
+            }
+        } else {
+            let labels = shell_support
+                .supported_shells()
+                .iter()
+                .map(|entry| entry.shell.display_label())
+                .collect::<Vec<_>>();
+            match self.current_locale() {
+                AppLocale::ZhCn => format!("当前系统支持：{}。", labels.join("、")),
+                AppLocale::EnUs => format!("Detected shells: {}.", labels.join(", ")),
+            }
+        };
+
+        let auto_summary = match shell_support.auto_shell() {
+            Some(entry) if shell_support.auto_uses_user_preference() => match self.current_locale()
+            {
+                AppLocale::ZhCn => {
+                    format!(
+                        "auto 当前将使用用户指定的 {}。",
+                        entry.shell.display_label()
+                    )
+                }
+                AppLocale::EnUs => {
+                    format!(
+                        "auto currently resolves to the user-selected {}.",
+                        entry.shell.display_label()
+                    )
+                }
+            },
+            Some(entry) => match self.current_locale() {
+                AppLocale::ZhCn => {
+                    format!(
+                        "auto 当前将按系统优先级使用 {}。",
+                        entry.shell.display_label()
+                    )
+                }
+                AppLocale::EnUs => format!(
+                    "auto currently resolves to {} by host priority.",
+                    entry.shell.display_label()
+                ),
+            },
+            None => match self.current_locale() {
+                AppLocale::ZhCn => String::from("auto 当前无法解析到可用 shell。"),
+                AppLocale::EnUs => {
+                    String::from("auto cannot currently resolve to an available shell.")
+                }
+            },
+        };
+
+        format!("{supported} {auto_summary}")
     }
 
     /// Resolves the initial provider picker choice using the persisted configuration and supported catalog order.
@@ -500,6 +620,60 @@ impl VulcanWorkbench {
         self.provider_configuration
             .session_transcript_turn_page_size = Some(self.session_transcript_turn_page_size);
         provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
+    /// Persists the currently selected default command shell back into shared configuration and refreshes the runtime foundation so tool schemas immediately reflect the new `auto` behavior.
+    /// 将当前选中的默认命令 shell 持久化回共享配置，并刷新运行时基础架构，使工具 schema 立刻反映新的 `auto` 行为。
+    pub(super) fn persist_default_command_shell_preference(
+        &mut self,
+        selected_shell: Option<HostCommandShell>,
+    ) -> Result<String, String> {
+        self.provider_configuration.default_command_shell =
+            selected_shell.map(|shell| shell.id().to_string());
+        provider_config::save_configuration_file(&self.provider_configuration).map_err(
+            |error| match self.current_locale() {
+                AppLocale::ZhCn => format!("保存默认命令 shell 配置失败：{error}"),
+                AppLocale::EnUs => {
+                    format!("Failed to save the default command shell preference: {error}")
+                }
+            },
+        )?;
+        self.refresh_runtime_foundation();
+
+        let shell_support = self.command_shell_support();
+        let status_message = match selected_shell {
+            Some(shell) => match self.current_locale() {
+                AppLocale::ZhCn => {
+                    format!(
+                        "默认命令 shell 已切换为 {}，后续 auto 将优先使用它。",
+                        shell.display_label()
+                    )
+                }
+                AppLocale::EnUs => format!(
+                    "Default command shell changed to {}; future auto resolution will prefer it.",
+                    shell.display_label()
+                ),
+            },
+            None => {
+                let auto_label = shell_support
+                    .auto_shell()
+                    .map(|entry| entry.shell.display_label())
+                    .unwrap_or_else(|| match self.current_locale() {
+                        AppLocale::ZhCn => "未检测到可用 shell",
+                        AppLocale::EnUs => "no detected shell",
+                    });
+                match self.current_locale() {
+                    AppLocale::ZhCn => {
+                        format!("默认命令 shell 已切回系统自动检测，当前 auto 为 {auto_label}。")
+                    }
+                    AppLocale::EnUs => format!(
+                        "Default command shell restored to system auto; auto currently resolves to {auto_label}."
+                    ),
+                }
+            }
+        };
+
+        Ok(status_message)
     }
 
     /// Returns the currently visible workbench model choices after applying the in-modal filter text.
@@ -1994,14 +2168,15 @@ impl VulcanWorkbench {
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     pub(super) fn refresh_runtime_foundation(&mut self) {
         let task_runtime = self.runtime_foundation.task_runtime();
-        self.runtime_foundation =
-            RuntimeFoundation::build_from_optional_mcp_access_with_task_runtime(
-                &self.provider_configuration,
-                &self.agent_profile_catalog,
-                self.luaskills_runtime.clone(),
-                self.mcp_runtime.clone(),
-                task_runtime,
-            );
+        let command_session_runtime = self.runtime_foundation.command_session_runtime();
+        self.runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
+            &self.provider_configuration,
+            &self.agent_profile_catalog,
+            self.luaskills_runtime.clone(),
+            self.mcp_runtime.clone(),
+            task_runtime,
+            command_session_runtime,
+        );
         self.last_execution_preparation = None;
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();

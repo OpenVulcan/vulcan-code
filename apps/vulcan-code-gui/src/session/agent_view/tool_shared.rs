@@ -45,15 +45,16 @@ pub(crate) fn resolve_tool_presentation_kind(
     let Some(host_result) = resolved_host_result_from_tool_metadata(metadata) else {
         return AgentViewToolPresentationKind::Generic;
     };
-    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
-        return AgentViewToolPresentationKind::Generic;
-    }
-
-    match generated_attachment_kind(host_result).as_deref() {
-        Some("image") => AgentViewToolPresentationKind::GeneratedImage,
-        Some("video") => AgentViewToolPresentationKind::GeneratedVideo,
-        Some("audio") => AgentViewToolPresentationKind::GeneratedAudio,
-        Some("pdf") | Some("document") => AgentViewToolPresentationKind::GeneratedDocument,
+    match host_result.get("kind").and_then(Value::as_str) {
+        Some("command_run") => AgentViewToolPresentationKind::CommandRun,
+        Some("command_session") => AgentViewToolPresentationKind::CommandSession,
+        Some("generated_attachments") => match generated_attachment_kind(host_result).as_deref() {
+            Some("image") => AgentViewToolPresentationKind::GeneratedImage,
+            Some("video") => AgentViewToolPresentationKind::GeneratedVideo,
+            Some("audio") => AgentViewToolPresentationKind::GeneratedAudio,
+            Some("pdf") | Some("document") => AgentViewToolPresentationKind::GeneratedDocument,
+            _ => AgentViewToolPresentationKind::Generic,
+        },
         _ => AgentViewToolPresentationKind::Generic,
     }
 }
@@ -112,6 +113,19 @@ pub(crate) fn is_task_session_message(message: &SessionMessageEntry) -> bool {
 /// 当存在时，从单条工具转录消息中提取 task-session payload 对象。
 pub(crate) fn task_session_payload(message: &SessionMessageEntry) -> Option<&Value> {
     message.metadata.as_ref()?.get("payload")
+}
+
+/// Extracts the normalized host-result payload from one tool transcript message when the payload kind matches the requested stable identifier.
+/// 当载荷 kind 匹配请求的稳定标识时，从单条工具转录消息中提取规范化宿主结果 payload。
+pub(crate) fn host_result_payload_by_kind<'a>(
+    message: &'a SessionMessageEntry,
+    expected_kind: &str,
+) -> Option<&'a Value> {
+    let metadata = message.metadata.as_ref()?;
+    let host_result = resolved_host_result_from_tool_metadata(metadata)?;
+    (host_result.get("kind").and_then(Value::as_str) == Some(expected_kind))
+        .then(|| host_result.get("payload"))
+        .flatten()
 }
 
 /// Extracts one generated attachment descriptor of the requested modality from tool metadata when available.
