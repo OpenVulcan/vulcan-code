@@ -12711,43 +12711,22 @@ impl VulcanWorkbench {
         false
     }
 
-    /// Refreshes one visible session message raw/Markdown projection cache after a streamed delta has been applied.
-    /// 在流式增量写入后刷新单条可见会话消息的原文与 Markdown 投影缓存。
+    /// Invalidates one visible session message raw/Markdown projection cache after a streamed delta has been applied.
+    /// 在流式增量写入后作废单条可见会话消息的原文与 Markdown 投影缓存。
     fn refresh_streamed_session_message_view_caches(
         &mut self,
         session_id: SessionId,
         message_id: &str,
         delta: &str,
     ) {
-        let Some(message_body) = self
-            .session_message_entry(session_id, message_id)
-            .map(|message| message.body.clone())
-        else {
+        if delta.is_empty() {
             return;
-        };
-
-        self.session_message_raw_buffers.insert(
-            message_id.to_string(),
-            text_editor::Content::with_text(&message_body),
-        );
-
-        if let Some(markdown_content) = self.session_message_markdown.get_mut(message_id) {
-            let markdown_buffer = append_selectable_markdown_delta(
-                &message_body,
-                delta,
-                markdown_content,
-                &self.app_theme,
-            );
-            self.session_message_markdown_buffers
-                .insert(message_id.to_string(), markdown_buffer);
-        } else {
-            let (markdown_content, markdown_buffer) =
-                parse_selectable_markdown_body(&message_body, &self.app_theme);
-            self.session_message_markdown
-                .insert(message_id.to_string(), markdown_content);
-            self.session_message_markdown_buffers
-                .insert(message_id.to_string(), markdown_buffer);
         }
+
+        let _ = session_id;
+        self.session_message_raw_buffers.remove(message_id);
+        self.session_message_markdown.remove(message_id);
+        self.session_message_markdown_buffers.remove(message_id);
     }
 
     /// Appends one streamed body delta into an existing visible transcript message without rebuilding legacy per-message Markdown caches.
@@ -15031,6 +15010,7 @@ mod tests {
         SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
     };
     use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
+    use crate::app_shell::markdown;
     use iced::widget::text_editor;
     use serde_json::{Value, json};
     use vulcan_agent_view::AgentViewBlock;
@@ -16382,10 +16362,10 @@ mod tests {
         );
     }
 
-    /// Verifies the active transcript surface keeps refreshing live caches so the currently visible session still updates incrementally.
-    /// 验证当前活动转录表面仍会持续刷新实时缓存，确保当前可见会话继续按增量即时更新。
+    /// Verifies the active transcript surface invalidates heavyweight per-message caches while keeping the live session document available.
+    /// 验证当前活动转录表面会作废重型逐消息缓存，同时保持实时会话文档继续可用。
     #[test]
-    fn visible_streaming_session_keeps_live_view_cache_refresh() {
+    fn visible_streaming_session_invalidates_heavy_message_view_caches() {
         let (mut workbench, _task) = VulcanWorkbench::new();
         let session_id = SessionId::from_u128(9803);
         workbench.sessions.clear();
@@ -16416,6 +16396,18 @@ mod tests {
                 ..SessionRuntimeStateEntry::default()
             },
         );
+        workbench.session_message_raw_buffers.insert(
+            message_id.clone(),
+            text_editor::Content::with_text("hello"),
+        );
+        workbench
+            .session_message_markdown
+            .insert(message_id.clone(), markdown::Content::parse_transcript("hello"));
+        workbench.session_message_markdown_buffers.insert(
+            message_id.clone(),
+            text_editor::Content::with_text("hello"),
+        );
+        workbench.refresh_session_agent_view_buffers(session_id);
 
         workbench.append_stream_delta_to_session_message(session_id, &message_id, " world");
 
@@ -16426,6 +16418,10 @@ mod tests {
             Some("hello world")
         );
         assert!(workbench.session_agent_view_documents.contains_key(&session_id));
-        assert!(workbench.session_message_raw_buffers.contains_key(&message_id));
+        assert!(!workbench.session_message_raw_buffers.contains_key(&message_id));
+        assert!(!workbench.session_message_markdown.contains_key(&message_id));
+        assert!(!workbench
+            .session_message_markdown_buffers
+            .contains_key(&message_id));
     }
 }

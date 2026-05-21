@@ -184,6 +184,7 @@ pub(super) fn parse_selectable_markdown_body(
 
 /// Appends one Markdown delta into an existing parsed payload and rebuilds the paired selectable buffer.
 /// 向现有已解析 Markdown 载荷追加一段增量，并重建配套的可选缓冲区。
+#[cfg(test)]
 pub(super) fn append_selectable_markdown_delta(
     markdown_source: &str,
     delta: &str,
