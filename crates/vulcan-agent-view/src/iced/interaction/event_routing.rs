@@ -17,7 +17,7 @@ use super::{
     SelectableTranscriptContextMenuMediaKind, SelectableTranscriptContextMenuMediaTarget,
     SelectableTranscriptContextMenuRequest, SelectableTranscriptDragAutoScroll,
     SelectableTranscriptInteraction, SelectableTranscriptState, SelectableTranscriptSurfaceId,
-    TranscriptContextMenuState, TranscriptMediaTarget,
+    TranscriptContextMenuState, TranscriptHoverTooltipState, TranscriptMediaTarget,
 };
 use iced::advanced::Shell;
 use iced::advanced::mouse;
@@ -57,6 +57,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
             }
         }
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            state.hover_tooltip = None;
             handle_left_button_pressed(
                 document,
                 on_drag_auto_scroll,
@@ -67,6 +68,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
             );
         }
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+            state.hover_tooltip = None;
             handle_right_button_pressed(
                 document,
                 on_interaction,
@@ -78,6 +80,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
             );
         }
         Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
+            state.hover_tooltip = None;
             handle_drag_cursor_moved(
                 document,
                 on_drag_auto_scroll,
@@ -87,6 +90,9 @@ pub(super) fn handle_transcript_widget_event<Message>(
                 cursor,
                 shell,
             );
+        }
+        Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            update_hover_tooltip_state(document, state, widget_bounds, cursor, shell);
         }
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.dragging => {
             handle_left_button_released(
@@ -107,6 +113,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
             ..
         }) if state.focused && shortcut_matches_copy(key, *modifiers, text.as_deref()) => {
             state.context_menu = None;
+            state.hover_tooltip = None;
             if let Some((selection_start, selection_end)) = effective_selection(
                 state,
                 document,
@@ -131,6 +138,7 @@ pub(super) fn handle_transcript_widget_event<Message>(
             ..
         }) if state.focused && shortcut_matches_select_all(key, *modifiers, text.as_deref()) => {
             state.context_menu = None;
+            state.hover_tooltip = None;
             state.anchor_char = 0;
             state.head_char = document.len_chars();
             shell.request_redraw();
@@ -138,9 +146,53 @@ pub(super) fn handle_transcript_widget_event<Message>(
         }
         Event::Keyboard(keyboard::Event::KeyPressed { .. }) => {
             state.context_menu = None;
+            state.hover_tooltip = None;
             shell.request_redraw();
         }
         _ => {}
+    }
+}
+
+/// Updates the lightweight hover tooltip state using the currently hovered transcript chip, requesting redraw only when the visible payload changes.
+/// 基于当前悬停的转录标签更新轻量提示状态，仅在可见载荷发生变化时请求重绘。
+fn update_hover_tooltip_state<Message>(
+    document: &RenderedTranscriptDocument,
+    state: &mut SelectableTranscriptState,
+    widget_bounds: Rectangle,
+    cursor: mouse::Cursor,
+    shell: &mut Shell<'_, Message>,
+) {
+    let next_tooltip = cursor
+        .position_over(widget_bounds)
+        .and_then(|position| {
+            hovered_turn_stats_tooltip(document, state, widget_bounds, position)
+        });
+    if state.hover_tooltip == next_tooltip {
+        return;
+    }
+    state.hover_tooltip = next_tooltip;
+    shell.request_redraw();
+}
+
+/// Resolves the hovered turn-statistics tooltip payload under the current pointer position, if any.
+/// 解析当前指针位置下方命中的按轮次统计提示载荷（如果存在）。
+fn hovered_turn_stats_tooltip(
+    document: &RenderedTranscriptDocument,
+    state: &SelectableTranscriptState,
+    widget_bounds: Rectangle,
+    position: iced::Point,
+) -> Option<TranscriptHoverTooltipState> {
+    let local_position = localize_point(position, widget_bounds.position());
+    let link_target = background_action_link_at_position(document, state, local_position)?;
+    match document.link_action_for_target(&link_target) {
+        Some(RenderedTranscriptLinkAction::ShowTurnStatsTooltip { title, body }) => {
+            Some(TranscriptHoverTooltipState {
+                anchor_position: position,
+                title: title.clone(),
+                body: body.clone(),
+            })
+        }
+        _ => None,
     }
 }
 
@@ -450,6 +502,7 @@ fn dispatch_clicked_link_target<Message>(
                 ));
                 record_link_click(state, link_target);
             }
+            RenderedTranscriptLinkAction::ShowTurnStatsTooltip { .. } => {}
         }
     } else {
         shell.write_clipboard(link_target.into());

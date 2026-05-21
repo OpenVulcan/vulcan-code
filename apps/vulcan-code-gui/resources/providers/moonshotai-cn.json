@@ -8,6 +8,14 @@
   "fields": [
     "apiKey"
   ],
+  "usageCapture": {
+    "openaiCompatibleStreaming": {
+      "responseSources": [
+        "terminal-choice",
+        "top-level-terminal-chunk"
+      ]
+    }
+  },
   "baseUrl": {
     "kind": "fixed",
     "value": "https:\/\/api.moonshot.cn\/v1",

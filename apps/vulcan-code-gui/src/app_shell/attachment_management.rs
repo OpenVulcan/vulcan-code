@@ -370,7 +370,12 @@ impl VulcanWorkbench {
             self.show_workbench_notice_modal("附件未全部添加", notice_lines.join("\n"));
         }
 
-        operation::focus(COMPOSER_EDITOR_ID)
+        self.save_selected_session_composer_draft();
+
+        Task::batch([
+            operation::focus(COMPOSER_EDITOR_ID),
+            self.persist_workspace_snapshot_task(),
+        ])
     }
 
     /// Stages one arbitrary RGBA image snapshot as a managed PNG attachment reusable by both iced clipboard images and native clipboard fallbacks.
@@ -568,6 +573,7 @@ impl VulcanWorkbench {
             removed.kind.display_label(),
             removed.file_name
         );
-        Task::none()
+        self.save_selected_session_composer_draft();
+        self.persist_workspace_snapshot_task()
     }
 }

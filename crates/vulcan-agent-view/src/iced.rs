@@ -462,12 +462,7 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let state = tree.state.downcast_mut::<SelectableTranscriptState>();
-        let menu_state = state.context_menu.clone()?;
         bind_selectable_transcript_render_cache(state, self.context_menu_surface_id.as_ref());
-        state
-            .render_cache
-            .ensure_rendered_document(&self.document, &self.app_theme);
-        let rendered_document = state.render_cache.rendered_document()?.clone();
         let translated_bounds = Rectangle::new(
             Point::new(
                 layout.bounds().x + translation.x,
@@ -475,15 +470,22 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             ),
             layout.bounds().size(),
         );
-
-        let overlay = build_context_menu_overlay(
-            state,
-            rendered_document,
-            translated_bounds,
-            menu_state,
-            self.on_interaction.as_ref(),
-        );
-        Some(overlay)
+        if let Some(menu_state) = state.context_menu.clone() {
+            state
+                .render_cache
+                .ensure_rendered_document(&self.document, &self.app_theme);
+            let rendered_document = state.render_cache.rendered_document()?.clone();
+            let overlay = build_context_menu_overlay(
+                state,
+                rendered_document,
+                translated_bounds,
+                menu_state,
+                self.on_interaction.as_ref(),
+            );
+            return Some(overlay);
+        }
+        let hover_tooltip = state.hover_tooltip.clone()?;
+        Some(build_hover_tooltip_overlay(hover_tooltip, translated_bounds))
     }
 }
 

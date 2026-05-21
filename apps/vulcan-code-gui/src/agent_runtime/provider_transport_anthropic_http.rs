@@ -190,6 +190,14 @@ struct AnthropicUsage {
     /// 输出 token 数量。
     #[serde(rename = "output_tokens")]
     _output_tokens: u64,
+    /// Optional cache-creation input token count.
+    /// 可选的缓存写入输入 token 数量。
+    #[serde(rename = "cache_creation_input_tokens", default)]
+    _cache_creation_input_tokens: Option<u64>,
+    /// Optional cache-read input token count.
+    /// 可选的缓存命中输入 token 数量。
+    #[serde(rename = "cache_read_input_tokens", default)]
+    _cache_read_input_tokens: Option<u64>,
 }
 
 /// Minimal Anthropic partial usage payload.
@@ -210,6 +218,8 @@ fn anthropic_usage_to_snapshot(usage: &AnthropicUsage) -> Option<CoreProviderUsa
         output_tokens: Some(usage._output_tokens as usize),
         reasoning_tokens: None,
         total_tokens: Some((usage._input_tokens.saturating_add(usage._output_tokens)) as usize),
+        cached_input_tokens: usage._cache_read_input_tokens.map(|value| value as usize),
+        cache_creation_input_tokens: usage._cache_creation_input_tokens.map(|value| value as usize),
     };
     snapshot.has_any_tokens().then_some(snapshot)
 }

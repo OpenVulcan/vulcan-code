@@ -11,7 +11,10 @@ mod tool_task_session;
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::{AppLocale, I18nArg, I18nKey, format_for_locale, text_for_locale};
-use crate::model::{SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+use crate::model::{
+    SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
+    SessionTurnStats,
+};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -168,6 +171,9 @@ fn append_session_message_blocks(
             };
             document.push_directive(build_tool_record_block(tool_kind, message, options));
         }
+        (_, SessionMessageRecordKind::TurnStats) => {
+            document.push_directive(build_turn_stats_block(message, options));
+        }
         (SessionMessageKind::Error, _) => {
             document.push_directive(build_error_notice_block(message));
         }
@@ -178,6 +184,48 @@ fn append_session_message_blocks(
             append_parsed_markdown_document(document, &message.body, Some(&message.id));
         }
     }
+}
+
+/// Builds one lightweight turn-statistics directive block from the visible transcript message metadata.
+/// 根据可见转录消息元数据构建一条轻量轮次统计指令区块。
+fn build_turn_stats_block(
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) -> AgentViewDirectiveBlock {
+    let mut attributes = AgentViewAttributes::new();
+    attributes.insert(String::from("message-id"), message.id.clone());
+    if !message.created_at.trim().is_empty() {
+        attributes.insert(String::from("created-at"), message.created_at.clone());
+    }
+    if let Some(turn_stats) = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn_stats"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<SessionTurnStats>(value).ok())
+    {
+        attributes.insert(String::from("turn-stats-status"), turn_stats.status.label().to_string());
+        attributes.insert(String::from("turn-stats-summary"), turn_stats.summary_line());
+        if let Some(duration_ms) = turn_stats.duration_ms {
+            attributes.insert(String::from("turn-stats-duration-ms"), duration_ms.to_string());
+        }
+    }
+    if let Some(title) = localized_message_title(message, options) {
+        attributes.insert(String::from("title"), title);
+    }
+    let raw_source = render_directive_source(
+        &AgentViewDirectiveKind::Custom(String::from("turn-stats")),
+        &attributes,
+        &message.body,
+    );
+
+    AgentViewDirectiveBlock::new(
+        AgentViewDirectiveKind::Custom(String::from("turn-stats")),
+        attributes,
+        message.body.clone(),
+        raw_source,
+        false,
+    )
 }
 
 /// Appends assistant-output blocks while optionally splitting one actively streaming Markdown reply into sealed immutable segments plus one active tail segment.
@@ -447,6 +495,7 @@ fn localized_message_title(
         (_, SessionMessageRecordKind::ToolResultOutput) => {
             localized_tool_result_title(message, options.locale).or_else(|| non_empty_title(message))
         }
+        (_, SessionMessageRecordKind::TurnStats) => Some(String::from("Turn Stats")),
         _ => non_empty_title(message),
     }
 }
@@ -999,6 +1048,49 @@ mod tests {
                         .attributes
                         .get("generated-media-local-path")
                         .is_some_and(|value| value == "D:/demo.png")
+        ));
+    }
+
+    /// Verifies one visible turn-stats message becomes a dedicated custom directive so the transcript can render one compact per-turn statistics chip.
+    /// 验证一条可见 turn 统计消息会变成专属自定义指令，从而让转录能够渲染紧凑的按轮次统计标签。
+    #[test]
+    fn turn_stats_message_becomes_custom_turn_stats_directive() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("turn-stats-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnStats,
+            visible: true,
+            title: String::from("Turn Stats"),
+            body: String::from("status: completed"),
+            metadata: Some(json!({
+                "turn_stats": {
+                    "status": "completed",
+                    "provider_call_count": 2,
+                    "tool_call_count": 1,
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "reasoning_tokens": 10,
+                    "total_tokens": 160,
+                    "duration_ms": 2000,
+                    "output_tokens_per_second": 25.0
+                }
+            })),
+            created_at: String::from("4"),
+        }];
+        let document = build_agent_view_document(&messages, &[]);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if matches!(&block.kind, AgentViewDirectiveKind::Custom(label) if label == "turn-stats")
+                    && block
+                        .attributes
+                        .get("turn-stats-status")
+                        .is_some_and(|value| value == "completed")
+                    && block
+                        .attributes
+                        .get("turn-stats-summary")
+                        .is_some_and(|value| value.contains("2 次调用"))
         ));
     }
 

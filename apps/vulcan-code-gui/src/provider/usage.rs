@@ -93,12 +93,16 @@ mod tests {
             output_tokens: Some(64),
             reasoning_tokens: None,
             total_tokens: Some(320),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
         };
         let latest_usage = ProviderUsageSnapshot {
             input_tokens: Some(1024),
             output_tokens: Some(128),
             reasoning_tokens: Some(256),
             total_tokens: Some(1408),
+            cached_input_tokens: Some(512),
+            cache_creation_input_tokens: None,
         };
         let state = SessionConversationState {
             messages: vec![
@@ -144,6 +148,8 @@ mod tests {
             output_tokens: Some(256),
             reasoning_tokens: Some(512),
             total_tokens: Some(2816),
+            cached_input_tokens: Some(1024),
+            cache_creation_input_tokens: Some(256),
         };
 
         let raw = serialize_provider_usage_to_json(Some(&usage))
@@ -164,6 +170,8 @@ mod tests {
             output_tokens: Some(512),
             reasoning_tokens: None,
             total_tokens: Some(4608),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
         };
 
         assert_eq!(calibrated_input_token_estimate(1024, Some(&usage)), 4096);

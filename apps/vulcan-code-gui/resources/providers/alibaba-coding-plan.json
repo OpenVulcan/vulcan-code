@@ -8,6 +8,15 @@
   "fields": [
     "apiKey"
   ],
+  "usageCapture": {
+    "openaiCompatibleStreaming": {
+      "requestIncludeUsage": true,
+      "responseSources": [
+        "top-level-empty-choices-chunk",
+        "top-level-terminal-chunk"
+      ]
+    }
+  },
   "reasoningProfile": {
     "kind": "binary",
     "off": {

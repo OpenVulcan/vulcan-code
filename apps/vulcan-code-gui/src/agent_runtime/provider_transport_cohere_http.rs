@@ -319,6 +319,8 @@ fn cohere_usage_to_snapshot(usage: CohereUsage) -> Option<CoreProviderUsageSnaps
             }
             _ => None,
         },
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
     };
     snapshot.has_any_tokens().then_some(snapshot)
 }

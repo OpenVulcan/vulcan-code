@@ -178,6 +178,10 @@ struct OpenAiResponsesUsage {
     /// 可选的输出 Token 细分载荷。
     #[serde(default)]
     output_tokens_details: Option<OpenAiResponsesOutputTokenDetails>,
+    /// Optional input-token detail payload.
+    /// 可选的输入 Token 细分载荷。
+    #[serde(default)]
+    input_tokens_details: Option<OpenAiResponsesInputTokenDetails>,
 }
 
 /// Minimal OpenAI Responses output-token detail payload.
@@ -188,6 +192,16 @@ struct OpenAiResponsesOutputTokenDetails {
     /// 可选的推理 Token 数量。
     #[serde(default)]
     reasoning_tokens: Option<usize>,
+}
+
+/// Minimal OpenAI Responses input-token detail payload.
+/// 最小 OpenAI Responses 输入 Token 细分载荷。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpenAiResponsesInputTokenDetails {
+    /// Optional cached-token count reported for prompt reuse.
+    /// 为提示词复用报告的可选缓存命中 Token 数量。
+    #[serde(default)]
+    cached_tokens: Option<usize>,
 }
 
 /// Executes one direct OpenAI Responses streaming turn without going through any third-party completion-model abstraction.
@@ -890,6 +904,10 @@ fn openai_responses_usage_to_snapshot(
             .output_tokens_details
             .and_then(|details| details.reasoning_tokens),
         total_tokens: usage.total_tokens,
+        cached_input_tokens: usage
+            .input_tokens_details
+            .and_then(|details| details.cached_tokens),
+        cache_creation_input_tokens: None,
     };
     snapshot.has_any_tokens().then_some(snapshot)
 }

@@ -834,6 +834,7 @@ mod tests {
             credential_env_keys: vec![String::from("DEEPSEEK_API_KEY")],
             extra_headers: BTreeMap::new(),
             extra_body: serde_json::Map::new(),
+            usage_capture: crate::provider_config::ProviderUsageCaptureConfig::default(),
             model_runtime_overrides: BTreeMap::new(),
             reasoning_profile: None,
             ai_tools: Vec::new(),

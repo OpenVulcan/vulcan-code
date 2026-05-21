@@ -272,6 +272,11 @@ pub(super) fn render_directive_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
+    if matches!(&block.kind, AgentViewDirectiveKind::Custom(label) if label == "turn-stats") {
+        render_turn_stats_block(builder, block, markdown_settings, app_theme);
+        return;
+    }
+
     if block.kind == AgentViewDirectiveKind::UserPrompt {
         render_user_prompt_block(builder, block, markdown_settings, app_theme);
         return;
@@ -415,6 +420,91 @@ pub(super) fn render_directive_block(
             }
         }
     }
+}
+
+/// Renders one compact per-turn statistics footer row so finished turns expose aggregated usage without duplicating every provider call.
+/// 渲染单条紧凑按轮次统计页脚行，使已结束轮次能够暴露聚合用量而不会重复展示每次 Provider 调用。
+fn render_turn_stats_block(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    markdown_settings: markdown::Settings,
+    app_theme: &Theme,
+) {
+    let palette = app_theme.palette();
+    let status = block
+        .attributes
+        .get("turn-stats-status")
+        .map(String::as_str)
+        .unwrap_or("completed");
+    let (icon, accent_color) = match status {
+        "failed" => ("⚠", palette.danger.strong.color),
+        "stopped" => ("⏹", palette.warning.strong.color),
+        _ => ("◔", palette.success.strong.color),
+    };
+    let summary_text = block
+        .attributes
+        .get("turn-stats-summary")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| block.body.trim());
+    let line = if summary_text.is_empty() {
+        format!("{icon} Turn Stats")
+    } else {
+        format!("{icon} {summary_text}")
+    };
+    let tooltip_title = block
+        .attributes
+        .get("title")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| String::from("Turn Stats"));
+    let block_id = block
+        .attributes
+        .get("ui-block-id")
+        .cloned()
+        .unwrap_or_else(|| tooltip_title.clone());
+    let tooltip_link_target = format!("vulcan-agent-view://turn-stats-tooltip/{block_id}");
+    builder.register_link_action(
+        tooltip_link_target.clone(),
+        RenderedTranscriptLinkAction::ShowTurnStatsTooltip {
+            title: tooltip_title,
+            body: block.body.clone(),
+        },
+    );
+    let background = directive_background(
+        palette.background.weak.color.scale_alpha(0.12),
+        palette.background.strong.color.scale_alpha(0.22),
+    );
+
+    let mut summary_node = builder.build_rich_paragraph_node_with_layout(
+        build_agent_view_plain_text_spans(
+            &line,
+            Font {
+                weight: font::Weight::Medium,
+                ..theme::ui_font()
+            },
+            PlainTextRenderKind::Flow,
+            Some(accent_color),
+            app_theme,
+        ),
+        Pixels(markdown_settings.text_size.0 - 1.0),
+        text::LineHeight::default(),
+        text::Wrapping::Word,
+        0.0,
+        2.0,
+        8.0,
+        Padding::from([2.0, 8.0]),
+        Some(background),
+        0,
+        RenderedParagraphHorizontalPlacement::Leading,
+        false,
+        None,
+    );
+    summary_node.background_action_link = Some(tooltip_link_target);
+    builder
+        .nodes
+        .push(RenderedTranscriptNode::Paragraph(summary_node));
+    builder.pending_separator = Some("\n");
 }
 
 /// Renders one compact tool row that opens a dedicated modal instead of expanding inline.

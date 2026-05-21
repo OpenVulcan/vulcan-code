@@ -226,6 +226,21 @@ pub(super) struct TranscriptContextMenuState {
     pub(super) media_target: Option<TranscriptMediaTarget>,
 }
 
+/// Lightweight hover tooltip payload anchored to one transcript chip such as a per-turn statistics footer.
+/// 锚定到某个转录标签（例如按轮次统计页脚）的轻量悬浮提示载荷。
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TranscriptHoverTooltipState {
+    /// Pointer position used to anchor the tooltip inside the transcript surface.
+    /// 用于在转录表面内部锚定提示浮层的指针位置。
+    pub(super) anchor_position: Point,
+    /// Short title shown at the top of the tooltip body.
+    /// 显示在提示正文顶部的简短标题。
+    pub(super) title: String,
+    /// Multi-line human-readable tooltip body.
+    /// 面向用户的多行提示正文。
+    pub(super) body: String,
+}
+
 /// Runtime state retained by the selectable transcript widget.
 /// 可选择转录组件保留的运行时状态。
 pub(super) struct SelectableTranscriptState {
@@ -268,6 +283,9 @@ pub(super) struct SelectableTranscriptState {
     /// Last host-driven context-menu command revision already consumed by this widget state.
     /// 此组件状态已消费的最近一次宿主侧右键菜单命令修订号。
     pub(super) last_context_menu_command_revision: u64,
+    /// Optional hover tooltip currently visible for lightweight transcript statistic chips.
+    /// 当前为轻量转录统计标签显示的可选悬浮提示。
+    pub(super) hover_tooltip: Option<TranscriptHoverTooltipState>,
 }
 
 impl Default for SelectableTranscriptState {
@@ -288,6 +306,7 @@ impl Default for SelectableTranscriptState {
             collapsible_body_scroll_offsets: BTreeMap::new(),
             context_menu: None,
             last_context_menu_command_revision: 0,
+            hover_tooltip: None,
         }
     }
 }

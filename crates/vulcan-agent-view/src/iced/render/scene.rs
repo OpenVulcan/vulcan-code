@@ -137,6 +137,16 @@ pub(super) enum RenderedTranscriptLinkAction {
     /// Opens one generated-media path with the system default application.
     /// 使用系统默认应用打开一条生成媒体路径。
     OpenMediaWithDefaultApp(String),
+    /// Carries one hover-only turn-statistics tooltip payload for lightweight transcript footer chips.
+    /// 为轻量转录页脚统计标签携带一份仅悬浮展示的按轮次统计提示载荷。
+    ShowTurnStatsTooltip {
+        /// Short title shown at the top of the tooltip body.
+        /// 显示在提示正文顶部的简短标题。
+        title: String,
+        /// Multi-line human-readable tooltip body.
+        /// 面向用户的多行提示正文。
+        body: String,
+    },
 }
 
 /// Extracts one character-based slice from a string without panicking when the range exceeds bounds.

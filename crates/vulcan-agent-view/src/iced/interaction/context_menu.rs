@@ -4,7 +4,8 @@
 use super::interaction::current_selection_for_state;
 use super::{
     RenderedTranscriptDocument, SelectableTranscriptInteraction, SelectableTranscriptState,
-    TranscriptContextMenuAction, TranscriptContextMenuState, TranscriptMediaTarget,
+    TranscriptContextMenuAction, TranscriptContextMenuState, TranscriptHoverTooltipState,
+    TranscriptMediaTarget,
 };
 use crate::iced_theme as theme;
 use iced::advanced::layout::{self, Layout};
@@ -33,6 +34,22 @@ pub(super) const TRANSCRIPT_CONTEXT_MENU_ITEM_PADDING_X: f32 = 12.0;
 /// Corner radius used by the lightweight transcript context menu.
 /// 轻量转录右键菜单使用的圆角半径。
 pub(super) const TRANSCRIPT_CONTEXT_MENU_RADIUS: f32 = 2.0;
+
+/// Fixed width used by the lightweight transcript hover tooltip shown for turn-stat chips.
+/// 为按轮次统计标签展示的轻量悬浮提示使用的固定宽度。
+const TRANSCRIPT_HOVER_TOOLTIP_WIDTH: f32 = 280.0;
+
+/// Outer padding applied around the hover-tooltip text body.
+/// 应用于悬浮提示文本正文周围的外边距。
+const TRANSCRIPT_HOVER_TOOLTIP_PADDING: f32 = 12.0;
+
+/// Gap inserted between the tooltip title and detail body.
+/// 在提示标题与详情正文之间插入的间距。
+const TRANSCRIPT_HOVER_TOOLTIP_TITLE_GAP: f32 = 8.0;
+
+/// Corner radius used by the lightweight transcript hover tooltip.
+/// 轻量转录悬浮提示使用的圆角半径。
+const TRANSCRIPT_HOVER_TOOLTIP_RADIUS: f32 = 8.0;
 
 /// Returns the lightweight transcript context-menu actions visible under the current selection state or hovered media card.
 /// 根据当前选区状态或悬停媒体卡片返回轻量转录右键菜单可见的动作集合。
@@ -307,6 +324,18 @@ pub(super) fn build_context_menu_overlay<'a, Message>(
     }))
 }
 
+/// Builds one floating hover-tooltip overlay anchored to the transcript widget.
+/// 构建一个锚定到转录组件的浮动悬浮提示覆盖层元素。
+pub(super) fn build_hover_tooltip_overlay<'a, Message>(
+    tooltip_state: TranscriptHoverTooltipState,
+    widget_bounds: Rectangle,
+) -> overlay::Element<'a, Message, Theme, Renderer> {
+    overlay::Element::new(Box::new(SelectableTranscriptHoverTooltipOverlay {
+        tooltip_state,
+        widget_bounds,
+    }))
+}
+
 /// Overlay responsible for presenting and executing the selectable transcript context menu.
 /// 负责展示并执行可选择转录右键菜单的浮层。
 struct SelectableTranscriptContextMenuOverlay<'a, Message> {
@@ -325,6 +354,17 @@ struct SelectableTranscriptContextMenuOverlay<'a, Message> {
     /// High-level transcript interaction dispatcher reused by media-card context-menu actions.
     /// 供媒体卡片右键菜单动作复用的高层转录交互分发器。
     on_interaction: &'a dyn Fn(SelectableTranscriptInteraction) -> Message,
+}
+
+/// Overlay responsible for presenting one lightweight hover tooltip above the transcript surface.
+/// 负责在转录表面之上展示一个轻量悬浮提示的浮层。
+struct SelectableTranscriptHoverTooltipOverlay {
+    /// Hover tooltip payload currently anchored inside the transcript surface.
+    /// 当前锚定在转录表面内部的悬浮提示载荷。
+    tooltip_state: TranscriptHoverTooltipState,
+    /// Absolute widget bounds used to clamp the hover tooltip inside the transcript surface.
+    /// 用于将悬浮提示钳制在转录表面内部的绝对组件边界。
+    widget_bounds: Rectangle,
 }
 
 impl<Message> overlay::Overlay<Message, Theme, Renderer>
@@ -519,6 +559,148 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer>
             .map(|_| mouse::Interaction::Pointer)
             .unwrap_or(mouse::Interaction::default())
     }
+}
+
+impl<Message> overlay::Overlay<Message, Theme, Renderer> for SelectableTranscriptHoverTooltipOverlay {
+    /// Lays out the hover tooltip using one clamped floating rectangle that covers the transcript surface.
+    /// 使用一个覆盖转录表面的钳制浮动矩形对悬浮提示进行布局。
+    fn layout(&mut self, _renderer: &Renderer, bounds: Size) -> layout::Node {
+        layout::Node::new(Size::new(bounds.width.max(1.0), bounds.height.max(1.0)))
+    }
+
+    /// Draws the floating hover tooltip above the transcript surface without intercepting interactions.
+    /// 在不拦截交互的前提下，将浮动悬浮提示绘制在转录表面之上。
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        theme_palette_owner: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+    ) {
+        let palette = theme_palette_owner.palette();
+        let tooltip_bounds =
+            transcript_hover_tooltip_bounds(self.widget_bounds, &self.tooltip_state);
+        let title_line_count = 1usize;
+        let body_line_count = self.tooltip_state.body.lines().count().max(1);
+
+        renderer.with_layer(layout.bounds(), |renderer| {
+            let local_bounds = Rectangle::new(
+                Point::new(
+                    tooltip_bounds.x - layout.bounds().x,
+                    tooltip_bounds.y - layout.bounds().y,
+                ),
+                tooltip_bounds.size(),
+            );
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: local_bounds,
+                    border: Border {
+                        color: palette.background.strong.color.scale_alpha(0.28),
+                        width: 1.0,
+                        radius: TRANSCRIPT_HOVER_TOOLTIP_RADIUS.into(),
+                    },
+                    shadow: iced::Shadow {
+                        color: Color::BLACK.scale_alpha(0.16),
+                        offset: iced::Vector::new(0.0, 6.0),
+                        blur_radius: 16.0,
+                    },
+                    ..renderer::Quad::default()
+                },
+                Background::Color(palette.background.base.color),
+            );
+
+            renderer.fill_text(
+                text::Text {
+                    content: self.tooltip_state.title.clone(),
+                    bounds: Size::new(
+                        (local_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_PADDING * 2.0).max(1.0),
+                        ((title_line_count as f32) * 20.0).max(1.0),
+                    ),
+                    size: Pixels(13.0),
+                    line_height: text::LineHeight::default(),
+                    font: iced::Font {
+                        weight: iced::font::Weight::Semibold,
+                        ..theme::ui_font()
+                    },
+                    align_x: text::Alignment::Left,
+                    align_y: iced::alignment::Vertical::Top,
+                    shaping: text::Shaping::Advanced,
+                    wrapping: text::Wrapping::Word,
+                    ellipsis: text::Ellipsis::None,
+                    hint_factor: None,
+                },
+                Point::new(
+                    local_bounds.x + TRANSCRIPT_HOVER_TOOLTIP_PADDING,
+                    local_bounds.y + TRANSCRIPT_HOVER_TOOLTIP_PADDING,
+                ),
+                palette.background.base.text,
+                layout.bounds(),
+            );
+
+            renderer.fill_text(
+                text::Text {
+                    content: self.tooltip_state.body.clone(),
+                    bounds: Size::new(
+                        (local_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_PADDING * 2.0).max(1.0),
+                        ((body_line_count as f32) * 18.0).max(1.0),
+                    ),
+                    size: Pixels(12.0),
+                    line_height: text::LineHeight::default(),
+                    font: theme::ui_font(),
+                    align_x: text::Alignment::Left,
+                    align_y: iced::alignment::Vertical::Top,
+                    shaping: text::Shaping::Advanced,
+                    wrapping: text::Wrapping::Word,
+                    ellipsis: text::Ellipsis::None,
+                    hint_factor: None,
+                },
+                Point::new(
+                    local_bounds.x + TRANSCRIPT_HOVER_TOOLTIP_PADDING,
+                    local_bounds.y
+                        + TRANSCRIPT_HOVER_TOOLTIP_PADDING
+                        + 18.0
+                        + TRANSCRIPT_HOVER_TOOLTIP_TITLE_GAP,
+                ),
+                palette.background.base.text.scale_alpha(0.88),
+                layout.bounds(),
+            );
+        });
+    }
+
+    /// Returns the default mouse interaction so the hover tooltip never steals pointer semantics from the transcript body.
+    /// 返回默认鼠标交互，使悬浮提示不会从转录正文手中抢走指针语义。
+    fn mouse_interaction(
+        &self,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        mouse::Interaction::default()
+    }
+}
+
+/// Computes one clamped floating rectangle for the hover tooltip near the pointer anchor while staying inside the transcript surface.
+/// 计算一个靠近指针锚点且保持在转录表面内部的钳制悬浮提示矩形。
+fn transcript_hover_tooltip_bounds(
+    widget_bounds: Rectangle,
+    tooltip_state: &TranscriptHoverTooltipState,
+) -> Rectangle {
+    let title_line_count = 1.0f32;
+    let body_line_count = tooltip_state.body.lines().count().max(1) as f32;
+    let height = TRANSCRIPT_HOVER_TOOLTIP_PADDING * 2.0
+        + title_line_count * 18.0
+        + TRANSCRIPT_HOVER_TOOLTIP_TITLE_GAP
+        + body_line_count * 18.0;
+    let max_x =
+        (widget_bounds.x + widget_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_WIDTH).max(widget_bounds.x);
+    let max_y = (widget_bounds.y + widget_bounds.height - height).max(widget_bounds.y);
+    let x = (tooltip_state.anchor_position.x + 14.0).clamp(widget_bounds.x, max_x);
+    let y = (tooltip_state.anchor_position.y + 14.0).clamp(widget_bounds.y, max_y);
+    Rectangle::new(
+        Point::new(x, y),
+        Size::new(TRANSCRIPT_HOVER_TOOLTIP_WIDTH, height.max(72.0)),
+    )
 }
 
 #[cfg(test)]

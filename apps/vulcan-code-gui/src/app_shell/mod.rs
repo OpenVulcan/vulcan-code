@@ -67,9 +67,10 @@ use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingPromptModelReference,
     PendingPromptPanelEntry, PendingPromptPanelEntryState, PendingPromptRuntimeOptions,
     PendingPromptWebSearchOverride, PendingSessionPromptEntry, PendingSessionPromptSource,
-    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, TaskProjectSummary,
+    SessionCompactionEntry, SessionComposerDraftState, SessionId, SessionMessageEntry,
+    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
+    SessionState, SessionSummary, SessionTitleSource, SessionTurnStats,
+    SessionTurnStatsStatus, TaskProjectSummary,
 };
 use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;
@@ -832,6 +833,233 @@ fn merge_tool_display_messages(messages: Vec<SessionMessageEntry>) -> Vec<Sessio
     }
 
     merged_messages
+}
+
+/// Builds one best-effort turn-statistics snapshot from the transcript rows bounded by the provided terminal closing record.
+/// 根据给定终态闭合记录所界定的转录行，构建一份最佳努力的轮次统计快照。
+fn build_session_turn_stats_from_state(
+    conversation_state: &crate::conversation_protocol::SessionConversationState,
+    closing_record_id: &str,
+    status: SessionTurnStatsStatus,
+) -> Option<SessionTurnStats> {
+    let records = &conversation_state.records;
+    let closing_index = records
+        .iter()
+        .position(|record| record.id == closing_record_id)?;
+    let boundary_index = records[..closing_index]
+        .iter()
+        .rposition(|record| {
+            matches!(
+                record.record_kind,
+                SessionMessageRecordKind::SummaryOutput
+                    | SessionMessageRecordKind::TurnTerminated
+                    | SessionMessageRecordKind::TurnStats
+            )
+        })
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let start_index = records[boundary_index..=closing_index]
+        .iter()
+        .position(|record| {
+            matches!(record.kind, SessionMessageKind::User)
+                && record.visible
+                && record.record_kind == SessionMessageRecordKind::Transcript
+        })
+        .map(|offset| boundary_index + offset)
+        .unwrap_or(boundary_index);
+    let turn_records = &records[start_index..=closing_index];
+    if turn_records.is_empty() {
+        return None;
+    }
+    let visible_user_record_count_before_turn = records[..start_index]
+        .iter()
+        .filter(|record| {
+            matches!(record.kind, SessionMessageKind::User)
+                && record.visible
+                && record.record_kind == SessionMessageRecordKind::Transcript
+        })
+        .count();
+    let turn_start_message_index =
+        canonical_turn_start_message_index(conversation_state, visible_user_record_count_before_turn)
+            .unwrap_or(0);
+    let turn_messages = &conversation_state.messages[turn_start_message_index..];
+
+    let mut stats = SessionTurnStats {
+        status,
+        provider_call_count: 0,
+        tool_call_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
+        duration_ms: None,
+        output_tokens_per_second: None,
+    };
+
+    stats.tool_call_count = count_turn_tool_calls_from_records(turn_records);
+
+    for message in turn_messages {
+        match &message.payload {
+            crate::conversation_protocol::SessionConversationPayload::Assistant {
+                usage,
+                tool_calls,
+                ..
+            } => {
+                if assistant_payload_contributes_to_turn_stats(message) {
+                    stats.provider_call_count = stats.provider_call_count.saturating_add(1);
+                }
+                if stats.tool_call_count == 0 {
+                    stats.tool_call_count =
+                        stats.tool_call_count.saturating_add(tool_calls.len());
+                }
+                let Some(usage) = usage.as_ref() else {
+                    continue;
+                };
+                stats.input_tokens = stats
+                    .input_tokens
+                    .saturating_add(usage.input_tokens.unwrap_or(0));
+                stats.output_tokens = stats
+                    .output_tokens
+                    .saturating_add(usage.output_tokens.unwrap_or(0));
+                stats.reasoning_tokens = stats
+                    .reasoning_tokens
+                    .saturating_add(usage.reasoning_tokens.unwrap_or(0));
+                stats.total_tokens = stats
+                    .total_tokens
+                    .saturating_add(
+                        usage.total_tokens.unwrap_or_else(|| {
+                            usage.input_tokens.unwrap_or(0)
+                                .saturating_add(usage.output_tokens.unwrap_or(0))
+                                .saturating_add(usage.reasoning_tokens.unwrap_or(0))
+                        }),
+                    );
+                if let Some(cached_input_tokens) = usage.cached_input_tokens {
+                    let accumulated = stats.cached_input_tokens.unwrap_or(0);
+                    stats.cached_input_tokens = Some(accumulated.saturating_add(cached_input_tokens));
+                }
+                if let Some(cache_creation_input_tokens) = usage.cache_creation_input_tokens {
+                    let accumulated = stats.cache_creation_input_tokens.unwrap_or(0);
+                    stats.cache_creation_input_tokens = Some(
+                        accumulated.saturating_add(cache_creation_input_tokens),
+                    );
+                }
+            }
+            crate::conversation_protocol::SessionConversationPayload::ToolResult { .. }
+            | crate::conversation_protocol::SessionConversationPayload::UserText { .. } => {}
+        }
+    }
+
+    let started_at = turn_records
+        .iter()
+        .find(|record| {
+            record.id != closing_record_id
+                && record.record_kind != SessionMessageRecordKind::SummaryOutput
+                && record.record_kind != SessionMessageRecordKind::TurnTerminated
+                && record.record_kind != SessionMessageRecordKind::TurnStats
+                && !record.created_at.trim().is_empty()
+        })
+        .and_then(|record| parse_unix_millis_text(&record.created_at))
+        .or_else(|| {
+            turn_records
+                .iter()
+                .find(|record| !record.created_at.trim().is_empty())
+                .and_then(|record| parse_unix_millis_text(&record.created_at))
+        });
+    let finished_at = turn_records
+        .iter()
+        .rev()
+        .find(|record| record.id == closing_record_id)
+        .and_then(|record| parse_unix_millis_text(&record.created_at));
+    stats.duration_ms = match (started_at, finished_at) {
+        (Some(started_at), Some(finished_at)) if finished_at >= started_at => {
+            Some((finished_at - started_at) as u64)
+        }
+        _ => None,
+    };
+    stats.output_tokens_per_second = stats.duration_ms.and_then(|duration_ms| {
+        if duration_ms == 0 || stats.output_tokens == 0 {
+            return None;
+        }
+        Some(stats.output_tokens as f64 / (duration_ms as f64 / 1000.0))
+    });
+
+    Some(stats)
+}
+
+/// Resolves the canonical message index where the active turn begins by matching the count of visible user transcript rows that appeared before the turn boundary.
+/// 通过匹配轮次边界之前已出现的可见用户转录条目数量，解析当前活动轮次在规范消息数组中的起始下标。
+fn canonical_turn_start_message_index(
+    conversation_state: &crate::conversation_protocol::SessionConversationState,
+    visible_user_record_count_before_turn: usize,
+) -> Option<usize> {
+    let user_message_indexes = conversation_state
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            matches!(
+                message.payload,
+                crate::conversation_protocol::SessionConversationPayload::UserText { .. }
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if user_message_indexes.is_empty() {
+        return None;
+    }
+
+    user_message_indexes
+        .get(visible_user_record_count_before_turn)
+        .copied()
+        .or_else(|| user_message_indexes.last().copied())
+}
+
+/// Counts unique tool-call records inside the current turn using transcript metadata so UI projection ids never affect the final statistic.
+/// 使用转录元数据统计当前轮次中的唯一工具调用记录数量，确保界面投影标识不会影响最终统计值。
+fn count_turn_tool_calls_from_records(
+    turn_records: &[crate::conversation_protocol::SessionConversationRecord],
+) -> usize {
+    let mut unique_tool_call_ids = std::collections::BTreeSet::new();
+    for record in turn_records {
+        if record.record_kind != SessionMessageRecordKind::ToolCallOutput {
+            continue;
+        }
+        let stable_key = record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_call_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| record.id.clone());
+        unique_tool_call_ids.insert(stable_key);
+    }
+    unique_tool_call_ids.len()
+}
+
+/// Returns whether one assistant payload carries meaningful provider work that should count as a provider call in the turn summary.
+/// 返回某条助手载荷是否承载了应计入轮次摘要的有效 Provider 工作。
+fn assistant_payload_contributes_to_turn_stats(
+    message: &crate::conversation_protocol::SessionConversationMessage,
+) -> bool {
+    match &message.payload {
+        crate::conversation_protocol::SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            usage,
+            tool_calls,
+            ..
+        } => {
+            !text.trim().is_empty()
+                || !reasoning.trim().is_empty()
+                || !tool_calls.is_empty()
+                || usage.is_some()
+        }
+        _ => false,
+    }
 }
 
 /// Merges one freshly projected conversation-state slice back into the already hydrated visible transcript window so older on-demand history rows are preserved instead of disappearing during live updates.
@@ -7287,7 +7515,8 @@ impl VulcanWorkbench {
             }
             Message::ComposerChanged(value) => {
                 self.composer = value;
-                Task::none()
+                self.save_selected_session_composer_draft();
+                self.persist_workspace_snapshot_task()
             }
             Message::ComposerEditorAction(action) => self.apply_composer_editor_action(action),
             Message::ComposerUndo => self.restore_latest_composer_undo_snapshot(),
@@ -9211,6 +9440,9 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::SessionSelected(session_id) => {
+                let previous_workspace_path = self.selected_attachment_workspace_path();
+                let previous_scope = self.composer_attachment_ref_scope();
+                self.save_selected_session_composer_draft();
                 self.prune_unmaterialized_sessions(Some(session_id));
                 if self
                     .workspace_history_search
@@ -9229,6 +9461,7 @@ impl VulcanWorkbench {
                 self.hovered_task_session = Some(session_id);
                 self.clear_pending_prompt_drag_state();
                 self.sync_workspace_path_with_selected_session();
+                self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_subagent_panel = None;
                 self.rebuild_subagent_task_cache_for_session(session_id);
@@ -9250,6 +9483,7 @@ impl VulcanWorkbench {
                 let projection_task =
                     self.schedule_session_agent_view_projection_refresh_if_needed(session_id);
                 Task::batch([
+                    self.persist_workspace_snapshot_task(),
                     self.schedule_session_hydration(session_id),
                     projection_task,
                     if has_pending_search_navigation {
@@ -10606,6 +10840,79 @@ impl VulcanWorkbench {
             .unwrap_or(SessionRunPhase::Idle)
     }
 
+    /// Persists the current composer draft into the selected session runtime UI state without mutating transcript history.
+    /// 在不修改转录历史的前提下，将当前输入框草稿持久化到已选会话的运行时界面状态中。
+    fn save_selected_session_composer_draft(&mut self) {
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            return;
+        };
+        let text = self.composer_buffer.text();
+        let attachments = self.composer_attachments.clone();
+        let scroll_offset = self.composer_scroll_offset.max(0.0);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.ui_state.composer_draft = SessionComposerDraftState {
+            text,
+            attachments,
+            scroll_offset,
+        };
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+
+    /// Restores the selected session draft into the shared composer surface while re-binding attachment leases to the new session scope.
+    /// 将已选会话草稿恢复到共享输入表面，同时把附件租约重新绑定到新会话作用域。
+    fn restore_session_composer_draft(
+        &mut self,
+        previous_workspace_path: &str,
+        previous_scope: &str,
+    ) {
+        let next_workspace_path = self.selected_attachment_workspace_path();
+        let next_scope = self.composer_attachment_ref_scope();
+        let previous_attachments = self.composer_attachments.clone();
+        self.release_staged_attachment_refs(
+            previous_workspace_path,
+            previous_scope,
+            &previous_attachments,
+            "输入框",
+        );
+        self.release_all_composer_undo_attachment_refs();
+
+        let draft = self
+            .selected_session()
+            .and_then(|session| self.session_runtime_state(session.id))
+            .map(|runtime_state| runtime_state.ui_state.composer_draft.clone())
+            .unwrap_or_default();
+
+        if !draft.attachments.is_empty()
+            && let Err(error) = self.acquire_staged_attachment_refs(
+                &next_workspace_path,
+                &next_scope,
+                &draft.attachments,
+                "输入框",
+            )
+        {
+            self.show_workbench_notice_modal("草稿附件无法恢复", error.clone());
+            self.status_message = error;
+            self.composer.clear();
+            self.composer_buffer = text_editor::Content::with_text("");
+            self.composer_attachments.clear();
+            self.composer_scroll_offset = 0.0;
+            self.composer_drag_hover_labels.clear();
+            self.composer_scrollbar_pointer_y = None;
+            self.composer_scrollbar_drag_grab_offset = None;
+            self.dismiss_workbench_context_menu();
+            return;
+        }
+
+        self.composer = draft.text.clone();
+        self.composer_buffer = text_editor::Content::with_text(&draft.text);
+        self.composer_attachments = draft.attachments;
+        self.composer_scroll_offset = draft.scroll_offset.max(0.0);
+        self.composer_drag_hover_labels.clear();
+        self.composer_scrollbar_pointer_y = None;
+        self.composer_scrollbar_drag_grab_offset = None;
+        self.dismiss_workbench_context_menu();
+    }
+
     /// Replaces the main composer buffer with the provided prompt text and focuses the editor again.
     /// 使用给定提示词文本替换主提示词缓冲区，并重新聚焦编辑器。
     fn restore_prompt_into_composer(
@@ -10641,6 +10948,7 @@ impl VulcanWorkbench {
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
         self.dismiss_workbench_context_menu();
+        self.save_selected_session_composer_draft();
         Ok(operation::focus(COMPOSER_EDITOR_ID))
     }
 
@@ -10665,6 +10973,7 @@ impl VulcanWorkbench {
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
         self.dismiss_workbench_context_menu();
+        self.save_selected_session_composer_draft();
     }
 
     /// Opens the reusable blocking workbench notice modal with a default confirmation action.
@@ -12327,11 +12636,11 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
         report: &ExecutionRunReport,
-    ) {
+    ) -> String {
         let derived_record = self
             .session_skill_chain
             .run_summary_skill(SummarySkillInput { report });
-        self.push_session_derived_record(session_id, derived_record);
+        self.push_session_derived_record(session_id, derived_record)
     }
 
     /// Appends one hidden terminated-turn marker after an interrupted, stopped, or failed execution branch closes without a summary.
@@ -12340,7 +12649,7 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
         body: impl Into<String>,
-    ) {
+    ) -> String {
         self.push_session_derived_record(
             session_id,
             SessionDerivedRecord {
@@ -12349,7 +12658,37 @@ impl VulcanWorkbench {
                 title: String::from("Turn Terminated"),
                 body: body.into(),
             },
-        );
+        )
+    }
+
+    /// Aggregates one terminal per-turn statistics snapshot from the current transcript slice and appends a visible lightweight statistics row.
+    /// 从当前转录切片聚合一份终态按轮次统计快照，并追加一条可见轻量统计行。
+    fn append_session_turn_stats(
+        &mut self,
+        session_id: SessionId,
+        closing_record_id: &str,
+        status: SessionTurnStatsStatus,
+    ) -> Option<String> {
+        let conversation_state = self
+            .session_runtime_state(session_id)
+            .map(|runtime_state| runtime_state.conversation_state.clone())?;
+        let turn_stats =
+            build_session_turn_stats_from_state(&conversation_state, closing_record_id, status)?;
+        let metadata = serde_json::to_value(json!({
+            "turn_stats": turn_stats,
+        }))
+        .ok();
+        let title = format!("Turn Stats · {}", turn_stats.status.label());
+        let body = turn_stats.detail_body();
+        Some(self.push_visible_session_record_message_with_metadata(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::TurnStats,
+            title,
+            body,
+            metadata,
+            false,
+        ))
     }
 
     /// Updates the runtime-state snapshot for the session from the latest execution preparation.
@@ -12625,9 +12964,14 @@ impl VulcanWorkbench {
                 "执行失败",
                 error.clone(),
             );
-            self.append_session_turn_terminated(
+            let terminated_message_id = self.append_session_turn_terminated(
                 session_id,
                 format!("The run terminated without a summary. Error detail: {error}"),
+            );
+            let _ = self.append_session_turn_stats(
+                session_id,
+                &terminated_message_id,
+                SessionTurnStatsStatus::Failed,
             );
             self.set_session_run_phase(session_id, SessionRunPhase::Failed);
             self.status_message = error.clone();
@@ -12636,7 +12980,12 @@ impl VulcanWorkbench {
 
         self.refresh_session_queued_steps(session_id);
         if report.is_success() {
-            self.append_session_summary_output(session_id, &report);
+            let summary_message_id = self.append_session_summary_output(session_id, &report);
+            let _ = self.append_session_turn_stats(
+                session_id,
+                &summary_message_id,
+                SessionTurnStatsStatus::Completed,
+            );
         }
         self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
@@ -14242,6 +14591,7 @@ impl VulcanWorkbench {
 mod tests {
     use super::{
         VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
+        build_session_turn_stats_from_state,
         build_background_legacy_maintenance_queue, clear_selectable_transcript_render_cache_stash,
         compact_tool_detail_message_for_projection,
         composer_text_has_submittable_content, composer_visible_line_count,
@@ -14254,7 +14604,7 @@ mod tests {
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
         SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-        SessionRuntimeStateEntry, SessionState, SessionSummary,
+        SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
     };
     use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
     use iced::widget::text_editor;
@@ -14860,6 +15210,242 @@ mod tests {
                 .and_then(|payload| payload.get("conversation_state"))
                 .is_none()
         );
+    }
+
+    /// Verifies turn statistics aggregate provider usage from canonical assistant messages even when the visible transcript metadata does not mirror `provider_usage`.
+    /// 验证即使可见转录元数据没有镜像 `provider_usage`，按轮次统计仍会从规范助手消息中聚合 Provider 用量。
+    #[test]
+    fn turn_stats_reads_usage_from_canonical_messages() {
+        let conversation_state = crate::conversation_protocol::SessionConversationState {
+            messages: vec![
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("user-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                        text: String::from("请分析一下"),
+                        attachments: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("assistant-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::from("先调用工具"),
+                        reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
+                        usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                            input_tokens: Some(120),
+                            output_tokens: Some(30),
+                            reasoning_tokens: Some(10),
+                            total_tokens: Some(160),
+                            cached_input_tokens: Some(64),
+                            cache_creation_input_tokens: None,
+                        }),
+                        tool_calls: vec![crate::conversation_protocol::SessionConversationToolCall {
+                            id: String::from("tool-call-1"),
+                            tool_call_id: Some(String::from("call-1")),
+                            tool_name: String::from("read_file"),
+                            arguments: json!({"path": "README.md"}),
+                        }],
+                    },
+                },
+            ],
+            records: vec![
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("user-1"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户"),
+                    body: String::from("请分析一下"),
+                    metadata: None,
+                    created_at: String::from("1000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("assistant-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::AssistantOutput,
+                    visible: true,
+                    title: String::from("输出"),
+                    body: String::from("先调用工具"),
+                    metadata: None,
+                    created_at: String::from("2000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("summary-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("Summary"),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("3000"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            "summary-1",
+            SessionTurnStatsStatus::Completed,
+        )
+        .expect("turn stats should build");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 1);
+        assert_eq!(stats.total_tokens, 160);
+        assert_eq!(stats.cached_input_tokens, Some(64));
+    }
+
+    /// Verifies turn statistics still aggregate provider usage and tool counts when transcript record ids differ from canonical message ids.
+    /// 验证当转录记录标识与规范消息标识不一致时，轮次统计仍能正确聚合 Provider 用量与工具调用数量。
+    #[test]
+    fn turn_stats_do_not_require_record_message_id_alignment() {
+        let conversation_state = crate::conversation_protocol::SessionConversationState {
+            messages: vec![
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("protocol-user-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                        text: String::from("随便调用两个工具"),
+                        attachments: Vec::new(),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("provider-assistant-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                        text: String::new(),
+                        reasoning: String::from("先调用两个工具再总结。"),
+                        provider_message_id: Some(String::from("resp-1")),
+                        provider_message_state: None,
+                        usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                            input_tokens: Some(120),
+                            output_tokens: Some(48),
+                            reasoning_tokens: Some(16),
+                            total_tokens: Some(184),
+                            cached_input_tokens: Some(32),
+                            cache_creation_input_tokens: None,
+                        }),
+                        tool_calls: vec![
+                            crate::conversation_protocol::SessionConversationToolCall {
+                                id: String::from("tool-call-1"),
+                                tool_call_id: Some(String::from("call-1")),
+                                tool_name: String::from("vulcan_file_list"),
+                                arguments: json!({"path": "."}),
+                            },
+                            crate::conversation_protocol::SessionConversationToolCall {
+                                id: String::from("tool-call-2"),
+                                tool_call_id: Some(String::from("call-2")),
+                                tool_name: String::from("vulcan_file_read"),
+                                arguments: json!({"file": "README.md"}),
+                            },
+                        ],
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("tool-result-1"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::ToolResult {
+                        tool_result_id: String::from("tool-result-call-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        text: String::from("列出文件完成"),
+                    },
+                },
+                crate::conversation_protocol::SessionConversationMessage {
+                    id: String::from("tool-result-2"),
+                    payload: crate::conversation_protocol::SessionConversationPayload::ToolResult {
+                        tool_result_id: String::from("tool-result-call-2"),
+                        tool_call_id: Some(String::from("call-2")),
+                        text: String::from("读取文件完成"),
+                    },
+                },
+            ],
+            records: vec![
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-user-1"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户"),
+                    body: String::from("随便调用两个工具"),
+                    metadata: None,
+                    created_at: String::from("1000"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-tool-call-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolCallOutput,
+                    visible: true,
+                    title: String::from("调用 vulcan_file_list 工具"),
+                    body: String::from("{}"),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-1",
+                        "tool_name": "vulcan_file_list"
+                    })),
+                    created_at: String::from("1100"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-tool-result-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolResultOutput,
+                    visible: true,
+                    title: String::from("工具返回 vulcan_file_list"),
+                    body: String::from("列出文件完成"),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-1",
+                        "kind": "file_list"
+                    })),
+                    created_at: String::from("1200"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-tool-call-2"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolCallOutput,
+                    visible: true,
+                    title: String::from("调用 vulcan_file_read 工具"),
+                    body: String::from("{}"),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-2",
+                        "tool_name": "vulcan_file_read"
+                    })),
+                    created_at: String::from("1300"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-tool-result-2"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::ToolResultOutput,
+                    visible: true,
+                    title: String::from("工具返回 vulcan_file_read"),
+                    body: String::from("读取文件完成"),
+                    metadata: Some(json!({
+                        "tool_call_id": "call-2",
+                        "kind": "file_read"
+                    })),
+                    created_at: String::from("1400"),
+                },
+                crate::conversation_protocol::SessionConversationRecord {
+                    id: String::from("summary-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("Summary"),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("1500"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            "summary-1",
+            SessionTurnStatsStatus::Completed,
+        )
+        .expect("turn stats should build");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 2);
+        assert_eq!(stats.total_tokens, 184);
+        assert_eq!(stats.cached_input_tokens, Some(32));
     }
 
     /// Verifies that dedicated `task` tool cards use the robot dispatch title and upgrade from running to completed when the result arrives.

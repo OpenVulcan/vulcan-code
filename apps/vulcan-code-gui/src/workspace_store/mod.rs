@@ -2936,6 +2936,28 @@ mod tests {
         assert_eq!(parsed.pending_prompt_panel_queue[0].prompt, "继续排队消息");
     }
 
+    /// Verifies that session-scoped composer draft state round-trips through the persisted transcript UI-state JSON payload.
+    /// 验证按会话归属的输入框草稿状态可以在持久化转录界面状态 JSON 载荷中正确往返。
+    #[test]
+    fn session_ui_state_json_preserves_composer_draft() {
+        let state = SessionTranscriptUiState {
+            composer_draft: crate::model::SessionComposerDraftState {
+                text: String::from("请继续修复这个问题"),
+                attachments: Vec::new(),
+                scroll_offset: 24.0,
+            },
+            ..SessionTranscriptUiState::default()
+        };
+
+        let json_payload = serialize_session_ui_state_to_json(&state)
+            .expect("composer draft should make UI state persistable");
+        let parsed = parse_session_ui_state_from_json(&json_payload)
+            .expect("composer draft UI state should parse");
+
+        assert_eq!(parsed.composer_draft.text, "请继续修复这个问题");
+        assert_eq!(parsed.composer_draft.scroll_offset, 24.0);
+    }
+
     /// Verifies that runtime persistence now keeps the full canonical conversation state payload alongside the lightweight continuation cursor.
     /// 验证运行时持久化现在会保留完整规范会话状态载荷，同时继续保存轻量 continuation 游标。
     #[test]

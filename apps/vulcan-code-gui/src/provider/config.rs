@@ -2928,6 +2928,56 @@ pub struct ProviderModelDiscoveryConfig {
     pub kind: ProviderModelDiscoveryKind,
 }
 
+/// Structured provider-usage capture configuration loaded from one provider definition.
+/// 从单个供应商定义中载入的结构化 Provider 用量捕获配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageCaptureConfig {
+    /// Optional OpenAI-compatible streaming usage policy used by chat-completions style transports.
+    /// 供 chat-completions 风格传输链路使用的可选 OpenAI 兼容流式 usage 策略。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai_compatible_streaming: Option<OpenAiCompatibleStreamingUsageConfig>,
+}
+
+impl ProviderUsageCaptureConfig {
+    /// Returns whether the current usage-capture configuration contains no explicit provider rules.
+    /// 返回当前用量捕获配置是否未声明任何显式供应商规则。
+    pub const fn is_empty(&self) -> bool {
+        self.openai_compatible_streaming.is_none()
+    }
+}
+
+/// Structured OpenAI-compatible streaming usage policy loaded from one provider definition.
+/// 从单个供应商定义中载入的结构化 OpenAI 兼容流式 usage 策略。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAiCompatibleStreamingUsageConfig {
+    /// Whether the host should explicitly request the terminal usage chunk through `stream_options.include_usage`.
+    /// 宿主是否应通过 `stream_options.include_usage` 显式请求终态 usage 块。
+    #[serde(default)]
+    pub request_include_usage: bool,
+    /// Ordered terminal usage sources accepted by the current provider.
+    /// 当前供应商可接受的终态 usage 来源优先级列表。
+    #[serde(default)]
+    pub response_sources: Vec<OpenAiCompatibleStreamingUsageSource>,
+}
+
+/// Supported terminal usage source variants for OpenAI-compatible chat-completions streaming providers.
+/// OpenAI 兼容 chat-completions 流式供应商支持的终态 usage 来源变体。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpenAiCompatibleStreamingUsageSource {
+    /// Uses one top-level `usage` payload carried by a terminal chunk that still includes choices.
+    /// 使用仍包含 choices 的终态块上携带的顶层 `usage` 载荷。
+    TopLevelTerminalChunk,
+    /// Uses one top-level `usage` payload carried by a terminal chunk whose `choices` array is empty.
+    /// 使用 `choices` 数组为空的终态块上携带的顶层 `usage` 载荷。
+    TopLevelEmptyChoicesChunk,
+    /// Uses one terminal `usage` payload nested inside a completed streamed choice.
+    /// 使用嵌套在已结束流式 choice 内部的终态 `usage` 载荷。
+    TerminalChoice,
+}
+
 /// Supported model discovery kinds used by the current GUI implementation.
 /// 当前 GUI 实现支持的模型发现方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3091,6 +3141,10 @@ pub struct SupportedProviderDefinition {
     /// 由兼容运行时合并进供应商请求体中的附加 JSON Body 参数。
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra_body: serde_json::Map<String, serde_json::Value>,
+    /// Optional provider-specific usage capture rules reused by runtime request construction and terminal usage extraction.
+    /// 供运行时请求构造与终态 usage 提取复用的可选供应商专属用量捕获规则。
+    #[serde(default, skip_serializing_if = "ProviderUsageCaptureConfig::is_empty")]
+    pub usage_capture: ProviderUsageCaptureConfig,
     /// Optional per-model runtime overrides for providers whose individual models use different compatible protocols.
     /// 当同一供应商下不同模型使用不同兼容协议时采用的可选模型级运行时覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -5470,8 +5524,9 @@ mod tests {
         PersistedAiToolConfiguration, PersistedProviderEntry, PersistedWebSearchConfiguration,
         PersistedWebSearchProviderEntry, ProviderApiFamily, ProviderBaseUrlConfig,
         ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
-        ProviderModelDiscoveryKind, ProviderRuntimeKind, ReasoningCapabilityKind,
-        ReasoningEffortLevel, ReasoningProfileConfig, SupportedProviderDefinition,
+        ProviderModelDiscoveryKind, ProviderRuntimeKind, ProviderUsageCaptureConfig,
+        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        SupportedProviderDefinition,
         WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
         apply_provider_reasoning_model_overrides, catalog_model_choices, effective_model_choices,
         extract_models_from_array, filter_remote_model_choices, merge_embedded_model_metadata,
@@ -5496,6 +5551,7 @@ mod tests {
             credential_env_keys: Vec::new(),
             extra_headers: Default::default(),
             extra_body: JsonMap::new(),
+            usage_capture: ProviderUsageCaptureConfig::default(),
             model_runtime_overrides: BTreeMap::new(),
             reasoning_profile,
             ai_tools: Vec::new(),
@@ -6558,6 +6614,7 @@ mod tests {
             credential_env_keys: Vec::new(),
             extra_headers: BTreeMap::new(),
             extra_body: JsonMap::new(),
+            usage_capture: ProviderUsageCaptureConfig::default(),
             model_runtime_overrides: BTreeMap::new(),
             reasoning_profile: None,
             ai_tools: Vec::new(),

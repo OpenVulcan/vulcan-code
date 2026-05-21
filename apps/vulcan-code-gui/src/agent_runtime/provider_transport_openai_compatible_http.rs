@@ -25,7 +25,10 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
-use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily};
+use crate::provider_config::{
+    ModelInterleavedCapability, OpenAiCompatibleStreamingUsageConfig,
+    OpenAiCompatibleStreamingUsageSource, ProviderApiFamily, supported_provider_by_id,
+};
 use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
@@ -139,6 +142,10 @@ struct OpenAiCompatibleStreamingChoice {
     /// Optional finish reason emitted by the provider.
     /// Provider 发出的可选结束原因。
     finish_reason: Option<OpenAiCompatibleFinishReason>,
+    /// Optional provider usage payload nested inside one completed streamed choice.
+    /// 可选的嵌套在单个已完成流式 choice 内部的 Provider 用量载荷。
+    #[serde(default)]
+    usage: Option<OpenAiCompatibleUsage>,
 }
 
 /// Minimal OpenAI-compatible streaming chunk decoded from one SSE `data:` payload.
@@ -157,6 +164,14 @@ struct OpenAiCompatibleStreamingChunk {
     #[serde(default)]
     usage: Option<OpenAiCompatibleUsage>,
 }
+
+/// Default ordered OpenAI-compatible terminal usage sources used when one provider definition does not declare an explicit override.
+/// 当供应商定义未声明显式覆盖时使用的默认 OpenAI 兼容终态 usage 来源顺序。
+const DEFAULT_OPENAI_COMPATIBLE_STREAMING_USAGE_SOURCES: [OpenAiCompatibleStreamingUsageSource; 3] = [
+    OpenAiCompatibleStreamingUsageSource::TopLevelEmptyChoicesChunk,
+    OpenAiCompatibleStreamingUsageSource::TopLevelTerminalChunk,
+    OpenAiCompatibleStreamingUsageSource::TerminalChoice,
+];
 
 /// Minimal OpenAI-compatible usage payload decoded from one streamed terminal chunk.
 /// 从一条流式终态块中解码出的最小 OpenAI 兼容用量载荷。
@@ -178,6 +193,10 @@ struct OpenAiCompatibleUsage {
     /// 可选的补全 Token 细分载荷。
     #[serde(default)]
     completion_tokens_details: Option<OpenAiCompatibleCompletionTokenDetails>,
+    /// Optional prompt-token detail payload.
+    /// 可选的提示词 Token 细分载荷。
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAiCompatiblePromptTokenDetails>,
 }
 
 /// Minimal OpenAI-compatible completion-token detail payload.
@@ -188,6 +207,16 @@ struct OpenAiCompatibleCompletionTokenDetails {
     /// 可选的推理 Token 数量。
     #[serde(default)]
     reasoning_tokens: Option<usize>,
+}
+
+/// Minimal OpenAI-compatible prompt-token detail payload.
+/// 最小 OpenAI 兼容提示词 Token 细分载荷。
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OpenAiCompatiblePromptTokenDetails {
+    /// Optional cached-token count reported for prompt reuse.
+    /// 为提示词复用报告的可选缓存命中 Token 数量。
+    #[serde(default)]
+    cached_tokens: Option<usize>,
 }
 
 /// Authorization strategy used by OpenAI-compatible wire protocols whose payload semantics are shared but whose auth headers may differ.
@@ -344,6 +373,7 @@ where
     let mut provider_visible_assistant_fields = JsonMap::new();
     let mut saw_reasoning_content_field = false;
     let mut raw_reasoning_content = String::new();
+    let usage_policy = resolve_openai_compatible_streaming_usage_policy(provider_id);
 
     while let Some(event_result) = events.next().await {
         let event = event_result.map_err(|error| VulcanCoreError::ProviderFailure {
@@ -355,8 +385,12 @@ where
             continue;
         }
 
-        let chunk =
-            normalize_openai_compatible_chunk(provider_id, provider_label.as_str(), &event.data)?;
+        let chunk = normalize_openai_compatible_chunk_with_policy(
+            provider_id,
+            provider_label.as_str(),
+            &event.data,
+            &usage_policy,
+        )?;
         response_id = chunk.response_id.or(response_id);
         if let Some(usage) = chunk
             .usage
@@ -506,6 +540,7 @@ fn build_openai_compatible_request_payload(
         current_prompt,
         interleaved_reasoning,
     } = request;
+    let usage_policy = resolve_openai_compatible_streaming_usage_policy(snapshot.provider_id.as_str());
 
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
@@ -542,6 +577,7 @@ fn build_openai_compatible_request_payload(
     }
     payload.insert(String::from("messages"), Value::Array(messages));
     payload.insert(String::from("stream"), Value::Bool(true));
+    ensure_openai_compatible_stream_usage_requested(&mut payload, &usage_policy);
 
     if let Some(temperature) = snapshot.temperature {
         payload.insert(String::from("temperature"), json!(temperature));
@@ -561,6 +597,25 @@ fn build_openai_compatible_request_payload(
     }
 
     Ok(Value::Object(payload))
+}
+
+/// Ensures OpenAI-compatible streaming requests ask the provider to emit the terminal usage chunk when the upstream protocol supports `stream_options.include_usage`.
+/// 确保 OpenAI 兼容流式请求在上游协议支持 `stream_options.include_usage` 时明确请求返回终态 usage 块。
+fn ensure_openai_compatible_stream_usage_requested(
+    payload: &mut JsonMap<String, Value>,
+    usage_policy: &OpenAiCompatibleStreamingUsageConfig,
+) {
+    if !usage_policy.request_include_usage {
+        return;
+    }
+    let mut stream_options = match payload.remove("stream_options") {
+        Some(Value::Object(object)) => object,
+        Some(_) | None => JsonMap::new(),
+    };
+    stream_options
+        .entry(String::from("include_usage"))
+        .or_insert(Value::Bool(true));
+    payload.insert(String::from("stream_options"), Value::Object(stream_options));
 }
 
 /// Converts one canonical core message into one OpenAI-compatible request message and replays provider-native interleaved state only when the active model explicitly declares compatible support.
@@ -736,10 +791,26 @@ fn stringify_openai_compatible_tool_arguments(arguments: &Value) -> String {
 
 /// Normalizes one OpenAI-compatible SSE `data:` payload into the shared compatibility chunk shape.
 /// 将单条 OpenAI 兼容 SSE `data:` 载荷规范化为共享兼容块形状。
+#[cfg_attr(not(test), allow(dead_code))]
 fn normalize_openai_compatible_chunk(
     provider_id: &str,
     provider_label: &str,
     data: &str,
+) -> Result<
+    crate::agent_runtime::provider_protocol_openai_compatible::CompatibleChunk,
+    VulcanCoreError,
+> {
+    let usage_policy = resolve_openai_compatible_streaming_usage_policy(provider_id);
+    normalize_openai_compatible_chunk_with_policy(provider_id, provider_label, data, &usage_policy)
+}
+
+/// Normalizes one OpenAI-compatible SSE `data:` payload into the shared compatibility chunk shape using one resolved provider usage policy.
+/// 使用一份已解析的供应商 usage 策略，将单条 OpenAI 兼容 SSE `data:` 载荷规范化为共享兼容块形状。
+fn normalize_openai_compatible_chunk_with_policy(
+    provider_id: &str,
+    provider_label: &str,
+    data: &str,
+    usage_policy: &OpenAiCompatibleStreamingUsageConfig,
 ) -> Result<
     crate::agent_runtime::provider_protocol_openai_compatible::CompatibleChunk,
     VulcanCoreError,
@@ -752,8 +823,8 @@ fn normalize_openai_compatible_chunk(
     })?;
 
     Ok(normalize_first_choice_chunk(
-        chunk.id,
-        chunk.usage.and_then(openai_compatible_usage_to_snapshot),
+        chunk.id.clone(),
+        extract_openai_compatible_terminal_usage(&chunk, usage_policy),
         &chunk.choices,
         |choice| CompatibleChoiceData {
             finish_reason: if choice.finish_reason == Some(OpenAiCompatibleFinishReason::ToolCalls)
@@ -768,6 +839,70 @@ fn normalize_openai_compatible_chunk(
             tool_calls: tool_call_chunks(&choice.delta.tool_calls),
         },
     ))
+}
+
+/// Resolves one provider-scoped OpenAI-compatible streaming usage policy from the provider catalog and falls back to conservative terminal-only defaults.
+/// 从供应商目录解析单个 Provider 作用域的 OpenAI 兼容流式 usage 策略，并在缺失时回退到保守的终态默认值。
+fn resolve_openai_compatible_streaming_usage_policy(
+    provider_id: &str,
+) -> OpenAiCompatibleStreamingUsageConfig {
+    supported_provider_by_id(provider_id)
+        .and_then(|definition| definition.usage_capture.openai_compatible_streaming.clone())
+        .unwrap_or_default()
+}
+
+/// Returns the effective ordered terminal usage sources for one OpenAI-compatible provider policy.
+/// 返回单个 OpenAI 兼容 Provider 策略生效中的终态 usage 来源顺序。
+fn effective_openai_compatible_streaming_usage_sources(
+    usage_policy: &OpenAiCompatibleStreamingUsageConfig,
+) -> &[OpenAiCompatibleStreamingUsageSource] {
+    if usage_policy.response_sources.is_empty() {
+        &DEFAULT_OPENAI_COMPATIBLE_STREAMING_USAGE_SOURCES
+    } else {
+        usage_policy.response_sources.as_slice()
+    }
+}
+
+/// Extracts one terminal OpenAI-compatible usage snapshot from the current streamed chunk according to the resolved provider policy.
+/// 按照已解析的供应商策略，从当前流式块中提取一份终态 OpenAI 兼容用量快照。
+fn extract_openai_compatible_terminal_usage(
+    chunk: &OpenAiCompatibleStreamingChunk,
+    usage_policy: &OpenAiCompatibleStreamingUsageConfig,
+) -> Option<CoreProviderUsageSnapshot> {
+    for source in effective_openai_compatible_streaming_usage_sources(usage_policy) {
+        let usage = match source {
+            OpenAiCompatibleStreamingUsageSource::TopLevelEmptyChoicesChunk => {
+                if chunk.choices.is_empty() {
+                    chunk.usage.clone().and_then(openai_compatible_usage_to_snapshot)
+                } else {
+                    None
+                }
+            }
+            OpenAiCompatibleStreamingUsageSource::TopLevelTerminalChunk => {
+                if chunk
+                    .choices
+                    .iter()
+                    .any(|choice| choice.finish_reason.is_some())
+                {
+                    chunk.usage.clone().and_then(openai_compatible_usage_to_snapshot)
+                } else {
+                    None
+                }
+            }
+            OpenAiCompatibleStreamingUsageSource::TerminalChoice => chunk
+                .choices
+                .iter()
+                .find(|choice| choice.finish_reason.is_some())
+                .and_then(|choice| choice.usage.clone())
+                .and_then(openai_compatible_usage_to_snapshot),
+        };
+
+        if usage.as_ref().is_some_and(CoreProviderUsageSnapshot::has_any_tokens) {
+            return usage;
+        }
+    }
+
+    None
 }
 
 /// Builds one provider_message_state payload that preserves an OpenAI-compatible assistant message for future high-fidelity history replay.
@@ -901,6 +1036,10 @@ fn openai_compatible_usage_to_snapshot(
             .completion_tokens_details
             .and_then(|details| details.reasoning_tokens),
         total_tokens: usage.total_tokens,
+        cached_input_tokens: usage
+            .prompt_tokens_details
+            .and_then(|details| details.cached_tokens),
+        cache_creation_input_tokens: None,
     };
     snapshot.has_any_tokens().then_some(snapshot)
 }
@@ -994,7 +1133,7 @@ fn forward_openai_compatible_delta<S>(
 
 #[cfg(test)]
 mod tests {
-    use super::build_openai_compatible_request_payload;
+    use super::{build_openai_compatible_request_payload, normalize_openai_compatible_chunk};
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
     use crate::provider_config::{ModelInterleavedCapability, ModelInterleavedField};
@@ -1186,6 +1325,124 @@ mod tests {
         assert_eq!(tools[1]["function"]["name"], "read_file");
         assert_eq!(payload["enable_search"], true);
         assert!(payload.get("search_options").is_none());
+        assert_eq!(payload["stream_options"]["include_usage"], true);
+    }
+
+    /// Verifies OpenAI-compatible streaming payloads explicitly request the terminal usage chunk while preserving caller-supplied stream-options fields.
+    /// 验证 OpenAI 兼容流式载荷会显式请求终态 usage 块，同时保留调用方自带的 stream-options 字段。
+    #[test]
+    fn request_payload_requests_stream_usage_without_overwriting_other_options() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("deepseek"),
+                model_id: String::from("deepseek-v4-pro"),
+                system_prompt: String::new(),
+                prompt: String::from("hello"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 4,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "stream_options": {
+                        "foo": "bar"
+                    }
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("hello"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload(
+            "deepseek-v4-pro",
+            request,
+            &[],
+            true,
+        )
+        .expect("payload should build");
+
+        assert_eq!(payload["stream"], true);
+        assert_eq!(payload["stream_options"]["include_usage"], true);
+        assert_eq!(payload["stream_options"]["foo"], "bar");
+    }
+
+    /// Verifies providers whose catalog rules do not request `stream_options.include_usage` keep caller payloads unchanged while still using provider-declared terminal usage sources.
+    /// 验证目录规则未请求 `stream_options.include_usage` 的供应商会保持调用方载荷不变，同时仍使用供应商声明的终态 usage 来源。
+    #[test]
+    fn request_payload_skips_stream_usage_flag_when_provider_rule_disables_it() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openrouter"),
+                model_id: String::from("openai/gpt-5"),
+                system_prompt: String::new(),
+                prompt: String::from("hello"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 4,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "stream_options": {
+                        "foo": "bar"
+                    }
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("hello"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload("openai/gpt-5", request, &[], true)
+            .expect("payload should build");
+
+        assert_eq!(payload["stream"], true);
+        assert!(payload["stream_options"].get("include_usage").is_none());
+        assert_eq!(payload["stream_options"]["foo"], "bar");
+    }
+
+    /// Verifies OpenAI-compatible chunk normalization can extract terminal usage nested inside one completed streamed choice, which matches Kimi-style terminal chunks.
+    /// 验证 OpenAI 兼容块规范化可以提取嵌套在已完成流式 choice 内部的终态 usage，这与 Kimi 风格终态块一致。
+    #[test]
+    fn normalize_chunk_extracts_terminal_choice_usage_from_provider_rule() {
+        let chunk = normalize_openai_compatible_chunk(
+            "moonshotai",
+            "Moonshot AI",
+            r#"{
+                "id":"resp_1",
+                "choices":[
+                    {
+                        "delta":{"content":"done"},
+                        "finish_reason":"stop",
+                        "usage":{
+                            "prompt_tokens":128,
+                            "completion_tokens":32,
+                            "total_tokens":160
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("chunk should parse");
+
+        let usage = chunk.usage.expect("terminal choice usage should be captured");
+        assert_eq!(usage.input_tokens, Some(128));
+        assert_eq!(usage.output_tokens, Some(32));
+        assert_eq!(usage.total_tokens, Some(160));
     }
 
     /// Verifies OpenAI-compatible transports keep parallel tool results as separate `tool` messages instead of borrowing Anthropic-only coalescing behavior.

@@ -129,6 +129,11 @@ impl VulcanWorkbench {
         self.session_agent_view_documents.remove(&session_id);
         self.session_agent_view_block_collapsed.remove(&session_id);
         self.refresh_session_queued_steps(session_id);
+        if self.selected_session().is_some_and(|session| session.id == session_id) {
+            let previous_workspace_path = self.selected_attachment_workspace_path();
+            let previous_scope = self.composer_attachment_ref_scope();
+            self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
+        }
     }
 
     /// Prepends one older transcript page to an already hydrated session cache.

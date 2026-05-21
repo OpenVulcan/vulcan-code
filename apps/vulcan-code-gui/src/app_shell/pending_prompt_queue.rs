@@ -1054,9 +1054,14 @@ impl VulcanWorkbench {
             "执行已停止",
             "已按用户请求停止当前会话的子代理与系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。",
         );
-        self.append_session_turn_terminated(
+        let terminated_message_id = self.append_session_turn_terminated(
             session_id,
             "The run was stopped manually before a summary could be produced.",
+        );
+        let _ = self.append_session_turn_stats(
+            session_id,
+            &terminated_message_id,
+            SessionTurnStatsStatus::Stopped,
         );
         self.push_activity(
             ActivityLevel::Warning,
@@ -1116,9 +1121,14 @@ impl VulcanWorkbench {
                 "执行已停止",
                 "已按用户请求停止当前 AI 调用、运行中的子代理以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。",
             );
-            self.append_session_turn_terminated(
+            let terminated_message_id = self.append_session_turn_terminated(
                 session_id,
                 "The run was stopped manually before a summary could be produced.",
+            );
+            let _ = self.append_session_turn_stats(
+                session_id,
+                &terminated_message_id,
+                SessionTurnStatsStatus::Stopped,
             );
             self.push_activity(
                 ActivityLevel::Warning,

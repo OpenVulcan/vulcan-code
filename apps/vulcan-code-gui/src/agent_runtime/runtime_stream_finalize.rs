@@ -396,6 +396,8 @@ mod tests {
             output_tokens: Some(256),
             reasoning_tokens: Some(128),
             total_tokens: Some(4480),
+            cached_input_tokens: Some(2048),
+            cache_creation_input_tokens: None,
         };
         let mut preparation = build_test_preparation();
         preparation.model_blueprint.capabilities.input_limit = Some(8_000);

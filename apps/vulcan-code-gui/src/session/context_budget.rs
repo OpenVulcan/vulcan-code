@@ -673,6 +673,8 @@ mod tests {
             output_tokens: Some(256),
             reasoning_tokens: Some(128),
             total_tokens: Some(2432),
+            cached_input_tokens: Some(1024),
+            cache_creation_input_tokens: Some(128),
         };
 
         let snapshot = build_request_context_budget_snapshot(

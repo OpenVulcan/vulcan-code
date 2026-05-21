@@ -77,6 +77,7 @@ fn session_record_to_core_role(record: &SessionConversationRecord) -> CoreTransc
         SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput => {
             CoreTranscriptRole::Tool
         }
+        SessionMessageRecordKind::TurnStats => CoreTranscriptRole::Assistant,
         SessionMessageRecordKind::SummaryOutput | SessionMessageRecordKind::CompactionSummary => {
             CoreTranscriptRole::Summary
         }
@@ -98,7 +99,8 @@ fn session_record_to_core_record_kind(
         SessionMessageRecordKind::Transcript
         | SessionMessageRecordKind::AssistantOutput
         | SessionMessageRecordKind::ToolCallOutput
-        | SessionMessageRecordKind::ToolResultOutput => CoreTranscriptRecordKind::Visible,
+        | SessionMessageRecordKind::ToolResultOutput
+        | SessionMessageRecordKind::TurnStats => CoreTranscriptRecordKind::Visible,
         SessionMessageRecordKind::ThinkingOutput
         | SessionMessageRecordKind::TitleOutput
         | SessionMessageRecordKind::SummaryOutput
@@ -121,6 +123,14 @@ fn core_record_to_session_message_kind(record: &CoreConversationRecord) -> Sessi
 /// 根据一条 `vulcan-core` 持久化记录推导 GUI 记录类型，同时保留工具调用、工具结果与隐藏节点之间的语义差异。
 fn core_record_to_session_record_kind(record: &CoreConversationRecord) -> SessionMessageRecordKind {
     match (&record.role, &record.record_kind) {
+        _ if record
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|object| object.contains_key("turn_stats")) =>
+        {
+            SessionMessageRecordKind::TurnStats
+        }
         (CoreTranscriptRole::Thinking, _) => SessionMessageRecordKind::ThinkingOutput,
         (CoreTranscriptRole::Summary, _) | (_, CoreTranscriptRecordKind::Checkpoint) => {
             SessionMessageRecordKind::CompactionSummary

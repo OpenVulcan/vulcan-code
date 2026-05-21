@@ -408,6 +408,14 @@ pub struct ProviderUsageSnapshot {
     /// Provider 报告的可选总 Token 数量。
     #[serde(default)]
     pub total_tokens: Option<usize>,
+    /// Optional provider-reported cache-hit input token count.
+    /// Provider 报告的可选缓存命中输入 Token 数量。
+    #[serde(default)]
+    pub cached_input_tokens: Option<usize>,
+    /// Optional provider-reported cache-creation input token count.
+    /// Provider 报告的可选缓存写入输入 Token 数量。
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<usize>,
 }
 
 impl ProviderUsageSnapshot {
@@ -418,6 +426,8 @@ impl ProviderUsageSnapshot {
             || self.output_tokens.is_some()
             || self.reasoning_tokens.is_some()
             || self.total_tokens.is_some()
+            || self.cached_input_tokens.is_some()
+            || self.cache_creation_input_tokens.is_some()
     }
 }
 

@@ -244,6 +244,11 @@ fn gemini_usage_to_snapshot(
             .total_token_count
             .filter(|value| *value >= 0)
             .map(|value| value as usize),
+        cached_input_tokens: usage
+            .cached_content_token_count
+            .filter(|value| *value >= 0)
+            .map(|value| value as usize),
+        cache_creation_input_tokens: None,
     };
     snapshot.has_any_tokens().then_some(snapshot)
 }

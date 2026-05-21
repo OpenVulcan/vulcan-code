@@ -261,6 +261,10 @@ pub(crate) struct GeminiUsageMetadata {
     /// 可选的总 Token 数量。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) total_token_count: Option<i64>,
+    /// Optional cached-content token count reported when one reusable cached context is attached.
+    /// 当附加可复用缓存上下文时报告的可选缓存内容 Token 数量。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cached_content_token_count: Option<i64>,
 }
 
 /// Wraps one Gemini-native content payload into the generic provider-message-state value stored in canonical assistant messages.

@@ -497,8 +497,14 @@ fn build_persisted_session_event_rows(
     let mut active_turn_start_seq = 0_i64;
     let mut active_turn_summary_message_id = None::<String>;
     let mut seq_in_turn = 0_i64;
+    let mut turn_closed_waiting_for_stats = false;
 
     for (position, message) in messages.iter().enumerate() {
+        let next_is_turn_stats = messages
+            .get(position + 1)
+            .is_some_and(|next_message| {
+                next_message.record_kind == SessionMessageRecordKind::TurnStats
+            });
         let opens_turn = session_message_starts_new_event_turn(message);
         if opens_turn && !active_turn_open {
             active_turn_index = active_turn_index.saturating_add(1);
@@ -560,9 +566,11 @@ fn build_persisted_session_event_rows(
 
         seq_in_turn = seq_in_turn.saturating_add(1);
 
-        if position + 1 == messages.len()
-            || (active_turn_open && turn_should_close_after_message(message))
-        {
+        if active_turn_open && turn_should_close_after_message(message) {
+            if next_is_turn_stats {
+                turn_closed_waiting_for_stats = true;
+                continue;
+            }
             turn_rows.push(SessionTurnIndexPersistenceRow {
                 turn_id,
                 turn_index: active_turn_index,
@@ -571,11 +579,44 @@ fn build_persisted_session_event_rows(
                 turn_state: active_turn_state.clone(),
                 summary_message_id: active_turn_summary_message_id.clone(),
             });
-            if turn_should_close_after_message(message) {
-                active_turn_open = false;
-                active_turn_state = String::from("open");
-                active_turn_summary_message_id = None;
+            active_turn_open = false;
+            active_turn_state = String::from("open");
+            active_turn_summary_message_id = None;
+            turn_closed_waiting_for_stats = false;
+            continue;
+        }
+
+        if turn_closed_waiting_for_stats && !next_is_turn_stats {
+            turn_rows.push(SessionTurnIndexPersistenceRow {
+                turn_id,
+                turn_index: active_turn_index,
+                start_seq: active_turn_start_seq,
+                end_seq: seq,
+                turn_state: active_turn_state.clone(),
+                summary_message_id: active_turn_summary_message_id.clone(),
+            });
+            active_turn_open = false;
+            active_turn_state = String::from("open");
+            active_turn_summary_message_id = None;
+            turn_closed_waiting_for_stats = false;
+            continue;
+        }
+
+        if position + 1 == messages.len() {
+            if !active_turn_open && !turn_closed_waiting_for_stats {
+                continue;
             }
+            let persisted_end_seq = if turn_closed_waiting_for_stats { seq } else { seq };
+            turn_rows.push(SessionTurnIndexPersistenceRow {
+                turn_id,
+                turn_index: active_turn_index,
+                start_seq: active_turn_start_seq,
+                end_seq: persisted_end_seq,
+                turn_state: active_turn_state.clone(),
+                summary_message_id: active_turn_summary_message_id.clone(),
+            });
+            active_turn_open = false;
+            turn_closed_waiting_for_stats = false;
         }
     }
 
@@ -979,6 +1020,50 @@ mod tests {
         assert_eq!(turn_rows[1].turn_index, 1);
         assert_eq!(turn_rows[1].turn_state, "summarized");
         assert_eq!(turn_rows[1].summary_message_id.as_deref(), Some("summary2"));
+    }
+
+    /// Verifies that one visible turn-stats row appended after a hidden summary still belongs to the just-closed turn instead of opening a fresh turn.
+    /// 验证隐藏摘要后追加的一条可见 turn 统计行仍然归属于刚闭合的轮次，而不会错误开启新轮次。
+    #[test]
+    fn event_store_turn_builder_keeps_turn_stats_inside_summarized_turn() {
+        let messages = vec![
+            test_message(
+                "u1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "执行任务",
+            ),
+            test_message(
+                "a1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "处理中",
+            ),
+            SessionMessageEntry {
+                visible: false,
+                ..test_message(
+                    "summary",
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::SummaryOutput,
+                    "摘要完成",
+                )
+            },
+            test_message(
+                "stats",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::TurnStats,
+                "2 次调用 · 120 tokens",
+            ),
+        ];
+
+        let (rows, turn_rows, _) =
+            build_persisted_session_event_rows("project-1", SessionId::from_u128(3), &messages);
+
+        assert_eq!(turn_rows.len(), 1);
+        assert_eq!(turn_rows[0].turn_index, 0);
+        assert_eq!(turn_rows[0].end_seq, 3);
+        assert_eq!(rows[3].turn_index, 0);
+        assert_eq!(rows[3].turn_id, "turn-000000");
     }
 
     /// Verifies compaction checkpoints round-trip through the file-backed event store without losing ordering or anchors.
