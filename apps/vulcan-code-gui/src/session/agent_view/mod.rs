@@ -527,6 +527,13 @@ fn non_empty_title(message: &SessionMessageEntry) -> Option<String> {
 /// 优先使用规范化元数据并在需要时回退到旧版持久化标题模式，解析一条本地化工具调用标题。
 fn localized_tool_call_title(message: &SessionMessageEntry, locale: AppLocale) -> Option<String> {
     let tool_name = tool_name_from_message(message)?;
+    if let Some(display_state) = tool_display_state_from_message(message) {
+        return Some(localized_tool_display_title(
+            tool_name.as_str(),
+            display_state,
+            locale,
+        ));
+    }
     Some(format_for_locale(
         locale,
         I18nKey::TranscriptToolCallWithName,
@@ -537,6 +544,16 @@ fn localized_tool_call_title(message: &SessionMessageEntry, locale: AppLocale) -
 /// Resolves one localized tool-result title, including generated-media summaries and generic named tool results.
 /// 解析一条本地化工具返回标题，覆盖生成媒体摘要与通用具名工具返回两类情况。
 fn localized_tool_result_title(message: &SessionMessageEntry, locale: AppLocale) -> Option<String> {
+    if let Some(tool_name) = tool_name_from_message(message)
+        && let Some(display_state) = tool_display_state_from_message(message)
+    {
+        return Some(localized_tool_display_title(
+            tool_name.as_str(),
+            display_state,
+            locale,
+        ));
+    }
+
     if let Some(metadata) = message.metadata.as_ref()
         && let Some(generated_title) = generated_attachment_title_from_metadata(metadata, locale)
     {
@@ -556,6 +573,38 @@ fn localized_tool_result_title(message: &SessionMessageEntry, locale: AppLocale)
     }
 
     None
+}
+
+/// Resolves one localized stable title for a stateful tool execution row.
+/// 解析一条带执行状态的工具行应显示的本地化稳定标题。
+fn localized_tool_display_title(tool_name: &str, display_state: &str, locale: AppLocale) -> String {
+    match locale {
+        AppLocale::ZhCn => {
+            let status_label = match display_state {
+                "failed" => "失败",
+                "completed" => "已完成",
+                _ => "进行中",
+            };
+            format!("调用 {tool_name} 工具 {status_label}")
+        }
+        AppLocale::EnUs => match display_state {
+            "failed" => format!("Tool Call {tool_name} Failed"),
+            "completed" => format!("Tool Call {tool_name} Completed"),
+            _ => format!("Tool Call {tool_name} In Progress"),
+        },
+    }
+}
+
+/// Extracts the current display-state marker from one tool transcript message when available.
+/// 当存在时，从单条工具转录消息中提取当前显示状态标记。
+fn tool_display_state_from_message(message: &SessionMessageEntry) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_display_state"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// Extracts the best-effort tool name from structured metadata or from legacy persisted titles.

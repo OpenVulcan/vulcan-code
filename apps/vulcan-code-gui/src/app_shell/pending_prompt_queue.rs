@@ -958,6 +958,7 @@ impl VulcanWorkbench {
         self.session_tool_call_message_ids.remove(&session_id);
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();
+        self.mark_session_pending_provider_response(session_id);
         self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
         if let Some(session) = self
             .sessions

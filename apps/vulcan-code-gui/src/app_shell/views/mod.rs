@@ -4675,6 +4675,14 @@ impl VulcanWorkbench {
             Subscription::none()
         };
 
+        let runtime_progress_animation_subscription =
+            if self.has_runtime_progress_animation_work() {
+                iced::time::every(SESSION_RUNTIME_PROGRESS_TICK_INTERVAL)
+                    .map(|_| Message::SessionRuntimeProgressTick)
+            } else {
+                Subscription::none()
+            };
+
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
@@ -4686,6 +4694,7 @@ impl VulcanWorkbench {
             transcript_follow_tail_subscription,
             thinking_overlay_follow_tail_subscription,
             thinking_modal_animation_subscription,
+            runtime_progress_animation_subscription,
         ])
     }
 

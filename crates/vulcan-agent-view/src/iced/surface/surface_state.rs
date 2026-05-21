@@ -230,8 +230,8 @@ pub(super) struct TranscriptContextMenuState {
 /// 锚定到某个转录标签（例如按轮次统计页脚）的轻量悬浮提示载荷。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct TranscriptHoverTooltipState {
-    /// Pointer position used to anchor the tooltip inside the transcript surface.
-    /// 用于在转录表面内部锚定提示浮层的指针位置。
+    /// Pointer position localized into the transcript surface and later remapped during overlay placement.
+    /// 已局部化到转录表面内部、并会在浮层放置阶段重新映射的指针位置。
     pub(super) anchor_position: Point,
     /// Short title shown at the top of the tooltip body.
     /// 显示在提示正文顶部的简短标题。

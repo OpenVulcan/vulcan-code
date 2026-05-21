@@ -365,6 +365,7 @@ impl VulcanWorkbench {
                 .get(&session_id)
                 .is_some_and(|active_message_id| active_message_id == message_id)
         {
+            self.refresh_streaming_thinking_placeholder_titles(session_id, message_id);
             perf_trace.finish();
             return true;
         }
@@ -446,6 +447,64 @@ impl VulcanWorkbench {
         perf_trace.checkpoint("refresh_modal_payloads", phase_started_at);
         perf_trace.finish();
         true
+    }
+
+    /// Refreshes only the visible inline-thinking placeholder titles for one still-floating streaming thinking message without projecting its body back into the main transcript.
+    /// 仅刷新某条仍处于浮动状态的流式思考消息在主转录中的内联占位标题，而不把其正文重新投影回主转录。
+    fn refresh_streaming_thinking_placeholder_titles(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+    ) {
+        let Some(inline_title) =
+            self.session_streaming_thinking_progress_title(session_id, message_id)
+        else {
+            return;
+        };
+
+        if let Some(document) = self.session_agent_view_documents.get_mut(&session_id) {
+            for block in &mut document.blocks {
+                let Some(block_message_id) = block.attributes().get("message-id") else {
+                    continue;
+                };
+                if block_message_id != message_id {
+                    continue;
+                }
+                let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
+                    continue;
+                };
+                if directive.kind != vulcan_agent_view::AgentViewDirectiveKind::Thinking {
+                    continue;
+                }
+                directive.attributes.insert(
+                    String::from("ui-inline-thinking-title"),
+                    inline_title.clone(),
+                );
+            }
+        }
+
+        if let Some(cache) = self.session_inline_agent_view_documents.get_mut(&session_id) {
+            let document = Rc::make_mut(&mut cache.document);
+            for block in &mut document.blocks {
+                let Some(block_message_id) = block.attributes().get("message-id") else {
+                    continue;
+                };
+                if block_message_id != message_id {
+                    continue;
+                }
+                let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
+                    continue;
+                };
+                if directive.kind != vulcan_agent_view::AgentViewDirectiveKind::Thinking {
+                    continue;
+                }
+                directive.attributes.insert(
+                    String::from("ui-inline-thinking-title"),
+                    inline_title.clone(),
+                );
+                prepare_session_inline_render_block(block);
+            }
+        }
     }
 
     /// Rebuilds the selectable structured/raw transcript projections from the already cached structural document.
@@ -806,6 +865,17 @@ impl VulcanWorkbench {
             directive
                 .attributes
                 .insert(String::from("ui-thinking-surface"), String::from("inline"));
+            let inline_title = directive
+                .attributes
+                .get("message-id")
+                .and_then(|message_id| {
+                    self.session_streaming_thinking_progress_title(session_id, message_id)
+                })
+                .unwrap_or_else(|| self.session_thinking_title(session_id, directive));
+            directive.attributes.insert(
+                String::from("ui-inline-thinking-title"),
+                inline_title,
+            );
             directive.attributes.insert(
                 String::from("ui-thinking-title"),
                 self.session_thinking_title(session_id, directive),

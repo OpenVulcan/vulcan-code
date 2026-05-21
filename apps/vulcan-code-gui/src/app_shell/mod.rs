@@ -32,6 +32,7 @@ use crate::agent_runtime::{
     self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
     ExecutionStreamEvent, RuntimeFoundation, RuntimeSkillKind, stream_runtime_run,
 };
+use crate::agent_runtime::provider_stream_projection::is_provider_tool_boundary_runtime_event;
 use crate::agent_view::{
     AgentViewBuildOptions, agent_view_block_collapsed_by_default, agent_view_block_id,
     agent_view_document_raw_source, build_agent_view_document_with_options,
@@ -336,6 +337,10 @@ const TRANSCRIPT_DRAG_AUTO_SCROLL_TICK_INTERVAL: Duration = Duration::from_milli
 /// Shared coalescing tick used to keep streaming transcript tail-follow work bounded to frame cadence.
 /// 用于将流式转录尾部追随工作合并到帧节奏内的共享 Tick。
 const TRANSCRIPT_STREAM_FOLLOW_TAIL_TICK_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Shared animation tick used by lightweight runtime progress labels such as "requesting" and "thinking".
+/// 供“正在请求”与“正在思考”等轻量运行进度文案使用的共享动画 Tick。
+const SESSION_RUNTIME_PROGRESS_TICK_INTERVAL: Duration = Duration::from_millis(450);
 
 /// Shared pointer overshoot dead zone used before drag auto-scroll begins accelerating the transcript viewport.
 /// 在拖拽自动滚动开始加速转录视口前使用的共享指针越界死区。
@@ -1652,6 +1657,18 @@ fn task_session_tool_display_status(
     if let Some(execution_status) = task_session_execution_status_from_tool_metadata(metadata) {
         return subagent_execution_status_badge_label(execution_status);
     }
+    if let Some(display_state) = metadata
+        .get("tool_display_state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return match display_state {
+            "failed" => "❌ 失败",
+            "completed" => "✅ 完成",
+            _ => "🔄 运行中",
+        };
+    }
 
     match record_kind {
         SessionMessageRecordKind::ToolResultOutput => "✅ 完成",
@@ -1910,46 +1927,25 @@ fn parse_generated_attachment_kind(value: &str) -> Option<ConversationAttachment
     }
 }
 
-/// Builds one human-facing generated-media title from the host-produced attachment list stored on a tool card.
-/// 根据工具卡片上保存的宿主生成附件列表构建一条面向用户的人类可读标题。
-fn generated_attachment_tool_display_title(metadata: &Value) -> Option<String> {
-    let attachments = generated_attachments_from_tool_metadata(metadata);
-    let first_kind = attachments
-        .first()
-        .map(|attachment| attachment.kind.clone())?;
-    let base_label = match first_kind {
-        ConversationAttachmentKind::Image => "已生成图片",
-        ConversationAttachmentKind::Audio => "已生成音频",
-        ConversationAttachmentKind::Video => "已生成视频",
-        ConversationAttachmentKind::Pdf => "已生成文档",
-    };
-    if attachments.len() <= 1 {
-        Some(base_label.to_string())
-    } else {
-        Some(format!("{base_label}（共 {} 个）", attachments.len()))
-    }
-}
-
 /// Normalizes one tool display message into the unified transcript-card title expected by the merged human-facing view.
 /// 将单条工具显示消息规范化为合并后面向人类视图所需的统一转录卡片标题。
 fn normalize_tool_display_message(mut message: SessionMessageEntry) -> SessionMessageEntry {
     if let Some(metadata) = message.metadata.as_ref() {
         if let Some(task_title) = task_session_tool_display_title(message.record_kind, metadata) {
             message.title = task_title;
-        } else if let Some(generated_title) = generated_attachment_tool_display_title(metadata) {
-            message.title = generated_title;
         } else if let Some(tool_name) = metadata
             .get("tool_name")
             .and_then(Value::as_str)
             .filter(|tool_name| !tool_name.trim().is_empty())
         {
-            message.title = format!("调用 {tool_name} 工具");
+            let display_state =
+                tool_display_state_for_message(message.record_kind, Some(metadata));
+            message.title = human_tool_display_title(tool_name, display_state);
         }
     }
-    message.metadata = attach_tool_display_state_metadata(
-        message.metadata.take(),
-        tool_display_state_for_record_kind(message.record_kind),
-    );
+    let display_state = tool_display_state_for_message(message.record_kind, message.metadata.as_ref());
+    message.metadata =
+        attach_tool_display_state_metadata(message.metadata.take(), display_state);
     message
 }
 
@@ -1961,14 +1957,25 @@ fn merge_tool_result_into_display_entry(
 ) {
     let tool_result_was_task_session = tool_display_message_is_task_session(&tool_result_message);
     let tool_result_title = tool_result_message.title.clone();
+    let merged_display_state =
+        tool_display_state_for_message(tool_result_message.record_kind, tool_result_message.metadata.as_ref());
     existing.record_kind = SessionMessageRecordKind::ToolCallOutput;
     existing.body = merge_tool_display_body(&existing.body, &tool_result_message.body);
     existing.metadata =
         merge_tool_display_metadata(existing.metadata.take(), tool_result_message.metadata);
-    existing.metadata = attach_tool_display_state_metadata(existing.metadata.take(), "completed");
+    existing.metadata =
+        attach_tool_display_state_metadata(existing.metadata.take(), merged_display_state);
     if let Some(metadata) = existing.metadata.as_ref() {
         if let Some(task_title) = task_session_tool_display_title(existing.record_kind, metadata) {
             existing.title = task_title;
+            return;
+        }
+        if let Some(tool_name) = metadata
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .filter(|tool_name| !tool_name.trim().is_empty())
+        {
+            existing.title = human_tool_display_title(tool_name, merged_display_state);
             return;
         }
     }
@@ -2061,11 +2068,48 @@ fn task_session_payload_execution_rank_from_metadata_object(
 
 /// Returns the stable display state used by one human-facing tool execution card.
 /// 返回单张面向人类的工具执行卡片所使用的稳定显示状态。
-fn tool_display_state_for_record_kind(record_kind: SessionMessageRecordKind) -> &'static str {
+fn tool_display_state_for_message(
+    record_kind: SessionMessageRecordKind,
+    metadata: Option<&Value>,
+) -> &'static str {
+    if metadata.is_some_and(tool_metadata_represents_failed_result) {
+        return "failed";
+    }
+
     match record_kind {
         SessionMessageRecordKind::ToolResultOutput => "completed",
         _ => "running",
     }
+}
+
+/// Returns whether the provided tool metadata semantically describes one failed host-side tool result.
+/// 返回提供的工具元数据是否在语义上描述了一条失败的宿主侧工具结果。
+fn tool_metadata_represents_failed_result(metadata: &Value) -> bool {
+    metadata
+        .get("host_result")
+        .and_then(|host_result| host_result.get("kind"))
+        .and_then(Value::as_str)
+        == Some("tool_error")
+        || metadata
+            .get("payload")
+            .and_then(|payload| payload.get("status"))
+            .and_then(Value::as_str)
+            == Some("failed")
+        || metadata
+            .get("status")
+            .and_then(Value::as_str)
+            == Some("failed")
+}
+
+/// Builds one stable human-facing title for a tool execution card from the tool name and display state.
+/// 根据工具名称与显示状态构建一条稳定的人类可读工具执行卡片标题。
+fn human_tool_display_title(tool_name: &str, display_state: &str) -> String {
+    let status_label = match display_state {
+        "failed" => "失败",
+        "completed" => "已完成",
+        _ => "进行中",
+    };
+    format!("调用 {tool_name} 工具 {status_label}")
 }
 
 /// Injects one display-only execution state flag into tool-card metadata without affecting the model-facing protocol payload.
@@ -2844,6 +2888,12 @@ pub struct VulcanWorkbench {
     /// Per-session active real-AI run state keyed by session identifier.
     /// 以会话标识为键保存的按会话划分活动真实 AI 运行状态。
     active_runs: BTreeMap<SessionId, ActiveSessionRunState>,
+    /// Session identifiers currently waiting for the next provider-visible response chunk after a request has already been sent.
+    /// 已经发送请求、但仍在等待下一段 Provider 可见响应块的会话标识集合。
+    pending_provider_response_sessions: BTreeSet<SessionId>,
+    /// Shared animation frame used by transient runtime progress labels.
+    /// 供瞬时运行进度文案复用的共享动画帧编号。
+    runtime_progress_animation_frame: usize,
     /// Monotonic identifier seed used to distinguish restarted or stopped execution streams.
     /// 用于区分重启后或已停止执行流的单调递增标识种子。
     next_run_id: u64,
@@ -6126,6 +6176,9 @@ enum Message {
     /// Drives one centered thinking-modal animation tick while it is opening or closing.
     /// 在居中思考弹层打开或关闭期间驱动一次动画 Tick。
     ThinkingModalAnimationTick,
+    /// Drives one lightweight animation tick shared by request/thinking progress hints.
+    /// 驱动“正在请求/正在思考”等轻量进度提示共用的动画 Tick。
+    SessionRuntimeProgressTick,
     /// Applies one read-only text editor action to one inspector activity-log buffer.
     /// 向某个检查面板活动日志缓冲区应用一次只读文本编辑器动作。
     ActivityLogRawAction(usize, text_editor::Action),
@@ -6707,6 +6760,8 @@ impl VulcanWorkbench {
             agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
             session_run_phases: BTreeMap::new(),
             active_runs: BTreeMap::new(),
+            pending_provider_response_sessions: BTreeSet::new(),
+            runtime_progress_animation_frame: 0,
             next_run_id: 1,
             startup_lifecycle: StartupLifecycle::Bootstrapping {
                 message: language_manager.text(I18nKey::StatusInitializingDataPlane),
@@ -6953,6 +7008,9 @@ impl VulcanWorkbench {
                 self.active_thinking_overlay_drag_auto_scroll = None;
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.session_run_phases.clear();
+                self.active_runs.clear();
+                self.pending_provider_response_sessions.clear();
+                self.runtime_progress_animation_frame = 0;
                 self.expanded_task_projects.clear();
                 self.selected_session = SessionId::nil();
 
@@ -10921,6 +10979,11 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::SessionRuntimeProgressTick => {
+                self.runtime_progress_animation_frame =
+                    self.runtime_progress_animation_frame.wrapping_add(1);
+                Task::none()
+            }
             Message::RunExecutionStreamEvent { run_id, event } => {
                 let Some(session_id) = self.active_run_session_id_for_run_id(run_id) else {
                     return Task::none();
@@ -10944,7 +11007,12 @@ impl VulcanWorkbench {
                         self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
                         Task::none()
                     }
+                    ExecutionStreamEvent::RequestStarted { session_id } => {
+                        self.mark_session_pending_provider_response(session_id);
+                        Task::none()
+                    }
                     ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                        self.clear_session_pending_provider_response(session_id);
                         self.append_streaming_thinking_delta(session_id, &delta);
                         self.request_selected_session_transcript_tail_follow(session_id);
                         self.request_selected_session_thinking_overlay_tail_follow(session_id);
@@ -10955,11 +11023,16 @@ impl VulcanWorkbench {
                         self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                        self.clear_session_pending_provider_response(session_id);
                         self.append_streaming_output_delta(session_id, &delta);
                         self.request_selected_session_transcript_tail_follow(session_id);
                         Task::none()
                     }
                     ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                        self.clear_session_pending_provider_response(session_id);
+                        if is_provider_tool_boundary_runtime_event(&event) {
+                            self.dock_streaming_thinking_message(session_id);
+                        }
                         let detached_listener_task =
                             self.maybe_start_detached_subagent_task_listener(session_id, &event);
                         self.push_session_runtime_event(session_id, event);
@@ -10978,7 +11051,12 @@ impl VulcanWorkbench {
             Message::DetachedSubagentTaskEvent { task_id, event } => match event {
                 DetachedTaskRuntimeEvent::ChildExecution(event) => match event {
                     ExecutionStreamEvent::Prepared(_) => Task::none(),
+                    ExecutionStreamEvent::RequestStarted { session_id } => {
+                        self.mark_session_pending_provider_response(session_id);
+                        Task::none()
+                    }
                     ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                        self.clear_session_pending_provider_response(session_id);
                         self.append_streaming_thinking_delta(session_id, &delta);
                         self.request_selected_session_transcript_tail_follow(session_id);
                         self.request_selected_session_thinking_overlay_tail_follow(session_id);
@@ -10989,11 +11067,16 @@ impl VulcanWorkbench {
                         self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
                     ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                        self.clear_session_pending_provider_response(session_id);
                         self.append_streaming_output_delta(session_id, &delta);
                         self.request_selected_session_transcript_tail_follow(session_id);
                         Task::none()
                     }
                     ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                        self.clear_session_pending_provider_response(session_id);
+                        if is_provider_tool_boundary_runtime_event(&event) {
+                            self.dock_streaming_thinking_message(session_id);
+                        }
                         self.push_session_runtime_event(session_id, event);
                         self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
@@ -12711,8 +12794,8 @@ impl VulcanWorkbench {
         false
     }
 
-    /// Invalidates one visible session message raw/Markdown projection cache after a streamed delta has been applied.
-    /// 在流式增量写入后作废单条可见会话消息的原文与 Markdown 投影缓存。
+    /// Keeps streamed message projection caches untouched on the hot path so large read-only buffers are not dropped on every token.
+    /// 在流式热路径上保持消息投影缓存不动，避免每个 token 都释放大型只读缓冲对象。
     fn refresh_streamed_session_message_view_caches(
         &mut self,
         session_id: SessionId,
@@ -12724,9 +12807,7 @@ impl VulcanWorkbench {
         }
 
         let _ = session_id;
-        self.session_message_raw_buffers.remove(message_id);
-        self.session_message_markdown.remove(message_id);
-        self.session_message_markdown_buffers.remove(message_id);
+        let _ = message_id;
     }
 
     /// Appends one streamed body delta into an existing visible transcript message without rebuilding legacy per-message Markdown caches.
@@ -13737,6 +13818,9 @@ impl VulcanWorkbench {
         self.reset_background_legacy_session_maintenance_queue();
         self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
+        self.active_runs.clear();
+        self.pending_provider_response_sessions.clear();
+        self.runtime_progress_animation_frame = 0;
         self.expanded_task_projects = snapshot.expanded_task_projects;
         self.selected_session = snapshot.selected_session;
         self.hovered_task_project = None;
@@ -13841,6 +13925,7 @@ impl VulcanWorkbench {
     fn clear_streaming_message_ids(&mut self, session_id: SessionId) {
         self.clear_transcript_drag_auto_scroll_for_session(session_id);
         self.clear_thinking_overlay_drag_auto_scroll(session_id);
+        self.pending_provider_response_sessions.remove(&session_id);
         self.pending_transcript_follow_tail_session_ids
             .remove(&session_id);
         self.pending_thinking_overlay_follow_tail_session_ids
@@ -14079,7 +14164,7 @@ impl VulcanWorkbench {
                 };
 
                 self.seal_streaming_message_segments(session_id);
-                let title = format!("调用 {tool_name} 工具");
+                let title = human_tool_display_title(&tool_name, "running");
                 let message_id = self.push_visible_session_record_message_with_metadata(
                     session_id,
                     SessionMessageKind::Assistant,
@@ -14102,6 +14187,8 @@ impl VulcanWorkbench {
                 };
 
                 self.seal_streaming_message_segments(session_id);
+                let display_state =
+                    tool_display_state_for_message(SessionMessageRecordKind::ToolResultOutput, event.metadata.as_ref());
                 let result_title = self
                     .session_tool_call_message_ids
                     .get(&session_id)
@@ -14112,17 +14199,27 @@ impl VulcanWorkbench {
                                 .iter()
                                 .find(|message| message.id == *message_id)
                                 .map(|message| {
-                                    let call_title = message.title.trim();
-                                    if call_title.is_empty() {
-                                        format!("调用 {tool_call_id} 工具")
-                                    } else {
-                                        call_title.to_string()
-                                    }
+                                    let tool_name = message
+                                        .metadata
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.get("tool_name"))
+                                        .and_then(Value::as_str)
+                                        .filter(|tool_name| !tool_name.trim().is_empty());
+                                    tool_name
+                                        .map(|tool_name| human_tool_display_title(tool_name, display_state))
+                                        .unwrap_or_else(|| {
+                                            let call_title = message.title.trim();
+                                            if call_title.is_empty() {
+                                                human_tool_display_title(&tool_call_id, display_state)
+                                            } else {
+                                                call_title.to_string()
+                                            }
+                                        })
                                 })
                         })
                     })
                     .filter(|title| !title.trim().is_empty())
-                    .unwrap_or_else(|| format!("调用 {tool_call_id} 工具"));
+                    .unwrap_or_else(|| human_tool_display_title(&tool_call_id, display_state));
                 self.push_visible_session_record_message_with_metadata(
                     session_id,
                     SessionMessageKind::Assistant,
@@ -14233,10 +14330,73 @@ impl VulcanWorkbench {
         self.active_runs.contains_key(&session_id)
     }
 
+    /// Returns whether any lightweight runtime-progress animation still needs ticking.
+    /// 返回当前是否仍有任一轻量运行进度动画需要继续 Tick。
+    fn has_runtime_progress_animation_work(&self) -> bool {
+        !self.pending_provider_response_sessions.is_empty()
+            || !self.floating_streaming_thinking_sessions.is_empty()
+    }
+
+    /// Marks one session as waiting for the next provider-visible response chunk after a request has already been sent.
+    /// 将某个会话标记为“请求已发送，正在等待下一段 Provider 可见响应块”。
+    fn mark_session_pending_provider_response(&mut self, session_id: SessionId) {
+        self.pending_provider_response_sessions.insert(session_id);
+    }
+
+    /// Clears the pending-provider-response marker once the session has started showing visible progress again.
+    /// 一旦会话重新开始展示可见进度，清除其“等待 Provider 响应”标记。
+    fn clear_session_pending_provider_response(&mut self, session_id: SessionId) {
+        self.pending_provider_response_sessions.remove(&session_id);
+    }
+
+    /// Returns the shared animated suffix used by lightweight runtime progress hints.
+    /// 返回轻量运行进度提示共用的动画后缀。
+    fn runtime_progress_ellipsis(&self) -> &'static str {
+        match self.runtime_progress_animation_frame % 3 {
+            0 => ".",
+            1 => "..",
+            _ => "...",
+        }
+    }
+
+    /// Returns the localized lightweight request-progress hint shown before the first visible provider delta arrives.
+    /// 返回在首个可见 Provider 增量到来前展示的本地化轻量请求进度提示。
+    fn session_requesting_progress_text(&self, session_id: SessionId) -> Option<String> {
+        if !self.pending_provider_response_sessions.contains(&session_id) {
+            return None;
+        }
+        let suffix = self.runtime_progress_ellipsis();
+        Some(match self.current_locale() {
+            AppLocale::ZhCn => format!("正在请求{suffix}"),
+            AppLocale::EnUs => format!("Requesting{suffix}"),
+        })
+    }
+
+    /// Returns the localized lightweight inline-thinking placeholder title while the visible reasoning block is still streaming.
+    /// 当可见思考区块仍在流式进行中时，返回其本地化轻量占位标题。
+    fn session_streaming_thinking_progress_title(
+        &self,
+        session_id: SessionId,
+        message_id: &str,
+    ) -> Option<String> {
+        let active_message_id = self.streaming_thinking_message_ids.get(&session_id)?;
+        if active_message_id != message_id
+            || !self.floating_streaming_thinking_sessions.contains(&session_id)
+        {
+            return None;
+        }
+        let suffix = self.runtime_progress_ellipsis();
+        Some(match self.current_locale() {
+            AppLocale::ZhCn => format!("正在思考{suffix}"),
+            AppLocale::EnUs => format!("Thinking{suffix}"),
+        })
+    }
+
     /// Clears the active run state tracked for one session after its stream finishes or is stopped.
     /// 在某个会话的流结束或被停止后清理其活动运行状态。
     fn clear_active_run_tracking(&mut self, session_id: SessionId) {
         self.active_runs.remove(&session_id);
+        self.pending_provider_response_sessions.remove(&session_id);
     }
 
     /// Removes and returns the active run state tracked for one session.
@@ -15376,7 +15536,7 @@ mod tests {
         assert!(
             rendered_titles
                 .iter()
-                .any(|title| title == "Tool Result read_file")
+                .any(|title| title == "Tool Call read_file Completed")
         );
     }
 
@@ -15463,7 +15623,7 @@ mod tests {
                 kind: SessionMessageKind::Assistant,
                 record_kind: SessionMessageRecordKind::ToolCallOutput,
                 visible: true,
-                title: String::from("调用 read_file 工具"),
+                title: String::from("调用 read_file 工具 进行中"),
                 body: String::from("## 调用参数\n\n```json\n{\"path\":\"src/main.rs\"}\n```"),
                 metadata: Some(json!({
                     "tool_call_id": "call-1",
@@ -15502,7 +15662,7 @@ mod tests {
             merged[0].record_kind,
             SessionMessageRecordKind::ToolCallOutput
         );
-        assert_eq!(merged[0].title, "调用 read_file 工具");
+        assert_eq!(merged[0].title, "调用 read_file 工具 已完成");
         assert!(merged[0].body.contains("## 调用参数"));
         assert!(merged[0].body.contains("## 工具返回"));
         assert_eq!(
@@ -15532,7 +15692,7 @@ mod tests {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolCallOutput,
             visible: true,
-            title: String::from("调用 read_file 工具"),
+            title: String::from("调用 read_file 工具 进行中"),
             body: String::from("## 调用参数\n\n```json\n{\"path\":\"src/main.rs\"}\n```"),
             metadata: Some(json!({
                 "tool_call_id": "call-1",
@@ -15547,7 +15707,7 @@ mod tests {
             merged[0].record_kind,
             SessionMessageRecordKind::ToolCallOutput
         );
-        assert_eq!(merged[0].title, "调用 read_file 工具");
+        assert_eq!(merged[0].title, "调用 read_file 工具 进行中");
         assert_eq!(
             merged[0]
                 .metadata
@@ -16362,10 +16522,10 @@ mod tests {
         );
     }
 
-    /// Verifies the active transcript surface invalidates heavyweight per-message caches while keeping the live session document available.
-    /// 验证当前活动转录表面会作废重型逐消息缓存，同时保持实时会话文档继续可用。
+    /// Verifies the active transcript surface keeps heavyweight per-message caches stable during streaming so per-token updates do not repeatedly drop large buffers.
+    /// 验证当前活动转录表面会在流式阶段保持重型逐消息缓存稳定，避免逐 token 更新反复释放大型缓冲对象。
     #[test]
-    fn visible_streaming_session_invalidates_heavy_message_view_caches() {
+    fn visible_streaming_session_keeps_heavy_message_view_caches_stable() {
         let (mut workbench, _task) = VulcanWorkbench::new();
         let session_id = SessionId::from_u128(9803);
         workbench.sessions.clear();
@@ -16418,9 +16578,9 @@ mod tests {
             Some("hello world")
         );
         assert!(workbench.session_agent_view_documents.contains_key(&session_id));
-        assert!(!workbench.session_message_raw_buffers.contains_key(&message_id));
-        assert!(!workbench.session_message_markdown.contains_key(&message_id));
-        assert!(!workbench
+        assert!(workbench.session_message_raw_buffers.contains_key(&message_id));
+        assert!(workbench.session_message_markdown.contains_key(&message_id));
+        assert!(workbench
             .session_message_markdown_buffers
             .contains_key(&message_id));
     }

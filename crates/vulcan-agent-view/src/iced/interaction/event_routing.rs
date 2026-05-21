@@ -185,7 +185,7 @@ fn hovered_turn_stats_tooltip(
     match document.link_action_for_target(&link_target) {
         Some(RenderedTranscriptLinkAction::ShowTurnStatsTooltip { title, body }) => {
             Some(TranscriptHoverTooltipState {
-                anchor_position: position,
+                anchor_position: local_position,
                 title: title.clone(),
                 body: body.clone(),
             })

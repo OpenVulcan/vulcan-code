@@ -80,6 +80,9 @@ pub enum ExecutionStreamEvent {
     /// Execution preparation completed and validated.
     /// 执行准备已完成且通过校验。
     Prepared(ExecutionPreparation),
+    /// One real provider request snapshot has just been sent and the GUI should show a lightweight waiting hint until visible output arrives.
+    /// 一次真实 Provider 请求快照刚刚发出，图形界面应显示轻量等待提示，直到出现可见输出为止。
+    RequestStarted { session_id: SessionId },
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。
     ThinkingDelta {

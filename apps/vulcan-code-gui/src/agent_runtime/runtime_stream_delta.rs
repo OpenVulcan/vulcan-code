@@ -213,7 +213,7 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
             state.latest_request_snapshot = Some(snapshot);
             state.provider_request_count = state.provider_request_count.saturating_add(1);
-            Vec::new()
+            vec![ExecutionStreamEvent::RequestStarted { session_id }]
         }
         Ok(ProviderStreamDelta::Thinking(delta)) => state
             .process_thinking_delta(session_id, delta)

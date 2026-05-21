@@ -3,6 +3,7 @@
 
 use super::super::helpers::*;
 use super::*;
+use iced::Alignment;
 use iced::widget::column;
 use std::rc::Rc;
 
@@ -574,9 +575,13 @@ impl VulcanWorkbench {
         session_id: SessionId,
     ) -> Option<Element<'_, Message>> {
         let pending_config_hint = self.selected_session_pending_runtime_config_hint_text();
+        let runtime_progress_hint = self.session_requesting_progress_text(session_id);
         let should_show_jump_button = !self.session_agent_view_should_follow_tail(session_id)
             && self.session_agent_view_viewports.contains_key(&session_id);
-        if !should_show_jump_button && pending_config_hint.is_none() {
+        if !should_show_jump_button
+            && pending_config_hint.is_none()
+            && runtime_progress_hint.is_none()
+        {
             return None;
         }
 
@@ -601,18 +606,38 @@ impl VulcanWorkbench {
         } else {
             space::vertical().height(0).into()
         };
-        let hint_label: Element<'_, Message> = if let Some(hint_text) = pending_config_hint {
-            container(
-                text(hint_text)
-                    .size(12)
-                    .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
-            )
-            .padding([8, 12])
-            .style(style::workbench_image_preview_floating_label_style)
-            .max_width(320)
-            .into()
-        } else {
+        let mut hint_column = column![];
+        let mut has_hint_label = false;
+        if let Some(hint_text) = runtime_progress_hint {
+            has_hint_label = true;
+            hint_column = hint_column.push(
+                container(
+                    text(hint_text)
+                        .size(12)
+                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                )
+                .padding([8, 12])
+                .style(style::workbench_image_preview_floating_label_style)
+                .max_width(320),
+            );
+        }
+        if let Some(hint_text) = pending_config_hint {
+            has_hint_label = true;
+            hint_column = hint_column.push(
+                container(
+                    text(hint_text)
+                        .size(12)
+                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                )
+                .padding([8, 12])
+                .style(style::workbench_image_preview_floating_label_style)
+                .max_width(320),
+            );
+        }
+        let hint_label: Element<'_, Message> = if !has_hint_label {
             space::vertical().height(0).into()
+        } else {
+            hint_column.spacing(8).align_x(Alignment::End).into()
         };
         let bottom_reserved_height = if self
             .selected_subagent_task_panel_state()
@@ -627,21 +652,13 @@ impl VulcanWorkbench {
             container(
                 column![
                     space::vertical().height(Fill),
-                    row![
-                        space::horizontal().width(Fill),
-                        hint_label,
-                        space::horizontal().width(Fill)
-                    ]
-                    .width(Fill)
-                    .align_y(Center),
+                    row![space::horizontal().width(Fill), hint_label]
+                        .width(Fill)
+                        .align_y(Center),
                     space::vertical().height(if should_show_jump_button { 8.0 } else { 0.0 }),
-                    row![
-                        space::horizontal().width(Fill),
-                        button,
-                        space::horizontal().width(Fill)
-                    ]
-                    .width(Fill)
-                    .align_y(Center),
+                    row![space::horizontal().width(Fill), button]
+                        .width(Fill)
+                        .align_y(Center),
                 ]
                 .width(Fill)
                 .height(Fill),

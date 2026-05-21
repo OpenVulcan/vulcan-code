@@ -697,8 +697,8 @@ fn transcript_hover_tooltip_bounds(
     let max_x = (widget_bounds.x + widget_bounds.width - TRANSCRIPT_HOVER_TOOLTIP_WIDTH)
         .max(widget_bounds.x);
     let max_y = (widget_bounds.y + widget_bounds.height - height).max(widget_bounds.y);
-    let x = (tooltip_state.anchor_position.x + 14.0).clamp(widget_bounds.x, max_x);
-    let y = (tooltip_state.anchor_position.y + 14.0).clamp(widget_bounds.y, max_y);
+    let x = (widget_bounds.x + tooltip_state.anchor_position.x + 14.0).clamp(widget_bounds.x, max_x);
+    let y = (widget_bounds.y + tooltip_state.anchor_position.y + 14.0).clamp(widget_bounds.y, max_y);
     Rectangle::new(
         Point::new(x, y),
         Size::new(TRANSCRIPT_HOVER_TOOLTIP_WIDTH, height.max(72.0)),
@@ -707,9 +707,12 @@ fn transcript_hover_tooltip_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::transcript_context_menu_action_label;
+    use super::{transcript_context_menu_action_label, transcript_hover_tooltip_bounds};
     use crate::iced::scene::RenderedMediaKind;
-    use crate::iced::surface_state::{TranscriptContextMenuAction, TranscriptMediaTarget};
+    use crate::iced::surface_state::{
+        TranscriptContextMenuAction, TranscriptHoverTooltipState, TranscriptMediaTarget,
+    };
+    use iced::{Point, Rectangle, Size};
 
     /// Verifies the audio context-menu verb switches between play and stop according to the active transcript media target state.
     /// 验证音频右键菜单动词会根据当前转录媒体目标的激活状态在播放与停止之间切换。
@@ -740,5 +743,22 @@ mod tests {
             ),
             "停止播放"
         );
+    }
+
+    /// Verifies hover-tooltips treat their stored anchor as transcript-local coordinates so overlay translation cannot double-offset the floating card.
+    /// 验证悬浮提示会把存储锚点视为转录局部坐标，从而避免浮层平移时再次产生双重偏移。
+    #[test]
+    fn hover_tooltip_bounds_translate_local_anchor_into_widget_space() {
+        let widget_bounds = Rectangle::new(Point::new(120.0, 80.0), Size::new(640.0, 360.0));
+        let tooltip_state = TranscriptHoverTooltipState {
+            anchor_position: Point::new(30.0, 24.0),
+            title: String::from("统计"),
+            body: String::from("第一行\n第二行"),
+        };
+
+        let bounds = transcript_hover_tooltip_bounds(widget_bounds, &tooltip_state);
+
+        assert_eq!(bounds.x, 164.0);
+        assert_eq!(bounds.y, 118.0);
     }
 }
