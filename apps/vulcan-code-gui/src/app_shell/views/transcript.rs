@@ -5,7 +5,6 @@ use super::super::helpers::*;
 use super::*;
 use iced::Alignment;
 use iced::widget::column;
-use std::rc::Rc;
 
 /// Shared visible width reserved by the default vertical transcript scrollbar when content overflows.
 /// 内容溢出时为默认纵向转录滚动条预留的共享可见宽度。
@@ -682,14 +681,14 @@ impl VulcanWorkbench {
         &self,
         session_id: SessionId,
     ) -> Element<'_, Message> {
-        let Some(document_cache) = self.session_inline_agent_view_documents.get(&session_id) else {
+        let Some(document) = self.rendered_session_inline_agent_view_document(session_id) else {
             return container(text(self.t(I18nKey::TranscriptNoRenderableBlocks)).size(14))
                 .padding(14)
                 .height(Fill)
                 .into();
         };
         let transcript_body = view_selectable_rendered_transcript_shared_with_context_menu::<Message>(
-            Rc::clone(&document_cache.document),
+            document,
             self.app_theme.clone(),
             session_transcript_surface_id(session_id, self.current_locale()),
             self.selectable_transcript_command.clone(),
@@ -1085,7 +1084,11 @@ impl VulcanWorkbench {
         &self,
         modal_state: &ToolModalState,
     ) -> Element<'_, Message> {
-        match &modal_state.payload.tool_modal_presentation {
+        let live_presentation = self.tool_modal_presentation_with_live_command_session_state(
+            modal_state.session_id,
+            &modal_state.payload.tool_modal_presentation,
+        );
+        match &live_presentation {
             ToolModalPresentation::CommandRun(summary) => {
                 let summary_column = column![
                     row![

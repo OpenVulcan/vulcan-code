@@ -1851,6 +1851,9 @@ fn command_session_tool_modal_summary_from_agent_view_attributes(
     let status = cloned_agent_view_attribute(attributes, "command-session-status")?;
     Some(CommandSessionToolModalSummary {
         command_session_id,
+        owner_session_id: parse_agent_view_attribute_session_id(
+            attributes.get("command-session-owner-id"),
+        ),
         action: cloned_agent_view_attribute(attributes, "command-session-action"),
         status,
         shell: cloned_agent_view_attribute(attributes, "command-shell"),
@@ -3768,6 +3771,9 @@ struct CommandSessionToolModalSummary {
     /// Stable command-session identifier owned by the host runtime.
     /// 由宿主运行时持有的稳定命令会话标识。
     command_session_id: SessionId,
+    /// Optional owner session identifier recovered from transcript metadata so GUI controls can rebind to the live runtime session even after the historical tool result becomes stale.
+    /// 从转录元数据恢复出的可选 owner 会话标识，使 GUI 控件即使在历史工具结果过期后也能重新绑定到实时运行时会话。
+    owner_session_id: Option<SessionId>,
     /// Most recent shell-session action represented by the transcript card.
     /// 当前转录卡片所代表的最近一次 shell-session 动作。
     action: Option<String>,
@@ -3812,6 +3818,37 @@ struct CommandSessionToolModalSummary {
     output_overflowed: bool,
 }
 
+impl CommandSessionToolModalSummary {
+    /// Applies one live runtime snapshot onto this modal summary so status-oriented fields always reflect the latest command-session state instead of the stale historical transcript payload.
+    /// 将一份实时运行时快照应用到当前弹层摘要上，使偏状态字段始终反映最新命令会话状态，而不是过期历史转录载荷。
+    fn apply_runtime_snapshot(&mut self, snapshot: &CommandSessionSnapshot) -> bool {
+        if self.command_session_id != snapshot.command_session_id {
+            return false;
+        }
+        self.owner_session_id = Some(snapshot.owner_session_id);
+        self.status = snapshot.status.as_str().to_string();
+        self.shell = Some(snapshot.shell_label.clone());
+        self.working_directory = Some(snapshot.cwd.to_string_lossy().to_string());
+        self.command_text = Some(snapshot.command.clone());
+        self.exit_code = snapshot.exit_code;
+        self.failure_reason = snapshot.failure_reason.clone();
+        self.stdout_bytes = Some(snapshot.stdout_bytes as u64);
+        self.stderr_bytes = Some(snapshot.stderr_bytes as u64);
+        self.last_seq = Some(snapshot.last_seq);
+        true
+    }
+
+    /// Rewrites one historically running modal summary to `stopped` when the referenced runtime session can no longer be found, so stale GUI state never keeps showing a live session after the host registry has already dropped it.
+    /// 当引用的运行时会话已经无法找到时，将一份历史上仍显示 running 的弹层摘要改写为 `stopped`，从而避免过期 GUI 状态在宿主注册表已移除该会话后继续显示其仍然存活。
+    fn mark_runtime_missing_as_stopped(&mut self) {
+        if self.status.trim() != "running" {
+            return;
+        }
+        self.status = String::from("stopped");
+        self.has_more = Some(false);
+    }
+}
+
 /// High-level tool-modal presentation family derived from one rendered transcript block.
 /// 从单个已渲染转录区块派生出的高层工具弹层展示家族。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3852,16 +3889,7 @@ impl ToolModalPresentation {
         let Some(summary) = self.command_session_summary_mut() else {
             return false;
         };
-        if summary.command_session_id != snapshot.command_session_id {
-            return false;
-        }
-        summary.status = snapshot.status.as_str().to_string();
-        summary.exit_code = snapshot.exit_code;
-        summary.failure_reason = snapshot.failure_reason.clone();
-        summary.stdout_bytes = Some(snapshot.stdout_bytes as u64);
-        summary.stderr_bytes = Some(snapshot.stderr_bytes as u64);
-        summary.last_seq = Some(snapshot.last_seq);
-        true
+        summary.apply_runtime_snapshot(snapshot)
     }
 }
 
@@ -15416,16 +15444,81 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Returns one best-effort live runtime snapshot for the requested command-session lookup, preferring the historical owner id when available but falling back to the currently rendered session when needed.
+    /// 为指定命令会话查询返回一份尽力而为的实时运行时快照，在可用时优先使用历史 owner id，并在必要时回退到当前渲染会话。
+    fn live_command_session_snapshot_for_lookup(
+        &self,
+        fallback_owner_session_id: SessionId,
+        command_session_id: SessionId,
+        owner_session_id: Option<SessionId>,
+    ) -> Option<CommandSessionSnapshot> {
+        let command_session_runtime = self.runtime_foundation.command_session_runtime();
+        owner_session_id
+            .and_then(|owner_session_id| {
+                command_session_runtime
+                    .try_snapshot_owned_session(owner_session_id, command_session_id)
+            })
+            .or_else(|| {
+                command_session_runtime
+                    .try_snapshot_owned_session(fallback_owner_session_id, command_session_id)
+            })
+            .or_else(|| command_session_runtime.try_snapshot_session_by_id(command_session_id))
+    }
+
+    /// Returns one command-session modal summary overlaid with the latest runtime snapshot when a live session still exists, while preserving the historical transcript payload as the fallback for archived sessions.
+    /// 当实时会话仍存在时，返回一份叠加了最新运行时快照的命令会话弹层摘要；对于归档会话，则保留历史转录载荷作为回退。
+    fn command_session_summary_with_live_runtime_state(
+        &self,
+        fallback_owner_session_id: SessionId,
+        summary: &CommandSessionToolModalSummary,
+    ) -> CommandSessionToolModalSummary {
+        let Some(snapshot) = self.live_command_session_snapshot_for_lookup(
+            fallback_owner_session_id,
+            summary.command_session_id,
+            summary.owner_session_id,
+        ) else {
+            let mut summary = summary.clone();
+            summary.mark_runtime_missing_as_stopped();
+            return summary;
+        };
+        let mut summary = summary.clone();
+        let _ = summary.apply_runtime_snapshot(&snapshot);
+        summary
+    }
+
+    /// Returns one tool-modal presentation clone whose command-session summary fields are refreshed from the live runtime whenever the referenced session still exists.
+    /// 返回一份工具弹层展示副本；只要被引用的命令会话仍存在，就会用实时运行时刷新其中的命令会话摘要字段。
+    fn tool_modal_presentation_with_live_command_session_state(
+        &self,
+        fallback_owner_session_id: SessionId,
+        presentation: &ToolModalPresentation,
+    ) -> ToolModalPresentation {
+        match presentation {
+            ToolModalPresentation::CommandSession(summary) => {
+                ToolModalPresentation::CommandSession(
+                    self.command_session_summary_with_live_runtime_state(
+                        fallback_owner_session_id,
+                        summary,
+                    ),
+                )
+            }
+            _ => presentation.clone(),
+        }
+    }
+
     /// Returns the owner/session identifiers of the currently opened running command-session modal when one exists.
     /// 当存在时，返回当前已打开且仍在运行的命令会话弹层对应的归属会话标识与命令会话标识。
     fn active_command_session_modal_stop_target(&self) -> Option<(SessionId, SessionId)> {
         let modal_state = self.active_tool_modal.as_ref()?;
-        let summary = modal_state
-            .payload
-            .tool_modal_presentation
-            .command_session_summary()?;
-        (summary.status == "running")
-            .then_some((modal_state.session_id, summary.command_session_id))
+        let live_presentation = self.tool_modal_presentation_with_live_command_session_state(
+            modal_state.session_id,
+            &modal_state.payload.tool_modal_presentation,
+        );
+        let summary = live_presentation.command_session_summary()?;
+        (summary.status == "running").then_some((
+            summary.owner_session_id.unwrap_or(modal_state.session_id),
+            summary.command_session_id,
+        ))
     }
 
     /// Returns the stable tool-call identifier associated with the currently opened command-session modal when one can still be recovered from the rendered transcript block.
@@ -15914,6 +16007,10 @@ mod tests {
             String::from("00000000-0000-0000-0000-000000000111"),
         );
         attributes.insert(
+            String::from("command-session-owner-id"),
+            String::from("00000000-0000-0000-0000-000000000010"),
+        );
+        attributes.insert(
             String::from("command-session-status"),
             String::from("running"),
         );
@@ -15957,6 +16054,13 @@ mod tests {
             SessionId::parse_str("00000000-0000-0000-0000-000000000111")
                 .expect("parse command session id")
         );
+        assert_eq!(
+            summary.owner_session_id,
+            Some(
+                SessionId::parse_str("00000000-0000-0000-0000-000000000010")
+                    .expect("parse owner session id"),
+            )
+        );
         assert_eq!(summary.status, "running");
         assert_eq!(summary.action.as_deref(), Some("read"));
         assert_eq!(summary.shell.as_deref(), Some("powershell"));
@@ -15978,6 +16082,10 @@ mod tests {
         let mut presentation =
             ToolModalPresentation::CommandSession(CommandSessionToolModalSummary {
                 command_session_id,
+                owner_session_id: Some(
+                    SessionId::parse_str("00000000-0000-0000-0000-000000000001")
+                        .expect("parse owner session id"),
+                ),
                 action: Some(String::from("read")),
                 status: String::from("running"),
                 shell: Some(String::from("powershell")),
@@ -16014,6 +16122,13 @@ mod tests {
         let ToolModalPresentation::CommandSession(summary) = presentation else {
             panic!("expected command-session modal presentation");
         };
+        assert_eq!(
+            summary.owner_session_id,
+            Some(
+                SessionId::parse_str("00000000-0000-0000-0000-000000000001")
+                    .expect("parse owner session id"),
+            )
+        );
         assert_eq!(summary.status, "stopped");
         assert_eq!(summary.exit_code, Some(1));
         assert_eq!(summary.failure_reason.as_deref(), Some("stopped by user"));
@@ -16021,6 +16136,105 @@ mod tests {
         assert_eq!(summary.stderr_bytes, Some(8));
         assert_eq!(summary.last_seq, Some(11));
         assert_eq!(summary.action.as_deref(), Some("read"));
+    }
+
+    /// Verifies command-session modal summaries fall back to `stopped` once the runtime can no longer resolve the referenced session id, instead of preserving a stale historical `running` state forever.
+    /// 验证当运行时已经无法解析被引用的命令会话标识时，命令会话弹层摘要会回退为 `stopped`，而不是永久保留过期的历史 `running` 状态。
+    #[test]
+    fn command_session_modal_summary_marks_missing_runtime_session_as_stopped() {
+        let (workbench, _task) = VulcanWorkbench::new();
+        let summary = CommandSessionToolModalSummary {
+            command_session_id: SessionId::from_u128(0xBEEF),
+            owner_session_id: Some(SessionId::from_u128(0xCAFE)),
+            action: Some(String::from("read")),
+            status: String::from("running"),
+            shell: Some(String::from("pwsh")),
+            working_directory: Some(String::from("D:\\openvulcan\\vulcan-code")),
+            command_text: Some(String::from("cargo test")),
+            failure_reason: None,
+            exit_code: None,
+            last_seq: Some(7),
+            stdout_bytes: Some(256),
+            stderr_bytes: Some(0),
+            returned_chunk_count: Some(2),
+            bytes_written: None,
+            has_more: Some(true),
+            output_overflowed: false,
+        };
+
+        let resolved = workbench.command_session_summary_with_live_runtime_state(
+            summary.owner_session_id.unwrap(),
+            &summary,
+        );
+
+        assert_eq!(resolved.status, "stopped");
+        assert_eq!(resolved.has_more, Some(false));
+        assert_eq!(resolved.command_session_id, summary.command_session_id);
+        assert_eq!(resolved.owner_session_id, summary.owner_session_id);
+    }
+
+    /// Verifies rendered command-session transcript cards also fall back to `stopped` when their runtime session id is no longer present, so the main transcript cannot keep showing a dead session as running.
+    /// 验证当命令会话的运行时标识已经不存在时，渲染后的命令会话转录卡片同样会回退为 `stopped`，从而避免主转录继续把已死亡会话显示为 running。
+    #[test]
+    fn rendered_command_session_card_marks_missing_runtime_session_as_stopped() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(0x1200);
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "命令会话测试"));
+        workbench.selected_session = session_id;
+        workbench.session_messages.insert(
+            session_id,
+            vec![SessionMessageEntry {
+                id: String::from("command-session-result-live-state"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回 shell_session"),
+                body: String::from("命令会话历史上仍显示 running。"),
+                metadata: Some(json!({
+                    "tool_call_id": "call-command-session-live-state",
+                    "tool_name": "shell_session",
+                    "tool_display_state": "completed",
+                    "kind": "command_session",
+                    "payload": {
+                        "action": "read",
+                        "owner_session_id": session_id.to_string(),
+                        "command_session_id": "00000000-0000-0000-0000-00000000beef",
+                        "command": "cargo test",
+                        "cwd": "D:/openvulcan/vulcan-code",
+                        "shell": "pwsh",
+                        "status": "running",
+                        "last_seq": 3,
+                        "stdout_bytes": 64,
+                        "stderr_bytes": 0,
+                        "returned_chunk_count": 1,
+                        "has_more": true,
+                        "output_overflowed": false
+                    }
+                })),
+                created_at: String::from("1"),
+            }],
+        );
+
+        workbench.refresh_session_agent_view_buffers(session_id);
+
+        let rendered = workbench
+            .rendered_session_inline_agent_view_document(session_id)
+            .expect("render inline transcript document");
+        let status = rendered
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                AgentViewBlock::Directive(directive) => {
+                    directive.attributes.get("command-session-status").cloned()
+                }
+                AgentViewBlock::Markdown(_) => None,
+            })
+            .expect("read command-session status");
+
+        assert_eq!(status, "stopped");
     }
 
     /// Verifies session title generation only runs for the first user turn and leaves later turns unchanged.

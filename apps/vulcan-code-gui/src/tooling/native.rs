@@ -1417,16 +1417,17 @@ async fn execute_shell_session_start_action(
         ),
         format!(
             "Pending stdin line after start: {}",
-            if snapshot.pending_stdin_line { "yes" } else { "no" }
+            if snapshot.pending_stdin_line {
+                "yes"
+            } else {
+                "no"
+            }
         ),
         format!(
             "Resolved launcher shell: {}",
             shell_behavior.launcher_shell_label
         ),
-        format!(
-            "Requested shell selector: {}",
-            requested_shell_selector
-        ),
+        format!("Requested shell selector: {}", requested_shell_selector),
         format!(
             "Interactive newline shell: {}",
             shell_behavior.interactive_shell_label
@@ -1749,9 +1750,9 @@ mod tests {
         NativeToolExecutionRequest, build_agent_list_tool, build_mcp_server_list_tool,
         build_shell_command_tool, build_shell_session_tool, build_skill_list_tool,
         build_workspace_describe_tool, effective_start_append_newline,
-        resolve_session_shell_behavior,
-        resolve_shell_command_launcher, resolve_shell_command_working_directory,
-        shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
+        resolve_session_shell_behavior, resolve_shell_command_launcher,
+        resolve_shell_command_working_directory, shell_command_args_schema,
+        shell_session_args_schema, shell_specific_newline,
         validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
     };
     use crate::agent_runtime::config::{
@@ -2124,7 +2125,10 @@ mod tests {
     fn shell_session_start_defaults_append_newline_when_stdin_exists() {
         assert!(effective_start_append_newline(None, Some("echo hi")));
         assert!(!effective_start_append_newline(None, None));
-        assert!(!effective_start_append_newline(Some(false), Some("echo hi")));
+        assert!(!effective_start_append_newline(
+            Some(false),
+            Some("echo hi")
+        ));
         assert!(effective_start_append_newline(Some(true), None));
     }
 

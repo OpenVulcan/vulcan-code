@@ -453,6 +453,27 @@ impl CommandSessionRecord {
         }
     }
 
+    /// Builds one best-effort immutable snapshot without waiting on the async mutex, so synchronous GUI render paths can reuse the latest runtime state when it is immediately available.
+    /// 在不等待异步互斥锁的前提下构建一份尽力而为的不可变快照，使同步 GUI 渲染路径可以在状态立即可得时复用最新运行时状态。
+    fn try_snapshot(&self) -> Option<CommandSessionSnapshot> {
+        let state = self.shared_state.mutable_state.try_lock().ok()?;
+        Some(CommandSessionSnapshot {
+            command_session_id: self.command_session_id,
+            owner_session_id: self.owner_session_id,
+            command: self.command.clone(),
+            shell_label: self.shell_label.clone(),
+            launcher_shell_label: self.launcher_shell_label.clone(),
+            cwd: self.cwd.clone(),
+            status: state.status,
+            exit_code: state.exit_code,
+            failure_reason: state.failure_reason.clone(),
+            stdout_bytes: state.stdout_bytes,
+            stderr_bytes: state.stderr_bytes,
+            last_seq: state.last_seq,
+            pending_stdin_line: state.pending_stdin_line,
+        })
+    }
+
     /// Builds one incremental read outcome based on the caller-provided output cursor and read cap.
     /// 根据调用方提供的输出游标与读取上限构建一次增量读取结果。
     async fn read_since(&self, after_seq: u64, max_chunks: usize) -> CommandSessionReadOutcome {
@@ -469,8 +490,7 @@ impl CommandSessionRecord {
             .take(max_chunks)
             .collect::<Vec<_>>();
         if let Some(last_returned_chunk) = returned_chunks.last() {
-            state.highest_delivered_seq =
-                state.highest_delivered_seq.max(last_returned_chunk.seq);
+            state.highest_delivered_seq = state.highest_delivered_seq.max(last_returned_chunk.seq);
         }
         let snapshot = CommandSessionSnapshot {
             command_session_id: self.command_session_id,
@@ -708,6 +728,40 @@ impl CommandSessionRuntime {
         }
     }
 
+    /// Returns one best-effort live snapshot for the requested owned command session without blocking on async state, so GUI status surfaces can prefer current runtime state over historical transcript payloads.
+    /// 在不阻塞异步状态锁的前提下返回目标归属命令会话的一份尽力而为实时快照，使 GUI 状态界面可以优先展示当前运行时状态而不是历史转录载荷。
+    pub fn try_snapshot_owned_session(
+        &self,
+        owner_session_id: SessionId,
+        command_session_id: SessionId,
+    ) -> Option<CommandSessionSnapshot> {
+        let record = self
+            .sessions
+            .read()
+            .ok()?
+            .get(&command_session_id)
+            .cloned()?;
+        if record.owner_session_id != owner_session_id {
+            return None;
+        }
+        record.try_snapshot()
+    }
+
+    /// Returns one best-effort live snapshot for the requested command session identifier without enforcing ownership, so read-only GUI projections can still recover the latest visible status when the owner id must be inferred from historical metadata.
+    /// 在不强制校验归属的前提下返回目标命令会话标识的一份尽力而为实时快照，使只读 GUI 投影在只能从历史元数据推断 owner id 时仍可恢复最新可见状态。
+    pub fn try_snapshot_session_by_id(
+        &self,
+        command_session_id: SessionId,
+    ) -> Option<CommandSessionSnapshot> {
+        let record = self
+            .sessions
+            .read()
+            .ok()?
+            .get(&command_session_id)
+            .cloned()?;
+        record.try_snapshot()
+    }
+
     /// Resolves one command-session record and enforces that the caller owns it.
     /// 解析一条命令会话记录并强制校验调用方是否拥有它。
     fn session_for_owner(
@@ -897,8 +951,14 @@ async fn run_command_session_supervisor(
 mod tests {
     use super::{
         COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES, CommandSessionOutputChunk,
-        CommandSessionOutputStream, can_coalesce_output_chunk, output_chunk_ends_with_line_boundary,
+        CommandSessionOutputStream, CommandSessionRecord, CommandSessionRuntime,
+        CommandSessionSharedState, CommandSessionStatus, can_coalesce_output_chunk,
+        output_chunk_ends_with_line_boundary,
     };
+    use crate::model::SessionId;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tokio::sync::mpsc::unbounded_channel;
 
     /// Output coalescing should keep appending to one undelivered line fragment until the line is completed.
     /// 输出合并应持续追加到同一条未投递行碎片，直到该行被完整结束。
@@ -957,5 +1017,70 @@ mod tests {
             CommandSessionOutputStream::Stdout,
             1,
         ));
+    }
+
+    /// Best-effort live snapshots should expose the latest shared state to synchronous GUI callers without crossing ownership boundaries.
+    /// 尽力而为的实时快照应在不跨越归属边界的前提下，把最新共享状态暴露给同步 GUI 调用方。
+    #[test]
+    fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
+        let runtime = CommandSessionRuntime::new();
+        let command_session_id = SessionId::from_u128(0xCA11);
+        let owner_session_id = SessionId::from_u128(0x0A11);
+        let shared_state = Arc::new(CommandSessionSharedState::default());
+        {
+            let mut state = shared_state
+                .mutable_state
+                .try_lock()
+                .expect("lock shared state");
+            state.status = CommandSessionStatus::Stopped;
+            state.exit_code = Some(9);
+            state.failure_reason = Some(String::from("stopped by test"));
+            state.stdout_bytes = 128;
+            state.stderr_bytes = 16;
+            state.last_seq = 5;
+            state.pending_stdin_line = true;
+        }
+        let (control_sender, _control_receiver) = unbounded_channel();
+        runtime
+            .sessions
+            .write()
+            .expect("lock runtime registry")
+            .insert(
+                command_session_id,
+                Arc::new(CommandSessionRecord {
+                    command_session_id,
+                    owner_session_id,
+                    command: String::from("echo live"),
+                    shell_label: String::from("pwsh"),
+                    launcher_shell_label: String::from("pwsh"),
+                    interactive_newline: String::from("\r\n"),
+                    cwd: PathBuf::from("D:/openvulcan/vulcan-code"),
+                    control_sender,
+                    shared_state,
+                }),
+            );
+
+        let snapshot = runtime
+            .try_snapshot_owned_session(owner_session_id, command_session_id)
+            .expect("read live snapshot");
+        assert_eq!(snapshot.command_session_id, command_session_id);
+        assert_eq!(snapshot.owner_session_id, owner_session_id);
+        assert_eq!(snapshot.status, CommandSessionStatus::Stopped);
+        assert_eq!(snapshot.exit_code, Some(9));
+        assert_eq!(snapshot.failure_reason.as_deref(), Some("stopped by test"));
+        assert_eq!(snapshot.stdout_bytes, 128);
+        assert_eq!(snapshot.stderr_bytes, 16);
+        assert_eq!(snapshot.last_seq, 5);
+        assert!(snapshot.pending_stdin_line);
+        assert!(
+            runtime
+                .try_snapshot_owned_session(SessionId::from_u128(0x0A12), command_session_id)
+                .is_none()
+        );
+        assert!(
+            runtime
+                .try_snapshot_session_by_id(command_session_id)
+                .is_some()
+        );
     }
 }

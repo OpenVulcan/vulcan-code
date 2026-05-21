@@ -30,6 +30,93 @@ fn prepare_session_inline_render_block(block: &mut vulcan_agent_view::AgentViewB
     );
 }
 
+/// Stores one runtime decoration attribute when a value exists, or removes the stale historical attribute when the live runtime snapshot no longer exposes one.
+/// 当值存在时写入一条运行时装饰属性，而当实时运行时快照不再暴露该值时移除过期历史属性。
+fn set_runtime_agent_view_attribute(
+    attributes: &mut vulcan_agent_view::AgentViewAttributes,
+    key: &str,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        attributes.insert(key.to_string(), value);
+    } else {
+        attributes.remove(key);
+    }
+}
+
+/// Overlays one live command-session snapshot onto rendered transcript attributes so status-oriented tool cards reflect the current runtime session instead of the historical tool-result payload.
+/// 将一份实时命令会话快照覆盖到已渲染转录属性上，使偏状态的工具卡片反映当前运行时会话，而不是历史工具结果载荷。
+fn apply_live_command_session_snapshot_to_attributes(
+    attributes: &mut vulcan_agent_view::AgentViewAttributes,
+    snapshot: &CommandSessionSnapshot,
+) {
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-session-owner-id",
+        Some(snapshot.owner_session_id.to_string()),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-session-status",
+        Some(snapshot.status.as_str().to_string()),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-shell",
+        Some(snapshot.shell_label.clone()),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-working-directory",
+        Some(snapshot.cwd.to_string_lossy().to_string()),
+    );
+    set_runtime_agent_view_attribute(attributes, "command-text", Some(snapshot.command.clone()));
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-failure-reason",
+        snapshot.failure_reason.clone(),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-exit-code",
+        snapshot.exit_code.map(|value| value.to_string()),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-last-seq",
+        Some(snapshot.last_seq.to_string()),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-stdout-bytes",
+        Some(snapshot.stdout_bytes.to_string()),
+    );
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-stderr-bytes",
+        Some(snapshot.stderr_bytes.to_string()),
+    );
+}
+
+/// Rewrites one historically running command-session block to `stopped` when the runtime no longer exposes that session id, so rendered transcript badges never continue claiming the session is still active after it has disappeared.
+/// 当运行时不再暴露该命令会话标识时，将一条历史上仍显示 running 的命令会话区块改写为 `stopped`，从而避免渲染后的转录徽标在会话消失后继续宣称其仍在运行。
+fn apply_missing_command_session_runtime_state_to_attributes(
+    attributes: &mut vulcan_agent_view::AgentViewAttributes,
+) {
+    let historical_status = attributes
+        .get("command-session-status")
+        .map(String::as_str)
+        .map(str::trim);
+    if historical_status != Some("running") {
+        return;
+    }
+    set_runtime_agent_view_attribute(
+        attributes,
+        "command-session-status",
+        Some(String::from("stopped")),
+    );
+}
+
 /// Decorates and compacts the inline transcript suffix starting at the provided index so streaming updates refresh only the changed tail plus any suffix blocks whose stable GUI identifiers depend on block positions.
 /// 从给定索引开始装饰并压缩内联转录后缀，使流式更新只刷新变化尾部以及稳定图形界面标识依赖区块位置的后缀区块。
 fn decorate_and_prepare_inline_document_suffix(
@@ -826,6 +913,30 @@ impl VulcanWorkbench {
         Some(document)
     }
 
+    /// Returns the cached inline transcript document with a lightweight runtime-only command-session status overlay applied for the current frame, so the main transcript stream can stay compact while still reflecting live shell-session state.
+    /// 返回一份带有轻量运行时命令会话状态覆盖的缓存内联转录文档，使主转录流在保持紧凑的同时仍能反映实时 shell 会话状态。
+    pub(super) fn rendered_session_inline_agent_view_document(
+        &self,
+        session_id: SessionId,
+    ) -> Option<Rc<vulcan_agent_view::AgentViewDocument>> {
+        let mut document = self
+            .session_inline_agent_view_documents
+            .get(&session_id)?
+            .document
+            .as_ref()
+            .clone();
+        for block in &mut document.blocks {
+            let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
+                continue;
+            };
+            self.decorate_agent_view_block_live_command_session_state(
+                session_id,
+                &mut directive.attributes,
+            );
+        }
+        Some(Rc::new(document))
+    }
+
     /// Decorates one agent-view block with runtime-only rendering metadata such as collapse state and thinking metrics.
     /// 使用折叠状态与思考指标等仅运行时元数据装饰单个 agent-view 区块。
     pub(super) fn decorate_agent_view_block_for_render(
@@ -843,6 +954,11 @@ impl VulcanWorkbench {
         directive
             .attributes
             .insert(String::from("ui-block-id"), block_id.to_string());
+
+        self.decorate_agent_view_block_live_command_session_state(
+            session_id,
+            &mut directive.attributes,
+        );
 
         if let Some(local_path) = directive
             .attributes
@@ -883,6 +999,31 @@ impl VulcanWorkbench {
                 self.session_thinking_title(session_id, directive),
             );
         }
+    }
+
+    /// Overlays the latest live command-session snapshot onto one rendered block attribute map when the block belongs to a host-managed shell session, so transcript badges stay synchronized with the runtime.
+    /// 当区块属于宿主管理 shell 会话时，将最新实时命令会话快照覆盖到其已渲染属性映射上，使转录徽标与运行时保持同步。
+    fn decorate_agent_view_block_live_command_session_state(
+        &self,
+        fallback_owner_session_id: SessionId,
+        attributes: &mut vulcan_agent_view::AgentViewAttributes,
+    ) {
+        let Some(command_session_id) =
+            parse_agent_view_attribute_session_id(attributes.get("command-session-id"))
+        else {
+            return;
+        };
+        let owner_session_id =
+            parse_agent_view_attribute_session_id(attributes.get("command-session-owner-id"));
+        let Some(snapshot) = self.live_command_session_snapshot_for_lookup(
+            fallback_owner_session_id,
+            command_session_id,
+            owner_session_id,
+        ) else {
+            apply_missing_command_session_runtime_state_to_attributes(attributes);
+            return;
+        };
+        apply_live_command_session_snapshot_to_attributes(attributes, &snapshot);
     }
 
     /// Builds the inline thinking title shown in both the transcript header row and the explicit centered modal.
