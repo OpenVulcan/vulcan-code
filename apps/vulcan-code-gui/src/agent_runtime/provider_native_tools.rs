@@ -159,6 +159,7 @@ mod tests {
             runtime_label: String::from("OpenAI Responses-Compatible"),
             model_id: String::from("qwen3.6-plus"),
             model_name: String::from("Qwen 3.6 Plus"),
+            openrouter_endpoint_route: None,
             base_url: Some(String::from(
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
             )),

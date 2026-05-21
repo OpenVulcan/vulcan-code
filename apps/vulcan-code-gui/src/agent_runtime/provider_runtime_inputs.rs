@@ -26,10 +26,29 @@ pub(crate) fn resolve_provider_additional_params(
         provider_defaults,
         blueprint.reasoning.additional_params.clone(),
     );
-    merge_ai_tool_patch_into_additional_params(
+    let merged = merge_ai_tool_patch_into_additional_params(
         base,
         build_provider_native_ai_tool_additional_params(blueprint),
-    )
+    );
+    merge_openrouter_endpoint_route_additional_params(merged, blueprint)
+}
+
+/// Merges one OpenRouter endpoint-routing override into the additional request parameters when the current run locks a specific upstream endpoint.
+/// 当当前运行锁定了特定上游端点时，将一份 OpenRouter 端点路由覆盖合并进附加请求参数。
+fn merge_openrouter_endpoint_route_additional_params(
+    base: Option<Value>,
+    blueprint: &ProviderRuntimeBlueprint,
+) -> Option<Value> {
+    let Some(route) = blueprint.openrouter_endpoint_route.as_ref() else {
+        return base;
+    };
+    let route_patch = serde_json::json!({
+        "provider": {
+            "order": [route.tag.clone()],
+            "allow_fallbacks": false,
+        }
+    });
+    merge_additional_params(base, Some(route_patch))
 }
 
 /// Builds one request-header map from the configured strategy and provider-defined extra headers.
@@ -96,4 +115,81 @@ pub(crate) fn resolve_provider_options<'a>(
         .get(provider_id)
         .map(|entry| &entry.options)
         .ok_or_else(|| format!("供应商 `{provider_id}` 当前尚未保存配置。"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_provider_additional_params;
+    use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
+    use crate::provider::capabilities::ResolvedModelCapabilities;
+    use crate::provider_config::{
+        OpenRouterEndpointRouteSelection, ProviderRuntimeKind,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    /// Builds one minimal runtime blueprint used by the OpenRouter endpoint-routing regression tests.
+    /// 构建供 OpenRouter 端点路由回归测试使用的最小运行时蓝图。
+    fn test_blueprint() -> ProviderRuntimeBlueprint {
+        ProviderRuntimeBlueprint {
+            provider_id: String::from("openrouter"),
+            provider_name: String::from("OpenRouter"),
+            runtime_kind: ProviderRuntimeKind::OpenRouter,
+            runtime_label: String::from("OpenRouter"),
+            model_id: String::from("openai/gpt-4o-mini"),
+            model_name: String::from("GPT-4o Mini"),
+            openrouter_endpoint_route: Some(OpenRouterEndpointRouteSelection {
+                tag: String::from("openai"),
+                provider_name: String::from("OpenAI"),
+                endpoint_name: String::from("OpenAI"),
+            }),
+            base_url: Some(String::from("https://openrouter.ai/api/v1")),
+            supports_remote_model_refresh: true,
+            credential_source: String::from("api-key"),
+            user_agent: None,
+            extra_headers: BTreeMap::new(),
+            extra_body: json!({
+                "provider": {
+                    "require_parameters": true
+                }
+            }),
+            reasoning: ProviderRuntimeReasoningResolution::default(),
+            capabilities: ResolvedModelCapabilities::default(),
+            interleaved_reasoning: None,
+        }
+    }
+
+    /// Verifies OpenRouter endpoint-routing rules merge into the additional-params object without discarding pre-existing provider fields.
+    /// 验证 OpenRouter 端点路由规则会合并进附加参数对象，同时不会丢弃已有的 provider 字段。
+    #[test]
+    fn openrouter_endpoint_route_merges_into_additional_params() {
+        let additional_params =
+            resolve_provider_additional_params(&test_blueprint()).expect("expected params");
+        let provider = additional_params
+            .get("provider")
+            .and_then(serde_json::Value::as_object)
+            .expect("expected provider object");
+
+        assert_eq!(
+            provider
+                .get("order")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|value| value.first())
+                .and_then(serde_json::Value::as_str),
+            Some("openai")
+        );
+        assert_eq!(
+            provider
+                .get("allow_fallbacks")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            provider
+                .get("require_parameters")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+    }
 }

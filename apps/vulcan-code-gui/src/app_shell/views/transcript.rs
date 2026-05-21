@@ -573,28 +573,47 @@ impl VulcanWorkbench {
         &self,
         session_id: SessionId,
     ) -> Option<Element<'_, Message>> {
-        if self.session_agent_view_should_follow_tail(session_id)
-            || !self.session_agent_view_viewports.contains_key(&session_id)
-        {
+        let pending_config_hint = self.selected_session_pending_runtime_config_hint_text();
+        let should_show_jump_button = !self.session_agent_view_should_follow_tail(session_id)
+            && self.session_agent_view_viewports.contains_key(&session_id);
+        if !should_show_jump_button && pending_config_hint.is_none() {
             return None;
         }
 
-        let button = tooltip(
-            button(
-                container(codicon::chevron_down().size(18).line_height(1.0))
-                    .width(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
-                    .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
-                    .center(Fill),
+        let button: Element<'_, Message> = if should_show_jump_button {
+            tooltip(
+                button(
+                    container(codicon::chevron_down().size(18).line_height(1.0))
+                        .width(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+                        .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+                        .center(Fill),
+                )
+                .padding(0)
+                .width(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+                .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
+                .style(style::transcript_jump_to_bottom_button_style)
+                .on_press(Message::JumpSelectedSessionTranscriptToBottom),
+                text(self.t(I18nKey::TranscriptJumpToBottom)),
+                tooltip::Position::Top,
             )
-            .padding(0)
-            .width(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
-            .height(TRANSCRIPT_JUMP_TO_BOTTOM_BUTTON_SIZE)
-            .style(style::transcript_jump_to_bottom_button_style)
-            .on_press(Message::JumpSelectedSessionTranscriptToBottom),
-            text(self.t(I18nKey::TranscriptJumpToBottom)),
-            tooltip::Position::Top,
-        )
-        .style(container::rounded_box);
+            .style(container::rounded_box)
+            .into()
+        } else {
+            space::vertical().height(0).into()
+        };
+        let hint_label: Element<'_, Message> = if let Some(hint_text) = pending_config_hint {
+            container(
+                text(hint_text)
+                    .size(12)
+                    .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+            )
+            .padding([8, 12])
+            .style(style::workbench_image_preview_floating_label_style)
+            .max_width(320)
+            .into()
+        } else {
+            space::vertical().height(0).into()
+        };
         let bottom_reserved_height = if self
             .selected_subagent_task_panel_state()
             .is_some_and(|state| state.task_id == session_id)
@@ -608,6 +627,14 @@ impl VulcanWorkbench {
             container(
                 column![
                     space::vertical().height(Fill),
+                    row![
+                        space::horizontal().width(Fill),
+                        hint_label,
+                        space::horizontal().width(Fill)
+                    ]
+                    .width(Fill)
+                    .align_y(Center),
+                    space::vertical().height(if should_show_jump_button { 8.0 } else { 0.0 }),
                     row![
                         space::horizontal().width(Fill),
                         button,

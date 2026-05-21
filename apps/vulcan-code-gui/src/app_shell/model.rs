@@ -2,7 +2,7 @@
 //! AI 编程桌面骨架的领域模型定义。
 
 use crate::conversation_protocol::SessionConversationState;
-use crate::provider_config::ReasoningEffortLevel;
+use crate::provider_config::{OpenRouterEndpointRouteSelection, ReasoningEffortLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -762,6 +762,10 @@ pub struct PendingPromptModelReference {
     /// 为队列诊断保留的人类可读模型标签。
     #[serde(default)]
     pub model_name: String,
+    /// Optional OpenRouter endpoint route locked together with the queued provider/model identity.
+    /// 与排队供应商/模型身份一起锁定的可选 OpenRouter 端点路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openrouter_endpoint_route: Option<OpenRouterEndpointRouteSelection>,
 }
 
 /// One persisted pending session prompt retained for queued follow-ups and delegated-task callbacks.
@@ -1081,6 +1085,10 @@ pub struct SessionRuntimeStateEntry {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
+    /// Last active OpenRouter endpoint route locked by the session.
+    /// 最近一次被该会话锁定使用的 OpenRouter 端点路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_openrouter_endpoint_route: Option<OpenRouterEndpointRouteSelection>,
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,

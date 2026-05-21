@@ -238,6 +238,9 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_workbench_model_picker_modal() {
             layered_surfaces.push(overlay);
         }
+        if let Some(overlay) = self.view_workbench_openrouter_endpoint_picker_modal() {
+            layered_surfaces.push(overlay);
+        }
         if let Some(overlay) = self.view_workbench_reasoning_picker_modal() {
             layered_surfaces.push(overlay);
         }
@@ -2134,6 +2137,201 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Builds the clickable OpenRouter secondary-provider trigger shown only when the active workbench model belongs to OpenRouter.
+    /// 构建仅在当前激活工作台模型属于 OpenRouter 时显示的可点击二级供应商触发表面。
+    pub(super) fn view_workbench_openrouter_endpoint_selector(&self) -> Element<'_, Message> {
+        let Some(selected_choice) = self.active_workbench_model_choice() else {
+            return space::horizontal().width(0).into();
+        };
+        if selected_choice.provider_id != "openrouter" {
+            return space::horizontal().width(0).into();
+        }
+
+        let palette = self.app_theme.extended_palette();
+        let selected_route = self.active_workbench_openrouter_endpoint_route();
+        let title = selected_route
+            .as_ref()
+            .map(|route| route.display_label())
+            .unwrap_or_else(|| String::from("Auto"));
+        let icon = lucide::route()
+            .size(14)
+            .line_height(1.0)
+            .color(palette.primary.base.color)
+            .into();
+
+        self.view_workbench_dual_line_trigger(
+            Some(icon),
+            title,
+            String::from("二级供应商"),
+            WORKBENCH_OPENROUTER_ENDPOINT_SELECTOR_WIDTH,
+            true,
+            Some(Message::OpenWorkbenchOpenRouterEndpointPicker),
+        )
+    }
+
+    /// Builds the blocking OpenRouter secondary-provider picker modal shown above the main workbench when the active model supports endpoint routing.
+    /// 构建在当前模型支持端点路由时显示在主工作台之上的阻塞式 OpenRouter 二级供应商选择弹窗。
+    pub(super) fn view_workbench_openrouter_endpoint_picker_modal(
+        &self,
+    ) -> Option<Element<'_, Message>> {
+        if !self.workbench_openrouter_endpoint_picker.open {
+            return None;
+        }
+
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(30)
+        .height(30)
+        .padding(0)
+        .style(style::workbench_model_trigger_button_style)
+        .on_press(Message::CloseWorkbenchOpenRouterEndpointPicker);
+        let selected_route = self.active_workbench_openrouter_endpoint_route();
+        let filtered_choices = self.filtered_workbench_openrouter_endpoint_choices();
+        let option_list: Element<'_, Message> = if self.workbench_openrouter_endpoint_picker.loading
+        {
+            container(
+                container(text("正在加载二级供应商列表...").size(14))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT)
+            .into()
+        } else if let Some(error) = self.workbench_openrouter_endpoint_picker.error.as_ref() {
+            container(
+                container(text(error.clone()).size(13))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT)
+            .into()
+        } else if filtered_choices.is_empty() {
+            container(
+                container(text("没有找到匹配的二级供应商。").size(13))
+                    .width(Fill)
+                    .height(Fill)
+                    .center(Fill),
+            )
+            .width(Fill)
+            .height(WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT)
+            .into()
+        } else {
+            scrollable(
+                column(filtered_choices.into_iter().map(|choice| {
+                    let route = choice.to_route_selection();
+                    let is_selected = selected_route.as_ref() == Some(&route);
+                    button(
+                        container(
+                            column![
+                                row![
+                                    text(choice.provider_name.clone()).size(14),
+                                    space::horizontal().width(Fill),
+                                    container(text(choice.tag.clone()).size(11))
+                                        .padding([3, 8])
+                                        .style(style::main_task_search_shortcut_badge_style),
+                                ]
+                                .align_y(Center),
+                                text(choice.subtitle_line())
+                                    .size(12)
+                                    .color(palette.background.base.text.scale_alpha(0.62)),
+                            ]
+                            .spacing(6)
+                            .width(Fill),
+                        )
+                        .width(Fill),
+                    )
+                    .width(Fill)
+                    .padding([10, 12])
+                    .style(move |theme, status| {
+                        style::main_task_search_result_button_style(theme, status, is_selected)
+                    })
+                    .on_press(Message::WorkbenchOpenRouterEndpointSelected(Some(route)))
+                    .into()
+                }))
+                .spacing(8),
+            )
+            .height(WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT)
+            .into()
+        };
+        let auto_selected = selected_route.is_none();
+        let auto_button = button(
+            container(
+                column![
+                    text("Auto").size(14),
+                    text("自动路由（可能切换到不同上游供应商）")
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.62)),
+                ]
+                .spacing(6)
+                .width(Fill),
+            )
+            .width(Fill),
+        )
+        .width(Fill)
+        .padding([10, 12])
+        .style(move |theme, status| {
+            style::main_task_search_result_button_style(theme, status, auto_selected)
+        })
+        .on_press(Message::WorkbenchOpenRouterEndpointSelected(None));
+        let modal_card = container(
+            column![
+                row![
+                    text("选择二级供应商").size(20),
+                    space::horizontal(),
+                    close_button,
+                ]
+                .align_y(Center),
+                text_input(
+                    "按供应商名称、标签或端点过滤",
+                    &self.workbench_openrouter_endpoint_picker.filter
+                )
+                .on_input(Message::WorkbenchOpenRouterEndpointPickerFilterChanged)
+                .padding([10, 12]),
+                auto_button,
+                option_list,
+            ]
+            .spacing(14),
+        )
+        .padding([22, 24])
+        .width(WORKBENCH_OPENROUTER_ENDPOINT_PICKER_MODAL_WIDTH)
+        .style(style::startup_overlay_card_style);
+        let backdrop = mouse_area(container(space()).width(Fill).height(Fill))
+            .on_press(Message::CloseWorkbenchOpenRouterEndpointPicker);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
+    }
+
     /// Builds the compact reasoning-effort selector shown before the trailing send button.
     /// 构建显示在尾部发送按钮之前的紧凑推理级别选择器。
     pub(super) fn view_workbench_reasoning_effort_selector(&self) -> Element<'_, Message> {
@@ -3072,6 +3270,7 @@ impl VulcanWorkbench {
         let composer_primary_controls = row![
             execution_mode_selector,
             self.view_workbench_model_selector(),
+            self.view_workbench_openrouter_endpoint_selector(),
             self.view_workbench_ai_capability_quick_controls(),
             self.view_composer_attachment_button(),
         ]

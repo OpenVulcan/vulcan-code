@@ -2978,6 +2978,42 @@ pub enum OpenAiCompatibleStreamingUsageSource {
     TerminalChoice,
 }
 
+/// Stable OpenRouter endpoint route selection persisted for one concrete model.
+/// 为某个具体模型持久化保存的稳定 OpenRouter 端点路由选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenRouterEndpointRouteSelection {
+    /// Stable endpoint tag forwarded to the OpenRouter `provider.order` request field.
+    /// 转发到 OpenRouter `provider.order` 请求字段中的稳定端点标签。
+    pub tag: String,
+    /// Human-readable provider label rendered in the workbench trigger and pending-change hints.
+    /// 渲染在工作台触发器与待生效提示中的人类可读供应商标签。
+    pub provider_name: String,
+    /// Optional endpoint display name exposed by the endpoint catalog.
+    /// 由端点目录暴露的可选端点显示名称。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub endpoint_name: String,
+}
+
+impl OpenRouterEndpointRouteSelection {
+    /// Returns the compact display label rendered by the workbench trigger.
+    /// 返回由工作台触发器渲染的紧凑显示标签。
+    pub fn display_label(&self) -> String {
+        if !self.provider_name.trim().is_empty() {
+            return self.provider_name.trim().to_string();
+        }
+        if !self.endpoint_name.trim().is_empty() {
+            return self.endpoint_name.trim().to_string();
+        }
+        self.tag.trim().to_string()
+    }
+
+    /// Returns whether the persisted selection carries no usable endpoint identity.
+    /// 返回该持久化选择是否不包含可用的端点身份信息。
+    pub fn is_empty(&self) -> bool {
+        self.tag.trim().is_empty()
+    }
+}
+
 /// Supported model discovery kinds used by the current GUI implementation.
 /// 当前 GUI 实现支持的模型发现方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -4356,6 +4392,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_transcript_turn_page_size: Option<usize>,
+    /// Remembered OpenRouter endpoint route selections keyed by the exact OpenRouter model identifier.
+    /// 以精确 OpenRouter 模型标识为键记忆的 OpenRouter 端点路由选择集合。
+    #[serde(
+        rename = "openrouterEndpointRoutes",
+        default,
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub openrouter_endpoint_routes: BTreeMap<String, OpenRouterEndpointRouteSelection>,
     /// Persisted provider map keyed by provider identifier.
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -4638,6 +4682,34 @@ pub fn enabled_model_ids(
 pub fn parse_active_model_reference(model: &str) -> Option<(&str, &str)> {
     let (provider_id, model_id) = model.split_once('/')?;
     Some((provider_id, model_id))
+}
+
+/// Returns the remembered OpenRouter endpoint route selection for one exact model identifier.
+/// 返回某个精确模型标识已记忆的 OpenRouter 端点路由选择。
+pub fn openrouter_endpoint_route_for_model(
+    config: &ProviderConfigurationFile,
+    model_id: &str,
+) -> Option<OpenRouterEndpointRouteSelection> {
+    config
+        .openrouter_endpoint_routes
+        .get(model_id)
+        .cloned()
+        .filter(|selection| !selection.is_empty())
+}
+
+/// Persists or clears one remembered OpenRouter endpoint route selection for the given model identifier.
+/// 为指定模型标识持久化保存或清除一条已记忆的 OpenRouter 端点路由选择。
+pub fn set_openrouter_endpoint_route_for_model(
+    config: &mut ProviderConfigurationFile,
+    model_id: impl Into<String>,
+    selection: Option<OpenRouterEndpointRouteSelection>,
+) {
+    let model_id = model_id.into();
+    if let Some(selection) = selection.filter(|selection| !selection.is_empty()) {
+        config.openrouter_endpoint_routes.insert(model_id, selection);
+    } else {
+        config.openrouter_endpoint_routes.remove(model_id.as_str());
+    }
 }
 
 #[cfg(test)]

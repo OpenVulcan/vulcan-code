@@ -396,6 +396,7 @@ mod tests {
                 runtime_label: String::from("Anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 model_name: String::from("Claude Sonnet 4.6"),
+                openrouter_endpoint_route: None,
                 base_url: Some(String::from("https://api.anthropic.com")),
                 supports_remote_model_refresh: false,
                 credential_source: String::from("环境变量 `ANTHROPIC_API_KEY`"),

@@ -101,6 +101,10 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// Last active model identifier used by the session.
     /// 最近一次被该会话使用的激活模型标识。
     pub active_model_id: Option<String>,
+    /// Last active OpenRouter endpoint route locked by the session.
+    /// 最近一次被该会话锁定使用的 OpenRouter 端点路由。
+    pub active_openrouter_endpoint_route:
+        Option<crate::provider_config::OpenRouterEndpointRouteSelection>,
     /// Latest active compaction identifier retained by the session runtime.
     /// 被会话运行时保留的最近活动压缩标识。
     pub last_compaction_id: Option<String>,
@@ -617,6 +621,7 @@ fn runtime_state_to_store_document(
         active_agent_id: runtime_state.active_agent_id.clone(),
         active_provider_id: runtime_state.active_provider_id.clone(),
         active_model_id: runtime_state.active_model_id.clone(),
+        active_openrouter_endpoint_route: runtime_state.active_openrouter_endpoint_route.clone(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
         ui_state: runtime_state.ui_state.clone(),

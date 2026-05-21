@@ -5,6 +5,7 @@
 
 use super::event_store::PersistedSessionEventRow;
 use super::*;
+use crate::conversation_protocol::conversation_state_to_session_messages;
 
 /// Lightweight persisted session locator row used to resolve the file-backed event store.
 /// 用于解析文件化事件存储的轻量持久化会话定位行。
@@ -68,7 +69,7 @@ pub async fn load_session_hydration_snapshot(
     let turn_rows =
         query_session_turn_rows(&controller, session_id, None, target_turn_count).await?;
     let has_more_history = turn_rows.first().is_some_and(|row| row.turn_index > 0);
-    let (messages, tool_detail_messages, earliest_ordinal, full_messages) =
+    let (mut messages, mut tool_detail_messages, earliest_ordinal, full_messages) =
         load_event_store_window_messages(&locator, session_id, &turn_rows)?;
     let runtime_state = hydrate_session_runtime_state(
         locator.as_ref(),
@@ -77,6 +78,11 @@ pub async fn load_session_hydration_snapshot(
         &full_messages,
     )
     .await?;
+    restore_hydration_window_from_runtime_state_if_empty(
+        &mut messages,
+        &mut tool_detail_messages,
+        runtime_state.as_ref(),
+    );
 
     Ok(SessionHydrationSnapshot {
         session_id,
@@ -462,6 +468,9 @@ async fn hydrate_session_runtime_state(
     runtime_state.active_model_id = runtime_state_cache
         .active_model_id
         .or(runtime_state.active_model_id);
+    runtime_state.active_openrouter_endpoint_route = runtime_state_cache
+        .active_openrouter_endpoint_route
+        .or(runtime_state.active_openrouter_endpoint_route);
     runtime_state.last_compaction_id = runtime_state_cache
         .last_compaction_id
         .or(runtime_state.last_compaction_id);
@@ -504,6 +513,37 @@ async fn hydrate_session_runtime_state(
         };
 
     Ok(Some(runtime_state))
+}
+
+/// Rebuilds the visible hydration transcript from runtime state when the persisted turn window is unexpectedly empty.
+/// 当持久化 turn 窗口意外为空时，根据运行时状态回建可见的水合转录窗口。
+fn restore_hydration_window_from_runtime_state_if_empty(
+    messages: &mut Vec<SessionMessageEntry>,
+    tool_detail_messages: &mut Vec<SessionMessageEntry>,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) {
+    if !messages.is_empty() {
+        return;
+    }
+    let Some(runtime_state) = runtime_state else {
+        return;
+    };
+    let rebuilt_messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+    if rebuilt_messages.is_empty() {
+        return;
+    }
+    *tool_detail_messages = rebuilt_messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolCallOutput
+                    | SessionMessageRecordKind::ToolResultOutput
+            )
+        })
+        .cloned()
+        .collect();
+    *messages = rebuilt_messages;
 }
 
 /// Resolves the startup hydration turn target by taking the larger value between the configured page size and the overlap required to expose five turns before the active compaction boundary.
@@ -779,5 +819,40 @@ mod tests {
 
         assert_eq!(hydrated.conversation_state.messages.len(), 1);
         remove_session_event_store(project_id, session_id).expect("cleanup fallback event-store");
+    }
+
+    /// Verifies startup hydration rebuilds the visible transcript from runtime context when turn-window rows are temporarily absent.
+    /// 验证当 turn 窗口行暂时缺失时，启动水合会从运行时上下文回建可见转录。
+    #[test]
+    fn restore_hydration_window_from_runtime_state_if_empty_rebuilds_visible_messages() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state =
+            conversation_state_from_session_messages(&[
+                test_message(
+                    "user-1",
+                    SessionMessageKind::User,
+                    SessionMessageRecordKind::Transcript,
+                    "启动后要能看到我",
+                ),
+                test_message(
+                    "assistant-1",
+                    SessionMessageKind::Assistant,
+                    SessionMessageRecordKind::AssistantOutput,
+                    "当然可以",
+                ),
+            ]);
+
+        let mut messages = Vec::new();
+        let mut tool_detail_messages = Vec::new();
+        restore_hydration_window_from_runtime_state_if_empty(
+            &mut messages,
+            &mut tool_detail_messages,
+            Some(&runtime_state),
+        );
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].body, "启动后要能看到我");
+        assert_eq!(messages[1].body, "当然可以");
+        assert!(tool_detail_messages.is_empty());
     }
 }

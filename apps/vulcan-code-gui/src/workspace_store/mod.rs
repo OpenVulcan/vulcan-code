@@ -721,6 +721,7 @@ pub async fn load_workspace_snapshot(
             active_agent_id: row.active_agent_id,
             active_provider_id: row.active_provider_id,
             active_model_id: row.active_model_id,
+            active_openrouter_endpoint_route: None,
             last_compaction_id: row.last_compaction_id,
             context_start_message_id: row.context_start_message_id,
             ui_state: row
@@ -1325,6 +1326,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         active_agent_id: row.active_agent_id,
         active_provider_id: row.active_provider_id,
         active_model_id: row.active_model_id,
+        active_openrouter_endpoint_route: None,
         last_compaction_id: row.last_compaction_id,
         context_start_message_id: row.context_start_message_id,
         ui_state: row

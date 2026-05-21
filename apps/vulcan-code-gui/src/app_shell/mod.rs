@@ -120,6 +120,7 @@ use iced::{
 use iced_aw::date_picker::Date;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
 use rodio::{Decoder, OutputStream, Sink};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque, hash_map::DefaultHasher};
@@ -556,6 +557,10 @@ const WORKBENCH_EXECUTION_MODE_SELECTOR_WIDTH: f32 = 66.0;
 /// 工作台内联模型触发表面使用的共享固定宽度。
 const WORKBENCH_MODEL_SELECTOR_WIDTH: f32 = 200.0;
 
+/// Shared fixed width used by the inline OpenRouter secondary-provider trigger surface.
+/// 工作台内联 OpenRouter 二级供应商触发表面使用的共享固定宽度。
+const WORKBENCH_OPENROUTER_ENDPOINT_SELECTOR_WIDTH: f32 = 170.0;
+
 /// Shared fixed width used by the compact workbench web-search selector placed beside the model trigger.
 /// 放置在模型触发器旁侧的紧凑工作台网页搜索选择器使用的共享固定宽度。
 const WORKBENCH_AI_CAPABILITY_QUICK_CONTROL_WIDTH: f32 = 150.0;
@@ -567,6 +572,14 @@ const WORKBENCH_REASONING_SELECTOR_WIDTH: f32 = 112.0;
 /// Shared fixed width used by the in-app workbench model-picker modal card.
 /// 工作台内嵌模型选择弹窗卡片使用的共享固定宽度。
 const WORKBENCH_MODEL_PICKER_MODAL_WIDTH: f32 = 680.0;
+
+/// Shared fixed width used by the in-app OpenRouter secondary-provider picker modal card.
+/// 工作台内嵌 OpenRouter 二级供应商选择弹窗卡片使用的共享固定宽度。
+const WORKBENCH_OPENROUTER_ENDPOINT_PICKER_MODAL_WIDTH: f32 = 760.0;
+
+/// Shared fixed height used by the scrollable result list inside the OpenRouter secondary-provider picker modal.
+/// OpenRouter 二级供应商选择弹窗内部滚动结果列表使用的共享固定高度。
+const WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT: f32 = 360.0;
 
 /// Shared fixed width used by the reusable blocking notice modal card.
 /// 可复用阻塞提示弹窗卡片使用的共享固定宽度。
@@ -3022,6 +3035,9 @@ pub struct VulcanWorkbench {
     /// Whether the in-app workbench model-picker modal is currently visible.
     /// 工作台内嵌模型选择弹窗当前是否可见。
     workbench_model_picker_open: bool,
+    /// In-memory OpenRouter endpoint-picker state shown only when the active model belongs to OpenRouter.
+    /// 仅在当前激活模型属于 OpenRouter 时显示的内存态二级供应商选择弹窗状态。
+    workbench_openrouter_endpoint_picker: WorkbenchOpenRouterEndpointPickerState,
     /// Whether the compact in-app reasoning-effort picker modal is currently visible.
     /// 工作台内嵌思考级别选择弹窗当前是否可见。
     workbench_reasoning_picker_open: bool,
@@ -3813,6 +3829,326 @@ impl std::fmt::Display for WorkbenchModelChoice {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.model_name)
     }
+}
+
+/// Lightweight OpenRouter endpoint choice rendered inside the workbench secondary-provider picker.
+/// 渲染在工作台二级供应商选择器中的轻量 OpenRouter 端点选项。
+#[derive(Debug, Clone, PartialEq)]
+struct WorkbenchOpenRouterEndpointChoice {
+    /// Stable endpoint tag forwarded to OpenRouter provider routing.
+    /// 转发到 OpenRouter Provider 路由中的稳定端点标签。
+    tag: String,
+    /// Human-readable upstream provider name.
+    /// 人类可读的上游供应商名称。
+    provider_name: String,
+    /// Human-readable endpoint name returned by the OpenRouter catalog.
+    /// OpenRouter 目录返回的人类可读端点名称。
+    endpoint_name: String,
+    /// Optional prompt-side unit pricing in USD per token.
+    /// 可选的输入侧每 token 美元单价。
+    prompt_price_per_token_usd: Option<f64>,
+    /// Optional completion-side unit pricing in USD per token.
+    /// 可选的输出侧每 token 美元单价。
+    completion_price_per_token_usd: Option<f64>,
+    /// Optional cache-read unit pricing in USD per token.
+    /// 可选的缓存读取每 token 美元单价。
+    cache_read_price_per_token_usd: Option<f64>,
+    /// Optional recent latency summary returned by OpenRouter.
+    /// OpenRouter 返回的可选近期延迟摘要。
+    latency_last_30m_ms: Option<f64>,
+    /// Optional recent uptime summary returned by OpenRouter as a percentage value.
+    /// OpenRouter 返回的可选近期可用性百分比数值。
+    uptime_last_30m_percent: Option<f64>,
+    /// Optional recent throughput summary returned by OpenRouter in tokens per second.
+    /// OpenRouter 返回的可选近期平均吞吐速度（每秒 token 数）。
+    throughput_last_30m_tps: Option<f64>,
+}
+
+impl WorkbenchOpenRouterEndpointChoice {
+    /// Converts the UI choice into the persisted route selection payload.
+    /// 将界面选项转换为持久化路由选择载荷。
+    fn to_route_selection(&self) -> crate::provider_config::OpenRouterEndpointRouteSelection {
+        crate::provider_config::OpenRouterEndpointRouteSelection {
+            tag: self.tag.clone(),
+            provider_name: self.provider_name.clone(),
+            endpoint_name: self.endpoint_name.clone(),
+        }
+    }
+
+    /// Returns the compact subtitle line rendered under the provider title.
+    /// 返回渲染在供应商标题下方的紧凑副标题文本。
+    fn subtitle_line(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(prompt_price) =
+            format_openrouter_price_per_mtokens(self.prompt_price_per_token_usd)
+        {
+            parts.push(format!("输入 {prompt_price}"));
+        }
+        if let Some(completion_price) =
+            format_openrouter_price_per_mtokens(self.completion_price_per_token_usd)
+        {
+            parts.push(format!("输出 {completion_price}"));
+        }
+        if let Some(cache_read_price) =
+            format_openrouter_price_per_mtokens(self.cache_read_price_per_token_usd)
+        {
+            parts.push(format!("缓存 {cache_read_price}"));
+        }
+        if let Some(latency) = format_openrouter_latency_ms(self.latency_last_30m_ms) {
+            parts.push(format!("延迟 {latency}"));
+        }
+        if let Some(throughput) =
+            format_openrouter_throughput_tokens_per_second(self.throughput_last_30m_tps)
+        {
+            parts.push(format!("速度 {throughput}"));
+        }
+        if let Some(uptime) = format_openrouter_percentage(self.uptime_last_30m_percent) {
+            parts.push(format!("可用性 {uptime}"));
+        }
+        if parts.is_empty() {
+            self.endpoint_name.clone()
+        } else {
+            parts.join(" · ")
+        }
+    }
+}
+
+/// In-memory OpenRouter endpoint picker state shown above the main workbench.
+/// 显示在主工作台之上的内存态 OpenRouter 端点选择弹窗状态。
+#[derive(Debug, Clone, Default)]
+struct WorkbenchOpenRouterEndpointPickerState {
+    /// Whether the blocking picker modal is currently visible.
+    /// 当前阻塞式选择弹窗是否可见。
+    open: bool,
+    /// Stable model identifier whose endpoints are currently displayed.
+    /// 当前正在显示端点列表的稳定模型标识。
+    model_id: String,
+    /// Free-text filter applied inside the endpoint picker.
+    /// 应用于端点选择弹窗内部的自由文本过滤值。
+    filter: String,
+    /// Whether the picker is currently waiting for the remote catalog response.
+    /// 该选择弹窗当前是否正在等待远端目录响应。
+    loading: bool,
+    /// Optional remote loading error rendered inside the picker surface.
+    /// 渲染在选择弹窗表面内部的可选远端加载错误。
+    error: Option<String>,
+    /// Loaded endpoint choices for the active OpenRouter model.
+    /// 当前 OpenRouter 模型已加载的端点选项集合。
+    choices: Vec<WorkbenchOpenRouterEndpointChoice>,
+}
+
+/// Minimal OpenRouter endpoint catalog response used by the workbench secondary-provider picker.
+/// 被工作台二级供应商选择弹窗使用的最小 OpenRouter 端点目录响应结构。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterModelEndpointsResponse {
+    /// Response payload body containing the endpoint array.
+    /// 包含端点数组的响应载荷主体。
+    data: OpenRouterModelEndpointsData,
+}
+
+/// Minimal OpenRouter endpoint catalog payload used by the workbench secondary-provider picker.
+/// 被工作台二级供应商选择弹窗使用的最小 OpenRouter 端点目录载荷结构。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterModelEndpointsData {
+    /// Endpoint rows available for the requested model.
+    /// 为目标模型返回的可用端点行集合。
+    #[serde(default)]
+    endpoints: Vec<OpenRouterModelEndpointRecord>,
+}
+
+/// Minimal OpenRouter endpoint record used by the workbench secondary-provider picker.
+/// 被工作台二级供应商选择弹窗使用的最小 OpenRouter 端点记录结构。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterModelEndpointRecord {
+    /// Stable endpoint tag forwarded to `provider.order`.
+    /// 转发到 `provider.order` 的稳定端点标签。
+    tag: Option<String>,
+    /// Human-readable upstream provider name.
+    /// 人类可读的上游供应商名称。
+    provider_name: Option<String>,
+    /// Human-readable endpoint name.
+    /// 人类可读的端点名称。
+    name: Option<String>,
+    /// Optional recent latency summary.
+    /// 可选的近期延迟摘要。
+    latency_last_30m: Option<Value>,
+    /// Optional recent uptime summary.
+    /// 可选的近期可用性摘要。
+    uptime_last_30m: Option<Value>,
+    /// Optional recent throughput summary.
+    /// 可选的近期吞吐速度摘要。
+    throughput_last_30m: Option<Value>,
+    /// Optional pricing payload returned by OpenRouter.
+    /// OpenRouter 返回的可选价格载荷。
+    pricing: Option<OpenRouterEndpointPricingRecord>,
+}
+
+/// Minimal OpenRouter endpoint pricing payload used by the workbench secondary-provider picker.
+/// 被工作台二级供应商选择弹窗使用的最小 OpenRouter 端点价格载荷结构。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterEndpointPricingRecord {
+    /// Optional prompt price string.
+    /// 可选的输入价格字符串。
+    prompt: Option<String>,
+    /// Optional completion price string.
+    /// 可选的输出价格字符串。
+    completion: Option<String>,
+    /// Optional cache-read price string.
+    /// 可选的缓存读取价格字符串。
+    input_cache_read: Option<String>,
+}
+
+/// Loads the OpenRouter endpoint catalog for one exact model identifier.
+/// 加载某个精确模型标识对应的 OpenRouter 端点目录。
+async fn fetch_openrouter_endpoint_choices_for_model(
+    model_id: String,
+    api_key: Option<String>,
+) -> Result<Vec<WorkbenchOpenRouterEndpointChoice>, String> {
+    let url = format!("https://openrouter.ai/api/v1/models/{model_id}/endpoints");
+    let client = reqwest::Client::new();
+    let mut request = client.get(url.clone());
+    if let Some(api_key) = api_key.as_deref().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(api_key.trim());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("请求 OpenRouter 二级供应商目录失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "请求 OpenRouter 二级供应商目录失败：HTTP {}",
+            response.status()
+        ));
+    }
+    let payload = response
+        .json::<OpenRouterModelEndpointsResponse>()
+        .await
+        .map_err(|error| format!("解析 OpenRouter 二级供应商目录失败：{error}"))?;
+    let mut choices = payload
+        .data
+        .endpoints
+        .into_iter()
+        .filter_map(openrouter_endpoint_record_to_choice)
+        .collect::<Vec<_>>();
+    choices.sort_by(|left, right| {
+        left.provider_name
+            .cmp(&right.provider_name)
+            .then_with(|| left.tag.cmp(&right.tag))
+    });
+    choices.dedup_by(|left, right| left.tag == right.tag);
+    Ok(choices)
+}
+
+/// Converts one raw OpenRouter endpoint record into a UI choice row when the record still exposes a stable provider tag.
+/// 当原始记录仍暴露稳定供应商标签时，将单条 OpenRouter 端点记录转换为一条界面选项行。
+fn openrouter_endpoint_record_to_choice(
+    record: OpenRouterModelEndpointRecord,
+) -> Option<WorkbenchOpenRouterEndpointChoice> {
+    let tag = record.tag?.trim().to_string();
+    if tag.is_empty() {
+        return None;
+    }
+    let provider_name = record
+        .provider_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(tag.as_str())
+        .to_string();
+    let endpoint_name = record
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(provider_name.as_str())
+        .to_string();
+
+    Some(WorkbenchOpenRouterEndpointChoice {
+        tag,
+        provider_name,
+        endpoint_name,
+        prompt_price_per_token_usd: record
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.prompt.as_deref())
+            .and_then(parse_openrouter_f64_text),
+        completion_price_per_token_usd: record
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.completion.as_deref())
+            .and_then(parse_openrouter_f64_text),
+        cache_read_price_per_token_usd: record
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.input_cache_read.as_deref())
+            .and_then(parse_openrouter_f64_text),
+        latency_last_30m_ms: value_as_f64(record.latency_last_30m.as_ref()),
+        uptime_last_30m_percent: value_as_f64(record.uptime_last_30m.as_ref()),
+        throughput_last_30m_tps: value_as_f64(record.throughput_last_30m.as_ref()),
+    })
+}
+
+/// Parses one OpenRouter numeric text field into a floating-point value.
+/// 将单个 OpenRouter 数值文本字段解析为浮点数值。
+fn parse_openrouter_f64_text(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<f64>().ok()
+}
+
+/// Extracts one JSON numeric leaf into a floating-point value when possible.
+/// 在可能的情况下，将单个 JSON 数值叶子提取为浮点数值。
+fn value_as_f64(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(text)) => parse_openrouter_f64_text(text),
+        Some(Value::Object(object)) => object
+            .get("p50")
+            .and_then(|percentile| value_as_f64(Some(percentile))),
+        _ => None,
+    }
+}
+
+/// Formats one USD-per-token price into the shared USD-per-million-tokens label.
+/// 将单个每 token 美元价格格式化为统一的每百万 tokens 美元标签。
+fn format_openrouter_price_per_mtokens(price_per_token_usd: Option<f64>) -> Option<String> {
+    let price_per_token_usd = price_per_token_usd?;
+    if !price_per_token_usd.is_finite() || price_per_token_usd < 0.0 {
+        return None;
+    }
+    Some(format!("${:.2}/MTokens", price_per_token_usd * 1_000_000.0))
+}
+
+/// Formats one percentage-like numeric field with two decimal places.
+/// 将单个百分比数值字段格式化为保留两位小数的百分比文本。
+fn format_openrouter_percentage(value: Option<f64>) -> Option<String> {
+    let value = value?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some(format!("{value:.2}%"))
+}
+
+/// Formats one latency metric into milliseconds text.
+/// 将单个延迟指标格式化为毫秒文本。
+fn format_openrouter_latency_ms(value: Option<f64>) -> Option<String> {
+    let value = value?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some(format!("{value:.0}ms"))
+}
+
+/// Formats one throughput metric into tokens-per-second text.
+/// 将单个吞吐速度指标格式化为每秒 tokens 文本。
+fn format_openrouter_throughput_tokens_per_second(value: Option<f64>) -> Option<String> {
+    let value = value?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some(format!("{value:.2} tok/s"))
 }
 
 /// Shared workbench reasoning-effort alias reused by the application state and compact picker surfaces.
@@ -5322,6 +5658,30 @@ enum Message {
     /// Selects one globally configured model from the in-app workbench model picker.
     /// 从工作台内嵌模型选择器中选中一个全局已配置模型。
     WorkbenchModelSelected(WorkbenchModelChoice),
+    /// Opens the OpenRouter secondary-provider picker for the currently active OpenRouter model.
+    /// 为当前激活的 OpenRouter 模型打开二级供应商选择弹窗。
+    OpenWorkbenchOpenRouterEndpointPicker,
+    /// Closes the OpenRouter secondary-provider picker without changing the remembered route.
+    /// 在不修改已记忆路由的前提下关闭 OpenRouter 二级供应商选择弹窗。
+    CloseWorkbenchOpenRouterEndpointPicker,
+    /// Updates the live filter text shown at the top of the OpenRouter secondary-provider picker.
+    /// 更新显示在 OpenRouter 二级供应商选择弹窗顶部的实时过滤文本。
+    WorkbenchOpenRouterEndpointPickerFilterChanged(String),
+    /// Persists the selected OpenRouter secondary-provider route for the current model, or clears it back to Auto.
+    /// 为当前模型持久化保存选中的 OpenRouter 二级供应商路由，或清除回 Auto。
+    WorkbenchOpenRouterEndpointSelected(
+        Option<crate::provider_config::OpenRouterEndpointRouteSelection>,
+    ),
+    /// Receives the asynchronously loaded OpenRouter endpoint catalog for one concrete model.
+    /// 接收为某个具体模型异步加载得到的 OpenRouter 端点目录结果。
+    WorkbenchOpenRouterEndpointsLoaded {
+        /// Stable model identifier that owned the request.
+        /// 拥有该请求的稳定模型标识。
+        model_id: String,
+        /// Loaded endpoint catalog or a human-readable error.
+        /// 已加载的端点目录或人类可读错误信息。
+        result: Result<Vec<WorkbenchOpenRouterEndpointChoice>, String>,
+    },
     /// Opens the in-app workbench model-picker modal.
     /// 打开工作台内嵌模型选择弹窗。
     OpenWorkbenchModelPicker,
@@ -6423,6 +6783,7 @@ impl VulcanWorkbench {
             workbench_ai_capability_panel_open: false,
             workbench_ai_capability_section: WorkbenchAiCapabilitySection::WebSearch,
             workbench_model_picker_open: false,
+            workbench_openrouter_endpoint_picker: WorkbenchOpenRouterEndpointPickerState::default(),
             workbench_reasoning_picker_open: false,
             workbench_model_picker_filter: String::new(),
             workbench_model_picker_highlighted_index: None,
@@ -8514,8 +8875,59 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WorkbenchModelSelected(choice) => self.request_workbench_model_choice(choice),
+            Message::OpenWorkbenchOpenRouterEndpointPicker => {
+                self.open_workbench_openrouter_endpoint_picker()
+            }
+            Message::CloseWorkbenchOpenRouterEndpointPicker => {
+                self.workbench_openrouter_endpoint_picker =
+                    WorkbenchOpenRouterEndpointPickerState::default();
+                Task::none()
+            }
+            Message::WorkbenchOpenRouterEndpointPickerFilterChanged(value) => {
+                self.workbench_openrouter_endpoint_picker.filter = value;
+                Task::none()
+            }
+            Message::WorkbenchOpenRouterEndpointSelected(selection) => {
+                let result =
+                    self.set_active_workbench_openrouter_endpoint_route(selection.clone());
+                self.workbench_openrouter_endpoint_picker =
+                    WorkbenchOpenRouterEndpointPickerState::default();
+                match result {
+                    Ok(()) => {
+                        self.status_message = selection
+                            .as_ref()
+                            .map(|route| format!("已切换 OpenRouter 二级供应商：{}", route.provider_name))
+                            .unwrap_or_else(|| String::from("已切换为 OpenRouter 自动路由。"));
+                    }
+                    Err(error) => {
+                        self.status_message = error.clone();
+                        self.show_workbench_notice_modal("保存二级供应商失败", error);
+                    }
+                }
+                Task::none()
+            }
+            Message::WorkbenchOpenRouterEndpointsLoaded { model_id, result } => {
+                if self.workbench_openrouter_endpoint_picker.model_id != model_id {
+                    return Task::none();
+                }
+                self.workbench_openrouter_endpoint_picker.loading = false;
+                match result {
+                    Ok(choices) => {
+                        self.workbench_openrouter_endpoint_picker.error = None;
+                        self.workbench_openrouter_endpoint_picker.choices = choices;
+                    }
+                    Err(error) => {
+                        self.workbench_openrouter_endpoint_picker.choices.clear();
+                        self.workbench_openrouter_endpoint_picker.error = Some(error.clone());
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
             Message::OpenWorkbenchModelPicker => self.open_workbench_model_picker(),
             Message::CloseWorkbenchModelPicker => {
+                self.workbench_openrouter_endpoint_picker =
+                    WorkbenchOpenRouterEndpointPickerState::default();
                 self.workbench_model_picker_open = false;
                 self.workbench_model_picker_filter.clear();
                 self.workbench_model_picker_highlighted_index = None;
@@ -8525,6 +8937,8 @@ impl VulcanWorkbench {
             }
             Message::OpenWorkbenchReasoningPicker => {
                 self.workbench_model_picker_open = false;
+                self.workbench_openrouter_endpoint_picker =
+                    WorkbenchOpenRouterEndpointPickerState::default();
                 self.workbench_model_picker_filter.clear();
                 self.workbench_model_picker_highlighted_index = None;
                 self.workbench_reasoning_picker_open = true;
@@ -12741,6 +13155,8 @@ impl VulcanWorkbench {
         runtime_state.active_agent_id = Some(preparation.agent_id.clone());
         runtime_state.active_provider_id = Some(preparation.model_blueprint.provider_id.clone());
         runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
+        runtime_state.active_openrouter_endpoint_route =
+            preparation.model_blueprint.openrouter_endpoint_route.clone();
         runtime_state.updated_at = current_unix_millis_text();
     }
 
@@ -14630,11 +15046,13 @@ mod tests {
         build_background_legacy_maintenance_queue, build_session_turn_stats_from_state,
         clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
         composer_text_has_submittable_content, composer_visible_line_count,
+        format_openrouter_percentage, format_openrouter_price_per_mtokens,
+        format_openrouter_throughput_tokens_per_second,
         generated_attachments_from_tool_metadata,
         merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
         pending_prompt_dispatch_index, prune_session_messages_to_limit,
         sanitize_workspace_history_search_query_input, session_event_store_missing_error,
-        task_session_payload_from_tool_metadata,
+        task_session_payload_from_tool_metadata, value_as_f64,
     };
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
@@ -14766,6 +15184,54 @@ mod tests {
         assert!(!session_event_store_missing_error(
             "解析 JSON 文档失败：unexpected eof"
         ));
+    }
+
+    /// Verifies OpenRouter endpoint prices are rendered in shared USD-per-million-token units.
+    /// 验证 OpenRouter 端点价格会以统一的每百万 tokens 美元单位渲染。
+    #[test]
+    fn openrouter_price_format_uses_usd_per_mtokens() {
+        assert_eq!(
+            format_openrouter_price_per_mtokens(Some(0.000002_f64)).as_deref(),
+            Some("$2.00/MTokens")
+        );
+        assert_eq!(
+            format_openrouter_price_per_mtokens(Some(0.0000005_f64)).as_deref(),
+            Some("$0.50/MTokens")
+        );
+    }
+
+    /// Verifies OpenRouter availability values are rendered as percentages with two decimal places.
+    /// 验证 OpenRouter 可用性数值会被格式化为保留两位小数的百分比。
+    #[test]
+    fn openrouter_percentage_format_keeps_two_decimal_places() {
+        assert_eq!(
+            format_openrouter_percentage(Some(99.21630094043887_f64)).as_deref(),
+            Some("99.22%")
+        );
+    }
+
+    /// Verifies OpenRouter throughput values are rendered as tokens-per-second with two decimal places.
+    /// 验证 OpenRouter 吞吐速度数值会被格式化为保留两位小数的每秒 tokens。
+    #[test]
+    fn openrouter_throughput_format_keeps_two_decimal_places() {
+        assert_eq!(
+            format_openrouter_throughput_tokens_per_second(Some(42.678_f64)).as_deref(),
+            Some("42.68 tok/s")
+        );
+    }
+
+    /// Verifies object-shaped OpenRouter metrics fall back to the p50 percentile for compact display surfaces.
+    /// 验证对象结构的 OpenRouter 指标会回退到 p50 百分位，用于紧凑展示界面。
+    #[test]
+    fn openrouter_metric_object_prefers_p50_percentile() {
+        let metric = json!({
+            "p50": 415,
+            "p75": 516,
+            "p90": 669.9,
+            "p99": 1312.18
+        });
+
+        assert_eq!(value_as_f64(Some(&metric)), Some(415.0));
     }
 
     /// Verifies that an empty composer still reserves one visible line.

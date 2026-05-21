@@ -172,6 +172,7 @@ mod tests {
             runtime_label: String::from("OpenAI"),
             model_id: String::from("gpt-test"),
             model_name: String::from("GPT Test"),
+            openrouter_endpoint_route: None,
             base_url: None,
             supports_remote_model_refresh: false,
             credential_source: String::from("测试"),

@@ -236,6 +236,43 @@ impl VulcanWorkbench {
             })
     }
 
+    /// Returns the currently selected OpenRouter endpoint route for the active workbench model when the model belongs to OpenRouter.
+    /// 返回当前激活工作台模型在属于 OpenRouter 时所选中的 OpenRouter 端点路由。
+    pub(super) fn active_workbench_openrouter_endpoint_route(
+        &self,
+    ) -> Option<crate::provider_config::OpenRouterEndpointRouteSelection> {
+        let active_choice = self.active_workbench_model_choice()?;
+        if active_choice.provider_id != "openrouter" {
+            return None;
+        }
+        provider_config::openrouter_endpoint_route_for_model(
+            &self.provider_configuration,
+            &active_choice.model_id,
+        )
+    }
+
+    /// Persists or clears the currently selected OpenRouter endpoint route for the active workbench model.
+    /// 为当前激活工作台模型持久化保存或清除所选中的 OpenRouter 端点路由。
+    pub(super) fn set_active_workbench_openrouter_endpoint_route(
+        &mut self,
+        selection: Option<crate::provider_config::OpenRouterEndpointRouteSelection>,
+    ) -> Result<(), String> {
+        let Some(active_choice) = self.active_workbench_model_choice() else {
+            return Err(String::from("当前尚未选中工作台模型，无法设置二级供应商。"));
+        };
+        if active_choice.provider_id != "openrouter" {
+            return Err(String::from(
+                "当前模型不属于 OpenRouter，无法设置二级供应商。",
+            ));
+        }
+        provider_config::set_openrouter_endpoint_route_for_model(
+            &mut self.provider_configuration,
+            &active_choice.model_id,
+            selection,
+        );
+        provider_config::save_configuration_file(&self.provider_configuration)
+    }
+
     /// Resolves the dynamic reasoning selector view for the currently active workbench model and the remembered user preference.
     /// 根据当前激活的工作台模型与已记忆用户偏好解析动态思考选择器视图。
     pub(super) fn active_workbench_reasoning_view(
@@ -522,6 +559,122 @@ impl VulcanWorkbench {
             .unwrap_or_else(Task::none);
 
         Task::batch([focus_task, scroll_task])
+    }
+
+    /// Opens the OpenRouter secondary-provider picker for the currently active OpenRouter model and asynchronously loads its endpoint catalog.
+    /// 为当前激活的 OpenRouter 模型打开二级供应商选择弹窗，并异步加载其端点目录。
+    pub(super) fn open_workbench_openrouter_endpoint_picker(&mut self) -> Task<Message> {
+        let Some(active_choice) = self.active_workbench_model_choice() else {
+            return Task::none();
+        };
+        if active_choice.provider_id != "openrouter" {
+            return Task::none();
+        }
+        let openrouter_api_key = match self
+            .provider_configuration
+            .provider
+            .get("openrouter")
+            .map(|entry| entry.options.resolved_api_key())
+            .transpose()
+        {
+            Ok(api_key) => api_key.and_then(|value| value),
+            Err(error) => {
+                self.status_message =
+                    format!("读取 OpenRouter API Key 失败，无法加载二级供应商目录：{error}");
+                return Task::none();
+            }
+        };
+
+        self.workbench_model_picker_open = false;
+        self.workbench_reasoning_picker_open = false;
+        self.workbench_openrouter_endpoint_picker = WorkbenchOpenRouterEndpointPickerState {
+            open: true,
+            model_id: active_choice.model_id.clone(),
+            filter: String::new(),
+            loading: true,
+            error: None,
+            choices: Vec::new(),
+        };
+
+        Task::perform(
+            fetch_openrouter_endpoint_choices_for_model(
+                active_choice.model_id.clone(),
+                openrouter_api_key,
+            ),
+            move |result| Message::WorkbenchOpenRouterEndpointsLoaded {
+                model_id: active_choice.model_id.clone(),
+                result,
+            },
+        )
+    }
+
+    /// Returns the currently visible OpenRouter endpoint choices after applying the in-modal filter text.
+    /// 返回应用弹窗内过滤文本后当前可见的 OpenRouter 端点选项集合。
+    pub(super) fn filtered_workbench_openrouter_endpoint_choices(
+        &self,
+    ) -> Vec<WorkbenchOpenRouterEndpointChoice> {
+        let filter = self
+            .workbench_openrouter_endpoint_picker
+            .filter
+            .trim()
+            .to_lowercase();
+        if filter.is_empty() {
+            return self.workbench_openrouter_endpoint_picker.choices.clone();
+        }
+        self.workbench_openrouter_endpoint_picker
+            .choices
+            .iter()
+            .filter(|choice| {
+                choice.provider_name.to_lowercase().contains(&filter)
+                    || choice.endpoint_name.to_lowercase().contains(&filter)
+                    || choice.tag.to_lowercase().contains(&filter)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Returns the human-readable active runtime configuration summary that should stay pinned while a busy session still uses a locked model snapshot.
+    /// 返回当繁忙会话仍在使用锁定模型快照时应保持显示的人类可读运行时配置摘要。
+    pub(super) fn selected_session_pending_runtime_config_hint_text(&self) -> Option<String> {
+        let session_id = self.selected_session().map(|session| session.id)?;
+        if !self.session_has_blocking_system_prompt_work(session_id) {
+            return None;
+        }
+        let runtime_state = self.session_runtime_state(session_id)?;
+        let active_provider_id = runtime_state.active_provider_id.as_deref()?;
+        let active_model_id = runtime_state.active_model_id.as_deref()?;
+        let active_provider_label = provider_config::provider_summary(active_provider_id);
+        let active_model_label = provider_config::model_summary(
+            active_provider_id,
+            active_model_id,
+            &self.provider_configuration,
+        );
+        let panel_route = self.active_workbench_openrouter_endpoint_route();
+        let active_route = runtime_state.active_openrouter_endpoint_route.clone();
+        let panel_model = self.active_workbench_model_choice();
+        let panel_matches_active = panel_model.as_ref().is_some_and(|choice| {
+            choice.provider_id == active_provider_id && choice.model_id == active_model_id
+        });
+        if panel_matches_active && panel_route == active_route {
+            return None;
+        }
+
+        let mut current_parts = vec![active_model_label];
+        if active_provider_id == "openrouter" {
+            current_parts.push(
+                active_route
+                    .map(|route| route.display_label())
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| String::from("Auto")),
+            );
+        } else if !active_provider_label.trim().is_empty() {
+            current_parts.push(active_provider_label);
+        }
+
+        Some(format!(
+            "新配置将在下一轮生效\n当前仍使用：{}",
+            current_parts.join(" · ")
+        ))
     }
 
     /// Keeps the highlighted index inside the visible bounds of the filtered model-picker result list.
@@ -853,6 +1006,14 @@ impl VulcanWorkbench {
     ) -> Option<PendingPromptModelReference> {
         if let Some(choice) = self.active_workbench_model_choice() {
             return Some(PendingPromptModelReference {
+                openrouter_endpoint_route: (choice.provider_id == "openrouter")
+                    .then(|| {
+                        provider_config::openrouter_endpoint_route_for_model(
+                            &self.provider_configuration,
+                            &choice.model_id,
+                        )
+                    })
+                    .flatten(),
                 provider_id: choice.provider_id,
                 model_id: choice.model_id,
                 provider_label: choice.provider_label,
@@ -874,6 +1035,14 @@ impl VulcanWorkbench {
                 model_id,
                 &self.provider_configuration,
             ),
+            openrouter_endpoint_route: (provider_id == "openrouter")
+                .then(|| {
+                    provider_config::openrouter_endpoint_route_for_model(
+                        &self.provider_configuration,
+                        model_id,
+                    )
+                })
+                .flatten(),
         })
     }
 
@@ -948,6 +1117,13 @@ impl VulcanWorkbench {
                 "{}/{}",
                 model_reference.provider_id, model_reference.model_id
             ));
+            if model_reference.provider_id == "openrouter" {
+                provider_config::set_openrouter_endpoint_route_for_model(
+                    &mut config,
+                    &model_reference.model_id,
+                    model_reference.openrouter_endpoint_route.clone(),
+                );
+            }
         }
         config
     }

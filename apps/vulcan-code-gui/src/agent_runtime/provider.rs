@@ -9,9 +9,9 @@ use crate::provider_capabilities::{
     resolve_effective_model_capabilities, resolve_provider_api_key,
 };
 use crate::provider_config::{
-    self, ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
-    ProviderApiFamily, ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind,
-    ReasoningEffortLevel,
+    self, ModelInterleavedCapability, OpenRouterEndpointRouteSelection,
+    PersistedAiToolConfiguration, PersistedProviderOptions, ProviderApiFamily,
+    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -38,6 +38,9 @@ pub struct ProviderRuntimeBlueprint {
     /// Human-readable model name.
     /// 人类可读的模型名称。
     pub model_name: String,
+    /// Optional OpenRouter endpoint route locked for the current run.
+    /// 为当前运行锁定的可选 OpenRouter 端点路由。
+    pub openrouter_endpoint_route: Option<OpenRouterEndpointRouteSelection>,
     /// Resolved base URL when one is available.
     /// 当存在时的已解析接口基址。
     pub base_url: Option<String>,
@@ -176,6 +179,9 @@ pub fn resolve_active_provider_blueprint_with_ai_tools(
     let model_interleaved_reasoning = capabilities.interleaved_reasoning.clone();
     let credential_source = resolve_credential_source_summary(options, &capabilities);
     let provider_reasoning_profile = definition.reasoning_profile.clone();
+    let openrouter_endpoint_route = (provider_id == "openrouter")
+        .then(|| provider_config::openrouter_endpoint_route_for_model(config, model_id))
+        .flatten();
     let reasoning = resolve_provider_runtime_reasoning(
         effective_runtime,
         provider_id,
@@ -193,6 +199,7 @@ pub fn resolve_active_provider_blueprint_with_ai_tools(
         runtime_label: effective_runtime.label().to_string(),
         model_id: model_id.to_string(),
         model_name,
+        openrouter_endpoint_route,
         base_url: definition.resolved_base_url(options),
         supports_remote_model_refresh: definition.supports_remote_model_refresh(),
         credential_source,
