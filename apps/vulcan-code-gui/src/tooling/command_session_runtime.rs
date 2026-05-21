@@ -18,6 +18,18 @@ use uuid::Uuid;
 /// 运行时在收到停止命令会话请求时使用的默认等待预算。
 pub const DEFAULT_COMMAND_SESSION_STOP_WAIT_MS: u64 = 2_000;
 
+/// Default polling wait used by `read_session` when the caller does not request blocking.
+/// 当调用方未请求阻塞时，`read_session` 使用的默认轮询等待时间。
+pub const DEFAULT_COMMAND_SESSION_READ_WAIT_MS: u64 = 0;
+
+/// Default maximum chunk count returned by `read_session` when the caller does not provide one.
+/// 当调用方未提供读取上限时，`read_session` 返回的默认最大分片数量。
+pub const DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS: usize = 128;
+
+/// Soft byte threshold used while coalescing adjacent undelivered output fragments toward one larger read chunk.
+/// 在把相邻未读输出碎片合并成较大读取分片时使用的软字节阈值。
+const COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 512;
+
 /// One stable lifecycle status observed for a host-managed command session.
 /// 宿主管理命令会话观测到的一种稳定生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +103,9 @@ pub struct CommandSessionSnapshot {
     /// Stable shell label selected by the host launcher.
     /// 由宿主启动器选定的稳定 shell 标签。
     pub shell_label: String,
+    /// Stable outer launcher shell label selected before the command possibly entered another nested interactive shell.
+    /// 在命令可能进入其他嵌套交互 shell 之前选定的稳定外层启动器 shell 标签。
+    pub launcher_shell_label: String,
     /// Effective working directory used by the command session.
     /// 命令会话使用的实际工作目录。
     pub cwd: PathBuf,
@@ -112,6 +127,9 @@ pub struct CommandSessionSnapshot {
     /// Highest output sequence number buffered so far.
     /// 当前已缓冲输出中的最高序号。
     pub last_seq: u64,
+    /// Whether the latest stdin write left one open input line without a trailing newline.
+    /// 最近一次标准输入写入是否留下了一条未以换行结束的开放输入行。
+    pub pending_stdin_line: bool,
 }
 
 /// One read outcome returned by the command-session runtime.
@@ -154,6 +172,9 @@ pub struct CommandSessionStartRequest {
     /// Stable shell label selected by the launcher resolver.
     /// 由启动器解析器选定的稳定 shell 标签。
     pub shell_label: String,
+    /// Stable outer launcher shell label selected by the launcher resolver before any nested shell handoff.
+    /// 由启动器解析器在任何嵌套 shell 切换前选定的稳定外层启动器 shell 标签。
+    pub launcher_shell_label: String,
     /// Effective working directory used by the command session.
     /// 命令会话使用的实际工作目录。
     pub cwd: PathBuf,
@@ -166,6 +187,12 @@ pub struct CommandSessionStartRequest {
     /// Optional stdin text that should be written immediately after the process starts.
     /// 进程启动后应立即写入的可选标准输入文本。
     pub initial_stdin: Option<String>,
+    /// Whether the runtime should append the session-specific interactive newline to the initial stdin text.
+    /// 运行时是否应把当前会话特定的交互换行追加到初始标准输入文本末尾。
+    pub initial_stdin_append_newline: bool,
+    /// Shell-specific interactive newline sequence used when callers request automatic line submission.
+    /// 当调用方请求自动提交一行输入时使用的 shell 特定交互换行序列。
+    pub interactive_newline: String,
 }
 
 /// Mutable per-session process state that must stay synchronized across output readers and control actions.
@@ -190,6 +217,12 @@ struct CommandSessionMutableState {
     /// Highest assigned output sequence number.
     /// 当前已分配的最高输出序号。
     last_seq: u64,
+    /// Highest output sequence number already exposed to at least one read caller.
+    /// 已经暴露给至少一个读取调用方的最高输出序号。
+    highest_delivered_seq: u64,
+    /// Whether the latest stdin write left one open input line without a trailing newline.
+    /// 最近一次标准输入写入是否留下了一条未以换行结束的开放输入行。
+    pending_stdin_line: bool,
     /// Buffered output chunks retained for future read calls.
     /// 为后续读取调用保留的缓冲输出分片。
     chunks: Vec<CommandSessionOutputChunk>,
@@ -206,6 +239,8 @@ impl Default for CommandSessionMutableState {
             stdout_bytes: 0,
             stderr_bytes: 0,
             last_seq: 0,
+            highest_delivered_seq: 0,
+            pending_stdin_line: false,
             chunks: Vec::new(),
         }
     }
@@ -231,7 +266,6 @@ impl CommandSessionSharedState {
             return;
         }
         let mut state = self.mutable_state.lock().await;
-        state.last_seq = state.last_seq.saturating_add(1);
         let bytes = text.len();
         match stream {
             CommandSessionOutputStream::Stdout => {
@@ -241,10 +275,22 @@ impl CommandSessionSharedState {
                 state.stderr_bytes = state.stderr_bytes.saturating_add(bytes);
             }
         }
-        let seq = state.last_seq;
-        state
-            .chunks
-            .push(CommandSessionOutputChunk { seq, stream, text });
+        if can_coalesce_output_chunk(
+            state.chunks.last(),
+            state.highest_delivered_seq,
+            stream,
+            bytes,
+        ) {
+            if let Some(last_chunk) = state.chunks.last_mut() {
+                last_chunk.text.push_str(&text);
+            }
+        } else {
+            state.last_seq = state.last_seq.saturating_add(1);
+            let seq = state.last_seq;
+            state
+                .chunks
+                .push(CommandSessionOutputChunk { seq, stream, text });
+        }
         drop(state);
         self.change_notify.notify_waiters();
     }
@@ -256,6 +302,15 @@ impl CommandSessionSharedState {
         if state.failure_reason.is_none() {
             state.failure_reason = Some(reason);
         }
+        drop(state);
+        self.change_notify.notify_waiters();
+    }
+
+    /// Updates whether the latest stdin submission left one open line and wakes pending readers.
+    /// 更新最近一次标准输入提交是否留下开放输入行，并唤醒等待中的读取方。
+    async fn set_pending_stdin_line(&self, pending_stdin_line: bool) {
+        let mut state = self.mutable_state.lock().await;
+        state.pending_stdin_line = pending_stdin_line;
         drop(state);
         self.change_notify.notify_waiters();
     }
@@ -297,6 +352,30 @@ impl CommandSessionSharedState {
     }
 }
 
+/// Reports whether one output chunk already ends on a stable line boundary.
+/// 判断一条输出分片是否已经稳定结束在行边界上。
+fn output_chunk_ends_with_line_boundary(text: &str) -> bool {
+    text.ends_with(['\n', '\r'])
+}
+
+/// Reports whether one new fragment may be merged into the last undelivered chunk without breaking read-cursor stability.
+/// 判断一条新碎片是否可以安全合并进最后一个未投递分片，而不破坏读取游标稳定性。
+fn can_coalesce_output_chunk(
+    last_chunk: Option<&CommandSessionOutputChunk>,
+    highest_delivered_seq: u64,
+    incoming_stream: CommandSessionOutputStream,
+    incoming_bytes: usize,
+) -> bool {
+    let Some(last_chunk) = last_chunk else {
+        return false;
+    };
+    last_chunk.seq > highest_delivered_seq
+        && last_chunk.stream == incoming_stream
+        && !output_chunk_ends_with_line_boundary(&last_chunk.text)
+        && last_chunk.text.len().saturating_add(incoming_bytes)
+            <= COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES
+}
+
 /// One control message sent to the background process supervisor.
 /// 发送给后台进程监管器的一条控制消息。
 enum CommandSessionControlMessage {
@@ -335,6 +414,12 @@ struct CommandSessionRecord {
     /// Stable shell label selected by the launcher resolver.
     /// 由启动器解析器选定的稳定 shell 标签。
     shell_label: String,
+    /// Stable outer launcher shell label selected by the launcher resolver.
+    /// 由启动器解析器选定的稳定外层启动器 shell 标签。
+    launcher_shell_label: String,
+    /// Shell-specific interactive newline sequence reused by write operations that request automatic line submission.
+    /// 由请求自动提交一行输入的写入操作复用的 shell 特定交互换行序列。
+    interactive_newline: String,
     /// Effective working directory used by the spawned process.
     /// 已派生进程使用的实际工作目录。
     cwd: PathBuf,
@@ -356,6 +441,7 @@ impl CommandSessionRecord {
             owner_session_id: self.owner_session_id,
             command: self.command.clone(),
             shell_label: self.shell_label.clone(),
+            launcher_shell_label: self.launcher_shell_label.clone(),
             cwd: self.cwd.clone(),
             status: state.status,
             exit_code: state.exit_code,
@@ -363,13 +449,14 @@ impl CommandSessionRecord {
             stdout_bytes: state.stdout_bytes,
             stderr_bytes: state.stderr_bytes,
             last_seq: state.last_seq,
+            pending_stdin_line: state.pending_stdin_line,
         }
     }
 
     /// Builds one incremental read outcome based on the caller-provided output cursor and read cap.
     /// 根据调用方提供的输出游标与读取上限构建一次增量读取结果。
     async fn read_since(&self, after_seq: u64, max_chunks: usize) -> CommandSessionReadOutcome {
-        let state = self.shared_state.mutable_state.lock().await;
+        let mut state = self.shared_state.mutable_state.lock().await;
         let matching_chunks = state
             .chunks
             .iter()
@@ -381,11 +468,16 @@ impl CommandSessionRecord {
             .into_iter()
             .take(max_chunks)
             .collect::<Vec<_>>();
+        if let Some(last_returned_chunk) = returned_chunks.last() {
+            state.highest_delivered_seq =
+                state.highest_delivered_seq.max(last_returned_chunk.seq);
+        }
         let snapshot = CommandSessionSnapshot {
             command_session_id: self.command_session_id,
             owner_session_id: self.owner_session_id,
             command: self.command.clone(),
             shell_label: self.shell_label.clone(),
+            launcher_shell_label: self.launcher_shell_label.clone(),
             cwd: self.cwd.clone(),
             status: state.status,
             exit_code: state.exit_code,
@@ -393,6 +485,7 @@ impl CommandSessionRecord {
             stdout_bytes: state.stdout_bytes,
             stderr_bytes: state.stderr_bytes,
             last_seq: state.last_seq,
+            pending_stdin_line: state.pending_stdin_line,
         };
         CommandSessionReadOutcome {
             snapshot,
@@ -400,6 +493,12 @@ impl CommandSessionRecord {
             has_more,
         }
     }
+}
+
+/// Reports whether one stdin payload leaves the interactive session on an open input line.
+/// 判断一段标准输入载荷是否会让交互会话停留在一条未闭合的输入行上。
+fn stdin_payload_leaves_pending_line(text: &str) -> bool {
+    !text.is_empty() && !text.ends_with(['\n', '\r'])
 }
 
 /// One host-managed runtime that owns long-lived shell sessions and their process supervisors.
@@ -465,6 +564,8 @@ impl CommandSessionRuntime {
             owner_session_id: request.owner_session_id,
             command: request.command,
             shell_label: request.shell_label,
+            launcher_shell_label: request.launcher_shell_label,
+            interactive_newline: request.interactive_newline,
             cwd: request.cwd,
             control_sender,
             shared_state: Arc::clone(&shared_state),
@@ -483,6 +584,7 @@ impl CommandSessionRuntime {
             stderr,
             control_receiver,
             request.initial_stdin,
+            request.initial_stdin_append_newline,
         ));
 
         Ok(record.snapshot().await)
@@ -500,8 +602,10 @@ impl CommandSessionRuntime {
     ) -> Result<CommandSessionReadOutcome, String> {
         let record = self.session_for_owner(owner_session_id, command_session_id)?;
         let after_seq = after_seq.unwrap_or(0);
-        let max_chunks = max_chunks.unwrap_or(128).max(1);
-        let wait_for_output_ms = wait_for_output_ms.unwrap_or(0);
+        let max_chunks = max_chunks
+            .unwrap_or(DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS)
+            .max(1);
+        let wait_for_output_ms = wait_for_output_ms.unwrap_or(DEFAULT_COMMAND_SESSION_READ_WAIT_MS);
         let wait_started_at = Instant::now();
 
         loop {
@@ -529,6 +633,7 @@ impl CommandSessionRuntime {
         owner_session_id: SessionId,
         command_session_id: SessionId,
         text: String,
+        append_newline: bool,
     ) -> Result<CommandSessionWriteOutcome, String> {
         let record = self.session_for_owner(owner_session_id, command_session_id)?;
         let snapshot = record.snapshot().await;
@@ -539,6 +644,11 @@ impl CommandSessionRuntime {
                 snapshot.status.as_str()
             ));
         }
+        let text = if append_newline {
+            format!("{text}{}", record.interactive_newline.as_str())
+        } else {
+            text
+        };
 
         let (sender, receiver) = oneshot::channel();
         record
@@ -671,6 +781,7 @@ async fn run_command_session_supervisor(
     stderr: ChildStderr,
     mut control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
     initial_stdin: Option<String>,
+    initial_stdin_append_newline: bool,
 ) {
     let stdout_task = tokio::spawn(pump_command_session_output(
         stdout,
@@ -685,6 +796,11 @@ async fn run_command_session_supervisor(
 
     let mut stop_requested = false;
     if let Some(initial_stdin) = initial_stdin {
+        let initial_stdin = if initial_stdin_append_newline {
+            format!("{initial_stdin}{}", record.interactive_newline.as_str())
+        } else {
+            initial_stdin
+        };
         match stdin.as_mut() {
             Some(child_stdin) => {
                 if let Err(error) = child_stdin.write_all(initial_stdin.as_bytes()).await {
@@ -694,6 +810,11 @@ async fn run_command_session_supervisor(
                         .await;
                     let _ = child.start_kill();
                     stop_requested = true;
+                } else {
+                    record
+                        .shared_state
+                        .set_pending_stdin_line(stdin_payload_leaves_pending_line(&initial_stdin))
+                        .await;
                 }
             }
             None => {
@@ -733,11 +854,16 @@ async fn run_command_session_supervisor(
                 match maybe_message {
                     Some(CommandSessionControlMessage::Write { text, responder }) => {
                         let write_result = match stdin.as_mut() {
-                            Some(child_stdin) => child_stdin
-                                .write_all(text.as_bytes())
-                                .await
-                                .map(|_| text.len())
-                                .map_err(|error| format!("写入命令会话标准输入失败：{error}")),
+                            Some(child_stdin) => match child_stdin.write_all(text.as_bytes()).await {
+                                Ok(()) => {
+                                    record
+                                        .shared_state
+                                        .set_pending_stdin_line(stdin_payload_leaves_pending_line(&text))
+                                        .await;
+                                    Ok(text.len())
+                                }
+                                Err(error) => Err(format!("写入命令会话标准输入失败：{error}")),
+                            },
                             None => Err(String::from("命令会话当前没有可写入的标准输入通道。")),
                         };
                         let _ = responder.send(write_result);
@@ -765,4 +891,71 @@ async fn run_command_session_supervisor(
         .finalize_process_exit(stop_requested, exit_code, wait_error, process_succeeded)
         .await;
     record.shared_state.change_notify.notify_waiters();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES, CommandSessionOutputChunk,
+        CommandSessionOutputStream, can_coalesce_output_chunk, output_chunk_ends_with_line_boundary,
+    };
+
+    /// Output coalescing should keep appending to one undelivered line fragment until the line is completed.
+    /// 输出合并应持续追加到同一条未投递行碎片，直到该行被完整结束。
+    #[test]
+    fn output_chunk_coalescing_prefers_undelivered_partial_lines() {
+        let last_chunk = CommandSessionOutputChunk {
+            seq: 3,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from("partial"),
+        };
+        assert!(can_coalesce_output_chunk(
+            Some(&last_chunk),
+            2,
+            CommandSessionOutputStream::Stdout,
+            8,
+        ));
+        assert!(!can_coalesce_output_chunk(
+            Some(&last_chunk),
+            3,
+            CommandSessionOutputStream::Stdout,
+            8,
+        ));
+        assert!(!can_coalesce_output_chunk(
+            Some(&last_chunk),
+            2,
+            CommandSessionOutputStream::Stderr,
+            8,
+        ));
+    }
+
+    /// Output coalescing should stop once the prior chunk already ended with a line boundary or the soft size limit would be exceeded.
+    /// 一旦前一个分片已经结束在行边界，或继续合并会超过软大小阈值，输出合并就应停止。
+    #[test]
+    fn output_chunk_coalescing_respects_line_boundaries_and_soft_limit() {
+        let line_chunk = CommandSessionOutputChunk {
+            seq: 4,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from("line complete\n"),
+        };
+        assert!(output_chunk_ends_with_line_boundary(&line_chunk.text));
+        assert!(!can_coalesce_output_chunk(
+            Some(&line_chunk),
+            0,
+            CommandSessionOutputStream::Stdout,
+            1,
+        ));
+
+        let oversized_chunk = CommandSessionOutputChunk {
+            seq: 5,
+            stream: CommandSessionOutputStream::Stdout,
+            text: "x".repeat(COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES),
+        };
+        assert!(!can_coalesce_output_chunk(
+            Some(&oversized_chunk),
+            0,
+            CommandSessionOutputStream::Stdout,
+            1,
+        ));
+    }
 }

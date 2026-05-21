@@ -10,10 +10,11 @@ use crate::tool_result_format::{
 };
 use crate::tooling::command_session_runtime::{
     CommandSessionOutputChunk, CommandSessionRuntime, CommandSessionSnapshot,
-    CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
+    CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS,
+    DEFAULT_COMMAND_SESSION_READ_WAIT_MS, DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
 };
 use crate::tooling::output_decode::decode_shell_output_bytes;
-use crate::tooling::shell_host::HostCommandShellSupport;
+use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -394,10 +395,8 @@ fn build_skill_list_tool(
 fn build_shell_command_tool(shell_support: HostCommandShellSupport) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from("shell_command"),
-        name: String::from("执行命令"),
-        description: String::from(
-            "在宿主环境中执行一次命令，返回退出状态、标准输出与错误输出摘要。",
-        ),
+        name: String::from("shell_command"),
+        description: shell_command_tool_description(),
         ai_visible: true,
         available_in_plan: true,
     };
@@ -420,8 +419,8 @@ fn build_shell_session_tool(
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from("shell_session"),
-        name: String::from("命令会话"),
-        description: String::from("在宿主环境中启动、读取、写入或停止一条可持续交互的命令会话。"),
+        name: String::from("shell_session"),
+        description: shell_session_tool_description(),
         ai_visible: true,
         available_in_plan: true,
     };
@@ -508,6 +507,10 @@ impl ShellCommandExecutionStatus {
         }
     }
 }
+
+/// Maximum inline byte budget used before shell tool output switches into page mode spill rendering.
+/// shell 工具输出在切换到分页落盘渲染前使用的最大内联字节预算。
+const SHELL_INLINE_OUTPUT_LIMIT_BYTES: u64 = 200_000;
 
 /// One normalized shell-command execution report used by both model text and host metadata.
 /// 同时供模型文本与宿主元数据复用的一份规范化 shell 命令执行报告。
@@ -599,6 +602,52 @@ struct ShellSessionToolArgs {
     max_chunks: Option<usize>,
 }
 
+/// One resolved shell behavior snapshot for a command session, separating the outer launcher shell from the inferred interactive shell.
+/// 一份命令会话的已解析 shell 行为快照，用于区分外层启动器 shell 与推断得到的交互 shell。
+#[derive(Debug, Clone)]
+struct ResolvedSessionShellBehavior {
+    /// Stable shell label used for newline semantics and user-facing interaction summaries.
+    /// 用于换行语义与面向用户交互摘要的稳定 shell 标签。
+    interactive_shell_label: String,
+    /// Stable outer launcher shell label selected directly by the host shell resolver.
+    /// 由宿主 shell 解析器直接选定的稳定外层启动器 shell 标签。
+    launcher_shell_label: String,
+    /// Whether the runtime inferred that the command enters a nested interactive shell different from the outer launcher.
+    /// 运行时是否推断出该命令进入了一个不同于外层启动器的嵌套交互 shell。
+    nested_shell_inferred: bool,
+}
+
+/// Builds the English AI-facing description for the one-shot shell command tool.
+/// 构建一次性 shell 命令工具面向 AI 的英文描述。
+fn shell_command_tool_description() -> String {
+    format!(
+        "Run a one-shot command in the host environment and return the full decoded stdout/stderr plus the exit status, not just a summary. Default `timeout_ms`: unlimited. If `timeout_ms` is omitted, no timeout is applied and the host waits until the process exits. When the inline result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
+    )
+}
+
+/// Builds the English AI-facing description for the session-oriented shell tool.
+/// 构建面向会话 shell 工具面向 AI 的英文描述。
+fn shell_session_tool_description() -> String {
+    format!(
+        "Start, read, write to, or stop a long-lived host command session. Reads are polling-based, and `cwd` only affects `start`. The `start` result reports the resolved launcher shell used for `auto` and whether stdin is currently left on an open input line. When an inline read result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
+    )
+}
+
+/// Builds the shell-session-specific schema text for the `shell` argument so AI sees the current `auto` target plus nested-shell guidance.
+/// 为 `shell_session` 的 `shell` 参数构建专用 schema 文本，使 AI 能看到当前 `auto` 目标及嵌套 shell 指引。
+fn shell_session_schema_shell_description(shell_support: &HostCommandShellSupport) -> String {
+    let windows_nested_shell_policy_note = if cfg!(windows) {
+        " On Windows, `shell_session` rejects `shell: auto` when the command directly launches `bash`, `sh`, or `zsh`; use an explicit Unix-like shell selector for deterministic interactive behavior."
+    } else {
+        ""
+    };
+    format!(
+        "{} For interactive nested shells such as `bash`, `sh`, or `zsh`, `auto` selects only the outer launcher and nested-shell inference is best-effort. The `start` result reports both the resolved launcher shell and the effective interactive newline shell. Prefer an explicit Unix-like shell when line-ending semantics matter or when deterministic behavior is required across environments.{}",
+        shell_support.schema_shell_description(),
+        windows_nested_shell_policy_note
+    )
+}
+
 /// Builds the JSON Schema advertised to the model for the host-owned `shell_command` tool.
 /// 为宿主自有 `shell_command` 工具构建对模型声明的 JSON Schema。
 fn shell_command_args_schema(shell_support: &HostCommandShellSupport) -> Value {
@@ -607,19 +656,21 @@ fn shell_command_args_schema(shell_support: &HostCommandShellSupport) -> Value {
         "properties": {
             "command": {
                 "type": "string",
-                "description": "需要执行的原始命令字符串。"
+                "description": format!(
+                    "Raw command text executed by the selected shell. On success, the tool returns the full decoded stdout/stderr plus exit status, not just a summary. If the rendered result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host spills the full output into `.vulcan/temp/tool_output_overflow_page_md_<unix_ms>.md`."
+                )
             },
             "cwd": {
                 "type": "string",
-                "description": "可选工作目录；相对路径会优先基于当前工作区根目录解析。"
+                "description": "Optional working directory used only for this one-shot command invocation. Relative paths resolve against the current workspace root when available."
             },
             "timeout_ms": {
                 "type": "integer",
-                "description": "可选超时时间（毫秒）；省略时使用宿主默认等待策略。"
+                "description": "Optional hard timeout in milliseconds. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits."
             },
             "stdin": {
                 "type": "string",
-                "description": "可选标准输入文本，会在等待进程输出前写入子进程。"
+                "description": "Optional stdin text written once before waiting for process output. No newline is added automatically."
             },
             "shell": {
                 "type": "string",
@@ -641,44 +692,48 @@ fn shell_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
             "action": {
                 "type": "string",
                 "enum": ["start", "read", "write", "stop"],
-                "description": "命令会话动作类型。"
+                "description": "Session action. `start` launches a new session, `read` polls buffered output, `write` appends stdin, and `stop` terminates the session."
             },
             "command_session_id": {
                 "type": "string",
-                "description": "命令会话标识；read/write/stop 时必填。"
+                "description": "Session identifier. Required for `read`, `write`, and `stop`."
             },
             "command": {
                 "type": "string",
-                "description": "要启动的原始命令字符串；start 时必填。"
+                "description": "Raw command text used only by `start`."
             },
             "cwd": {
                 "type": "string",
-                "description": "可选工作目录；相对路径会优先基于当前工作区根目录解析。"
+                "description": "Optional working directory used only by `start`. Relative paths resolve against the current workspace root when available. Later `write` calls cannot change the working directory."
             },
             "shell": {
                 "type": "string",
                 "enum": shell_support.schema_shell_ids(),
-                "description": shell_support.schema_shell_description()
+                "description": shell_session_schema_shell_description(shell_support)
             },
             "stdin": {
                 "type": "string",
-                "description": "可选标准输入文本；start 时表示初始输入，write 时表示追加输入。"
+                "description": "Optional stdin text. For `start`, it is written once after launch. For `write`, it is appended to the running session. No newline is added unless `append_newline` is true. For `start`, omitted `append_newline` defaults to `true` when `stdin` is provided. If `start` sends stdin without a trailing newline, the host rejects the request to avoid hidden concatenation with later writes."
             },
             "append_newline": {
                 "type": "boolean",
-                "description": "write 动作是否在输入末尾追加换行。"
+                "description": "Optional newline submission flag for `start` and `write`. When true, the host appends the session-specific interactive newline (`\\n` for bash/sh/zsh, `\\r\\n` for cmd/PowerShell on Windows). For `start`, the default is `true` when `stdin` is provided and `false` otherwise. For `write`, the default is `false`. For `auto`, newline behavior follows the resolved launcher shell reported by the `start` result unless the host can directly infer a nested interactive shell from the command."
             },
             "after_seq": {
                 "type": "integer",
-                "description": "read 动作使用的输出游标，只返回更高序号的新分片。"
+                "description": "Optional output cursor for `read`. Only chunks with a higher sequence number are returned."
             },
             "wait_for_output_ms": {
                 "type": "integer",
-                "description": "read 动作在没有新输出时的可选等待毫秒数。"
+                "description": format!(
+                    "Optional poll wait in milliseconds for `read`. Default: {DEFAULT_COMMAND_SESSION_READ_WAIT_MS} (do not wait; return immediately with whatever is already buffered)."
+                )
             },
             "max_chunks": {
                 "type": "integer",
-                "description": "read 动作返回的最大输出分片数。"
+                "description": format!(
+                    "Optional maximum number of buffered chunks returned by `read`. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}. A chunk is one decoded stdout/stderr fragment emitted by the runtime; the host opportunistically coalesces adjacent undelivered fragments toward line-sized chunks, but chunk boundaries remain implementation-defined and may still be smaller than full lines or commands."
+                )
             }
         },
         "required": ["action"],
@@ -723,10 +778,129 @@ fn parse_command_session_id(
     })
 }
 
-/// Returns the platform-preferred interactive newline sequence used by shell-session write operations.
-/// 返回 shell 会话写入操作使用的平台首选交互换行序列。
-fn platform_shell_newline() -> &'static str {
-    if cfg!(windows) { "\r\n" } else { "\n" }
+/// Returns the shell-specific interactive newline sequence used by session input auto-submission.
+/// 返回会话输入自动提交时使用的 shell 特定交互换行序列。
+fn shell_specific_newline(shell_label: &str) -> &'static str {
+    HostCommandShell::parse(shell_label)
+        .map(HostCommandShell::interactive_newline)
+        .unwrap_or(if cfg!(windows) { "\r\n" } else { "\n" })
+}
+
+/// Normalizes one optional shell selector and falls back to `auto` when the caller omitted it.
+/// 规范化一份可选 shell 选择器，并在调用方省略时回退到 `auto`。
+fn normalize_shell_selector(raw_shell_selector: Option<&str>) -> &str {
+    raw_shell_selector
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("auto")
+}
+
+/// Reports whether one shell selector still relies on host-side `auto` resolution.
+/// 判断一个 shell 选择器是否仍依赖宿主侧 `auto` 解析。
+fn shell_selector_uses_auto(raw_shell_selector: Option<&str>) -> bool {
+    normalize_shell_selector(raw_shell_selector).eq_ignore_ascii_case("auto")
+}
+
+/// Reports whether one stdin payload already ends with a line terminator.
+/// 判断一段标准输入载荷是否已经以行终止符结束。
+fn stdin_payload_has_trailing_newline(text: &str) -> bool {
+    text.ends_with(['\n', '\r'])
+}
+
+/// Resolves the effective newline-submission default for the `start` action.
+/// 解析 `start` 动作的有效换行提交默认值。
+fn effective_start_append_newline(
+    requested_append_newline: Option<bool>,
+    initial_stdin: Option<&str>,
+) -> bool {
+    requested_append_newline.unwrap_or(initial_stdin.is_some())
+}
+
+/// Validates whether `start` stdin is safe to submit without hidden concatenation across later writes.
+/// 校验 `start` 的标准输入是否能安全提交，避免与后续写入发生隐式拼接。
+fn validate_shell_session_start_stdin_policy(
+    initial_stdin: Option<&str>,
+    append_newline: bool,
+) -> Result<(), NativeToolError> {
+    if let Some(stdin_text) = initial_stdin {
+        if !append_newline && !stdin_payload_has_trailing_newline(stdin_text) {
+            return Err(NativeToolError::new(
+                "shell_session start rejected initial stdin without a trailing newline. Either set `append_newline: true`, include the trailing newline inside `stdin`, or start without `stdin` and use `write` for partial interactive input.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates whether one requested shell selector may safely rely on `auto` for the resolved session behavior.
+/// 校验一条请求的 shell 选择器是否可以安全依赖 `auto` 来驱动当前会话行为。
+fn validate_shell_session_start_shell_policy(
+    raw_shell_selector: Option<&str>,
+    shell_behavior: &ResolvedSessionShellBehavior,
+) -> Result<(), NativeToolError> {
+    if cfg!(windows)
+        && shell_selector_uses_auto(raw_shell_selector)
+        && shell_behavior.nested_shell_inferred
+        && matches!(
+            HostCommandShell::parse(shell_behavior.interactive_shell_label.as_str()),
+            Some(HostCommandShell::Bash | HostCommandShell::Sh | HostCommandShell::Zsh)
+        )
+    {
+        return Err(NativeToolError::new(
+            "shell_session start requires an explicit `shell` when the command directly launches `bash`, `sh`, or `zsh` on Windows. `auto` resolves only the outer launcher and is rejected here to keep interactive newline behavior deterministic.",
+        ));
+    }
+    Ok(())
+}
+
+/// Extracts the leading program token from a raw command string for best-effort nested interactive shell detection.
+/// 从原始命令字符串中提取起始程序标记，用于尽力检测嵌套交互 shell。
+fn leading_command_program_token(command_text: &str) -> Option<String> {
+    command_text
+        .trim()
+        .split_whitespace()
+        .next()
+        .map(|token| token.trim_matches(|character| character == '"' || character == '\''))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_string())
+}
+
+/// Attempts to infer a nested interactive shell directly launched by the command text.
+/// 尝试根据命令文本直接推断被启动的嵌套交互 shell。
+fn infer_nested_interactive_shell(command_text: &str) -> Option<HostCommandShell> {
+    let token = leading_command_program_token(command_text)?;
+    let token = token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token.as_str())
+        .to_ascii_lowercase();
+    let token = token
+        .strip_suffix(".exe")
+        .or_else(|| token.strip_suffix(".cmd"))
+        .or_else(|| token.strip_suffix(".bat"))
+        .or_else(|| token.strip_suffix(".com"))
+        .unwrap_or(token.as_str());
+    HostCommandShell::parse(token)
+}
+
+/// Resolves the effective interactive shell behavior for a command session, including nested-shell handoff when it can be inferred safely.
+/// 解析命令会话的有效交互 shell 行为，并在能够安全推断时处理嵌套 shell 切换。
+fn resolve_session_shell_behavior(
+    command_text: &str,
+    launcher_shell_label: &str,
+) -> ResolvedSessionShellBehavior {
+    let nested_shell = infer_nested_interactive_shell(command_text);
+    let interactive_shell_label = nested_shell
+        .map(HostCommandShell::id)
+        .unwrap_or(launcher_shell_label)
+        .to_string();
+    let nested_shell_inferred = interactive_shell_label != launcher_shell_label;
+
+    ResolvedSessionShellBehavior {
+        interactive_shell_label,
+        launcher_shell_label: launcher_shell_label.to_string(),
+        nested_shell_inferred,
+    }
 }
 
 /// Builds one model-visible text render input for shell-session actions that do not need to include buffered output chunks.
@@ -742,12 +916,25 @@ fn build_shell_session_summary_render_input(
         format!("Owner session: {}", snapshot.owner_session_id),
         format!("Command: {}", snapshot.command),
         format!("Shell: {}", snapshot.shell_label),
+    ];
+    if snapshot.launcher_shell_label != snapshot.shell_label {
+        lines.push(format!("Launcher shell: {}", snapshot.launcher_shell_label));
+    }
+    lines.extend([
         format!("Working directory: {}", snapshot.cwd.display()),
         format!("Status: {}", snapshot.status.as_str()),
         format!("Stdout bytes: {}", snapshot.stdout_bytes),
         format!("Stderr bytes: {}", snapshot.stderr_bytes),
         format!("Last sequence: {}", snapshot.last_seq),
-    ];
+        format!(
+            "Pending stdin line: {}",
+            if snapshot.pending_stdin_line {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+    ]);
     if let Some(exit_code) = snapshot.exit_code {
         lines.push(format!("Exit code: {exit_code}"));
     }
@@ -782,6 +969,10 @@ fn build_shell_session_read_render_input(
         format!(
             "Has more buffered output: {}",
             if has_more { "yes" } else { "no" }
+        ),
+        String::from("Read model: polling"),
+        String::from(
+            "Chunk semantics: implementation-defined decoded stdout/stderr fragments; boundaries may be smaller than full lines or commands.",
         ),
     ];
     let mut render_input = build_shell_session_summary_render_input(
@@ -1081,11 +1272,11 @@ fn build_shell_command_text_render_input(
 fn default_shell_command_budget_snapshot() -> ToolResultBudgetSnapshot {
     ToolResultBudgetSnapshot {
         tool_result: EffectiveBudgetScope {
-            bytes: 200_000,
+            bytes: SHELL_INLINE_OUTPUT_LIMIT_BYTES,
             lines: -1,
         },
         file_read: EffectiveBudgetScope {
-            bytes: 200_000,
+            bytes: SHELL_INLINE_OUTPUT_LIMIT_BYTES,
             lines: -1,
         },
     }
@@ -1142,11 +1333,13 @@ fn build_shell_session_host_payload(
         "command": snapshot.command.clone(),
         "cwd": snapshot.cwd.display().to_string(),
         "shell": snapshot.shell_label.clone(),
+        "launcher_shell": snapshot.launcher_shell_label.clone(),
         "status": snapshot.status.as_str(),
         "exit_code": snapshot.exit_code,
         "stdout_bytes": snapshot.stdout_bytes,
         "stderr_bytes": snapshot.stderr_bytes,
         "last_seq": snapshot.last_seq,
+        "pending_stdin_line": snapshot.pending_stdin_line,
         "failure_reason": snapshot.failure_reason.clone(),
         "output_overflowed": output_overflowed,
     });
@@ -1182,31 +1375,97 @@ async fn execute_shell_session_start_action(
         request.workspace_root.as_deref(),
         &effective_cwd,
     );
-    let (launcher_program, launcher_args, shell_label) =
+    let (launcher_program, launcher_args, launcher_shell_label) =
         resolve_shell_command_launcher(shell_support, parsed_args.shell.as_deref(), command_text)?;
+    let shell_behavior = resolve_session_shell_behavior(command_text, &launcher_shell_label);
+    let requested_shell_selector = normalize_shell_selector(parsed_args.shell.as_deref());
+    validate_shell_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
+    let append_newline =
+        effective_start_append_newline(parsed_args.append_newline, parsed_args.stdin.as_deref());
+    let initial_stdin = parsed_args.stdin.clone();
+    validate_shell_session_start_stdin_policy(initial_stdin.as_deref(), append_newline)?;
     let snapshot = command_session_runtime
         .start_session(CommandSessionStartRequest {
             owner_session_id,
             command: command_text.to_string(),
-            shell_label,
+            shell_label: shell_behavior.interactive_shell_label.clone(),
+            launcher_shell_label: shell_behavior.launcher_shell_label.clone(),
+            interactive_newline: shell_specific_newline(
+                shell_behavior.interactive_shell_label.as_str(),
+            )
+            .to_string(),
             cwd: effective_cwd,
             launcher_program,
             launcher_args,
-            initial_stdin: parsed_args.stdin,
+            initial_stdin,
+            initial_stdin_append_newline: append_newline,
         })
         .await
         .map_err(NativeToolError::new)?;
+    let mut extra_lines = vec![
+        format!(
+            "Initial stdin provided: {}",
+            if parsed_args.stdin.is_some() {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+        format!(
+            "Automatic newline submission: {}",
+            if append_newline { "yes" } else { "no" }
+        ),
+        format!(
+            "Pending stdin line after start: {}",
+            if snapshot.pending_stdin_line { "yes" } else { "no" }
+        ),
+        format!(
+            "Resolved launcher shell: {}",
+            shell_behavior.launcher_shell_label
+        ),
+        format!(
+            "Requested shell selector: {}",
+            requested_shell_selector
+        ),
+        format!(
+            "Interactive newline shell: {}",
+            shell_behavior.interactive_shell_label
+        ),
+        format!(
+            "Nested shell inference: {}",
+            if shell_behavior.nested_shell_inferred {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+        String::from("Read model: polling"),
+    ];
+    if shell_behavior.nested_shell_inferred {
+        extra_lines.push(String::from(
+            "Warning: the command appears to enter a nested interactive shell. `auto` still resolved the outer launcher shell shown above, and nested-shell inference remains best-effort. Prefer an explicit shell selector when newline semantics must be deterministic.",
+        ));
+    }
+    if shell_selector_uses_auto(parsed_args.shell.as_deref()) {
+        extra_lines.push(String::from(
+            "Auto-shell note: `auto` is resolved by the host at session start. Different hosts, installed shells, or nested-shell handoff can change the effective behavior. Use an explicit `shell` value for deterministic interactive sessions.",
+        ));
+    }
     let render_input = build_shell_session_summary_render_input(
         ShellSessionToolAction::Start,
         &snapshot,
-        Vec::new(),
+        extra_lines,
     );
     let budget = default_shell_command_budget_snapshot();
     let host_payload = build_shell_session_host_payload(
         ShellSessionToolAction::Start,
         &snapshot,
         shell_command_output_exceeds_inline_budget(&render_input, &budget),
-        json!({}),
+        json!({
+            "requested_shell": requested_shell_selector,
+            "nested_shell_inferred": shell_behavior.nested_shell_inferred,
+            "append_newline_effective": append_newline,
+        }),
     );
     let model_output = render_tool_result_text(
         &render_input,
@@ -1303,29 +1562,32 @@ async fn execute_shell_session_write_action(
     let input_text = parsed_args
         .stdin
         .ok_or_else(|| NativeToolError::new("shell_session 的 write 动作需要 `stdin`。"))?;
-    let input_text = if parsed_args.append_newline.unwrap_or(false) {
-        format!("{input_text}{}", platform_shell_newline())
-    } else {
-        input_text
-    };
+    let append_newline = parsed_args.append_newline.unwrap_or(false);
     let write_outcome = command_session_runtime
-        .write_session(owner_session_id, command_session_id, input_text)
+        .write_session(
+            owner_session_id,
+            command_session_id,
+            input_text,
+            append_newline,
+        )
         .await
         .map_err(NativeToolError::new)?;
+    let mut extra_lines = vec![
+        format!("Bytes written: {}", write_outcome.bytes_written),
+        format!(
+            "Appended newline: {}",
+            if append_newline { "yes" } else { "no" }
+        ),
+    ];
+    if write_outcome.snapshot.pending_stdin_line {
+        extra_lines.push(String::from(
+            "Warning: the session stdin is still left on an open input line. Subsequent writes will continue the same line until a newline is sent.",
+        ));
+    }
     let render_input = build_shell_session_summary_render_input(
         ShellSessionToolAction::Write,
         &write_outcome.snapshot,
-        vec![
-            format!("Bytes written: {}", write_outcome.bytes_written),
-            format!(
-                "Appended newline: {}",
-                if parsed_args.append_newline.unwrap_or(false) {
-                    "yes"
-                } else {
-                    "no"
-                }
-            ),
-        ],
+        extra_lines,
     );
     let budget = default_shell_command_budget_snapshot();
     let host_payload = build_shell_session_host_payload(
@@ -1334,7 +1596,7 @@ async fn execute_shell_session_write_action(
         shell_command_output_exceeds_inline_budget(&render_input, &budget),
         json!({
             "bytes_written": write_outcome.bytes_written,
-            "appended_newline": parsed_args.append_newline.unwrap_or(false),
+            "appended_newline": append_newline,
         }),
     );
 
@@ -1486,9 +1748,11 @@ mod tests {
     use super::{
         NativeToolExecutionRequest, build_agent_list_tool, build_mcp_server_list_tool,
         build_shell_command_tool, build_shell_session_tool, build_skill_list_tool,
-        build_workspace_describe_tool, resolve_shell_command_launcher,
-        resolve_shell_command_working_directory, shell_command_args_schema,
-        shell_session_args_schema,
+        build_workspace_describe_tool, effective_start_append_newline,
+        resolve_session_shell_behavior,
+        resolve_shell_command_launcher, resolve_shell_command_working_directory,
+        shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
+        validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
     };
     use crate::agent_runtime::config::{
         AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -1745,6 +2009,177 @@ mod tests {
             session_schema["properties"]["shell"]["enum"],
             json!(["auto", "pwsh", "powershell", "cmd"])
         );
+    }
+
+    /// The AI-facing shell schema text should stay in English and should document critical defaults and paging behavior explicitly.
+    /// 面向 AI 的 shell schema 文案应保持英文，并明确说明关键默认值与分页行为。
+    #[test]
+    fn shell_tool_schema_descriptions_document_defaults_in_english() {
+        let shell_support = test_shell_support();
+        let command_tool = build_shell_command_tool(shell_support.clone());
+        let session_tool = build_shell_session_tool(
+            Arc::new(CommandSessionRuntime::new()),
+            shell_support.clone(),
+        );
+        let command_schema = shell_command_args_schema(&shell_support);
+        let session_schema = shell_session_args_schema(&shell_support);
+
+        assert!(
+            command_tool
+                .descriptor
+                .description
+                .starts_with("Run a one-shot command")
+        );
+        assert!(
+            session_tool
+                .descriptor
+                .description
+                .starts_with("Start, read, write to, or stop")
+        );
+        assert!(
+            command_tool
+                .descriptor
+                .description
+                .contains("no timeout is applied")
+        );
+        assert!(
+            command_tool
+                .descriptor
+                .description
+                .contains("not just a summary")
+        );
+        assert!(
+            command_tool
+                .descriptor
+                .description
+                .contains(".vulcan/temp/")
+        );
+        assert!(
+            session_tool
+                .descriptor
+                .description
+                .contains("tool_output_overflow_page_md_")
+        );
+        assert!(
+            command_schema["properties"]["timeout_ms"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Default: unlimited")
+        );
+        assert!(
+            command_schema["properties"]["cwd"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("used only for this one-shot command invocation")
+        );
+        assert!(
+            command_schema["properties"]["stdin"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("No newline is added automatically")
+        );
+        assert!(
+            session_schema["properties"]["wait_for_output_ms"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Default: 0")
+        );
+        assert!(
+            session_schema["properties"]["max_chunks"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Default: 128")
+        );
+        assert!(
+            session_schema["properties"]["max_chunks"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("coalesces adjacent undelivered fragments")
+        );
+        assert!(
+            session_schema["properties"]["append_newline"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("resolved launcher shell")
+        );
+        if cfg!(windows) {
+            assert!(
+                session_schema["properties"]["shell"]["description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("rejects `shell: auto`")
+            );
+        }
+        assert!(
+            session_schema["properties"]["stdin"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hidden concatenation")
+        );
+    }
+
+    /// The start action should default newline submission on when initial stdin is provided so complete commands are safer by default.
+    /// start 动作在提供初始标准输入时应默认开启换行提交，以便默认情况下更安全地发送完整命令。
+    #[test]
+    fn shell_session_start_defaults_append_newline_when_stdin_exists() {
+        assert!(effective_start_append_newline(None, Some("echo hi")));
+        assert!(!effective_start_append_newline(None, None));
+        assert!(!effective_start_append_newline(Some(false), Some("echo hi")));
+        assert!(effective_start_append_newline(Some(true), None));
+    }
+
+    /// The start action should reject newline-less initial stdin unless the caller explicitly submits a newline in-band or via append_newline.
+    /// start 动作应拒绝未闭合的初始标准输入，除非调用方通过文本本身或 append_newline 显式提交换行。
+    #[test]
+    fn shell_session_start_rejects_hidden_stdin_concatenation() {
+        let error = validate_shell_session_start_stdin_policy(Some("echo init"), false)
+            .expect_err("newline-less initial stdin should be rejected");
+        assert!(error.message.contains("rejected initial stdin"));
+        validate_shell_session_start_stdin_policy(Some("echo init\n"), false)
+            .expect("trailing newline inside stdin should pass");
+        validate_shell_session_start_stdin_policy(Some("echo init"), true)
+            .expect("append_newline should make the input safe");
+    }
+
+    /// Windows shell sessions should reject `auto` when the command directly enters a nested Unix shell because the outer launcher is not deterministic enough.
+    /// Windows shell 会话在命令直接进入嵌套 Unix shell 时应拒绝 `auto`，因为外层启动器行为不够确定。
+    #[test]
+    fn shell_session_start_rejects_windows_auto_for_nested_unix_shells() {
+        let bash_behavior = resolve_session_shell_behavior("bash", "pwsh");
+        if cfg!(windows) {
+            let error = validate_shell_session_start_shell_policy(Some("auto"), &bash_behavior)
+                .expect_err("windows auto nested bash should be rejected");
+            assert!(error.message.contains("requires an explicit `shell`"));
+        } else {
+            validate_shell_session_start_shell_policy(Some("auto"), &bash_behavior)
+                .expect("non-windows hosts should keep current auto behavior");
+        }
+        validate_shell_session_start_shell_policy(Some("bash"), &bash_behavior)
+            .expect("explicit bash should remain valid");
+    }
+
+    /// Bash-like shells should always receive LF for automatic line submission, even on Windows hosts.
+    /// 类 Bash shell 在自动提交输入行时始终应接收 LF，即使宿主是 Windows。
+    #[test]
+    fn shell_specific_newline_uses_lf_for_unix_shell_labels() {
+        assert_eq!(shell_specific_newline("bash"), "\n");
+        assert_eq!(shell_specific_newline("sh"), "\n");
+        assert_eq!(shell_specific_newline("zsh"), "\n");
+        assert_eq!(
+            shell_specific_newline("cmd"),
+            if cfg!(windows) { "\r\n" } else { "\n" }
+        );
+    }
+
+    /// Directly launching a nested interactive Unix shell should switch newline semantics away from the outer auto-resolved Windows launcher.
+    /// 直接启动嵌套交互式 Unix shell 时，应把换行语义从外层自动解析的 Windows 启动器切换开。
+    #[test]
+    fn session_shell_behavior_detects_nested_bash_from_command_text() {
+        let behavior = resolve_session_shell_behavior("bash", "pwsh");
+
+        assert_eq!(behavior.launcher_shell_label, "pwsh");
+        assert_eq!(behavior.interactive_shell_label, "bash");
+        assert!(behavior.nested_shell_inferred);
     }
 
     /// The shell-command tool should stay AI-visible in Plan mode so planning turns can still discover and select host command execution.

@@ -15999,6 +15999,7 @@ mod tests {
                 .expect("parse owner session id"),
             command: String::from("ping 127.0.0.1"),
             shell_label: String::from("powershell"),
+            launcher_shell_label: String::from("powershell"),
             cwd: PathBuf::from("D:\\openvulcan\\vulcan-code"),
             status: CommandSessionStatus::Stopped,
             exit_code: Some(1),
@@ -16006,6 +16007,7 @@ mod tests {
             stdout_bytes: 256,
             stderr_bytes: 8,
             last_seq: 11,
+            pending_stdin_line: false,
         };
 
         assert!(presentation.apply_command_session_snapshot(&snapshot));
@@ -16772,6 +16774,7 @@ mod tests {
                 .expect("parse owner session id"),
             command: String::from("cargo test -p vulcan-code-gui"),
             shell_label: String::from("powershell"),
+            launcher_shell_label: String::from("powershell"),
             cwd: PathBuf::from("D:\\openvulcan\\vulcan-code"),
             status: CommandSessionStatus::Stopped,
             exit_code: Some(1),
@@ -16779,6 +16782,7 @@ mod tests {
             stdout_bytes: 2048,
             stderr_bytes: 16,
             last_seq: 27,
+            pending_stdin_line: false,
         };
 
         let metadata =

@@ -56,6 +56,21 @@ impl HostCommandShell {
         }
     }
 
+    /// Returns the interactive newline sequence that should be used when one session asks the host to submit an input line automatically.
+    /// 返回当某个会话请求宿主自动提交一行输入时应使用的交互换行序列。
+    pub const fn interactive_newline(self) -> &'static str {
+        match self {
+            Self::Bash | Self::Zsh | Self::Sh => "\n",
+            Self::Pwsh | Self::Powershell | Self::Cmd => {
+                if cfg!(windows) {
+                    "\r\n"
+                } else {
+                    "\n"
+                }
+            }
+        }
+    }
+
     /// Parses one persisted or tool-provided shell identifier into a supported shell family.
     /// 将一条持久化或工具传入的 shell 标识解析为受支持的 shell 族。
     pub fn parse(value: &str) -> Option<Self> {
@@ -219,27 +234,38 @@ impl HostCommandShellSupport {
     /// 返回对 AI 代理声明的动态 shell 字段描述。
     pub fn schema_shell_description(&self) -> String {
         let supported = if self.supported_shells.is_empty() {
-            String::from("未检测到可用 shell")
+            String::from("none detected")
         } else {
             self.supported_shells
                 .iter()
                 .map(|entry| entry.shell.id())
                 .collect::<Vec<_>>()
-                .join("、")
+                .join(", ")
         };
         let auto_summary = self
             .auto_shell()
             .map(|entry| {
                 if self.auto_uses_user_preference() {
-                    format!("{}（用户默认）", entry.shell.id())
+                    format!("{} (user default)", entry.shell.id())
                 } else {
                     entry.shell.id().to_string()
                 }
             })
-            .unwrap_or_else(|| String::from("未解析"));
+            .unwrap_or_else(|| String::from("unresolved"));
+        let windows_unix_shell_note = if cfg!(windows)
+            && self.supported_shells.iter().any(|entry| {
+                matches!(
+                    entry.shell,
+                    HostCommandShell::Bash | HostCommandShell::Sh | HostCommandShell::Zsh
+                )
+            }) {
+            " On Windows, bash/sh/zsh require a compatible Unix-like environment such as Git Bash or another PATH-visible launcher."
+        } else {
+            ""
+        };
 
         format!(
-            "可选 shell 类型；默认 auto。当前系统支持：{supported}。auto 当前解析为：{auto_summary}。"
+            "Optional shell selector. Defaults to `auto`. Supported on this host: {supported}. `auto` currently resolves to: {auto_summary}.{windows_unix_shell_note}"
         )
     }
 
