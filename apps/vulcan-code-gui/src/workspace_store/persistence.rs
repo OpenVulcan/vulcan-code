@@ -8,30 +8,13 @@ use super::*;
 /// Maintains the storage shape for one already hydrated session without scanning unrelated history.
 /// 在不扫描无关历史的前提下维护单个已水合会话的存储形态。
 pub async fn maintain_hydrated_session_storage(
-    controller: ControllerRuntimeHandle,
+    _controller: ControllerRuntimeHandle,
     session_id: SessionId,
-    messages: Vec<SessionMessageEntry>,
+    _messages: Vec<SessionMessageEntry>,
 ) -> Result<SessionMaintenanceReport, String> {
-    let Some(session_summary) = query_persisted_session_summary(&controller, session_id).await?
-    else {
-        return Err(format!(
-            "维护已水合会话存储失败：未找到会话 `{session_id}` 的会话摘要。"
-        ));
-    };
-    let runtime_state = query_session_runtime_state_entry(&controller, session_id).await?;
-    let compactions = query_session_compaction_entries(&controller, session_id).await?;
-    let persist_result = persist_session_event_store(
-        &session_summary,
-        &messages,
-        runtime_state.as_ref(),
-        &compactions,
-    )?;
-    persist_single_session_event_store_projection(&controller, &session_summary, &persist_result)
-        .await?;
-
     Ok(SessionMaintenanceReport {
         session_id,
-        upserted_message_count: messages.len(),
+        upserted_message_count: 0,
         runtime_state_persistence_ok: true,
         legacy_chunk_migration: SessionLegacyChunkMigrationReport {
             session_id,

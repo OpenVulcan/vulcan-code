@@ -42,9 +42,8 @@ pub(crate) use self::event_store::{
 };
 pub use history_search::search_workspace_history;
 pub use persistence::{
-    maintain_hydrated_session_storage, maintain_legacy_session_storage,
-    permanently_delete_archived_project, permanently_delete_archived_session,
-    persist_workspace_snapshot,
+    maintain_legacy_session_storage, permanently_delete_archived_project,
+    permanently_delete_archived_session, persist_workspace_snapshot,
 };
 pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 

@@ -5144,9 +5144,6 @@ enum Message {
     /// Applies one older transcript page loaded before the current session window.
     /// 应用在当前会话窗口之前加载的一页更早转录历史。
     OlderSessionHistoryLoaded(SessionId, Result<SessionHistoryPage, String>),
-    /// Applies the completed legacy-storage maintenance result for one hydrated session.
-    /// 应用单个已水合会话的旧存储维护结果。
-    SessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
     /// Applies the completed background legacy-storage maintenance result for one session.
     /// 应用单个会话的后台旧存储维护结果。
     BackgroundLegacySessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
@@ -7110,8 +7107,6 @@ impl VulcanWorkbench {
                 match result {
                     Ok(snapshot) => {
                         self.apply_session_hydration_snapshot(snapshot);
-                        let maintenance_task =
-                            self.schedule_session_storage_maintenance(session_id);
                         if self
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
@@ -7120,7 +7115,6 @@ impl VulcanWorkbench {
                                 self.maybe_continue_workspace_history_search_navigation(session_id);
                             self.status_message = self.t(I18nKey::StatusSessionHydrated);
                             return Task::batch([
-                                maintenance_task,
                                 self.schedule_session_agent_view_projection_refresh_if_needed(
                                     session_id,
                                 ),
@@ -7133,7 +7127,6 @@ impl VulcanWorkbench {
                         }
 
                         return Task::batch([
-                            maintenance_task,
                             self.schedule_session_agent_view_projection_refresh_if_needed(
                                 session_id,
                             ),
@@ -7212,31 +7205,6 @@ impl VulcanWorkbench {
                     Err(error) => {
                         self.status_message = format!("加载更早会话历史失败：{error}");
                         self.push_activity(ActivityLevel::Warning, "加载更早会话历史失败", error);
-                    }
-                }
-
-                Task::none()
-            }
-            Message::SessionMaintenanceFinished(session_id, result) => {
-                match result {
-                    Ok(report) => {
-                        if report.session_id != session_id || !report.runtime_state_persistence_ok {
-                            self.push_activity(
-                                ActivityLevel::Warning,
-                                "会话旧数据维护结果异常",
-                                format!(
-                                    "维护报告与请求会话不一致或运行时状态持久化未确认，message_count={}",
-                                    report.upserted_message_count
-                                ),
-                            );
-                        }
-                        self.record_session_legacy_chunk_migration_activity(
-                            "旧版超大消息已迁移",
-                            &report,
-                        );
-                    }
-                    Err(error) => {
-                        self.push_activity(ActivityLevel::Warning, "会话旧数据维护失败", error);
                     }
                 }
 
@@ -12614,6 +12582,34 @@ impl VulcanWorkbench {
             .or_else(|| self.selected_session().map(|session| session.id))
     }
 
+    /// Returns whether one session currently owns the visible transcript surface and therefore warrants live view-cache refresh work.
+    /// 返回某个会话当前是否拥有可见转录表面，并因此值得承担实时视图缓存刷新开销。
+    fn session_owns_active_transcript_surface(&self, session_id: SessionId) -> bool {
+        self.active_transcript_surface_session_id() == Some(session_id)
+    }
+
+    /// Invalidates heavyweight transcript projection caches for one hidden session so background streaming keeps the data fresh without rebuilding invisible views.
+    /// 使某个隐藏会话的重型转录投影缓存失效，让后台流式输出仅保持数据新鲜，而不重建不可见视图。
+    fn invalidate_hidden_session_streaming_view_caches(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+    ) {
+        if !message_id.is_empty() {
+            self.session_message_raw_buffers.remove(message_id);
+            self.session_message_markdown.remove(message_id);
+            self.session_message_markdown_buffers.remove(message_id);
+        }
+        self.loading_session_agent_view_projection_ids
+            .remove(&session_id);
+        self.collapsed_runtime_event_ids.remove(&session_id);
+        self.markdown_runtime_event_ids.remove(&session_id);
+        self.remove_runtime_event_raw_buffers(session_id);
+        self.clear_session_agent_view_text_buffers(session_id);
+        self.session_agent_view_documents.remove(&session_id);
+        self.clear_session_inline_agent_view_document_cache(session_id);
+    }
+
     /// Appends one canonical record to the session standard state so transcript projection never becomes the source of truth.
     /// 向会话标准状态追加一条规范记录，确保转录投影永远不是事实源。
     fn append_session_record_to_conversation(
@@ -12788,11 +12784,17 @@ impl VulcanWorkbench {
         }
         perf_trace.checkpoint("project_visible_messages", phase_started_at);
         phase_started_at = Instant::now();
-        self.refresh_streamed_session_message_view_caches(session_id, message_id, delta);
-        perf_trace.checkpoint("refresh_message_view_caches", phase_started_at);
-        phase_started_at = Instant::now();
-        if !self.refresh_session_agent_view_message_blocks(session_id, message_id) {
-            self.refresh_session_agent_view_buffers(session_id);
+        if self.session_owns_active_transcript_surface(session_id) {
+            self.refresh_streamed_session_message_view_caches(session_id, message_id, delta);
+            perf_trace.checkpoint("refresh_message_view_caches", phase_started_at);
+            phase_started_at = Instant::now();
+            if !self.refresh_session_agent_view_message_blocks(session_id, message_id) {
+                self.refresh_session_agent_view_buffers(session_id);
+            }
+        } else {
+            self.invalidate_hidden_session_streaming_view_caches(session_id, message_id);
+            perf_trace.checkpoint("refresh_message_view_caches", phase_started_at);
+            phase_started_at = Instant::now();
         }
         perf_trace.checkpoint("refresh_agent_view", phase_started_at);
         perf_trace.finish();
@@ -13583,45 +13585,6 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Schedules best-effort storage maintenance for one already hydrated session.
-    /// 为单个已水合会话调度尽力而为的存储维护任务。
-    fn schedule_session_storage_maintenance(&self, session_id: SessionId) -> Task<Message> {
-        if session_id.is_nil() {
-            return Task::none();
-        }
-        let Some(controller_runtime) = self.controller_runtime.clone() else {
-            return Task::none();
-        };
-        let messages = self
-            .session_messages
-            .get(&session_id)
-            .or_else(|| self.archived_session_messages.get(&session_id))
-            .map(|messages| {
-                messages
-                    .iter()
-                    .map(|message| {
-                        self.full_tool_detail_message_entry(session_id, &message.id)
-                            .cloned()
-                            .unwrap_or_else(|| message.clone())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        Task::perform(
-            async move {
-                let result = workspace_store::maintain_hydrated_session_storage(
-                    controller_runtime,
-                    session_id,
-                    messages,
-                )
-                .await;
-                (session_id, result)
-            },
-            |(session_id, result)| Message::SessionMaintenanceFinished(session_id, result),
-        )
-    }
-
     /// Schedules the next low-priority legacy session maintenance task if the queue is idle.
     /// 当队列空闲时调度下一条低优先级旧会话维护任务。
     fn schedule_next_background_legacy_session_maintenance(&mut self) -> Task<Message> {
@@ -14207,27 +14170,35 @@ impl VulcanWorkbench {
             return;
         }
 
-        let event_index = self
-            .session_runtime_events
-            .get(&session_id)
-            .map(|events| events.len())
-            .unwrap_or(0);
-        let event_id = session_runtime_event_id(session_id, event_index, &event);
-        self.runtime_event_raw_buffers.insert(
-            event_id.clone(),
-            text_editor::Content::with_text(&event.detail),
-        );
-        let (markdown_content, markdown_buffer) =
-            parse_selectable_markdown_body(&event.detail, &self.app_theme);
-        self.runtime_event_markdown
-            .insert(event_id.clone(), markdown_content);
-        self.runtime_event_markdown_buffers
-            .insert(event_id, markdown_buffer);
-        self.session_runtime_events
-            .entry(session_id)
-            .or_default()
-            .push(event);
-        self.refresh_session_agent_view_buffers(session_id);
+        if self.session_owns_active_transcript_surface(session_id) {
+            let event_index = self
+                .session_runtime_events
+                .get(&session_id)
+                .map(|events| events.len())
+                .unwrap_or(0);
+            let event_id = session_runtime_event_id(session_id, event_index, &event);
+            self.runtime_event_raw_buffers.insert(
+                event_id.clone(),
+                text_editor::Content::with_text(&event.detail),
+            );
+            let (markdown_content, markdown_buffer) =
+                parse_selectable_markdown_body(&event.detail, &self.app_theme);
+            self.runtime_event_markdown
+                .insert(event_id.clone(), markdown_content);
+            self.runtime_event_markdown_buffers
+                .insert(event_id, markdown_buffer);
+            self.session_runtime_events
+                .entry(session_id)
+                .or_default()
+                .push(event);
+            self.refresh_session_agent_view_buffers(session_id);
+        } else {
+            self.session_runtime_events
+                .entry(session_id)
+                .or_default()
+                .push(event);
+            self.invalidate_hidden_session_streaming_view_caches(session_id, "");
+        }
     }
 
     /// Consumes one delegate runtime event into the dedicated subagent panel cache and returns whether the event should stop there.
@@ -16332,5 +16303,129 @@ mod tests {
                 .and_then(Value::as_str),
             Some("completed")
         );
+    }
+
+    /// Verifies hidden streaming sessions skip heavyweight transcript cache refreshes while still applying the delta to canonical and visible message data.
+    /// 验证隐藏流式会话会跳过重型转录缓存刷新，同时仍将增量写入规范状态与可见消息数据。
+    #[test]
+    fn hidden_streaming_session_skips_view_cache_refresh() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let hidden_session_id = SessionId::from_u128(9801);
+        let visible_session_id = SessionId::from_u128(9802);
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(hidden_session_id, "后台会话"));
+        workbench
+            .sessions
+            .push(test_session_summary(visible_session_id, "前台会话"));
+        workbench.selected_session = visible_session_id;
+
+        let hidden_message_id = String::from("assistant-hidden-1");
+        let hidden_messages = vec![SessionMessageEntry {
+            id: hidden_message_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("输出"),
+            body: String::from("before"),
+            metadata: None,
+            created_at: String::from("1"),
+        }];
+        let hidden_conversation_state =
+            crate::conversation_protocol::conversation_state_from_session_messages(&hidden_messages);
+        workbench
+            .session_messages
+            .insert(hidden_session_id, hidden_messages);
+        workbench.session_runtime_state.insert(
+            hidden_session_id,
+            SessionRuntimeStateEntry {
+                conversation_state: hidden_conversation_state,
+                updated_at: String::from("1"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        workbench.refresh_session_agent_view_buffers(hidden_session_id);
+        assert!(
+            workbench
+                .session_agent_view_documents
+                .contains_key(&hidden_session_id)
+        );
+
+        workbench.append_stream_delta_to_session_message(
+            hidden_session_id,
+            &hidden_message_id,
+            " after",
+        );
+
+        assert_eq!(
+            workbench
+                .session_message_entry(hidden_session_id, &hidden_message_id)
+                .map(|message| message.body.as_str()),
+            Some("before after")
+        );
+        assert!(
+            !workbench
+                .session_agent_view_documents
+                .contains_key(&hidden_session_id)
+        );
+        assert!(
+            !workbench
+                .session_message_raw_buffers
+                .contains_key(&hidden_message_id)
+        );
+        assert!(
+            !workbench
+                .session_message_markdown_buffers
+                .contains_key(&hidden_message_id)
+        );
+    }
+
+    /// Verifies the active transcript surface keeps refreshing live caches so the currently visible session still updates incrementally.
+    /// 验证当前活动转录表面仍会持续刷新实时缓存，确保当前可见会话继续按增量即时更新。
+    #[test]
+    fn visible_streaming_session_keeps_live_view_cache_refresh() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(9803);
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "当前会话"));
+        workbench.selected_session = session_id;
+
+        let message_id = String::from("assistant-visible-1");
+        let messages = vec![SessionMessageEntry {
+            id: message_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("输出"),
+            body: String::from("hello"),
+            metadata: None,
+            created_at: String::from("1"),
+        }];
+        let conversation_state =
+            crate::conversation_protocol::conversation_state_from_session_messages(&messages);
+        workbench.session_messages.insert(session_id, messages);
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                conversation_state,
+                updated_at: String::from("1"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        workbench.append_stream_delta_to_session_message(session_id, &message_id, " world");
+
+        assert_eq!(
+            workbench
+                .session_message_entry(session_id, &message_id)
+                .map(|message| message.body.as_str()),
+            Some("hello world")
+        );
+        assert!(workbench.session_agent_view_documents.contains_key(&session_id));
+        assert!(workbench.session_message_raw_buffers.contains_key(&message_id));
     }
 }
