@@ -46,3 +46,118 @@
 - 状态型工具要把“历史记录”和“实时状态”分层处理。
 - 一次性命令结果可以主要依赖历史记录。
 - 长生命周期命令会话必须始终有一条按 id 回查实时状态的路径，否则 GUI 一定会出现“历史状态冒充当前状态”的问题。
+
+## 本轮会话沉淀（2026-05）
+
+### 8. ask 工具当前约定
+- 模型可见的提问工具当前只保留 `ask`，不再保留 `question` 别名；注册入口在 `apps/vulcan-code-gui/src/tooling/bridge.rs`。
+- `ask` 的 tool description / schema / 参数说明继续固定使用英文，目的不是给用户看，而是提高模型主动发起澄清与确认的概率。
+- `ask` 的最终返回当前固定为 Markdown，而不是 JSON；实现位于 `apps/vulcan-code-gui/src/agent_runtime/question_runtime.rs` 的 `build_question_reply_markdown`。
+- `ask` 运行时必须复用共享 `QuestionRuntime`，不能在 runtime refresh 时重建丢失；相关复用点在 `apps/vulcan-code-gui/src/agent_runtime/runtime.rs` 与 runtime stream bootstrap 链路。
+- `ask` GUI 当前是专用阻塞面板，不是通用 notice modal；多题采用标签页加确认页模式，来源状态定义在 `apps/vulcan-code-gui/src/app_shell/mod.rs`。
+- 当前交互语义：
+  - 左右键切换问题标签或确认页。
+  - 上下键移动当前题高亮项。
+  - `Space` 只负责单选/多选切换；在确认页 `Space` 等同确认提交。
+  - `Enter` 在答题页表示确认当前页并进入下一页，在确认页表示确认提交。
+  - `Esc` 或右上角关闭不会直接取消，而是先弹出现有确认提示；确认放弃后会中断当前工具调用与后续对话执行。
+- 纯文本题不应再显示“先选其他回答再输入”，而是进入该题后直接显示输入框并自动聚焦。
+- 带选项题仍保留“其他回答”这一行，只有选中后才展开自定义输入。
+- 确认页使用单独页面，不再保留底部“上一题/下一题/进入确认”大按钮；若存在未答完问题，确认页应明确列出未完成项并允许快捷跳转。
+- 示例面板当前保留“工作区入口 / 补丁与骨架预览 / Git Diff 入口 / Git Diff 独立窗口”，并提供 `ask 调试` 入口专门用于样式调试。
+- `ask` 调试预览当前是只读、可选择、可复制的 Markdown 预览缓冲区，不应退回为普通纯文本。
+- `ask` 相关 Markdown 预览与渲染不要再回退到 `iced` 原生 Markdown；统一走项目自己的 `vulcan_markdown` 链路。
+- overlay 顺序要注意：放弃确认提示必须渲染在 `ask` 面板之上，否则会出现提示被 ask 面板盖住的错觉。
+
+### 9. Markdown 组件约定
+- 项目内 Markdown 渲染优先使用自有 `vulcan_markdown`，相关入口见 `apps/vulcan-code-gui/src/ui/theme.rs`。
+- 需要“可选中 / 可复制 / 只读”的 Markdown 预览时，优先用 `text_editor::Content` 承载可选择文本，而不是直接嵌回 `iced` 原生 Markdown 控件。
+- 如果只是为了显示 Markdown 外观，但实际需求是“复制测试结果”，不要为了省事退回普通 `text`；这样会丢掉选择与复制能力。
+
+### 10. LuaSkills 0.4.3 对接约定
+- 当前仓库已经对齐 `luaskills = 0.4.3`，不要再按 `0.4.2` 的旧扁平参数推导逻辑修改宿主。
+- `LuaSkills` 工具参数 schema 当前应优先直接复用 `RuntimeEntryDescriptor.input_schema`；实现位于 `apps/vulcan-code-gui/src/runtime_support/luaskills_runtime.rs` 的 `luaskills_entry_args_schema`。
+- `LUASKILL_SID` 仍然是宿主管理字段，但处理方式是：
+  - 面向模型的可见 schema 里隐藏该字段。
+  - 调用执行前由宿主自动注入。
+  - 如果 `input_schema.required` 包含该字段，隐藏时必须同步从 `required` 中移除。
+- `tooling/bridge.rs` 中判断某个 skill 是否声明 `LUASKILL_SID` 时，优先看 `input_schema.properties`，只把旧版 `parameters` 作为回退。
+- 如果某个 skill 包本身还没升级到 `input_schema` / `input_schema_file`，即使宿主已经升级到 0.4.3，也拿不到完整 schema 能力；此时要去更新 skill 包本身，而不是继续在宿主里手搓特例 schema。
+- 当前会触发严格 schema 问题的典型 LuaSkills 技能有 `vulcan-codekit`、`vulcan-curl`、`vulcan-testkit`；排查时优先检查 skill 包是否提供完整 schema。
+
+### 11. OpenRouter / Gemini 工具 schema 兼容层
+- 当前 OpenRouter 经 Google AI Studio 路由时，对函数工具 schema 的校验明显严于通用 JSON Schema；不要假设“上游 schema 合法 = Gemini 一定接受”。
+- 宿主当前通过共享兼容层 `normalize_provider_tool_parameters_schema` 做正规化，位置在 `apps/vulcan-code-gui/src/agent_runtime/provider_protocol_tool_definition.rs`。
+- 这层兼容当前已经接入：
+  - `provider_transport_google_http.rs`
+  - `provider_transport_openai_compatible_http.rs`
+  - `provider_transport_openai_responses_http.rs`
+- 当前正规化职责包括：
+  - 为对象形 / 数组形分支补显式 `type`。
+  - 递归处理 `properties`、`patternProperties`、`dependentSchemas`、`items`、`additionalProperties`、`unevaluatedProperties`、`unevaluatedItems`、`not`、`anyOf`、`oneOf`、`allOf` 等子 schema。
+  - 对只写了 `required` 的组合分支复制父级 `properties` / `additionalProperties`，兼容 Gemini 要求“required 字段必须在同一分支声明”的限制。
+  - 把 JSON Schema 的 `type: ["string","number","boolean"]` 这类多类型数组改写成 Gemini 更容易接受的 `anyOf`。
+- 典型坑：
+  - `required` 在 `anyOf` / `oneOf` 分支里但分支没有 `type: object`，Google 会拒。
+  - `required` 引用了父级 `properties` 里才定义的字段，Google 仍会拒。
+  - `items.type` / `additionalProperties.type` 用联合数组时，Google 可能报成“missing field”，本质是它不接受多类型数组写法。
+- 这类问题优先在 provider 兼容层修，不要先去改 skill 原始 schema，除非确认 skill 本身就是错的。
+
+### 12. Provider 错误诊断约定
+- 工具与 provider 错误文案当前要求统一英文，不走语言包；面向用户 GUI 可继续中文。
+- 标准 HTTP provider 错误格式化统一走 `apps/vulcan-code-gui/src/agent_runtime/provider_transport_http_support.rs` 的 `format_standard_error_response`。
+- 该格式化当前会尽量保留：
+  - HTTP status
+  - `error.code`
+  - `error.type`
+  - `error.param`
+  - `error.message`
+  - `error.metadata` 里的 `raw` / `details` / `provider_name` / `upstream_provider` / `model` / `request_id`
+  - 顶层 `user_id` / `request_id`
+- 当 OpenRouter / OpenAI-compatible 上游报 `function_declarations[n]` 时，错误增强层会把索引反查为 `tool[n]=...`，实现位于 `provider_transport_openai_compatible_http.rs`。
+- 调试顺序建议：
+  - 先看 `tool[n]=...` 定位具体工具。
+  - 再看报错路径是 `parameters.properties.xxx`、`items`、`anyOf`、`oneOf` 还是 `required`。
+  - 最后判断是 skill schema 问题还是 Gemini 兼容层问题。
+
+### 13. Provider 目录同步脚本约定
+- 当前同步 OpenCode / models.dev provider 目录的脚本为 `scripts/sync_opencode_provider_catalog.ps1`。
+- 常用调用方式：
+  - 试运行：`pwsh -File scripts/sync_opencode_provider_catalog.ps1 -DryRun`
+  - 正式写入：`pwsh -File scripts/sync_opencode_provider_catalog.ps1`
+  - 如需自定义目录或报告：
+    - `-ProviderDirectory <path>`
+    - `-ReportPath <path>`
+    - `-RemoteCatalogUrl <url>`
+- 默认同步源是 `https://models.dev/api.json`。
+- 默认排除 `opencode` 与 `opencode-go`，这是刻意策略，不要在脚本里误删。
+- 仍需人工复核运行时支持的 provider 当前内置在 `ManualReviewProviderIds`，例如 `amazon-bedrock`、`google-vertex`、`vercel` 等；资源文件同步完成不代表运行时已经真正可用。
+- 合并策略必须是“保留本地既有结构与扩展字段，只追加缺失模型”：
+  - 不覆盖已有 provider 顶层自定义字段。
+  - 不覆盖已有模型对象。
+  - 本地独有字段如 `usageCapture`、`reasoningProfile`、`modelRuntimeOverrides`、`extraHeaders` 等必须保留。
+- 同步脚本当前带结构守卫 `Assert-ProviderDefinitionShape`，用于防止把数组字段错误压成标量。
+- 这轮真实踩坑就是：如果把 `credentialEnvKeys`、`fields`、`inputModalities`、`outputModalities`、`aiTools` 之类数组字段写坏成字符串或对象，运行时会在加载 provider catalog 时 panic。
+- 不要直接编辑 `output/resources/providers` 作为长期来源；源资源目录以 `apps/vulcan-code-gui/resources/providers` 为准。
+
+### 14. Provider 模型显示与 enabled_models 约定
+- UI 里大多数模型列表看的不是“完整 catalog”，而是 `effective_model_choices`；实现位于 `apps/vulcan-code-gui/src/provider/config.rs`。
+- 只要某个 provider 配置项已经持久化了 `enabled_models`，新增同步进来的模型不会自动出现在工作台模型选择器里，除非：
+  - 它被手动加入 `enabled_models`
+  - 或它在刷新合并时命中“新发现且 `default_enabled = true`”的自动启用逻辑
+- `current_provider_model_choices` 与 `configured_workbench_model_choices` 都依赖 `effective_model_choices`，因此“资源文件里明明有模型，但界面里看不到”通常先查 `enabled_models`。
+- 如果某个旧 provider 条目完全没有保存过 `enabled_models`，当前逻辑会回退到完整目录，而不是只看默认启用模型。
+- `alibaba`、`alibaba-cn`、`alibaba-coding-plan-cn` 等 provider 资源是独立文件，不要假设上游 `alibaba` 新增模型会自动出现在 `alibaba-cn`。
+- 这轮实际出现过的例子：
+  - `Qwen3.7 Max` 已经进了 `alibaba.json` 与 `openrouter.json`
+  - 但 `alibaba-cn.json` 还没有
+  - 同时用户本地 `enabled_models` 也可能没把它加入，所以 UI 依旧看不到
+
+### 15. 参考来源与排查顺序
+- provider 目录与模型节点同步，当前主要参考 `D:\projects\OpenCode\opencode` 与 `models.dev/api.json`。
+- LuaSkills schema 行为与新字段支持，当前主要参考 `D:\projects\vulcan-luaskills` 与技能仓库 `D:\projects\vulcan-luaskills-skills`。
+- 遇到“同一个问题到底该改宿主、改 skill 包、还是改 provider 兼容层”的判断顺序：
+  - 先确认当前代码是否已经接入上游新能力，例如 `input_schema`。
+  - 再确认 skill 包实际是否已经产出完整 schema。
+  - 如果 skill 合法但 Gemini / OpenRouter 仍拒绝，则优先在 provider 兼容层正规化。
+  - 只有确认 skill 自己输出错误时，才改 skill 包或其 schema 文件。
