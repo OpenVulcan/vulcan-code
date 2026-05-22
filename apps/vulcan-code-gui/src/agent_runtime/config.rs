@@ -143,19 +143,6 @@ pub enum RuntimeSkillKind {
     Memory,
 }
 
-impl RuntimeSkillKind {
-    /// Returns a compact human-readable label.
-    /// 返回紧凑的人类可读标签。
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Regular => "常规技能",
-            Self::LuaSkills => "LuaSkills",
-            Self::Automation => "自动化",
-            Self::Memory => "记忆",
-        }
-    }
-}
-
 impl From<PersistedSkillKind> for RuntimeSkillKind {
     /// Converts one persisted skill kind into its runtime counterpart.
     /// 将一个持久化技能类型转换为对应的运行时技能类型。
