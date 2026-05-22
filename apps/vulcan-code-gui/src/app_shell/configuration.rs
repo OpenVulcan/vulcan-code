@@ -1874,6 +1874,32 @@ impl VulcanWorkbench {
         Ok(())
     }
 
+    /// Persists one host-managed LuaSkills tool visibility override and refreshes the runtime foundation only when the visibility state actually changed.
+    /// 持久化单个宿主管理的 LuaSkills 工具可见性覆盖，并且仅在状态真实变化时刷新运行时基础架构。
+    pub(super) fn persist_luaskills_tool_visibility(
+        &mut self,
+        skill_id: &str,
+        local_name: &str,
+        hidden: bool,
+    ) -> Result<bool, String> {
+        let previous_visibility = self.provider_configuration.luaskills.clone();
+        let changed = self
+            .provider_configuration
+            .luaskills
+            .set_tool_disabled(skill_id, local_name, hidden);
+        if !changed {
+            return Ok(false);
+        }
+
+        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
+            self.provider_configuration.luaskills = previous_visibility;
+            return Err(error);
+        }
+
+        self.refresh_runtime_foundation();
+        Ok(true)
+    }
+
     /// Adds one shared AI capability vendor instance when it does not already exist.
     /// 当共享 AI 能力供应商实例尚不存在时新增该实例。
     pub(super) fn add_ai_capability_vendor(&mut self, vendor_id: &str) -> bool {

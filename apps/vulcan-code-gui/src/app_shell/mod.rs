@@ -6925,6 +6925,13 @@ enum Message {
     /// Requests uninstalling one ordinary LuaSkills package through the embedded host runtime.
     /// 请求通过嵌入式宿主运行时卸载一个普通 LuaSkills 包。
     UninstallLuaSkill(String),
+    /// Updates one host-managed LuaSkills runtime tool visibility override without mutating the package lifecycle state itself.
+    /// 更新单个宿主管理的 LuaSkills 运行时工具可见性覆盖，而不会改动技能包自身生命周期状态。
+    SetLuaSkillToolVisibility {
+        skill_id: String,
+        local_name: String,
+        hidden: bool,
+    },
     /// Applies the finished result of one host-side LuaSkills management action.
     /// 应用单次宿主侧 LuaSkills 管理动作的完成结果。
     LuaSkillsManagementFinished(Result<LuaSkillsManagementReport, String>),
@@ -8586,6 +8593,38 @@ impl VulcanWorkbench {
                     ),
                     Message::LuaSkillsManagementFinished,
                 )
+            }
+            Message::SetLuaSkillToolVisibility {
+                skill_id,
+                local_name,
+                hidden,
+            } => {
+                match self.persist_luaskills_tool_visibility(&skill_id, &local_name, hidden) {
+                    Ok(true) => {
+                        self.luaskills_notice = if hidden {
+                            format!(
+                                "已隐藏技能 `{skill_id}` 的工具 `{local_name}`，仅影响宿主对模型暴露。"
+                            )
+                        } else {
+                            format!(
+                                "已恢复技能 `{skill_id}` 的工具 `{local_name}`，宿主会重新向模型暴露它。"
+                            )
+                        };
+                        self.status_message = self.luaskills_notice.clone();
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        self.luaskills_notice = format!("保存 LuaSkills 工具可见性失败：{error}");
+                        self.status_message = self.luaskills_notice.clone();
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "保存 LuaSkills 工具可见性失败",
+                            error,
+                        );
+                    }
+                }
+
+                Task::none()
             }
             Message::LuaSkillsManagementFinished(result) => {
                 self.luaskills_operation_in_flight = false;

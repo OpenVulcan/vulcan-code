@@ -4058,6 +4058,105 @@ pub struct PersistedToolPolicyEntry {
     pub mcp_tools: Vec<String>,
 }
 
+/// Host-managed LuaSkills tool visibility configuration persisted independently from package lifecycle state.
+/// 与技能包生命周期状态独立持久化的宿主管理 LuaSkills 工具可见性配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedLuaSkillsConfiguration {
+    /// Disabled LuaSkills local tool names grouped by stable skill identifier.
+    /// 按稳定技能标识分组保存的已禁用 LuaSkills 本地工具名称集合。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub disabled_tools_by_skill: BTreeMap<String, Vec<String>>,
+}
+
+impl PersistedLuaSkillsConfiguration {
+    /// Returns whether the current LuaSkills visibility configuration is still empty.
+    /// 返回当前 LuaSkills 可见性配置是否仍为空。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Normalizes the persisted LuaSkills visibility map by trimming identifiers, dropping empty entries, and deduplicating tool names.
+    /// 通过裁剪标识、移除空条目并去重工具名来归一化持久化的 LuaSkills 可见性映射。
+    pub fn normalize(&mut self) -> bool {
+        let normalized_map = self
+            .disabled_tools_by_skill
+            .iter()
+            .filter_map(|(skill_id, local_names)| {
+                let stable_skill_id = skill_id.trim();
+                if stable_skill_id.is_empty() {
+                    return None;
+                }
+
+                let normalized_local_names = local_names
+                    .iter()
+                    .map(|local_name| local_name.trim())
+                    .filter(|local_name| !local_name.is_empty())
+                    .map(String::from)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+
+                if normalized_local_names.is_empty() {
+                    None
+                } else {
+                    Some((stable_skill_id.to_string(), normalized_local_names))
+                }
+            })
+            .collect::<BTreeMap<_, _>>();
+        let changed = normalized_map != self.disabled_tools_by_skill;
+        self.disabled_tools_by_skill = normalized_map;
+        changed
+    }
+
+    /// Returns whether one LuaSkills local tool name is currently hidden for the given skill package.
+    /// 返回给定技能包下某个 LuaSkills 本地工具名称当前是否处于隐藏状态。
+    pub fn is_tool_disabled(&self, skill_id: &str, local_name: &str) -> bool {
+        let stable_skill_id = skill_id.trim();
+        let stable_local_name = local_name.trim();
+        if stable_skill_id.is_empty() || stable_local_name.is_empty() {
+            return false;
+        }
+
+        self.disabled_tools_by_skill
+            .get(stable_skill_id)
+            .map(|local_names| local_names.iter().any(|name| name == stable_local_name))
+            .unwrap_or(false)
+    }
+
+    /// Updates one LuaSkills local tool visibility entry while persisting only disabled items.
+    /// 更新单个 LuaSkills 本地工具的可见性条目，并且只持久化禁用项。
+    pub fn set_tool_disabled(&mut self, skill_id: &str, local_name: &str, disabled: bool) -> bool {
+        let stable_skill_id = skill_id.trim();
+        let stable_local_name = local_name.trim();
+        if stable_skill_id.is_empty() || stable_local_name.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+        if disabled {
+            let entry = self
+                .disabled_tools_by_skill
+                .entry(stable_skill_id.to_string())
+                .or_default();
+            if !entry.iter().any(|name| name == stable_local_name) {
+                entry.push(stable_local_name.to_string());
+                changed = true;
+            }
+        } else if let Some(entry) = self.disabled_tools_by_skill.get_mut(stable_skill_id) {
+            let original_len = entry.len();
+            entry.retain(|name| name != stable_local_name);
+            changed = original_len != entry.len();
+            if entry.is_empty() {
+                self.disabled_tools_by_skill.remove(stable_skill_id);
+            }
+        }
+
+        changed |= self.normalize();
+        changed
+    }
+}
+
 /// One persisted agent entry stored in the shared Vulcan configuration file.
 /// 存储在共享 Vulcan 配置文件中的单个持久化代理条目。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4427,6 +4526,13 @@ pub struct ProviderConfigurationFile {
     /// 以稳定策略标识为键保存的工具策略定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_policies: BTreeMap<String, PersistedToolPolicyEntry>,
+    /// Host-managed LuaSkills visibility overrides persisted independently from package lifecycle state.
+    /// 与技能包生命周期状态独立持久化的宿主管理 LuaSkills 可见性覆盖配置。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedLuaSkillsConfiguration::is_default"
+    )]
+    pub luaskills: PersistedLuaSkillsConfiguration,
     /// Legacy embedded AI tool routing and compatibility configuration kept only as a migration fallback for the standalone AI capability file.
     /// 仅作为独立 AI 能力配置文件迁移回退而保留的旧版内嵌 AI 工具路由与兼容配置。
     #[serde(
@@ -5388,6 +5494,7 @@ fn normalize_provider_configuration_for_save(
     for entry in normalized.provider.values_mut() {
         entry.models.clear();
     }
+    normalized.luaskills.normalize();
     normalized
 }
 
@@ -5602,15 +5709,15 @@ mod tests {
         AiCapabilityVendorConnectionMode, AiToolDeclaration, AiToolKind, ModelChoice,
         ModelInterleavedCapability, ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
         PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-        PersistedAiToolConfiguration, PersistedProviderEntry, PersistedWebSearchConfiguration,
-        PersistedWebSearchProviderEntry, ProviderApiFamily, ProviderBaseUrlConfig,
-        ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
-        ProviderModelDiscoveryKind, ProviderRuntimeKind, ProviderUsageCaptureConfig,
-        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-        SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
-        WebSearchRoutingMode, apply_provider_reasoning_model_overrides, catalog_model_choices,
-        effective_model_choices, extract_models_from_array, filter_remote_model_choices,
-        merge_embedded_model_metadata, merge_refreshed_models,
+        PersistedAiToolConfiguration, PersistedLuaSkillsConfiguration, PersistedProviderEntry,
+        PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderApiFamily,
+        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
+        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
+        ProviderUsageCaptureConfig, ReasoningCapabilityKind, ReasoningEffortLevel,
+        ReasoningProfileConfig, SupportedProviderDefinition, WebSearchProviderDispatchMode,
+        WebSearchProviderKind, WebSearchRoutingMode, apply_provider_reasoning_model_overrides,
+        catalog_model_choices, effective_model_choices, extract_models_from_array,
+        filter_remote_model_choices, merge_embedded_model_metadata, merge_refreshed_models,
         normalize_provider_configuration_for_save, persist_remote_models, remote_models_url,
         supported_provider_by_id,
     };
@@ -6063,6 +6170,74 @@ mod tests {
         );
         assert_eq!(restored.ai_tools.web_search.providers.len(), 1);
         assert!(restored.ai_tools.web_search.providers[0].enabled);
+    }
+
+    /// Verifies the provider configuration file round-trips the dedicated host-managed LuaSkills visibility block.
+    /// 验证供应商配置文件可以完整往返独立的宿主管理 LuaSkills 可见性配置块。
+    #[test]
+    fn provider_configuration_round_trips_luaskills_visibility_configuration() {
+        let config = ProviderConfigurationFile {
+            luaskills: PersistedLuaSkillsConfiguration {
+                disabled_tools_by_skill: BTreeMap::from([(
+                    String::from("skill-a"),
+                    vec![String::from("tool-a"), String::from("tool-b")],
+                )]),
+            },
+            ..ProviderConfigurationFile::default()
+        };
+
+        let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+        assert_eq!(
+            value["luaskills"]["disabledToolsBySkill"]["skill-a"],
+            json!(["tool-a", "tool-b"])
+        );
+
+        let restored: ProviderConfigurationFile =
+            serde_json::from_value(value).expect("provider configuration must deserialize");
+        assert_eq!(
+            restored
+                .luaskills
+                .disabled_tools_by_skill
+                .get("skill-a")
+                .cloned()
+                .unwrap_or_default(),
+            vec![String::from("tool-a"), String::from("tool-b")]
+        );
+    }
+
+    /// Verifies the dedicated LuaSkills visibility configuration keeps only disabled tool entries and removes empty duplicates during normalization.
+    /// 验证独立 LuaSkills 可见性配置只保留禁用工具条目，并会在归一化时移除空值与重复项。
+    #[test]
+    fn luaskills_visibility_configuration_only_persists_disabled_tools() {
+        let mut configuration = PersistedLuaSkillsConfiguration {
+            disabled_tools_by_skill: BTreeMap::from([
+                (
+                    String::from(" skill-a "),
+                    vec![
+                        String::from("tool-a"),
+                        String::from("tool-a"),
+                        String::from(" "),
+                    ],
+                ),
+                (String::new(), vec![String::from("tool-x")]),
+            ]),
+        };
+
+        assert!(configuration.normalize());
+        assert!(configuration.is_tool_disabled("skill-a", "tool-a"));
+        assert!(!configuration.is_tool_disabled("skill-a", "tool-b"));
+        assert!(configuration.set_tool_disabled("skill-a", "tool-b", true));
+        assert!(configuration.is_tool_disabled("skill-a", "tool-b"));
+        assert!(configuration.set_tool_disabled("skill-a", "tool-a", false));
+        assert!(!configuration.is_tool_disabled("skill-a", "tool-a"));
+        assert_eq!(
+            configuration
+                .disabled_tools_by_skill
+                .get("skill-a")
+                .cloned()
+                .unwrap_or_default(),
+            vec![String::from("tool-b")]
+        );
     }
 
     /// Verifies MiniMax web-search hints stay aligned with the official Token Plan CLI naming.

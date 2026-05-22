@@ -13,7 +13,7 @@ use crate::mcp::{
     McpRuntimeAccess, McpRuntimeOverview, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
     configured_mcp_runtime_access,
 };
-use crate::provider_config::ProviderConfigurationFile;
+use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
 use std::collections::{BTreeMap, BTreeSet};
@@ -168,7 +168,7 @@ impl RuntimeFoundation {
         let mut warnings = Vec::new();
         let luaskills_tools = match luaskills_runtime.as_ref() {
             Some(handle) => match list_luaskills_tool_entries(handle) {
-                Ok(entries) => entries,
+                Ok(entries) => filter_luaskills_entries_by_visibility(entries, &config.luaskills),
                 Err(error) => {
                     warnings.push(format!("加载 LuaSkills 工具表失败：{error}"));
                     Vec::new()
@@ -505,12 +505,27 @@ fn optional_non_empty_string_set(values: &[String]) -> Option<BTreeSet<String>> 
     }
 }
 
+/// Filters LuaSkills runtime entries through the host-managed visibility overrides while keeping unrecorded tools visible by default.
+/// 通过宿主管理的可见性覆盖配置过滤 LuaSkills 运行时入口，并保持未记录工具默认可见。
+fn filter_luaskills_entries_by_visibility(
+    entries: Vec<RuntimeEntryDescriptor>,
+    visibility: &PersistedLuaSkillsConfiguration,
+) -> Vec<RuntimeEntryDescriptor> {
+    entries
+        .into_iter()
+        .filter(|entry| !visibility.is_tool_disabled(&entry.skill_id, &entry.local_name))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::resolve_agent_native_tools;
+    use super::{filter_luaskills_entries_by_visibility, resolve_agent_native_tools};
     use crate::agent_runtime::config::{
         RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
     };
+    use crate::provider_config::PersistedLuaSkillsConfiguration;
+    use luaskills::RuntimeEntryDescriptor;
+    use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// Verifies that referencing one missing tool policy blocks native-tool exposure instead of silently falling back to a full-open default.
@@ -548,5 +563,52 @@ mod tests {
         assert!(resolved.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("不会暴露任何原生工具"));
+    }
+
+    /// Verifies that host-managed LuaSkills visibility overrides hide only the recorded tool names and leave newly added tools visible by default.
+    /// 验证宿主管理的 LuaSkills 可见性覆盖只会隐藏已记录工具名，并让新增工具默认保持可见。
+    #[test]
+    fn luaskills_visibility_filters_only_recorded_disabled_tools() {
+        let entries = vec![
+            build_test_luaskills_entry("skill-a", "tool-a"),
+            build_test_luaskills_entry("skill-a", "tool-b"),
+            build_test_luaskills_entry("skill-b", "tool-a"),
+        ];
+        let mut visibility = PersistedLuaSkillsConfiguration::default();
+        assert!(visibility.set_tool_disabled("skill-a", "tool-a", true));
+
+        let filtered = filter_luaskills_entries_by_visibility(entries, &visibility);
+        let remaining = filtered
+            .iter()
+            .map(|entry| entry.canonical_name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            remaining,
+            BTreeSet::from(["skill-a-tool-b", "skill-b-tool-a"])
+        );
+    }
+
+    /// Builds one minimal LuaSkills runtime entry descriptor used by the runtime visibility tests.
+    /// 构建运行时可见性测试使用的最小 LuaSkills 运行时入口描述符。
+    fn build_test_luaskills_entry(skill_id: &str, local_name: &str) -> RuntimeEntryDescriptor {
+        RuntimeEntryDescriptor {
+            canonical_name: format!("{skill_id}-{local_name}"),
+            skill_id: skill_id.to_string(),
+            local_name: local_name.to_string(),
+            root_name: String::from("ROOT"),
+            skill_dir: String::from("skill-dir"),
+            description: String::from("entry"),
+            parameters: Vec::new(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "string"
+                    }
+                },
+                "required": ["value"]
+            }),
+        }
     }
 }

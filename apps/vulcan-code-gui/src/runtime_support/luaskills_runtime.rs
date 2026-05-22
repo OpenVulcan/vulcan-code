@@ -119,6 +119,21 @@ pub struct LuaSkillsCatalog {
     pub entry_count: usize,
 }
 
+/// One visible LuaSkills runtime tool row grouped under one enabled skill package in the desktop panel.
+/// 桌面面板中归属单个已启用技能包的一条可见 LuaSkills 运行时工具行。
+#[derive(Debug, Clone)]
+pub struct LuaSkillsCatalogTool {
+    /// Stable canonical tool identifier resolved by the LuaSkills runtime.
+    /// 由 LuaSkills 运行时解析出的稳定规范工具标识。
+    pub canonical_name: String,
+    /// Stable local tool name declared inside the owning LuaSkills package.
+    /// 在所属 LuaSkills 技能包内部声明的稳定本地工具名称。
+    pub local_name: String,
+    /// Human-readable tool description declared by the runtime entry descriptor.
+    /// 由运行时入口描述符声明的人类可读工具描述。
+    pub description: String,
+}
+
 /// One visible LuaSkills summary row used by the desktop management panel.
 /// 桌面管理面板使用的单条可见 LuaSkills 摘要行。
 #[derive(Debug, Clone)]
@@ -156,6 +171,9 @@ pub struct LuaSkillsCatalogSkill {
     /// Number of currently loaded runtime entries belonging to the current skill.
     /// 当前技能所属且已加载的运行时入口数量。
     pub entry_count: usize,
+    /// Runtime tool rows currently exposed by the enabled effective skill instance.
+    /// 当前由已启用生效技能实例暴露出的运行时工具行集合。
+    pub tools: Vec<LuaSkillsCatalogTool>,
     /// Whether the current skill lives in the host-controlled ROOT layer.
     /// 当前技能是否位于宿主控制的 ROOT 层。
     pub system_owned: bool,
@@ -719,7 +737,7 @@ pub fn list_luaskills_tool_entries(
     handle: &LuaSkillsRuntimeHandle,
 ) -> Result<Vec<RuntimeEntryDescriptor>, String> {
     let engine = lock_runtime_engine(handle)?;
-    Ok(engine.list_entries_for_authority(SkillManagementAuthority::System))
+    Ok(list_host_visible_luaskills_entries(&engine))
 }
 
 /// Call one LuaSkills runtime entry on a dedicated blocking thread and return the structured result.
@@ -1039,14 +1057,21 @@ fn build_luaskills_catalog(
     handle: &LuaSkillsRuntimeHandle,
     engine: &LuaEngine,
 ) -> Result<LuaSkillsCatalog, String> {
-    let entry_counts =
-        engine
-            .list_entries()
-            .into_iter()
-            .fold(BTreeMap::new(), |mut counts, entry| {
-                *counts.entry(entry.skill_id).or_insert(0) += 1;
-                counts
-            });
+    let visible_entries = list_host_visible_luaskills_entries(engine);
+    let mut tools_by_skill = visible_entries.into_iter().fold(
+        BTreeMap::<String, Vec<LuaSkillsCatalogTool>>::new(),
+        |mut grouped_tools, entry| {
+            grouped_tools
+                .entry(entry.skill_id.clone())
+                .or_default()
+                .push(LuaSkillsCatalogTool {
+                    canonical_name: entry.canonical_name,
+                    local_name: entry.local_name,
+                    description: entry.description,
+                });
+            grouped_tools
+        },
+    );
     let resolved_skills = collect_effective_skill_instances_from_roots(&handle.skill_roots)
         .map_err(|error| format!("解析 LuaSkills 生效技能目录失败：{error}"))?;
 
@@ -1073,6 +1098,14 @@ fn build_luaskills_catalog(
             ),
             None => (false, None, None),
         };
+        let mut tools = tools_by_skill
+            .remove(&resolved.skill_id)
+            .unwrap_or_default();
+        tools.sort_by(|left, right| {
+            left.local_name
+                .cmp(&right.local_name)
+                .then_with(|| left.canonical_name.cmp(&right.canonical_name))
+        });
 
         skills.push(LuaSkillsCatalogSkill {
             skill_id: resolved.skill_id.clone(),
@@ -1085,7 +1118,8 @@ fn build_luaskills_catalog(
             managed,
             source_type,
             source_locator,
-            entry_count: entry_counts.get(&resolved.skill_id).copied().unwrap_or(0),
+            entry_count: tools.len(),
+            tools,
             system_owned: resolved.root_name.eq_ignore_ascii_case("ROOT"),
         });
     }
@@ -1099,9 +1133,15 @@ fn build_luaskills_catalog(
     Ok(LuaSkillsCatalog {
         runtime_root: handle.runtime_root.clone(),
         system_lua_lib_dir: handle.system_lua_lib_dir.clone(),
-        entry_count: engine.list_entries().len(),
+        entry_count: skills.iter().map(|skill| skill.entry_count).sum(),
         skills,
     })
+}
+
+/// Lists the LuaSkills runtime entries currently visible to the host-controlled System authority.
+/// 列出当前对宿主控制 System authority 可见的 LuaSkills 运行时入口。
+fn list_host_visible_luaskills_entries(engine: &LuaEngine) -> Vec<RuntimeEntryDescriptor> {
+    engine.list_entries_for_authority(SkillManagementAuthority::System)
 }
 
 /// Resolves the ordinary USER root used by the desktop panel for managed install actions.

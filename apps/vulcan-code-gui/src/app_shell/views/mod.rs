@@ -4263,6 +4263,17 @@ impl VulcanWorkbench {
         let summary_lines = if let Some(catalog) = &self.luaskills_catalog {
             let enabled_skill_count = catalog.skills.iter().filter(|skill| skill.enabled).count();
             let managed_skill_count = catalog.skills.iter().filter(|skill| skill.managed).count();
+            let hidden_tool_count = catalog
+                .skills
+                .iter()
+                .flat_map(|skill| {
+                    skill.tools.iter().filter(|tool| {
+                        self.provider_configuration
+                            .luaskills
+                            .is_tool_disabled(&skill.skill_id, &tool.local_name)
+                    })
+                })
+                .count();
             column![
                 text(format!("运行时根：{}", catalog.runtime_root.display())).size(12),
                 text(format!(
@@ -4271,11 +4282,12 @@ impl VulcanWorkbench {
                 ))
                 .size(12),
                 text(format!(
-                    "可见技能 {} · 已启用 {} · 受管安装 {} · 运行时入口 {}",
+                    "可见技能 {} · 已启用 {} · 受管安装 {} · 运行时入口 {} · 宿主隐藏工具 {}",
                     catalog.skills.len(),
                     enabled_skill_count,
                     managed_skill_count,
-                    catalog.entry_count
+                    catalog.entry_count,
+                    hidden_tool_count
                 ))
                 .size(12),
             ]
@@ -4426,6 +4438,53 @@ impl VulcanWorkbench {
         column![panel_header, install_controls, skill_list]
             .spacing(12)
             .height(Fill)
+            .into()
+    }
+
+    /// Builds one LuaSkills runtime tool row with host-managed visibility controls while keeping package lifecycle state unchanged.
+    /// 构建带宿主管理可见性控件的单条 LuaSkills 运行时工具行，同时保持技能包生命周期状态不变。
+    pub(super) fn view_luaskills_tool_row<'a>(
+        &'a self,
+        skill: &'a LuaSkillsCatalogSkill,
+        tool: &'a crate::luaskills_runtime::LuaSkillsCatalogTool,
+    ) -> Element<'a, Message> {
+        let hidden = self
+            .provider_configuration
+            .luaskills
+            .is_tool_disabled(&skill.skill_id, &tool.local_name);
+        let status_text = if hidden { "已隐藏" } else { "已显示" };
+        let mut toggle_button = if hidden {
+            button("显示").padding([6, 10])
+        } else {
+            button("隐藏").padding([6, 10]).style(button::secondary)
+        };
+        toggle_button = toggle_button.on_press(Message::SetLuaSkillToolVisibility {
+            skill_id: skill.skill_id.clone(),
+            local_name: tool.local_name.clone(),
+            hidden: !hidden,
+        });
+
+        let description = tool.description.trim();
+        let mut body = column![
+            row![
+                text(&tool.local_name).size(14),
+                space::horizontal().width(Fill),
+                text(status_text).size(11),
+                toggle_button,
+            ]
+            .spacing(10)
+            .align_y(Center),
+            text(format!("规范名：{}", tool.canonical_name)).size(12),
+        ]
+        .spacing(4);
+        if !description.is_empty() {
+            body = body.push(text(description).size(12));
+        }
+
+        container(body)
+            .padding([10, 12])
+            .style(container::rounded_box)
+            .width(Fill)
             .into()
     }
 
@@ -4736,10 +4795,10 @@ impl VulcanWorkbench {
 
     /// Builds one LuaSkills skill card row used by the desktop management panel.
     /// 构建桌面管理面板使用的单个 LuaSkills 技能卡片行。
-    pub(super) fn view_luaskills_skill_card(
-        &self,
-        skill: &LuaSkillsCatalogSkill,
-    ) -> Element<'_, Message> {
+    pub(super) fn view_luaskills_skill_card<'a>(
+        &'a self,
+        skill: &'a LuaSkillsCatalogSkill,
+    ) -> Element<'a, Message> {
         let source_text = if let Some(source_locator) = &skill.source_locator {
             let source_type = match skill.source_type {
                 Some(luaskills::SkillInstallSourceType::Github) => "GitHub",
@@ -4763,6 +4822,16 @@ impl VulcanWorkbench {
             "已停用"
         };
         let manage_text = if skill.managed { "受管" } else { "非受管" };
+        let hidden_tool_count = skill
+            .tools
+            .iter()
+            .filter(|tool| {
+                self.provider_configuration
+                    .luaskills
+                    .is_tool_disabled(&skill.skill_id, &tool.local_name)
+            })
+            .count();
+        let visible_tool_count = skill.tools.len().saturating_sub(hidden_tool_count);
         let active_progress = self
             .luaskills_operation_progress
             .as_ref()
@@ -4813,8 +4882,13 @@ impl VulcanWorkbench {
 
         let mut detail_rows = column![
             text(format!(
-                "{} · {} · 根 {} · 运行时入口 {}",
-                status_text, manage_text, skill.root_name, skill.entry_count
+                "{} · {} · 根 {} · 运行时入口 {} · 当前可见 {} · 宿主隐藏 {}",
+                status_text,
+                manage_text,
+                skill.root_name,
+                skill.entry_count,
+                visible_tool_count,
+                hidden_tool_count
             ))
             .size(12),
             text(format!("来源：{source_text}")).size(12),
@@ -4837,6 +4911,37 @@ impl VulcanWorkbench {
         }
         detail_rows =
             detail_rows.push(text(format!("路径：{}", skill.skill_dir.display())).size(12));
+        let tool_section: Element<'_, Message> = if skill.tools.is_empty() {
+            let empty_text = if skill.enabled {
+                "当前技能尚未解析到可管理的运行时工具。"
+            } else {
+                "技能停用后不会加载运行时工具；重新启用后可在这里逐项管理。"
+            };
+            container(column![text("工具列表").size(13), text(empty_text).size(12),].spacing(6))
+                .padding(12)
+                .style(container::bordered_box)
+                .width(Fill)
+                .into()
+        } else {
+            let tool_rows = skill
+                .tools
+                .iter()
+                .fold(column![].spacing(8), |column, tool| {
+                    column.push(self.view_luaskills_tool_row(skill, tool))
+                });
+            container(
+                column![
+                    text("工具列表").size(13),
+                    text("隐藏只影响宿主对模型暴露，不会修改技能包内容。").size(12),
+                    tool_rows,
+                ]
+                .spacing(8),
+            )
+            .padding(12)
+            .style(container::bordered_box)
+            .width(Fill)
+            .into()
+        };
 
         container(
             column![
@@ -4854,6 +4959,7 @@ impl VulcanWorkbench {
                 },
                 detail_rows,
                 action_row,
+                tool_section,
             ]
             .spacing(10),
         )
