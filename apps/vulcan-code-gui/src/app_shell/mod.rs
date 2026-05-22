@@ -31,7 +31,9 @@ use crate::agent_runtime::provider_protocol_bridge::{
     attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
 };
 use crate::agent_runtime::provider_stream_projection::is_provider_tool_boundary_runtime_event;
-use crate::agent_runtime::question_runtime::{QuestionOption, QuestionPrompt, QuestionRequest};
+use crate::agent_runtime::question_runtime::{
+    QuestionOption, QuestionPrompt, QuestionRequest, build_question_reply_markdown,
+};
 use crate::agent_runtime::task_runtime::DetachedTaskRuntimeEvent;
 use crate::agent_runtime::{
     self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
@@ -112,6 +114,7 @@ use crate::workspace_store::{
     WorkspaceHistorySearchPage, WorkspaceSnapshot,
 };
 use crate::{AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale};
+use iced::advanced::widget::operation::focusable::unfocus;
 use iced::widget::operation;
 use iced::widget::pane_grid::{self, Configuration, PaneGrid};
 use iced::widget::{
@@ -171,6 +174,16 @@ impl AgentRuntime {
         Ok(())
     }
 }
+"#;
+
+/// Seed Markdown reply rendered in the example ask-debug preview before any live answers are written back.
+/// 在写回真实回答之前展示在示例 ask 调试预览中的初始 Markdown 回复。
+const SAMPLE_ASK_DEBUG_PREVIEW_MARKDOWN: &str = r#"# Ask Debug Preview
+
+The final Markdown reply for the `ask` tool will appear here.
+
+- Supports selection and copy testing.
+- Does not allow direct editing inside the preview surface.
 "#;
 
 /// Shared text size used by both the home-page editor and the diff editor.
@@ -459,6 +472,10 @@ const WORKSPACE_HISTORY_SEARCH_INPUT_ID: &str = "vulcan-code.workspace-history-s
 /// 左侧搜索项目过滤输入框使用的稳定部件标识。
 const WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID: &str =
     "vulcan-code.workspace-history-search-project-filter-input";
+/// Stable widget identifier used by the visible ask/question custom-answer input inside the blocking modal.
+/// 阻塞式 ask/question 弹窗内部可见自定义回答输入框使用的稳定部件标识。
+const WORKBENCH_QUESTION_MODAL_CUSTOM_INPUT_ID: &str =
+    "vulcan-code.workbench-question-modal-custom-input";
 
 /// Shared logical line height used by the main prompt composer.
 /// 主提示词编辑器使用的共享逻辑行高。
@@ -2639,6 +2656,9 @@ enum WorkbenchNoticeConfirmAction {
     /// Closes the modal without mutating domain state.
     /// 关闭弹窗且不修改业务状态。
     Acknowledge,
+    /// Abandons the currently visible ask/question modal after the user explicitly accepts interrupting the running conversation.
+    /// 在用户显式接受中断当前对话后，放弃当前可见的 ask/question 弹窗。
+    AbandonQuestionModal,
     /// Applies one pending model switch and removes staged attachments unsupported by the target model.
     /// 应用一次待确认模型切换，并移除目标模型不支持的已暂存附件。
     ApplyModelSwitchRemovingUnsupportedAttachments {
@@ -3039,6 +3059,9 @@ pub struct VulcanWorkbench {
     /// Text editor content for patch and scaffold previews.
     /// 用于补丁与骨架预览的文本编辑器内容。
     editor_content: text_editor::Content,
+    /// Read-only Markdown preview buffer dedicated to the example ask-debug sandbox.
+    /// 专供示例 ask 调试沙盒使用的只读 Markdown 预览缓冲区。
+    example_preview_markdown_buffer: text_editor::Content,
     /// Summary text describing the latest loaded diff preview.
     /// 描述最近一次已载入 diff 预览的摘要文本。
     diff_summary: String,
@@ -6007,6 +6030,9 @@ enum Message {
     /// Selects one question tab inside the currently visible ask/question modal and returns the modal to the editing stage.
     /// 选择当前可见 ask/question 弹窗中的某个问题标签，并让弹窗回到编辑阶段。
     QuestionModalSelectQuestionTab(usize),
+    /// Selects the dedicated confirmation tab inside the currently visible ask/question modal.
+    /// 选择当前可见 ask/question 弹窗中的专用确认标签页。
+    QuestionModalSelectConfirmTab,
     /// Moves the active ask/question modal editor to the previous question.
     /// 将当前 ask/question 弹窗编辑焦点移动到上一道问题。
     QuestionModalMoveToPreviousQuestion,
@@ -6016,18 +6042,9 @@ enum Message {
     /// Toggles the currently highlighted option row inside the active ask/question modal question.
     /// 在当前 ask/question 弹窗的激活问题中切换当前高亮选项行。
     QuestionModalToggleHighlightedOption,
-    /// Validates every draft and enters the final confirmation stage for the current ask/question modal.
-    /// 校验全部答案草稿并让当前 ask/question 弹窗进入最终确认阶段。
-    QuestionModalOpenConfirmStage,
-    /// Returns the current ask/question modal from the confirmation stage back to answer editing.
-    /// 让当前 ask/question 弹窗从确认阶段返回到答案编辑阶段。
-    QuestionModalBackToEditing,
     /// Submits the currently visible ask/question modal back into the shared question runtime.
     /// 将当前可见 ask/question 弹窗提交回共享问题运行时。
     SubmitQuestionModal,
-    /// Rejects the currently visible ask/question modal and resumes the waiting tool call with a cancellation error.
-    /// 拒绝当前可见 ask/question 弹窗，并以取消错误恢复等待中的工具调用。
-    RejectQuestionModal,
     /// Dismisses the top-most keyboard-driven overlay, preferring the reusable notice modal before legacy overlays.
     /// 关闭键盘驱动的最顶层遮罩，优先处理可复用提示弹窗再回退到旧弹层。
     DismissTopLevelOverlay,
@@ -6097,6 +6114,9 @@ enum Message {
     /// Embedded editor emitted an editing action.
     /// 嵌入式编辑器发出了编辑动作。
     EditorActionPerformed(text_editor::Action),
+    /// Example ask-debug Markdown preview emitted one selectable read-only action.
+    /// 示例 ask 调试 Markdown 预览发出了一次可选择只读动作。
+    ExamplePreviewMarkdownAction(text_editor::Action),
     /// Supported provider selected from the provider catalog picker.
     /// 从供应商目录选择框中选中了某个受支持供应商。
     ProviderCatalogSelected(ProviderChoice),
@@ -7347,6 +7367,9 @@ impl VulcanWorkbench {
             selectable_transcript_command: None,
             selectable_transcript_command_revision: 0,
             editor_content: text_editor::Content::with_text(SAMPLE_EDITOR_CONTENT),
+            example_preview_markdown_buffer: text_editor::Content::with_text(
+                SAMPLE_ASK_DEBUG_PREVIEW_MARKDOWN,
+            ),
             diff_summary: placeholder_diff_panel.summary_text(),
             diff_panel: placeholder_diff_panel,
             collapsed_diff_files: BTreeSet::new(),
@@ -8281,7 +8304,7 @@ impl VulcanWorkbench {
                 self.active_question_modal = Some(Self::build_ask_debug_question_modal_state());
                 self.status_message =
                     String::from("已打开 ask 调试弹窗，可直接验证不同问题类型与样式。");
-                Task::none()
+                self.sync_active_question_modal_focus()
             }
             Message::WindowTitleBarPressed(window_id) => {
                 self.pending_title_bar_drag = self
@@ -8687,18 +8710,25 @@ impl VulcanWorkbench {
             Message::ConfirmWorkbenchNoticeModal => self.confirm_workbench_notice_modal(),
             Message::CloseWorkbenchNoticeModal => {
                 self.workbench_notice_modal = None;
-                Task::none()
+                if self.active_question_modal.is_some() {
+                    self.sync_active_question_modal_focus()
+                } else {
+                    Task::none()
+                }
             }
             Message::QuestionRuntimePollTick => {
-                self.sync_active_question_modal_from_runtime();
-                Task::none()
+                if self.sync_active_question_modal_from_runtime() {
+                    self.sync_active_question_modal_focus()
+                } else {
+                    Task::none()
+                }
             }
             Message::QuestionModalOptionPressed {
                 question_index,
                 option_index,
             } => {
                 self.toggle_active_question_modal_option(question_index, option_index);
-                Task::none()
+                self.sync_active_question_modal_focus()
             }
             Message::QuestionModalCustomTextChanged {
                 question_index,
@@ -8709,29 +8739,31 @@ impl VulcanWorkbench {
             }
             Message::QuestionModalSelectQuestionTab(question_index) => {
                 self.select_active_question_modal_question(question_index);
-                Task::none()
+                self.sync_active_question_modal_focus()
+            }
+            Message::QuestionModalSelectConfirmTab => {
+                self.open_active_question_modal_confirm_stage();
+                self.sync_active_question_modal_focus()
             }
             Message::QuestionModalMoveToPreviousQuestion => {
                 self.move_active_question_modal_question(false);
-                Task::none()
+                self.sync_active_question_modal_focus()
             }
             Message::QuestionModalMoveToNextQuestion => {
                 self.move_active_question_modal_question(true);
-                Task::none()
+                self.sync_active_question_modal_focus()
             }
             Message::QuestionModalToggleHighlightedOption => {
-                self.toggle_active_question_modal_highlighted_option();
-                Task::none()
-            }
-            Message::QuestionModalOpenConfirmStage => {
-                self.open_active_question_modal_confirm_stage()
-            }
-            Message::QuestionModalBackToEditing => {
-                self.return_active_question_modal_to_editing();
-                Task::none()
+                if self.active_question_modal_stage()
+                    == Some(WorkbenchQuestionModalStage::Confirming)
+                {
+                    self.confirm_active_question_modal_page()
+                } else {
+                    self.toggle_active_question_modal_highlighted_option();
+                    self.sync_active_question_modal_focus()
+                }
             }
             Message::SubmitQuestionModal => self.submit_active_question_modal(),
-            Message::RejectQuestionModal => self.reject_active_question_modal(),
             Message::DismissTopLevelOverlay => {
                 if self.workbench_context_menu.take().is_some() {
                     self.composer_context_clipboard_text = None;
@@ -8740,14 +8772,14 @@ impl VulcanWorkbench {
                 if self.workbench_image_preview_modal.take().is_some() {
                     return Task::none();
                 }
-                if self.active_question_modal.is_some() {
-                    if self.active_question_modal_stage()
-                        == Some(WorkbenchQuestionModalStage::Confirming)
-                    {
-                        self.return_active_question_modal_to_editing();
-                        return Task::none();
+                if self.workbench_notice_modal.take().is_some() {
+                    if self.active_question_modal.is_some() {
+                        return self.sync_active_question_modal_focus();
                     }
-                    return self.reject_active_question_modal();
+                    return Task::none();
+                }
+                if self.active_question_modal.is_some() {
+                    return self.request_active_question_modal_rejection();
                 }
                 if self.ai_capability_vendor_editor.take().is_some() {
                     return Task::none();
@@ -8780,9 +8812,6 @@ impl VulcanWorkbench {
                 }
                 if self.workbench_reasoning_picker_open {
                     self.workbench_reasoning_picker_open = false;
-                    return Task::none();
-                }
-                if self.workbench_notice_modal.take().is_some() {
                     return Task::none();
                 }
                 if self.workbench_model_picker_open {
@@ -8834,19 +8863,11 @@ impl VulcanWorkbench {
                     self.workbench_reasoning_picker_open = false;
                     return Task::none();
                 }
-                if self.active_question_modal.is_some() {
-                    return match self.active_question_modal_stage() {
-                        Some(WorkbenchQuestionModalStage::Answering) => {
-                            self.open_active_question_modal_confirm_stage()
-                        }
-                        Some(WorkbenchQuestionModalStage::Confirming) => {
-                            self.submit_active_question_modal()
-                        }
-                        None => Task::none(),
-                    };
-                }
                 if self.workbench_notice_modal.is_some() {
                     return self.confirm_workbench_notice_modal();
+                }
+                if self.active_question_modal.is_some() {
+                    return self.confirm_active_question_modal_page();
                 }
                 if !self.workbench_model_picker_open {
                     return Task::none();
@@ -9034,6 +9055,12 @@ impl VulcanWorkbench {
             }
             Message::EditorActionPerformed(action) => {
                 self.editor_content.perform(action);
+                Task::none()
+            }
+            Message::ExamplePreviewMarkdownAction(action) => {
+                if !action.is_edit() {
+                    self.example_preview_markdown_buffer.perform(action);
+                }
                 Task::none()
             }
             Message::SettingsSectionSelected(section) => {
@@ -12353,6 +12380,9 @@ impl VulcanWorkbench {
 
         match modal.confirm_action {
             WorkbenchNoticeConfirmAction::Acknowledge => Task::none(),
+            WorkbenchNoticeConfirmAction::AbandonQuestionModal => {
+                self.reject_active_question_modal()
+            }
             WorkbenchNoticeConfirmAction::ApplyModelSwitchRemovingUnsupportedAttachments {
                 choice,
             } => self.apply_confirmed_workbench_model_choice_after_attachment_cleanup(choice),
@@ -12492,50 +12522,15 @@ impl VulcanWorkbench {
         ]
     }
 
-    /// Writes one host-result-like ask debug payload into the patch/scaffold preview so the style sandbox can inspect the final returned content.
-    /// 将接近真实 host result 的 ask 调试载荷写入补丁与骨架预览区，以便样式沙盒检查最终回传内容。
+    /// Writes one Markdown ask debug reply preview into the dedicated example preview buffer so the style sandbox can inspect the final model-facing content.
+    /// 将 Markdown 形式的 ask 调试回复预览写入独立示例预览缓冲区，以便样式沙盒检查最终面向模型的内容。
     fn apply_ask_debug_answers_to_preview(
         &mut self,
         questions: &[QuestionPrompt],
         answers: &[Vec<String>],
     ) -> Result<(), String> {
-        let question_payload = questions
-            .iter()
-            .map(|question| {
-                json!({
-                    "question": question.question,
-                    "header": question.header,
-                    "options": question.options.iter().map(|option| {
-                        json!({
-                            "label": option.label,
-                            "description": option.description,
-                        })
-                    }).collect::<Vec<_>>(),
-                    "multiple": question.multiple,
-                })
-            })
-            .collect::<Vec<_>>();
-        let rendered_answers = questions
-            .iter()
-            .zip(answers.iter())
-            .map(|(question, answer)| {
-                json!({
-                    "header": question.header,
-                    "question": question.question,
-                    "rendered_answer": answer.join(", "),
-                })
-            })
-            .collect::<Vec<_>>();
-        let preview_text = serde_json::to_string_pretty(&json!({
-            "kind": "ask",
-            "tool_name": "ask",
-            "question_count": questions.len(),
-            "questions": question_payload,
-            "answers": answers,
-            "rendered_answers": rendered_answers,
-        }))
-        .map_err(|error| format!("ask 调试结果序列化失败：{error}"))?;
-        self.editor_content = text_editor::Content::with_text(&preview_text);
+        let preview_text = build_question_reply_markdown(questions, answers);
+        self.example_preview_markdown_buffer = text_editor::Content::with_text(&preview_text);
         Ok(())
     }
 
@@ -12565,10 +12560,18 @@ impl VulcanWorkbench {
             .map(|state| state.origin)
     }
 
-    /// Returns the rendered option count for one ask/question prompt, including the synthetic custom-answer row.
-    /// 返回单条 ask/question 提示的渲染选项数量，包含合成的“其他回答”行。
+    /// Returns whether one ask/question prompt should render the synthetic custom-answer row in addition to structured options.
+    /// 返回某条 ask/question 提示是否应在结构化选项之外渲染合成的“其他回答”行。
+    fn question_modal_has_custom_option_row(question: &QuestionPrompt) -> bool {
+        !question.options.is_empty()
+    }
+
+    /// Returns the rendered option count for one ask/question prompt, including the synthetic custom-answer row when it is visible.
+    /// 返回单条 ask/question 提示的渲染选项数量，并在可见时包含合成的“其他回答”行。
     fn question_modal_option_count(question: &QuestionPrompt) -> usize {
-        question.options.len().saturating_add(1)
+        question.options.len().saturating_add(usize::from(
+            Self::question_modal_has_custom_option_row(question),
+        ))
     }
 
     /// Returns the rendered option index occupied by the synthetic custom-answer row for one prompt.
@@ -12583,6 +12586,9 @@ impl VulcanWorkbench {
         question: &QuestionPrompt,
         draft: &WorkbenchQuestionAnswerDraft,
     ) -> usize {
+        if question.options.is_empty() {
+            return 0;
+        }
         if draft.custom_selected {
             return Self::question_modal_custom_option_index(question);
         }
@@ -12629,21 +12635,54 @@ impl VulcanWorkbench {
         state.active_option_index = state.active_option_index.min(max_option_index);
     }
 
+    /// Returns whether the current active ask/question page should focus the visible custom-answer text input.
+    /// 返回当前激活 ask/question 页面是否应聚焦可见的自定义回答输入框。
+    fn active_question_modal_needs_text_input_focus(&self) -> bool {
+        let Some(state) = self.active_question_modal.as_ref() else {
+            return false;
+        };
+        if state.stage != WorkbenchQuestionModalStage::Answering {
+            return false;
+        }
+        let Some((question, draft)) = state
+            .request
+            .questions
+            .get(state.active_question_index)
+            .zip(state.drafts.get(state.active_question_index))
+        else {
+            return false;
+        };
+
+        question.options.is_empty() || draft.custom_selected
+    }
+
+    /// Synchronizes keyboard focus so the active ask/question modal either owns the visible text input or clears background focus entirely.
+    /// 同步键盘焦点，使当前 ask/question 弹窗要么占有可见文本输入框，要么彻底清空背景焦点。
+    fn sync_active_question_modal_focus(&self) -> Task<Message> {
+        if self.active_question_modal_needs_text_input_focus() {
+            operation::focus(WORKBENCH_QUESTION_MODAL_CUSTOM_INPUT_ID)
+        } else {
+            iced_runtime::task::effect(iced_runtime::Action::widget(unfocus()))
+        }
+    }
+
     /// Mirrors the oldest pending ask/question runtime request into the main workbench modal layer while preserving in-progress drafts for the currently visible request.
     /// 将最早的待回答 ask/question 运行时请求镜像到主工作台弹层，同时为当前可见请求保留进行中的答案草稿。
-    fn sync_active_question_modal_from_runtime(&mut self) {
+    fn sync_active_question_modal_from_runtime(&mut self) -> bool {
         let pending_requests = match self.runtime_foundation.question_runtime().list_pending() {
             Ok(requests) => requests,
             Err(error) => {
                 self.status_message = error;
-                return;
+                return false;
             }
         };
         let Some(next_request) = pending_requests.into_iter().next() else {
             if self.active_question_modal_origin() != Some(WorkbenchQuestionModalOrigin::AskDebug) {
+                let had_modal = self.active_question_modal.is_some();
                 self.active_question_modal = None;
+                return had_modal;
             }
-            return;
+            return false;
         };
         if let Some(state) = self
             .active_question_modal
@@ -12652,10 +12691,11 @@ impl VulcanWorkbench {
         {
             state.request = next_request;
             Self::reconcile_question_modal_state(state);
-            return;
+            return false;
         }
         self.active_question_modal = Some(Self::build_question_modal_state(next_request));
         self.status_message = String::from("当前执行正在等待你回答补充问题。");
+        true
     }
 
     /// Selects one question inside the active ask/question modal and restores the editing stage around it.
@@ -12681,40 +12721,53 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Moves the active ask/question modal editor to the previous or next question with wrap-around navigation.
-    /// 使用循环导航将当前 ask/question 弹窗编辑器移动到上一题或下一题。
+    /// Moves the active ask/question modal editor to the previous or next question, using the dedicated confirmation page as the terminal tab.
+    /// 将当前 ask/question 弹窗编辑器移动到上一题或下一题，并把专用确认页当作终点标签页。
     fn move_active_question_modal_question(&mut self, forward: bool) {
         let Some(state) = self.active_question_modal.as_mut() else {
             return;
         };
-        if state.stage != WorkbenchQuestionModalStage::Answering {
-            return;
-        }
         let question_count = state.request.questions.len();
         if question_count == 0 {
             return;
         }
 
-        state.active_question_index = if forward {
-            (state.active_question_index + 1) % question_count
-        } else if state.active_question_index == 0 {
-            question_count.saturating_sub(1)
+        if forward {
+            if state.stage == WorkbenchQuestionModalStage::Confirming {
+                return;
+            }
+            if state.active_question_index + 1 < question_count {
+                state.active_question_index += 1;
+                state.stage = WorkbenchQuestionModalStage::Answering;
+            } else {
+                state.stage = WorkbenchQuestionModalStage::Confirming;
+            }
+        } else if state.stage == WorkbenchQuestionModalStage::Confirming {
+            state.stage = WorkbenchQuestionModalStage::Answering;
+            state.active_question_index = question_count.saturating_sub(1);
+        } else if state.active_question_index > 0 {
+            state.active_question_index = state.active_question_index.saturating_sub(1);
+            state.stage = WorkbenchQuestionModalStage::Answering;
         } else {
-            state.active_question_index.saturating_sub(1)
-        };
+            return;
+        }
+
         state.validation_error = None;
-        if let Some((question, draft)) = state
-            .request
-            .questions
-            .get(state.active_question_index)
-            .zip(state.drafts.get(state.active_question_index))
-        {
-            state.active_option_index = Self::default_question_modal_option_index(question, draft);
+        if state.stage == WorkbenchQuestionModalStage::Answering {
+            if let Some((question, draft)) = state
+                .request
+                .questions
+                .get(state.active_question_index)
+                .zip(state.drafts.get(state.active_question_index))
+            {
+                state.active_option_index =
+                    Self::default_question_modal_option_index(question, draft);
+            }
         }
     }
 
-    /// Moves the highlighted option within the active ask/question modal question with wrap-around navigation.
-    /// 使用循环导航在当前 ask/question 弹窗激活问题内移动高亮选项。
+    /// Moves the highlighted option within the active ask/question modal question with non-circular navigation.
+    /// 在当前 ask/question 弹窗激活问题内以非循环方式移动高亮选项。
     fn move_active_question_modal_option(&mut self, forward: bool) {
         let Some(state) = self.active_question_modal.as_mut() else {
             return;
@@ -12730,13 +12783,14 @@ impl VulcanWorkbench {
             return;
         }
 
-        state.active_option_index = if forward {
-            (state.active_option_index + 1) % option_count
-        } else if state.active_option_index == 0 {
-            option_count.saturating_sub(1)
+        if forward {
+            state.active_option_index = state
+                .active_option_index
+                .saturating_add(1)
+                .min(option_count.saturating_sub(1));
         } else {
-            state.active_option_index.saturating_sub(1)
-        };
+            state.active_option_index = state.active_option_index.saturating_sub(1);
+        }
         state.validation_error = None;
     }
 
@@ -12769,20 +12823,19 @@ impl VulcanWorkbench {
         state.validation_error = None;
 
         let question = &state.request.questions[question_index];
+        if question.options.is_empty() {
+            return;
+        }
         let draft = &mut state.drafts[question_index];
         let custom_option_index = Self::question_modal_custom_option_index(question);
         let max_option_index = Self::question_modal_option_count(question).saturating_sub(1);
         state.active_option_index = state.active_option_index.min(max_option_index);
 
-        if state.active_option_index == custom_option_index {
-            if question.options.is_empty() {
-                draft.custom_selected = true;
-                return;
-            }
+        if Self::question_modal_has_custom_option_row(question)
+            && state.active_option_index == custom_option_index
+        {
             if question.allows_multiple() {
                 draft.custom_selected = !draft.custom_selected;
-            } else if draft.custom_selected {
-                draft.custom_selected = false;
             } else {
                 draft.selected_labels.clear();
                 draft.custom_selected = true;
@@ -12811,11 +12864,7 @@ impl VulcanWorkbench {
             return;
         }
 
-        if draft.selected_labels.len() == 1 && draft.selected_labels[0] == option_label {
-            draft.selected_labels.clear();
-        } else {
-            draft.selected_labels = vec![option_label];
-        }
+        draft.selected_labels = vec![option_label];
         draft.custom_selected = false;
     }
 
@@ -12899,52 +12948,102 @@ impl VulcanWorkbench {
             .collect()
     }
 
-    /// Returns the current ask/question modal from the confirmation stage back to answer editing.
-    /// 让当前 ask/question 弹窗从确认阶段返回到答案编辑阶段。
-    fn return_active_question_modal_to_editing(&mut self) {
+    /// Collects every currently unanswered question inside the active ask/question modal so the confirmation page can link back to the missing items.
+    /// 收集当前 ask/question 弹窗内所有尚未完成的问题，以便确认页回链到缺失项。
+    fn collect_active_question_modal_unanswered_questions(&self) -> Vec<(usize, String, String)> {
+        let Some(state) = self.active_question_modal.as_ref() else {
+            return Vec::new();
+        };
+
+        state
+            .request
+            .questions
+            .iter()
+            .enumerate()
+            .filter_map(|(question_index, question)| {
+                let draft = state.drafts.get(question_index)?;
+                Self::collect_question_modal_prompt_answers(question, draft)
+                    .err()
+                    .map(|error| (question_index, question.header.clone(), error))
+            })
+            .collect()
+    }
+
+    /// Opens the dedicated confirmation page of the current ask/question modal without blocking incomplete drafts.
+    /// 打开当前 ask/question 弹窗的专用确认页，而不会阻止未完成草稿先行查看。
+    fn open_active_question_modal_confirm_stage(&mut self) {
         let Some(state) = self.active_question_modal.as_mut() else {
             return;
         };
-        state.stage = WorkbenchQuestionModalStage::Answering;
+        state.stage = WorkbenchQuestionModalStage::Confirming;
         state.validation_error = None;
     }
 
-    /// Validates every current answer draft and moves the ask/question modal into its final confirmation stage.
-    /// 校验当前全部答案草稿，并让 ask/question 弹窗进入最终确认阶段。
-    fn open_active_question_modal_confirm_stage(&mut self) -> Task<Message> {
-        let validation = self.collect_active_question_modal_answers();
-        let Some(state) = self.active_question_modal.as_mut() else {
+    /// Opens one blocking confirmation modal before abandoning the active ask/question flow so accidental escape presses do not immediately interrupt the running conversation.
+    /// 在放弃当前 ask/question 流程前打开一个阻塞确认弹窗，从而避免误触 Esc 直接中断正在执行的对话。
+    fn request_active_question_modal_rejection(&mut self) -> Task<Message> {
+        let Some(origin) = self.active_question_modal_origin() else {
+            return Task::none();
+        };
+        match origin {
+            WorkbenchQuestionModalOrigin::Runtime => self.show_workbench_confirmation_modal(
+                "放弃当前问题回答？",
+                "放弃提交会导致当前对话执行立即中断，正在等待的 ask 工具调用会按失败结束。",
+                "放弃提交",
+                "继续回答",
+                WorkbenchNoticeConfirmAction::AbandonQuestionModal,
+            ),
+            WorkbenchQuestionModalOrigin::AskDebug => self.show_workbench_confirmation_modal(
+                "放弃当前 ask 调试？",
+                "放弃提交后不会写入调试预览，当前 ask 调试窗口中的回答草稿也会一并丢失。",
+                "放弃调试",
+                "继续调整",
+                WorkbenchNoticeConfirmAction::AbandonQuestionModal,
+            ),
+        }
+        iced_runtime::task::effect(iced_runtime::Action::widget(unfocus()))
+    }
+
+    /// Confirms the current ask/question page, applying the highlighted single-choice row when needed and then moving to the next page or submitting from the confirmation page.
+    /// 确认当前 ask/question 页面，在需要时应用当前高亮的单选行，然后进入下一页；若已在确认页则直接提交。
+    fn confirm_active_question_modal_page(&mut self) -> Task<Message> {
+        let Some((stage, question_index, option_index, should_apply_highlighted_single_choice)) =
+            self.active_question_modal.as_ref().map(|state| {
+                let should_apply_highlighted_single_choice = state
+                    .request
+                    .questions
+                    .get(state.active_question_index)
+                    .is_some_and(|question| {
+                        !question.options.is_empty() && !question.allows_multiple()
+                    });
+                (
+                    state.stage,
+                    state.active_question_index,
+                    state.active_option_index,
+                    should_apply_highlighted_single_choice,
+                )
+            })
+        else {
             return Task::none();
         };
 
-        match validation {
-            Ok(_) => {
-                state.stage = WorkbenchQuestionModalStage::Confirming;
-                state.validation_error = None;
-            }
-            Err((question_index, error)) => {
-                state.stage = WorkbenchQuestionModalStage::Answering;
-                state.active_question_index = question_index;
-                state.validation_error = Some(error);
-                if let Some((question, draft)) = state
-                    .request
-                    .questions
-                    .get(question_index)
-                    .zip(state.drafts.get(question_index))
-                {
-                    state.active_option_index =
-                        Self::default_question_modal_option_index(question, draft);
-                }
-            }
+        if stage == WorkbenchQuestionModalStage::Confirming {
+            return self.submit_active_question_modal();
         }
-        Task::none()
+
+        if should_apply_highlighted_single_choice {
+            self.toggle_active_question_modal_option(question_index, option_index);
+        }
+        self.move_active_question_modal_question(true);
+        self.sync_active_question_modal_focus()
     }
 
     /// Validates and submits the currently visible ask/question modal back into the shared runtime so the blocked tool invocation can continue.
     /// 校验并提交当前可见 ask/question 弹窗到共享运行时，使被阻塞的工具调用继续执行。
     fn submit_active_question_modal(&mut self) -> Task<Message> {
         if self.active_question_modal_stage() == Some(WorkbenchQuestionModalStage::Answering) {
-            return self.open_active_question_modal_confirm_stage();
+            self.open_active_question_modal_confirm_stage();
+            return self.sync_active_question_modal_focus();
         }
 
         let validation = self.collect_active_question_modal_answers();
@@ -12962,19 +13061,9 @@ impl VulcanWorkbench {
                         answers,
                     )
                 }
-                Err((question_index, error)) => {
-                    state.stage = WorkbenchQuestionModalStage::Answering;
-                    state.active_question_index = question_index;
-                    state.validation_error = Some(error);
-                    if let Some((question, draft)) = state
-                        .request
-                        .questions
-                        .get(question_index)
-                        .zip(state.drafts.get(question_index))
-                    {
-                        state.active_option_index =
-                            Self::default_question_modal_option_index(question, draft);
-                    }
+                Err((_question_index, _error)) => {
+                    state.stage = WorkbenchQuestionModalStage::Confirming;
+                    state.validation_error = None;
                     return Task::none();
                 }
             }
@@ -13034,7 +13123,7 @@ impl VulcanWorkbench {
         {
             Ok(_) => {
                 self.active_question_modal = None;
-                self.status_message = String::from("已取消当前补充问题，相关执行会按失败处理。");
+                self.status_message = String::from("已放弃当前补充问题，本次对话执行已中断。");
             }
             Err(error) => {
                 if let Some(state) = self.active_question_modal.as_mut() {

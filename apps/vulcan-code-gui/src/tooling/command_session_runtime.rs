@@ -342,8 +342,10 @@ impl CommandSessionSharedState {
             state.status = CommandSessionStatus::Failed;
             if state.failure_reason.is_none() {
                 state.failure_reason = Some(match exit_code {
-                    Some(code) => format!("命令会话以退出码 {code} 结束。"),
-                    None => String::from("命令会话在未返回退出码的情况下失败结束。"),
+                    Some(code) => format!("The command session exited with status code {code}."),
+                    None => {
+                        String::from("The command session failed without returning an exit code.")
+                    }
                 });
             }
         }
@@ -562,19 +564,17 @@ impl CommandSessionRuntime {
 
         let mut child = command.spawn().map_err(|error| {
             format!(
-                "启动命令会话失败：程序 `{}` 无法执行：{error}",
+                "Failed to start the command session: program `{}` could not be executed: {error}",
                 request.launcher_program
             )
         })?;
         let stdin = child.stdin.take();
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| String::from("命令会话已启动，但未能获取标准输出管道。"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| String::from("命令会话已启动，但未能获取标准错误管道。"))?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            String::from("The command session started, but stdout could not be captured.")
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            String::from("The command session started, but stderr could not be captured.")
+        })?;
 
         let command_session_id = Uuid::new_v4();
         let shared_state = Arc::new(CommandSessionSharedState::default());
@@ -593,7 +593,11 @@ impl CommandSessionRuntime {
 
         self.sessions
             .write()
-            .map_err(|_| String::from("命令会话注册表已锁定，无法写入新会话。"))?
+            .map_err(|_| {
+                String::from(
+                    "The command session registry is locked and cannot store a new session.",
+                )
+            })?
             .insert(command_session_id, Arc::clone(&record));
 
         tokio::spawn(run_command_session_supervisor(
@@ -659,7 +663,7 @@ impl CommandSessionRuntime {
         let snapshot = record.snapshot().await;
         if snapshot.status != CommandSessionStatus::Running {
             return Err(format!(
-                "命令会话 `{}` 当前已处于 `{}` 状态，不能再写入标准输入。",
+                "Command session `{}` is already in `{}` state and cannot accept more stdin.",
                 command_session_id,
                 snapshot.status.as_str()
             ));
@@ -677,10 +681,14 @@ impl CommandSessionRuntime {
                 text,
                 responder: sender,
             })
-            .map_err(|_| String::from("命令会话监管器已退出，无法继续写入标准输入。"))?;
-        let bytes_written = receiver
-            .await
-            .map_err(|_| String::from("命令会话写入确认通道已关闭。"))??;
+            .map_err(|_| {
+                String::from(
+                    "The command session supervisor has exited and cannot write more stdin.",
+                )
+            })?;
+        let bytes_written = receiver.await.map_err(|_| {
+            String::from("The command session write acknowledgement channel is closed.")
+        })??;
 
         Ok(CommandSessionWriteOutcome {
             snapshot: record.snapshot().await,
@@ -706,10 +714,14 @@ impl CommandSessionRuntime {
         record
             .control_sender
             .send(CommandSessionControlMessage::Stop { responder: sender })
-            .map_err(|_| String::from("命令会话监管器已退出，无法继续停止进程。"))?;
-        receiver
-            .await
-            .map_err(|_| String::from("命令会话停止确认通道已关闭。"))??;
+            .map_err(|_| {
+                String::from(
+                    "The command session supervisor has exited and cannot stop the process.",
+                )
+            })?;
+        receiver.await.map_err(|_| {
+            String::from("The command session stop acknowledgement channel is closed.")
+        })??;
 
         let wait_for_exit_ms = wait_for_exit_ms.unwrap_or(DEFAULT_COMMAND_SESSION_STOP_WAIT_MS);
         let wait_started_at = Instant::now();
@@ -772,13 +784,15 @@ impl CommandSessionRuntime {
         let record = self
             .sessions
             .read()
-            .map_err(|_| String::from("命令会话注册表已锁定，无法读取会话。"))?
+            .map_err(|_| {
+                String::from("The command session registry is locked and cannot read the session.")
+            })?
             .get(&command_session_id)
             .cloned()
-            .ok_or_else(|| format!("未找到命令会话 `{command_session_id}`。"))?;
+            .ok_or_else(|| format!("Command session `{command_session_id}` was not found."))?;
         if record.owner_session_id != owner_session_id {
             return Err(format!(
-                "命令会话 `{}` 不属于当前控制器会话，拒绝跨会话访问。",
+                "Command session `{}` does not belong to the current controller session, so cross-session access is rejected.",
                 command_session_id
             ));
         }
@@ -816,7 +830,10 @@ async fn pump_command_session_output<R>(
                 shared_state
                     .append_output_chunk(
                         CommandSessionOutputStream::Stderr,
-                        format!("[host] 读取命令会话 {} 失败：{error}\n", stream.as_str()),
+                        format!(
+                            "[host] Failed to read command session {}: {error}\n",
+                            stream.as_str()
+                        ),
                     )
                     .await;
                 break;
@@ -860,7 +877,9 @@ async fn run_command_session_supervisor(
                 if let Err(error) = child_stdin.write_all(initial_stdin.as_bytes()).await {
                     record
                         .shared_state
-                        .remember_failure_reason(format!("写入命令会话初始标准输入失败：{error}"))
+                        .remember_failure_reason(format!(
+                            "Failed to write the initial command-session stdin: {error}"
+                        ))
                         .await;
                     let _ = child.start_kill();
                     stop_requested = true;
@@ -874,7 +893,9 @@ async fn run_command_session_supervisor(
             None => {
                 record
                     .shared_state
-                    .remember_failure_reason(String::from("命令会话未提供可写入的标准输入通道。"))
+                    .remember_failure_reason(String::from(
+                        "The command session did not expose a writable stdin channel.",
+                    ))
                     .await;
             }
         }
@@ -886,7 +907,13 @@ async fn run_command_session_supervisor(
             match child.wait().await {
                 Ok(status) => break (status.code(), None, status.success()),
                 Err(error) => {
-                    break (None, Some(format!("等待命令会话结束失败：{error}")), false);
+                    break (
+                        None,
+                        Some(format!(
+                            "Failed to wait for the command session to exit: {error}"
+                        )),
+                        false,
+                    );
                 }
             }
         }
@@ -898,7 +925,7 @@ async fn run_command_session_supervisor(
                     Err(error) => {
                         break (
                             None,
-                            Some(format!("等待命令会话结束失败：{error}")),
+                            Some(format!("Failed to wait for the command session to exit: {error}")),
                             false,
                         );
                     }
@@ -916,9 +943,13 @@ async fn run_command_session_supervisor(
                                         .await;
                                     Ok(text.len())
                                 }
-                                Err(error) => Err(format!("写入命令会话标准输入失败：{error}")),
+                                Err(error) => {
+                                    Err(format!("Failed to write command-session stdin: {error}"))
+                                }
                             },
-                            None => Err(String::from("命令会话当前没有可写入的标准输入通道。")),
+                            None => Err(String::from(
+                                "The command session does not currently have a writable stdin channel.",
+                            )),
                         };
                         let _ = responder.send(write_result);
                     }
@@ -927,7 +958,9 @@ async fn run_command_session_supervisor(
                         stdin = None;
                         let stop_result = child
                             .start_kill()
-                            .map_err(|error| format!("停止命令会话进程失败：{error}"));
+                            .map_err(|error| {
+                                format!("Failed to stop the command-session process: {error}")
+                            });
                         let _ = responder.send(stop_result);
                     }
                     None => {

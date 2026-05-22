@@ -162,12 +162,12 @@ pub fn configured_image_generation_parameters_schema(
     json!({
         "type": "object",
         "properties": {
-            "prompt": { "type": "string", "description": "图片生成提示词。" },
+            "prompt": { "type": "string", "description": "Prompt used for image generation." },
             "target": { "type": "string", "enum": target_enum, "default": "auto" },
             "count": { "type": "integer", "minimum": 1, "maximum": 4, "default": 1 },
-            "aspect_ratio": { "type": "string", "description": "例如 1:1、16:9、9:16。" },
+            "aspect_ratio": { "type": "string", "description": "Optional aspect ratio such as `1:1`, `16:9`, or `9:16`." },
             "seed": { "type": "integer", "minimum": 0 },
-            "subject_image": { "type": "string", "enum": image_enum, "description": "可选参考图片附件名称。" },
+            "subject_image": { "type": "string", "enum": image_enum, "description": "Optional reference image attachment file name." },
             "prompt_optimizer": { "type": "boolean", "default": false }
         },
         "required": ["prompt"]
@@ -188,11 +188,11 @@ pub fn configured_video_generation_parameters_schema(
     json!({
         "type": "object",
         "properties": {
-            "prompt": { "type": "string", "description": "视频生成提示词。" },
+            "prompt": { "type": "string", "description": "Prompt used for video generation." },
             "target": { "type": "string", "enum": target_enum, "default": "auto" },
-            "first_image": { "type": "string", "enum": image_enum, "description": "可选首帧图片附件。" },
-            "last_image": { "type": "string", "enum": image_enum, "description": "可选末帧图片附件。" },
-            "subject_image": { "type": "string", "enum": image_enum, "description": "可选主体参考图片附件。" }
+            "first_image": { "type": "string", "enum": image_enum, "description": "Optional first-frame image attachment file name." },
+            "last_image": { "type": "string", "enum": image_enum, "description": "Optional last-frame image attachment file name." },
+            "subject_image": { "type": "string", "enum": image_enum, "description": "Optional subject reference image attachment file name." }
         },
         "required": ["prompt"]
     })
@@ -209,10 +209,10 @@ pub fn configured_speech_synthesis_parameters_schema(
     json!({
         "type": "object",
         "properties": {
-            "text": { "type": "string", "description": "需要合成的文本。" },
+            "text": { "type": "string", "description": "Input text to synthesize into speech." },
             "target": { "type": "string", "enum": target_enum, "default": "auto" },
-            "voice": { "type": "string", "description": "可选 voice_id。" },
-            "language": { "type": "string", "description": "可选 language_boost 代码。" },
+            "voice": { "type": "string", "description": "Optional `voice_id` value." },
+            "language": { "type": "string", "description": "Optional `language_boost` code." },
             "format": { "type": "string", "enum": ["mp3", "wav", "flac", "aac", "m4a"], "default": "mp3" }
         },
         "required": ["text"]
@@ -230,8 +230,8 @@ pub fn configured_music_generation_parameters_schema(
     json!({
         "type": "object",
         "properties": {
-            "prompt": { "type": "string", "description": "音乐风格提示词。" },
-            "lyrics": { "type": "string", "description": "可选歌词；若未提供可改用 instrumental 或 lyrics_optimizer。" },
+            "prompt": { "type": "string", "description": "Optional music style prompt." },
+            "lyrics": { "type": "string", "description": "Optional lyrics text. If omitted, use `instrumental` or `lyrics_optimizer` instead when appropriate." },
             "target": { "type": "string", "enum": target_enum, "default": "auto" },
             "instrumental": { "type": "boolean", "default": false },
             "lyrics_optimizer": { "type": "boolean", "default": false },
@@ -254,9 +254,9 @@ pub fn configured_music_cover_parameters_schema(
     json!({
         "type": "object",
         "properties": {
-            "prompt": { "type": "string", "description": "翻唱风格提示词。" },
-            "audio": { "type": "string", "enum": audio_enum, "description": "参考音频附件名称。" },
-            "lyrics": { "type": "string", "description": "可选歌词覆盖值。" },
+            "prompt": { "type": "string", "description": "Style prompt for the music cover." },
+            "audio": { "type": "string", "enum": audio_enum, "description": "Reference audio attachment file name." },
+            "lyrics": { "type": "string", "description": "Optional lyrics override." },
             "target": { "type": "string", "enum": target_enum, "default": "auto" },
             "format": { "type": "string", "enum": ["mp3", "wav", "flac", "aac", "m4a"], "default": "mp3" }
         },
@@ -292,13 +292,13 @@ pub async fn execute_configured_image_generation(
         .await
         {
             Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}：{error}", target.target_selector)),
+            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
         }
     }
 
     Err(format!(
-        "所有已配置 image_generation 目标均调用失败：{}。",
-        errors.join("；")
+        "All configured `image_generation` targets failed: {}.",
+        errors.join("; ")
     ))
 }
 
@@ -330,13 +330,13 @@ pub async fn execute_configured_video_generation(
         .await
         {
             Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}：{error}", target.target_selector)),
+            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
         }
     }
 
     Err(format!(
-        "所有已配置 video_generation 目标均调用失败：{}。",
-        errors.join("；")
+        "All configured `video_generation` targets failed: {}.",
+        errors.join("; ")
     ))
 }
 
@@ -366,13 +366,13 @@ pub async fn execute_configured_speech_synthesis(
         .await
         {
             Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}：{error}", target.target_selector)),
+            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
         }
     }
 
     Err(format!(
-        "所有已配置 speech_synthesis 目标均调用失败：{}。",
-        errors.join("；")
+        "All configured `speech_synthesis` targets failed: {}.",
+        errors.join("; ")
     ))
 }
 
@@ -402,13 +402,13 @@ pub async fn execute_configured_music_generation(
         .await
         {
             Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}：{error}", target.target_selector)),
+            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
         }
     }
 
     Err(format!(
-        "所有已配置 music_generation 目标均调用失败：{}。",
-        errors.join("；")
+        "All configured `music_generation` targets failed: {}.",
+        errors.join("; ")
     ))
 }
 
@@ -440,13 +440,13 @@ pub async fn execute_configured_music_cover(
         .await
         {
             Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}：{error}", target.target_selector)),
+            Err(error) => errors.push(format!("{}: {error}", target.target_selector)),
         }
     }
 
     Err(format!(
-        "所有已配置 music_cover 目标均调用失败：{}。",
-        errors.join("；")
+        "All configured `music_cover` targets failed: {}.",
+        errors.join("; ")
     ))
 }
 
@@ -455,7 +455,7 @@ pub async fn execute_configured_music_cover(
 fn build_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .build()
-        .map_err(|error| format!("创建 AI 能力 HTTP 客户端失败：{error}"))
+        .map_err(|error| format!("Failed to build the AI capability HTTP client: {error}"))
 }
 
 /// Resolves one ordered vendor-target attempt list from the configured capability routing state.
@@ -475,7 +475,7 @@ fn resolve_vendor_targets(
     };
     if target_order.is_empty() {
         return Err(format!(
-            "{} 当前尚未配置任何可用目标。",
+            "No usable targets are configured for `{}`.",
             capability_kind.key()
         ));
     }
@@ -506,11 +506,11 @@ fn resolve_vendor_targets(
 
     if resolved.is_empty() {
         return Err(format!(
-            "{} 指定目标当前不存在或不可用。可用目标：{}。",
+            "The requested target for `{}` does not exist or is not available. Available targets: {}.",
             capability_kind.key(),
             configuration
                 .usable_targets_for_kind(capability_kind)
-                .join("、")
+                .join(", ")
         ));
     }
 
@@ -527,7 +527,7 @@ async fn execute_image_generation_against_target(
     conversation_attachments: &[ConversationAttachment],
 ) -> Result<VulcanToolInvocationResult, String> {
     ensure_minimax_vendor(target, AiToolKind::ImageGeneration)?;
-    let api_key = require_vendor_api_key(&target.vendor, "MiniMax 图片生成")?;
+    let api_key = require_vendor_api_key(&target.vendor, "MiniMax Image Generation")?;
     let endpoint = resolve_minimax_endpoint(&target.vendor, "/v1/image_generation", false)?;
 
     let subject_reference = if let Some(image_selector) = invocation.subject_image.as_deref() {
@@ -537,7 +537,9 @@ async fn execute_image_generation_against_target(
             image_selector,
         )
         .ok_or_else(|| {
-            format!("image_generation 指定的参考图片 `{image_selector}` 当前不存在。")
+            format!(
+                "The reference image `{image_selector}` requested by `image_generation` does not exist."
+            )
         })?;
         let payload =
             match read_provider_attachment(attachment).map_err(|error| error.to_string())? {
@@ -573,7 +575,7 @@ async fn execute_image_generation_against_target(
         &endpoint,
         &api_key,
         &request_body,
-        "MiniMax 图片生成",
+        "MiniMax Image Generation",
     )
     .await?;
     let images = response_body
@@ -583,7 +585,7 @@ async fn execute_image_generation_against_target(
         .unwrap_or_default();
     if images.is_empty() {
         return Err(format!(
-            "MiniMax 图片生成响应缺少 image_base64：{}",
+            "MiniMax Image Generation returned no `image_base64` payload: {}",
             truncate_error_text(&response_body.to_string(), 240)
         ));
     }
@@ -594,10 +596,10 @@ async fn execute_image_generation_against_target(
             .as_str()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| String::from("MiniMax 图片生成返回了空图片数据。"))?;
-        let image_bytes = BASE64_STANDARD
-            .decode(base64_image)
-            .map_err(|error| format!("解码 MiniMax 图片 Base64 失败：{error}"))?;
+            .ok_or_else(|| String::from("MiniMax Image Generation returned empty image data."))?;
+        let image_bytes = BASE64_STANDARD.decode(base64_image).map_err(|error| {
+            format!("Failed to decode MiniMax Image Generation base64 image data: {error}")
+        })?;
         attachments.push(stage_generated_asset_bytes(
             workspace_path,
             "image/jpeg",
@@ -628,7 +630,7 @@ async fn execute_video_generation_against_target(
     conversation_attachments: &[ConversationAttachment],
 ) -> Result<VulcanToolInvocationResult, String> {
     ensure_minimax_vendor(target, AiToolKind::VideoGeneration)?;
-    let api_key = require_vendor_api_key(&target.vendor, "MiniMax 视频生成")?;
+    let api_key = require_vendor_api_key(&target.vendor, "MiniMax Video Generation")?;
     let endpoint = resolve_minimax_endpoint(&target.vendor, "/v1/video_generation", false)?;
 
     let first_frame_image = resolve_optional_image_data_url(
@@ -647,24 +649,28 @@ async fn execute_video_generation_against_target(
     let model_id = target.binding.model_id();
     if model_id.eq_ignore_ascii_case("MiniMax-Hailuo-2.3-Fast") && first_frame_image.is_none() {
         return Err(String::from(
-            "MiniMax-Hailuo-2.3-Fast 仅支持图生视频，请提供 first_image。",
+            "MiniMax-Hailuo-2.3-Fast supports image-to-video only, so `first_image` is required.",
         ));
     }
     if last_frame_image.is_some() && first_frame_image.is_none() {
-        return Err(String::from("提供 last_image 时必须同时提供 first_image。"));
+        return Err(String::from(
+            "`first_image` must also be provided when `last_image` is set.",
+        ));
     }
     if last_frame_image.is_some() && subject_image.is_some() {
-        return Err(String::from("last_image 与 subject_image 不能同时使用。"));
+        return Err(String::from(
+            "`last_image` and `subject_image` cannot be used at the same time.",
+        ));
     }
     if model_id.eq_ignore_ascii_case("MiniMax-Hailuo-02")
         && (first_frame_image.is_none() || last_frame_image.is_none())
     {
         return Err(String::from(
-            "MiniMax-Hailuo-02 需要同时提供 first_image 与 last_image。",
+            "MiniMax-Hailuo-02 requires both `first_image` and `last_image`.",
         ));
     }
     if model_id.eq_ignore_ascii_case("S2V-01") && subject_image.is_none() {
-        return Err(String::from("S2V-01 需要提供 subject_image。"));
+        return Err(String::from("S2V-01 requires `subject_image`."));
     }
 
     let mut request_body = json!({
@@ -687,7 +693,7 @@ async fn execute_video_generation_against_target(
         &endpoint,
         &api_key,
         &request_body,
-        "MiniMax 视频生成",
+        "MiniMax Video Generation",
     )
     .await?;
     let task_id = response_body
@@ -695,7 +701,7 @@ async fn execute_video_generation_against_target(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("MiniMax 视频生成响应缺少 task_id。"))?
+        .ok_or_else(|| String::from("MiniMax Video Generation returned no `task_id`."))?
         .to_string();
 
     let task_payload = poll_minimax_video_task(client, &target.vendor, &api_key, &task_id).await?;
@@ -704,10 +710,12 @@ async fn execute_video_generation_against_target(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("MiniMax 视频任务完成后未返回 file_id。"))?;
+        .ok_or_else(|| {
+            String::from("The completed MiniMax video task did not return a `file_id`.")
+        })?;
     let download_url =
         fetch_minimax_file_download_url(client, &target.vendor, &api_key, file_id).await?;
-    let video_bytes = download_binary(&download_url, "MiniMax 视频下载").await?;
+    let video_bytes = download_binary(&download_url, "MiniMax Video Download").await?;
     let attachment = stage_generated_asset_bytes(
         workspace_path,
         "video/mp4",
@@ -736,7 +744,7 @@ async fn execute_speech_synthesis_against_target(
     invocation: &SpeechSynthesisInvocation,
 ) -> Result<VulcanToolInvocationResult, String> {
     ensure_minimax_vendor(target, AiToolKind::SpeechSynthesis)?;
-    let api_key = require_vendor_api_key(&target.vendor, "MiniMax 语音合成")?;
+    let api_key = require_vendor_api_key(&target.vendor, "MiniMax Speech Synthesis")?;
     let endpoint = resolve_minimax_endpoint(&target.vendor, "/v1/t2a_v2", false)?;
     let mut request_body = json!({
         "model": target.binding.model_id(),
@@ -761,7 +769,7 @@ async fn execute_speech_synthesis_against_target(
         &endpoint,
         &api_key,
         &request_body,
-        "MiniMax 语音合成",
+        "MiniMax Speech Synthesis",
     )
     .await?;
     let audio_hex = response_body
@@ -769,8 +777,8 @@ async fn execute_speech_synthesis_against_target(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("MiniMax 语音合成响应缺少 audio 字段。"))?;
-    let audio_bytes = decode_hex_bytes(audio_hex, "MiniMax 语音合成")?;
+        .ok_or_else(|| String::from("MiniMax Speech Synthesis returned no `audio` field."))?;
+    let audio_bytes = decode_hex_bytes(audio_hex, "MiniMax Speech Synthesis")?;
     let mime_type = audio_format_to_mime_type(&invocation.format)?;
     let attachment = stage_generated_asset_bytes(
         workspace_path,
@@ -799,15 +807,17 @@ async fn execute_music_generation_against_target(
     invocation: &MusicGenerationInvocation,
 ) -> Result<VulcanToolInvocationResult, String> {
     ensure_minimax_vendor(target, AiToolKind::MusicGeneration)?;
-    let api_key = require_vendor_api_key(&target.vendor, "MiniMax 音乐生成")?;
+    let api_key = require_vendor_api_key(&target.vendor, "MiniMax Music Generation")?;
     let endpoint = resolve_minimax_endpoint(&target.vendor, "/v1/music_generation", false)?;
 
     if invocation.instrumental && invocation.lyrics.is_some() {
-        return Err(String::from("instrumental 与 lyrics 不能同时使用。"));
+        return Err(String::from(
+            "`instrumental` and `lyrics` cannot be used together.",
+        ));
     }
     if invocation.lyrics_optimizer && (invocation.lyrics.is_some() || invocation.instrumental) {
         return Err(String::from(
-            "lyrics_optimizer 不能与 lyrics 或 instrumental 同时使用。",
+            "`lyrics_optimizer` cannot be used together with `lyrics` or `instrumental`.",
         ));
     }
     if invocation.prompt.is_none()
@@ -816,7 +826,7 @@ async fn execute_music_generation_against_target(
         && !invocation.lyrics_optimizer
     {
         return Err(String::from(
-            "music_generation 至少需要 prompt、lyrics、instrumental 或 lyrics_optimizer 中的一项。",
+            "`music_generation` requires at least one of `prompt`, `lyrics`, `instrumental`, or `lyrics_optimizer`.",
         ));
     }
 
@@ -838,7 +848,7 @@ async fn execute_music_generation_against_target(
         &endpoint,
         &api_key,
         &request_body,
-        "MiniMax 音乐生成",
+        "MiniMax Music Generation",
     )
     .await?;
     let audio_hex = response_body
@@ -846,8 +856,8 @@ async fn execute_music_generation_against_target(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("MiniMax 音乐生成响应缺少 audio 字段。"))?;
-    let audio_bytes = decode_hex_bytes(audio_hex, "MiniMax 音乐生成")?;
+        .ok_or_else(|| String::from("MiniMax Music Generation returned no `audio` field."))?;
+    let audio_bytes = decode_hex_bytes(audio_hex, "MiniMax Music Generation")?;
     let mime_type = audio_format_to_mime_type(&invocation.format)?;
     let attachment = stage_generated_asset_bytes(
         workspace_path,
@@ -877,7 +887,7 @@ async fn execute_music_cover_against_target(
     conversation_attachments: &[ConversationAttachment],
 ) -> Result<VulcanToolInvocationResult, String> {
     ensure_minimax_vendor(target, AiToolKind::MusicCover)?;
-    let api_key = require_vendor_api_key(&target.vendor, "MiniMax 音乐翻唱")?;
+    let api_key = require_vendor_api_key(&target.vendor, "MiniMax Music Cover")?;
     let endpoint = resolve_minimax_endpoint(&target.vendor, "/v1/music_generation", false)?;
     let attachment = resolve_attachment_by_name(
         conversation_attachments,
@@ -886,7 +896,7 @@ async fn execute_music_cover_against_target(
     )
     .ok_or_else(|| {
         format!(
-            "music_cover 指定的参考音频 `{}` 当前不存在。",
+            "The reference audio `{}` requested by `music_cover` does not exist.",
             invocation.audio
         )
     })?;
@@ -912,7 +922,7 @@ async fn execute_music_cover_against_target(
         &endpoint,
         &api_key,
         &request_body,
-        "MiniMax 音乐翻唱",
+        "MiniMax Music Cover",
     )
     .await?;
     let audio_hex = response_body
@@ -920,8 +930,8 @@ async fn execute_music_cover_against_target(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("MiniMax 音乐翻唱响应缺少 audio 字段。"))?;
-    let audio_bytes = decode_hex_bytes(audio_hex, "MiniMax 音乐翻唱")?;
+        .ok_or_else(|| String::from("MiniMax Music Cover returned no `audio` field."))?;
+    let audio_bytes = decode_hex_bytes(audio_hex, "MiniMax Music Cover")?;
     let mime_type = audio_format_to_mime_type(&invocation.format)?;
     let attachment = stage_generated_asset_bytes(
         workspace_path,
@@ -957,7 +967,7 @@ async fn send_json_request(
         .json(body)
         .send()
         .await
-        .map_err(|error| format!("{provider_label} 请求失败：{error}"))?;
+        .map_err(|error| format!("{provider_label} request failed: {error}"))?;
     parse_json_response(response, provider_label).await
 }
 
@@ -968,19 +978,18 @@ async fn parse_json_response(
     provider_label: &str,
 ) -> Result<Value, String> {
     let status = response.status();
-    let body_text = response
-        .text()
-        .await
-        .map_err(|error| format!("{provider_label} 读取响应正文失败：{error}"))?;
+    let body_text = response.text().await.map_err(|error| {
+        format!("Failed to read the response body from {provider_label}: {error}")
+    })?;
     if !status.is_success() {
         return Err(format!(
-            "{provider_label} 返回 HTTP {}：{}",
+            "{provider_label} returned HTTP {}: {}",
             status,
             truncate_error_text(&body_text, 400)
         ));
     }
     let payload: Value = serde_json::from_str(&body_text)
-        .map_err(|error| format!("{provider_label} 响应 JSON 解析失败：{error}"))?;
+        .map_err(|error| format!("Failed to parse JSON returned by {provider_label}: {error}"))?;
     if let Some(status_code) = payload
         .pointer("/base_resp/status_code")
         .and_then(Value::as_i64)
@@ -989,9 +998,9 @@ async fn parse_json_response(
             let status_msg = payload
                 .pointer("/base_resp/status_msg")
                 .and_then(Value::as_str)
-                .unwrap_or("未知错误");
+                .unwrap_or("Unknown error");
             return Err(format!(
-                "{provider_label} 返回业务错误 {status_code}：{}",
+                "{provider_label} returned business error {status_code}: {}",
                 status_msg.trim()
             ));
         }
@@ -1019,8 +1028,8 @@ async fn poll_minimax_video_task(
             .header(AUTHORIZATION, format!("Bearer {api_key}"))
             .send()
             .await
-            .map_err(|error| format!("MiniMax 视频任务查询失败：{error}"))?;
-        let payload = parse_json_response(response, "MiniMax 视频任务查询").await?;
+            .map_err(|error| format!("MiniMax Video Task Query failed: {error}"))?;
+        let payload = parse_json_response(response, "MiniMax Video Task Query").await?;
         let status = payload
             .get("status")
             .and_then(Value::as_str)
@@ -1029,14 +1038,16 @@ async fn poll_minimax_video_task(
             "Success" => return Ok(payload),
             "Failed" => {
                 return Err(format!(
-                    "MiniMax 视频任务执行失败：{}",
+                    "MiniMax video task failed: {}",
                     truncate_error_text(&payload.to_string(), 240)
                 ));
             }
             _ => {}
         }
         if elapsed_seconds >= 300 {
-            return Err(String::from("MiniMax 视频任务等待超时（300 秒）。"));
+            return Err(String::from(
+                "Timed out while waiting for the MiniMax video task to finish (300 seconds).",
+            ));
         }
         sleep(Duration::from_secs(5)).await;
         elapsed_seconds += 5;
@@ -1061,15 +1072,17 @@ async fn fetch_minimax_file_download_url(
         .header(AUTHORIZATION, format!("Bearer {api_key}"))
         .send()
         .await
-        .map_err(|error| format!("MiniMax 文件下载地址查询失败：{error}"))?;
-    let payload = parse_json_response(response, "MiniMax 文件下载地址查询").await?;
+        .map_err(|error| format!("MiniMax File Download URL Query failed: {error}"))?;
+    let payload = parse_json_response(response, "MiniMax File Download URL Query").await?;
     payload
         .pointer("/file/download_url")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| String::from("MiniMax 文件下载地址响应缺少 download_url。"))
+        .ok_or_else(|| {
+            String::from("MiniMax file download URL response is missing `download_url`.")
+        })
 }
 
 /// Downloads one binary payload from the provided URL.
@@ -1077,15 +1090,15 @@ async fn fetch_minimax_file_download_url(
 async fn download_binary(url: &str, label: &str) -> Result<Vec<u8>, String> {
     let response = reqwest::get(url)
         .await
-        .map_err(|error| format!("{label} 请求失败：{error}"))?;
+        .map_err(|error| format!("{label} request failed: {error}"))?;
     let status = response.status();
     if !status.is_success() {
         let body_text = response
             .text()
             .await
-            .unwrap_or_else(|_| String::from("无法读取响应正文"));
+            .unwrap_or_else(|_| String::from("Unable to read the response body"));
         return Err(format!(
-            "{label} 返回 HTTP {}：{}",
+            "{label} returned HTTP {}: {}",
             status,
             truncate_error_text(&body_text, 240)
         ));
@@ -1094,7 +1107,7 @@ async fn download_binary(url: &str, label: &str) -> Result<Vec<u8>, String> {
         .bytes()
         .await
         .map(|bytes| bytes.to_vec())
-        .map_err(|error| format!("{label} 读取响应字节失败：{error}"))
+        .map_err(|error| format!("Failed to read response bytes from {label}: {error}"))
 }
 
 /// Resolves the correct MiniMax endpoint from one shared vendor root and one capability-specific path.
@@ -1115,12 +1128,12 @@ fn resolve_minimax_endpoint(
         return Ok(format!("{host}{capability_path}"));
     }
 
-    let mut url =
-        reqwest::Url::parse(base_url).map_err(|error| format!("MiniMax Base URL 无效：{error}"))?;
+    let mut url = reqwest::Url::parse(base_url)
+        .map_err(|error| format!("MiniMax base URL is invalid: {error}"))?;
     let normalized_path = url.path().trim_end_matches('/').to_ascii_lowercase();
     if !allow_regular_text_api && minimax_path_looks_like_regular_text_api(&normalized_path) {
         return Err(String::from(
-            "当前 MiniMax 能力层使用独立能力端点，不支持普通文本模型 API 地址。请填写 MiniMax 根地址（如 `https://api.minimax.io`）或留空使用默认值。",
+            "This MiniMax capability uses dedicated capability endpoints and does not support regular text-model API URLs. Provide a MiniMax root URL such as `https://api.minimax.io`, or leave the field empty to use the default.",
         ));
     }
     url.set_path(capability_path);
@@ -1136,8 +1149,8 @@ fn resolve_minimax_file_or_task_endpoint(
     query_pairs: &[(&str, &str)],
 ) -> Result<String, String> {
     let endpoint = resolve_minimax_endpoint(vendor, capability_path, false)?;
-    let mut url =
-        reqwest::Url::parse(&endpoint).map_err(|error| format!("MiniMax 端点无效：{error}"))?;
+    let mut url = reqwest::Url::parse(&endpoint)
+        .map_err(|error| format!("MiniMax endpoint is invalid: {error}"))?;
     {
         let mut pairs = url.query_pairs_mut();
         for (key, value) in query_pairs {
@@ -1167,7 +1180,7 @@ fn ensure_minimax_vendor(
 ) -> Result<(), String> {
     if target.vendor.vendor_id != "minimax" || target.binding.capability_kind != capability_kind {
         return Err(format!(
-            "当前只实现了 MiniMax 的 `{}` 能力目标。",
+            "Only MiniMax `{}` capability targets are currently implemented.",
             capability_kind.key()
         ));
     }
@@ -1179,7 +1192,7 @@ fn ensure_minimax_vendor(
     .is_none()
     {
         return Err(format!(
-            "MiniMax `{}` 目标 `{}` 当前未在能力资源目录中注册。",
+            "The MiniMax `{}` target `{}` is not registered in the capability resource catalog.",
             capability_kind.key(),
             target.binding.target_alias()
         ));
@@ -1195,7 +1208,7 @@ fn require_vendor_api_key(
 ) -> Result<String, String> {
     vendor
         .resolved_api_key()?
-        .ok_or_else(|| format!("{provider_label} 当前缺少有效 API Key。"))
+        .ok_or_else(|| format!("{provider_label} is missing a valid API key."))
 }
 
 /// Stages one generated binary asset into the managed attachment store.
@@ -1206,8 +1219,9 @@ fn stage_generated_asset_bytes(
     suggested_file_name: &str,
     bytes: &[u8],
 ) -> Result<ConversationAttachment, String> {
-    let descriptor = attachment_descriptor_from_mime_type(mime_type)
-        .ok_or_else(|| format!("当前暂不支持处理 MIME `{mime_type}` 的生成结果。"))?;
+    let descriptor = attachment_descriptor_from_mime_type(mime_type).ok_or_else(|| {
+        format!("Generated assets with MIME type `{mime_type}` are not currently supported.")
+    })?;
     stage_attachment_bytes(
         workspace_path,
         &descriptor,
@@ -1304,7 +1318,7 @@ fn resolve_optional_image_data_url(
         ConversationAttachmentKind::Image,
         image_selector,
     )
-    .ok_or_else(|| format!("指定图片 `{image_selector}` 当前不存在。"))?;
+    .ok_or_else(|| format!("The image `{image_selector}` does not exist."))?;
     let payload = match read_provider_attachment(attachment).map_err(|error| error.to_string())? {
         Some(payload) => payload,
         None => return Ok(None),
@@ -1369,12 +1383,12 @@ fn available_attachment_names(
 /// Parses one semantic `image_generation` invocation payload.
 /// 解析单条语义 `image_generation` 调用载荷。
 fn parse_image_generation_invocation(args: Value) -> Result<ImageGenerationInvocation, String> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| String::from("image_generation 参数必须是 JSON 对象。"))?;
+    let object = args.as_object().ok_or_else(|| {
+        String::from("The arguments for `image_generation` must be a JSON object.")
+    })?;
     let prompt = required_trimmed_string(
         object.get("prompt"),
-        "image_generation 缺少必填参数 `prompt`。",
+        "The `image_generation` tool is missing the required `prompt` argument.",
     )?;
     Ok(ImageGenerationInvocation {
         prompt,
@@ -1397,13 +1411,13 @@ fn parse_image_generation_invocation(args: Value) -> Result<ImageGenerationInvoc
 /// Parses one semantic `video_generation` invocation payload.
 /// 解析单条语义 `video_generation` 调用载荷。
 fn parse_video_generation_invocation(args: Value) -> Result<VideoGenerationInvocation, String> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| String::from("video_generation 参数必须是 JSON 对象。"))?;
+    let object = args.as_object().ok_or_else(|| {
+        String::from("The arguments for `video_generation` must be a JSON object.")
+    })?;
     Ok(VideoGenerationInvocation {
         prompt: required_trimmed_string(
             object.get("prompt"),
-            "video_generation 缺少必填参数 `prompt`。",
+            "The `video_generation` tool is missing the required `prompt` argument.",
         )?,
         target: optional_trimmed_string(object.get("target")),
         first_image: optional_trimmed_string(object.get("first_image")),
@@ -1415,13 +1429,13 @@ fn parse_video_generation_invocation(args: Value) -> Result<VideoGenerationInvoc
 /// Parses one semantic `speech_synthesis` invocation payload.
 /// 解析单条语义 `speech_synthesis` 调用载荷。
 fn parse_speech_synthesis_invocation(args: Value) -> Result<SpeechSynthesisInvocation, String> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| String::from("speech_synthesis 参数必须是 JSON 对象。"))?;
+    let object = args.as_object().ok_or_else(|| {
+        String::from("The arguments for `speech_synthesis` must be a JSON object.")
+    })?;
     Ok(SpeechSynthesisInvocation {
         text: required_trimmed_string(
             object.get("text"),
-            "speech_synthesis 缺少必填参数 `text`。",
+            "The `speech_synthesis` tool is missing the required `text` argument.",
         )?,
         target: optional_trimmed_string(object.get("target")),
         voice: optional_trimmed_string(object.get("voice")),
@@ -1434,9 +1448,9 @@ fn parse_speech_synthesis_invocation(args: Value) -> Result<SpeechSynthesisInvoc
 /// Parses one semantic `music_generation` invocation payload.
 /// 解析单条语义 `music_generation` 调用载荷。
 fn parse_music_generation_invocation(args: Value) -> Result<MusicGenerationInvocation, String> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| String::from("music_generation 参数必须是 JSON 对象。"))?;
+    let object = args.as_object().ok_or_else(|| {
+        String::from("The arguments for `music_generation` must be a JSON object.")
+    })?;
     Ok(MusicGenerationInvocation {
         prompt: optional_trimmed_string(object.get("prompt")),
         lyrics: optional_trimmed_string(object.get("lyrics")),
@@ -1459,13 +1473,16 @@ fn parse_music_generation_invocation(args: Value) -> Result<MusicGenerationInvoc
 fn parse_music_cover_invocation(args: Value) -> Result<MusicCoverInvocation, String> {
     let object = args
         .as_object()
-        .ok_or_else(|| String::from("music_cover 参数必须是 JSON 对象。"))?;
+        .ok_or_else(|| String::from("The arguments for `music_cover` must be a JSON object."))?;
     Ok(MusicCoverInvocation {
         prompt: required_trimmed_string(
             object.get("prompt"),
-            "music_cover 缺少必填参数 `prompt`。",
+            "The `music_cover` tool is missing the required `prompt` argument.",
         )?,
-        audio: required_trimmed_string(object.get("audio"), "music_cover 缺少必填参数 `audio`。")?,
+        audio: required_trimmed_string(
+            object.get("audio"),
+            "The `music_cover` tool is missing the required `audio` argument.",
+        )?,
         lyrics: optional_trimmed_string(object.get("lyrics")),
         target: optional_trimmed_string(object.get("target")),
         format: optional_trimmed_string(object.get("format"))
@@ -1512,25 +1529,31 @@ fn split_vendor_target_selector(target: &str) -> Option<(&str, &str)> {
 fn decode_hex_bytes(hex: &str, provider_label: &str) -> Result<Vec<u8>, String> {
     let trimmed = hex.trim();
     if trimmed.is_empty() {
-        return Err(format!("{provider_label} 返回了空音频数据。"));
+        return Err(format!("{provider_label} returned empty audio data."));
     }
     if !trimmed
         .chars()
         .all(|character| character.is_ascii_hexdigit())
     {
-        return Err(format!("{provider_label} 返回的音频数据不是合法十六进制。"));
+        return Err(format!(
+            "{provider_label} returned audio data that is not valid hexadecimal."
+        ));
     }
     if trimmed.len() % 2 != 0 {
-        return Err(format!("{provider_label} 返回的音频十六进制长度为奇数。"));
+        return Err(format!(
+            "{provider_label} returned hexadecimal audio data with an odd length."
+        ));
     }
     let mut bytes = Vec::with_capacity(trimmed.len() / 2);
     let raw_bytes = trimmed.as_bytes();
     let mut index = 0usize;
     while index < raw_bytes.len() {
-        let chunk = std::str::from_utf8(&raw_bytes[index..index + 2])
-            .map_err(|error| format!("{provider_label} 解码十六进制失败：{error}"))?;
-        let byte = u8::from_str_radix(chunk, 16)
-            .map_err(|error| format!("{provider_label} 解码十六进制失败：{error}"))?;
+        let chunk = std::str::from_utf8(&raw_bytes[index..index + 2]).map_err(|error| {
+            format!("Failed to decode hexadecimal data from {provider_label}: {error}")
+        })?;
+        let byte = u8::from_str_radix(chunk, 16).map_err(|error| {
+            format!("Failed to decode hexadecimal data from {provider_label}: {error}")
+        })?;
         bytes.push(byte);
         index += 2;
     }
@@ -1546,7 +1569,9 @@ fn audio_format_to_mime_type(format: &str) -> Result<&'static str, String> {
         "m4a" => Ok("audio/mp4"),
         "aac" => Ok("audio/aac"),
         "flac" => Ok("audio/flac"),
-        other => Err(format!("当前暂不支持音频格式 `{other}`。")),
+        other => Err(format!(
+            "Audio format `{other}` is not currently supported."
+        )),
     }
 }
 

@@ -282,21 +282,20 @@ impl HostCommandShellSupport {
             .to_ascii_lowercase();
 
         if normalized == "auto" {
-            return self
-                .auto_shell()
-                .cloned()
-                .ok_or_else(|| String::from("当前系统未检测到可用的命令行 shell。"));
+            return self.auto_shell().cloned().ok_or_else(|| {
+                String::from("No supported command shell was detected on this host.")
+            });
         }
 
         let requested_shell = HostCommandShell::parse(&normalized)
-            .ok_or_else(|| format!("不支持的 shell 类型：{normalized}。"))?;
+            .ok_or_else(|| format!("Unsupported shell type: {normalized}."))?;
         self.supported_shells
             .iter()
             .find(|entry| entry.shell == requested_shell)
             .cloned()
             .ok_or_else(|| {
                 format!(
-                    "当前系统未检测到可用的 `{}` shell 启动器。",
+                    "No available launcher for shell `{}` was detected on this host.",
                     requested_shell.id()
                 )
             })

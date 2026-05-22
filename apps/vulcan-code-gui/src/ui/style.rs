@@ -1440,6 +1440,31 @@ pub fn workbench_notice_modal_confirm_button_style(
     }
 }
 
+/// Returns the circular confirmation-icon surface style used by the ask confirmation page submit control.
+/// 返回 ask 确认页提交控件使用的圆形确认图标表面样式。
+pub fn workbench_question_modal_submit_icon_surface_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(palette.primary.base.color)),
+        text_color: Some(palette.primary.base.text),
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: palette.primary.strong.color.scale_alpha(0.40),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.18,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 14.0,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the secondary action-button style used by reusable workbench notice modals.
 /// 返回可复用工作台提示弹窗使用的次要操作按钮样式。
 pub fn workbench_notice_modal_secondary_button_style(

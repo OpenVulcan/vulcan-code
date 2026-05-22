@@ -456,18 +456,20 @@ fn write_overflow_text_file(
     policy: &OverflowPolicy,
     spill_root: &Path,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(spill_root).map_err(|error| format!("创建超限目录失败：{}。", error))?;
+    fs::create_dir_all(spill_root)
+        .map_err(|error| format!("Failed to create the overflow directory: {error}."))?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("读取系统时间失败：{}。", error))?;
+        .map_err(|error| format!("Failed to read the system clock: {error}."))?;
     let file_name = format!(
         "tool_output_{}_{}.md",
         policy.template_name.replace('.', "_"),
         now.as_millis()
     );
     let file_path = spill_root.join(file_name);
-    fs::write(&file_path, content).map_err(|error| format!("写入超限文件失败：{}。", error))?;
+    fs::write(&file_path, content)
+        .map_err(|error| format!("Failed to write the overflow file: {error}."))?;
     Ok(file_path)
 }
 

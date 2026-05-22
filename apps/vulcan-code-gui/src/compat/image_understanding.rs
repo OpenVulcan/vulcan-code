@@ -44,7 +44,7 @@ pub async fn execute_configured_understand_image(
         .collect::<Vec<_>>();
     if providers.is_empty() {
         return Err(String::from(
-            "understand_image 已选择宿主兼容模式，但尚未配置可用的图片理解提供方。",
+            "The `understand_image` tool is using host compatibility mode, but no usable image-understanding providers are configured.",
         ));
     }
 
@@ -54,7 +54,7 @@ pub async fn execute_configured_understand_image(
         .collect::<Vec<_>>();
     if image_attachments.is_empty() {
         return Err(String::from(
-            "当前会话中没有可供 understand_image 使用的图片附件。",
+            "There are no image attachments in the current conversation for `understand_image` to use.",
         ));
     }
 
@@ -62,9 +62,9 @@ pub async fn execute_configured_understand_image(
         .ok_or_else(|| {
             let image_names = available_image_names(&image_attachments);
             format!(
-                "understand_image 指定的图片 `{}` 当前不存在。可用图片：{}。",
+                "The image `{}` requested by `understand_image` does not exist. Available images: {}.",
                 invocation.image,
-                image_names.join("、")
+                image_names.join(", ")
             )
         })?;
     let available_targets = providers
@@ -74,7 +74,9 @@ pub async fn execute_configured_understand_image(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|error| format!("创建 understand_image HTTP 客户端失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to build the HTTP client for `understand_image`: {error}")
+        })?;
 
     if let Some(explicit_target) = invocation
         .target
@@ -87,8 +89,8 @@ pub async fn execute_configured_understand_image(
             .find(|provider| provider.matches_target(explicit_target))
             .ok_or_else(|| {
                 format!(
-                    "understand_image 指定的 target `{explicit_target}` 当前不存在或不可用。可用目标：{}。",
-                    available_targets.join("、")
+                    "The target `{explicit_target}` requested by `understand_image` does not exist or is not available. Available targets: {}.",
+                    available_targets.join(", ")
                 )
             })?;
 
@@ -97,7 +99,7 @@ pub async fn execute_configured_understand_image(
                 .await
                 .map_err(|error| {
                     format!(
-                        "understand_image 指定目标 `{}` 调用失败：{error}",
+                        "The requested `understand_image` target `{}` failed: {error}",
                         provider.qualified_target()
                     )
                 })?;
@@ -127,13 +129,13 @@ pub async fn execute_configured_understand_image(
                     &content,
                 )));
             }
-            Err(error) => failures.push(format!("{}：{error}", provider.name)),
+            Err(error) => failures.push(format!("{}: {error}", provider.name)),
         }
     }
 
     Err(format!(
-        "所有已配置 understand_image 提供方均调用失败：{}。",
-        failures.join("；")
+        "All configured `understand_image` providers failed: {}.",
+        failures.join("; ")
     ))
 }
 
@@ -177,9 +179,9 @@ pub fn configured_understand_image_parameters_schema(
 /// Parses model-provided JSON arguments into a stable image-understanding invocation.
 /// 将模型提供的 JSON 参数解析为稳定的图片理解调用。
 fn parse_understand_image_invocation(args: Value) -> Result<UnderstandImageInvocation, String> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| String::from("understand_image 参数必须是 JSON 对象。"))?;
+    let object = args.as_object().ok_or_else(|| {
+        String::from("The arguments for `understand_image` must be a JSON object.")
+    })?;
     let target = object
         .get("target")
         .or_else(|| object.get("provider"))
@@ -196,7 +198,9 @@ fn parse_understand_image_invocation(args: Value) -> Result<UnderstandImageInvoc
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("understand_image 缺少必填参数 `image`。"))?
+        .ok_or_else(|| {
+            String::from("The `understand_image` tool is missing the required `image` argument.")
+        })?
         .to_string();
     let prompt = object
         .get("prompt")
@@ -239,7 +243,7 @@ async fn invoke_minimax_image_understanding(
     attachment: &ConversationAttachment,
 ) -> Result<String, String> {
     let Some(api_key) = provider.resolved_api_key()? else {
-        return Err(String::from("MiniMax Vision 当前缺少有效 API Key。"));
+        return Err(String::from("MiniMax Vision is missing a valid API key."));
     };
     let endpoint = resolve_minimax_vlm_endpoint(provider)?;
     let payload = match read_provider_attachment(attachment).map_err(|error| error.to_string())? {
@@ -256,25 +260,25 @@ async fn invoke_minimax_image_understanding(
         }))
         .send()
         .await
-        .map_err(|error| format!("MiniMax Vision 请求失败：{error}"))?;
+        .map_err(|error| format!("MiniMax Vision request failed: {error}"))?;
     let status = response.status();
     let body_text = response
         .text()
         .await
-        .map_err(|error| format!("MiniMax Vision 读取响应正文失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the MiniMax Vision response body: {error}"))?;
     if !status.is_success() {
         return Err(format!(
-            "MiniMax Vision 返回 HTTP {}：{}",
+            "MiniMax Vision returned HTTP {}: {}",
             status,
             truncate_error_text(&body_text, 400)
         ));
     }
 
     let payload: Value = serde_json::from_str(&body_text)
-        .map_err(|error| format!("MiniMax Vision 响应 JSON 解析失败：{error}"))?;
+        .map_err(|error| format!("Failed to parse MiniMax Vision JSON response: {error}"))?;
     extract_minimax_vlm_content(&payload).ok_or_else(|| {
         format!(
-            "MiniMax Vision 响应缺少可读内容：{}",
+            "MiniMax Vision returned no readable content: {}",
             truncate_error_text(&body_text, 240)
         )
     })
@@ -294,11 +298,11 @@ fn resolve_minimax_vlm_endpoint(
     }
 
     let mut url = reqwest::Url::parse(&provider.resolved_base_url())
-        .map_err(|error| format!("MiniMax Vision Base URL 无效：{error}"))?;
+        .map_err(|error| format!("MiniMax Vision base URL is invalid: {error}"))?;
     let normalized_path = url.path().trim_end_matches('/').to_ascii_lowercase();
     if minimax_path_looks_like_regular_text_api(&normalized_path) {
         return Err(String::from(
-            "当前 MiniMax 图片理解使用 MiniMax VLM 接口，不支持普通文本模型 API 地址。请填写图片理解端点（当前官方路径为 `/v1/coding_plan/vlm`）或留空使用默认值。",
+            "MiniMax image understanding uses the MiniMax VLM endpoint and does not support regular text-model API URLs. Provide an image-understanding endpoint (the current official path is `/v1/coding_plan/vlm`) or leave the field empty to use the default.",
         ));
     }
     if normalized_path.is_empty() || normalized_path == "/" || normalized_path == "/v1" {
@@ -398,7 +402,7 @@ fn render_understand_image_result(
     content: &str,
 ) -> String {
     format!(
-        "图片理解结果\n\n提供方：{} ({})\n附件：{}\n问题：{}\n\n{}",
+        "Image understanding result\n\nProvider: {} ({})\nAttachment: {}\nQuestion: {}\n\n{}",
         provider.name,
         provider.qualified_target(),
         attachment.file_name,
@@ -455,13 +459,13 @@ mod tests {
         let invocation = parse_understand_image_invocation(json!({
             "provider": "minimax/minimax",
             "attachment": "screen.png",
-            "question": "图里写了什么？"
+            "question": "What text appears in the image?"
         }))
         .expect("arguments should parse");
 
         assert_eq!(invocation.target.as_deref(), Some("minimax/minimax"));
         assert_eq!(invocation.image, "screen.png");
-        assert_eq!(invocation.prompt, "图里写了什么？");
+        assert_eq!(invocation.prompt, "What text appears in the image?");
     }
 
     /// Exposes a strict schema with stable target and image enums.

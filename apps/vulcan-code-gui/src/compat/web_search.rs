@@ -90,7 +90,7 @@ pub async fn execute_configured_web_search(
 
     if providers.is_empty() {
         return Err(String::from(
-            "web_search 已选择宿主兼容模式，但尚未配置可用的第三方搜索供应商。",
+            "web_search is routed through the host-compatible path, but no usable third-party search provider is configured.",
         ));
     }
 
@@ -102,7 +102,7 @@ pub async fn execute_configured_web_search(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|error| format!("创建 web_search HTTP 客户端失败：{error}"))?;
+        .map_err(|error| format!("Failed to build the web_search HTTP client: {error}"))?;
     let mut failures = Vec::new();
 
     if let Some(explicit_target) = invocation
@@ -116,8 +116,8 @@ pub async fn execute_configured_web_search(
             .find(|provider| provider.matches_target(explicit_target))
             .ok_or_else(|| {
                 format!(
-                    "web_search 指定的 target `{explicit_target}` 当前不存在或不可用。可用目标：{}。",
-                    available_targets.join("、")
+                    "The requested web_search target `{explicit_target}` does not exist or is not available. Available targets: {}.",
+                    available_targets.join(", ")
                 )
             })?;
 
@@ -129,7 +129,7 @@ pub async fn execute_configured_web_search(
                 render_web_search_narrative(provider, &invocation, &content, &citations),
             )),
             Err(error) => Err(format!(
-                "web_search 指定目标 `{}` 调用失败：{error}",
+                "The requested web_search target `{}` failed: {error}",
                 provider.qualified_target()
             )),
         };
@@ -156,13 +156,13 @@ pub async fn execute_configured_web_search(
                     &citations,
                 )));
             }
-            Err(error) => failures.push(format!("{}：{error}", provider.name)),
+            Err(error) => failures.push(format!("{}: {error}", provider.name)),
         }
     }
 
     Err(format!(
-        "所有已配置 web_search 供应商均调用失败：{}。",
-        failures.join("；")
+        "All configured web_search providers failed: {}.",
+        failures.join("; ")
     ))
 }
 
@@ -1097,7 +1097,7 @@ async fn fetch_text(builder: reqwest::RequestBuilder) -> Result<String, String> 
 /// 解析可能引用 `{env:NAME}` 环境变量占位符的密钥值。
 fn resolve_required_secret_value(raw_value: &str, field_label: &str) -> Result<String, String> {
     resolve_optional_secret_value(raw_value, field_label)?
-        .ok_or_else(|| format!("{field_label} 为空。"))
+        .ok_or_else(|| format!("{field_label} is empty."))
 }
 
 /// Resolves an optional secret value that may reference a `{env:NAME}` environment placeholder.
@@ -1119,16 +1119,22 @@ fn resolve_optional_secret_value(
     };
     let env_name = env_name.trim();
     if env_name.is_empty() {
-        return Err(format!("{field_label} 的环境变量占位符格式无效。"));
+        return Err(format!(
+            "{field_label} uses an invalid environment-variable placeholder format."
+        ));
     }
 
     std::env::var(env_name)
         .map(|value| value.trim().to_string())
-        .map_err(|_| format!("{field_label} 引用了环境变量 `{env_name}`，但当前进程未找到该变量。"))
+        .map_err(|_| {
+            format!(
+                "{field_label} references environment variable `{env_name}`, but it is not defined in the current process."
+            )
+        })
         .and_then(|value| {
             if value.is_empty() {
                 Err(format!(
-                    "{field_label} 引用了环境变量 `{env_name}`，但该变量为空。"
+                    "{field_label} references environment variable `{env_name}`, but that variable is empty."
                 ))
             } else {
                 Ok(Some(value))
@@ -1614,23 +1620,23 @@ fn render_web_search_results(
     results: &[WebSearchResult],
 ) -> String {
     let mut lines = vec![format!(
-        "web_search 由 `{}` 完成，查询：{}。",
+        "web_search completed via `{}`.\nQuery: {}",
         provider.name, invocation.query
     )];
 
     if results.is_empty() {
-        lines.push(String::from("未找到可用搜索结果。"));
+        lines.push(String::from("No usable search results were returned."));
         return lines.join("\n");
     }
 
     for (index, result) in results.iter().enumerate() {
         lines.push(format!(
-            "{}. {}\n   URL: {}\n   摘要: {}",
+            "{}. {}\n   URL: {}\n   Snippet: {}",
             index + 1,
             result.title,
             result.url,
             if result.snippet.trim().is_empty() {
-                "无摘要"
+                "No snippet"
             } else {
                 result.snippet.trim()
             }
@@ -1649,13 +1655,13 @@ fn render_web_search_narrative(
     citations: &[WebSearchCitation],
 ) -> String {
     let mut lines = vec![format!(
-        "web_search 由 `{}` 完成，查询：{}。",
+        "web_search completed via `{}`.\nQuery: {}",
         provider.name, invocation.query
     )];
 
     let trimmed_content = content.trim();
     if trimmed_content.is_empty() {
-        lines.push(String::from("未返回可用文本答案。"));
+        lines.push(String::from("No usable narrative answer was returned."));
     } else {
         lines.push(trimmed_content.to_string());
     }
@@ -1673,7 +1679,7 @@ fn render_web_search_narrative(
                 format!("{}. {} ({})", index + 1, label, citation.url)
             })
             .collect::<Vec<_>>();
-        lines.push(format!("参考来源：\n{}", citation_lines.join("\n")));
+        lines.push(format!("Sources:\n{}", citation_lines.join("\n")));
     }
 
     lines.join("\n\n")

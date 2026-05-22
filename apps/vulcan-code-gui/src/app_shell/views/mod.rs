@@ -283,10 +283,10 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_startup_overlay() {
             layered_surfaces.push(overlay);
         }
-        if let Some(overlay) = self.view_workbench_notice_modal() {
+        if let Some(overlay) = self.view_workbench_question_modal() {
             layered_surfaces.push(overlay);
         }
-        if let Some(overlay) = self.view_workbench_question_modal() {
+        if let Some(overlay) = self.view_workbench_notice_modal() {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_workbench_image_preview_modal() {
@@ -804,88 +804,96 @@ impl VulcanWorkbench {
         .height(28)
         .padding(0)
         .style(style::workbench_notice_modal_close_button_style)
-        .on_press(Message::RejectQuestionModal);
+        .on_press(Message::DismissTopLevelOverlay);
         let question_count = modal.request.questions.len();
         let active_question_index = modal
             .active_question_index
             .min(question_count.saturating_sub(1));
+        let unanswered_questions = self.collect_active_question_modal_unanswered_questions();
+        let all_answered = unanswered_questions.is_empty();
         let modal_subtitle = match modal.stage {
             WorkbenchQuestionModalStage::Answering => {
                 format!("第 {}/{} 题", active_question_index + 1, question_count)
             }
-            WorkbenchQuestionModalStage::Confirming => {
-                format!("确认 {} 个问题的回答", question_count)
-            }
+            WorkbenchQuestionModalStage::Confirming => String::from("确认"),
         };
-        let action_button = |label: &'static str, message: Option<Message>, primary: bool| {
-            let button = button(container(text(label).size(14)).width(Fill).center(Fill))
-                .width(132)
-                .padding([9, 14])
-                .style(if primary {
-                    style::workbench_notice_modal_confirm_button_style
-                } else {
-                    style::workbench_notice_modal_secondary_button_style
-                });
-            if let Some(message) = message {
-                button.on_press(message)
-            } else {
-                button
-            }
-        };
-        let question_tabs =
-            row(modal
-                .request
-                .questions
-                .iter()
-                .enumerate()
-                .map(|(question_index, question)| {
-                    let draft = modal
-                        .drafts
-                        .get(question_index)
-                        .cloned()
-                        .unwrap_or_default();
-                    let is_answered =
-                        Self::collect_question_modal_prompt_answers(question, &draft).is_ok();
-                    let is_active = question_index == active_question_index;
-                    button(
-                        container(
-                            row![
-                                text(if is_answered { "●" } else { "○" }).size(10).color(
-                                    if is_answered {
-                                        palette.success.strong.color
-                                    } else {
-                                        palette.background.base.text.scale_alpha(0.40)
-                                    }
-                                ),
-                                container(
-                                    text(format!("{:02} {}", question_index + 1, question.header))
-                                        .size(13)
-                                )
+        let question_tabs = row(modal
+            .request
+            .questions
+            .iter()
+            .enumerate()
+            .map(|(question_index, question)| {
+                let draft = modal
+                    .drafts
+                    .get(question_index)
+                    .cloned()
+                    .unwrap_or_default();
+                let is_answered =
+                    Self::collect_question_modal_prompt_answers(question, &draft).is_ok();
+                let is_active = modal.stage == WorkbenchQuestionModalStage::Answering
+                    && question_index == active_question_index;
+                button(
+                    container(
+                        row![
+                            text(if is_answered { "●" } else { "○" }).size(10).color(
+                                if is_answered {
+                                    palette.success.strong.color
+                                } else {
+                                    palette.background.base.text.scale_alpha(0.38)
+                                }
+                            ),
+                            container(text(question.header.as_str()).size(13))
                                 .width(Fill)
                                 .clip(true),
-                            ]
-                            .spacing(8)
-                            .align_y(Center)
-                            .width(Fill),
-                        )
-                        .width(Fill)
-                        .center_y(Fill),
+                        ]
+                        .spacing(8)
+                        .align_y(Center)
+                        .width(Fill),
                     )
-                    .width(120)
-                    .height(36)
-                    .padding([0, 10])
-                    .style(move |theme, status| {
-                        style::workbench_model_picker_option_button_style(
-                            theme,
-                            status,
-                            modal.stage == WorkbenchQuestionModalStage::Answering && is_active,
-                        )
-                    })
-                    .on_press(Message::QuestionModalSelectQuestionTab(question_index))
-                    .into()
-                }))
-            .spacing(8)
-            .align_y(Center);
+                    .width(Fill)
+                    .center_y(Fill),
+                )
+                .width(120)
+                .height(36)
+                .padding([0, 10])
+                .style(move |theme, status| {
+                    style::workbench_model_picker_option_button_style(theme, status, is_active)
+                })
+                .on_press(Message::QuestionModalSelectQuestionTab(question_index))
+                .into()
+            })
+            .chain(std::iter::once({
+                let is_active = modal.stage == WorkbenchQuestionModalStage::Confirming;
+                button(
+                    container(
+                        row![
+                            text(if all_answered { "●" } else { "○" }).size(10).color(
+                                if all_answered {
+                                    palette.success.strong.color
+                                } else {
+                                    palette.background.base.text.scale_alpha(0.38)
+                                }
+                            ),
+                            container(text("确认").size(13)).width(Fill).clip(true),
+                        ]
+                        .spacing(8)
+                        .align_y(Center)
+                        .width(Fill),
+                    )
+                    .width(Fill)
+                    .center_y(Fill),
+                )
+                .width(120)
+                .height(36)
+                .padding([0, 10])
+                .style(move |theme, status| {
+                    style::workbench_model_picker_option_button_style(theme, status, is_active)
+                })
+                .on_press(Message::QuestionModalSelectConfirmTab)
+                .into()
+            })))
+        .spacing(8)
+        .align_y(Center);
         let question_tabs_surface: Element<'_, Message> =
             scrollable(container(question_tabs).width(Shrink))
                 .direction(scrollable::Direction::Horizontal(
@@ -902,20 +910,58 @@ impl VulcanWorkbench {
                     .get(active_question_index)
                     .cloned()
                     .unwrap_or_default();
-                let custom_option_index =
-                    Self::question_modal_custom_option_index(current_question);
-                let option_list =
-                    current_question
-                        .options
-                        .iter()
-                        .enumerate()
-                        .map(|(option_index, option)| {
+                let selected_single_option_index =
+                    current_question.options.iter().position(|option| {
+                        current_draft
+                            .selected_labels
+                            .iter()
+                            .any(|selected_label| selected_label == &option.label)
+                    });
+                let option_rows: Element<'_, Message> = if current_question.options.is_empty() {
+                    text_input("请输入回答", &current_draft.custom_text)
+                        .id(WORKBENCH_QUESTION_MODAL_CUSTOM_INPUT_ID)
+                        .on_input(move |value| Message::QuestionModalCustomTextChanged {
+                            question_index: active_question_index,
+                            value,
+                        })
+                        .on_submit(Message::ConfirmTopLevelOverlay)
+                        .padding([10, 12])
+                        .into()
+                } else {
+                    let custom_option_index =
+                        Self::question_modal_custom_option_index(current_question);
+                    let option_list = current_question.options.iter().enumerate().map(
+                        |(option_index, option)| {
                             let is_selected = current_draft
                                 .selected_labels
                                 .iter()
                                 .any(|selected_label| selected_label == &option.label);
                             let is_highlighted = option_index == modal.active_option_index;
                             let has_description = !option.description.trim().is_empty();
+                            let row_message = Message::QuestionModalOptionPressed {
+                                question_index: active_question_index,
+                                option_index,
+                            };
+                            let control_message = row_message.clone();
+                            let control: Element<'_, Message> = if current_question
+                                .allows_multiple()
+                            {
+                                checkbox(is_selected)
+                                    .size(16)
+                                    .spacing(0)
+                                    .on_toggle({
+                                        let control_message = control_message.clone();
+                                        move |_| control_message.clone()
+                                    })
+                                    .into()
+                            } else {
+                                radio("", option_index, selected_single_option_index, move |_| {
+                                    control_message.clone()
+                                })
+                                .size(16)
+                                .spacing(0)
+                                .into()
+                            };
                             let indicator: Element<'_, Message> = if is_highlighted {
                                 codicon::chevron_right()
                                     .size(14)
@@ -930,21 +976,22 @@ impl VulcanWorkbench {
                                     text(option.description.as_str())
                                         .size(12)
                                         .color(palette.background.base.text.scale_alpha(0.54))
-                                        .wrapping(iced::advanced::text::Wrapping::None),
+                                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
                                 )
+                                .padding([0, 34])
                                 .width(Fill)
-                                .clip(true)
                                 .into()
                             } else {
                                 space::vertical().height(0).into()
                             };
-                            button(
+
+                            mouse_area(
                                 container(
                                     column![
                                         row![
                                             container(indicator).width(18).center_y(Fill),
-                                            text(if is_selected { "[x]" } else { "[ ]" }).size(13),
-                                            container(text(option.label.as_str()).size(14))
+                                            container(control).width(16).center_y(Fill),
+                                            container(text(option.label.as_str()).size(15))
                                                 .width(Fill)
                                                 .clip(true),
                                         ]
@@ -954,108 +1001,149 @@ impl VulcanWorkbench {
                                     ]
                                     .spacing(if has_description { 4 } else { 0 }),
                                 )
-                                .width(Fill),
+                                .padding([7, 10])
+                                .width(Fill)
+                                .style(move |theme: &Theme| {
+                                    let mut row_style =
+                                        style::workbench_ai_capability_route_row_style(
+                                            theme, false,
+                                        );
+                                    let palette = theme.extended_palette();
+                                    row_style.background =
+                                        Some(Background::Color(if is_highlighted {
+                                            palette.primary.weak.color.scale_alpha(0.18)
+                                        } else if is_selected {
+                                            palette.primary.weak.color.scale_alpha(0.10)
+                                        } else {
+                                            palette.background.base.color.scale_alpha(0.72)
+                                        }));
+                                    row_style.border.color = if is_highlighted {
+                                        palette.primary.base.color.scale_alpha(0.58)
+                                    } else if is_selected {
+                                        palette.primary.base.color.scale_alpha(0.26)
+                                    } else {
+                                        palette.background.strong.color.scale_alpha(0.20)
+                                    };
+                                    row_style
+                                }),
                             )
-                            .width(Fill)
-                            .height(if has_description { 56 } else { 42 })
-                            .padding([0, 12])
-                            .style(move |theme, status| {
-                                style::workbench_model_picker_option_button_style(
-                                    theme,
-                                    status,
-                                    is_highlighted,
-                                )
-                            })
-                            .on_press(Message::QuestionModalOptionPressed {
-                                question_index: active_question_index,
-                                option_index,
-                            })
+                            .on_press(row_message)
                             .into()
-                        });
-                let custom_row = {
-                    let is_selected =
-                        current_draft.custom_selected || current_question.options.is_empty();
-                    let is_highlighted = custom_option_index == modal.active_option_index;
-                    let indicator: Element<'_, Message> = if is_highlighted {
-                        codicon::chevron_right()
-                            .size(14)
-                            .line_height(1.0)
-                            .color(palette.primary.base.color)
+                        },
+                    );
+                    let custom_row = {
+                        let is_selected = current_draft.custom_selected;
+                        let is_highlighted = custom_option_index == modal.active_option_index;
+                        let row_message = Message::QuestionModalOptionPressed {
+                            question_index: active_question_index,
+                            option_index: custom_option_index,
+                        };
+                        let control_message = row_message.clone();
+                        let control: Element<'_, Message> = if current_question.allows_multiple() {
+                            checkbox(is_selected)
+                                .size(16)
+                                .spacing(0)
+                                .on_toggle({
+                                    let control_message = control_message.clone();
+                                    move |_| control_message.clone()
+                                })
+                                .into()
+                        } else {
+                            radio(
+                                "",
+                                custom_option_index,
+                                current_draft.custom_selected.then_some(custom_option_index),
+                                move |_| control_message.clone(),
+                            )
+                            .size(16)
+                            .spacing(0)
                             .into()
-                    } else {
-                        text("").size(14).into()
-                    };
-                    button(
-                        container(
-                            column![
+                        };
+                        let indicator: Element<'_, Message> = if is_highlighted {
+                            codicon::chevron_right()
+                                .size(14)
+                                .line_height(1.0)
+                                .color(palette.primary.base.color)
+                                .into()
+                        } else {
+                            text("").size(14).into()
+                        };
+
+                        mouse_area(
+                            container(
                                 row![
                                     container(indicator).width(18).center_y(Fill),
-                                    text(if is_selected { "[x]" } else { "[ ]" }).size(13),
-                                    container(text("其他回答").size(14)).width(Fill).clip(true),
+                                    container(control).width(16).center_y(Fill),
+                                    container(text("其他回答").size(15)).width(Fill).clip(true),
                                 ]
                                 .spacing(10)
                                 .align_y(Center),
-                            ]
-                            .spacing(0),
+                            )
+                            .padding([7, 10])
+                            .width(Fill)
+                            .style(move |theme: &Theme| {
+                                let mut row_style =
+                                    style::workbench_ai_capability_route_row_style(theme, false);
+                                let palette = theme.extended_palette();
+                                row_style.background = Some(Background::Color(if is_highlighted {
+                                    palette.primary.weak.color.scale_alpha(0.18)
+                                } else if is_selected {
+                                    palette.primary.weak.color.scale_alpha(0.10)
+                                } else {
+                                    palette.background.base.color.scale_alpha(0.72)
+                                }));
+                                row_style.border.color = if is_highlighted {
+                                    palette.primary.base.color.scale_alpha(0.58)
+                                } else if is_selected {
+                                    palette.primary.base.color.scale_alpha(0.26)
+                                } else {
+                                    palette.background.strong.color.scale_alpha(0.20)
+                                };
+                                row_style
+                            }),
                         )
-                        .width(Fill),
-                    )
-                    .width(Fill)
-                    .height(42)
-                    .padding([0, 12])
-                    .style(move |theme, status| {
-                        style::workbench_model_picker_option_button_style(
-                            theme,
-                            status,
-                            is_highlighted,
+                        .on_press(row_message)
+                        .into()
+                    };
+                    let custom_input_surface: Element<'_, Message> =
+                        if current_draft.custom_selected {
+                            text_input("请输入自定义回答", &current_draft.custom_text)
+                                .id(WORKBENCH_QUESTION_MODAL_CUSTOM_INPUT_ID)
+                                .on_input(move |value| Message::QuestionModalCustomTextChanged {
+                                    question_index: active_question_index,
+                                    value,
+                                })
+                                .on_submit(Message::ConfirmTopLevelOverlay)
+                                .padding([10, 12])
+                                .into()
+                        } else {
+                            space::vertical().height(0).into()
+                        };
+                    column![
+                        scrollable(
+                            column(option_list.chain(std::iter::once(custom_row))).spacing(8)
                         )
-                    })
-                    .on_press(Message::QuestionModalOptionPressed {
-                        question_index: active_question_index,
-                        option_index: custom_option_index,
-                    })
+                        .width(Fill)
+                        .height(Fill),
+                        custom_input_surface,
+                    ]
+                    .spacing(12)
+                    .height(Fill)
                     .into()
                 };
-                let option_column =
-                    column(option_list.chain(std::iter::once(custom_row))).spacing(8);
-                let custom_input_surface: Element<'_, Message> =
-                    if current_draft.custom_selected || current_question.options.is_empty() {
-                        text_input("请输入自定义回答", &current_draft.custom_text)
-                            .on_input(move |value| Message::QuestionModalCustomTextChanged {
-                                question_index: active_question_index,
-                                value,
-                            })
-                            .on_submit(Message::ConfirmTopLevelOverlay)
-                            .padding([10, 12])
-                            .into()
-                    } else {
-                        space::vertical().height(0).into()
-                    };
-                let navigation_row = row![
-                    action_button("取消", Some(Message::RejectQuestionModal), false),
-                    space::horizontal(),
-                    action_button(
-                        "上一题",
-                        (question_count > 1)
-                            .then_some(Message::QuestionModalMoveToPreviousQuestion),
-                        false
-                    ),
-                    action_button(
-                        "下一题",
-                        (question_count > 1).then_some(Message::QuestionModalMoveToNextQuestion),
-                        false
-                    ),
-                    action_button(
-                        "进入确认",
-                        Some(Message::QuestionModalOpenConfirmStage),
-                        true
-                    ),
-                ]
-                .spacing(10)
-                .align_y(Center);
+                let hint_text = if current_question.options.is_empty() {
+                    "Enter 下一页 · Esc 取消"
+                } else if current_question.allows_multiple() {
+                    "↑↓ 选择 · 空格勾选 · Enter 下一页 · ←→ 切换标签 · Esc 取消"
+                } else {
+                    "↑↓ 选择 · 空格勾选 · Enter 下一页 · ←→ 切换标签 · Esc 取消"
+                };
+
                 column![
                     row![
-                        text(if current_question.allows_multiple() {
+                        text(if current_question.options.is_empty() {
+                            "输入"
+                        } else if current_question.allows_multiple() {
                             "多选"
                         } else {
                             "单选"
@@ -1063,7 +1151,7 @@ impl VulcanWorkbench {
                         .size(12)
                         .color(palette.primary.base.color),
                         space::horizontal(),
-                        text("左右切题")
+                        text(hint_text)
                             .size(12)
                             .color(palette.background.base.text.scale_alpha(0.48)),
                     ]
@@ -1071,9 +1159,7 @@ impl VulcanWorkbench {
                     text(current_question.question.as_str())
                         .size(18)
                         .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
-                    scrollable(option_column).width(Fill).height(Fill),
-                    custom_input_surface,
-                    navigation_row,
+                    option_rows,
                 ]
                 .spacing(12)
                 .height(Fill)
@@ -1092,7 +1178,7 @@ impl VulcanWorkbench {
                         container(
                             row![
                                 column![
-                                    text(format!("{:02} {}", question_index + 1, question.header))
+                                    text(question.header.as_str())
                                         .size(12)
                                         .color(palette.primary.base.color),
                                     text(question.question.as_str())
@@ -1124,7 +1210,7 @@ impl VulcanWorkbench {
                                     palette.background.weak.color.scale_alpha(0.24),
                                 )),
                                 border: Border {
-                                    radius: 12.0.into(),
+                                    radius: 0.0.into(),
                                     width: 1.0,
                                     color: palette.background.strong.color.scale_alpha(0.16),
                                 },
@@ -1135,16 +1221,88 @@ impl VulcanWorkbench {
                     },
                 ))
                 .spacing(12);
-                let action_row = row![
-                    action_button("返回修改", Some(Message::QuestionModalBackToEditing), false),
-                    space::horizontal(),
-                    action_button("确认提交", Some(Message::SubmitQuestionModal), true),
-                ]
-                .spacing(10)
-                .align_y(Center);
+                let missing_surface: Element<'_, Message> = if all_answered {
+                    container(
+                        text("已回答全部问题，确认提交后会继续执行。")
+                            .size(13)
+                            .color(palette.background.base.text.scale_alpha(0.62)),
+                    )
+                    .width(Fill)
+                    .into()
+                } else {
+                    container(
+                        column(
+                            std::iter::once(
+                                text("没有回答完全部问题，请先完成以下问题。")
+                                    .size(13)
+                                    .color(iced::color!(0xB91C1C))
+                                    .into(),
+                            )
+                            .chain(
+                                unanswered_questions.clone().into_iter().map(
+                                    |(question_index, header, error)| {
+                                        button(
+                                            container(
+                                                column![
+                                                    text(header).size(13),
+                                                    text(error).size(12).color(
+                                                        palette
+                                                            .background
+                                                            .base
+                                                            .text
+                                                            .scale_alpha(0.54)
+                                                    ),
+                                                ]
+                                                .spacing(4)
+                                                .width(Fill),
+                                            )
+                                            .width(Fill),
+                                        )
+                                        .width(Fill)
+                                        .padding([8, 10])
+                                        .style(style::workbench_notice_modal_secondary_button_style)
+                                        .on_press(Message::QuestionModalSelectQuestionTab(
+                                            question_index,
+                                        ))
+                                        .into()
+                                    },
+                                ),
+                            ),
+                        )
+                        .spacing(8),
+                    )
+                    .width(Fill)
+                    .into()
+                };
+                let action_row: Element<'_, Message> = if all_answered {
+                    row![
+                        space::horizontal(),
+                        container(
+                            mouse_area(
+                                container(codicon::check().size(20).line_height(1.0))
+                                    .width(Fill)
+                                    .height(Fill)
+                                    .center(Fill)
+                                    .style(
+                                        style::workbench_question_modal_submit_icon_surface_style
+                                    )
+                            )
+                            .on_press(Message::SubmitQuestionModal)
+                        )
+                        .width(52)
+                        .height(52),
+                        space::horizontal(),
+                    ]
+                    .align_y(Center)
+                    .into()
+                } else {
+                    space::vertical().height(0).into()
+                };
+
                 column![
+                    missing_surface,
                     scrollable(summary_cards).width(Fill).height(Fill),
-                    action_row,
+                    action_row
                 ]
                 .spacing(12)
                 .height(Fill)
@@ -3885,18 +4043,13 @@ impl VulcanWorkbench {
         .spacing(14)
         .height(156);
 
-        let bottom_row = row![
-            container(self.view_example_editor_preview_card())
-                .width(FillPortion(2))
-                .height(Fill),
-            container(self.view_example_diff_panel_card())
-                .width(FillPortion(3))
-                .height(Fill),
+        column![
+            top_row,
+            container(self.view_example_editor_preview_card()).height(Fill)
         ]
         .spacing(14)
-        .height(Fill);
-
-        column![top_row, bottom_row].spacing(14).height(Fill).into()
+        .height(Fill)
+        .into()
     }
 
     /// Builds the workspace-entry card dedicated to the example-panel style sandbox.
@@ -3936,49 +4089,18 @@ impl VulcanWorkbench {
         container(
             column![
                 text("补丁与骨架预览").size(18),
-                text_editor(&self.editor_content)
-                    .height(Fill)
-                    .padding(14)
-                    .size(CODE_EDITOR_TEXT_SIZE)
-                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
-                    .wrapping(iced::advanced::text::Wrapping::None)
-                    .font(theme::code_font())
-                    .highlight_with::<iced::highlighter::Highlighter>(
-                        iced::highlighter::Settings {
-                            theme: theme::code_theme(&self.app_theme),
-                            token: String::from("json"),
-                        },
-                        theme::code_highlight_format,
-                    )
-                    .on_action(Message::EditorActionPerformed),
-            ]
-            .spacing(12)
-            .height(Fill),
-        )
-        .padding(16)
-        .height(Fill)
-        .style(container::bordered_box)
-        .into()
-    }
-
-    /// Builds the embedded Git diff card dedicated to the example-panel style sandbox.
-    /// 构建专供示例面板样式沙盒使用的内嵌 Git diff 卡片。
-    fn view_example_diff_panel_card(&self) -> Element<'_, Message> {
-        container(
-            column![
-                row![
-                    text("Git Diff").size(18),
-                    space::horizontal(),
-                    action_button(
-                        "重新扫描",
-                        "重新加载当前工作区的 Git Diff。",
-                        Message::ScanWorkspace
-                    ),
-                ]
-                .align_y(Center),
-                container(self.view_diff_panel())
-                    .height(Fill)
-                    .style(container::rounded_box),
+                scrollable(
+                    text_editor(&self.example_preview_markdown_buffer)
+                        .height(Shrink)
+                        .padding(14)
+                        .size(CODE_EDITOR_TEXT_SIZE)
+                        .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                        .wrapping(iced::widget::text::Wrapping::Word)
+                        .font(theme::code_font())
+                        .style(style::workbench_transcript_raw_view_style)
+                        .on_action(Message::ExamplePreviewMarkdownAction),
+                )
+                .height(Fill),
             ]
             .spacing(12)
             .height(Fill),
@@ -3994,7 +4116,7 @@ impl VulcanWorkbench {
     fn view_example_diff_window_launcher_card(&self) -> Element<'_, Message> {
         container(
             column![
-                text("Git Diff 独立窗口").size(18),
+                text("Git Diff").size(18),
                 row![
                     action_button(
                         if self.diff_window_id.is_some() {
@@ -5359,6 +5481,7 @@ impl VulcanWorkbench {
                 repeat,
                 ..
             }) if !repeat
+                && matches!(status, iced::event::Status::Ignored)
                 && !modifiers.control()
                 && !modifiers.shift()
                 && !modifiers.alt()

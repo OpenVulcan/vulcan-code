@@ -38,16 +38,15 @@ const DEFAULT_TASK_NESTING_LIMIT: usize = 8;
 
 /// Fallback stop summary returned to the parent task tool when the child run is manually interrupted before producing a complete answer.
 /// 当子运行在产出完整答案前被人工中断时，返回给父级 task 工具的兜底停止摘要。
-const STOPPED_TASK_RESULT_SUMMARY: &str = "子代理已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。";
+const STOPPED_TASK_RESULT_SUMMARY: &str = "The subagent was stopped at the user's request before producing a complete final result. Decide whether to retry, rewrite the task, or continue the main flow with the current context.";
 
 /// Synthetic running summary returned to the parent task tool while the detached child run continues asynchronously in the background.
 /// 当已分离的子运行仍在后台异步继续执行时，返回给父级 task 工具的合成运行中摘要。
-const RUNNING_TASK_RESULT_SUMMARY: &str =
-    "子代理已开始后台执行，主流程可以继续推进；任务完成后系统会自动回填结果并继续协调。";
+const RUNNING_TASK_RESULT_SUMMARY: &str = "The subagent has started running in the background. The main flow may continue, and the result will be filled back automatically when the task finishes.";
 
 /// Windows filesystem path guidance injected into child task prompts to stabilize tool calls.
 /// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
-const WINDOWS_TASK_FILESYSTEM_PATH_GUIDANCE: &str = "[Filesystem Paths]\nWhen calling filesystem-oriented tools on Windows, prefer absolute paths written with forward slashes like D:/repo/path. Do not wrap tool arguments in Markdown code fences or extra quotes, and avoid escaped backslashes unless a tool explicitly requires them.\n在 Windows 上调用面向文件系统的工具时，优先使用类似 D:/repo/path 的正斜杠绝对路径。不要给工具参数额外包裹 Markdown 代码块或多余引号，也不要使用转义反斜杠，除非工具明确要求。";
+const WINDOWS_TASK_FILESYSTEM_PATH_GUIDANCE: &str = "[Filesystem Paths]\nWhen calling filesystem-oriented tools on Windows, prefer absolute paths written with forward slashes like D:/repo/path. Do not wrap tool arguments in Markdown code fences or extra quotes, and avoid escaped backslashes unless a tool explicitly requires them.";
 
 /// Boxed asynchronous task execution future.
 /// 装箱后的异步任务执行 Future。
@@ -406,7 +405,7 @@ impl TaskRuntime {
             .backend_for_session(current_session_id)
             .ok_or_else(|| {
                 format!(
-                    "当前会话 `{}` 尚未安装 task 后端，无法执行子任务。",
+                    "The current session `{}` does not have a task backend installed, so the subtask cannot run.",
                     current_session_id
                 )
             })?;
@@ -416,11 +415,13 @@ impl TaskRuntime {
         if self
             .active_task_runs
             .read()
-            .map_err(|_| String::from("活动子任务注册表已锁定，无法检查运行状态。"))?
+            .map_err(|_| {
+                String::from("The active task registry is locked and cannot inspect running state.")
+            })?
             .contains_key(&resolved_identifier.task_id)
         {
             return Err(format!(
-                "子任务 `{}` 仍在执行中，当前不能重复启动同一任务。",
+                "Task `{}` is still running and cannot be started again right now.",
                 resolved_identifier.public_task_id
             ));
         }
@@ -449,7 +450,11 @@ impl TaskRuntime {
         let handle = self
             .active_task_runs
             .read()
-            .map_err(|_| String::from("活动子任务注册表已锁定，无法停止子代理。"))?
+            .map_err(|_| {
+                String::from(
+                    "The active task registry is locked and cannot stop the subagent task.",
+                )
+            })?
             .get(&task_id)
             .cloned();
         if let Some(handle) = handle {
@@ -466,7 +471,11 @@ impl TaskRuntime {
         Ok(self
             .active_task_runs
             .read()
-            .map_err(|_| String::from("活动子任务注册表已锁定，无法检查子代理运行状态。"))?
+            .map_err(|_| {
+                String::from(
+                    "The active task registry is locked and cannot inspect the subagent run state.",
+                )
+            })?
             .contains_key(&task_id))
     }
 
@@ -607,10 +616,9 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
-        let mut sessions = self
-            .sessions
-            .write()
-            .map_err(|_| String::from("任务会话注册表已锁定，无法写入结果。"))?;
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The task session registry is locked and cannot store the result.")
+        })?;
         let now = current_unix_millis_text();
         let status = outcome.execution_status.as_str().to_string();
         let record = sessions
@@ -661,10 +669,9 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
     ) -> Result<(), String> {
-        let mut sessions = self
-            .sessions
-            .write()
-            .map_err(|_| String::from("任务会话注册表已锁定，无法写入失败状态。"))?;
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The task session registry is locked and cannot store the failure state.")
+        })?;
         let record = sessions
             .entry(invocation.task_id.clone())
             .or_insert_with(|| {
@@ -705,7 +712,7 @@ pub fn build_task_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCa
             id: String::from("task"),
             name: String::from("task"),
             description: String::from(
-                "创建或续跑一个可恢复的子任务会话。调用时应始终提供 description 与 subagent，确保子任务拥有稳定命名、续跑身份与界面标题。",
+                "Create or resume a recoverable subtask session. Always provide `description` and `subagent` so the subtask keeps a stable title, identity, and resume target.",
             ),
             source: VulcanToolSourceKind::Native,
         },
@@ -716,10 +723,13 @@ pub fn build_task_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCa
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let Some(session_id) = session_id.as_deref() else {
-                    return Err(String::from("task 工具缺少会话标识，无法执行。"));
+                    return Err(String::from(
+                        "The `task` tool requires a session identifier and cannot run without it.",
+                    ));
                 };
-                let session_id = Uuid::parse_str(session_id)
-                    .map_err(|error| format!("task 工具会话标识解析失败：{error}"))?;
+                let session_id = Uuid::parse_str(session_id).map_err(|error| {
+                    format!("Failed to parse the session identifier for the `task` tool: {error}")
+                })?;
                 task_runtime.invoke_task(session_id, args).await
             })
         }),
@@ -734,19 +744,19 @@ fn task_tool_args_schema() -> Value {
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "用于启动或续跑子任务的详细提示词，应明确说明目标、边界、返回格式以及是否允许修改代码。"
+                "description": "Detailed prompt used to start or resume the subtask. State the goal, boundaries, expected return format, and whether code changes are allowed."
             },
             "description": {
                 "type": "string",
-                "description": "建议必填的简短任务标题（3-8 个词），用于稳定的任务命名、卡片标题与续跑展示。"
+                "description": "Short task title, ideally 3 to 8 words, used for stable naming, card titles, and resume display."
             },
             "task_id": {
                 "type": "string",
-                "description": "可选的稳定任务标识，传入后可继续同一子任务。"
+                "description": "Optional stable task identifier. Provide it to continue the same subtask."
             },
             "subagent": {
                 "type": "string",
-                "description": "建议必填的子代理名称或角色标签，用于稳定显示子代理类型与任务分工。"
+                "description": "Subagent name or role label. This should usually be provided so the UI can display a stable worker identity and responsibility."
             }
         },
         "required": ["prompt", "description", "subagent"],
@@ -757,7 +767,8 @@ fn task_tool_args_schema() -> Value {
 /// Parses one raw JSON payload into the strongly typed task invocation arguments.
 /// 将一份原始 JSON 载荷解析为强类型任务调用参数。
 fn parse_task_tool_arguments(args: Value) -> Result<TaskToolInvocationArgs, String> {
-    serde_json::from_value(args).map_err(|error| format!("task 工具参数解析失败：{error}"))
+    serde_json::from_value(args)
+        .map_err(|error| format!("Failed to parse task tool arguments: {error}"))
 }
 
 /// Resolves the stable task identifier and resume flag for the current invocation.
@@ -772,7 +783,11 @@ fn resolve_task_session_id(
         let resumed_record = task_runtime
             .sessions
             .read()
-            .map_err(|_| String::from("任务会话注册表已锁定，无法检查既有任务。"))?
+            .map_err(|_| {
+                String::from(
+                    "The task session registry is locked and cannot inspect existing tasks.",
+                )
+            })?
             .values()
             .find(|record| {
                 record.origin_session_id == current_session_id
@@ -797,13 +812,15 @@ fn resolve_task_session_id(
     let current_depth = task_runtime
         .sessions
         .read()
-        .map_err(|_| String::from("任务会话注册表已锁定，无法计算任务深度。"))?
+        .map_err(|_| {
+            String::from("The task session registry is locked and cannot compute task depth.")
+        })?
         .get(&current_session_id)
         .map(|record| record.depth)
         .unwrap_or(0);
     if current_depth + 1 > task_runtime.max_depth() {
         return Err(format!(
-            "当前任务链已达到最大深度 `{}`，无法再创建新的子任务。",
+            "The current task chain has reached the maximum depth `{}` and cannot create another subtask.",
             task_runtime.max_depth()
         ));
     }
@@ -821,7 +838,7 @@ fn resolve_task_session_id(
 fn normalize_public_task_identifier(task_id_text: &str) -> Result<String, String> {
     let normalized_task_id = task_id_text.trim();
     if normalized_task_id.is_empty() {
-        return Err(String::from("task_id 不能为空。"));
+        return Err(String::from("`task_id` cannot be empty."));
     }
     Ok(normalized_task_id.to_string())
 }
@@ -871,7 +888,7 @@ fn build_task_display_title(
     let subagent = normalize_optional_task_label(subagent);
     match (description.as_deref(), subagent.as_deref()) {
         (Some(description), Some(subagent)) if description != subagent => {
-            return format!("{description}（{subagent}）");
+            return format!("{description} ({subagent})");
         }
         (Some(description), _) => return description.to_string(),
         (_, Some(subagent)) => return subagent.to_string(),
@@ -890,7 +907,7 @@ fn build_task_display_title(
     if !normalized_public_task_id.is_empty() {
         return normalized_public_task_id.to_string();
     }
-    format!("子代理 {}", task_id)
+    format!("Subagent {}", task_id)
 }
 
 /// Prepares one task execution request from the current invocation and the stored registry state.
@@ -910,10 +927,11 @@ fn prepare_task_execution_request(
     let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref());
     let prompt = args.prompt;
     let (parent_task_id, depth, snapshot, controller_config, description, subagent, display_title) = {
-        let mut sessions = task_runtime
-            .sessions
-            .write()
-            .map_err(|_| String::from("任务会话注册表已锁定，无法准备执行请求。"))?;
+        let mut sessions = task_runtime.sessions.write().map_err(|_| {
+            String::from(
+                "The task session registry is locked and cannot prepare the execution request.",
+            )
+        })?;
         if let Some(record) = sessions.get_mut(&task_id) {
             if is_resumed {
                 record.updated_at = current_unix_millis_text();
@@ -961,7 +979,7 @@ fn prepare_task_execution_request(
             };
             if depth > task_runtime.max_depth() {
                 return Err(format!(
-                    "当前任务链已达到最大深度 `{}`，无法再创建新的子任务。",
+                    "The current task chain has reached the maximum depth `{}` and cannot create another subtask.",
                     task_runtime.max_depth()
                 ));
             }
@@ -1157,7 +1175,7 @@ where
                 build_task_delegate_runtime_event(
                     RuntimeEventKind::DelegateStarted,
                     &request,
-                    "运行中，等待子代理返回结果。",
+                    "Running and waiting for the subagent to return a result.",
                     started_payload,
                 ),
             )));
@@ -1256,7 +1274,7 @@ where
                             )
                             .await
                             .map_err(|error| {
-                                format!("任务 `{}` 执行失败：{error}", background_task_id)
+                                format!("Task `{}` failed: {error}", background_task_id)
                             });
                         (controller_result, controller.snapshot().clone())
                     }
@@ -1286,11 +1304,11 @@ where
                                             controller_result.final_assistant_message_id.as_ref()
                                         {
                                             format!(
-                                                "任务已完成，但未能直接定位最终助手消息 `{message_id}`。"
+                                                "The task completed, but the final assistant message `{message_id}` could not be located directly."
                                             )
                                         } else {
                                             String::from(
-                                                "任务已完成，但未产出可复用的最终助手文本。",
+                                                "The task completed, but it did not produce reusable final assistant text.",
                                             )
                                         }
                                     });
@@ -1323,7 +1341,7 @@ where
                                         event: build_task_delegate_runtime_event(
                                             RuntimeEventKind::DelegateFinished,
                                             &background_request,
-                                            "子代理任务已完成。",
+                                            "The subagent task has completed.",
                                             finished_payload,
                                         ),
                                     },
@@ -1421,7 +1439,7 @@ where
                     Err(join_error) => {
                         let _ = child_stream_forward_task.await;
                         let error = format!(
-                            "任务 `{}` 执行失败：{}",
+                            "Task `{}` failed: {}",
                             background_task_id,
                             format_task_join_error(&join_error)
                         );
@@ -1521,9 +1539,9 @@ fn build_stopped_task_execution_outcome(
 /// 将一条已派生子任务的 JoinError 格式化为简短的面向用户诊断文本。
 fn format_task_join_error(error: &tokio::task::JoinError) -> String {
     if error.is_panic() {
-        String::from("子代理任务内部发生 panic。")
+        String::from("The subagent task panicked internally.")
     } else if error.is_cancelled() {
-        String::from("子代理任务已被取消。")
+        String::from("The subagent task was cancelled.")
     } else {
         error.to_string()
     }
@@ -1543,8 +1561,6 @@ fn task_execution_error_is_stopped(error: &str) -> bool {
         || normalized.contains("canceled")
         || normalized.contains("aborted")
         || normalized.contains("stopped")
-        || error.contains("已停止")
-        || error.contains("中止")
 }
 
 /// Builds one host-only payload for task-session UI metadata without leaking large child snapshots into the model-visible tool result.
@@ -1594,12 +1610,12 @@ fn build_task_delegate_runtime_event(
     let task_label = invocation.display_title.as_str();
     let title = match kind {
         RuntimeEventKind::DelegateStarted => {
-            format!("子代理启动 · {} · {task_label}", invocation.task_id)
+            format!("Subagent started · {} · {task_label}", invocation.task_id)
         }
         RuntimeEventKind::DelegateFinished => {
-            format!("子代理结束 · {} · {task_label}", invocation.task_id)
+            format!("Subagent finished · {} · {task_label}", invocation.task_id)
         }
-        _ => format!("子代理事件 · {} · {task_label}", invocation.task_id),
+        _ => format!("Subagent event · {} · {task_label}", invocation.task_id),
     };
 
     RuntimeEvent::new(kind, title, detail).with_metadata(Some(json!({

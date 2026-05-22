@@ -71,7 +71,7 @@ fn build_tool_failure_invocation_result(
 ) -> CoreToolInvocationResult {
     let message = message.into();
     let model_output = format!(
-        "工具 `{}` 调用失败。\n原因：{}\n请根据错误原因修正参数、缩小范围，或改用其它更合适的工具后继续。",
+        "Tool `{}` failed.\nReason: {}\nAdjust the arguments, narrow the scope, or switch to a more appropriate tool before continuing.",
         request.tool_name, message
     );
     CoreToolInvocationResult {
@@ -104,7 +104,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             return Ok(build_tool_failure_invocation_result(
                 request,
                 format!(
-                    "工具 `{}` 当前未在已解析定义集合中注册。",
+                    "Tool `{}` is not registered in the resolved definition set.",
                     request.tool_name
                 ),
             ));

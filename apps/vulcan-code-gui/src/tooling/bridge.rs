@@ -169,7 +169,7 @@ pub fn build_vulcan_tools_manager(
                 Box::pin(async move {
                     let Some(handle) = runtime else {
                         return Err(format!(
-                            "LuaSkills 运行时当前不可用，无法调用工具 `{}`。",
+                            "The LuaSkills runtime is currently unavailable, so tool `{}` cannot be invoked.",
                             canonical_name
                         ));
                     };
@@ -196,7 +196,7 @@ pub fn build_vulcan_tools_manager(
                     )
                     .await
                     .map_err(|error| {
-                        format!("LuaSkills 工具 `{}` 调用失败：{}。", canonical_name, error)
+                        format!("LuaSkills tool `{}` failed: {}.", canonical_name, error)
                     })?;
                     let model_output = Value::String(render_luaskills_invocation_result_text(
                         &handle,
@@ -315,14 +315,14 @@ fn configured_web_search_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::WebSearch))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的外部搜索目标链执行网页搜索。可用 target：{}。传入 `auto` 时按当前默认顺序尝试。",
+                "Execute web search through the user-configured external search target chain. Available `target` values: {}. When `auto` is provided, targets are tried in the current default order.",
                 target_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -364,19 +364,19 @@ fn configured_understand_image_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::UnderstandImage))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
     let image_summary = image_attachments
         .iter()
         .map(|attachment| attachment.file_name.clone())
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的图片理解目标链读取当前会话图片附件。可用 target：{}。可用图片：{}。",
+                "Read image attachments from the current session through the user-configured image-understanding target chain. Available `target` values: {}. Available images: {}.",
                 target_summary, image_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -415,14 +415,14 @@ fn configured_image_generation_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::ImageGeneration))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的图片生成目标链执行图片生成。可用 target：{}。",
+                "Generate images through the user-configured image-generation target chain. Available `target` values: {}.",
                 target_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -466,14 +466,14 @@ fn configured_video_generation_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::VideoGeneration))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的视频生成目标链执行视频生成。可用 target：{}。",
+                "Generate videos through the user-configured video-generation target chain. Available `target` values: {}.",
                 target_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -516,14 +516,14 @@ fn configured_speech_synthesis_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::SpeechSynthesis))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的语音合成目标链执行文本转语音。可用 target：{}。",
+                "Synthesize speech through the user-configured text-to-speech target chain. Available `target` values: {}.",
                 target_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -556,14 +556,14 @@ fn configured_music_generation_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::MusicGeneration))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的音乐生成目标链执行歌曲或纯音乐生成。可用 target：{}。",
+                "Generate songs or instrumental music through the user-configured music-generation target chain. Available `target` values: {}.",
                 target_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -604,14 +604,14 @@ fn configured_music_cover_candidate(
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::MusicCover))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(", ");
 
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "按用户配置的音乐翻唱目标链执行参考音频翻唱。可用 target：{}。",
+                "Create a music cover from reference audio through the user-configured music-cover target chain. Available `target` values: {}.",
                 target_summary
             ),
             source: VulcanToolSourceKind::Native,
@@ -741,8 +741,8 @@ fn build_ai_tool_fallback_candidate(
             id: semantic_tool_name.clone(),
             name: semantic_tool_name.clone(),
             description: format!(
-                "{}；由宿主工具 `{}` 回退执行。",
-                kind.label(),
+                "Semantic tool `{}` falls back to host tool `{}`.",
+                kind.key(),
                 target.descriptor.name
             ),
             source: VulcanToolSourceKind::AiFallback,
@@ -794,14 +794,16 @@ fn inject_host_managed_luaskill_sid_if_needed(
     }
 
     let stable_session_id = session_id.ok_or_else(|| {
-        format!("LuaSkills 工具 `{tool_name}` 需要宿主管理的 LUASKILL_SID，但当前会话标识不可用。")
+        format!(
+            "LuaSkills tool `{tool_name}` requires a host-managed LUASKILL_SID, but the current session identifier is unavailable."
+        )
     })?;
 
     let mut object = match args {
         Value::Object(map) => map,
         _ => {
             return Err(format!(
-                "LuaSkills 工具 `{tool_name}` 的参数必须是 JSON 对象，才能注入宿主管理 LUASKILL_SID。"
+                "LuaSkills tool `{tool_name}` expects a JSON object so a host-managed LUASKILL_SID can be injected."
             ));
         }
     };

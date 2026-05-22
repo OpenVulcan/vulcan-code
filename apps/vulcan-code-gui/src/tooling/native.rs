@@ -1,7 +1,7 @@
 //! Built-in native tools exposed to the host runtime foundation.
 //! 暴露给宿主运行时基础架构的内建原生工具。
 
-use crate::agent_runtime::config::AgentRuntimeConfig;
+use crate::agent_runtime::config::{AgentRuntimeConfig, RuntimeAgentKind, RuntimeSkillKind};
 use crate::model::SessionId;
 use crate::project_temp_maintenance;
 use crate::tool_result_format::{
@@ -184,7 +184,7 @@ impl NativeToolCatalog {
     ) -> Result<VulcanToolInvocationResult, NativeToolError> {
         let Some(definition) = self.definition(tool_id) else {
             return Err(NativeToolError::new(format!(
-                "未找到原生工具 `{tool_id}`。"
+                "Native tool `{tool_id}` was not found."
             )));
         };
         definition.invoke(request).await
@@ -255,8 +255,10 @@ fn build_workspace_describe_tool(
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from("native_workspace_describe"),
-        name: String::from("工作区概览"),
-        description: String::from("返回当前工作目录、激活模型以及基础运行时统计。"),
+        name: String::from("Workspace Summary"),
+        description: String::from(
+            "Return the current workspace directory, active model, and basic runtime statistics.",
+        ),
         ai_visible: false,
         available_in_plan: false,
     };
@@ -293,7 +295,13 @@ fn build_agent_list_tool(
             json!({
                 "id": agent.id,
                 "name": agent.name,
-                "kind": agent.kind.label(),
+                "kind": match agent.kind {
+                    RuntimeAgentKind::Worker => "worker",
+                    RuntimeAgentKind::Planner => "planner",
+                    RuntimeAgentKind::Explorer => "explorer",
+                    RuntimeAgentKind::Specialist => "specialist",
+                    RuntimeAgentKind::Coordinator => "coordinator",
+                },
                 "description": agent.description,
                 "systemPrompt": agent.system_prompt,
                 "skills": agent.skill_ids,
@@ -321,8 +329,8 @@ fn build_agent_list_tool(
     let items = Arc::new(items);
     let descriptor = NativeToolDescriptor {
         id: String::from("native_registry_list_agents"),
-        name: String::from("列出代理"),
-        description: String::from("返回当前已声明的代理清单。"),
+        name: String::from("List Agents"),
+        description: String::from("Return the currently declared agent catalog."),
         ai_visible: false,
         available_in_plan: false,
     };
@@ -356,7 +364,12 @@ fn build_skill_list_tool(
             json!({
                 "id": skill.id,
                 "name": skill.name,
-                "kind": skill.kind.label(),
+                "kind": match skill.kind {
+                    RuntimeSkillKind::Regular => "regular",
+                    RuntimeSkillKind::LuaSkills => "luaskills",
+                    RuntimeSkillKind::Automation => "automation",
+                    RuntimeSkillKind::Memory => "memory",
+                },
                 "description": skill.description,
                 "enabled": skill.enabled,
                 "triggerSignals": skill.trigger_signals,
@@ -368,8 +381,8 @@ fn build_skill_list_tool(
     let items = Arc::new(items);
     let descriptor = NativeToolDescriptor {
         id: String::from("native_registry_list_skills"),
-        name: String::from("列出技能"),
-        description: String::from("返回当前已声明的技能清单。"),
+        name: String::from("List Skills"),
+        description: String::from("Return the currently declared skill catalog."),
         ai_visible: false,
         available_in_plan: false,
     };
@@ -445,8 +458,8 @@ fn build_mcp_server_list_tool(
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from("native_mcp_list_servers"),
-        name: String::from("列出 MCP 服务器"),
-        description: String::from("返回当前 MCP 服务器配置及启用情况。"),
+        name: String::from("List MCP Servers"),
+        description: String::from("Return the current MCP server configuration and enabled state."),
         ai_visible: false,
         available_in_plan: false,
     };
@@ -746,8 +759,9 @@ fn shell_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
 fn parse_shell_session_tool_arguments(
     arguments: Value,
 ) -> Result<ShellSessionToolArgs, NativeToolError> {
-    serde_json::from_value::<ShellSessionToolArgs>(arguments)
-        .map_err(|error| NativeToolError::new(format!("shell_session 参数解析失败：{error}")))
+    serde_json::from_value::<ShellSessionToolArgs>(arguments).map_err(|error| {
+        NativeToolError::new(format!("Failed to parse shell_session arguments: {error}"))
+    })
 }
 
 /// Resolves the controller session that owns the current shell-session tool invocation.
@@ -757,7 +771,7 @@ fn require_shell_session_owner_session_id(
 ) -> Result<SessionId, NativeToolError> {
     session_id.ok_or_else(|| {
         NativeToolError::new(
-            "shell_session 需要稳定的控制器会话标识，但当前调用未附带 session_id。",
+            "The shell_session tool requires a stable controller session identifier, but no session_id was attached to this invocation.",
         )
     })
 }
@@ -770,10 +784,14 @@ fn parse_command_session_id(
     let raw_command_session_id = raw_command_session_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| NativeToolError::new("shell_session 缺少必填参数 `command_session_id`。"))?;
+        .ok_or_else(|| {
+            NativeToolError::new(
+                "The shell_session tool is missing the required `command_session_id` argument.",
+            )
+        })?;
     Uuid::parse_str(raw_command_session_id).map_err(|error| {
         NativeToolError::new(format!(
-            "shell_session 的 `command_session_id` 不是合法 UUID：{error}"
+            "The `command_session_id` provided to shell_session is not a valid UUID: {error}"
         ))
     })
 }
@@ -1002,11 +1020,12 @@ fn build_shell_session_read_render_input(
 fn parse_shell_command_tool_arguments(
     arguments: Value,
 ) -> Result<ShellCommandToolArgs, NativeToolError> {
-    let parsed = serde_json::from_value::<ShellCommandToolArgs>(arguments)
-        .map_err(|error| NativeToolError::new(format!("shell_command 参数解析失败：{error}")))?;
+    let parsed = serde_json::from_value::<ShellCommandToolArgs>(arguments).map_err(|error| {
+        NativeToolError::new(format!("Failed to parse shell_command arguments: {error}"))
+    })?;
     if parsed.command.trim().is_empty() {
         return Err(NativeToolError::new(
-            "shell_command 的 `command` 不能为空字符串。",
+            "The `command` argument for shell_command cannot be empty.",
         ));
     }
     Ok(parsed)
@@ -1020,8 +1039,11 @@ fn resolve_shell_command_working_directory(
 ) -> Result<PathBuf, NativeToolError> {
     let base_directory = match workspace_root {
         Some(root) => root.to_path_buf(),
-        None => std::env::current_dir()
-            .map_err(|error| NativeToolError::new(format!("读取当前工作目录失败：{error}")))?,
+        None => std::env::current_dir().map_err(|error| {
+            NativeToolError::new(format!(
+                "Failed to read the current working directory: {error}"
+            ))
+        })?,
     };
     let Some(raw_cwd) = raw_cwd.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(base_directory);
@@ -1114,7 +1136,7 @@ async fn execute_shell_command_process(
                 duration_ms: started_at.elapsed().as_millis() as u64,
                 stdout_text: String::new(),
                 stderr_text: String::new(),
-                failure_reason: Some(format!("启动命令失败：{error}")),
+                failure_reason: Some(format!("Failed to start the command: {error}")),
             };
         }
     };
@@ -1131,7 +1153,7 @@ async fn execute_shell_command_process(
                         duration_ms: started_at.elapsed().as_millis() as u64,
                         stdout_text: String::new(),
                         stderr_text: String::new(),
-                        failure_reason: Some(format!("写入命令标准输入失败：{error}")),
+                        failure_reason: Some(format!("Failed to write command stdin: {error}")),
                     };
                 }
             }
@@ -1144,7 +1166,9 @@ async fn execute_shell_command_process(
                     duration_ms: started_at.elapsed().as_millis() as u64,
                     stdout_text: String::new(),
                     stderr_text: String::new(),
-                    failure_reason: Some(String::from("命令未提供可写入的标准输入通道。")),
+                    failure_reason: Some(String::from(
+                        "The command did not expose a writable stdin channel.",
+                    )),
                 };
             }
         }
@@ -1164,7 +1188,9 @@ async fn execute_shell_command_process(
                         duration_ms: started_at.elapsed().as_millis() as u64,
                         stdout_text: String::new(),
                         stderr_text: String::new(),
-                        failure_reason: Some(format!("等待命令输出失败：{error}")),
+                        failure_reason: Some(format!(
+                            "Failed while waiting for command output: {error}"
+                        )),
                     };
                 }
             },
@@ -1177,7 +1203,10 @@ async fn execute_shell_command_process(
                     duration_ms: started_at.elapsed().as_millis() as u64,
                     stdout_text: String::new(),
                     stderr_text: String::new(),
-                    failure_reason: Some(format!("命令执行超过超时限制（{} ms）。", timeout_ms)),
+                    failure_reason: Some(format!(
+                        "The command exceeded the timeout limit ({} ms).",
+                        timeout_ms
+                    )),
                 };
             }
         },
@@ -1192,7 +1221,9 @@ async fn execute_shell_command_process(
                     duration_ms: started_at.elapsed().as_millis() as u64,
                     stdout_text: String::new(),
                     stderr_text: String::new(),
-                    failure_reason: Some(format!("等待命令输出失败：{error}")),
+                    failure_reason: Some(format!(
+                        "Failed while waiting for command output: {error}"
+                    )),
                 };
             }
         },
@@ -1365,7 +1396,11 @@ async fn execute_shell_session_start_action(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| NativeToolError::new("shell_session 的 start 动作需要非空 `command`。"))?;
+        .ok_or_else(|| {
+            NativeToolError::new(
+                "The `start` action for shell_session requires a non-empty `command`.",
+            )
+        })?;
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
         parsed_args.cwd.as_deref(),
@@ -1560,9 +1595,9 @@ async fn execute_shell_session_write_action(
     command_session_runtime: Arc<CommandSessionRuntime>,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let command_session_id = parse_command_session_id(parsed_args.command_session_id.as_deref())?;
-    let input_text = parsed_args
-        .stdin
-        .ok_or_else(|| NativeToolError::new("shell_session 的 write 动作需要 `stdin`。"))?;
+    let input_text = parsed_args.stdin.ok_or_else(|| {
+        NativeToolError::new("The `write` action for shell_session requires `stdin`.")
+    })?;
     let append_newline = parsed_args.append_newline.unwrap_or(false);
     let write_outcome = command_session_runtime
         .write_session(
@@ -1991,7 +2026,7 @@ mod tests {
         let shell_support = test_shell_support();
         let error = resolve_shell_command_launcher(&shell_support, Some("fish"), "echo hello")
             .expect_err("unsupported shell should fail");
-        assert!(error.message.contains("不支持"));
+        assert!(error.message.contains("unsupported"));
     }
 
     /// The dynamic shell schemas should expose `auto` together with only the shells detected on the current host snapshot.
@@ -2416,7 +2451,11 @@ mod tests {
             })
             .await
             .expect_err("foreign session should not control another session");
-        assert!(foreign_stop_error.message.contains("不属于当前控制器会话"));
+        assert!(
+            foreign_stop_error
+                .message
+                .contains("does not belong to the current controller session")
+        );
 
         let stop_result = tool
             .invoke(NativeToolExecutionRequest {

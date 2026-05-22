@@ -186,7 +186,7 @@ impl QuestionRuntime {
         let (sender, receiver) = oneshot::channel::<PendingQuestionCompletion>();
         self.pending
             .write()
-            .map_err(|_| String::from("问题运行时注册表已锁定，无法登记待回答问题。"))?
+            .map_err(|_| String::from("The question runtime registry is locked and cannot register pending questions."))?
             .insert(request_id.clone(), PendingQuestionEntry { request, sender });
         let _pending_guard = PendingQuestionGuard {
             runtime: Arc::clone(self),
@@ -194,11 +194,11 @@ impl QuestionRuntime {
         };
         match receiver.await {
             Ok(PendingQuestionCompletion::Reply(reply)) => Ok(reply),
-            Ok(PendingQuestionCompletion::Reject) => {
-                Err(String::from("用户已取消当前问答请求，工具调用已终止。"))
-            }
+            Ok(PendingQuestionCompletion::Reject) => Err(String::from(
+                "The user abandoned the current questionnaire request. The current conversation run has been interrupted.",
+            )),
             Err(_) => Err(String::from(
-                "待回答问题请求已失去宿主连接，当前问答工具无法继续执行。",
+                "The pending question request lost its host connection, so the ask tool cannot continue.",
             )),
         }
     }
@@ -209,7 +209,11 @@ impl QuestionRuntime {
         let mut requests = self
             .pending
             .read()
-            .map_err(|_| String::from("问题运行时注册表已锁定，无法读取待回答问题。"))?
+            .map_err(|_| {
+                String::from(
+                    "The question runtime registry is locked and cannot read pending questions.",
+                )
+            })?
             .values()
             .map(|entry| entry.request.clone())
             .collect::<Vec<_>>();
@@ -223,7 +227,9 @@ impl QuestionRuntime {
         let entry = self
             .pending
             .write()
-            .map_err(|_| String::from("问题运行时注册表已锁定，无法提交回答。"))?
+            .map_err(|_| {
+                String::from("The question runtime registry is locked and cannot submit answers.")
+            })?
             .remove(request_id);
         let Some(entry) = entry else {
             return Ok(false);
@@ -240,7 +246,7 @@ impl QuestionRuntime {
         let entry = self
             .pending
             .write()
-            .map_err(|_| String::from("问题运行时注册表已锁定，无法取消待回答问题。"))?
+            .map_err(|_| String::from("The question runtime registry is locked and cannot cancel the pending question."))?
             .remove(request_id);
         let Some(entry) = entry else {
             return Ok(false);
@@ -301,10 +307,17 @@ pub fn build_question_tool_candidate(
             let tool_name = tool_name.clone();
             Box::pin(async move {
                 let Some(session_id) = session_id.as_deref() else {
-                    return Err(format!("{} 工具缺少会话标识，无法执行。", tool_name));
+                    return Err(format!(
+                        "The `{}` tool requires a session identifier and cannot run without it.",
+                        tool_name
+                    ));
                 };
-                let session_id = Uuid::parse_str(session_id)
-                    .map_err(|error| format!("{} 工具会话标识解析失败：{error}", tool_name))?;
+                let session_id = Uuid::parse_str(session_id).map_err(|error| {
+                    format!(
+                        "Failed to parse the session identifier for the `{}` tool: {error}",
+                        tool_name
+                    )
+                })?;
                 question_runtime
                     .invoke_tool(session_id, args, &tool_name)
                     .await
@@ -371,45 +384,74 @@ fn question_tool_args_schema() -> Value {
 /// Parses one raw JSON payload into strongly typed question tool arguments.
 /// 将一份原始 JSON 载荷解析为强类型问题工具参数。
 fn parse_question_tool_arguments(args: Value) -> Result<QuestionToolInvocationArgs, String> {
-    serde_json::from_value(args).map_err(|error| format!("问题工具参数解析失败：{error}"))
+    serde_json::from_value(args)
+        .map_err(|error| format!("Failed to parse ask tool arguments: {error}"))
 }
 
 /// Validates a structured question array before it is registered in the runtime so obviously broken prompts fail fast.
 /// 在结构化问题数组写入运行时前执行校验，从而让明显损坏的提示尽早失败。
 fn validate_question_prompts(questions: &[QuestionPrompt]) -> Result<(), String> {
     if questions.is_empty() {
-        return Err(String::from("至少需要提供一个待回答问题。"));
+        return Err(String::from(
+            "At least one question must be provided to the ask tool.",
+        ));
     }
     for (question_index, question) in questions.iter().enumerate() {
         let question_number = question_index + 1;
         if question.question.trim().is_empty() {
-            return Err(format!("第 {question_number} 个问题缺少 question 文本。"));
+            return Err(format!(
+                "Question #{question_number} is missing the `question` text."
+            ));
         }
         if question.header.trim().is_empty() {
-            return Err(format!("第 {question_number} 个问题缺少 header 文本。"));
+            return Err(format!(
+                "Question #{question_number} is missing the `header` text."
+            ));
         }
         let mut seen_labels = std::collections::BTreeSet::new();
         for option in &question.options {
             if option.label.trim().is_empty() {
                 return Err(format!(
-                    "第 {question_number} 个问题存在空白选项标签，当前无法展示。"
+                    "Question #{question_number} contains an option with an empty label."
                 ));
             }
             if option.description.trim().is_empty() {
                 return Err(format!(
-                    "第 {question_number} 个问题的选项 `{}` 缺少描述文本。",
+                    "Option `{}` in question #{question_number} is missing a description.",
                     option.label
                 ));
             }
             if !seen_labels.insert(option.label.trim().to_string()) {
                 return Err(format!(
-                    "第 {question_number} 个问题存在重复选项标签 `{}`。",
+                    "Question #{question_number} contains a duplicate option label `{}`.",
                     option.label
                 ));
             }
         }
     }
     Ok(())
+}
+
+/// Builds one compact Markdown summary of the final ask answers that will be returned back to the model.
+/// 构建一份紧凑 Markdown 形式的 ask 最终答案摘要，并将其回传给模型。
+pub(crate) fn build_question_reply_markdown(
+    questions: &[QuestionPrompt],
+    answers: &[Vec<String>],
+) -> String {
+    let mut lines = vec![String::from("## User Answers"), String::new()];
+
+    for (index, prompt) in questions.iter().enumerate() {
+        let rendered_answer = answers
+            .get(index)
+            .map(|answer| answer.join(", "))
+            .filter(|answer| !answer.trim().is_empty())
+            .unwrap_or_else(|| String::from("Unanswered"));
+        lines.push(format!("- {}: {}", prompt.header, rendered_answer));
+    }
+
+    lines.push(String::new());
+    lines.push(String::from("Continue with these answers."));
+    lines.join("\n")
 }
 
 /// Builds the final tool invocation result surfaced back to the model after the user has answered every structured question.
@@ -419,42 +461,13 @@ fn build_question_invocation_result(
     questions: &[QuestionPrompt],
     reply: &QuestionReply,
 ) -> VulcanToolInvocationResult {
-    let formatted_answers = questions
-        .iter()
-        .enumerate()
-        .map(|(index, prompt)| {
-            let rendered_answer = reply
-                .answers
-                .get(index)
-                .map(|answers| answers.join(", "))
-                .filter(|answer| !answer.trim().is_empty())
-                .unwrap_or_else(|| String::from("Unanswered"));
-            format!("\"{}\"=\"{}\"", prompt.question, rendered_answer)
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let output = format!(
-        "User has answered your questions: {formatted_answers}. You can now continue with the user's answers in mind."
-    );
+    let output = build_question_reply_markdown(questions, &reply.answers);
     VulcanToolInvocationResult::from_model_output(Value::String(output)).with_host_result(
         VulcanToolHostResult {
             kind: String::from(QUESTION_TOOL_HOST_RESULT_KIND),
             payload: json!({
                 "tool_name": tool_name,
-                "question_count": questions.len(),
-                "questions": questions.iter().map(|question| {
-                    json!({
-                        "question": question.question,
-                        "header": question.header,
-                        "options": question.options.iter().map(|option| {
-                            json!({
-                                "label": option.label,
-                                "description": option.description,
-                            })
-                        }).collect::<Vec<_>>(),
-                        "multiple": question.multiple,
-                    })
-                }).collect::<Vec<_>>(),
+                "headers": questions.iter().map(|question| question.header.clone()).collect::<Vec<_>>(),
                 "answers": reply.answers,
             }),
         },
