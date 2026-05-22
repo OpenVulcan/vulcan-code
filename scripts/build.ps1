@@ -36,20 +36,25 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 $ProjectDir = Split-Path $PSScriptRoot -Parent
 Set-Location $ProjectDir
 
+# BaseOutDir stores the absolute output root so filesystem operations never depend on the caller's current directory.
+# BaseOutDir 用于保存绝对 output 根目录，确保文件系统操作永远不依赖调用方当前目录。
+$BaseOutDir = Join-Path $ProjectDir "output"
+
 $BinName = "vulcan-code-gui"
 $BinaryFileName = $BinName
 if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
     $BinaryFileName = "$BinName.exe"
 }
 $AppResourcesRoot = Join-Path $ProjectDir "apps\vulcan-code-gui\resources"
+$AppLicenseResourcesRoot = Join-Path $AppResourcesRoot "licenses"
 
 if ($Release -or ($args.Count -gt 0 -and $args[0] -eq "release")) {
-    $OutDir = "output\bin"
+    $OutDir = Join-Path $BaseOutDir "bin"
     $CargoProfile = "release"
     $CargoArgs = @("--release")
     Write-Host "==> Building release..."
 } else {
-    $OutDir = "output\debug"
+    $OutDir = Join-Path $BaseOutDir "debug"
     $CargoProfile = "debug"
     $CargoArgs = @()
     Write-Host "==> Building debug..."
@@ -69,19 +74,29 @@ if (-not (Test-Path $BinExe)) {
 }
 
 # Output directories
-$BaseOutDir = "output"
-$LibsOut = "$BaseOutDir\libs"
-$SkillsOut = "$BaseOutDir\skills"
-$PkgOut = "$BaseOutDir\lua_packages"
-$ConfigOut = "$BaseOutDir\config"
-$ResourcesOut = "$BaseOutDir\resources"
-$LicensesOut = "$BaseOutDir\licenses"
-$DependenciesOut = "$BaseOutDir\dependencies"
-$DatabasesOut = "$BaseOutDir\databases"
-$StateOut = "$BaseOutDir\state"
-$TempOut = "$BaseOutDir\temp"
-$LogsOut = "$BaseOutDir\logs"
+$LibsOut = Join-Path $BaseOutDir "libs"
+$SkillsOut = Join-Path $BaseOutDir "skills"
+$PkgOut = Join-Path $BaseOutDir "lua_packages"
+$ConfigOut = Join-Path $BaseOutDir "config"
+$ResourcesOut = Join-Path $BaseOutDir "resources"
+$LicensesOut = Join-Path $BaseOutDir "licenses"
+$DependenciesOut = Join-Path $BaseOutDir "dependencies"
+$DatabasesOut = Join-Path $BaseOutDir "databases"
+$StateOut = Join-Path $BaseOutDir "state"
+$TempOut = Join-Path $BaseOutDir "temp"
+$LogsOut = Join-Path $BaseOutDir "logs"
 $LuaSkillsRuntimeRoot = Join-Path $ProjectDir "third_party\luaskills_runtime"
+
+# RustThirdPartyGeneratedLicenseFileNames stores the generated license-sidecar file names that should survive static resource syncs.
+# RustThirdPartyGeneratedLicenseFileNames 用于保存需要跨静态资源同步保留下来的生成许可证文件名集合。
+$RustThirdPartyGeneratedLicenseFileNames = @(
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_NOTICES_INDEX.json"
+)
+
+# OutputLicenseResourcesDirectory points at the packaged output license directory that hosts both static and generated notices.
+# OutputLicenseResourcesDirectory 指向同时承载静态与生成许可证文件的打包 output 许可证目录。
+$OutputLicenseResourcesDirectory = Join-Path $ResourcesOut "licenses"
 
 function Reset-DirectoryContents {
     <#
@@ -168,6 +183,75 @@ function Merge-DirectoryContents {
     return $true
 }
 
+# Sync-ApplicationLicenseResources refreshes static app license files while preserving dynamically generated Rust notices in output.
+# Sync-ApplicationLicenseResources 用于刷新应用静态许可证文件，同时保留 output 中动态生成的 Rust 声明文件。
+# Source points at the source-tree static license directory.
+# Source 指向源码树中的静态许可证目录。
+# Destination points at the output runtime license directory.
+# Destination 指向 output 运行时许可证目录。
+# PreservedGeneratedFileNames name the dynamically generated notice files that must survive the sync.
+# PreservedGeneratedFileNames 表示必须在同步过程中保留下来的动态生成声明文件名集合。
+function Sync-ApplicationLicenseResources {
+    param(
+        [string]$Source,
+        [string]$Destination,
+        [string[]]$PreservedGeneratedFileNames
+    )
+
+    if (-not (Test-Path -LiteralPath $Source)) {
+        return $false
+    }
+
+    $PreservedGeneratedNoticeBytesByName = @{}
+    foreach ($GeneratedFileName in $PreservedGeneratedFileNames) {
+        $PreservedGeneratedNoticePath = Join-Path $Destination $GeneratedFileName
+        if (Test-Path -LiteralPath $PreservedGeneratedNoticePath) {
+            $PreservedGeneratedNoticeBytesByName[$GeneratedFileName] =
+                [System.IO.File]::ReadAllBytes($PreservedGeneratedNoticePath)
+        }
+    }
+
+    Copy-DirectoryContents -Source $Source -Destination $Destination | Out-Null
+
+    foreach ($GeneratedFileName in $PreservedGeneratedNoticeBytesByName.Keys) {
+        $PreservedGeneratedNoticePath = Join-Path $Destination $GeneratedFileName
+        [System.IO.File]::WriteAllBytes(
+            $PreservedGeneratedNoticePath,
+            $PreservedGeneratedNoticeBytesByName[$GeneratedFileName]
+        )
+    }
+
+    return $true
+}
+
+# Restore-PreservedGeneratedLicenseFiles rewrites any previously captured generated license files after broader resource syncs cleared output/resources.
+# Restore-PreservedGeneratedLicenseFiles 用于在更大范围的资源同步清空 output/resources 后，重新写回此前捕获的生成许可证文件。
+# DestinationDirectory points at output/resources/licenses where generated sidecars should be restored.
+# DestinationDirectory 指向应恢复生成旁路文件的 output/resources/licenses 目录。
+# FilesByName carries the previously captured file bytes keyed by their file names.
+# FilesByName 承接按文件名索引的此前捕获字节内容。
+function Restore-PreservedGeneratedLicenseFiles {
+    param(
+        [string]$DestinationDirectory,
+        [hashtable]$FilesByName
+    )
+
+    if ($null -eq $FilesByName -or $FilesByName.Count -eq 0) {
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $DestinationDirectory)) {
+        New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
+    }
+
+    foreach ($GeneratedFileName in $FilesByName.Keys) {
+        [System.IO.File]::WriteAllBytes(
+            (Join-Path $DestinationDirectory $GeneratedFileName),
+            $FilesByName[$GeneratedFileName]
+        )
+    }
+}
+
 function Enable-OutputModelConfigForLocalTesting {
     <#
     .SYNOPSIS
@@ -208,6 +292,17 @@ foreach ($dir in @(
     "$StateOut\\skills"
 )) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+}
+
+# PreservedGeneratedLicenseFiles captures previously generated output-side license files before any broader resource sync resets output/resources.
+# PreservedGeneratedLicenseFiles 用于在任何更大范围的资源同步重置 output/resources 之前捕获已有的 output 侧生成许可证文件。
+$PreservedGeneratedLicenseFiles = @{}
+foreach ($GeneratedFileName in $RustThirdPartyGeneratedLicenseFileNames) {
+    $GeneratedFilePath = Join-Path $OutputLicenseResourcesDirectory $GeneratedFileName
+    if (Test-Path -LiteralPath $GeneratedFilePath) {
+        $PreservedGeneratedLicenseFiles[$GeneratedFileName] =
+            [System.IO.File]::ReadAllBytes($GeneratedFilePath)
+    }
 }
 
 # Copy binary
@@ -271,6 +366,23 @@ if (Test-Path (Join-Path $AppResourcesRoot "system-prompts")) {
 }
 else {
     Write-Host "==> No app provider system prompt catalog directory found"
+}
+
+if (Test-Path -LiteralPath $AppLicenseResourcesRoot) {
+    Sync-ApplicationLicenseResources `
+        -Source $AppLicenseResourcesRoot `
+        -Destination $OutputLicenseResourcesDirectory `
+        -PreservedGeneratedFileNames $RustThirdPartyGeneratedLicenseFileNames | Out-Null
+    Restore-PreservedGeneratedLicenseFiles `
+        -DestinationDirectory $OutputLicenseResourcesDirectory `
+        -FilesByName $PreservedGeneratedLicenseFiles
+    Write-Host "==> App license resources synced to $(Join-Path $ResourcesOut 'licenses')\\"
+}
+else {
+    Restore-PreservedGeneratedLicenseFiles `
+        -DestinationDirectory $OutputLicenseResourcesDirectory `
+        -FilesByName $PreservedGeneratedLicenseFiles
+    Write-Host "==> No app license resource directory found"
 }
 
 if (Test-Path (Join-Path $AppResourcesRoot "vulcan-mark.svg")) {

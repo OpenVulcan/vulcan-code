@@ -45,6 +45,8 @@
   "settings.section_ai_capability_music_cover_description": "Configure music-cover targets and default ordering, including exporting results to a chosen directory and returning reusable local paths.",
   "settings.section_mcp_servers_label": "MCP Config",
   "settings.section_mcp_servers_description": "Manage MCP servers, OAuth authorization, and connection parameters.",
+  "settings.section_about_licenses_label": "About & Licenses",
+  "settings.section_about_licenses_description": "Review the application license, Rust dependency notices, and extra retained third-party notice documents.",
   "settings.section_archived_restore_label": "Archived Restore",
   "settings.section_archived_restore_description": "Restore archived projects and sessions from the settings page.",
   "settings.policy_title": "Engineering Policy",

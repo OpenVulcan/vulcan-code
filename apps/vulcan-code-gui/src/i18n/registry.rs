@@ -304,6 +304,8 @@ impl LanguageRegistry {
                 I18nKey::SettingsSectionAiCapabilityMusicCoverDescription,
                 I18nKey::SettingsSectionMcpServersLabel,
                 I18nKey::SettingsSectionMcpServersDescription,
+                I18nKey::SettingsSectionAboutLicensesLabel,
+                I18nKey::SettingsSectionAboutLicensesDescription,
                 I18nKey::SettingsSectionArchivedRestoreLabel,
                 I18nKey::SettingsSectionArchivedRestoreDescription,
                 I18nKey::TaskTreeNoSessions,

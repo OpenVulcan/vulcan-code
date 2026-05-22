@@ -1,0 +1,26 @@
+# Rust Third-Party Notices
+
+This file is generated from Cargo dependency metadata by `cargo-about`.
+此文件由 `cargo-about` 根据 Cargo 依赖元数据自动生成。
+
+## License Overview
+
+{{#each overview}}
+- {{{name}}} ({{count}})
+{{/each}}
+
+## License Details
+
+{{#each licenses}}
+### {{{name}}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} - {{crate.repository}}{{else}} - https://crates.io/crates/{{crate.name}}{{/if}}
+{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

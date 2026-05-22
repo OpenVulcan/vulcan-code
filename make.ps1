@@ -59,6 +59,10 @@ $HostDepsScriptPath = Join-Path $ScriptDir "scripts\install_host_deps.ps1"
 # LuaDepsScriptPath 用于指向专用的 PowerShell Lua 依赖初始化脚本。
 $LuaDepsScriptPath = Join-Path $ScriptDir "scripts\install_lua_deps.ps1"
 
+# RustNoticesScriptPath points at the dedicated PowerShell notice-generation script for the About page.
+# RustNoticesScriptPath 用于指向关于页面专用的 Rust 许可证声明生成脚本。
+$RustNoticesScriptPath = Join-Path $ScriptDir "scripts\generate_rust_third_party_notices.ps1"
+
 # Normalize-Command converts nullable command text into a trimmed lower-case token so dispatch rules remain predictable.
 # Normalize-Command 用于把可空命令文本转换成去空白的小写标记，确保分发规则稳定可预测。
 # Value is the raw command-line token to normalize before dispatch.
@@ -156,6 +160,19 @@ function Invoke-DependencyInstall {
     }
 }
 
+# Invoke-RustThirdPartyNoticeGeneration delegates About-page Rust notice generation to the dedicated PowerShell script.
+# Invoke-RustThirdPartyNoticeGeneration 用于把关于页面的 Rust 声明生成委托给专用的 PowerShell 脚本。
+function Invoke-RustThirdPartyNoticeGeneration {
+    if (-not (Test-Path -LiteralPath $RustNoticesScriptPath)) {
+        throw "Missing Rust notice generation script: $RustNoticesScriptPath"
+    }
+
+    & $RustNoticesScriptPath
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 # Show-Usage prints the supported command forms so contributors can quickly recover from invalid input.
 # Show-Usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 function Show-Usage {
@@ -163,6 +180,7 @@ function Show-Usage {
     Write-Host "  ./make             # debug build"
     Write-Host "  ./make build       # debug build"
     Write-Host "  ./make release     # release build"
+    Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make run         # run debug build"
     Write-Host "  ./make run release # run release build"
     Write-Host "  ./make deps        # install host + official LuaSkills runtime dependencies"
@@ -187,6 +205,14 @@ switch ($NormalizedMode) {
     }
     "release" {
         Invoke-Build -IsRelease $true
+    }
+    "licenses" {
+        if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
+            Write-Error "Unsupported licenses command: '$CommandVariant'"
+            Show-Usage
+            exit 1
+        }
+        Invoke-RustThirdPartyNoticeGeneration
     }
     "run" {
         Invoke-Run -IsRelease ($NormalizedVariant -eq "release")

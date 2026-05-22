@@ -74,10 +74,11 @@ impl VulcanWorkbench {
         }
         navigation = navigation
             .push(self.view_settings_navigation_top_level_button(SettingsSection::McpServers))
-            .push(self.view_settings_navigation_top_level_button(SettingsSection::ArchivedRestore))
             .push(
                 self.view_settings_navigation_top_level_button(SettingsSection::RuntimeDiagnostics),
-            );
+            )
+            .push(self.view_settings_navigation_top_level_button(SettingsSection::AboutLicenses))
+            .push(self.view_settings_navigation_top_level_button(SettingsSection::ArchivedRestore));
 
         container(navigation).width(Fill).into()
     }
@@ -380,6 +381,11 @@ impl VulcanWorkbench {
                 .color(color)
                 .into(),
             SettingsSection::McpServers => codicon::folder()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::AboutLicenses => lucide::file_text()
                 .size(15)
                 .line_height(1.0)
                 .color(color)

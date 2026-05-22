@@ -187,6 +187,8 @@ pub enum I18nKey {
     SettingsSectionAiCapabilityMusicCoverDescription,
     SettingsSectionMcpServersLabel,
     SettingsSectionMcpServersDescription,
+    SettingsSectionAboutLicensesLabel,
+    SettingsSectionAboutLicensesDescription,
     SettingsSectionArchivedRestoreLabel,
     SettingsSectionArchivedRestoreDescription,
     TaskTreeNoSessions,
@@ -449,6 +451,10 @@ impl I18nKey {
             Self::SettingsSectionMcpServersLabel => "settings.section_mcp_servers_label",
             Self::SettingsSectionMcpServersDescription => {
                 "settings.section_mcp_servers_description"
+            }
+            Self::SettingsSectionAboutLicensesLabel => "settings.section_about_licenses_label",
+            Self::SettingsSectionAboutLicensesDescription => {
+                "settings.section_about_licenses_description"
             }
             Self::SettingsSectionArchivedRestoreLabel => "settings.section_archived_restore_label",
             Self::SettingsSectionArchivedRestoreDescription => {

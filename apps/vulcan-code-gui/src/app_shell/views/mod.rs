@@ -7,6 +7,7 @@ use iced::widget::{column, opaque, pin, rich_text};
 use iced::{Background, Border, Color};
 use iced_aw::helpers::date_picker;
 
+mod about_licenses;
 mod ai_capability;
 mod diff;
 mod settings_navigation;
@@ -278,6 +279,9 @@ impl VulcanWorkbench {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_task_project_settings_modal() {
+            layered_surfaces.push(overlay);
+        }
+        if let Some(overlay) = self.view_about_license_document_modal() {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_startup_overlay() {
@@ -5052,6 +5056,7 @@ impl VulcanWorkbench {
                 self.view_ai_capability_settings_page(AiToolKind::MusicCover)
             }
             SettingsSection::McpServers => self.view_mcp_configuration_card(),
+            SettingsSection::AboutLicenses => self.view_about_licenses_page(),
             SettingsSection::ArchivedRestore => self.view_archived_restore_card(),
         };
         let uses_fill_layout = matches!(
@@ -5155,6 +5160,40 @@ impl VulcanWorkbench {
                     .on_press(Message::CreateMcpServer)
                     .into(),
             ),
+            SettingsSection::AboutLicenses => {
+                if self.about_license_catalog_loading {
+                    let loading_text = text(self.about_licenses_text(
+                        "正在后台加载许可证…",
+                        "Loading licenses in background…",
+                    ))
+                    .size(12)
+                    .color(
+                        self.app_theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.62),
+                    );
+                    Some(loading_text.into())
+                } else {
+                    let mut actions = row![].spacing(10).align_y(Center);
+                    if self
+                        .about_license_catalog
+                        .preferred_directory_to_open()
+                        .is_some()
+                    {
+                        actions = actions.push(
+                            button(
+                                self.about_licenses_text("打开许可证目录", "Open License Folder"),
+                            )
+                            .style(button::secondary)
+                            .on_press(Message::OpenAboutLicensesDirectory),
+                        );
+                    }
+                    Some(actions.into())
+                }
+            }
             section if section.belongs_to_ai_capabilities() => {
                 let capability_kind = section.capability_kind()?;
                 let enabled_target_count = self

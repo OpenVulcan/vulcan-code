@@ -894,6 +894,8 @@ fn validate_cleanup_managed_path(
     }
 
     let expected_category_dir = asset_root.join(attachment_kind_directory_name(&record.kind));
+    let case_insensitive_comparison =
+        path_text_comparison_is_case_insensitive(asset_root, &expected_category_dir);
     if managed_path.is_file() {
         let canonical_managed_path = fs::canonicalize(&managed_path).map_err(|error| {
             format!(
@@ -909,7 +911,11 @@ fn validate_cleanup_managed_path(
                 error
             )
         })?;
-        if !path_is_inside_for_host(&canonical_managed_path, &canonical_category_dir) {
+        if !path_is_inside_for_host(
+            &canonical_managed_path,
+            &canonical_category_dir,
+            case_insensitive_comparison,
+        ) {
             return Err(format!(
                 "附件资产 `{}` 的托管路径 `{}` 不在当前项目附件目录内，已停止清理以避免误删。",
                 record.asset_id,
@@ -926,7 +932,7 @@ fn validate_cleanup_managed_path(
             managed_path.display()
         ));
     };
-    if !paths_equal_for_host(parent, &expected_category_dir) {
+    if !paths_equal_for_host(parent, &expected_category_dir, case_insensitive_comparison) {
         return Err(format!(
             "附件资产 `{}` 的缺失托管路径 `{}` 不属于当前项目附件分类目录，已停止清理以避免误删。",
             record.asset_id,
@@ -946,30 +952,99 @@ fn path_contains_parent_component(path: &Path) -> bool {
 
 /// Returns whether `child` is inside `parent`, using host-appropriate case sensitivity for path text comparison.
 /// 使用符合宿主大小写语义的路径文本比较，返回 `child` 是否位于 `parent` 内部。
-fn path_is_inside_for_host(child: &Path, parent: &Path) -> bool {
-    let child_text = normalized_host_path_text(child);
-    let parent_text = normalized_host_path_text(parent);
+fn path_is_inside_for_host(child: &Path, parent: &Path, case_insensitive: bool) -> bool {
+    let child_text = normalized_host_path_text(child, case_insensitive);
+    let parent_text = normalized_host_path_text(parent, case_insensitive);
     child_text == parent_text || child_text.starts_with(&format!("{parent_text}/"))
 }
 
 /// Returns whether two paths identify the same lexical location for the current host platform.
 /// 返回两条路径在当前宿主平台上是否指向同一个词法位置。
-fn paths_equal_for_host(left: &Path, right: &Path) -> bool {
-    normalized_host_path_text(left) == normalized_host_path_text(right)
+fn paths_equal_for_host(left: &Path, right: &Path, case_insensitive: bool) -> bool {
+    normalized_host_path_text(left, case_insensitive)
+        == normalized_host_path_text(right, case_insensitive)
 }
 
 /// Converts a path into normalized comparison text without changing filesystem state.
 /// 将路径转换为规范化比较文本，同时不改变文件系统状态。
-fn normalized_host_path_text(path: &Path) -> String {
+fn normalized_host_path_text(path: &Path, case_insensitive: bool) -> String {
     let mut text = path.to_string_lossy().replace('\\', "/");
     while text.ends_with('/') && text.len() > 1 {
         text.pop();
     }
-    #[cfg(windows)]
-    {
+    if case_insensitive {
         text = text.to_ascii_lowercase();
     }
     text
+}
+
+/// Returns whether lexical path comparison should ignore ASCII case for the current managed attachment filesystem.
+/// 返回当前托管附件文件系统上的词法路径比较是否应忽略 ASCII 大小写。
+fn path_text_comparison_is_case_insensitive(
+    asset_root: &Path,
+    expected_category_dir: &Path,
+) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = asset_root;
+        let _ = expected_category_dir;
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        if !cfg!(target_os = "macos") {
+            let _ = expected_category_dir;
+            return false;
+        }
+        let probe_root = if expected_category_dir.is_dir() {
+            expected_category_dir
+        } else {
+            asset_root
+        };
+        directory_path_is_case_insensitive(probe_root)
+    }
+}
+
+/// Probes whether one existing directory path resolves case-insensitively on the current filesystem.
+/// 探测某个已存在目录路径在当前文件系统上是否按大小写不敏感方式解析。
+#[cfg(not(windows))]
+fn directory_path_is_case_insensitive(reference_dir: &Path) -> bool {
+    let Some(file_name) = reference_dir.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let toggled_name = toggle_first_ascii_alpha_case(file_name);
+    if toggled_name == file_name {
+        return false;
+    }
+    let probe_path = reference_dir.with_file_name(toggled_name);
+    match (
+        fs::canonicalize(reference_dir),
+        fs::canonicalize(&probe_path),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Builds one best-effort alternate spelling by toggling the first ASCII alphabetic codepoint in the provided text.
+/// 通过翻转首个 ASCII 字母的大小写，为给定文本构造一份尽力而为的替代拼写。
+#[cfg(not(windows))]
+fn toggle_first_ascii_alpha_case(value: &str) -> String {
+    let mut toggled = String::with_capacity(value.len());
+    let mut switched = false;
+    for character in value.chars() {
+        if !switched && character.is_ascii_alphabetic() {
+            if character.is_ascii_lowercase() {
+                toggled.push(character.to_ascii_uppercase());
+            } else {
+                toggled.push(character.to_ascii_lowercase());
+            }
+            switched = true;
+        } else {
+            toggled.push(character);
+        }
+    }
+    toggled
 }
 
 /// Returns the managed attachment category directory name for one canonical attachment kind.

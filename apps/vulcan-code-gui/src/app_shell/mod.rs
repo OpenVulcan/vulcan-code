@@ -1,5 +1,6 @@
 //! Main application state and view composition for the desktop scaffold.
 //! 桌面端骨架的主应用状态与界面组合逻辑。
+mod about_licenses;
 mod attachment_management;
 mod composer_attachments;
 mod configuration;
@@ -18,6 +19,7 @@ mod subagent_runtime;
 mod task_tree;
 mod views;
 
+use self::about_licenses::*;
 use self::helpers::*;
 use self::oauth_flow::*;
 use self::perf::*;
@@ -202,6 +204,12 @@ const CODE_EDITOR_LINE_HEIGHT: f32 = 20.0;
 /// Text size used by the workbench raw-source transcript preview so it matches the default Markdown reading size.
 /// 工作台原文转录预览使用的字号，与默认 Markdown 阅读字号保持一致。
 const WORKBENCH_TRANSCRIPT_CODE_PREVIEW_TEXT_SIZE: f32 = 14.0;
+
+/// Builds one read-only text-editor buffer used by one About-page license document body.
+/// 构建供单份关于页许可证文档正文使用的一份只读文本编辑器缓冲区。
+fn build_about_license_document_buffer(body: &str) -> text_editor::Content {
+    text_editor::Content::with_text(body)
+}
 
 /// Legacy pick-list helper that preserves the older option-first call shape on top of iced 0.15-dev.
 /// 在 iced 0.15-dev 之上保留旧版“选项在前”调用形式的下拉列表兼容辅助函数。
@@ -637,6 +645,18 @@ const WORKBENCH_NOTICE_MODAL_HEADER_HEIGHT: f32 = 36.0;
 /// Shared fixed width used by each reusable blocking notice modal action button.
 /// 可复用阻塞提示弹窗每个操作按钮使用的共享固定宽度。
 const WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH: f32 = 118.0;
+
+/// Shared fixed width used by the About-page license detail modal card.
+/// 关于页面许可证详情弹窗卡片使用的共享固定宽度。
+const WORKBENCH_ABOUT_LICENSE_MODAL_WIDTH: f32 = 920.0;
+
+/// Shared fixed height used by the About-page license detail modal card.
+/// 关于页面许可证详情弹窗卡片使用的共享固定高度。
+const WORKBENCH_ABOUT_LICENSE_MODAL_HEIGHT: f32 = 700.0;
+
+/// Shared fixed height used by the About-page license detail modal header.
+/// 关于页面许可证详情弹窗标题栏使用的共享固定高度。
+const WORKBENCH_ABOUT_LICENSE_MODAL_HEADER_HEIGHT: f32 = 40.0;
 
 /// Shared fixed width used by the blocking ask/question modal card.
 /// 阻塞式 ask/question 弹窗卡片使用的共享固定宽度。
@@ -3191,6 +3211,33 @@ pub struct VulcanWorkbench {
     /// Selectable Markdown buffer rendered in the inspector guide.
     /// 渲染在检查面板指引中的可选 Markdown 缓冲区。
     quick_guide_markdown_buffer: text_editor::Content,
+    /// Application-side license catalog rendered by the dedicated About settings page.
+    /// 由专用关于设置页渲染的应用侧许可证目录。
+    about_license_catalog: AboutLicenseCatalog,
+    /// Whether the About-page license catalog is currently loading on a background worker thread.
+    /// 关于页许可证目录当前是否正在后台工作线程中加载。
+    about_license_catalog_loading: bool,
+    /// Latest load failure captured for the About-page license catalog, if any.
+    /// 关于页许可证目录最近一次捕获到的加载失败信息（如果存在）。
+    about_license_catalog_load_error: Option<String>,
+    /// Monotonic revision used to ignore stale About-page load completions that finish out of order.
+    /// 用于忽略乱序完成的过期关于页加载结果的单调修订号。
+    about_license_catalog_load_revision: u64,
+    /// Stable identifier of the single About-page document whose full body is currently expanded.
+    /// 当前在关于页中展开完整正文的单份文档稳定标识。
+    about_license_active_document_id: Option<String>,
+    /// Whether the currently expanded About-page document buffer is still being prepared on a background worker.
+    /// 当前展开的关于页文档缓冲区是否仍在后台工作线程中准备。
+    about_license_document_buffer_loading: bool,
+    /// Latest load failure captured for the currently expanded About-page document buffer, if any.
+    /// 当前展开的关于页文档缓冲区最近一次捕获到的加载失败信息（如果存在）。
+    about_license_document_buffer_load_error: Option<String>,
+    /// Monotonic revision used to ignore stale About-page document-buffer completions that finish out of order.
+    /// 用于忽略乱序完成的过期关于页文档缓冲区结果的单调修订号。
+    about_license_document_buffer_load_revision: u64,
+    /// Read-only text-editor buffers backing the About-page license document surfaces.
+    /// 为关于页许可证文档表面提供支撑的只读文本编辑器缓冲区集合。
+    about_license_document_buffers: BTreeMap<String, text_editor::Content>,
     /// Session summaries rendered in the navigator pane.
     /// 渲染在导航面板中的会话摘要列表。
     sessions: Vec<SessionSummary>,
@@ -5849,9 +5896,21 @@ enum SettingsSection {
     /// MCP server configuration and OAuth management.
     /// MCP 服务器配置与 OAuth 管理。
     McpServers,
+    /// About page for application licensing, generated notices, and bundled compliance references.
+    /// 展示应用许可证、生成声明与内置合规参考的关于页面。
+    AboutLicenses,
     /// Archived session and project restoration surface.
     /// 归档会话与归档项目恢复界面。
     ArchivedRestore,
+}
+
+/// Describes why the About-page license catalog is being reloaded so status copy can stay precise.
+/// 描述关于页许可证目录重新加载的触发原因，以便状态文案保持准确。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AboutLicenseCatalogLoadTrigger {
+    /// The user has just opened the About settings page and needs one fresh asynchronous load.
+    /// 用户刚刚打开关于设置页，需要触发一次新的异步加载。
+    OpenSection,
 }
 
 impl SettingsSection {
@@ -5887,6 +5946,7 @@ impl SettingsSection {
             }
             Self::AiCapabilityMusicCover => I18nKey::SettingsSectionAiCapabilityMusicCoverLabel,
             Self::McpServers => I18nKey::SettingsSectionMcpServersLabel,
+            Self::AboutLicenses => I18nKey::SettingsSectionAboutLicensesLabel,
             Self::ArchivedRestore => I18nKey::SettingsSectionArchivedRestoreLabel,
         }
     }
@@ -5925,6 +5985,7 @@ impl SettingsSection {
                 I18nKey::SettingsSectionAiCapabilityMusicCoverDescription
             }
             Self::McpServers => I18nKey::SettingsSectionMcpServersDescription,
+            Self::AboutLicenses => I18nKey::SettingsSectionAboutLicensesDescription,
             Self::ArchivedRestore => I18nKey::SettingsSectionArchivedRestoreDescription,
         }
     }
@@ -7089,6 +7150,24 @@ enum Message {
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
+    /// Applies the finished result of one background About-page license catalog loading task.
+    /// 应用一条后台关于页许可证目录加载任务的完成结果。
+    AboutLicenseCatalogLoaded(u64, Result<AboutLicenseCatalog, String>),
+    /// Opens the preferred application-side license resource directory in the host file manager.
+    /// 在宿主文件管理器中打开首选的应用侧许可证资源目录。
+    OpenAboutLicensesDirectory,
+    /// Opens one concrete About-page license document with the host operating system default application.
+    /// 使用宿主操作系统默认应用打开关于页中的某份具体许可证文档。
+    OpenAboutLicenseDocumentPath(String),
+    /// Toggles one concrete About-page license document body and starts lazy buffer preparation when needed.
+    /// 切换关于页中某份具体许可证文档的正文展开状态，并在需要时启动延迟缓冲构建。
+    ToggleAboutLicenseDocumentBody(String),
+    /// Applies the finished result of one background About-page document-buffer loading task.
+    /// 应用一条后台关于页文档缓冲区加载任务的完成结果。
+    AboutLicenseDocumentBufferLoaded(u64, String, Result<text_editor::Content, String>),
+    /// Applies one read-only text editor action to one About-page license document buffer.
+    /// 向关于页中的某个许可证文档缓冲区应用一次只读文本编辑器动作。
+    AboutLicenseDocumentRawAction(String, text_editor::Action),
     /// Execution mode selected from the radio group.
     /// 从单选组中选择了执行模式。
     ExecutionModeSelected(ExecutionMode),
@@ -7503,6 +7582,153 @@ impl VulcanWorkbench {
         );
     }
 
+    /// Returns whether entering the About-page section should trigger the first lazy catalog load automatically.
+    /// 返回进入关于页分区时是否应自动触发首次延迟目录加载。
+    fn should_auto_start_about_license_catalog_reload(&self, section_changed: bool) -> bool {
+        section_changed
+            && !self.about_license_catalog_loading
+            && (self.about_license_catalog_load_revision == 0
+                || self.about_license_catalog_load_error.is_some())
+    }
+
+    /// Starts one background worker-thread task that prepares the currently requested About-page document buffer on demand.
+    /// 按需启动一条后台工作线程任务，为当前请求的关于页文档准备正文缓冲区。
+    fn start_about_license_document_buffer_load(&mut self, document_id: String) -> Task<Message> {
+        let Some(document) = self.about_license_catalog.document(&document_id).cloned() else {
+            self.about_license_document_buffer_loading = false;
+            self.about_license_document_buffer_load_error =
+                Some(String::from("当前许可证文档正文不可用，无法展开显示。"));
+            return Task::none();
+        };
+
+        if self
+            .about_license_document_buffers
+            .contains_key(&document_id)
+        {
+            self.about_license_active_document_id = Some(document_id);
+            self.about_license_document_buffer_loading = false;
+            self.about_license_document_buffer_load_error = None;
+            return Task::none();
+        }
+
+        self.about_license_active_document_id = Some(document_id.clone());
+        self.about_license_document_buffer_loading = true;
+        self.about_license_document_buffer_load_error = None;
+        self.about_license_document_buffer_load_revision = self
+            .about_license_document_buffer_load_revision
+            .wrapping_add(1);
+        let revision = self.about_license_document_buffer_load_revision;
+
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    document
+                        .load_body_text()
+                        .map(|body| build_about_license_document_buffer(&body))
+                })
+                .await
+                .map_err(|error| format!("许可证正文后台缓冲任务加入失败：{error}"))
+                .and_then(|result| result)
+            },
+            move |result| Message::AboutLicenseDocumentBufferLoaded(revision, document_id, result),
+        )
+    }
+
+    /// Applies one finished About-page document-buffer result when it still matches the latest requested revision and document selection.
+    /// 应用一条已完成的关于页文档缓冲结果，并在其仍匹配最新请求修订号与当前文档选择时生效。
+    fn finish_about_license_document_buffer_load(
+        &mut self,
+        revision: u64,
+        document_id: String,
+        result: Result<text_editor::Content, String>,
+    ) -> Task<Message> {
+        if revision != self.about_license_document_buffer_load_revision
+            || self.about_license_active_document_id.as_deref() != Some(document_id.as_str())
+        {
+            return Task::none();
+        }
+
+        self.about_license_document_buffer_loading = false;
+        match result {
+            Ok(content) => {
+                self.about_license_document_buffers
+                    .insert(document_id, content);
+                self.about_license_document_buffer_load_error = None;
+            }
+            Err(error) => {
+                self.about_license_document_buffer_load_error = Some(error.clone());
+                self.status_message = format!("许可证正文加载失败：{error}");
+            }
+        }
+
+        Task::none()
+    }
+
+    /// Starts one background worker-thread task that reloads the About-page license catalog while keeping already cached page state visible.
+    /// 启动一条后台工作线程任务以重新加载关于页许可证目录，并保留已缓存的页面状态继续可见。
+    fn start_about_license_catalog_reload(
+        &mut self,
+        trigger: AboutLicenseCatalogLoadTrigger,
+    ) -> Task<Message> {
+        self.about_license_catalog_loading = true;
+        self.about_license_catalog_load_error = None;
+        self.about_license_catalog_load_revision =
+            self.about_license_catalog_load_revision.wrapping_add(1);
+        let revision = self.about_license_catalog_load_revision;
+        self.status_message = match trigger {
+            AboutLicenseCatalogLoadTrigger::OpenSection => String::from("正在后台加载许可证目录。"),
+        };
+
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(AboutLicenseCatalog::load)
+                    .await
+                    .map_err(|error| format!("许可证后台加载任务加入失败：{error}"))
+                    .and_then(|result| result)
+            },
+            move |result| Message::AboutLicenseCatalogLoaded(revision, result),
+        )
+    }
+
+    /// Applies one finished About-page license catalog load result when it still matches the latest requested revision.
+    /// 应用一条已完成的关于页许可证目录加载结果，并在其仍匹配最新请求修订号时生效。
+    fn finish_about_license_catalog_reload(
+        &mut self,
+        revision: u64,
+        result: Result<AboutLicenseCatalog, String>,
+    ) -> Task<Message> {
+        if revision != self.about_license_catalog_load_revision {
+            return Task::none();
+        }
+
+        self.about_license_catalog_loading = false;
+        match result {
+            Ok(catalog) => {
+                let document_count = catalog.documents.len();
+                let active_document_id = self
+                    .about_license_active_document_id
+                    .clone()
+                    .filter(|document_id| catalog.document(document_id).is_some());
+                self.about_license_catalog = catalog;
+                self.status_message =
+                    format!("许可证目录已加载，共载入 {document_count} 条列表项。");
+                self.about_license_catalog_load_error = None;
+                self.about_license_document_buffers.clear();
+                self.about_license_document_buffer_loading = false;
+                self.about_license_document_buffer_load_error = None;
+                self.about_license_active_document_id = active_document_id.clone();
+                if let Some(document_id) = active_document_id {
+                    return self.start_about_license_document_buffer_load(document_id);
+                }
+            }
+            Err(error) => {
+                self.about_license_catalog_load_error = Some(error.clone());
+                self.status_message = format!("许可证目录加载失败：{error}");
+            }
+        }
+        Task::none()
+    }
+
     /// Rebuilds every cached session transcript projection so locale-sensitive labels refresh immediately after a GUI language change.
     /// 重建全部已缓存会话转录投影，使依赖语言的标签在界面语言切换后立即刷新。
     fn refresh_all_session_agent_view_localizations(&mut self) {
@@ -7735,6 +7961,8 @@ impl VulcanWorkbench {
         let quick_guide_markdown_buffer = text_editor::Content::with_text(
             &build_selectable_markdown_text(&quick_guide_source, &quick_guide, &app_theme),
         );
+        let about_license_catalog = AboutLicenseCatalog::empty();
+        let about_license_document_buffers = BTreeMap::new();
 
         let startup_controller_configuration = controller_configuration.clone();
         let initial_execution_mode = if matches!(
@@ -7796,6 +8024,15 @@ impl VulcanWorkbench {
             diff_scroll_offset: 0.0,
             diff_viewport_height: 0.0,
             quick_guide_markdown_buffer,
+            about_license_catalog,
+            about_license_catalog_loading: false,
+            about_license_catalog_load_error: None,
+            about_license_catalog_load_revision: 0,
+            about_license_active_document_id: None,
+            about_license_document_buffer_loading: false,
+            about_license_document_buffer_load_error: None,
+            about_license_document_buffer_load_revision: 0,
+            about_license_document_buffers,
             sessions: Vec::new(),
             task_projects: Vec::new(),
             archived_task_projects: Vec::new(),
@@ -9156,6 +9393,62 @@ impl VulcanWorkbench {
             Message::OpenGeneratedAttachmentWithDefaultApp(local_path) => {
                 self.open_generated_attachment_with_system_default_application(&local_path)
             }
+            Message::OpenAboutLicensesDirectory => {
+                match self
+                    .about_license_catalog
+                    .preferred_directory_to_open()
+                    .map(Path::to_path_buf)
+                {
+                    Some(directory) => {
+                        match open_path_in_system_file_manager(&directory.display().to_string()) {
+                            Ok(()) => {
+                                self.status_message = String::from("已打开许可证资源目录。");
+                            }
+                            Err(error) => {
+                                self.show_workbench_notice_modal(
+                                    "无法打开许可证资源目录",
+                                    error.clone(),
+                                );
+                                self.status_message = format!("打开许可证资源目录失败：{error}");
+                            }
+                        }
+                    }
+                    None => {
+                        self.status_message =
+                            String::from("当前运行环境还没有可打开的许可证资源目录。");
+                    }
+                }
+                Task::none()
+            }
+            Message::OpenAboutLicenseDocumentPath(document_id) => {
+                match self
+                    .about_license_catalog
+                    .document(&document_id)
+                    .and_then(|document| document.external_path.as_ref())
+                    .map(PathBuf::from)
+                {
+                    Some(path) => {
+                        match open_path_with_system_default_application(&path.display().to_string())
+                        {
+                            Ok(()) => {
+                                self.status_message = String::from("已打开许可证原始文件。");
+                            }
+                            Err(error) => {
+                                self.show_workbench_notice_modal(
+                                    "无法打开许可证原始文件",
+                                    error.clone(),
+                                );
+                                self.status_message = format!("打开许可证原始文件失败：{error}");
+                            }
+                        }
+                    }
+                    None => {
+                        self.status_message =
+                            String::from("当前许可证文档没有可直接打开的本地文件。");
+                    }
+                }
+                Task::none()
+            }
             Message::RevealGeneratedAttachmentInFolder(local_path) => {
                 match reveal_path_in_system_file_manager(&local_path) {
                     Ok(()) => {
@@ -9278,6 +9571,11 @@ impl VulcanWorkbench {
                 }
                 if self.active_question_modal.is_some() {
                     return self.request_active_question_modal_rejection();
+                }
+                if self.about_license_active_document_id.take().is_some() {
+                    self.about_license_document_buffer_loading = false;
+                    self.about_license_document_buffer_load_error = None;
+                    return Task::none();
                 }
                 if self.ai_capability_vendor_editor.take().is_some() {
                     return Task::none();
@@ -9562,6 +9860,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::SettingsSectionSelected(section) => {
+                let section_changed = self.selected_settings_section != section;
                 self.selected_settings_section = section;
                 if section.belongs_to_ai_capabilities() {
                     self.settings_ai_capability_tree_expanded = true;
@@ -9576,7 +9875,15 @@ impl VulcanWorkbench {
                         section.localized_title(self.current_locale()),
                     )],
                 );
-                Task::none()
+                if section == SettingsSection::AboutLicenses
+                    && self.should_auto_start_about_license_catalog_reload(section_changed)
+                {
+                    self.start_about_license_catalog_reload(
+                        AboutLicenseCatalogLoadTrigger::OpenSection,
+                    )
+                } else {
+                    Task::none()
+                }
             }
             Message::ToggleModelSettingsTree => {
                 self.settings_model_tree_expanded = !self.settings_model_tree_expanded;
@@ -11162,6 +11469,31 @@ impl VulcanWorkbench {
             Message::QuickGuideMarkdownAction(action) => {
                 if !action.is_edit() {
                     self.quick_guide_markdown_buffer.perform(action);
+                }
+                Task::none()
+            }
+            Message::AboutLicenseCatalogLoaded(revision, result) => {
+                self.finish_about_license_catalog_reload(revision, result)
+            }
+            Message::ToggleAboutLicenseDocumentBody(document_id) => {
+                if self.about_license_active_document_id.as_deref() == Some(document_id.as_str()) {
+                    self.about_license_active_document_id = None;
+                    self.about_license_document_buffer_loading = false;
+                    self.about_license_document_buffer_load_error = None;
+                    Task::none()
+                } else {
+                    self.start_about_license_document_buffer_load(document_id)
+                }
+            }
+            Message::AboutLicenseDocumentBufferLoaded(revision, document_id, result) => {
+                self.finish_about_license_document_buffer_load(revision, document_id, result)
+            }
+            Message::AboutLicenseDocumentRawAction(document_id, action) => {
+                if !action.is_edit() {
+                    if let Some(content) = self.about_license_document_buffers.get_mut(&document_id)
+                    {
+                        content.perform(action);
+                    }
                 }
                 Task::none()
             }
