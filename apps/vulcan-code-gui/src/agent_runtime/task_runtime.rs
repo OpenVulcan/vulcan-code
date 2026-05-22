@@ -46,7 +46,7 @@ const RUNNING_TASK_RESULT_SUMMARY: &str = "The subagent has started running in t
 
 /// Windows filesystem path guidance injected into child task prompts to stabilize tool calls.
 /// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
-const WINDOWS_TASK_FILESYSTEM_PATH_GUIDANCE: &str = "[Filesystem Paths]\nWhen calling filesystem-oriented tools on Windows, prefer absolute paths written with forward slashes like D:/repo/path. Do not wrap tool arguments in Markdown code fences or extra quotes, and avoid escaped backslashes unless a tool explicitly requires them.";
+const WINDOWS_TASK_FILESYSTEM_PATH_GUIDANCE: &str = "[Filesystem Paths]\nWhen calling filesystem-oriented tools on Windows, prefer standard absolute Windows paths like C:\\repo\\path. Do not wrap tool arguments in Markdown code fences or extra quotes. When a JSON string needs escaping, keep the semantic path as a normal Windows path and escape backslashes only as required by the transport format.";
 
 /// Boxed asynchronous task execution future.
 /// 装箱后的异步任务执行 Future。
@@ -1712,7 +1712,7 @@ mod tests {
                 .contains("[Task]\nAnalyze the current repository.")
         );
         assert!(config.system_prompt.contains("[Filesystem Paths]"));
-        assert!(config.system_prompt.contains("D:/repo/path"));
+        assert!(config.system_prompt.contains(r"C:\repo\path"));
     }
 
     /// Verifies that caller-facing task identifiers are normalized consistently before being stored or looked up.

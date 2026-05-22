@@ -320,7 +320,7 @@ impl TaskProjectSummary {
             Self::new(
                 "vulcan-luaskills",
                 "LuaSkills",
-                "D:/projects/LuaSkills",
+                r"D:\projects\LuaSkills",
                 false,
                 0,
                 vec![Uuid::from_u128(1), Uuid::from_u128(2)],
@@ -328,7 +328,7 @@ impl TaskProjectSummary {
             Self::new(
                 "vulcan-memory-mesh",
                 "VulcanMemoryMesh",
-                "D:/projects/VulcanMemoryMesh",
+                r"D:\projects\VulcanMemoryMesh",
                 false,
                 1,
                 vec![Uuid::from_u128(3), Uuid::from_u128(4)],
@@ -336,7 +336,7 @@ impl TaskProjectSummary {
             Self::new(
                 "vulcan-plugins-opencode",
                 "vulcan-plugins-opencode",
-                "D:/projects/vulcan-plugins-opencode",
+                r"D:\projects\vulcan-plugins-opencode",
                 false,
                 2,
                 vec![],

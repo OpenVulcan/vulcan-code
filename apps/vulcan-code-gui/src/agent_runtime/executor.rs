@@ -113,7 +113,7 @@ mod tests {
                 interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析这段代码"),
-            workspace_path: String::from("D:/workspace"),
+            workspace_path: String::from(r"D:\workspace"),
             conversation_attachments: Vec::new(),
             context_history_count: 2,
             execution_mode: String::from("Build"),
@@ -237,7 +237,7 @@ mod tests {
                 interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析这段代码"),
-            workspace_path: String::from("D:/workspace"),
+            workspace_path: String::from(r"D:\workspace"),
             conversation_attachments: Vec::new(),
             context_history_count: 1,
             execution_mode: String::from("Build"),
@@ -554,7 +554,7 @@ mod tests {
                 interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析这段代码"),
-            workspace_path: String::from("D:/workspace"),
+            workspace_path: String::from(r"D:\workspace"),
             conversation_attachments: Vec::new(),
             context_history_count: 2,
             execution_mode: String::from("Build"),
@@ -580,7 +580,7 @@ mod tests {
         assert!(!preamble.contains("LuaSkills 工具目录"));
         assert!(!preamble.contains("MCP 工具已真实注册"));
         assert!(!preamble.contains("可委派代理"));
-        assert!(preamble.contains("Current workspace: D:/workspace"));
+        assert!(preamble.contains(r"Current workspace: D:\workspace"));
         assert!(preamble.contains("Current execution mode: Build"));
     }
 

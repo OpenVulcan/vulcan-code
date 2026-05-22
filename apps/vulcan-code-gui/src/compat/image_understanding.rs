@@ -443,7 +443,7 @@ mod tests {
         ConversationAttachment {
             kind: ConversationAttachmentKind::Image,
             file_name: file_name.to_string(),
-            local_path: format!("C:/temp/{file_name}"),
+            local_path: format!("C:\\temp\\{file_name}"),
             source_path: None,
             asset_id: Some(format!("asset-{file_name}")),
             byte_len: Some(4),

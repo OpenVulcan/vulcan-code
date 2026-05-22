@@ -137,7 +137,7 @@ mod tests {
                 interleaved_reasoning: None,
             },
             prompt_preview: String::from("请分析代码"),
-            workspace_path: String::from("D:/workspace"),
+            workspace_path: String::from(r"D:\workspace"),
             conversation_attachments: Vec::new(),
             context_history_count: 1,
             execution_mode: String::from("Build"),
@@ -159,7 +159,7 @@ mod tests {
         ExecutionPreparationRequest {
             session_id: Uuid::nil(),
             session_title: String::from("测试会话"),
-            workspace_path: String::from("D:/workspace"),
+            workspace_path: String::from(r"D:\workspace"),
             prompt: String::from("  请分析主入口文件  "),
             conversation_state: SessionConversationState::default(),
             execution_mode: String::from("Build"),

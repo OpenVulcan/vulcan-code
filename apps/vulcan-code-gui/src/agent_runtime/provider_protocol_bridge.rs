@@ -259,7 +259,7 @@ mod tests {
                     "outputs": [{
                         "kind": "image",
                         "file_name": "demo.png",
-                        "local_path": "C:/demo.png",
+                        "local_path": r"C:\demo.png",
                     }],
                 },
             })),

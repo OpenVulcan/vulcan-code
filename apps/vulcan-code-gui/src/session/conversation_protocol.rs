@@ -1234,7 +1234,7 @@ mod tests {
                 "transcript_attachments": [{
                     "kind": "image",
                     "file_name": "diagram.png",
-                    "local_path": "D:/diagram.png",
+                    "local_path": r"D:\diagram.png",
                     "mime_type": "image/png",
                 }],
             })),
@@ -1252,7 +1252,7 @@ mod tests {
         assert_eq!(text, "请分析图片并告诉我结构");
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].file_name, "diagram.png");
-        assert_eq!(attachments[0].local_path, "D:/diagram.png");
+        assert_eq!(attachments[0].local_path, r"D:\diagram.png");
     }
 
     /// Verifies host-visible attachment collection includes generated media retained in tool-result metadata so later media tools can reuse them.
@@ -1267,7 +1267,7 @@ mod tests {
                     attachments: vec![ConversationAttachment {
                         kind: vulcan_core::types::ConversationAttachmentKind::Image,
                         file_name: String::from("reference.png"),
-                        local_path: String::from("D:/workspace/reference.png"),
+                        local_path: String::from(r"D:\workspace\reference.png"),
                         source_path: None,
                         asset_id: Some(String::from("asset-user-1")),
                         byte_len: Some(11),
@@ -1290,8 +1290,8 @@ mod tests {
                             "outputs": [{
                                 "kind": "image",
                                 "file_name": "generated-cover.png",
-                                "local_path": "D:/workspace/.vulcan-code/attachments/images/generated-cover.png",
-                                "source_path": "D:/workspace/exports/generated-cover.png",
+                                "local_path": r"D:\workspace\.vulcan-code\attachments\images\generated-cover.png",
+                                "source_path": r"D:\workspace\exports\generated-cover.png",
                                 "mime_type": "image/png",
                                 "asset_id": "asset-generated-1",
                                 "byte_len": 2048
@@ -1309,7 +1309,7 @@ mod tests {
         assert_eq!(attachments[0].file_name, "generated-cover.png");
         assert_eq!(
             attachments[0].source_path.as_deref(),
-            Some("D:/workspace/exports/generated-cover.png")
+            Some(r"D:\workspace\exports\generated-cover.png")
         );
         assert_eq!(attachments[1].file_name, "reference.png");
     }
@@ -1451,7 +1451,7 @@ mod tests {
                         "outputs": [{
                             "kind": "image",
                             "file_name": "demo.jpg",
-                            "local_path": "D:/demo.jpg",
+                            "local_path": r"D:\demo.jpg",
                             "mime_type": "image/jpeg",
                             "byte_len": 1024,
                             "asset_id": "asset-1",
@@ -1520,7 +1520,7 @@ mod tests {
         );
         assert_eq!(
             outputs[0].get("local_path").and_then(Value::as_str),
-            Some("D:/demo.jpg")
+            Some(r"D:\demo.jpg")
         );
         assert!(outputs[0].get("ignored").is_none());
         assert!(metadata.get("noise").is_none());
@@ -1547,7 +1547,7 @@ mod tests {
                         "summary": "Previewed file edit.",
                         "files": [{
                             "change": "create",
-                            "path": "D:/openvulcan/vulcan-code/src/demo.lua",
+                            "path": r"D:\openvulcan\vulcan-code\src\demo.lua",
                             "content": "return {}\n"
                         }]
                     }

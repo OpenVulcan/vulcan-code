@@ -564,11 +564,11 @@ mod tests {
         let (mut workbench, _task) = VulcanWorkbench::new();
         workbench.sessions.clear();
         workbench.task_projects.clear();
-        workbench.workspace_path = String::from("D:/workspace/project-a");
+        workbench.workspace_path = String::from(r"D:\workspace\project-a");
         workbench.task_projects.push(TaskProjectSummary::new(
             "project-a",
             "项目 A",
-            "D:/workspace/project-a",
+            r"D:\workspace\project-a",
             false,
             0,
             Vec::new(),
@@ -576,7 +576,7 @@ mod tests {
         workbench.task_projects.push(TaskProjectSummary::new(
             "project-b",
             "项目 B",
-            "D:/workspace/project-b",
+            r"D:\workspace\project-b",
             false,
             1,
             Vec::new(),
@@ -584,7 +584,7 @@ mod tests {
 
         workbench.create_task_project_session("project-b");
 
-        assert_eq!(workbench.workspace_path, "D:/workspace/project-b");
+        assert_eq!(workbench.workspace_path, r"D:\workspace\project-b");
         assert_eq!(
             workbench
                 .session_by_id(workbench.selected_session)

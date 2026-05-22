@@ -422,7 +422,7 @@ mod tests {
                 interleaved_reasoning: None,
             },
             prompt_preview: String::from("检查请求预览"),
-            workspace_path: String::from("D:/openvulcan/vulcan-code"),
+            workspace_path: String::from(r"D:\openvulcan\vulcan-code"),
             conversation_attachments: Vec::new(),
             context_history_count: 0,
             execution_mode: String::from("默认模式"),

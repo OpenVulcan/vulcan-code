@@ -2084,7 +2084,7 @@ mod tests {
                 payload: CoreConversationPayload::ToolResult {
                     tool_result_id: String::from("result-1"),
                     tool_call_id: Some(String::from("call-1")),
-                    text: String::from("D:/openvulcan/vulcan-code"),
+                    text: String::from(r"D:\openvulcan\vulcan-code"),
                 },
             },
             interleaved_reasoning: None,

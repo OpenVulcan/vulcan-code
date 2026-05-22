@@ -763,10 +763,17 @@ pub async fn call_luaskills_tool_entry(
 pub fn luaskills_entry_args_schema(
     entry: &RuntimeEntryDescriptor,
     hide_host_managed_sid: bool,
+    hide_host_managed_pwd: bool,
 ) -> Value {
     let mut schema = entry.input_schema.clone();
     if hide_host_managed_sid {
-        hide_luaskill_sid_from_visible_schema(&mut schema);
+        hide_reserved_luaskills_property_from_visible_schema(
+            &mut schema,
+            LUASKILL_SID_PARAMETER_NAME,
+        );
+    }
+    if hide_host_managed_pwd {
+        hide_reserved_luaskills_property_from_visible_schema(&mut schema, PWD_PARAMETER_NAME);
     }
     schema
 }
@@ -775,13 +782,17 @@ pub fn luaskills_entry_args_schema(
 /// 宿主投影使用的稳定 LuaSkills 保留托管身份参数名称。
 pub const LUASKILL_SID_PARAMETER_NAME: &str = "LUASKILL_SID";
 
+/// Stable LuaSkills reserved project-path parameter name used by host projections.
+/// 宿主投影使用的稳定 LuaSkills 保留项目路径参数名称。
+pub const PWD_PARAMETER_NAME: &str = "PWD";
+
 /// Stable host-managed prefix reserved by LuaSkills for injected managed identities.
 /// LuaSkills 为注入托管身份保留的稳定宿主管理前缀。
 pub const LUASKILLS_HOST_MANAGED_SID_PREFIX: &str = "LUASKILLS-SID-";
 
-/// Hide the reserved managed-identity property from one visible LuaSkills input schema clone.
-/// 从单份可见 LuaSkills 输入 schema 副本中隐藏保留托管身份属性。
-fn hide_luaskill_sid_from_visible_schema(schema: &mut Value) {
+/// Hide one reserved host-managed property from one visible LuaSkills input schema clone.
+/// 从单份可见 LuaSkills 输入 schema 副本中隐藏一个保留宿主管理属性。
+fn hide_reserved_luaskills_property_from_visible_schema(schema: &mut Value, field_name: &str) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
@@ -791,10 +802,10 @@ fn hide_luaskill_sid_from_visible_schema(schema: &mut Value) {
     let Some(properties) = properties_value.as_object_mut() else {
         return;
     };
-    if properties.remove(LUASKILL_SID_PARAMETER_NAME).is_none() {
+    if properties.remove(field_name).is_none() {
         return;
     }
-    remove_required_name_from_schema(schema, LUASKILL_SID_PARAMETER_NAME);
+    remove_required_name_from_schema(schema, field_name);
 }
 
 /// Remove one top-level required-field name from one visible LuaSkills input schema clone.
@@ -1257,8 +1268,8 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::LUASKILL_SID_PARAMETER_NAME;
     use super::luaskills_entry_args_schema;
+    use super::{LUASKILL_SID_PARAMETER_NAME, PWD_PARAMETER_NAME};
     use luaskills::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
     use serde_json::json;
 
@@ -1294,7 +1305,7 @@ mod tests {
             }),
         );
 
-        let schema = luaskills_entry_args_schema(&entry, false);
+        let schema = luaskills_entry_args_schema(&entry, false, false);
 
         assert_eq!(schema, entry.input_schema);
     }
@@ -1331,7 +1342,7 @@ mod tests {
             }),
         );
 
-        let schema = luaskills_entry_args_schema(&entry, true);
+        let schema = luaskills_entry_args_schema(&entry, true, false);
 
         assert_eq!(
             schema,
@@ -1343,6 +1354,49 @@ mod tests {
                         "items": { "type": "string" }
                     }
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn luaskills_schema_hides_managed_pwd_when_requested() {
+        let entry = build_entry(
+            "vulcan-codekit",
+            "run",
+            vec![
+                RuntimeEntryParameterDescriptor {
+                    name: String::from(PWD_PARAMETER_NAME),
+                    param_type: String::from("string"),
+                    description: String::from("workspace root"),
+                    required: false,
+                },
+                RuntimeEntryParameterDescriptor {
+                    name: String::from("query"),
+                    param_type: String::from("string"),
+                    description: String::from("search query"),
+                    required: false,
+                },
+            ],
+            json!({
+                "type": "object",
+                "properties": {
+                    "PWD": { "type": "string" },
+                    "query": { "type": "string" }
+                },
+                "required": ["PWD", "query"]
+            }),
+        );
+
+        let schema = luaskills_entry_args_schema(&entry, false, true);
+
+        assert_eq!(
+            schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
             })
         );
     }

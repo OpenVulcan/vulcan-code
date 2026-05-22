@@ -147,10 +147,10 @@ mod tests {
     /// 项目临时目录应始终位于隐藏的 `.vulcan/temp` 子树下。
     #[test]
     fn resolve_project_temp_dir_uses_hidden_vulcan_subtree() {
-        let root = PathBuf::from("D:/projects/demo");
+        let root = PathBuf::from(r"D:\projects\demo");
         assert_eq!(
             resolve_project_temp_dir(&root),
-            PathBuf::from("D:/projects/demo/.vulcan/temp")
+            PathBuf::from(r"D:\projects\demo\.vulcan\temp")
         );
     }
 }

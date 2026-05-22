@@ -10,7 +10,7 @@ use crate::image_understanding_compat::{
 };
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
-    build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
+    PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
     luaskills_entry_args_schema, render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
@@ -36,6 +36,7 @@ use crate::tooling::{
 use crate::web_search_compat::{
     configured_web_search_parameters_schema, execute_configured_web_search,
 };
+use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -154,10 +155,15 @@ pub fn build_vulcan_tools_manager(
 
     for entry in candidate_luaskills_tools {
         let descriptor = luaskills_descriptor_to_vulcan(&entry, &mut occupied_public_tool_ids);
-        let parameters_schema = luaskills_entry_args_schema(&entry, true);
+        let host_managed_pwd_available = workspace_root
+            .as_deref()
+            .is_some_and(|path| !path.as_os_str().is_empty());
+        let parameters_schema =
+            luaskills_entry_args_schema(&entry, true, host_managed_pwd_available);
         let canonical_name = entry.canonical_name.clone();
         let skill_id = entry.skill_id.clone();
         let entry_declares_luaskill_sid = entry_declares_luaskill_sid(&entry);
+        let entry_declares_pwd = entry_declares_pwd(&entry);
         let runtime = luaskills_runtime.clone();
         let workspace_root = workspace_root.clone();
         candidates.push(VulcanToolCandidate {
@@ -181,6 +187,12 @@ pub fn build_vulcan_tools_manager(
                         args,
                         entry_declares_luaskill_sid,
                         session_id.as_deref(),
+                        &canonical_name,
+                    )?;
+                    let args = inject_host_managed_pwd_if_needed(
+                        args,
+                        entry_declares_pwd,
+                        workspace_root.as_deref(),
                         &canonical_name,
                     )?;
                     let parsed_session_id = session_id
@@ -709,15 +721,27 @@ fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPlanToolPolicy
 /// Returns whether one LuaSkills runtime entry declares the reserved managed identity field.
 /// 返回单个 LuaSkills 运行时入口是否声明了保留托管身份字段。
 fn entry_declares_luaskill_sid(entry: &RuntimeEntryDescriptor) -> bool {
+    entry_declares_reserved_parameter(entry, LUASKILL_SID_PARAMETER_NAME)
+}
+
+/// Returns whether one LuaSkills runtime entry declares the reserved managed project-path field.
+/// 返回单个 LuaSkills 运行时入口是否声明了保留托管项目路径字段。
+fn entry_declares_pwd(entry: &RuntimeEntryDescriptor) -> bool {
+    entry_declares_reserved_parameter(entry, PWD_PARAMETER_NAME)
+}
+
+/// Returns whether one LuaSkills runtime entry declares one reserved parameter name in either schema properties or legacy parameter descriptors.
+/// 返回单个 LuaSkills 运行时入口是否在 schema properties 或旧版参数描述中声明了某个保留参数名。
+fn entry_declares_reserved_parameter(entry: &RuntimeEntryDescriptor, parameter_name: &str) -> bool {
     entry
         .input_schema
         .get("properties")
         .and_then(Value::as_object)
-        .is_some_and(|properties| properties.contains_key(LUASKILL_SID_PARAMETER_NAME))
+        .is_some_and(|properties| properties.contains_key(parameter_name))
         || entry
             .parameters
             .iter()
-            .any(|parameter| parameter.name == LUASKILL_SID_PARAMETER_NAME)
+            .any(|parameter| parameter.name == parameter_name)
 }
 
 /// Appends semantic AI fallback aliases and removes their concrete backing tool from direct model exposure.
@@ -840,14 +864,53 @@ fn inject_host_managed_luaskill_sid_if_needed(
     Ok(Value::Object(object))
 }
 
+/// Inject one host-managed workspace path when the entry declares `PWD`, the host can resolve a current project directory, and the caller did not provide one.
+/// 当入口声明 `PWD`、宿主能够解析当前项目目录且调用方未提供时，注入一份宿主管理工作区路径。
+fn inject_host_managed_pwd_if_needed(
+    args: Value,
+    entry_declares_pwd: bool,
+    workspace_root: Option<&std::path::Path>,
+    tool_name: &str,
+) -> Result<Value, String> {
+    if !entry_declares_pwd {
+        return Ok(args);
+    }
+
+    let Some(workspace_root) = workspace_root.filter(|path| !path.as_os_str().is_empty()) else {
+        return Ok(args);
+    };
+
+    let mut object = match args {
+        Value::Object(map) => map,
+        _ => {
+            return Err(format!(
+                "LuaSkills tool `{tool_name}` expects a JSON object so a host-managed PWD can be injected."
+            ));
+        }
+    };
+
+    if !object.contains_key(PWD_PARAMETER_NAME) {
+        object.insert(
+            String::from(PWD_PARAMETER_NAME),
+            Value::String(native_workspace_path_text_from_path(workspace_root)),
+        );
+    }
+
+    Ok(Value::Object(object))
+}
+
 #[cfg(test)]
 mod tests {
     //! GUI bridge tests for semantic AI fallback aliasing.
     //! 面向语义 AI 回退别名的 GUI 桥接层测试。
 
-    use super::{AiToolFallbackAlias, append_ai_tool_fallback_aliases};
+    use super::{
+        AiToolFallbackAlias, append_ai_tool_fallback_aliases, inject_host_managed_pwd_if_needed,
+    };
+    use crate::luaskills_runtime::PWD_PARAMETER_NAME;
     use crate::provider_config::AiToolKind;
     use serde_json::json;
+    use std::path::Path;
     use std::sync::Arc;
     use vulcan_tools_manager::{
         VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
@@ -905,5 +968,46 @@ mod tests {
             resolved.definitions[0].parameters_schema["properties"]["query"]["type"],
             "string"
         );
+    }
+
+    /// Verifies host-managed PWD injection uses the native workspace-path format expected by LuaSkills host conventions.
+    /// 验证宿主管理 PWD 注入会使用 LuaSkills 宿主公约要求的原生工作区路径格式。
+    #[test]
+    fn host_managed_pwd_injection_uses_native_workspace_path_text() {
+        let workspace_root = if cfg!(windows) {
+            Path::new("C:/workspace/demo")
+        } else {
+            Path::new("/tmp/workspace/demo")
+        };
+        let expected_pwd = if cfg!(windows) {
+            r"C:\workspace\demo"
+        } else {
+            "/tmp/workspace/demo"
+        };
+
+        let injected = inject_host_managed_pwd_if_needed(
+            json!({ "query": "demo" }),
+            true,
+            Some(workspace_root),
+            "vulcan-codekit-run",
+        )
+        .expect("pwd injection should succeed");
+
+        assert_eq!(injected[PWD_PARAMETER_NAME], expected_pwd);
+    }
+
+    /// Verifies host-managed PWD injection preserves an explicit caller-supplied path instead of overwriting it.
+    /// 验证宿主管理 PWD 注入会保留调用方显式提供的路径，而不是强行覆盖。
+    #[test]
+    fn host_managed_pwd_injection_preserves_explicit_value() {
+        let injected = inject_host_managed_pwd_if_needed(
+            json!({ "PWD": "/caller/path", "query": "demo" }),
+            true,
+            Some(Path::new("/tmp/workspace/demo")),
+            "vulcan-codekit-run",
+        )
+        .expect("pwd injection should preserve explicit value");
+
+        assert_eq!(injected[PWD_PARAMETER_NAME], "/caller/path");
     }
 }

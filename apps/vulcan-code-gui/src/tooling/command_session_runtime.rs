@@ -1087,7 +1087,7 @@ mod tests {
                     shell_label: String::from("pwsh"),
                     launcher_shell_label: String::from("pwsh"),
                     interactive_newline: String::from("\r\n"),
-                    cwd: PathBuf::from("D:/openvulcan/vulcan-code"),
+                    cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
                     control_sender,
                     shared_state,
                 }),

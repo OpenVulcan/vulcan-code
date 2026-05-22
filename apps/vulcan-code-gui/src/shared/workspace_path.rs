@@ -16,15 +16,46 @@ pub(crate) fn normalized_workspace_path_text_from_path(path: &Path) -> String {
     normalize_workspace_path_text(&path.to_string_lossy())
 }
 
+/// Converts one filesystem path buffer into the native host path text used for host-managed runtime injections.
+/// 将一个文件系统路径缓冲区转换为用于宿主管理运行时注入的宿主原生路径文本。
+pub(crate) fn native_workspace_path_text_from_path(path: &Path) -> String {
+    native_workspace_path_text(&canonicalize_workspace_path(path).to_string_lossy())
+}
+
 /// Converts one raw workspace path string into a stable human-readable text form without Windows verbatim prefixes.
 /// 将一个原始工作区路径字符串转换为稳定且可读的文本形式，并去除 Windows verbatim 前缀。
 pub(crate) fn normalize_workspace_path_text(path: &str) -> String {
+    native_workspace_path_text(path)
+}
+
+/// Converts one raw workspace path string into a stable native host path form without Windows verbatim prefixes.
+/// 将一个原始工作区路径字符串转换为稳定的宿主原生路径形式，并去除 Windows verbatim 前缀。
+fn native_workspace_path_text(path: &str) -> String {
     let trimmed_path = path.trim();
     if trimmed_path.is_empty() {
         return String::new();
     }
 
-    strip_windows_verbatim_prefix(trimmed_path).replace('\\', "/")
+    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(trimmed_path);
+    if looks_like_windows_path(trimmed_path, &path_without_verbatim_prefix) {
+        path_without_verbatim_prefix.replace('/', "\\")
+    } else {
+        path_without_verbatim_prefix
+    }
+}
+
+/// Returns whether one path string should be formatted with Windows separators after verbatim-prefix stripping.
+/// 返回一条路径字符串在移除 verbatim 前缀后是否应使用 Windows 分隔符格式化。
+fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
+    let bytes = normalized_path.as_bytes();
+    bytes.len() >= 3
+        && bytes[1] == b':'
+        && bytes[0].is_ascii_alphabetic()
+        && matches!(bytes[2], b'/' | b'\\')
+        || normalized_path.starts_with(r"\\")
+        || original_path.starts_with(r"\\?\UNC\")
+        || original_path.starts_with("//?/UNC/")
+        || (cfg!(windows) && normalized_path.starts_with("//"))
 }
 
 /// Removes Windows verbatim path prefixes while preserving normal drive-letter and UNC addressing semantics.
@@ -51,35 +82,36 @@ mod tests {
     //! Focused workspace-path normalization tests.
     //! 聚焦工作区路径规范化的定向测试。
 
-    use super::normalize_workspace_path_text;
+    use super::{native_workspace_path_text_from_path, normalize_workspace_path_text};
+    use std::path::Path;
 
-    /// Verifies Windows verbatim drive paths are rewritten into the forward-slash drive form used by the workbench prompts.
-    /// 验证 Windows verbatim 盘符路径会被改写成工作台提示词使用的正斜杠盘符形式。
+    /// Verifies Windows verbatim drive paths are rewritten into the standard backslash drive form used by host-visible path text.
+    /// 验证 Windows verbatim 盘符路径会被改写成宿主可见路径文本使用的标准反斜杠盘符形式。
     #[test]
     fn normalizes_windows_verbatim_drive_path() {
         assert_eq!(
             normalize_workspace_path_text(r"\\?\D:\openvulcan\vulcan-code"),
-            "D:/openvulcan/vulcan-code"
+            r"D:\openvulcan\vulcan-code"
         );
     }
 
-    /// Verifies slash-normalized Windows verbatim drive paths also lose the generic root prefix.
-    /// 验证已经使用斜杠表示的 Windows verbatim 盘符路径同样会移除通用根前缀。
+    /// Verifies slash-normalized Windows verbatim drive paths also lose the generic root prefix and return standard Windows separators.
+    /// 验证已经使用斜杠表示的 Windows verbatim 盘符路径同样会移除通用根前缀并返回标准 Windows 分隔符。
     #[test]
     fn normalizes_slash_windows_verbatim_drive_path() {
         assert_eq!(
             normalize_workspace_path_text("//?/D:/openvulcan/vulcan-code"),
-            "D:/openvulcan/vulcan-code"
+            r"D:\openvulcan\vulcan-code"
         );
     }
 
-    /// Verifies Windows verbatim UNC paths are rewritten into standard UNC display text.
-    /// 验证 Windows verbatim UNC 路径会被改写为标准 UNC 展示文本。
+    /// Verifies Windows verbatim UNC paths are rewritten into standard UNC text with backslashes.
+    /// 验证 Windows verbatim UNC 路径会被改写为带反斜杠的标准 UNC 文本。
     #[test]
     fn normalizes_windows_verbatim_unc_path() {
         assert_eq!(
             normalize_workspace_path_text(r"\\?\UNC\server\share\vulcan-code"),
-            "//server/share/vulcan-code"
+            r"\\server\share\vulcan-code"
         );
     }
 
@@ -90,6 +122,39 @@ mod tests {
         assert_eq!(
             normalize_workspace_path_text("/Users/demo/openvulcan/vulcan-code"),
             "/Users/demo/openvulcan/vulcan-code"
+        );
+    }
+
+    /// Verifies Unix double-slash paths are not mistaken for Windows UNC paths on non-Windows hosts.
+    /// 验证类 Unix 宿主上的双斜杠路径不会被误判成 Windows UNC 路径。
+    #[cfg(not(windows))]
+    #[test]
+    fn preserves_unix_double_slash_workspace_path() {
+        assert_eq!(
+            normalize_workspace_path_text("//server/share/openvulcan"),
+            "//server/share/openvulcan"
+        );
+    }
+
+    /// Verifies native workspace-path formatting keeps slash paths unchanged on Unix-like hosts.
+    /// 验证宿主原生工作区路径格式化在类 Unix 宿主上会保持斜杠路径不变。
+    #[cfg(not(windows))]
+    #[test]
+    fn native_workspace_path_preserves_unix_style_text() {
+        assert_eq!(
+            native_workspace_path_text_from_path(Path::new("/Users/demo/openvulcan/vulcan-code")),
+            "/Users/demo/openvulcan/vulcan-code"
+        );
+    }
+
+    /// Verifies native workspace-path formatting restores Windows separators for host-managed runtime injections.
+    /// 验证宿主原生工作区路径格式化会为宿主管理运行时注入恢复 Windows 分隔符。
+    #[cfg(windows)]
+    #[test]
+    fn native_workspace_path_restores_windows_separators() {
+        assert_eq!(
+            native_workspace_path_text_from_path(Path::new("C:/openvulcan/vulcan-code")),
+            r"C:\openvulcan\vulcan-code"
         );
     }
 }

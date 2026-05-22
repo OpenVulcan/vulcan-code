@@ -675,7 +675,7 @@ fn shell_command_args_schema(shell_support: &HostCommandShellSupport) -> Value {
             },
             "cwd": {
                 "type": "string",
-                "description": "Optional working directory used only for this one-shot command invocation. Relative paths resolve against the current workspace root when available."
+                "description": "Optional working directory used only for this one-shot command invocation. When omitted, the host uses the current workspace root when available and otherwise falls back to the host process working directory. Relative paths resolve against the same base directory."
             },
             "timeout_ms": {
                 "type": "integer",
@@ -717,7 +717,7 @@ fn shell_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
             },
             "cwd": {
                 "type": "string",
-                "description": "Optional working directory used only by `start`. Relative paths resolve against the current workspace root when available. Later `write` calls cannot change the working directory."
+                "description": "Optional working directory used only by `start`. When omitted, the host uses the current workspace root when available and otherwise falls back to the host process working directory. Relative paths resolve against the same base directory. Later `write` calls cannot change the working directory."
             },
             "shell": {
                 "type": "string",
@@ -1037,21 +1037,24 @@ fn resolve_shell_command_working_directory(
     workspace_root: Option<&Path>,
     raw_cwd: Option<&str>,
 ) -> Result<PathBuf, NativeToolError> {
-    let base_directory = match workspace_root {
-        Some(root) => root.to_path_buf(),
-        None => std::env::current_dir().map_err(|error| {
-            NativeToolError::new(format!(
-                "Failed to read the current working directory: {error}"
-            ))
-        })?,
-    };
+    let workspace_root = workspace_root.filter(|path| !path.as_os_str().is_empty());
+    let fallback_directory = std::env::current_dir().map_err(|error| {
+        NativeToolError::new(format!(
+            "Failed to read the current working directory: {error}"
+        ))
+    })?;
     let Some(raw_cwd) = raw_cwd.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(base_directory);
+        return Ok(workspace_root
+            .map(Path::to_path_buf)
+            .unwrap_or(fallback_directory));
     };
     let requested_path = PathBuf::from(raw_cwd);
     if requested_path.is_absolute() {
         return Ok(requested_path);
     }
+    let base_directory = workspace_root
+        .map(Path::to_path_buf)
+        .unwrap_or(fallback_directory);
     Ok(base_directory.join(requested_path))
 }
 
@@ -1853,7 +1856,7 @@ mod tests {
     #[tokio::test]
     async fn agent_registry_tool_exposes_extended_runtime_fields() {
         let snapshot = Arc::new(super::NativeToolRuntimeSnapshot {
-            workspace_directory: String::from("D:/workspace"),
+            workspace_directory: String::from(r"D:\workspace"),
             active_model: Some(String::from("openai/gpt-5")),
             agent_count: 1,
             skill_count: 1,
@@ -1929,7 +1932,7 @@ mod tests {
     #[test]
     fn host_diagnostic_tools_are_hidden_from_ai() {
         let snapshot = Arc::new(super::NativeToolRuntimeSnapshot {
-            workspace_directory: String::from("D:/workspace"),
+            workspace_directory: String::from(r"D:\workspace"),
             active_model: Some(String::from("openai/gpt-5")),
             agent_count: 0,
             skill_count: 0,
@@ -1963,7 +1966,7 @@ mod tests {
     #[tokio::test]
     async fn skill_registry_tool_exposes_extended_runtime_fields() {
         let snapshot = Arc::new(super::NativeToolRuntimeSnapshot {
-            workspace_directory: String::from("D:/workspace"),
+            workspace_directory: String::from(r"D:\workspace"),
             active_model: Some(String::from("openai/gpt-5")),
             agent_count: 1,
             skill_count: 1,
@@ -2012,11 +2015,61 @@ mod tests {
     #[test]
     fn shell_command_working_directory_joins_relative_path_to_workspace_root() {
         let resolved = resolve_shell_command_working_directory(
-            Some(Path::new("D:/workspace")),
+            Some(Path::new(r"D:\workspace")),
             Some("subdir/bin"),
         )
         .expect("relative cwd should resolve");
-        assert_eq!(resolved, Path::new("D:/workspace").join("subdir/bin"));
+        assert_eq!(resolved, Path::new(r"D:\workspace").join("subdir/bin"));
+    }
+
+    /// Omitted shell-command working directories should default to the current workspace root instead of the host process directory.
+    /// 省略 shell 命令工作目录时，应默认使用当前工作区根目录，而不是宿主进程目录。
+    #[test]
+    fn shell_command_working_directory_defaults_to_workspace_root() {
+        let resolved =
+            resolve_shell_command_working_directory(Some(Path::new(r"D:\workspace")), None)
+                .expect("workspace-root default should resolve");
+        assert_eq!(resolved, Path::new(r"D:\workspace"));
+    }
+
+    /// Shell invocations without a workspace root should still fall back to the host process working directory so non-project commands remain usable.
+    /// 缺少工作区根目录的 shell 调用仍应回退到宿主进程工作目录，以便非项目命令继续可用。
+    #[test]
+    fn shell_command_working_directory_falls_back_without_workspace_root() {
+        let resolved = resolve_shell_command_working_directory(None, None)
+            .expect("missing workspace root should fall back");
+        assert_eq!(
+            resolved,
+            std::env::current_dir().expect("current directory should resolve")
+        );
+    }
+
+    /// Relative shell-command working directories should fall back to the host process working directory when no workspace root is attached.
+    /// 当没有附着工作区根目录时，相对 shell 命令工作目录应回退到宿主进程工作目录。
+    #[test]
+    fn shell_command_working_directory_resolves_relative_cwd_without_workspace_root() {
+        let resolved = resolve_shell_command_working_directory(None, Some("subdir/bin"))
+            .expect("relative cwd without workspace root should resolve");
+        assert_eq!(
+            resolved,
+            std::env::current_dir()
+                .expect("current directory should resolve")
+                .join("subdir/bin")
+        );
+    }
+
+    /// Absolute shell-command working directories should remain usable even when no workspace root is attached to the turn.
+    /// 即使当前回合没有附着工作区根目录，绝对 shell 命令工作目录也应继续可用。
+    #[test]
+    fn shell_command_working_directory_accepts_absolute_cwd_without_workspace_root() {
+        let absolute_cwd = if cfg!(windows) {
+            r"D:\workspace\subdir"
+        } else {
+            "/tmp/workspace/subdir"
+        };
+        let resolved = resolve_shell_command_working_directory(None, Some(absolute_cwd))
+            .expect("absolute cwd should resolve without workspace root");
+        assert_eq!(resolved, Path::new(absolute_cwd));
     }
 
     /// Unknown shell selectors should fail fast before the host attempts to spawn a process.
@@ -2106,7 +2159,13 @@ mod tests {
             command_schema["properties"]["cwd"]["description"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("used only for this one-shot command invocation")
+                .contains("falls back to the host process working directory")
+        );
+        assert!(
+            command_schema["properties"]["cwd"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Relative paths resolve against the same base directory")
         );
         assert!(
             command_schema["properties"]["stdin"]["description"]
@@ -2137,6 +2196,12 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("resolved launcher shell")
+        );
+        assert!(
+            session_schema["properties"]["cwd"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("falls back to the host process working directory")
         );
         if cfg!(windows) {
             assert!(

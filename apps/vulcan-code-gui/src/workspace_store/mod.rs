@@ -2217,7 +2217,7 @@ mod tests {
                         "mode": "preview",
                         "files": [{
                             "change": "create",
-                            "path": "D:/openvulcan/vulcan-code/src/main.rs",
+                            "path": r"D:\openvulcan\vulcan-code\src\main.rs",
                             "content": "fn main() {}\n",
                         }],
                     },
@@ -2300,8 +2300,8 @@ mod tests {
                         "outputs": [{
                             "kind": "image",
                             "file_name": "demo.png",
-                            "local_path": "D:/demo.png",
-                            "preview_local_path": "D:/demo.preview.png",
+                            "local_path": r"D:\demo.png",
+                            "preview_local_path": r"D:\demo.preview.png",
                             "mime_type": "image/png",
                             "byte_len": 1024,
                             "asset_id": "asset-demo",
@@ -2336,7 +2336,7 @@ mod tests {
                 .and_then(|outputs| outputs.first())
                 .and_then(|output| output.get("local_path"))
                 .and_then(Value::as_str),
-            Some("D:/demo.png")
+            Some(r"D:\demo.png")
         );
         assert_eq!(
             host_result
@@ -2346,7 +2346,7 @@ mod tests {
                 .and_then(|outputs| outputs.first())
                 .and_then(|output| output.get("preview_local_path"))
                 .and_then(Value::as_str),
-            Some("D:/demo.preview.png")
+            Some(r"D:\demo.preview.png")
         );
     }
 
@@ -2364,7 +2364,7 @@ mod tests {
                         "outputs": [{
                             "kind": "audio",
                             "file_name": "demo.mp3",
-                            "local_path": "D:/demo.mp3",
+                            "local_path": r"D:\demo.mp3",
                             "mime_type": "audio/mpeg",
                         }],
                     },
@@ -2434,7 +2434,7 @@ mod tests {
                                 "outputs": [{
                                     "kind": "image",
                                     "file_name": "demo.png",
-                                    "local_path": "D:/demo.png",
+                                    "local_path": r"D:\demo.png",
                                     "mime_type": "image/png",
                                 }],
                             },

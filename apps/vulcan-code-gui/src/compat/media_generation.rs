@@ -2036,20 +2036,20 @@ mod tests {
             attachment: ConversationAttachment {
                 kind: ConversationAttachmentKind::Image,
                 file_name: String::from("diagram.png"),
-                local_path: String::from("D:/managed/diagram.png"),
+                local_path: String::from(r"D:\managed\diagram.png"),
                 source_path: None,
                 asset_id: Some(String::from("asset-1")),
                 byte_len: Some(42),
                 preview_local_path: None,
                 mime_type: String::from("image/png"),
             },
-            model_local_path: String::from("D:/exports/diagram.png"),
+            model_local_path: String::from(r"D:\exports\diagram.png"),
         };
 
         let value = generated_asset_to_model_output_json(&output);
         assert_eq!(
             value.get("local_path").and_then(serde_json::Value::as_str),
-            Some("D:/exports/diagram.png")
+            Some(r"D:\exports\diagram.png")
         );
     }
 

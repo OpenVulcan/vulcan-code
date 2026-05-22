@@ -1220,7 +1220,7 @@ mod tests {
                 "summary": "Applied one large file deletion.",
                 "files": [{
                     "change": "delete",
-                    "path": "D:/demo/large-delete.lua",
+                    "path": r"D:\demo\large-delete.lua",
                     "content_mode": "truncated",
                     "total_line_count": 12345,
                     "content_head": "deleted line 1\ndeleted line 2",
@@ -1253,7 +1253,7 @@ mod tests {
             "mode": "preview",
             "files": [{
                 "change": "create",
-                "path": "D:/demo.txt",
+                "path": r"D:\demo.txt",
                 "content": "demo"
             }]
         });

@@ -994,13 +994,13 @@ mod tests {
                     {
                         "kind": "image",
                         "file_name": "diagram.png",
-                        "local_path": "D:/diagram.png",
+                        "local_path": r"D:\diagram.png",
                         "mime_type": "image/png",
                     },
                     {
                         "kind": "audio",
                         "file_name": "demo.mp3",
-                        "local_path": "D:/demo.mp3",
+                        "local_path": r"D:\demo.mp3",
                         "mime_type": "audio/mpeg",
                     }
                 ],
@@ -1024,7 +1024,7 @@ mod tests {
                     && block
                         .attributes
                         .get("user-image-0-local-path")
-                        .is_some_and(|value| value == "D:/diagram.png")
+                        .is_some_and(|value| value == r"D:\diagram.png")
         ));
     }
 
@@ -1090,7 +1090,7 @@ mod tests {
                 "kind": "command_run",
                 "payload": {
                     "command": "cargo check -p vulcan-code-gui",
-                    "cwd": "D:/openvulcan/vulcan-code",
+                    "cwd": r"D:\openvulcan\vulcan-code",
                     "shell": "powershell",
                     "status": "completed",
                     "exit_code": 0,
@@ -1148,7 +1148,7 @@ mod tests {
                     "owner_session_id": "00000000-0000-0000-0000-000000000010",
                     "command_session_id": "00000000-0000-0000-0000-000000000011",
                     "command": "npm test",
-                    "cwd": "D:/openvulcan/vulcan-code",
+                    "cwd": r"D:\openvulcan\vulcan-code",
                     "shell": "powershell",
                     "status": "running",
                     "last_seq": 8,
@@ -1205,7 +1205,7 @@ mod tests {
                     "outputs": [{
                         "kind": "image",
                         "file_name": "demo.png",
-                        "local_path": "D:/demo.png",
+                        "local_path": r"D:\demo.png",
                         "mime_type": "image/png",
                     }],
                 },
@@ -1225,7 +1225,7 @@ mod tests {
                     && block
                         .attributes
                         .get("generated-media-local-path")
-                        .is_some_and(|value| value == "D:/demo.png")
+                        .is_some_and(|value| value == r"D:\demo.png")
         ));
     }
 

@@ -337,7 +337,7 @@ mod tests {
                 scopes: vec![String::from("read"), String::from("offline_access")],
                 redirect_uri: Some(String::from("http://localhost:8787/callback")),
             }),
-            cwd: Some(String::from("D:/mock/mcp")),
+            cwd: Some(String::from(r"D:\mock\mcp")),
             env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
             env_passthrough: Vec::new(),
         }
@@ -353,7 +353,7 @@ mod tests {
                 endpoint: String::from("sample-mcp --stdio --verbose"),
                 program: String::from("sample-mcp"),
                 args: vec![String::from("--stdio"), String::from("--verbose")],
-                cwd: Some(PathBuf::from("D:/mock/mcp")),
+                cwd: Some(PathBuf::from(r"D:\mock\mcp")),
                 env: BTreeMap::from([(String::from("VULCAN_MODE"), String::from("stdio"))]),
             }
         );

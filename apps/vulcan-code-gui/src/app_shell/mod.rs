@@ -7993,7 +7993,7 @@ impl VulcanWorkbench {
             main_task_panel_resize_handle_hovered: false,
             panes,
             focus,
-            workspace_path: String::from("D:/openvulcan/vulcan-code"),
+            workspace_path: String::from(r"D:\openvulcan\vulcan-code"),
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
             composer_attachments: Vec::new(),
@@ -18113,7 +18113,7 @@ mod tests {
                         "owner_session_id": session_id.to_string(),
                         "command_session_id": "00000000-0000-0000-0000-00000000beef",
                         "command": "cargo test",
-                        "cwd": "D:/openvulcan/vulcan-code",
+                        "cwd": r"D:\openvulcan\vulcan-code",
                         "shell": "pwsh",
                         "status": "running",
                         "last_seq": 3,
@@ -18761,7 +18761,7 @@ mod tests {
                     "owner_session_id": "00000000-0000-0000-0000-000000000010",
                     "command_session_id": "00000000-0000-0000-0000-000000000011",
                     "command": "cargo test -p vulcan-code-gui",
-                    "cwd": "D:/openvulcan/vulcan-code",
+                    "cwd": r"D:\openvulcan\vulcan-code",
                     "shell": "powershell",
                     "status": "running",
                     "last_seq": 9,
@@ -18778,7 +18778,7 @@ mod tests {
                         "owner_session_id": "00000000-0000-0000-0000-000000000010",
                         "command_session_id": "00000000-0000-0000-0000-000000000011",
                         "command": "cargo test -p vulcan-code-gui",
-                        "cwd": "D:/openvulcan/vulcan-code",
+                        "cwd": r"D:\openvulcan\vulcan-code",
                         "shell": "powershell",
                         "status": "running",
                         "last_seq": 9,
@@ -18835,7 +18835,7 @@ mod tests {
                 "kind": "command_run",
                 "payload": {
                     "command": "cargo check -p vulcan-code-gui",
-                    "cwd": "D:/openvulcan/vulcan-code",
+                    "cwd": r"D:\openvulcan\vulcan-code",
                     "shell": "powershell",
                     "status": "completed",
                     "exit_code": 0,
@@ -18848,7 +18848,7 @@ mod tests {
                     "kind": "command_run",
                     "payload": {
                         "command": "cargo check -p vulcan-code-gui",
-                        "cwd": "D:/openvulcan/vulcan-code",
+                        "cwd": r"D:\openvulcan\vulcan-code",
                         "shell": "powershell",
                         "status": "completed",
                         "exit_code": 0,
@@ -18906,7 +18906,7 @@ mod tests {
                     "mode": "preview",
                     "files": [{
                         "change": "create",
-                        "path": "D:/openvulcan/vulcan-code/src/main.rs",
+                        "path": r"D:\openvulcan\vulcan-code\src\main.rs",
                         "content": "fn main() {}\n"
                     }]
                 },
@@ -18916,7 +18916,7 @@ mod tests {
                         "mode": "preview",
                         "files": [{
                             "change": "create",
-                            "path": "D:/openvulcan/vulcan-code/src/main.rs",
+                            "path": r"D:\openvulcan\vulcan-code\src\main.rs",
                             "content": "fn main() {}\n"
                         }]
                     }
@@ -19540,8 +19540,8 @@ mod tests {
                 "outputs": [{
                     "kind": "audio",
                     "file_name": "demo.mp3",
-                    "local_path": "D:/demo.mp3",
-                    "preview_local_path": "D:/demo.preview.png",
+                    "local_path": r"D:\demo.mp3",
+                    "preview_local_path": r"D:\demo.preview.png",
                     "mime_type": "audio/mpeg",
                     "asset_id": "asset-1",
                     "byte_len": 2048,
@@ -19552,10 +19552,10 @@ mod tests {
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].kind, ConversationAttachmentKind::Audio);
         assert_eq!(attachments[0].file_name, "demo.mp3");
-        assert_eq!(attachments[0].local_path, "D:/demo.mp3");
+        assert_eq!(attachments[0].local_path, r"D:\demo.mp3");
         assert_eq!(
             attachments[0].preview_local_path.as_deref(),
-            Some("D:/demo.preview.png")
+            Some(r"D:\demo.preview.png")
         );
     }
 
