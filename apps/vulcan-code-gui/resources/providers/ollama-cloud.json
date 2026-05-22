@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/ollama.com\/v1",
+    "value": "https://ollama.com/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -699,6 +699,24 @@
       "attachment": false,
       "inputModalities": [
         "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "kimi-k2.6",
+      "family": "kimi",
+      "releaseDate": "2026-04-20",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
       ],
       "outputModalities": [
         "text"

@@ -701,9 +701,14 @@ fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPlanToolPolicy
 /// 返回单个 LuaSkills 运行时入口是否声明了保留托管身份字段。
 fn entry_declares_luaskill_sid(entry: &RuntimeEntryDescriptor) -> bool {
     entry
-        .parameters
-        .iter()
-        .any(|parameter| parameter.name == LUASKILL_SID_PARAMETER_NAME)
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| properties.contains_key(LUASKILL_SID_PARAMETER_NAME))
+        || entry
+            .parameters
+            .iter()
+            .any(|parameter| parameter.name == LUASKILL_SID_PARAMETER_NAME)
 }
 
 /// Appends semantic AI fallback aliases and removes their concrete backing tool from direct model exposure.

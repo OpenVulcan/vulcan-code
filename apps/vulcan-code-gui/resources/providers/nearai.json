@@ -1,0 +1,674 @@
+{
+  "id": "nearai",
+  "name": "NEAR AI Cloud",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "NEARAI_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https://cloud-api.near.ai/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "openai/whisper-large-v3",
+      "name": "Whisper Large v3",
+      "family": "whisper",
+      "releaseDate": "2023-11-06",
+      "contextLimit": 448,
+      "outputLimit": 448,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "name": "GPT-OSS 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org/GLM-5.1-FP8",
+      "name": "GLM-5.1 FP8",
+      "family": "glm",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "black-forest-labs/FLUX.2-klein-4B",
+      "name": "FLUX.2 Klein 4B",
+      "family": "flux",
+      "releaseDate": "2026-01-14",
+      "contextLimit": 128000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "image"
+      ]
+    },
+    {
+      "id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "name": "Qwen3 30B-A3B Instruct 2507",
+      "family": "qwen",
+      "releaseDate": "2025-07-29",
+      "contextLimit": 262144,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen/Qwen3-Embedding-0.6B",
+      "name": "Qwen3 Embedding 0.6B",
+      "family": "text-embedding",
+      "releaseDate": "2025-06-03",
+      "contextLimit": 40960,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen/Qwen3-Reranker-0.6B",
+      "name": "Qwen3 Reranker 0.6B",
+      "family": "qwen",
+      "releaseDate": "2025-06-03",
+      "contextLimit": 40960,
+      "outputLimit": 1024,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+      "name": "Qwen3-VL 30B-A3B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-09-23",
+      "contextLimit": 256000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5.2",
+      "name": "GPT-5.2",
+      "family": "gpt",
+      "releaseDate": "2025-12-11",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5.4-nano",
+      "name": "GPT-5.4 nano",
+      "family": "gpt-nano",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-4.1",
+      "name": "GPT-4.1",
+      "family": "gpt",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-4.1-mini",
+      "name": "GPT-4.1 mini",
+      "family": "gpt-mini",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5.1",
+      "name": "GPT-5.1",
+      "family": "gpt",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5-nano",
+      "name": "GPT-5 Nano",
+      "family": "gpt-nano",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5.4",
+      "name": "GPT-5.4",
+      "family": "gpt",
+      "releaseDate": "2026-03-05",
+      "contextLimit": 1050000,
+      "inputLimit": 922000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5.4-mini",
+      "name": "GPT-5.4 mini",
+      "family": "gpt-mini",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5.5",
+      "name": "GPT-5.5",
+      "family": "gpt",
+      "releaseDate": "2026-04-23",
+      "contextLimit": 1050000,
+      "inputLimit": 922000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-4.1-nano",
+      "name": "GPT-4.1 nano",
+      "family": "gpt-nano",
+      "releaseDate": "2025-04-14",
+      "contextLimit": 1047576,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/o4-mini",
+      "name": "o4-mini",
+      "family": "o-mini",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5-mini",
+      "name": "GPT-5 Mini",
+      "family": "gpt-mini",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/o3-mini",
+      "name": "o3-mini",
+      "family": "o-mini",
+      "releaseDate": "2024-12-20",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/o3",
+      "name": "o3",
+      "family": "o",
+      "releaseDate": "2025-04-16",
+      "contextLimit": 200000,
+      "outputLimit": 100000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-5",
+      "name": "GPT-5",
+      "family": "gpt",
+      "releaseDate": "2025-08-07",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic/claude-haiku-4-5",
+      "name": "Claude Haiku 4.5 (latest)",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-5",
+      "name": "Claude Sonnet 4.5 (latest)",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic/claude-opus-4-7",
+      "name": "Claude Opus 4.7",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic/claude-opus-4-6",
+      "name": "Claude Opus 4.6",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 200000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2026-05-07",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "family": "gemini-pro",
+      "releaseDate": "2025-03-20",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash-Lite",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2025-06-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "family": "gemini-flash",
+      "releaseDate": "2025-03-20",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "name": "Qwen3.5 122B-A10B",
+      "family": "qwen",
+      "releaseDate": "2026-02-23",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

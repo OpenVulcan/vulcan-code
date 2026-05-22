@@ -18,10 +18,12 @@ use crate::agent_runtime::provider_protocol_openai_compatible::{
     finalize_pending_tool_call, normalize_first_choice_chunk,
     should_evict_distinct_named_tool_call, tool_call_chunks,
 };
-use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_protocol_tool_definition::{
+    ProviderToolDefinition, normalize_provider_tool_parameters_schema,
+};
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
-    ensure_json_content_type, ensure_string_header, extract_standard_error_message,
+    ensure_json_content_type, ensure_string_header, format_standard_error_response,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -34,7 +36,7 @@ use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -423,11 +425,14 @@ where
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let message = extract_standard_error_message(&body)
-            .unwrap_or_else(|| format!("HTTP {status}: {}", body.trim()));
+        let message = augment_openai_compatible_error_with_tool_context(
+            format_standard_error_response(status, &body),
+            &body,
+            provider_tool_definitions,
+        );
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
-            message: format!("{provider_label} 请求失败：{message}"),
+            message: format!("{provider_label} request failed: {message}"),
         });
     }
 
@@ -857,14 +862,66 @@ fn core_tool_call_to_openai_compatible_tool_call(tool_call: &CoreConversationToo
 fn provider_tool_definition_to_openai_compatible_tool(
     definition: &ProviderToolDefinition,
 ) -> Value {
+    let mut parameters = definition.parameters.clone();
+    normalize_provider_tool_parameters_schema(&mut parameters);
+
     json!({
         "type": "function",
         "function": {
             "name": definition.name,
             "description": definition.description,
-            "parameters": definition.parameters
+            "parameters": parameters
         }
     })
+}
+
+/// Appends OpenAI-compatible function-tool index hints to one provider error summary when the upstream payload reports Gemini-style `function_declarations[n]` validation failures.
+/// 当上游载荷报告 Gemini 风格的 `function_declarations[n]` 校验失败时，为单条 OpenAI 兼容 Provider 错误摘要追加函数工具索引提示。
+fn augment_openai_compatible_error_with_tool_context(
+    base_message: String,
+    body: &str,
+    provider_tool_definitions: &[ProviderToolDefinition],
+) -> String {
+    let tool_indices = collect_openai_compatible_function_declaration_indices(body);
+    if tool_indices.is_empty() {
+        return base_message;
+    }
+
+    let mut tool_segments = Vec::new();
+    for index in tool_indices {
+        let Some(definition) = provider_tool_definitions.get(index) else {
+            continue;
+        };
+        tool_segments.push(format!("tool[{index}]={}", definition.name));
+    }
+
+    if tool_segments.is_empty() {
+        return base_message;
+    }
+
+    format!("{base_message} | {}", tool_segments.join(" | "))
+}
+
+/// Collects unique upstream function-declaration indices from one provider error body by scanning for `function_declarations[n]` fragments.
+/// 通过扫描 `function_declarations[n]` 片段，从单条 Provider 错误正文中收集唯一的上游函数声明索引。
+fn collect_openai_compatible_function_declaration_indices(body: &str) -> Vec<usize> {
+    let needle = "function_declarations[";
+    let mut indices = BTreeSet::new();
+    let mut search_offset = 0usize;
+
+    while let Some(relative_start) = body[search_offset..].find(needle) {
+        let start = search_offset + relative_start + needle.len();
+        let Some(relative_end) = body[start..].find(']') else {
+            break;
+        };
+        let end = start + relative_end;
+        if let Ok(index) = body[start..end].trim().parse::<usize>() {
+            indices.insert(index);
+        }
+        search_offset = end + 1;
+    }
+
+    indices.into_iter().collect()
 }
 
 /// Serializes one tool-arguments JSON value into the OpenAI-compatible string form expected inside assistant tool calls.
@@ -1242,8 +1299,10 @@ fn forward_openai_compatible_delta<S>(
 #[cfg(test)]
 mod tests {
     use super::{
+        augment_openai_compatible_error_with_tool_context,
         build_openai_compatible_provider_message_state, build_openai_compatible_request_payload,
-        normalize_openai_compatible_chunk,
+        collect_openai_compatible_function_declaration_indices, normalize_openai_compatible_chunk,
+        provider_tool_definition_to_openai_compatible_tool,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -2042,6 +2101,77 @@ mod tests {
             .expect("messages should be an array");
         assert!(without_messages[0].get("reasoning_details").is_none());
         assert_eq!(without_messages[0]["content"], "先做规划。");
+    }
+
+    /// Verifies OpenAI-compatible function-tool conversion fills in explicit array and nested object types so Gemini-backed proxy routes can validate host schemas.
+    /// 验证 OpenAI 兼容函数工具转换会补齐显式数组与嵌套对象类型，以便 Gemini 背后的代理路由能够校验宿主 schema。
+    #[test]
+    fn openai_compatible_tool_conversion_normalizes_nested_container_types() {
+        let tool = provider_tool_definition_to_openai_compatible_tool(&ProviderToolDefinition {
+            name: String::from("read_nodes"),
+            description: String::from("Read structured nodes"),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "nodes": {
+                        "items": {
+                            "properties": {
+                                "file": { "type": "string" },
+                                "selector": { "type": "string" }
+                            },
+                            "required": ["file", "selector"]
+                        }
+                    }
+                }
+            }),
+        });
+
+        assert_eq!(
+            tool["function"]["parameters"]["properties"]["nodes"]["type"],
+            json!("array")
+        );
+        assert_eq!(
+            tool["function"]["parameters"]["properties"]["nodes"]["items"]["type"],
+            json!("object")
+        );
+    }
+
+    /// Verifies OpenAI-compatible error augmentation maps Gemini-style function declaration indices back to the original host tool names.
+    /// 验证 OpenAI 兼容错误增强逻辑会把 Gemini 风格的函数声明索引映射回原始宿主工具名称。
+    #[test]
+    fn openai_compatible_error_augmentation_reports_tool_names_for_function_indices() {
+        let tool_definitions = vec![
+            ProviderToolDefinition {
+                name: String::from("ask"),
+                description: String::from("Ask the user"),
+                parameters: json!({"type":"object"}),
+            },
+            ProviderToolDefinition {
+                name: String::from("vulcan_codekit_node_source"),
+                description: String::from("Read node source"),
+                parameters: json!({"type":"object"}),
+            },
+            ProviderToolDefinition {
+                name: String::from("vulcan_codekit_patch"),
+                description: String::from("Patch one node"),
+                parameters: json!({"type":"object"}),
+            },
+        ];
+        let body = "* GenerateContentRequest.tools[0].function_declarations[1].parameters.properties[nodes].items: missing field.\n\
+* GenerateContentRequest.tools[0].function_declarations[2].parameters.properties[patches].items: missing field.";
+
+        let message = augment_openai_compatible_error_with_tool_context(
+            String::from("HTTP 400 Bad Request | Provider returned error"),
+            body,
+            &tool_definitions,
+        );
+
+        assert_eq!(
+            collect_openai_compatible_function_declaration_indices(body),
+            vec![1, 2]
+        );
+        assert!(message.contains("tool[1]=vulcan_codekit_node_source"));
+        assert!(message.contains("tool[2]=vulcan_codekit_patch"));
     }
 
     /// Verifies OpenAI-compatible user messages switch to content-part arrays and carry staged image attachments as data URLs.

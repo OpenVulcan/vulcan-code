@@ -1,0 +1,100 @@
+{
+  "id": "inceptron",
+  "name": "Inceptron",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "INCEPTRON_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https://api.inceptron.io/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "moonshotai/Kimi-K2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org/GLM-5.1-FP8",
+      "name": "GLM 5.1",
+      "family": "glm",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 202752,
+      "outputLimit": 202752,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia/llama-3.3-70b-instruct-fp8",
+      "name": "Llama 3.3 70B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "MiniMaxAI/MiniMax-M2.5",
+      "name": "MiniMax M2.5",
+      "family": "minimax",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 196608,
+      "outputLimit": 196608,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

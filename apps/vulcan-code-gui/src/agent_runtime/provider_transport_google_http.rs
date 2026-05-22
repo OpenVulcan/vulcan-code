@@ -15,10 +15,12 @@ use crate::agent_runtime::provider_protocol_gemini::{
     GeminiTool, GeminiToolConfig, build_gemini_provider_message_state,
     parse_gemini_provider_message_state,
 };
-use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_protocol_tool_definition::{
+    ProviderToolDefinition, normalize_provider_tool_parameters_schema,
+};
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_json_content_type, ensure_string_header,
-    extract_standard_error_message,
+    format_standard_error_response,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -75,11 +77,10 @@ where
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let message = extract_standard_error_message(&body)
-            .unwrap_or_else(|| format!("HTTP {status}: {}", body.trim()));
+        let message = format_standard_error_response(status, &body);
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
-            message: format!("Google Gemini 请求失败：{message}"),
+            message: format!("Google Gemini request failed: {message}"),
         });
     }
 
@@ -557,10 +558,13 @@ fn core_tool_call_to_gemini_function_call(
 fn provider_tool_definition_to_gemini_function_declaration(
     definition: &ProviderToolDefinition,
 ) -> GeminiFunctionDeclaration {
+    let mut parameters = definition.parameters.clone();
+    normalize_provider_tool_parameters_schema(&mut parameters);
+
     GeminiFunctionDeclaration {
         name: definition.name.clone(),
         description: definition.description.clone(),
-        parameters: Some(definition.parameters.clone()),
+        parameters: Some(parameters),
     }
 }
 
@@ -764,6 +768,7 @@ mod tests {
     use super::{
         build_google_gemini_request_payload, core_message_to_gemini_content,
         parse_gemini_provider_message_state,
+        provider_tool_definition_to_gemini_function_declaration,
     };
     use crate::agent_runtime::provider_protocol_gemini::{
         GeminiContent, GeminiFunctionCall, GeminiPart, build_gemini_provider_message_state,
@@ -1063,6 +1068,37 @@ mod tests {
         assert_eq!(parts[1]["inlineData"]["data"], "AAECAw==");
 
         let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies Gemini function declarations normalize nested container schemas before they are sent to the upstream GenerateContent API.
+    /// 验证 Gemini 函数声明会在发送到上游 GenerateContent API 之前规范化嵌套容器 schema。
+    #[test]
+    fn gemini_function_declaration_normalizes_nested_container_types() {
+        let declaration =
+            provider_tool_definition_to_gemini_function_declaration(&ProviderToolDefinition {
+                name: String::from("apply_patch_set"),
+                description: String::from("Apply one patch batch"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "patches": {
+                            "items": {
+                                "properties": {
+                                    "file": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }),
+            });
+
+        let parameters = declaration.parameters.expect("parameters should exist");
+        assert_eq!(parameters["properties"]["patches"]["type"], json!("array"));
+        assert_eq!(
+            parameters["properties"]["patches"]["items"]["type"],
+            json!("object")
+        );
     }
 
     /// Verifies Gemini user content includes inline data parts for audio, video, and PDF attachments in addition to images.

@@ -1,0 +1,124 @@
+{
+  "id": "umans-ai-coding-plan",
+  "name": "Umans AI Coding Plan",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "UMANS_AI_CODING_PLAN_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https://api.code.umans.ai/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "umans-qwen3.6-35b-a3b",
+      "name": "Qwen3.6 35B A3B",
+      "family": "qwen",
+      "releaseDate": "2026-04-17",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "umans-glm-5.1",
+      "name": "GLM 5.1",
+      "family": "glm",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "umans-coder",
+      "name": "Umans Coder",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "umans-flash",
+      "name": "Umans Flash",
+      "family": "qwen",
+      "releaseDate": "2026-04-17",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "umans-kimi-k2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

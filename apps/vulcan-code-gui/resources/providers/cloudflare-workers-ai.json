@@ -12,7 +12,7 @@
   ],
   "baseUrl": {
     "kind": "template",
-    "template": "https:\/\/api.cloudflare.com\/client\/v4\/accounts\/{accountId}\/ai\/v1",
+    "template": "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1",
     "parameter": "accountId",
     "allowOverride": false
   },
@@ -21,7 +21,7 @@
   },
   "models": [
     {
-      "id": "@cf\/google\/gemma-4-26b-a4b-it",
+      "id": "@cf/google/gemma-4-26b-a4b-it",
       "name": "Gemma 4 26B A4B IT",
       "family": "gemma",
       "releaseDate": "2025-12-15",
@@ -40,7 +40,7 @@
       ]
     },
     {
-      "id": "@cf\/meta\/llama-4-scout-17b-16e-instruct",
+      "id": "@cf/meta/llama-4-scout-17b-16e-instruct",
       "name": "Llama 4 Scout 17B 16E Instruct",
       "family": "llama",
       "releaseDate": "2025-04-16",
@@ -59,7 +59,7 @@
       ]
     },
     {
-      "id": "@cf\/moonshotai\/kimi-k2.5",
+      "id": "@cf/moonshotai/kimi-k2.5",
       "name": "Kimi K2.5",
       "family": "kimi",
       "releaseDate": "2026-01-27",
@@ -81,7 +81,7 @@
       ]
     },
     {
-      "id": "@cf\/moonshotai\/kimi-k2.6",
+      "id": "@cf/moonshotai/kimi-k2.6",
       "name": "Kimi K2.6",
       "family": "kimi",
       "releaseDate": "2026-04-20",
@@ -103,7 +103,7 @@
       ]
     },
     {
-      "id": "@cf\/nvidia\/nemotron-3-120b-a12b",
+      "id": "@cf/nvidia/nemotron-3-120b-a12b",
       "name": "Nemotron 3 Super 120B",
       "family": "nemotron",
       "releaseDate": "2026-03-11",
@@ -124,7 +124,7 @@
       ]
     },
     {
-      "id": "@cf\/openai\/gpt-oss-120b",
+      "id": "@cf/openai/gpt-oss-120b",
       "name": "GPT OSS 120B",
       "releaseDate": "2025-08-05",
       "contextLimit": 128000,
@@ -141,7 +141,7 @@
       ]
     },
     {
-      "id": "@cf\/openai\/gpt-oss-20b",
+      "id": "@cf/openai/gpt-oss-20b",
       "name": "GPT OSS 20B",
       "releaseDate": "2025-08-05",
       "contextLimit": 128000,
@@ -158,13 +158,356 @@
       ]
     },
     {
-      "id": "@cf\/zai-org\/glm-4.7-flash",
+      "id": "@cf/zai-org/glm-4.7-flash",
       "name": "GLM-4.7-Flash",
       "family": "glm-flash",
       "releaseDate": "2026-01-19",
       "contextLimit": 131072,
       "outputLimit": 131072,
       "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/ibm-granite/granite-4.0-h-micro",
+      "name": "Granite 4.0 H Micro",
+      "family": "granite",
+      "releaseDate": "2025-10-07",
+      "contextLimit": 131000,
+      "outputLimit": 131000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "name": "Deepseek R1 Distill Qwen 32B",
+      "family": "deepseek",
+      "releaseDate": "2025-01-22",
+      "contextLimit": 80000,
+      "outputLimit": 80000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/mistral/mistral-7b-instruct-v0.1",
+      "name": "Mistral 7B Instruct V0.1",
+      "family": "mistral",
+      "releaseDate": "2023-11-07",
+      "contextLimit": 2824,
+      "outputLimit": 2824,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+      "name": "Mistral Small 3.1 24B Instruct",
+      "family": "mistral-small",
+      "releaseDate": "2025-03-18",
+      "contextLimit": 128000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/qwen/qwq-32b",
+      "name": "Qwq 32B",
+      "family": "qwen",
+      "releaseDate": "2025-03-05",
+      "contextLimit": 24000,
+      "outputLimit": 24000,
+      "reasoning": true,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/qwen/qwen3-30b-a3b-fp8",
+      "name": "Qwen3 30B A3b fp8",
+      "family": "qwen",
+      "releaseDate": "2025-04-30",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/qwen/qwen2.5-coder-32b-instruct",
+      "name": "Qwen2.5 Coder 32B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-02-27",
+      "contextLimit": 32768,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/google/gemma-3-12b-it",
+      "name": "Gemma 3 12B It",
+      "family": "gemma",
+      "releaseDate": "2025-03-18",
+      "contextLimit": 80000,
+      "outputLimit": 80000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+      "name": "Gemma Sea Lion V4 27B It",
+      "family": "gemma",
+      "releaseDate": "2025-09-23",
+      "contextLimit": 128000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3.1-8b-instruct-fp8",
+      "name": "Llama 3.1 8B Instruct fp8",
+      "family": "llama",
+      "releaseDate": "2024-07-25",
+      "contextLimit": 32000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3.1-8b-instruct-awq",
+      "name": "Llama 3.1 8B Instruct Awq",
+      "family": "llama",
+      "releaseDate": "2024-07-25",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-2-7b-chat-fp16",
+      "name": "Llama 2 7B Chat fp16",
+      "family": "llama",
+      "releaseDate": "2023-11-07",
+      "contextLimit": 4096,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3.2-1b-instruct",
+      "name": "Llama 3.2 1B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-09-25",
+      "contextLimit": 60000,
+      "outputLimit": 60000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3-8b-instruct-awq",
+      "name": "Llama 3 8B Instruct Awq",
+      "family": "llama",
+      "releaseDate": "2024-05-09",
+      "contextLimit": 8192,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-guard-3-8b",
+      "name": "Llama Guard 3 8B",
+      "family": "llama",
+      "releaseDate": "2025-01-22",
+      "contextLimit": 131072,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3.2-11b-vision-instruct",
+      "name": "Llama 3.2 11B Vision Instruct",
+      "family": "llama",
+      "releaseDate": "2024-09-25",
+      "contextLimit": 128000,
+      "outputLimit": 128000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3-8b-instruct",
+      "name": "Llama 3 8B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-04-18",
+      "contextLimit": 7968,
+      "outputLimit": 7968,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3.2-3b-instruct",
+      "name": "Llama 3.2 3B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-09-25",
+      "contextLimit": 80000,
+      "outputLimit": 80000,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "name": "Llama 3.3 70B Instruct fp8 Fast",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 24000,
+      "outputLimit": 24000,
+      "reasoning": false,
       "toolCall": true,
       "temperature": true,
       "attachment": false,

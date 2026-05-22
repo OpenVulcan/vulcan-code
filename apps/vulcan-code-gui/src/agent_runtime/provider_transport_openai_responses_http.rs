@@ -11,10 +11,12 @@ use crate::agent_runtime::provider_protocol_bridge::{
 use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
-use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_protocol_tool_definition::{
+    ProviderToolDefinition, normalize_provider_tool_parameters_schema,
+};
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
-    ensure_json_content_type, extract_standard_error_message,
+    ensure_json_content_type, format_standard_error_response,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -239,11 +241,10 @@ where
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let message = extract_standard_error_message(&body)
-            .unwrap_or_else(|| format!("HTTP {status}: {}", body.trim()));
+        let message = format_standard_error_response(status, &body);
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
-            message: format!("{provider_label} 请求失败：{message}"),
+            message: format!("{provider_label} request failed: {message}"),
         });
     }
 
@@ -666,6 +667,7 @@ fn core_tool_call_to_openai_responses_item(tool_call: &CoreConversationToolCall)
 /// 将一条宿主自有 Provider 工具定义转换为一条启用严格 schema 规范化的 OpenAI Responses 函数工具对象。
 fn provider_tool_definition_to_openai_responses_tool(definition: &ProviderToolDefinition) -> Value {
     let mut parameters = definition.parameters.clone();
+    normalize_provider_tool_parameters_schema(&mut parameters);
     sanitize_openai_responses_schema(&mut parameters);
 
     json!({

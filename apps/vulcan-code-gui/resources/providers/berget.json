@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/api.berget.ai\/v1",
+    "value": "https://api.berget.ai/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -18,7 +18,7 @@
   },
   "models": [
     {
-      "id": "google\/gemma-4-31B-it",
+      "id": "google/gemma-4-31B-it",
       "name": "Gemma 4 31B Instruct",
       "family": "gemma",
       "releaseDate": "2026-04-02",
@@ -39,7 +39,7 @@
       ]
     },
     {
-      "id": "meta-llama\/Llama-3.3-70B-Instruct",
+      "id": "meta-llama/Llama-3.3-70B-Instruct",
       "name": "Llama 3.3 70B Instruct",
       "family": "llama",
       "releaseDate": "2025-04-27",
@@ -57,7 +57,7 @@
       ]
     },
     {
-      "id": "mistralai\/Mistral-Medium-3.5-128B",
+      "id": "mistralai/Mistral-Medium-3.5-128B",
       "name": "Mistral Medium 3.5 128B",
       "family": "mistral-medium",
       "releaseDate": "2026-04-29",
@@ -76,7 +76,7 @@
       ]
     },
     {
-      "id": "mistralai\/Mistral-Small-3.2-24B-Instruct-2506",
+      "id": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
       "name": "Mistral Small 3.2 24B Instruct 2506",
       "family": "mistral-small",
       "releaseDate": "2025-10-01",
@@ -94,7 +94,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-oss-120b",
+      "id": "openai/gpt-oss-120b",
       "name": "GPT-OSS-120B",
       "family": "gpt-oss",
       "releaseDate": "2025-08-05",
@@ -112,7 +112,7 @@
       ]
     },
     {
-      "id": "zai-org\/GLM-4.7",
+      "id": "zai-org/GLM-4.7",
       "name": "GLM 4.7",
       "family": "glm",
       "releaseDate": "2026-01-19",
@@ -124,6 +124,29 @@
       "attachment": false,
       "inputModalities": [
         "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai/Kimi-K2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-05-07",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
       ],
       "outputModalities": [
         "text"

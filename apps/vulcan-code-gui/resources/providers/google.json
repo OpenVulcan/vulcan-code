@@ -11,7 +11,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/generativelanguage.googleapis.com",
+    "value": "https://generativelanguage.googleapis.com",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -783,6 +783,50 @@
       "inputModalities": [
         "text",
         "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "family": "gemini-flash",
+      "releaseDate": "2026-05-19",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2026-05-07",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
       ],
       "outputModalities": [
         "text"

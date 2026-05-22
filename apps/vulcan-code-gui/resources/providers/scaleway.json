@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/api.scaleway.ai\/v1",
+    "value": "https://api.scaleway.ai/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -306,6 +306,25 @@
       "attachment": false,
       "inputModalities": [
         "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral-medium-3.5-128b",
+      "name": "Mistral Medium 3.5 128B",
+      "family": "mistral-medium",
+      "releaseDate": "2026-04-29",
+      "contextLimit": 256000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
       ],
       "outputModalities": [
         "text"

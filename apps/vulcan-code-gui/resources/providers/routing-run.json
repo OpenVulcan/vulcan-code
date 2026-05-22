@@ -1,0 +1,521 @@
+{
+  "id": "routing-run",
+  "name": "routing.run",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "ROUTING_RUN_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https://api.routing.run/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "route/deepseek-v3.2",
+      "name": "DeepSeek V3.2",
+      "family": "deepseek",
+      "releaseDate": "2025-12-01",
+      "contextLimit": 163840,
+      "outputLimit": 163840,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/kimi-k2.5",
+      "name": "Kimi K2.5",
+      "family": "kimi-k2.5",
+      "releaseDate": "2026-01",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/minimax-m2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed",
+      "family": "minimax",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 100000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/glm-5.1",
+      "name": "GLM 5.1",
+      "family": "glm",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 202752,
+      "outputLimit": 202752,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/qwen3.6-27b",
+      "name": "Qwen3.6 27B",
+      "family": "qwen",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/glm-5.1-6bit",
+      "name": "GLM 5.1 6bit",
+      "family": "glm",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 202752,
+      "outputLimit": 202752,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/mimo-v2.5-pro",
+      "name": "MiMo V2.5 Pro",
+      "family": "mimo",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 1000000,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/minimax-m2.5",
+      "name": "MiniMax M2.5",
+      "family": "minimax",
+      "releaseDate": "2026-02-12",
+      "contextLimit": 100000,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/gemma-4-31b-it",
+      "name": "Gemma 4 31B IT",
+      "family": "gemma",
+      "releaseDate": "2026-04-02",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/kimi-k2.6-6bit",
+      "name": "Kimi K2.6 6bit",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/minimax-m2.7",
+      "name": "MiniMax M2.7",
+      "family": "minimax",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 100000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/mistral-small-2503",
+      "name": "Mistral Small 2503",
+      "family": "mistral-small",
+      "releaseDate": "2026-03-16",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/stepfun-3.5-flash",
+      "name": "StepFun 3.5 Flash",
+      "releaseDate": "2026-01-29",
+      "contextLimit": 262144,
+      "inputLimit": 256000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/mistral-large-3",
+      "name": "Mistral Large 3",
+      "family": "mistral-large",
+      "releaseDate": "2024-11-01",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/step-3.5-flash-2603",
+      "name": "Step 3.5 Flash 2603",
+      "releaseDate": "2026-04-02",
+      "contextLimit": 262144,
+      "inputLimit": 256000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/deepseek-v4-pro-6bit",
+      "name": "DeepSeek V4 Pro 6bit",
+      "family": "deepseek-thinking",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/deepseek-v4-flash-6bit",
+      "name": "DeepSeek V4 Flash 6bit",
+      "family": "deepseek-flash",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/mistral-medium-2505",
+      "name": "Mistral Medium 2505",
+      "family": "mistral-medium",
+      "releaseDate": "2025-05-07",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "family": "deepseek-flash",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/mimo-v2.5-pro-6bit",
+      "name": "MiMo V2.5 Pro 6bit",
+      "family": "mimo",
+      "releaseDate": "2026-04-22",
+      "contextLimit": 1000000,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/step-3.5-flash",
+      "name": "Step 3.5 Flash",
+      "releaseDate": "2026-01-29",
+      "contextLimit": 262144,
+      "inputLimit": 256000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/minimax-m2.5-highspeed",
+      "name": "MiniMax M2.5 Highspeed",
+      "family": "minimax",
+      "releaseDate": "2026-02-13",
+      "contextLimit": 100000,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "route/kimi-k2.6",
+      "name": "Kimi K2.6",
+      "family": "kimi-k2.6",
+      "releaseDate": "2026-04-21",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

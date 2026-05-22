@@ -1,0 +1,344 @@
+{
+  "id": "gitlab",
+  "name": "GitLab Duo",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "GITLAB_TOKEN"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "allowOverride": true
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "duo-chat-gpt-5-2-codex",
+      "name": "Agentic Chat (GPT-5.2 Codex)",
+      "family": "gpt-codex",
+      "releaseDate": "2026-01-22",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-haiku-4-5",
+      "name": "Agentic Chat (Claude Haiku 4.5)",
+      "family": "claude-haiku",
+      "releaseDate": "2026-01-08",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-opus-4-6",
+      "name": "Agentic Chat (Claude Opus 4.6)",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-2",
+      "name": "Agentic Chat (GPT-5.2)",
+      "family": "gpt",
+      "releaseDate": "2026-01-23",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-3-codex",
+      "name": "Agentic Chat (GPT-5.3 Codex)",
+      "family": "gpt-codex",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-1",
+      "name": "Agentic Chat (GPT-5.1)",
+      "family": "gpt",
+      "releaseDate": "2026-01-22",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-opus-4-5",
+      "name": "Agentic Chat (Claude Opus 4.5)",
+      "family": "claude-opus",
+      "releaseDate": "2026-01-08",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-opus-4-7",
+      "name": "Agentic Chat (Claude Opus 4.7)",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-sonnet-4-5",
+      "name": "Agentic Chat (Claude Sonnet 4.5)",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-01-08",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-4-nano",
+      "name": "Agentic Chat (GPT-5.4 Nano)",
+      "family": "gpt-nano",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-codex",
+      "name": "Agentic Chat (GPT-5 Codex)",
+      "family": "gpt-codex",
+      "releaseDate": "2026-01-22",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-4-mini",
+      "name": "Agentic Chat (GPT-5.4 Mini)",
+      "family": "gpt-mini",
+      "releaseDate": "2026-03-17",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-mini",
+      "name": "Agentic Chat (GPT-5 Mini)",
+      "family": "gpt-mini",
+      "releaseDate": "2026-01-22",
+      "contextLimit": 400000,
+      "inputLimit": 272000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-sonnet-4-6",
+      "name": "Agentic Chat (Claude Sonnet 4.6)",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-5",
+      "name": "Agentic Chat (GPT-5.5)",
+      "family": "gpt",
+      "releaseDate": "2026-04-23",
+      "contextLimit": 1050000,
+      "inputLimit": 922000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "duo-chat-gpt-5-4",
+      "name": "Agentic Chat (GPT-5.4)",
+      "family": "gpt",
+      "releaseDate": "2026-03-05",
+      "contextLimit": 1050000,
+      "inputLimit": 922000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

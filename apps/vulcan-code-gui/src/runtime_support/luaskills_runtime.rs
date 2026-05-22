@@ -696,34 +696,11 @@ pub fn luaskills_entry_args_schema(
     entry: &RuntimeEntryDescriptor,
     hide_host_managed_sid: bool,
 ) -> Value {
-    let mut properties = Map::new();
-    let mut required = Vec::new();
-
-    for parameter in &entry.parameters {
-        if hide_host_managed_sid && parameter.name == LUASKILL_SID_PARAMETER_NAME {
-            continue;
-        }
-        if parameter.required {
-            required.push(Value::String(parameter.name.clone()));
-        }
-        properties.insert(
-            parameter.name.clone(),
-            json!({
-                "type": schema_type_for_luaskills_parameter(&parameter.param_type),
-                "description": parameter.description,
-            }),
-        );
+    let mut schema = entry.input_schema.clone();
+    if hide_host_managed_sid {
+        hide_luaskill_sid_from_visible_schema(&mut schema);
     }
-
-    let mut schema = Map::new();
-    schema.insert(String::from("type"), Value::String(String::from("object")));
-    schema.insert(String::from("properties"), Value::Object(properties));
-    schema.insert(String::from("additionalProperties"), Value::Bool(false));
-    if !required.is_empty() {
-        schema.insert(String::from("required"), Value::Array(required));
-    }
-
-    Value::Object(schema)
+    schema
 }
 
 /// Stable LuaSkills reserved managed-identity parameter name used by host projections.
@@ -733,6 +710,42 @@ pub const LUASKILL_SID_PARAMETER_NAME: &str = "LUASKILL_SID";
 /// Stable host-managed prefix reserved by LuaSkills for injected managed identities.
 /// LuaSkills 为注入托管身份保留的稳定宿主管理前缀。
 pub const LUASKILLS_HOST_MANAGED_SID_PREFIX: &str = "LUASKILLS-SID-";
+
+/// Hide the reserved managed-identity property from one visible LuaSkills input schema clone.
+/// 从单份可见 LuaSkills 输入 schema 副本中隐藏保留托管身份属性。
+fn hide_luaskill_sid_from_visible_schema(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(properties_value) = object.get_mut("properties") else {
+        return;
+    };
+    let Some(properties) = properties_value.as_object_mut() else {
+        return;
+    };
+    if properties.remove(LUASKILL_SID_PARAMETER_NAME).is_none() {
+        return;
+    }
+    remove_required_name_from_schema(schema, LUASKILL_SID_PARAMETER_NAME);
+}
+
+/// Remove one top-level required-field name from one visible LuaSkills input schema clone.
+/// 从单份可见 LuaSkills 输入 schema 副本中移除一个顶层必填字段名。
+fn remove_required_name_from_schema(schema: &mut Value, field_name: &str) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(required_value) = object.get_mut("required") else {
+        return;
+    };
+    let Some(required) = required_value.as_array_mut() else {
+        return;
+    };
+    required.retain(|value| value.as_str() != Some(field_name));
+    if required.is_empty() {
+        object.remove("required");
+    }
+}
 
 /// Render one LuaSkills invocation result into the final host-managed text returned to the model.
 /// 将单次 LuaSkills 调用结果渲染为返回给模型的最终宿主管理文本。
@@ -1104,6 +1117,9 @@ fn build_skill_manager_for_root(
         allow_network_download: true,
         github_base_url: None,
         github_api_base_url: None,
+        official_skill_hub_base_url: None,
+        enable_private_url_skill_install: false,
+        private_skill_source_allowlist: Vec::new(),
     }))
 }
 
@@ -1127,17 +1143,114 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
         .filter(|field| !field.is_empty())
 }
 
-/// Map one LuaSkills runtime parameter type string into a JSON-Schema primitive type label.
-/// 将单个 LuaSkills 运行时参数类型字符串映射为 JSON-Schema 基元类型标签。
-fn schema_type_for_luaskills_parameter(parameter_type: &str) -> &'static str {
-    match parameter_type.trim().to_ascii_lowercase().as_str() {
-        "int" | "integer" => "integer",
-        "number" | "float" | "double" => "number",
-        "bool" | "boolean" => "boolean",
-        "object" | "json" | "map" => "object",
-        "array" | "list" => "array",
-        "string" | "path" | "file" | "url" => "string",
-        _ => "string",
+#[cfg(test)]
+mod tests {
+    use super::LUASKILL_SID_PARAMETER_NAME;
+    use super::luaskills_entry_args_schema;
+    use luaskills::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
+    use serde_json::json;
+
+    #[test]
+    fn luaskills_schema_returns_resolved_input_schema_verbatim() {
+        let entry = build_entry(
+            "vulcan-codekit",
+            "node-source",
+            vec![RuntimeEntryParameterDescriptor {
+                name: String::from("nodes"),
+                param_type: String::from("array"),
+                description: String::from("Required node input."),
+                required: true,
+            }],
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "nodes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "file": { "type": "string" },
+                                "structural_path": { "type": "string" }
+                            },
+                            "required": ["file", "structural_path"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["nodes"]
+            }),
+        );
+
+        let schema = luaskills_entry_args_schema(&entry, false);
+
+        assert_eq!(schema, entry.input_schema);
+    }
+
+    #[test]
+    fn luaskills_schema_hides_managed_sid_when_requested() {
+        let entry = build_entry(
+            "vulcan-stateful",
+            "run",
+            vec![
+                RuntimeEntryParameterDescriptor {
+                    name: String::from(LUASKILL_SID_PARAMETER_NAME),
+                    param_type: String::from("string"),
+                    description: String::from("managed sid"),
+                    required: false,
+                },
+                RuntimeEntryParameterDescriptor {
+                    name: String::from("args"),
+                    param_type: String::from("array"),
+                    description: String::from("argument array"),
+                    required: false,
+                },
+            ],
+            json!({
+                "type": "object",
+                "properties": {
+                    "LUASKILL_SID": { "type": "string" },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["LUASKILL_SID"]
+            }),
+        );
+
+        let schema = luaskills_entry_args_schema(&entry, true);
+
+        assert_eq!(
+            schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                }
+            })
+        );
+    }
+
+    fn build_entry(
+        skill_id: &str,
+        local_name: &str,
+        parameters: Vec<RuntimeEntryParameterDescriptor>,
+        input_schema: serde_json::Value,
+    ) -> RuntimeEntryDescriptor {
+        RuntimeEntryDescriptor {
+            canonical_name: format!("{skill_id}-{local_name}"),
+            skill_id: skill_id.to_string(),
+            local_name: local_name.to_string(),
+            root_name: String::from("ROOT"),
+            skill_dir: String::from("skill-dir"),
+            description: String::from("entry"),
+            parameters,
+            input_schema,
+        }
     }
 }
 

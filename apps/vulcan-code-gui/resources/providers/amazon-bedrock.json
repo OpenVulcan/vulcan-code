@@ -1,0 +1,1646 @@
+{
+  "id": "amazon-bedrock",
+  "name": "Amazon Bedrock",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "AWS_BEARER_TOKEN_BEDROCK"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "allowOverride": true
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "zai.glm-4.7",
+      "name": "GLM-4.7",
+      "family": "glm",
+      "releaseDate": "2025-12-22",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5 (Global)",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-235b-a22b-2507-v1:0",
+      "name": "Qwen3 235B A22B 2507",
+      "family": "qwen",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai.glm-5",
+      "name": "GLM-5",
+      "family": "glm",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 202752,
+      "outputLimit": 101376,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon.nova-pro-v1:0",
+      "name": "Nova Pro",
+      "family": "nova-pro",
+      "releaseDate": "2024-12-03",
+      "contextLimit": 300000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai.gpt-oss-20b-1:0",
+      "name": "gpt-oss-20b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "name": "Claude Haiku 4.5 (US)",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "writer.palmyra-x4-v1:0",
+      "name": "Palmyra X4",
+      "family": "palmyra",
+      "releaseDate": "2025-04-28",
+      "contextLimit": 122880,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshot.kimi-k2-thinking",
+      "name": "Kimi K2 Thinking",
+      "family": "kimi-thinking",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 262143,
+      "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.ministral-3-8b-instruct",
+      "name": "Ministral 3 8B",
+      "family": "ministral",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta.llama4-scout-17b-instruct-v1:0",
+      "name": "Llama 4 Scout 17B Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 3500000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5 (US)",
+      "family": "claude-opus",
+      "releaseDate": "2025-11-24",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-coder-480b-a35b-v1:0",
+      "name": "Qwen3 Coder 480B A35B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google.gemma-3-27b-it",
+      "name": "Google Gemma 3 27B Instruct",
+      "family": "gemma",
+      "releaseDate": "2025-07-27",
+      "contextLimit": 202752,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.ministral-3-14b-instruct",
+      "name": "Ministral 14B 3.0",
+      "family": "ministral",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5 (US)",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-coder-30b-a3b-v1:0",
+      "name": "Qwen3 Coder 30B A3B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai.glm-4.7-flash",
+      "name": "GLM-4.7-Flash",
+      "family": "glm-flash",
+      "releaseDate": "2026-01-19",
+      "contextLimit": 200000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google.gemma-3-12b-it",
+      "name": "Google Gemma 3 12B",
+      "family": "gemma",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 131072,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5 (Global)",
+      "family": "claude-opus",
+      "releaseDate": "2025-11-24",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "au.anthropic.claude-sonnet-4-6",
+      "name": "AU Anthropic Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-vl-235b-a22b",
+      "name": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-10-04",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta.llama3-3-70b-instruct-v1:0",
+      "name": "Llama 3.3 70B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-12-06",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia.nemotron-nano-9b-v2",
+      "name": "NVIDIA Nemotron Nano 9B v2",
+      "family": "nemotron",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7 (US)",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia.nemotron-nano-12b-v2",
+      "name": "NVIDIA Nemotron Nano 12B v2 VL BF16",
+      "family": "nemotron",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5",
+      "family": "claude-opus",
+      "releaseDate": "2025-11-24",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek.v3-v1:0",
+      "name": "DeepSeek-V3.1",
+      "family": "deepseek",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 163840,
+      "outputLimit": 81920,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta.llama4-maverick-17b-instruct-v1:0",
+      "name": "Llama 4 Maverick 17B Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 1000000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "eu.anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7 (EU)",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-32b-v1:0",
+      "name": "Qwen3 32B (dense)",
+      "family": "qwen",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 16384,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon.nova-lite-v1:0",
+      "name": "Nova Lite",
+      "family": "nova-lite",
+      "releaseDate": "2024-12-03",
+      "contextLimit": 300000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.devstral-2-123b",
+      "name": "Devstral 2 123B",
+      "family": "devstral",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 256000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "eu.anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5 (EU)",
+      "family": "claude-opus",
+      "releaseDate": "2025-11-24",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai.gpt-oss-120b-1:0",
+      "name": "gpt-oss-120b",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek.r1-v1:0",
+      "name": "DeepSeek-R1",
+      "family": "deepseek-thinking",
+      "releaseDate": "2025-01-20",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.mistral-large-3-675b-instruct",
+      "name": "Mistral Large 3",
+      "family": "mistral",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 256000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.magistral-small-2509",
+      "name": "Magistral Small 1.2",
+      "family": "magistral",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 128000,
+      "outputLimit": 40000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.pixtral-large-2502-v1:0",
+      "name": "Pixtral Large (25.02)",
+      "family": "mistral",
+      "releaseDate": "2025-04-08",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.voxtral-mini-3b-2507",
+      "name": "Voxtral Mini 3B 2507",
+      "family": "mistral",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "audio",
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "writer.palmyra-x5-v1:0",
+      "name": "Palmyra X5",
+      "family": "palmyra",
+      "releaseDate": "2025-04-28",
+      "contextLimit": 1040000,
+      "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax.minimax-m2.1",
+      "name": "MiniMax M2.1",
+      "family": "minimax",
+      "releaseDate": "2025-12-23",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-next-80b-a3b",
+      "name": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-09-18",
+      "contextLimit": 262000,
+      "outputLimit": 262000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "au.anthropic.claude-opus-4-6-v1",
+      "name": "AU Anthropic Claude Opus 4.6",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta.llama3-1-8b-instruct-v1:0",
+      "name": "Llama 3.1 8B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon.nova-2-lite-v1:0",
+      "name": "Nova 2 Lite",
+      "family": "nova",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai.kimi-k2.5",
+      "name": "Kimi K2.5",
+      "family": "kimi",
+      "releaseDate": "2026-02-06",
+      "contextLimit": 262143,
+      "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia.nemotron-super-3-120b",
+      "name": "NVIDIA Nemotron 3 Super 120B A12B",
+      "family": "nemotron",
+      "releaseDate": "2026-03-11",
+      "contextLimit": 262144,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen.qwen3-coder-next",
+      "name": "Qwen3 Coder Next",
+      "family": "qwen",
+      "releaseDate": "2026-02-06",
+      "contextLimit": 131072,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.ministral-3-3b-instruct",
+      "name": "Ministral 3 3B",
+      "family": "ministral",
+      "releaseDate": "2025-12-02",
+      "contextLimit": 256000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "name": "Claude Haiku 4.5 (EU)",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax.minimax-m2",
+      "name": "MiniMax M2",
+      "family": "minimax",
+      "releaseDate": "2025-10-27",
+      "contextLimit": 204608,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta.llama3-1-70b-instruct-v1:0",
+      "name": "Llama 3.1 70B Instruct",
+      "family": "llama",
+      "releaseDate": "2024-07-23",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai.gpt-oss-safeguard-120b",
+      "name": "GPT OSS Safeguard 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-10-29",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "name": "Claude Haiku 4.5 (Global)",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "amazon.nova-micro-v1:0",
+      "name": "Nova Micro",
+      "family": "nova-micro",
+      "releaseDate": "2024-12-03",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5 (EU)",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mistral.voxtral-small-24b-2507",
+      "name": "Voxtral Small 24B 2507",
+      "family": "mistral",
+      "releaseDate": "2025-07-01",
+      "contextLimit": 32000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "audio"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "nvidia.nemotron-nano-3-30b",
+      "name": "NVIDIA Nemotron Nano 3 30B",
+      "family": "nemotron",
+      "releaseDate": "2025-12-23",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-haiku-4-5-20251001-v1:0",
+      "name": "Claude Haiku 4.5",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google.gemma-3-4b-it",
+      "name": "Gemma 3 4B IT",
+      "family": "gemma",
+      "releaseDate": "2024-12-01",
+      "contextLimit": 128000,
+      "outputLimit": 4096,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "global.anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7 (Global)",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax.minimax-m2.5",
+      "name": "MiniMax M2.5",
+      "family": "minimax",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 196608,
+      "outputLimit": 98304,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai.gpt-oss-safeguard-20b",
+      "name": "GPT OSS Safeguard 20B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-10-29",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek.v3.2",
+      "name": "DeepSeek-V3.2",
+      "family": "deepseek",
+      "releaseDate": "2026-02-06",
+      "contextLimit": 163840,
+      "outputLimit": 81920,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "global.anthropic.claude-opus-4-6-v1",
+      "name": "Claude Opus 4.6 (Global)",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "global.anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6 (Global)",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.meta.llama4-maverick-17b-instruct-v1:0",
+      "name": "Llama 4 Maverick 17B Instruct (US)",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 1000000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.deepseek.r1-v1:0",
+      "name": "DeepSeek-R1 (US)",
+      "family": "deepseek-thinking",
+      "releaseDate": "2025-01-20",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5 (AU)",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      "name": "Claude Opus 4.1 (US)",
+      "family": "claude-opus",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-opus-4-1-20250805-v1:0",
+      "name": "Claude Opus 4.1",
+      "family": "claude-opus",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6 (US)",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "anthropic.claude-opus-4-6-v1",
+      "name": "Claude Opus 4.6",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "eu.anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6 (EU)",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "eu.anthropic.claude-opus-4-6-v1",
+      "name": "Claude Opus 4.6 (EU)",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "au.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "name": "Claude Haiku 4.5 (AU)",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "jp.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5 (JP)",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "jp.anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6 (JP)",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-6-v1",
+      "name": "Claude Opus 4.6 (US)",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "us.meta.llama4-scout-17b-instruct-v1:0",
+      "name": "Llama 4 Scout 17B Instruct (US)",
+      "family": "llama",
+      "releaseDate": "2025-04-05",
+      "contextLimit": 3500000,
+      "outputLimit": 16384,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "jp.anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7 (JP)",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

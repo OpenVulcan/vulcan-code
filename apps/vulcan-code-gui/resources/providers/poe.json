@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/api.poe.com\/v1",
+    "value": "https://api.poe.com/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -18,7 +18,7 @@
   },
   "models": [
     {
-      "id": "anthropic\/claude-haiku-3",
+      "id": "anthropic/claude-haiku-3",
       "name": "Claude-Haiku-3",
       "family": "claude-haiku",
       "releaseDate": "2024-03-09",
@@ -38,7 +38,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-haiku-3.5",
+      "id": "anthropic/claude-haiku-3.5",
       "name": "Claude-Haiku-3.5",
       "family": "claude-haiku",
       "releaseDate": "2024-10-01",
@@ -58,7 +58,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-haiku-4.5",
+      "id": "anthropic/claude-haiku-4.5",
       "name": "Claude-Haiku-4.5",
       "family": "claude-haiku",
       "releaseDate": "2025-10-15",
@@ -78,7 +78,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-opus-4",
+      "id": "anthropic/claude-opus-4",
       "name": "Claude-Opus-4",
       "family": "claude-opus",
       "releaseDate": "2025-05-21",
@@ -98,7 +98,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-opus-4.1",
+      "id": "anthropic/claude-opus-4.1",
       "name": "Claude-Opus-4.1",
       "family": "claude-opus",
       "releaseDate": "2025-08-05",
@@ -118,7 +118,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-opus-4.5",
+      "id": "anthropic/claude-opus-4.5",
       "name": "Claude-Opus-4.5",
       "family": "claude-opus",
       "releaseDate": "2025-11-21",
@@ -138,7 +138,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-opus-4.6",
+      "id": "anthropic/claude-opus-4.6",
       "name": "Claude-Opus-4.6",
       "releaseDate": "2026-02-04",
       "contextLimit": 983040,
@@ -157,7 +157,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-opus-4.7",
+      "id": "anthropic/claude-opus-4.7",
       "name": "Claude-Opus-4.7",
       "releaseDate": "2026-04-15",
       "contextLimit": 1048576,
@@ -176,7 +176,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-sonnet-3.5",
+      "id": "anthropic/claude-sonnet-3.5",
       "name": "Claude-Sonnet-3.5",
       "status": "deprecated",
       "family": "claude-sonnet",
@@ -197,7 +197,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-sonnet-3.5-june",
+      "id": "anthropic/claude-sonnet-3.5-june",
       "name": "Claude-Sonnet-3.5-June",
       "status": "deprecated",
       "family": "claude-sonnet",
@@ -218,7 +218,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-sonnet-3.7",
+      "id": "anthropic/claude-sonnet-3.7",
       "name": "Claude-Sonnet-3.7",
       "family": "claude-sonnet",
       "releaseDate": "2025-02-19",
@@ -238,7 +238,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-sonnet-4",
+      "id": "anthropic/claude-sonnet-4",
       "name": "Claude-Sonnet-4",
       "family": "claude-sonnet",
       "releaseDate": "2025-05-21",
@@ -258,7 +258,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-sonnet-4.5",
+      "id": "anthropic/claude-sonnet-4.5",
       "name": "Claude-Sonnet-4.5",
       "family": "claude-sonnet",
       "releaseDate": "2025-09-26",
@@ -278,7 +278,7 @@
       ]
     },
     {
-      "id": "anthropic\/claude-sonnet-4.6",
+      "id": "anthropic/claude-sonnet-4.6",
       "name": "Claude-Sonnet-4.6",
       "releaseDate": "2026-02-05",
       "contextLimit": 983040,
@@ -297,7 +297,7 @@
       ]
     },
     {
-      "id": "cerebras\/gpt-oss-120b-cs",
+      "id": "cerebras/gpt-oss-120b-cs",
       "name": "GPT-OSS-120B-CS",
       "releaseDate": "2025-08-06",
       "contextLimit": 128000,
@@ -314,7 +314,7 @@
       ]
     },
     {
-      "id": "cerebras\/llama-3.1-8b-cs",
+      "id": "cerebras/llama-3.1-8b-cs",
       "name": "Llama-3.1-8B-CS",
       "releaseDate": "2025-05-13",
       "contextLimit": 128000,
@@ -331,7 +331,7 @@
       ]
     },
     {
-      "id": "cerebras\/llama-3.3-70b-cs",
+      "id": "cerebras/llama-3.3-70b-cs",
       "name": "llama-3.3-70b-cs",
       "status": "deprecated",
       "releaseDate": "2025-05-13",
@@ -349,7 +349,7 @@
       ]
     },
     {
-      "id": "cerebras\/qwen3-235b-2507-cs",
+      "id": "cerebras/qwen3-235b-2507-cs",
       "name": "qwen3-235b-2507-cs",
       "status": "deprecated",
       "releaseDate": "2025-08-06",
@@ -367,7 +367,7 @@
       ]
     },
     {
-      "id": "cerebras\/qwen3-32b-cs",
+      "id": "cerebras/qwen3-32b-cs",
       "name": "qwen3-32b-cs",
       "status": "deprecated",
       "releaseDate": "2025-05-15",
@@ -385,7 +385,7 @@
       ]
     },
     {
-      "id": "elevenlabs\/elevenlabs-music",
+      "id": "elevenlabs/elevenlabs-music",
       "name": "ElevenLabs-Music",
       "family": "elevenlabs",
       "releaseDate": "2025-08-29",
@@ -403,7 +403,7 @@
       ]
     },
     {
-      "id": "elevenlabs\/elevenlabs-v2.5-turbo",
+      "id": "elevenlabs/elevenlabs-v2.5-turbo",
       "name": "ElevenLabs-v2.5-Turbo",
       "family": "elevenlabs",
       "releaseDate": "2024-10-28",
@@ -421,7 +421,7 @@
       ]
     },
     {
-      "id": "elevenlabs\/elevenlabs-v3",
+      "id": "elevenlabs/elevenlabs-v3",
       "name": "ElevenLabs-v3",
       "family": "elevenlabs",
       "releaseDate": "2025-06-05",
@@ -439,7 +439,7 @@
       ]
     },
     {
-      "id": "fireworks-ai\/kimi-k2.5-fw",
+      "id": "fireworks-ai/kimi-k2.5-fw",
       "name": "Kimi-K2.5-FW",
       "releaseDate": "2026-01-27",
       "contextLimit": 262144,
@@ -458,7 +458,7 @@
       ]
     },
     {
-      "id": "google\/gemini-2.0-flash",
+      "id": "google/gemini-2.0-flash",
       "name": "Gemini-2.0-Flash",
       "family": "gemini-flash",
       "releaseDate": "2024-12-11",
@@ -479,7 +479,7 @@
       ]
     },
     {
-      "id": "google\/gemini-2.0-flash-lite",
+      "id": "google/gemini-2.0-flash-lite",
       "name": "Gemini-2.0-Flash-Lite",
       "family": "gemini-flash-lite",
       "releaseDate": "2025-02-05",
@@ -500,7 +500,7 @@
       ]
     },
     {
-      "id": "google\/gemini-2.5-flash",
+      "id": "google/gemini-2.5-flash",
       "name": "Gemini-2.5-Flash",
       "family": "gemini-flash",
       "releaseDate": "2025-04-26",
@@ -521,7 +521,7 @@
       ]
     },
     {
-      "id": "google\/gemini-2.5-flash-lite",
+      "id": "google/gemini-2.5-flash-lite",
       "name": "Gemini-2.5-Flash-Lite",
       "family": "gemini-flash-lite",
       "releaseDate": "2025-06-19",
@@ -542,7 +542,7 @@
       ]
     },
     {
-      "id": "google\/gemini-2.5-pro",
+      "id": "google/gemini-2.5-pro",
       "name": "Gemini-2.5-Pro",
       "family": "gemini-pro",
       "releaseDate": "2025-02-05",
@@ -563,7 +563,7 @@
       ]
     },
     {
-      "id": "google\/gemini-3-flash",
+      "id": "google/gemini-3-flash",
       "name": "Gemini-3-Flash",
       "releaseDate": "2025-10-07",
       "contextLimit": 1048576,
@@ -583,7 +583,7 @@
       ]
     },
     {
-      "id": "google\/gemini-3-pro",
+      "id": "google/gemini-3-pro",
       "name": "Gemini-3-Pro",
       "status": "deprecated",
       "family": "gemini-pro",
@@ -605,7 +605,7 @@
       ]
     },
     {
-      "id": "google\/gemini-3.1-flash-lite",
+      "id": "google/gemini-3.1-flash-lite",
       "name": "Gemini-3.1-Flash-Lite",
       "releaseDate": "2026-02-18",
       "contextLimit": 1048576,
@@ -625,7 +625,7 @@
       ]
     },
     {
-      "id": "google\/gemini-3.1-pro",
+      "id": "google/gemini-3.1-pro",
       "name": "Gemini-3.1-Pro",
       "releaseDate": "2026-02-19",
       "contextLimit": 1048576,
@@ -645,7 +645,7 @@
       ]
     },
     {
-      "id": "google\/gemini-deep-research",
+      "id": "google/gemini-deep-research",
       "name": "gemini-deep-research",
       "status": "deprecated",
       "releaseDate": "2025-12-11",
@@ -665,7 +665,7 @@
       ]
     },
     {
-      "id": "google\/gemma-4-31b",
+      "id": "google/gemma-4-31b",
       "name": "Gemma-4-31B",
       "releaseDate": "2026-04-02",
       "contextLimit": 262144,
@@ -683,7 +683,7 @@
       ]
     },
     {
-      "id": "google\/imagen-3",
+      "id": "google/imagen-3",
       "name": "Imagen-3",
       "family": "imagen",
       "releaseDate": "2024-10-15",
@@ -701,7 +701,7 @@
       ]
     },
     {
-      "id": "google\/imagen-3-fast",
+      "id": "google/imagen-3-fast",
       "name": "Imagen-3-Fast",
       "family": "imagen",
       "releaseDate": "2024-10-17",
@@ -719,7 +719,7 @@
       ]
     },
     {
-      "id": "google\/imagen-4",
+      "id": "google/imagen-4",
       "name": "Imagen-4",
       "family": "imagen",
       "releaseDate": "2025-05-22",
@@ -737,7 +737,7 @@
       ]
     },
     {
-      "id": "google\/imagen-4-fast",
+      "id": "google/imagen-4-fast",
       "name": "Imagen-4-Fast",
       "family": "imagen",
       "releaseDate": "2025-06-25",
@@ -755,7 +755,7 @@
       ]
     },
     {
-      "id": "google\/imagen-4-ultra",
+      "id": "google/imagen-4-ultra",
       "name": "Imagen-4-Ultra",
       "family": "imagen",
       "releaseDate": "2025-05-24",
@@ -773,7 +773,7 @@
       ]
     },
     {
-      "id": "google\/lyria",
+      "id": "google/lyria",
       "name": "Lyria",
       "family": "lyria",
       "releaseDate": "2025-06-04",
@@ -791,7 +791,7 @@
       ]
     },
     {
-      "id": "google\/nano-banana",
+      "id": "google/nano-banana",
       "name": "Nano-Banana",
       "family": "nano-banana",
       "releaseDate": "2025-08-21",
@@ -811,7 +811,7 @@
       ]
     },
     {
-      "id": "google\/nano-banana-pro",
+      "id": "google/nano-banana-pro",
       "name": "Nano-Banana-Pro",
       "family": "nano-banana",
       "releaseDate": "2025-11-19",
@@ -830,7 +830,7 @@
       ]
     },
     {
-      "id": "google\/veo-2",
+      "id": "google/veo-2",
       "name": "Veo-2",
       "family": "veo",
       "releaseDate": "2024-12-02",
@@ -848,7 +848,7 @@
       ]
     },
     {
-      "id": "google\/veo-3",
+      "id": "google/veo-3",
       "name": "Veo-3",
       "family": "veo",
       "releaseDate": "2025-05-21",
@@ -866,7 +866,7 @@
       ]
     },
     {
-      "id": "google\/veo-3-fast",
+      "id": "google/veo-3-fast",
       "name": "Veo-3-Fast",
       "family": "veo",
       "releaseDate": "2025-10-13",
@@ -884,7 +884,7 @@
       ]
     },
     {
-      "id": "google\/veo-3.1",
+      "id": "google/veo-3.1",
       "name": "Veo-3.1",
       "family": "veo",
       "releaseDate": "2025-10-15",
@@ -902,7 +902,7 @@
       ]
     },
     {
-      "id": "google\/veo-3.1-fast",
+      "id": "google/veo-3.1-fast",
       "name": "Veo-3.1-Fast",
       "family": "veo",
       "releaseDate": "2025-10-15",
@@ -921,7 +921,7 @@
       ]
     },
     {
-      "id": "ideogramai\/ideogram",
+      "id": "ideogramai/ideogram",
       "name": "Ideogram",
       "family": "ideogram",
       "releaseDate": "2024-04-03",
@@ -940,7 +940,7 @@
       ]
     },
     {
-      "id": "ideogramai\/ideogram-v2",
+      "id": "ideogramai/ideogram-v2",
       "name": "Ideogram-v2",
       "family": "ideogram",
       "releaseDate": "2024-08-21",
@@ -959,7 +959,7 @@
       ]
     },
     {
-      "id": "ideogramai\/ideogram-v2a",
+      "id": "ideogramai/ideogram-v2a",
       "name": "Ideogram-v2a",
       "family": "ideogram",
       "releaseDate": "2025-02-27",
@@ -977,7 +977,7 @@
       ]
     },
     {
-      "id": "ideogramai\/ideogram-v2a-turbo",
+      "id": "ideogramai/ideogram-v2a-turbo",
       "name": "Ideogram-v2a-Turbo",
       "family": "ideogram",
       "releaseDate": "2025-02-27",
@@ -995,7 +995,7 @@
       ]
     },
     {
-      "id": "lumalabs\/ray2",
+      "id": "lumalabs/ray2",
       "name": "Ray2",
       "family": "ray",
       "releaseDate": "2025-02-20",
@@ -1014,7 +1014,7 @@
       ]
     },
     {
-      "id": "novita\/deepseek-v3.2",
+      "id": "novita/deepseek-v3.2",
       "name": "DeepSeek-V3.2",
       "releaseDate": "2025-12-01",
       "contextLimit": 128000,
@@ -1031,7 +1031,7 @@
       ]
     },
     {
-      "id": "novita\/glm-4.6",
+      "id": "novita/glm-4.6",
       "name": "GLM-4.6",
       "family": "glm",
       "releaseDate": "2025-09-30",
@@ -1049,7 +1049,7 @@
       ]
     },
     {
-      "id": "novita\/glm-4.6v",
+      "id": "novita/glm-4.6v",
       "name": "glm-4.6v",
       "releaseDate": "2025-12-09",
       "contextLimit": 131000,
@@ -1067,7 +1067,7 @@
       ]
     },
     {
-      "id": "novita\/glm-4.7",
+      "id": "novita/glm-4.7",
       "name": "glm-4.7",
       "status": "deprecated",
       "releaseDate": "2025-12-22",
@@ -1085,7 +1085,7 @@
       ]
     },
     {
-      "id": "novita\/glm-4.7-flash",
+      "id": "novita/glm-4.7-flash",
       "name": "glm-4.7-flash",
       "releaseDate": "2026-01-19",
       "contextLimit": 200000,
@@ -1102,7 +1102,7 @@
       ]
     },
     {
-      "id": "novita\/glm-4.7-n",
+      "id": "novita/glm-4.7-n",
       "name": "glm-4.7-n",
       "releaseDate": "2025-12-22",
       "contextLimit": 205000,
@@ -1119,7 +1119,7 @@
       ]
     },
     {
-      "id": "novita\/glm-5",
+      "id": "novita/glm-5",
       "name": "GLM-5",
       "releaseDate": "2026-02-15",
       "contextLimit": 205000,
@@ -1136,7 +1136,7 @@
       ]
     },
     {
-      "id": "novita\/kimi-k2-thinking",
+      "id": "novita/kimi-k2-thinking",
       "name": "kimi-k2-thinking",
       "family": "kimi",
       "releaseDate": "2025-11-07",
@@ -1154,7 +1154,7 @@
       ]
     },
     {
-      "id": "novita\/kimi-k2.5",
+      "id": "novita/kimi-k2.5",
       "name": "Kimi-K2.5",
       "releaseDate": "2026-01-27",
       "contextLimit": 128000,
@@ -1173,7 +1173,7 @@
       ]
     },
     {
-      "id": "novita\/minimax-m2.1",
+      "id": "novita/minimax-m2.1",
       "name": "minimax-m2.1",
       "releaseDate": "2025-12-26",
       "contextLimit": 205000,
@@ -1190,7 +1190,7 @@
       ]
     },
     {
-      "id": "openai\/chatgpt-4o-latest",
+      "id": "openai/chatgpt-4o-latest",
       "name": "ChatGPT-4o-Latest",
       "status": "deprecated",
       "family": "gpt",
@@ -1210,7 +1210,7 @@
       ]
     },
     {
-      "id": "openai\/dall-e-3",
+      "id": "openai/dall-e-3",
       "name": "DALL-E-3",
       "family": "dall-e",
       "releaseDate": "2023-11-06",
@@ -1228,7 +1228,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-3.5-turbo",
+      "id": "openai/gpt-3.5-turbo",
       "name": "GPT-3.5-Turbo",
       "family": "gpt",
       "releaseDate": "2023-09-13",
@@ -1247,7 +1247,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-3.5-turbo-instruct",
+      "id": "openai/gpt-3.5-turbo-instruct",
       "name": "GPT-3.5-Turbo-Instruct",
       "family": "gpt",
       "releaseDate": "2023-09-20",
@@ -1266,7 +1266,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-3.5-turbo-raw",
+      "id": "openai/gpt-3.5-turbo-raw",
       "name": "GPT-3.5-Turbo-Raw",
       "family": "gpt",
       "releaseDate": "2023-09-27",
@@ -1285,7 +1285,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4-classic",
+      "id": "openai/gpt-4-classic",
       "name": "GPT-4-Classic",
       "status": "deprecated",
       "family": "gpt",
@@ -1305,7 +1305,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4-classic-0314",
+      "id": "openai/gpt-4-classic-0314",
       "name": "GPT-4-Classic-0314",
       "status": "deprecated",
       "family": "gpt",
@@ -1325,7 +1325,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4-turbo",
+      "id": "openai/gpt-4-turbo",
       "name": "GPT-4-Turbo",
       "family": "gpt",
       "releaseDate": "2023-09-13",
@@ -1344,7 +1344,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4.1",
+      "id": "openai/gpt-4.1",
       "name": "GPT-4.1",
       "family": "gpt",
       "releaseDate": "2025-04-14",
@@ -1363,7 +1363,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4.1-mini",
+      "id": "openai/gpt-4.1-mini",
       "name": "GPT-4.1-mini",
       "family": "gpt-mini",
       "releaseDate": "2025-04-15",
@@ -1382,7 +1382,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4.1-nano",
+      "id": "openai/gpt-4.1-nano",
       "name": "GPT-4.1-nano",
       "family": "gpt-nano",
       "releaseDate": "2025-04-15",
@@ -1401,7 +1401,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4o",
+      "id": "openai/gpt-4o",
       "name": "GPT-4o",
       "family": "gpt",
       "releaseDate": "2024-05-13",
@@ -1420,7 +1420,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4o-aug",
+      "id": "openai/gpt-4o-aug",
       "name": "GPT-4o-Aug",
       "family": "gpt",
       "releaseDate": "2024-11-21",
@@ -1439,7 +1439,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4o-mini",
+      "id": "openai/gpt-4o-mini",
       "name": "GPT-4o-mini",
       "family": "gpt-mini",
       "releaseDate": "2024-07-18",
@@ -1458,7 +1458,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4o-mini-search",
+      "id": "openai/gpt-4o-mini-search",
       "name": "GPT-4o-mini-Search",
       "family": "gpt-mini",
       "releaseDate": "2025-03-11",
@@ -1476,7 +1476,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-4o-search",
+      "id": "openai/gpt-4o-search",
       "name": "GPT-4o-Search",
       "family": "gpt",
       "releaseDate": "2025-03-11",
@@ -1494,7 +1494,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5",
+      "id": "openai/gpt-5",
       "name": "GPT-5",
       "family": "gpt",
       "releaseDate": "2025-08-05",
@@ -1513,7 +1513,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5-chat",
+      "id": "openai/gpt-5-chat",
       "name": "GPT-5-Chat",
       "family": "gpt-codex",
       "releaseDate": "2025-08-07",
@@ -1532,7 +1532,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5-codex",
+      "id": "openai/gpt-5-codex",
       "name": "GPT-5-Codex",
       "family": "gpt-codex",
       "releaseDate": "2025-09-23",
@@ -1551,7 +1551,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5-mini",
+      "id": "openai/gpt-5-mini",
       "name": "GPT-5-mini",
       "family": "gpt-mini",
       "releaseDate": "2025-06-25",
@@ -1570,7 +1570,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5-nano",
+      "id": "openai/gpt-5-nano",
       "name": "GPT-5-nano",
       "family": "gpt-nano",
       "releaseDate": "2025-08-05",
@@ -1589,7 +1589,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5-pro",
+      "id": "openai/gpt-5-pro",
       "name": "GPT-5-Pro",
       "family": "gpt-pro",
       "releaseDate": "2025-10-06",
@@ -1608,7 +1608,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.1",
+      "id": "openai/gpt-5.1",
       "name": "GPT-5.1",
       "family": "gpt",
       "releaseDate": "2025-11-12",
@@ -1627,7 +1627,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.1-codex",
+      "id": "openai/gpt-5.1-codex",
       "name": "GPT-5.1-Codex",
       "family": "gpt-codex",
       "releaseDate": "2025-11-12",
@@ -1646,7 +1646,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.1-codex-max",
+      "id": "openai/gpt-5.1-codex-max",
       "name": "GPT-5.1-Codex-Max",
       "releaseDate": "2025-12-08",
       "contextLimit": 400000,
@@ -1664,7 +1664,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.1-codex-mini",
+      "id": "openai/gpt-5.1-codex-mini",
       "name": "GPT-5.1-Codex-Mini",
       "family": "gpt-codex",
       "releaseDate": "2025-11-12",
@@ -1682,7 +1682,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.1-instant",
+      "id": "openai/gpt-5.1-instant",
       "name": "GPT-5.1-Instant",
       "family": "gpt",
       "releaseDate": "2025-11-12",
@@ -1701,7 +1701,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.2",
+      "id": "openai/gpt-5.2",
       "name": "GPT-5.2",
       "releaseDate": "2025-12-08",
       "contextLimit": 400000,
@@ -1719,7 +1719,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.2-codex",
+      "id": "openai/gpt-5.2-codex",
       "name": "GPT-5.2-Codex",
       "releaseDate": "2026-01-14",
       "contextLimit": 400000,
@@ -1737,7 +1737,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.2-instant",
+      "id": "openai/gpt-5.2-instant",
       "name": "GPT-5.2-Instant",
       "releaseDate": "2025-12-11",
       "contextLimit": 128000,
@@ -1755,7 +1755,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.2-pro",
+      "id": "openai/gpt-5.2-pro",
       "name": "GPT-5.2-Pro",
       "releaseDate": "2025-12-11",
       "contextLimit": 400000,
@@ -1773,7 +1773,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.3-codex",
+      "id": "openai/gpt-5.3-codex",
       "name": "GPT-5.3-Codex",
       "releaseDate": "2026-02-10",
       "contextLimit": 400000,
@@ -1791,7 +1791,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.3-codex-spark",
+      "id": "openai/gpt-5.3-codex-spark",
       "name": "GPT-5.3-Codex-Spark",
       "releaseDate": "2026-03-04",
       "contextLimit": 128000,
@@ -1808,7 +1808,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.3-instant",
+      "id": "openai/gpt-5.3-instant",
       "name": "GPT-5.3-Instant",
       "releaseDate": "2026-03-03",
       "contextLimit": 128000,
@@ -1827,7 +1827,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.4",
+      "id": "openai/gpt-5.4",
       "name": "GPT-5.4",
       "releaseDate": "2026-02-26",
       "contextLimit": 1050000,
@@ -1847,7 +1847,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.4-mini",
+      "id": "openai/gpt-5.4-mini",
       "name": "GPT-5.4-Mini",
       "releaseDate": "2026-03-12",
       "contextLimit": 400000,
@@ -1866,7 +1866,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.4-nano",
+      "id": "openai/gpt-5.4-nano",
       "name": "GPT-5.4-Nano",
       "releaseDate": "2026-03-11",
       "contextLimit": 400000,
@@ -1885,7 +1885,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.4-pro",
+      "id": "openai/gpt-5.4-pro",
       "name": "GPT-5.4-Pro",
       "releaseDate": "2026-03-05",
       "contextLimit": 1050000,
@@ -1904,7 +1904,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.5",
+      "id": "openai/gpt-5.5",
       "name": "GPT-5.5",
       "family": "gpt",
       "releaseDate": "2026-04-08",
@@ -1924,7 +1924,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.5-pro",
+      "id": "openai/gpt-5.5-pro",
       "name": "GPT-5.5-Pro",
       "family": "gpt-pro",
       "releaseDate": "2026-04-08",
@@ -1944,7 +1944,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-image-1",
+      "id": "openai/gpt-image-1",
       "name": "GPT-Image-1",
       "family": "gpt",
       "releaseDate": "2025-03-31",
@@ -1963,7 +1963,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-image-1-mini",
+      "id": "openai/gpt-image-1-mini",
       "name": "GPT-Image-1-Mini",
       "family": "gpt",
       "releaseDate": "2025-08-26",
@@ -1982,7 +1982,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-image-1.5",
+      "id": "openai/gpt-image-1.5",
       "name": "gpt-image-1.5",
       "releaseDate": "2025-12-16",
       "contextLimit": 128000,
@@ -2000,7 +2000,7 @@
       ]
     },
     {
-      "id": "openai\/gpt-image-2",
+      "id": "openai/gpt-image-2",
       "name": "GPT-Image-2",
       "releaseDate": "2026-04-21",
       "contextLimit": 0,
@@ -2018,7 +2018,7 @@
       ]
     },
     {
-      "id": "openai\/o1",
+      "id": "openai/o1",
       "name": "o1",
       "family": "o",
       "releaseDate": "2024-12-18",
@@ -2037,7 +2037,7 @@
       ]
     },
     {
-      "id": "openai\/o1-pro",
+      "id": "openai/o1-pro",
       "name": "o1-pro",
       "family": "o-pro",
       "releaseDate": "2025-03-19",
@@ -2056,7 +2056,7 @@
       ]
     },
     {
-      "id": "openai\/o3",
+      "id": "openai/o3",
       "name": "o3",
       "family": "o",
       "releaseDate": "2025-04-16",
@@ -2075,7 +2075,7 @@
       ]
     },
     {
-      "id": "openai\/o3-deep-research",
+      "id": "openai/o3-deep-research",
       "name": "o3-deep-research",
       "family": "o",
       "releaseDate": "2025-06-27",
@@ -2093,7 +2093,7 @@
       ]
     },
     {
-      "id": "openai\/o3-mini",
+      "id": "openai/o3-mini",
       "name": "o3-mini",
       "family": "o-mini",
       "releaseDate": "2025-01-31",
@@ -2112,7 +2112,7 @@
       ]
     },
     {
-      "id": "openai\/o3-mini-high",
+      "id": "openai/o3-mini-high",
       "name": "o3-mini-high",
       "family": "o-mini",
       "releaseDate": "2025-01-31",
@@ -2131,7 +2131,7 @@
       ]
     },
     {
-      "id": "openai\/o3-pro",
+      "id": "openai/o3-pro",
       "name": "o3-pro",
       "family": "o-pro",
       "releaseDate": "2025-06-10",
@@ -2150,7 +2150,7 @@
       ]
     },
     {
-      "id": "openai\/o4-mini",
+      "id": "openai/o4-mini",
       "name": "o4-mini",
       "family": "o-mini",
       "releaseDate": "2025-04-16",
@@ -2169,7 +2169,7 @@
       ]
     },
     {
-      "id": "openai\/o4-mini-deep-research",
+      "id": "openai/o4-mini-deep-research",
       "name": "o4-mini-deep-research",
       "family": "o-mini",
       "releaseDate": "2025-06-27",
@@ -2187,7 +2187,7 @@
       ]
     },
     {
-      "id": "openai\/sora-2",
+      "id": "openai/sora-2",
       "name": "Sora-2",
       "family": "sora",
       "releaseDate": "2025-10-06",
@@ -2206,7 +2206,7 @@
       ]
     },
     {
-      "id": "openai\/sora-2-pro",
+      "id": "openai/sora-2-pro",
       "name": "Sora-2-Pro",
       "family": "sora",
       "releaseDate": "2025-10-06",
@@ -2225,7 +2225,7 @@
       ]
     },
     {
-      "id": "poetools\/claude-code",
+      "id": "poetools/claude-code",
       "name": "claude-code",
       "releaseDate": "2025-11-27",
       "contextLimit": 0,
@@ -2242,7 +2242,7 @@
       ]
     },
     {
-      "id": "runwayml\/runway",
+      "id": "runwayml/runway",
       "name": "Runway",
       "family": "runway",
       "releaseDate": "2024-10-11",
@@ -2261,7 +2261,7 @@
       ]
     },
     {
-      "id": "runwayml\/runway-gen-4-turbo",
+      "id": "runwayml/runway-gen-4-turbo",
       "name": "Runway-Gen-4-Turbo",
       "family": "runway",
       "releaseDate": "2025-05-09",
@@ -2280,7 +2280,7 @@
       ]
     },
     {
-      "id": "stabilityai\/stablediffusionxl",
+      "id": "stabilityai/stablediffusionxl",
       "name": "StableDiffusionXL",
       "family": "stable-diffusion",
       "releaseDate": "2023-07-09",
@@ -2299,7 +2299,7 @@
       ]
     },
     {
-      "id": "topazlabs-co\/topazlabs",
+      "id": "topazlabs-co/topazlabs",
       "name": "TopazLabs",
       "family": "topazlabs",
       "releaseDate": "2024-12-03",
@@ -2317,7 +2317,7 @@
       ]
     },
     {
-      "id": "trytako\/tako",
+      "id": "trytako/tako",
       "name": "Tako",
       "family": "tako",
       "releaseDate": "2024-08-15",
@@ -2335,7 +2335,7 @@
       ]
     },
     {
-      "id": "xai\/grok-3",
+      "id": "xai/grok-3",
       "name": "Grok 3",
       "family": "grok",
       "releaseDate": "2025-04-11",
@@ -2353,7 +2353,7 @@
       ]
     },
     {
-      "id": "xai\/grok-3-mini",
+      "id": "xai/grok-3-mini",
       "name": "Grok 3 Mini",
       "family": "grok",
       "releaseDate": "2025-04-11",
@@ -2371,7 +2371,7 @@
       ]
     },
     {
-      "id": "xai\/grok-4",
+      "id": "xai/grok-4",
       "name": "Grok-4",
       "family": "grok",
       "releaseDate": "2025-07-10",
@@ -2390,7 +2390,7 @@
       ]
     },
     {
-      "id": "xai\/grok-4-fast-non-reasoning",
+      "id": "xai/grok-4-fast-non-reasoning",
       "name": "Grok-4-Fast-Non-Reasoning",
       "family": "grok",
       "releaseDate": "2025-09-16",
@@ -2409,7 +2409,7 @@
       ]
     },
     {
-      "id": "xai\/grok-4-fast-reasoning",
+      "id": "xai/grok-4-fast-reasoning",
       "name": "Grok-4-Fast-Reasoning",
       "family": "grok",
       "releaseDate": "2025-09-16",
@@ -2428,7 +2428,7 @@
       ]
     },
     {
-      "id": "xai\/grok-4.1-fast-non-reasoning",
+      "id": "xai/grok-4.1-fast-non-reasoning",
       "name": "Grok-4.1-Fast-Non-Reasoning",
       "family": "grok",
       "releaseDate": "2025-11-19",
@@ -2447,7 +2447,7 @@
       ]
     },
     {
-      "id": "xai\/grok-4.1-fast-reasoning",
+      "id": "xai/grok-4.1-fast-reasoning",
       "name": "Grok-4.1-Fast-Reasoning",
       "family": "grok",
       "releaseDate": "2025-11-19",
@@ -2466,7 +2466,7 @@
       ]
     },
     {
-      "id": "xai\/grok-4.20-multi-agent",
+      "id": "xai/grok-4.20-multi-agent",
       "name": "Grok-4.20-Multi-Agent",
       "releaseDate": "2026-03-13",
       "contextLimit": 128000,
@@ -2484,7 +2484,7 @@
       ]
     },
     {
-      "id": "xai\/grok-code-fast-1",
+      "id": "xai/grok-code-fast-1",
       "name": "Grok Code Fast 1",
       "family": "grok",
       "releaseDate": "2025-08-22",
@@ -2496,6 +2496,80 @@
       "attachment": true,
       "inputModalities": [
         "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "empiriolabs/deepseek-v4-flash-el",
+      "name": "DeepSeek-V4-Flash-EL",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "inputLimit": 1000000,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "empiriolabs/deepseek-v4-pro-el",
+      "name": "DeepSeek-V4-Pro-EL",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "inputLimit": 1000000,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "novita/kimi-k2.6",
+      "name": "Kimi-K2.6",
+      "releaseDate": "2026-04-20",
+      "contextLimit": 262144,
+      "inputLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "google/gemini-3.5-flash",
+      "name": "Gemini-3.5-Flash",
+      "family": "gemini-flash",
+      "releaseDate": "2026-05-19",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio"
       ],
       "outputModalities": [
         "text"

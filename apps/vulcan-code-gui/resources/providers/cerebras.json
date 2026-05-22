@@ -1,0 +1,92 @@
+{
+  "id": "cerebras",
+  "name": "Cerebras",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "CEREBRAS_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https://api.cerebras.ai/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "zai-glm-4.7",
+      "name": "Z.AI GLM-4.7",
+      "releaseDate": "2026-01-10",
+      "contextLimit": 131072,
+      "outputLimit": 40000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen-3-235b-a22b-instruct-2507",
+      "name": "Qwen 3 235B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-07-22",
+      "contextLimit": 131000,
+      "outputLimit": 32000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "llama3.1-8b",
+      "name": "Llama 3.1 8B",
+      "family": "llama",
+      "releaseDate": "2025-01-01",
+      "contextLimit": 32000,
+      "outputLimit": 8000,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

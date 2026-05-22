@@ -1,0 +1,77 @@
+{
+  "id": "v0",
+  "name": "v0",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "V0_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "allowOverride": true
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "v0-1.5-md",
+      "name": "v0-1.5-md",
+      "family": "v0",
+      "releaseDate": "2025-06-09",
+      "contextLimit": 128000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "v0-1.5-lg",
+      "name": "v0-1.5-lg",
+      "family": "v0",
+      "releaseDate": "2025-06-09",
+      "contextLimit": 512000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "v0-1.0-md",
+      "name": "v0-1.0-md",
+      "family": "v0",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 128000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

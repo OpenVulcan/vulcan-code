@@ -1,0 +1,803 @@
+{
+  "id": "google-vertex",
+  "name": "Vertex",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "GOOGLE_VERTEX_PROJECT",
+    "GOOGLE_VERTEX_LOCATION",
+    "GOOGLE_APPLICATION_CREDENTIALS"
+  ],
+  "fields": [
+    "baseUrl"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "allowOverride": true
+  },
+  "modelDiscovery": {
+    "kind": "none"
+  },
+  "models": [
+    {
+      "id": "gemini-flash-latest",
+      "name": "Gemini Flash Latest",
+      "family": "gemini-flash",
+      "releaseDate": "2025-09-25",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash-preview-09-2025",
+      "name": "Gemini 2.5 Flash Preview 09-25",
+      "family": "gemini-flash",
+      "releaseDate": "2025-09-25",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3-pro-preview",
+      "name": "Gemini 3 Pro Preview",
+      "family": "gemini-pro",
+      "releaseDate": "2025-11-18",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash-lite-preview-06-17",
+      "name": "Gemini 2.5 Flash Lite Preview 06-17",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2025-06-17",
+      "contextLimit": 65536,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "family": "gemini-flash",
+      "releaseDate": "2025-06-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "name": "Gemini 2.0 Flash",
+      "family": "gemini-flash",
+      "releaseDate": "2024-12-11",
+      "contextLimit": 1048576,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai/deepseek-v3.1-maas",
+      "name": "DeepSeek V3.1",
+      "family": "deepseek",
+      "releaseDate": "2025-08-28",
+      "contextLimit": 163840,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-ai/deepseek-v3.2-maas",
+      "name": "DeepSeek V3.2",
+      "family": "deepseek",
+      "releaseDate": "2025-12-17",
+      "contextLimit": 163840,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k2-thinking-maas",
+      "name": "Kimi K2 Thinking",
+      "family": "kimi-thinking",
+      "releaseDate": "2025-11-13",
+      "contextLimit": 262144,
+      "outputLimit": 262144,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-oss-20b-maas",
+      "name": "GPT OSS 20B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "openai/gpt-oss-120b-maas",
+      "name": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 131072,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org/glm-5-maas",
+      "name": "GLM-5",
+      "family": "glm",
+      "releaseDate": "2026-02-11",
+      "contextLimit": 202752,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "zai-org/glm-4.7-maas",
+      "name": "GLM-4.7",
+      "family": "glm",
+      "releaseDate": "2026-01-06",
+      "contextLimit": 200000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen/qwen3-235b-a22b-instruct-2507-maas",
+      "name": "Qwen3 235B A22B Instruct",
+      "family": "qwen",
+      "releaseDate": "2025-08-13",
+      "contextLimit": 262144,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta/llama-3.3-70b-instruct-maas",
+      "name": "Llama 3.3 70B Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-29",
+      "contextLimit": 128000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "meta/llama-4-maverick-17b-128e-instruct-maas",
+      "name": "Llama 4 Maverick 17B 128E Instruct",
+      "family": "llama",
+      "releaseDate": "2025-04-29",
+      "contextLimit": 524288,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4@20250514",
+      "name": "Claude Opus 4",
+      "family": "claude-opus",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2026-05-07",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4-6@default",
+      "name": "Claude Opus 4.6",
+      "family": "claude-opus",
+      "releaseDate": "2026-02-05",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "family": "gemini-pro",
+      "releaseDate": "2025-03-20",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4-6@default",
+      "name": "Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "releaseDate": "2026-02-17",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-3-5-haiku@20241022",
+      "name": "Claude Haiku 3.5",
+      "family": "claude-haiku",
+      "releaseDate": "2024-10-22",
+      "contextLimit": 200000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4-5@20250929",
+      "name": "Claude Sonnet 4.5",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-09-29",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4-5@20251101",
+      "name": "Claude Opus 4.5",
+      "family": "claude-opus",
+      "releaseDate": "2025-11-01",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-3-5-sonnet@20241022",
+      "name": "Claude Sonnet 3.5 v2",
+      "family": "claude-sonnet",
+      "releaseDate": "2024-10-22",
+      "contextLimit": 200000,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4-1@20250805",
+      "name": "Claude Opus 4.1",
+      "family": "claude-opus",
+      "releaseDate": "2025-08-05",
+      "contextLimit": 200000,
+      "outputLimit": 32000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash-Lite",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2025-06-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-flash-lite-latest",
+      "name": "Gemini Flash-Lite Latest",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2025-09-25",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-2.0-flash-lite",
+      "name": "Gemini 2.0 Flash-Lite",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2024-12-11",
+      "contextLimit": 1048576,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-pro-preview-customtools",
+      "name": "Gemini 3.1 Pro Preview Custom Tools",
+      "family": "gemini-pro",
+      "releaseDate": "2026-02-19",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-lite-preview",
+      "name": "Gemini 3.1 Flash Lite Preview",
+      "family": "gemini-flash-lite",
+      "releaseDate": "2026-03-03",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3.1-pro-preview",
+      "name": "Gemini 3.1 Pro Preview",
+      "family": "gemini-pro",
+      "releaseDate": "2026-02-19",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "name": "Gemini 3 Flash Preview",
+      "family": "gemini-flash",
+      "releaseDate": "2025-12-17",
+      "contextLimit": 1048576,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-haiku-4-5@20251001",
+      "name": "Claude Haiku 4.5",
+      "family": "claude-haiku",
+      "releaseDate": "2025-10-15",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-3-7-sonnet@20250219",
+      "name": "Claude Sonnet 3.7",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-02-19",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4-7@default",
+      "name": "Claude Opus 4.7",
+      "family": "claude-opus",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-embedding-001",
+      "name": "Gemini Embedding 001",
+      "family": "gemini",
+      "releaseDate": "2025-05-20",
+      "contextLimit": 2048,
+      "outputLimit": 1,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4@20250514",
+      "name": "Claude Sonnet 4",
+      "family": "claude-sonnet",
+      "releaseDate": "2025-05-22",
+      "contextLimit": 200000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

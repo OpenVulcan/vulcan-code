@@ -32,7 +32,7 @@ vulcan-iced-widget = { path = "crates/vulcan-iced-widget" }
 vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
 vulcan-core = { path = "crates/vulcan-core" }
 vldb-controller-client = "0.2.1"
-luaskills = "=0.4.2"
+luaskills = "=0.4.3"
 async-trait = "0.1.89"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }

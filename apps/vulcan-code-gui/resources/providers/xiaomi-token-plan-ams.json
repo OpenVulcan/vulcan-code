@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/token-plan-ams.xiaomimimo.com\/v1",
+    "value": "https://token-plan-ams.xiaomimimo.com/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -116,6 +116,27 @@
       "toolCall": true,
       "temperature": true,
       "attachment": true,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "mimo-v2-flash",
+      "name": "MiMo-V2-Flash",
+      "family": "mimo",
+      "releaseDate": "2025-12-16",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
       "interleaved": {
         "field": "reasoning_content"
       },

@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/api.thegrid.ai\/v1",
+    "value": "https://api.thegrid.ai/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -60,6 +60,122 @@
       "releaseDate": "2026-02-26",
       "contextLimit": 128000,
       "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "code-prime",
+      "name": "Code Prime",
+      "status": "beta",
+      "releaseDate": "2026-05-04",
+      "contextLimit": 128000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "agent-max",
+      "name": "Agent Max",
+      "status": "beta",
+      "releaseDate": "2026-05-04",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "agent-standard",
+      "name": "Agent Standard",
+      "status": "beta",
+      "releaseDate": "2026-05-04",
+      "contextLimit": 128000,
+      "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "code-standard",
+      "name": "Code Standard",
+      "status": "beta",
+      "releaseDate": "2026-05-04",
+      "contextLimit": 128000,
+      "outputLimit": 16000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "code-max",
+      "name": "Code Max",
+      "status": "beta",
+      "releaseDate": "2026-05-04",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "agent-prime",
+      "name": "Agent Prime",
+      "status": "beta",
+      "releaseDate": "2026-05-04",
+      "contextLimit": 128000,
+      "outputLimit": 64000,
       "reasoning": true,
       "toolCall": true,
       "temperature": true,

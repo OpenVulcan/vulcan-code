@@ -4700,6 +4700,10 @@ impl VulcanWorkbench {
             let source_type = match skill.source_type {
                 Some(luaskills::SkillInstallSourceType::Github) => "GitHub",
                 Some(luaskills::SkillInstallSourceType::Url) => "包地址",
+                Some(luaskills::SkillInstallSourceType::OfficialHub) => "Official Hub",
+                Some(luaskills::SkillInstallSourceType::PrivateUrlManifest) => {
+                    "Private URL Manifest"
+                }
                 None => "未知来源",
             };
             format!("{source_type} · {source_locator}")

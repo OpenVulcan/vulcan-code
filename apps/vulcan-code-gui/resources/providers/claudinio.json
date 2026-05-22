@@ -1,0 +1,38 @@
+{
+  "id": "claudinio",
+  "name": "Claudinio",
+  "runtime": "openai-compatible",
+  "credentialEnvKeys": [
+    "CLAUDINIO_API_KEY"
+  ],
+  "fields": [
+    "apiKey"
+  ],
+  "baseUrl": {
+    "kind": "fixed",
+    "value": "https://api.claudin.io/v1",
+    "allowOverride": false
+  },
+  "modelDiscovery": {
+    "kind": "openai-models"
+  },
+  "models": [
+    {
+      "id": "claudinio",
+      "name": "Claudinio",
+      "releaseDate": "2026-05-12",
+      "contextLimit": 256000,
+      "outputLimit": 64000,
+      "reasoning": true,
+      "toolCall": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    }
+  ]
+}

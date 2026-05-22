@@ -495,6 +495,88 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "grok-build-0.1",
+      "name": "Grok Build 0.1",
+      "family": "grok-build",
+      "releaseDate": "2026-04-16",
+      "contextLimit": 256000,
+      "outputLimit": 256000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "name": "Grok Imagine Image Quality",
+      "family": "grok",
+      "releaseDate": "2026-04-03",
+      "contextLimit": 8000,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "image",
+        "pdf"
+      ]
+    },
+    {
+      "id": "grok-imagine-video",
+      "name": "Grok Imagine Video",
+      "family": "grok",
+      "releaseDate": "2026-01-28",
+      "contextLimit": 1024,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "video"
+      ]
+    },
+    {
+      "id": "grok-imagine-image",
+      "name": "Grok Imagine Image",
+      "family": "grok",
+      "releaseDate": "2026-01-28",
+      "contextLimit": 8000,
+      "outputLimit": 0,
+      "reasoning": false,
+      "toolCall": false,
+      "temperature": false,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "outputModalities": [
+        "image",
+        "pdf"
+      ]
     }
   ]
 }

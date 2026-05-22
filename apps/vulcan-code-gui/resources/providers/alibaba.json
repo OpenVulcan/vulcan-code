@@ -28,7 +28,7 @@
   },
   "baseUrl": {
     "kind": "fixed",
-    "value": "https:\/\/dashscope-intl.aliyuncs.com\/compatible-mode\/v1",
+    "value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -1011,6 +1011,24 @@
       "releaseDate": "2025-03-05",
       "contextLimit": 131072,
       "outputLimit": 8192,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3.7-max",
+      "name": "Qwen3.7 Max",
+      "family": "qwen",
+      "releaseDate": "2026-05-21",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
       "reasoning": true,
       "toolCall": true,
       "temperature": true,
