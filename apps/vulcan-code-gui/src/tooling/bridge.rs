@@ -48,6 +48,10 @@ use vulcan_tools_manager::{
     VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
 
+/// Shared description suffix that explains how generated-media tools expose export controls and follow-up file paths to the model.
+/// 生成媒体工具共享的描述后缀，用于向模型说明导出控制项以及可复用的后续文件路径。
+const GENERATED_MEDIA_OUTPUT_DESCRIPTION_SUFFIX: &str = " Optional `output_dir` exports a caller-chosen copy. Optional `output_file_stem` suggests the file name without extension. Generated results return `outputs[*].local_path` for follow-up tool calls.";
+
 /// One semantic AI-tool fallback alias requested by the provider/model router.
 /// Provider/Model 路由器请求的一条语义 AI 工具回退别名。
 #[derive(Debug, Clone)]
@@ -303,6 +307,14 @@ fn append_configured_ai_tool_backing_candidates(
     }
 }
 
+/// Builds one AI-facing description for a generated-media host tool so semantic aliases can clearly understand export controls and follow-up path reuse.
+/// 构建一条面向 AI 的生成媒体宿主工具描述，使语义别名能够清楚理解导出控制项与后续路径复用方式。
+fn generated_media_tool_description(base_description: &str, target_summary: &str) -> String {
+    format!(
+        "{base_description} Available `target` values: {target_summary}.{GENERATED_MEDIA_OUTPUT_DESCRIPTION_SUFFIX}"
+    )
+}
+
 /// Builds the hidden backing tool used by the semantic `web_search` fallback alias.
 /// 构建语义 `web_search` 回退别名使用的隐藏承载工具。
 fn configured_web_search_candidate(
@@ -421,9 +433,9 @@ fn configured_image_generation_candidate(
         descriptor: VulcanToolDescriptor {
             id: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Generate images through the user-configured image-generation target chain. Available `target` values: {}.",
-                target_summary
+            description: generated_media_tool_description(
+                "Generate images through the user-configured image-generation target chain.",
+                &target_summary,
             ),
             source: VulcanToolSourceKind::Native,
         },
@@ -472,9 +484,9 @@ fn configured_video_generation_candidate(
         descriptor: VulcanToolDescriptor {
             id: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Generate videos through the user-configured video-generation target chain. Available `target` values: {}.",
-                target_summary
+            description: generated_media_tool_description(
+                "Generate videos through the user-configured video-generation target chain.",
+                &target_summary,
             ),
             source: VulcanToolSourceKind::Native,
         },
@@ -522,9 +534,9 @@ fn configured_speech_synthesis_candidate(
         descriptor: VulcanToolDescriptor {
             id: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Synthesize speech through the user-configured text-to-speech target chain. Available `target` values: {}.",
-                target_summary
+            description: generated_media_tool_description(
+                "Synthesize speech through the user-configured text-to-speech target chain.",
+                &target_summary,
             ),
             source: VulcanToolSourceKind::Native,
         },
@@ -562,9 +574,9 @@ fn configured_music_generation_candidate(
         descriptor: VulcanToolDescriptor {
             id: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Generate songs or instrumental music through the user-configured music-generation target chain. Available `target` values: {}.",
-                target_summary
+            description: generated_media_tool_description(
+                "Generate songs or instrumental music through the user-configured music-generation target chain.",
+                &target_summary,
             ),
             source: VulcanToolSourceKind::Native,
         },
@@ -598,9 +610,6 @@ fn configured_music_cover_candidate(
         .into_iter()
         .filter(|attachment| attachment.kind == ConversationAttachmentKind::Audio)
         .collect::<Vec<_>>();
-    if audio_attachments.is_empty() {
-        return None;
-    }
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::MusicCover))
         .collect::<Vec<_>>()
@@ -610,9 +619,9 @@ fn configured_music_cover_candidate(
         descriptor: VulcanToolDescriptor {
             id: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID.to_string(),
-            description: format!(
-                "Create a music cover from reference audio through the user-configured music-cover target chain. Available `target` values: {}.",
-                target_summary
+            description: generated_media_tool_description(
+                "Create a music cover from reference audio through the user-configured music-cover target chain.",
+                &target_summary,
             ),
             source: VulcanToolSourceKind::Native,
         },
@@ -741,22 +750,28 @@ fn build_ai_tool_fallback_candidate(
     target: VulcanToolCandidate,
 ) -> VulcanToolCandidate {
     let semantic_tool_name = kind.key().to_string();
+    let backing_tool_name = target.descriptor.name.clone();
+    let semantic_description = if target.descriptor.description.trim().is_empty() {
+        format!(
+            "Semantic tool `{}` falls back to host tool `{}`.",
+            kind.key(),
+            backing_tool_name
+        )
+    } else {
+        target.descriptor.description.clone()
+    };
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: semantic_tool_name.clone(),
             name: semantic_tool_name.clone(),
-            description: format!(
-                "Semantic tool `{}` falls back to host tool `{}`.",
-                kind.key(),
-                target.descriptor.name
-            ),
+            description: semantic_description.clone(),
             source: VulcanToolSourceKind::AiFallback,
         },
         parameters_schema: target.parameters_schema,
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::HeuristicText(format!(
             "{} {} {}",
-            semantic_tool_name, target.descriptor.name, target.descriptor.description
+            semantic_tool_name, backing_tool_name, semantic_description
         )),
         invoke: target.invoke,
     }
@@ -881,6 +896,7 @@ mod tests {
         let resolved = VulcanToolsManager::new(candidates).resolve_for_execution_mode("Build");
         assert_eq!(resolved.descriptors.len(), 1);
         assert_eq!(resolved.descriptors[0].id, "web_search");
+        assert_eq!(resolved.descriptors[0].description, "Search the web");
         assert_eq!(
             resolved.descriptors[0].source,
             VulcanToolSourceKind::AiFallback

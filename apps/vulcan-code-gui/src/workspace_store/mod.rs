@@ -14,6 +14,7 @@ use crate::model::{
     SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
 };
 use crate::provider_usage::{parse_provider_usage_from_json, serialize_provider_usage_to_json};
+use crate::tooling::change_set::compact_change_set_host_result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
@@ -1708,7 +1709,7 @@ fn sanitize_session_message_metadata_for_persistence(metadata: Option<Value>) ->
 /// Removes known large host-result and argument payload fields while preserving display metadata.
 /// 移除已知的大型宿主结果与参数载荷字段，同时保留展示所需元数据。
 fn strip_large_metadata_fields(value: Value) -> Value {
-    if let Some(preserved) = preserve_generated_attachment_host_result(&value) {
+    if let Some(preserved) = preserve_compactable_host_result(&value) {
         return preserved;
     }
 
@@ -1755,9 +1756,16 @@ fn strip_large_metadata_fields(value: Value) -> Value {
 /// Preserves compact generated-media host payloads whenever they are needed for later transcript reconstruction.
 /// 在后续转录重建确有需要时保留紧凑生成媒体宿主载荷。
 fn preserve_or_compact_large_metadata_field(key: &str, value: Value) -> Value {
-    preserve_generated_attachment_host_result(&value)
+    preserve_compactable_host_result(&value)
         .filter(|_| key == "host_result")
         .unwrap_or_else(|| compact_large_metadata_field(key, value))
+}
+
+/// Preserves compact host-result payloads whose semantics must survive restart and transcript reconstruction.
+/// 保留那些在重启与转录重建后仍必须保留语义的紧凑宿主结果载荷。
+fn preserve_compactable_host_result(value: &Value) -> Option<Value> {
+    preserve_generated_attachment_host_result(value)
+        .or_else(|| preserve_change_set_host_result(value))
 }
 
 /// Preserves the minimal generated-attachments host-result shape required to rebuild inline media cards after restart.
@@ -1786,6 +1794,12 @@ fn preserve_generated_attachment_host_result(value: &Value) -> Option<Value> {
             "outputs": compact_outputs,
         },
     }))
+}
+
+/// Preserves the minimal `change_set` host-result shape required to rebuild change statistics and file lists after restart without reviving stale filesystem verification warnings.
+/// 保留重启后重建变更统计与文件清单所需的最小 `change_set` 宿主结果形态，并避免复活过期的文件系统校验警告。
+fn preserve_change_set_host_result(value: &Value) -> Option<Value> {
+    compact_change_set_host_result(value)
 }
 
 /// Compacts one generated attachment output down to the fields required by transcript rendering and direct host actions.
@@ -1832,6 +1846,17 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
     }
     if let Some(byte_len) = output_object.get("byte_len").cloned() {
         compact.insert(String::from("byte_len"), byte_len);
+    }
+    if let Some(source_path) = output_object
+        .get("source_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact.insert(
+            String::from("source_path"),
+            Value::String(source_path.to_string()),
+        );
     }
     if let Some(preview_local_path) = output_object
         .get("preview_local_path")
@@ -1907,7 +1932,7 @@ fn compact_metadata_to_essential_fields(metadata: &Value) -> Option<Value> {
     }
     if let Some(host_result) = object
         .get("host_result")
-        .and_then(preserve_generated_attachment_host_result)
+        .and_then(preserve_compactable_host_result)
     {
         compact.insert(String::from("host_result"), host_result);
     }
@@ -2173,10 +2198,10 @@ mod tests {
     use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState};
     use serde_json::json;
 
-    /// Verifies that transcript metadata keeps display fields while sanitizing oversized host payloads.
-    /// 验证转录元数据会保留展示字段，同时清洗超大的宿主载荷。
+    /// Verifies that transcript metadata keeps display fields while preserving one compact `change_set` host payload for later change-summary reconstruction.
+    /// 验证转录元数据会保留展示字段，同时保留一份紧凑 `change_set` 宿主载荷以便后续重建变更摘要。
     #[test]
-    fn session_message_meta_json_sanitizes_large_host_payloads() {
+    fn session_message_meta_json_preserves_compact_change_set_host_payload() {
         let message = SessionMessageEntry {
             id: String::from("message-1"),
             kind: SessionMessageKind::Assistant,
@@ -2189,7 +2214,12 @@ mod tests {
                 "host_result": {
                     "kind": "change_set",
                     "payload": {
-                        "path": "src/main.rs",
+                        "mode": "preview",
+                        "files": [{
+                            "change": "create",
+                            "path": "D:/openvulcan/vulcan-code/src/main.rs",
+                            "content": "fn main() {}\n",
+                        }],
                     },
                 },
             })),
@@ -2211,21 +2241,44 @@ mod tests {
         let host_result = metadata
             .get("host_result")
             .and_then(|value| value.as_object())
-            .expect("expected host result to be compacted");
+            .expect("expected host result to be preserved");
         assert_eq!(
-            host_result.get("omitted").and_then(|value| value.as_bool()),
-            Some(true)
+            host_result.get("kind").and_then(|value| value.as_str()),
+            Some("change_set")
+        );
+        let payload = host_result
+            .get("payload")
+            .and_then(|value| value.as_object())
+            .expect("expected compact payload");
+        assert_eq!(
+            payload.get("mode").and_then(|value| value.as_str()),
+            Some("preview")
         );
         assert_eq!(
-            host_result.get("field").and_then(|value| value.as_str()),
-            Some("host_result")
+            payload
+                .get("stats")
+                .and_then(|value| value.get("file_count"))
+                .and_then(|value| value.as_u64()),
+            Some(1)
         );
-        let preview = host_result
-            .get("preview")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        assert!(preview.contains("change_set"));
-        assert!(preview.contains("src/main.rs"));
+        assert_eq!(
+            payload
+                .get("verification")
+                .and_then(|value| value.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("skipped")
+        );
+        let file = payload
+            .get("files")
+            .and_then(|value| value.as_array())
+            .and_then(|items| items.first())
+            .expect("expected compact file record");
+        assert_eq!(
+            file.get("change").and_then(|value| value.as_str()),
+            Some("create")
+        );
+        let preview = serde_json::to_string(payload).unwrap_or_default();
+        assert!(preview.contains("main.rs"));
     }
 
     /// Verifies generated-media host payloads keep the minimal fields required to rebuild inline media cards after restart.

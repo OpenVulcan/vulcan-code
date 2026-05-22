@@ -3,6 +3,7 @@
 
 use crate::context_budget::ContextCompactionPolicy;
 use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
+use crate::tooling::change_set::compact_change_set_host_result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -230,6 +231,19 @@ pub fn collect_host_visible_attachments(
     let mut seen_keys = BTreeSet::new();
     let mut attachments = Vec::new();
 
+    for record in state.records.iter().rev() {
+        let Some(metadata) = record.metadata.as_ref() else {
+            continue;
+        };
+        for attachment in generated_attachments_from_tool_metadata(metadata) {
+            let identity_key = attachment_identity_key(&attachment);
+            if !seen_keys.insert(identity_key) {
+                continue;
+            }
+            attachments.push(attachment);
+        }
+    }
+
     for message in state.messages.iter().rev() {
         let SessionConversationPayload::UserText {
             attachments: message_attachments,
@@ -240,20 +254,7 @@ pub fn collect_host_visible_attachments(
         };
 
         for attachment in message_attachments.iter().rev() {
-            let identity_key = attachment
-                .asset_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    format!(
-                        "{}|{}|{}",
-                        attachment.kind.modality_name(),
-                        attachment.file_name,
-                        attachment.local_path
-                    )
-                });
+            let identity_key = attachment_identity_key(attachment);
             if !seen_keys.insert(identity_key) {
                 continue;
             }
@@ -262,6 +263,38 @@ pub fn collect_host_visible_attachments(
     }
 
     attachments
+}
+
+/// Builds one stable attachment identity key that prefers asset identifiers and falls back to modality, file name, and local path.
+/// 构建单条稳定附件身份键，优先使用资产标识，缺失时退回到模态、文件名与本地路径的组合。
+fn attachment_identity_key(attachment: &ConversationAttachment) -> String {
+    attachment
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "{}|{}|{}",
+                attachment.kind.modality_name(),
+                attachment.file_name,
+                attachment.local_path
+            )
+        })
+}
+
+/// Extracts generated attachments from one tool-result metadata object when that record carries a generated-attachments host result.
+/// 当某条工具结果元数据携带 generated-attachments 宿主结果时，从中提取生成附件集合。
+fn generated_attachments_from_tool_metadata(metadata: &Value) -> Vec<ConversationAttachment> {
+    metadata
+        .as_object()
+        .and_then(|_| resolve_generated_attachment_host_result_from_metadata(metadata))
+        .and_then(|host_result| host_result.get("payload"))
+        .and_then(|payload| payload.get("outputs"))
+        .cloned()
+        .and_then(|outputs| serde_json::from_value::<Vec<ConversationAttachment>>(outputs).ok())
+        .unwrap_or_default()
 }
 
 /// Appends one streamed body delta to the matching canonical session record and returns whether it was found.
@@ -776,6 +809,7 @@ fn historical_record_survives_compaction(record: &SessionConversationRecord) -> 
             SessionMessageRecordKind::AssistantOutput | SessionMessageRecordKind::CompactionSummary
         )
         || generated_attachment_tool_result_should_survive_compaction(record)
+        || change_set_tool_result_should_survive_compaction(record)
 }
 
 /// Reduces an old surviving dialogue record to compact text and minimal metadata.
@@ -787,6 +821,11 @@ fn compact_historical_record(
     if generated_attachment_tool_result_should_survive_compaction(&record) {
         record.body.clear();
         record.metadata = compact_generated_attachment_tool_result_metadata(record.metadata.take());
+        return record;
+    }
+    if change_set_tool_result_should_survive_compaction(&record) {
+        record.body.clear();
+        record.metadata = compact_change_set_tool_result_metadata(record.metadata.take());
         return record;
     }
     record.body = if prune_tools
@@ -819,6 +858,19 @@ fn generated_attachment_tool_result_should_survive_compaction(
         .is_some()
 }
 
+/// Returns whether one canonical tool-result record carries `change_set` metadata that must remain transcript-visible after compaction.
+/// 返回一条规范工具结果记录是否携带必须在压缩后继续保留为转录可见的 `change_set` 元数据。
+fn change_set_tool_result_should_survive_compaction(record: &SessionConversationRecord) -> bool {
+    matches!(
+        record.record_kind,
+        SessionMessageRecordKind::ToolResultOutput
+    ) && record
+        .metadata
+        .as_ref()
+        .and_then(resolve_change_set_host_result_from_metadata)
+        .is_some()
+}
+
 /// Resolves the generated-attachments host-result payload from transcript metadata, accepting nested and flattened shapes.
 /// 从转录元数据中解析 generated-attachments 宿主结果载荷，同时兼容嵌套与扁平两种结构。
 fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> Option<&Value> {
@@ -833,12 +885,37 @@ fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> O
     })
 }
 
+/// Resolves the `change_set` host-result payload from transcript metadata, accepting nested and flattened shapes.
+/// 从转录元数据中解析 `change_set` 宿主结果载荷，同时兼容嵌套与扁平两种结构。
+fn resolve_change_set_host_result_from_metadata(metadata: &Value) -> Option<&Value> {
+    let nested_host_result = metadata
+        .get("host_result")
+        .filter(|value| value.is_object())
+        .filter(|value| value.get("kind").and_then(Value::as_str) == Some("change_set"));
+    nested_host_result.or_else(|| {
+        (metadata.get("kind").and_then(Value::as_str) == Some("change_set")
+            && metadata.get("payload").is_some())
+        .then_some(metadata)
+    })
+}
+
 /// Compacts one generated-media tool-result metadata object down to the minimum host payload required to rebuild inline transcript cards later.
 /// 将一份生成媒体工具结果元数据压缩到后续重建内联转录卡片所需的最小宿主载荷。
 fn compact_generated_attachment_tool_result_metadata(metadata: Option<Value>) -> Option<Value> {
     let metadata = metadata?;
     let host_result = resolve_generated_attachment_host_result_from_metadata(&metadata)?;
     let compact_host_result = compact_generated_attachment_host_result(host_result)?;
+    let mut metadata_object = serde_json::Map::new();
+    metadata_object.insert(String::from("host_result"), compact_host_result);
+    Some(Value::Object(metadata_object))
+}
+
+/// Compacts one `change_set` tool-result metadata object down to the minimum host payload required to rebuild inline change summaries later.
+/// 将一份 `change_set` 工具结果元数据压缩到后续重建内联变更摘要所需的最小宿主载荷。
+fn compact_change_set_tool_result_metadata(metadata: Option<Value>) -> Option<Value> {
+    let metadata = metadata?;
+    let host_result = resolve_change_set_host_result_from_metadata(&metadata)?;
+    let compact_host_result = compact_change_set_host_result(host_result)?;
     let mut metadata_object = serde_json::Map::new();
     metadata_object.insert(String::from("host_result"), compact_host_result);
     Some(Value::Object(metadata_object))
@@ -915,6 +992,17 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
     }
     if let Some(byte_len) = output_object.get("byte_len").cloned() {
         compact_output.insert(String::from("byte_len"), byte_len);
+    }
+    if let Some(source_path) = output_object
+        .get("source_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        compact_output.insert(
+            String::from("source_path"),
+            Value::String(source_path.to_string()),
+        );
     }
     if let Some(preview_local_path) = output_object
         .get("preview_local_path")
@@ -1167,6 +1255,65 @@ mod tests {
         assert_eq!(attachments[0].local_path, "D:/diagram.png");
     }
 
+    /// Verifies host-visible attachment collection includes generated media retained in tool-result metadata so later media tools can reuse them.
+    /// 验证宿主可见附件收集会包含保留在工具结果元数据中的生成媒体，从而让后续媒体工具继续复用它们。
+    #[test]
+    fn collect_host_visible_attachments_includes_generated_tool_outputs() {
+        let state = SessionConversationState {
+            messages: vec![SessionConversationMessage {
+                id: String::from("user-1"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("分析这张图"),
+                    attachments: vec![ConversationAttachment {
+                        kind: vulcan_core::types::ConversationAttachmentKind::Image,
+                        file_name: String::from("reference.png"),
+                        local_path: String::from("D:/workspace/reference.png"),
+                        source_path: None,
+                        asset_id: Some(String::from("asset-user-1")),
+                        byte_len: Some(11),
+                        preview_local_path: None,
+                        mime_type: String::from("image/png"),
+                    }],
+                },
+            }],
+            records: vec![SessionConversationRecord {
+                id: String::from("tool-result-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回"),
+                body: String::from("已生成图片。"),
+                metadata: Some(json!({
+                    "host_result": {
+                        "kind": "generated_attachments",
+                        "payload": {
+                            "outputs": [{
+                                "kind": "image",
+                                "file_name": "generated-cover.png",
+                                "local_path": "D:/workspace/.vulcan-code/attachments/images/generated-cover.png",
+                                "source_path": "D:/workspace/exports/generated-cover.png",
+                                "mime_type": "image/png",
+                                "asset_id": "asset-generated-1",
+                                "byte_len": 2048
+                            }]
+                        }
+                    }
+                })),
+                created_at: String::from("2"),
+            }],
+            continuation: SessionProviderContinuationState::default(),
+        };
+
+        let attachments = collect_host_visible_attachments(&state);
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments[0].file_name, "generated-cover.png");
+        assert_eq!(
+            attachments[0].source_path.as_deref(),
+            Some("D:/workspace/exports/generated-cover.png")
+        );
+        assert_eq!(attachments[1].file_name, "reference.png");
+    }
+
     /// Verifies compaction keeps the newest tool-call turn structurally replayable even when the result is large.
     /// 验证压缩在工具结果很大时仍会保持最新工具调用轮次的可回放结构。
     #[test]
@@ -1376,6 +1523,104 @@ mod tests {
             Some("D:/demo.jpg")
         );
         assert!(outputs[0].get("ignored").is_none());
+        assert!(metadata.get("noise").is_none());
+    }
+
+    /// Verifies record-level compaction keeps `change_set` tool results visible with the compact host payload needed to rebuild inline file-change summaries later.
+    /// 验证记录级压缩会保留 `change_set` 工具结果的可见性，并保留后续重建内联文件变更摘要所需的紧凑宿主载荷。
+    #[test]
+    fn record_compaction_preserves_change_set_tool_result_metadata() {
+        let mut records = vec![SessionConversationRecord {
+            id: String::from("tool-result-change-set-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("调用 write_file 工具"),
+            body: String::from("## 工具返回\n\n文件变更已应用。"),
+            metadata: Some(json!({
+                "tool_call_id": "call-change-set-1",
+                "tool_result_id": "tool-result-call-change-set-1",
+                "host_result": {
+                    "kind": "change_set",
+                    "payload": {
+                        "mode": "preview",
+                        "summary": "Previewed file edit.",
+                        "files": [{
+                            "change": "create",
+                            "path": "D:/openvulcan/vulcan-code/src/demo.lua",
+                            "content": "return {}\n"
+                        }]
+                    }
+                },
+                "noise": {
+                    "large": "drop-me-too"
+                }
+            })),
+            created_at: String::from("1"),
+        }];
+        for index in 0..50 {
+            records.push(SessionConversationRecord {
+                id: format!("recent-{index}"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::new(),
+                body: format!("最近消息 {index}"),
+                metadata: None,
+                created_at: (index + 2).to_string(),
+            });
+        }
+
+        let mut state = SessionConversationState {
+            messages: Vec::new(),
+            records,
+            continuation: SessionProviderContinuationState::default(),
+        };
+        compact_conversation_records_after_summary(
+            &mut state,
+            "missing-summary",
+            ContextCompactionPolicy {
+                tail_turns: 1,
+                ..ContextCompactionPolicy::default()
+            },
+        );
+
+        assert_eq!(state.records.len(), 51);
+        let preserved_record = state
+            .records
+            .iter()
+            .find(|record| record.id == "tool-result-change-set-1")
+            .expect("change-set tool result should survive compaction");
+        assert!(preserved_record.body.is_empty());
+        let metadata = preserved_record
+            .metadata
+            .as_ref()
+            .expect("change-set tool result should preserve metadata");
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("kind"))
+                .and_then(Value::as_str),
+            Some("change_set")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("stats"))
+                .and_then(|stats| stats.get("file_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("verification"))
+                .and_then(|verification| verification.get("status"))
+                .and_then(Value::as_str),
+            Some("skipped")
+        );
         assert!(metadata.get("noise").is_none());
     }
 }

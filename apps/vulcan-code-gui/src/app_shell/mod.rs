@@ -104,6 +104,10 @@ use crate::skills::{
 };
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
+use crate::tooling::change_set::{
+    ChangeSetFileChangeKind, ChangeSetFileSummary, ChangeSetModalSummary, ChangeSetMode,
+    change_set_modal_summary_from_payload, compact_change_set_host_result,
+};
 use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
 use crate::tooling::shell_host::HostCommandShell;
 use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
@@ -1378,6 +1382,7 @@ fn compact_host_result_for_projection(host_result: &Value) -> Option<Value> {
         Some("generated_attachments") => compact_generated_host_result_for_projection(host_result),
         Some("command_run") => compact_command_run_host_result_for_projection(host_result),
         Some("command_session") => compact_command_session_host_result_for_projection(host_result),
+        Some("change_set") => compact_change_set_host_result(host_result),
         _ => None,
     }
 }
@@ -1783,6 +1788,15 @@ fn command_session_action_label(action: &str) -> &'static str {
     }
 }
 
+/// Returns the emoji-prefixed badge label for one change-set mode.
+/// 返回单个变更集模式对应的 emoji 前缀徽标文案。
+fn change_set_mode_badge_label(mode: ChangeSetMode) -> &'static str {
+    match mode {
+        ChangeSetMode::Preview => "👀 预览变更",
+        ChangeSetMode::Applied => "✅ 已应用",
+    }
+}
+
 /// Parses one optional boolean-like transcript attribute into a concrete boolean value.
 /// 将一条可选类布尔转录属性解析为确定布尔值。
 fn parse_agent_view_attribute_bool(value: Option<&String>) -> Option<bool> {
@@ -1915,6 +1929,18 @@ fn command_session_tool_modal_summary_from_agent_view_attributes(
         )
         .unwrap_or(false),
     })
+}
+
+/// Builds one change-set tool-modal summary from structured tool metadata when the current tool result carries one canonical `change_set` host payload.
+/// 当当前工具结果携带 canonical `change_set` 宿主载荷时，根据结构化工具元数据构建一份变更集工具弹层摘要。
+fn change_set_tool_modal_summary_from_tool_metadata(
+    metadata: &Value,
+) -> Option<ChangeSetModalSummary> {
+    let host_result = resolved_host_result_from_tool_metadata(metadata)?;
+    if host_result.get("kind").and_then(Value::as_str) != Some("change_set") {
+        return None;
+    }
+    change_set_modal_summary_from_payload(host_result.get("payload")?)
 }
 
 /// Builds one compact human-facing task-session label from the optional task description and subagent name.
@@ -2210,7 +2236,12 @@ fn parse_generated_attachment_output(output: &Value) -> Option<ConversationAttac
         kind,
         file_name,
         local_path,
-        source_path: None,
+        source_path: output
+            .get("source_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         asset_id: output
             .get("asset_id")
             .and_then(Value::as_str)
@@ -3979,6 +4010,9 @@ enum ToolModalPresentation {
     /// Dedicated modal enriched with long-lived command-session summary fields.
     /// 携带长生命周期命令会话摘要字段的专属弹层。
     CommandSession(CommandSessionToolModalSummary),
+    /// Dedicated modal enriched with structured file-change summary fields.
+    /// 携带结构化文件变更摘要字段的专属弹层。
+    ChangeSet(ChangeSetModalSummary),
 }
 
 impl ToolModalPresentation {
@@ -18409,6 +18443,71 @@ mod tests {
                 .and_then(|payload| payload.get("duration_ms"))
                 .and_then(Value::as_u64),
             Some(1024)
+        );
+    }
+
+    /// Verifies compact tool projections preserve one compact `change_set` payload so inline tool cards can keep showing file-change statistics after the heavy raw payload is stripped.
+    /// 验证紧凑工具投影会保留一份紧凑 `change_set` 载荷，从而让内联工具卡在剥离重型原始载荷后仍能展示文件变更统计。
+    #[test]
+    fn compact_tool_detail_projection_preserves_change_set_payload() {
+        let message = SessionMessageEntry {
+            id: String::from("tool-change-set-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::from("工具返回"),
+            body: String::from("Applied file edit."),
+            metadata: Some(json!({
+                "tool_call_id": "call-change-set-1",
+                "tool_name": "write_file",
+                "kind": "change_set",
+                "payload": {
+                    "mode": "preview",
+                    "files": [{
+                        "change": "create",
+                        "path": "D:/openvulcan/vulcan-code/src/main.rs",
+                        "content": "fn main() {}\n"
+                    }]
+                },
+                "host_result": {
+                    "kind": "change_set",
+                    "payload": {
+                        "mode": "preview",
+                        "files": [{
+                            "change": "create",
+                            "path": "D:/openvulcan/vulcan-code/src/main.rs",
+                            "content": "fn main() {}\n"
+                        }]
+                    }
+                }
+            })),
+            created_at: String::from("1"),
+        };
+
+        let projected = compact_tool_detail_message_for_projection(&message);
+        let metadata = projected.metadata.expect("metadata should stay present");
+
+        assert!(projected.body.is_empty());
+        assert_eq!(
+            metadata.get("kind").and_then(Value::as_str),
+            Some("change_set")
+        );
+        assert_eq!(
+            metadata
+                .get("payload")
+                .and_then(|payload| payload.get("stats"))
+                .and_then(|stats| stats.get("file_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("verification"))
+                .and_then(|verification| verification.get("status"))
+                .and_then(Value::as_str),
+            Some("skipped")
         );
     }
 

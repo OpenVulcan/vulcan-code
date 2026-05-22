@@ -820,6 +820,7 @@ fn core_message_to_openai_compatible_message(
                     Value::String(reasoning.clone()),
                 );
             }
+            ensure_openai_compatible_assistant_message_has_required_payload(&mut object);
             Ok(Value::Object(object))
         }
         CoreConversationPayload::ToolResult {
@@ -1109,6 +1110,7 @@ fn build_openai_compatible_provider_message_state(
             ),
         );
     }
+    ensure_openai_compatible_assistant_message_has_required_payload(&mut provider_visible_fields);
 
     Some(Value::Object(JsonMap::from_iter([
         (
@@ -1132,6 +1134,29 @@ fn parse_openai_compatible_provider_message_state(state: &Value) -> Option<JsonM
         return None;
     }
     object.get("assistant_message")?.as_object().cloned()
+}
+
+/// Ensures one OpenAI-compatible assistant message object always carries provider-required replay fields by injecting an empty `content` string when neither visible content nor tool calls are present.
+/// 确保单条 OpenAI 兼容助手消息对象始终携带 Provider 要求的回放字段；当既没有可见内容也没有工具调用时，会注入空字符串 `content`。
+fn ensure_openai_compatible_assistant_message_has_required_payload(
+    object: &mut JsonMap<String, Value>,
+) {
+    let has_content = object.get("content").is_some_and(|content| match content {
+        Value::Null => false,
+        Value::Array(items) => !items.is_empty(),
+        Value::String(_) => true,
+        _ => true,
+    });
+    let has_tool_calls = object
+        .get("tool_calls")
+        .is_some_and(|tool_calls| match tool_calls {
+            Value::Null => false,
+            Value::Array(items) => !items.is_empty(),
+            _ => true,
+        });
+    if !has_content && !has_tool_calls {
+        object.insert(String::from("content"), Value::String(String::new()));
+    }
 }
 
 /// Merges one streamed provider-visible assistant field into the accumulated replay state while preserving common append semantics for string, array, and object payloads.
@@ -1908,6 +1933,119 @@ mod tests {
             .expect("messages should be an array");
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["reasoning_content"], "");
+    }
+
+    /// Verifies OpenAI-compatible request replay injects an empty `content` field for reasoning-only assistant history so strict providers such as DeepSeek do not reject the assistant message as structurally incomplete.
+    /// 验证 OpenAI 兼容请求回放会为纯 reasoning 的助手历史注入空 `content` 字段，从而避免 DeepSeek 这类严格 Provider 因助手消息结构不完整而拒绝请求。
+    #[test]
+    fn request_payload_keeps_reasoning_only_assistant_history_provider_valid() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("deepseek"),
+                model_id: String::from("deepseek-v4-pro"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("继续"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-reasoning-only-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::from("继续保持思考上下文。"),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_content"),
+            })),
+        };
+
+        let payload =
+            build_openai_compatible_request_payload("deepseek-v4-pro", request, &[], true)
+                .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "");
+        assert_eq!(messages[1]["reasoning_content"], "继续保持思考上下文。");
+    }
+
+    /// Verifies replaying one persisted OpenAI-compatible provider message state with reasoning-only assistant fields still injects empty `content` during request rebuild so previously stored sessions remain provider-valid.
+    /// 验证回放一条只含 reasoning 助手字段的已持久化 OpenAI 兼容 provider message state 时，请求重建仍会注入空 `content`，从而保证旧会话依然满足 Provider 要求。
+    #[test]
+    fn request_payload_repairs_reasoning_only_provider_message_state() {
+        let assistant_state = json!({
+            "protocol": "openai-compatible",
+            "assistant_message": {
+                "role": "assistant",
+                "reasoning_content": "继续保持思考上下文。"
+            }
+        });
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("deepseek"),
+                model_id: String::from("deepseek-v4-pro"),
+                system_prompt: String::from("system prompt"),
+                prompt: String::from("继续"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-reasoning-only-state-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: Some(assistant_state),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: Some(ModelInterleavedCapability::Field(ModelInterleavedField {
+                field: String::from("reasoning_content"),
+            })),
+        };
+
+        let payload =
+            build_openai_compatible_request_payload("deepseek-v4-pro", request, &[], true)
+                .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "");
+        assert_eq!(messages[1]["reasoning_content"], "继续保持思考上下文。");
     }
 
     /// Verifies OpenAI-compatible request replay restores raw provider-visible interleaved fields from provider_message_state when the active model declares a matching field-based capability.

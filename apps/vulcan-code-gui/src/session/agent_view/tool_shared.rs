@@ -3,6 +3,7 @@
 
 use crate::model::SessionMessageEntry;
 use serde_json::Value;
+use std::path::Path;
 use vulcan_agent_view::{
     AgentViewAttributes, AgentViewDirectiveBlock, AgentViewDirectiveKind,
     AgentViewToolPresentationKind, render_directive_source,
@@ -16,8 +17,8 @@ pub(crate) struct GeneratedAttachmentDescriptor {
     /// Human-readable output file name shown by the transcript card and host actions.
     /// 供转录卡片与宿主动作显示的人类可读输出文件名。
     pub(crate) file_name: String,
-    /// Local absolute path opened by transcript interactions.
-    /// 供转录交互打开的本地绝对路径。
+    /// Preferred local absolute path opened by transcript interactions, favoring the exported caller-visible copy when it still exists.
+    /// 供转录交互打开的首选本地绝对路径；若调用方可见的导出副本仍存在，则优先使用它。
     pub(crate) local_path: String,
     /// Optional preview-local-path used by media cards that should display a derived preview asset.
     /// 当媒体卡片需要展示派生预览资源时使用的可选预览本地路径。
@@ -160,6 +161,12 @@ pub(crate) fn generated_attachment_descriptor(
         .map(str::trim)
         .filter(|value| !value.is_empty())?
         .to_string();
+    let source_path = output
+        .get("source_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let preview_local_path = output
         .get("preview_local_path")
         .and_then(Value::as_str)
@@ -172,14 +179,29 @@ pub(crate) fn generated_attachment_descriptor(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let preferred_local_path =
+        preferred_generated_attachment_path(source_path.as_deref(), &local_path).to_string();
 
     Some(GeneratedAttachmentDescriptor {
         file_name,
-        local_path,
+        local_path: preferred_local_path,
         preview_local_path,
         mime_type,
         output_count: outputs.len(),
     })
+}
+
+/// Resolves the preferred interaction path for one generated attachment, favoring a caller-visible exported copy when it still exists on disk.
+/// 解析单条生成附件的首选交互路径；若调用方可见的导出副本仍存在于磁盘上，则优先使用它。
+fn preferred_generated_attachment_path<'a>(
+    source_path: Option<&'a str>,
+    managed_local_path: &'a str,
+) -> &'a str {
+    source_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| Path::new(value).is_file())
+        .unwrap_or(managed_local_path)
 }
 
 /// Resolves the host-result payload stored on one tool transcript metadata object, accepting both nested and flattened runtime-event shapes.
@@ -205,4 +227,59 @@ fn generated_attachment_kind(host_result: &Value) -> Option<String> {
         .get("kind")
         .and_then(Value::as_str)
         .map(|value| value.trim().to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Focused generated-attachment descriptor tests for transcript rendering.
+    //! 面向转录渲染的生成附件描述符定向测试。
+
+    use super::generated_attachment_descriptor;
+    use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Builds one unique temporary file path under the system temp directory.
+    /// 在系统临时目录下构建一条唯一临时文件路径。
+    fn unique_temp_file_path(extension: &str) -> std::path::PathBuf {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("vulcan-agent-view-{unique_id}.{extension}"))
+    }
+
+    /// Verifies generated-media transcript cards prefer the exported file path when that caller-visible copy still exists.
+    /// 验证当调用方可见的导出副本仍然存在时，生成媒体转录卡片会优先使用该导出文件路径。
+    #[test]
+    fn generated_attachment_descriptor_prefers_existing_exported_path() {
+        let managed_path = unique_temp_file_path("png");
+        let exported_path = unique_temp_file_path("png");
+        std::fs::write(&managed_path, [0_u8, 1, 2]).expect("managed file should write");
+        std::fs::write(&exported_path, [3_u8, 4, 5]).expect("exported file should write");
+
+        let descriptor = generated_attachment_descriptor(
+            &json!({
+                "kind": "generated_attachments",
+                "payload": {
+                    "outputs": [{
+                        "kind": "image",
+                        "file_name": "demo.png",
+                        "local_path": managed_path.to_string_lossy(),
+                        "source_path": exported_path.to_string_lossy(),
+                        "mime_type": "image/png"
+                    }]
+                }
+            }),
+            "image",
+        )
+        .expect("descriptor should resolve");
+
+        assert_eq!(
+            descriptor.local_path,
+            exported_path.to_string_lossy().into_owned()
+        );
+
+        let _ = std::fs::remove_file(managed_path);
+        let _ = std::fs::remove_file(exported_path);
+    }
 }

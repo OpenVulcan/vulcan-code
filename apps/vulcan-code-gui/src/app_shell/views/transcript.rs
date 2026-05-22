@@ -50,6 +50,29 @@ fn transcript_viewport_has_vertical_scrollbar(viewport: &scrollable::Viewport) -
         > viewport.bounds().height + TRANSCRIPT_SCROLLBAR_VISIBILITY_EPSILON
 }
 
+/// Resolves the preferred user-facing path for one generated attachment, favoring an exported copy when it still exists.
+/// 解析单条生成附件面向用户的首选路径；若导出副本仍存在，则优先使用该导出路径。
+fn preferred_generated_attachment_path(attachment: &ConversationAttachment) -> &str {
+    attachment
+        .source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| std::path::Path::new(value).is_file())
+        .unwrap_or(attachment.local_path.as_str())
+}
+
+/// Returns the caller-visible exported path when it differs from the managed attachment copy.
+/// 当调用方可见的导出路径与托管附件副本不同时时，返回该导出路径。
+fn exported_generated_attachment_path(attachment: &ConversationAttachment) -> Option<&str> {
+    attachment
+        .source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| *value != attachment.local_path.trim())
+}
+
 /// Maps one selectable transcript interaction into the corresponding workbench message while letting each caller supply its own thinking and tool modal routes.
 /// 将一条可选择转录交互映射为对应的工作台消息，同时允许各调用方提供自己的思考与工具弹层路由。
 fn map_selectable_transcript_interaction(
@@ -1285,6 +1308,50 @@ impl VulcanWorkbench {
                     .width(Fill)
                     .into()
             }
+            ToolModalPresentation::ChangeSet(summary) => {
+                let mut status_row = row![
+                    self.view_command_tool_modal_badge(
+                        change_set_mode_badge_label(summary.mode).to_string(),
+                    ),
+                    self.view_command_tool_modal_badge(format!(
+                        "📁 {} 个文件",
+                        summary.stats.file_count
+                    )),
+                    space::horizontal(),
+                ]
+                .align_y(Center);
+                if !summary.diagnostics.is_empty() {
+                    status_row = status_row.push(self.view_command_tool_modal_badge(format!(
+                        "🩺 {} 条诊断",
+                        summary.diagnostics.len()
+                    )));
+                }
+                let mut summary_column = column![
+                    status_row,
+                    self.view_command_tool_modal_fact_block(
+                        "变更概览",
+                        format_change_set_overview_text(summary),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "统计",
+                        format_change_set_stats_text(summary),
+                    ),
+                    self.view_command_tool_modal_fact_block(
+                        "文件清单",
+                        format_change_set_file_list_text(summary),
+                    ),
+                ];
+                if !summary.diagnostics.is_empty() {
+                    summary_column = summary_column.push(self.view_command_tool_modal_fact_block(
+                        "诊断",
+                        format_change_set_diagnostics_text(summary),
+                    ));
+                }
+                container(summary_column.spacing(10))
+                    .padding([4, 0])
+                    .width(Fill)
+                    .into()
+            }
             ToolModalPresentation::Generic => container(space()).width(Fill).into(),
         }
     }
@@ -1482,16 +1549,18 @@ impl VulcanWorkbench {
         &self,
         attachment: &ConversationAttachment,
     ) -> Element<'_, Message> {
+        let preferred_local_path = preferred_generated_attachment_path(attachment).to_string();
+        let exported_path = exported_generated_attachment_path(attachment).map(ToOwned::to_owned);
         let preview: Element<'_, Message> = match attachment.kind {
-            ConversationAttachmentKind::Image if Path::new(&attachment.local_path).is_file() => {
+            ConversationAttachmentKind::Image if Path::new(&preferred_local_path).is_file() => {
                 let preview_size = bounded_image_preview_size(
-                    local_raster_image_aspect_ratio(&attachment.local_path),
+                    local_raster_image_aspect_ratio(&preferred_local_path),
                     220.0,
                     520.0,
                 );
                 container(
                     button(
-                        iced_image(attachment.local_path.clone())
+                        iced_image(preferred_local_path.clone())
                             .width(preview_size.width)
                             .height(preview_size.height)
                             .content_fit(ContentFit::Contain),
@@ -1500,7 +1569,7 @@ impl VulcanWorkbench {
                     .style(style::workbench_composer_attachment_preview_button_style)
                     .on_press(Message::OpenComposerImageAttachmentPreview {
                         file_name: attachment.file_name.clone(),
-                        local_path: attachment.local_path.clone(),
+                        local_path: preferred_local_path.clone(),
                     }),
                 )
                 .width(Fill)
@@ -1509,7 +1578,7 @@ impl VulcanWorkbench {
             }
             ConversationAttachmentKind::Video => {
                 let Some(preview) = resolve_video_thumbnail_preview(
-                    &attachment.local_path,
+                    &preferred_local_path,
                     Some(attachment.mime_type.as_str()),
                 ) else {
                     return self.view_generated_tool_modal_icon_preview(
@@ -1529,7 +1598,7 @@ impl VulcanWorkbench {
                     .padding(0)
                     .style(style::workbench_composer_attachment_preview_button_style)
                     .on_press(Message::OpenGeneratedAttachmentWithDefaultApp(
-                        attachment.local_path.clone(),
+                        preferred_local_path.clone(),
                     )),
                 )
                 .width(Fill)
@@ -1569,16 +1638,47 @@ impl VulcanWorkbench {
             ),
             None => attachment.mime_type.clone(),
         };
+        let path_caption_color = self
+            .app_theme
+            .palette()
+            .background
+            .base
+            .text
+            .scale_alpha(0.68);
+        let path_details = exported_path.as_ref().map(|exported_path| {
+            column![
+                text(format!(
+                    "{}: {}",
+                    self.t(I18nKey::TranscriptExportedPathLabel),
+                    exported_path
+                ))
+                .size(11)
+                .style(move |_theme: &Theme| iced::widget::text::Style {
+                    color: Some(path_caption_color),
+                }),
+                text(format!(
+                    "{}: {}",
+                    self.t(I18nKey::TranscriptManagedCopyPathLabel),
+                    attachment.local_path
+                ))
+                .size(11)
+                .style(move |_theme: &Theme| iced::widget::text::Style {
+                    color: Some(path_caption_color),
+                }),
+            ]
+            .spacing(3)
+            .width(Fill)
+        });
         let primary_action = match attachment.kind {
             ConversationAttachmentKind::Image => Message::OpenComposerImageAttachmentPreview {
                 file_name: attachment.file_name.clone(),
-                local_path: attachment.local_path.clone(),
+                local_path: preferred_local_path.clone(),
             },
             ConversationAttachmentKind::Audio => Message::ToggleGeneratedAudioPlayback {
                 file_name: attachment.file_name.clone(),
-                local_path: attachment.local_path.clone(),
+                local_path: preferred_local_path.clone(),
             },
-            _ => Message::OpenGeneratedAttachmentWithDefaultApp(attachment.local_path.clone()),
+            _ => Message::OpenGeneratedAttachmentWithDefaultApp(preferred_local_path.clone()),
         };
         let secondary_copy_button: Element<'_, Message> = match attachment.kind {
             ConversationAttachmentKind::Image => {
@@ -1587,7 +1687,7 @@ impl VulcanWorkbench {
                     .style(style::subtle_panel_button_style)
                     .on_press(Message::CopyGeneratedImageToClipboard {
                         file_name: attachment.file_name.clone(),
-                        local_path: attachment.local_path.clone(),
+                        local_path: preferred_local_path.clone(),
                     })
                     .into()
             }
@@ -1595,37 +1695,54 @@ impl VulcanWorkbench {
                 .padding([6, 10])
                 .style(style::subtle_panel_button_style)
                 .on_press(Message::CopyGeneratedAttachmentPath(
-                    attachment.local_path.clone(),
+                    preferred_local_path.clone(),
                 ))
                 .into(),
         };
+        let image_path_copy_button =
+            (attachment.kind == ConversationAttachmentKind::Image).then(|| {
+                button(text(self.t(I18nKey::TranscriptCopyPathAction)).size(12))
+                    .padding([6, 10])
+                    .style(style::subtle_panel_button_style)
+                    .on_press(Message::CopyGeneratedAttachmentPath(
+                        preferred_local_path.clone(),
+                    ))
+            });
+
+        let mut detail_column = column![
+            text(attachment.file_name.clone()).size(14),
+            text(meta_line).size(12),
+        ]
+        .spacing(4)
+        .width(Fill);
+        if let Some(path_details) = path_details {
+            detail_column = detail_column.push(path_details);
+        }
+
+        let mut action_row = row![
+            button(text(open_label).size(12))
+                .padding([6, 10])
+                .style(style::subtle_panel_button_style)
+                .on_press(primary_action),
+            secondary_copy_button,
+        ]
+        .spacing(8);
+        if let Some(copy_path_button) = image_path_copy_button {
+            action_row = action_row.push(copy_path_button);
+        }
+        action_row = action_row.push(
+            button(text(self.t(I18nKey::TranscriptRevealFileAction)).size(12))
+                .padding([6, 10])
+                .style(style::subtle_panel_button_style)
+                .on_press(Message::RevealGeneratedAttachmentInFolder(
+                    preferred_local_path.clone(),
+                )),
+        );
 
         container(
-            column![
-                preview,
-                column![
-                    text(attachment.file_name.clone()).size(14),
-                    text(meta_line).size(12),
-                ]
-                .spacing(4)
+            column![preview, detail_column, action_row]
+                .spacing(12)
                 .width(Fill),
-                row![
-                    button(text(open_label).size(12))
-                        .padding([6, 10])
-                        .style(style::subtle_panel_button_style)
-                        .on_press(primary_action),
-                    secondary_copy_button,
-                    button(text(self.t(I18nKey::TranscriptRevealFileAction)).size(12))
-                        .padding([6, 10])
-                        .style(style::subtle_panel_button_style)
-                        .on_press(Message::RevealGeneratedAttachmentInFolder(
-                            attachment.local_path.clone()
-                        )),
-                ]
-                .spacing(8),
-            ]
-            .spacing(12)
-            .width(Fill),
         )
         .padding(14)
         .style(style::workbench_composer_panel_style)
@@ -1716,5 +1833,95 @@ impl VulcanWorkbench {
             .height(Fill)
             .into(),
         )
+    }
+}
+
+/// Formats the overview sentence shown by one change-set tool modal.
+/// 格式化单个变更集工具弹层展示的概览语句。
+fn format_change_set_overview_text(summary: &ChangeSetModalSummary) -> String {
+    summary
+        .summary
+        .clone()
+        .unwrap_or_else(|| match summary.mode {
+            ChangeSetMode::Preview => format!("已预览 {} 个文件变更。", summary.stats.file_count),
+            ChangeSetMode::Applied => format!("已应用 {} 个文件变更。", summary.stats.file_count),
+        })
+}
+
+/// Formats one compact statistics line shown by the change-set tool modal.
+/// 格式化展示在变更集工具弹层中的紧凑统计行。
+fn format_change_set_stats_text(summary: &ChangeSetModalSummary) -> String {
+    format!(
+        "新增：{} · 修改：{} · 删除：{} · 重命名：{} · +{} / -{}",
+        summary.stats.create_count,
+        summary.stats.modify_count,
+        summary.stats.delete_count,
+        summary.stats.rename_count,
+        summary.stats.inserted_line_count,
+        summary.stats.deleted_line_count
+    )
+}
+
+/// Formats the compact file list shown by the change-set tool modal.
+/// 格式化展示在变更集工具弹层中的紧凑文件清单。
+fn format_change_set_file_list_text(summary: &ChangeSetModalSummary) -> String {
+    if summary.files.is_empty() {
+        return String::from("当前没有可展示的文件记录。");
+    }
+    summary
+        .files
+        .iter()
+        .map(format_change_set_file_summary_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Formats one compact diagnostic list shown by the change-set tool modal.
+/// 格式化展示在变更集工具弹层中的紧凑诊断列表。
+fn format_change_set_diagnostics_text(summary: &ChangeSetModalSummary) -> String {
+    summary
+        .diagnostics
+        .iter()
+        .map(|diagnostic| format!("[{}] {}", diagnostic.level, diagnostic.message))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Formats one single-file summary row used by the change-set tool modal.
+/// 格式化变更集工具弹层使用的单文件摘要行。
+fn format_change_set_file_summary_line(file: &ChangeSetFileSummary) -> String {
+    match file.change {
+        ChangeSetFileChangeKind::Create => format!(
+            "[create] {} ({}, {} 行)",
+            file.path.as_deref().unwrap_or("未知路径"),
+            file.content_bytes
+                .map(|value| format!("{value} B"))
+                .unwrap_or_else(|| String::from("-")),
+            file.content_lines
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| String::from("-")),
+        ),
+        ChangeSetFileChangeKind::Modify => format!(
+            "[modify] {} (hunks: {}, +{} / -{})",
+            file.path.as_deref().unwrap_or("未知路径"),
+            file.hunk_count,
+            file.inserted_line_count,
+            file.deleted_line_count,
+        ),
+        ChangeSetFileChangeKind::Delete => format!(
+            "[delete] {} ({}, {} 行)",
+            file.path.as_deref().unwrap_or("未知路径"),
+            file.content_bytes
+                .map(|value| format!("{value} B"))
+                .unwrap_or_else(|| String::from("-")),
+            file.content_lines
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| String::from("-")),
+        ),
+        ChangeSetFileChangeKind::Rename => format!(
+            "[rename] {} -> {}",
+            file.old_path.as_deref().unwrap_or("未知旧路径"),
+            file.new_path.as_deref().unwrap_or("未知新路径"),
+        ),
     }
 }

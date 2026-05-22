@@ -9,6 +9,9 @@ use crate::tool_result_format::{
     EffectiveBudgetScope, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
     ToolResultBudgetSnapshot, render_tool_result_text,
 };
+use crate::tooling::change_set::{
+    change_set_host_verification_notice, luaskills_change_set_host_result_capabilities,
+};
 use iced::futures::channel::oneshot;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
@@ -848,15 +851,31 @@ pub fn render_luaskills_invocation_result_text(
 fn host_text_render_input_from_runtime_result(
     result: &RuntimeInvocationResult,
 ) -> HostTextRenderInput {
+    let mut content = result.content.clone();
+    if let Some(host_result) = result.host_result.as_ref()
+        && let Some(verification_notice) = (host_result.kind == "change_set")
+            .then(|| change_set_host_verification_notice(&host_result.payload))
+            .flatten()
+    {
+        if !content.trim().is_empty() {
+            content.push_str("\n\n");
+        }
+        content.push_str(&verification_notice);
+    }
+    let normalized = normalize_host_render_text(&content);
     HostTextRenderInput {
-        content: result.content.clone(),
+        content,
         overflow_mode: result.overflow_mode.map(|mode| match mode {
             luaskills::ToolOverflowMode::Truncate => HostToolOverflowMode::Truncate,
             luaskills::ToolOverflowMode::Page => HostToolOverflowMode::Page,
         }),
         template_hint: result.template_hint.clone(),
-        content_bytes: result.content_bytes,
-        content_lines: result.content_lines,
+        content_bytes: normalized.len(),
+        content_lines: if normalized.is_empty() {
+            0
+        } else {
+            normalized.split('\n').count()
+        },
     }
 }
 
@@ -877,7 +896,7 @@ pub fn build_luaskills_tool_invocation_context(
             name: Some(String::from("VulcanCode")),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         }),
-        client_capabilities: Value::Object(Map::new()),
+        client_capabilities: luaskills_change_set_host_result_capabilities(),
     };
     let client_budget = build_default_luaskills_client_budget(tool_name);
 
@@ -886,6 +905,12 @@ pub fn build_luaskills_tool_invocation_context(
         client_budget,
         Value::Object(Map::new()),
     )
+}
+
+/// Normalizes host-render text so byte and line metrics stay deterministic after host-side warning injection.
+/// 对宿主渲染文本进行规范化，使宿主侧注入警告后的字节与行数统计保持确定性。
+fn normalize_host_render_text(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// Builds one default client-budget snapshot for host-driven LuaSkills tool calls with unlimited lines and a 200KB byte ceiling.

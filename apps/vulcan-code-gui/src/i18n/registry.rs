@@ -237,6 +237,8 @@ impl LanguageRegistry {
                 I18nKey::TranscriptCopyImageAction,
                 I18nKey::TranscriptCopyPathAction,
                 I18nKey::TranscriptRevealFileAction,
+                I18nKey::TranscriptExportedPathLabel,
+                I18nKey::TranscriptManagedCopyPathLabel,
                 I18nKey::TranscriptSubagentCompletedHint,
                 I18nKey::TranscriptSubagentFailedHint,
                 I18nKey::TranscriptSubagentResultSummaryHint,

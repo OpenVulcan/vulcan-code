@@ -5,7 +5,9 @@ use crate::attachment_asset_index::{
     AttachmentReplayStatus, current_attachment_timestamp_parts, record_staged_attachment,
     resolve_attachment_replay_status,
 };
-use crate::workspace_path::canonicalize_workspace_path;
+use crate::workspace_path::{
+    canonicalize_workspace_path, normalized_workspace_path_text_from_path,
+};
 use filetime::{FileTime, set_file_times};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -251,7 +253,7 @@ pub fn stage_attachment_bytes(
         local_path: managed_file_path.to_string_lossy().into_owned(),
         source_path: source_path
             .map(canonicalize_workspace_path)
-            .map(|path| path.to_string_lossy().into_owned()),
+            .map(|path| normalized_workspace_path_text_from_path(&path)),
         asset_id: Some(asset_id),
         byte_len: Some(bytes.len() as u64),
         preview_local_path: None,
@@ -259,6 +261,37 @@ pub fn stage_attachment_bytes(
     };
     record_staged_attachment(workspace_path, &attachment, &timestamp)?;
     Ok(attachment)
+}
+
+/// Materializes one in-memory attachment payload into one caller-selected directory while keeping host-controlled extension normalization and collision avoidance.
+/// 将一份内存中的附件载荷物化到调用方选定的目录，同时保持宿主控制的扩展名规范化与重名避让。
+pub fn write_attachment_bytes_to_directory(
+    descriptor: &AttachmentDescriptor,
+    target_directory: &Path,
+    suggested_file_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    // Canonical target directory used for filesystem writes when the directory already exists.
+    // 当目标目录已经存在时，用于文件系统写入的规范目标目录。
+    let canonical_target_directory = canonicalize_workspace_path(target_directory);
+    fs::create_dir_all(&canonical_target_directory).map_err(|error| {
+        format!(
+            "创建导出附件目录 `{}` 失败：{}。",
+            canonical_target_directory.display(),
+            error
+        )
+    })?;
+
+    // Host-normalized file name whose extension is derived from the attachment descriptor instead of caller text.
+    // 扩展名由附件描述符而非调用方文本决定的宿主规范化文件名。
+    let normalized_file_name = normalize_attachment_file_name(suggested_file_name, descriptor);
+    // Collision-safe output path chosen inside the caller-selected directory.
+    // 在调用方选定目录内部挑选出的安全避重输出路径。
+    let output_path =
+        resolve_unique_attachment_output_path(&canonical_target_directory, &normalized_file_name);
+    fs::write(&output_path, bytes)
+        .map_err(|error| format!("写入导出附件 `{}` 失败：{}。", output_path.display(), error))?;
+    Ok(output_path)
 }
 
 /// Encodes one RGBA image payload into PNG bytes so clipboard images can enter the managed attachment store through the same staging pipeline.
@@ -522,17 +555,37 @@ fn attachment_descriptor_from_extension(extension: &str) -> Option<AttachmentDes
     }
 }
 
-/// Sanitizes one host-visible attachment file name while preserving a useful extension for managed assets.
-/// 在为托管资产保留有用扩展名的同时，对宿主可见附件文件名进行清洗。
+/// Normalizes one host-visible attachment file name while forcing the final extension chosen by the host descriptor.
+/// 规范化一条宿主可见附件文件名，并强制使用宿主描述符选定的最终扩展名。
+pub fn normalize_attachment_file_name(
+    file_name: &str,
+    descriptor: &AttachmentDescriptor,
+) -> String {
+    sanitize_attachment_file_name(file_name, descriptor.extension)
+}
+
+/// Sanitizes one host-visible attachment file name while forcing the final extension chosen by the host.
+/// 对一条宿主可见附件文件名做清洗，并强制使用宿主选定的最终扩展名。
 fn sanitize_attachment_file_name(file_name: &str, fallback_extension: &str) -> String {
+    // Trimmed caller-supplied file name or stem candidate.
+    // 调用方提供的裁剪后文件名或名称主体候选值。
     let trimmed_file_name = file_name.trim();
-    let fallback_name = format!("attachment.{fallback_extension}");
-    let base_name = if trimmed_file_name.is_empty() {
-        fallback_name
-    } else {
-        trimmed_file_name.to_string()
-    };
-    let normalized = base_name
+    // Raw stem text extracted from the caller input before host-side sanitization.
+    // 在宿主侧清洗前从调用方输入中提取出的原始名称主体文本。
+    let raw_stem = Path::new(trimmed_file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            (!trimmed_file_name.is_empty())
+                .then_some(trimmed_file_name.trim_matches(['.', ' ']).trim())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("attachment");
+    // Sanitized file-stem text with invalid path characters rewritten to underscores.
+    // 将非法路径字符改写为下划线后的清洗名称主体文本。
+    let normalized_stem = raw_stem
         .chars()
         .map(|character| {
             if matches!(
@@ -545,12 +598,97 @@ fn sanitize_attachment_file_name(file_name: &str, fallback_extension: &str) -> S
             }
         })
         .collect::<String>();
+    // Windows-safe file-stem text with empty and reserved-name cases normalized away.
+    // 已对空值与 Windows 保留名情况完成规范化处理的安全名称主体文本。
+    let safe_stem = finalize_attachment_file_stem(&normalized_stem);
+    format!("{safe_stem}.{fallback_extension}")
+}
 
-    if Path::new(&normalized).extension().is_some() {
-        normalized
-    } else {
-        format!("{normalized}.{fallback_extension}")
+/// Finalizes one sanitized attachment file stem so empty or Windows-reserved names stop leaking into real files.
+/// 对清洗后的附件名称主体做最终规范化，避免空名称或 Windows 保留名泄露到真实文件。
+fn finalize_attachment_file_stem(stem: &str) -> String {
+    // Trimmed stem text without leading or trailing dots that Windows would reject.
+    // 移除 Windows 不接受的首尾点号后的裁剪名称主体文本。
+    let trimmed_stem = stem.trim().trim_matches('.');
+    if trimmed_stem.is_empty() {
+        return String::from("attachment");
     }
+    if is_windows_reserved_file_stem(trimmed_stem) {
+        return format!("{trimmed_stem}_");
+    }
+    trimmed_stem.to_string()
+}
+
+/// Returns whether one file stem matches the Windows reserved device-name set and therefore cannot be used directly.
+/// 返回一个文件名主体是否命中 Windows 保留设备名集合，因此不能被直接使用。
+fn is_windows_reserved_file_stem(stem: &str) -> bool {
+    matches!(
+        stem.trim().to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+/// Resolves one collision-safe output path below the caller-selected directory by appending numbered suffixes when needed.
+/// 在调用方选定目录下解析一条安全避重输出路径，必要时追加编号后缀。
+fn resolve_unique_attachment_output_path(directory: &Path, file_name: &str) -> PathBuf {
+    // First-choice output path using the host-normalized file name without any collision suffix.
+    // 使用宿主规范化文件名且不带避重后缀的首选输出路径。
+    let preferred_path = directory.join(file_name);
+    if !preferred_path.exists() {
+        return preferred_path;
+    }
+
+    // Base stem reused while probing numbered collision suffixes.
+    // 在探测编号避重后缀期间复用的基础名称主体。
+    let base_stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("attachment");
+    // Stable extension reused while probing numbered collision suffixes.
+    // 在探测编号避重后缀期间复用的稳定扩展名。
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty());
+
+    for suffix_index in 1usize.. {
+        // Candidate collision-safe file name carrying one numbered suffix.
+        // 带有编号后缀的一条候选避重文件名。
+        let suffixed_file_name = if let Some(extension) = extension {
+            format!("{base_stem}-{suffix_index:03}.{extension}")
+        } else {
+            format!("{base_stem}-{suffix_index:03}")
+        };
+        // Candidate collision-safe output path carrying one numbered suffix.
+        // 带有编号后缀的一条候选避重输出路径。
+        let candidate_path = directory.join(suffixed_file_name);
+        if !candidate_path.exists() {
+            return candidate_path;
+        }
+    }
+
+    unreachable!("attachment output path probing should always find a free numbered suffix")
 }
 
 #[cfg(test)]
@@ -560,10 +698,13 @@ mod tests {
 
     use super::{
         attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
-        encode_rgba_image_to_png_bytes, resolve_attachment_replay_path,
-        resolve_managed_attachment_root, stage_attachment_bytes, stage_attachment_file,
+        encode_rgba_image_to_png_bytes, normalize_attachment_file_name,
+        resolve_attachment_replay_path, resolve_managed_attachment_root, stage_attachment_bytes,
+        stage_attachment_file, write_attachment_bytes_to_directory,
     };
-    use crate::workspace_path::canonicalize_workspace_path;
+    use crate::workspace_path::{
+        canonicalize_workspace_path, normalized_workspace_path_text_from_path,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::ConversationAttachmentKind;
 
@@ -607,16 +748,14 @@ mod tests {
         let attachment =
             stage_attachment_file(&workspace_directory.to_string_lossy(), &source_path)
                 .expect("attachment should stage successfully");
+        let expected_source_path =
+            normalized_workspace_path_text_from_path(&canonicalize_workspace_path(&source_path));
 
         assert_eq!(attachment.kind, ConversationAttachmentKind::Image);
         assert!(std::path::Path::new(&attachment.local_path).is_file());
         assert_eq!(
             attachment.source_path.as_deref(),
-            Some(
-                canonicalize_workspace_path(&source_path)
-                    .to_string_lossy()
-                    .as_ref()
-            )
+            Some(expected_source_path.as_str())
         );
         assert_eq!(attachment.byte_len, Some(4));
 
@@ -643,6 +782,51 @@ mod tests {
         assert_eq!(attachment.kind, ConversationAttachmentKind::Image);
         assert!(attachment.source_path.is_none());
         assert!(std::path::Path::new(&attachment.local_path).is_file());
+
+        cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies caller-supplied mismatched extensions are discarded so the managed file name always reflects the host-selected format.
+    /// 验证会丢弃调用方传入的错误扩展名，从而使托管文件名始终反映宿主选定的真实格式。
+    #[test]
+    fn normalize_attachment_file_name_forces_host_selected_extension() {
+        let descriptor = attachment_descriptor_from_mime_type("image/jpeg")
+            .expect("jpeg descriptor should resolve");
+        assert_eq!(
+            normalize_attachment_file_name("poster.png", &descriptor),
+            "poster.jpg"
+        );
+        assert_eq!(
+            normalize_attachment_file_name("CON.gif", &descriptor),
+            "CON_.jpg"
+        );
+    }
+
+    /// Verifies exporting one attachment payload to a caller-selected directory avoids overwriting an existing file by appending a numbered suffix.
+    /// 验证将一份附件载荷导出到调用方选定目录时，会通过追加编号后缀来避免覆盖已存在文件。
+    #[test]
+    fn write_attachment_bytes_to_directory_avoids_existing_file_collisions() {
+        let workspace_directory = unique_workspace_directory();
+        let export_directory = workspace_directory.join("exports");
+        std::fs::create_dir_all(&export_directory).expect("export directory should create");
+        let descriptor = attachment_descriptor_from_mime_type("image/png")
+            .expect("png descriptor should resolve");
+        let existing_file = export_directory.join("cover.png");
+        std::fs::write(&existing_file, [0_u8, 1, 2, 3]).expect("existing file should write");
+
+        let output_path = write_attachment_bytes_to_directory(
+            &descriptor,
+            &export_directory,
+            "cover.jpg",
+            &[4_u8],
+        )
+        .expect("exported file should materialize");
+
+        assert_eq!(
+            output_path.file_name().and_then(|value| value.to_str()),
+            Some("cover-001.png")
+        );
+        assert!(output_path.is_file());
 
         cleanup_workspace_directory(&workspace_directory);
     }

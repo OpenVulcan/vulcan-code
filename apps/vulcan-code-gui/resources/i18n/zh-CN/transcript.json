@@ -37,6 +37,8 @@
   "transcript.copy_image_action": "复制图片",
   "transcript.copy_path_action": "复制路径",
   "transcript.reveal_file_action": "定位文件",
+  "transcript.exported_path_label": "导出路径",
+  "transcript.managed_copy_path_label": "托管副本",
   "transcript.subagent_completed_hint": "子代理已结束，但当前没有可回看的转录内容。",
   "transcript.subagent_failed_hint": "子代理已失败，当前仅保留失败摘要。",
   "transcript.subagent_result_summary_hint": "当前子代理实时会话已不可恢复，这里展示最后一次持久化的 Markdown 返回摘要。",

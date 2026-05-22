@@ -1137,11 +1137,17 @@ impl VulcanWorkbench {
         session_id: SessionId,
         block_id: &str,
     ) -> Option<ModalSurfacePayload> {
-        let tool_modal_presentation = self
+        let fallback_tool_modal_presentation = self
             .resolve_rendered_tool_block_attributes(session_id, block_id)
             .map(|attributes| tool_modal_presentation_from_agent_view_attributes(&attributes))
             .unwrap_or(ToolModalPresentation::Generic);
         let resolved_message = self.resolve_rendered_tool_modal_message_entry(session_id, block_id);
+        let tool_modal_presentation = resolved_message
+            .as_ref()
+            .and_then(|message| message.metadata.as_ref())
+            .and_then(change_set_tool_modal_summary_from_tool_metadata)
+            .map(ToolModalPresentation::ChangeSet)
+            .unwrap_or(fallback_tool_modal_presentation);
         let generated_attachments = resolved_message
             .as_ref()
             .and_then(|message| message.metadata.as_ref())

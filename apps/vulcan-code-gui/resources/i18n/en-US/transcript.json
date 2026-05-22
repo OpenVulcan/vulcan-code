@@ -37,6 +37,8 @@
   "transcript.copy_image_action": "Copy image",
   "transcript.copy_path_action": "Copy path",
   "transcript.reveal_file_action": "Reveal file",
+  "transcript.exported_path_label": "Export path",
+  "transcript.managed_copy_path_label": "Managed copy",
   "transcript.subagent_completed_hint": "The subagent has finished, but there is currently no transcript to review.",
   "transcript.subagent_failed_hint": "The subagent failed and only the failure summary is currently retained.",
   "transcript.subagent_result_summary_hint": "The live subagent session can no longer be recovered. The last persisted Markdown summary is shown here.",

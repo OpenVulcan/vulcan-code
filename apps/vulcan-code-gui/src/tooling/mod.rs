@@ -2,6 +2,7 @@
 //! compose 运行时基础架构使用的原生工具注册面。
 
 pub mod bridge;
+pub mod change_set;
 pub mod command_session_runtime;
 pub mod native;
 pub mod output_decode;

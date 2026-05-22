@@ -79,6 +79,16 @@ fn resolve_tool_directive_visuals(
         .get("command-session-action")
         .map(String::as_str)
         .unwrap_or("read");
+    let change_set_mode = block
+        .attributes
+        .get("change-set-mode")
+        .map(String::as_str)
+        .unwrap_or("");
+    let change_set_verification_status = block
+        .attributes
+        .get("change-set-verification-status")
+        .map(String::as_str)
+        .unwrap_or("skipped");
     match block.kind {
         AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
             if presentation_kind == AgentViewToolPresentationKind::CommandRun =>
@@ -222,6 +232,55 @@ fn resolve_tool_directive_visuals(
                     ),
                     palette.background.base.text,
                     "调度代理",
+                )),
+            }
+        }
+        AgentViewDirectiveKind::ToolCall | AgentViewDirectiveKind::ToolResult
+            if !change_set_mode.trim().is_empty() =>
+        {
+            match (
+                change_set_mode.trim(),
+                change_set_verification_status.trim(),
+            ) {
+                ("preview", _) => Some((
+                    "📝",
+                    iced::color!(0xCDE7FF),
+                    directive_background(
+                        palette.primary.weak.color.scale_alpha(0.10),
+                        palette.primary.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "文件变更",
+                )),
+                ("applied", "warning") => Some((
+                    "⚠",
+                    iced::color!(0xFFE4B8),
+                    directive_background(
+                        palette.warning.weak.color.scale_alpha(0.10),
+                        palette.warning.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "文件变更",
+                )),
+                ("applied", _) => Some((
+                    "🧾",
+                    iced::color!(0xD7F6E6),
+                    directive_background(
+                        palette.success.weak.color.scale_alpha(0.10),
+                        palette.success.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "文件变更",
+                )),
+                _ => Some((
+                    "🧾",
+                    iced::color!(0xD7F6E6),
+                    directive_background(
+                        palette.success.weak.color.scale_alpha(0.10),
+                        palette.success.strong.color.scale_alpha(0.24),
+                    ),
+                    palette.background.base.text,
+                    "文件变更",
                 )),
             }
         }
@@ -648,9 +707,16 @@ pub(super) fn render_compact_tool_modal_summary_row(
     };
     let title = block
         .attributes
-        .get("title")
+        .get("tool-summary-text")
         .cloned()
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            block
+                .attributes
+                .get("title")
+                .cloned()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| fallback_title.to_string());
     let summary_text = format!("{icon} {title}");
     let summary_spans = build_tool_summary_spans(block, &summary_text, summary_color, app_theme);
