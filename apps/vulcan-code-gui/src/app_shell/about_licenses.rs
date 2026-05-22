@@ -224,9 +224,6 @@ pub(super) struct AboutLicenseCatalog {
     /// Preferred directory exposed to the “open license folder” action.
     /// 暴露给“打开许可证目录”动作的首选目录。
     preferred_directory: Option<PathBuf>,
-    /// Whether generated Rust dependency notice sections were discovered successfully.
-    /// 是否成功发现了生成的 Rust 依赖许可证分段。
-    has_generated_rust_notices: bool,
 }
 
 impl AboutLicenseCatalog {
@@ -252,7 +249,6 @@ impl AboutLicenseCatalog {
             source_license_directory.as_deref(),
         )?);
 
-        let mut has_generated_rust_notices = false;
         if let Some(generated_directory) = generated_license_directory.as_deref() {
             let generated_notice_markdown_path =
                 generated_directory.join(GENERATED_RUST_THIRD_PARTY_NOTICES_FILE_NAME);
@@ -264,7 +260,6 @@ impl AboutLicenseCatalog {
                     generated_notice_index_path.as_path(),
                 )?;
                 if !generated_entries.is_empty() {
-                    has_generated_rust_notices = true;
                     documents.extend(generated_entries.into_iter().map(|entry| {
                         build_generated_rust_notice_document(&generated_notice_markdown_path, entry)
                     }));
@@ -275,7 +270,6 @@ impl AboutLicenseCatalog {
         Ok(Self {
             documents,
             preferred_directory,
-            has_generated_rust_notices,
         })
     }
 
@@ -285,12 +279,6 @@ impl AboutLicenseCatalog {
         self.documents
             .iter()
             .find(|document| document.id == document_id)
-    }
-
-    /// Returns whether generated Rust dependency notice sections are currently available.
-    /// 返回当前是否存在生成的 Rust 依赖许可证分段。
-    pub(super) fn has_generated_rust_notices(&self) -> bool {
-        self.has_generated_rust_notices
     }
 
     /// Returns the preferred directory that should be opened from the About-page action row.

@@ -17,7 +17,7 @@ impl VulcanWorkbench {
     /// Renders the dedicated About-page surface that now loads only list metadata by default.
     /// 渲染新的关于页许可证界面，并默认只加载列表元数据。
     pub(super) fn view_about_licenses_page(&self) -> Element<'_, Message> {
-        let mut page = column![self.view_about_licenses_overview_card()].spacing(14);
+        let mut page = column![].spacing(14);
         if self.about_license_catalog_loading {
             page = page.push(self.view_about_licenses_loading_card());
         }
@@ -31,68 +31,6 @@ impl VulcanWorkbench {
         }
 
         page.into()
-    }
-
-    /// Renders the overview card shown at the top of the About-page licensing surface.
-    /// 渲染显示在关于页许可证界面顶部的总览卡片。
-    fn view_about_licenses_overview_card(&self) -> Element<'_, Message> {
-        let palette = self.app_theme.extended_palette();
-        let metadata_color = palette.background.base.text.scale_alpha(0.62);
-        let generated_notice_status = if self.about_license_catalog_loading {
-            self.about_licenses_text(
-                "Rust 依赖许可证：正在后台读取索引列表。",
-                "Rust dependency licenses: reading the list index on a background worker.",
-            )
-        } else if self.about_license_catalog.has_generated_rust_notices() {
-            self.about_licenses_text(
-                "Rust 依赖许可证：已检测到分段索引，正文将在查看时按项载入。",
-                "Rust dependency licenses: indexed sections detected, and bodies will load only when opened.",
-            )
-        } else {
-            self.about_licenses_text(
-                "Rust 依赖许可证：当前未检测到 `output/resources/licenses/THIRD_PARTY_NOTICES.md`，请运行 `./make licenses`。",
-                "Rust dependency licenses: `output/resources/licenses/THIRD_PARTY_NOTICES.md` is currently missing; run `./make licenses`.",
-            )
-        };
-        let directory_hint = self
-            .about_license_catalog
-            .preferred_directory_to_open()
-            .map(|path| {
-                format!(
-                    "{}{}",
-                    self.about_licenses_text("许可证资源目录：", "License resource directory: "),
-                    path.display()
-                )
-            })
-            .unwrap_or_else(|| {
-                self.about_licenses_text(
-                    "当前运行环境未提供独立许可证目录，仅能展示内嵌许可证文本。",
-                    "The current runtime does not expose a dedicated license directory, so only embedded license text is available.",
-                )
-                .to_string()
-            });
-
-        column![
-            text(self.about_licenses_text("关于与许可证", "About & Licenses")).size(18),
-            text(format!("Vulcan Code {}", env!("CARGO_PKG_VERSION"))).size(13),
-            text(self.about_licenses_text(
-                "页面默认只载入许可证列表，点击单项后才在弹窗里按需读取正文，避免整页渲染超长文本。",
-                "This page loads only the license list by default and reads each body on demand in a modal to avoid rendering one huge document.",
-            ))
-            .size(12)
-            .color(metadata_color),
-            text(format!(
-                "{}{}",
-                self.about_licenses_text("当前列表项数量：", "Visible entries: "),
-                self.about_license_catalog.documents.len()
-            ))
-            .size(12)
-            .color(metadata_color),
-            text(generated_notice_status).size(12).color(metadata_color),
-            text(directory_hint).size(12).color(metadata_color),
-        ]
-        .spacing(8)
-        .into()
     }
 
     /// Renders the lightweight loading placeholder shown while the catalog index is fetched on a worker thread.

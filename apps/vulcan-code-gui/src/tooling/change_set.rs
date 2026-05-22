@@ -95,6 +95,9 @@ pub(crate) struct ChangeSetFileSummary {
     /// Optional logical line count derived from create/delete content.
     /// 从 create/delete 内容推导出的可选逻辑行数。
     pub content_lines: Option<usize>,
+    /// Optional delete content mode preserved for deleted-file lifecycle records.
+    /// 为删除文件生命周期记录保留的可选删除内容模式。
+    pub delete_content_mode: Option<ChangeSetDeleteContentMode>,
     /// Whether the original file record exposed one optional patch field.
     /// 原始文件记录是否暴露了可选 patch 字段。
     pub patch_present: bool,
@@ -241,6 +244,39 @@ impl ChangeSetFileChangeKind {
     }
 }
 
+/// Stable delete content mode used by canonical `change_set` delete lifecycle records.
+/// canonical `change_set` 删除生命周期记录使用的稳定删除内容模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChangeSetDeleteContentMode {
+    /// The deleted file body stays inline as full text.
+    /// 被删除文件正文以内联全文形式保留。
+    Full,
+    /// The deleted file body is intentionally summarized into head and tail snippets.
+    /// 被删除文件正文会被有意摘要为前后片段。
+    Truncated,
+}
+
+impl ChangeSetDeleteContentMode {
+    /// Returns the stable lowercase serialization value.
+    /// 返回稳定的小写序列化值。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Truncated => "truncated",
+        }
+    }
+
+    /// Parses one delete content-mode field while treating absent values as the legacy full mode.
+    /// 解析删除内容模式字段，并把缺失值视为旧版全文模式。
+    fn parse(value: Option<&Value>) -> Option<Self> {
+        match value.and_then(Value::as_str).map(str::trim) {
+            None | Some("") | Some("full") => Some(Self::Full),
+            Some("truncated") => Some(Self::Truncated),
+            _ => None,
+        }
+    }
+}
+
 /// One raw line entry preserved inside a canonical modify hunk.
 /// 保存在 canonical modify hunk 中的一条原始行记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +326,12 @@ struct RawChangeSetFileRecord {
     /// Optional file content used by create/delete lifecycle records.
     /// 供 create/delete 生命周期记录使用的可选文件内容。
     content: Option<String>,
+    /// Optional delete content mode reported by delete lifecycle records.
+    /// 删除生命周期记录上报的可选删除内容模式。
+    delete_content_mode: Option<ChangeSetDeleteContentMode>,
+    /// Optional total logical line count reported by lifecycle records.
+    /// 生命周期记录上报的可选总逻辑行数。
+    total_line_count: Option<usize>,
     /// Parsed modify hunks of the current file record.
     /// 当前文件记录的已解析 modify hunk 集合。
     hunks: Vec<RawChangeSetHunk>,
@@ -484,6 +526,12 @@ fn parse_raw_file_record(file: &Value) -> Option<RawChangeSetFileRecord> {
         .get("content")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let delete_content_mode = if change == ChangeSetFileChangeKind::Delete {
+        ChangeSetDeleteContentMode::parse(object.get("content_mode"))
+    } else {
+        None
+    };
+    let total_line_count = compact_optional_usize(object.get("total_line_count"));
     let hunks = object
         .get("hunks")
         .and_then(Value::as_array)
@@ -500,6 +548,8 @@ fn parse_raw_file_record(file: &Value) -> Option<RawChangeSetFileRecord> {
         old_path,
         new_path,
         content,
+        delete_content_mode,
+        total_line_count,
         hunks,
         patch_present: object
             .get("patch")
@@ -806,15 +856,48 @@ fn compact_file_record(file: &RawChangeSetFileRecord) -> Value {
             json!(deleted_line_count),
         );
     }
-    if let Some(content) = file.content.as_deref() {
-        object.insert(
-            String::from("content_bytes"),
-            json!(normalize_text(content).len()),
-        );
-        object.insert(
-            String::from("content_lines"),
-            json!(split_normalized_lines(&normalize_text(content)).len()),
-        );
+    match file.change {
+        ChangeSetFileChangeKind::Create => {
+            if let Some(content) = file.content.as_deref() {
+                let normalized_content = normalize_text(content);
+                object.insert(
+                    String::from("content_bytes"),
+                    json!(normalized_content.len()),
+                );
+                object.insert(
+                    String::from("content_lines"),
+                    json!(count_change_set_content_lines(&normalized_content)),
+                );
+            }
+        }
+        ChangeSetFileChangeKind::Delete => {
+            let delete_content_mode = file
+                .delete_content_mode
+                .unwrap_or(ChangeSetDeleteContentMode::Full);
+            object.insert(
+                String::from("content_mode"),
+                Value::String(delete_content_mode.as_str().to_string()),
+            );
+            if let Some(total_line_count) = file.total_line_count {
+                object.insert(String::from("content_lines"), json!(total_line_count));
+            }
+            if delete_content_mode == ChangeSetDeleteContentMode::Full
+                && let Some(content) = file.content.as_deref()
+            {
+                let normalized_content = normalize_text(content);
+                object.insert(
+                    String::from("content_bytes"),
+                    json!(normalized_content.len()),
+                );
+                if file.total_line_count.is_none() {
+                    object.insert(
+                        String::from("content_lines"),
+                        json!(count_change_set_content_lines(&normalized_content)),
+                    );
+                }
+            }
+        }
+        ChangeSetFileChangeKind::Modify | ChangeSetFileChangeKind::Rename => {}
     }
     if file.patch_present {
         object.insert(String::from("patch_present"), Value::Bool(true));
@@ -826,8 +909,9 @@ fn compact_file_record(file: &RawChangeSetFileRecord) -> Value {
 /// 将一条紧凑文件行解析回工具弹层使用的带类型摘要。
 fn parse_compact_file_summary(file: &Value) -> Option<ChangeSetFileSummary> {
     let object = file.as_object()?;
+    let change = ChangeSetFileChangeKind::parse(object.get("change")?.as_str()?)?;
     Some(ChangeSetFileSummary {
-        change: ChangeSetFileChangeKind::parse(object.get("change")?.as_str()?)?,
+        change,
         path: compact_optional_string(object.get("path")),
         old_path: compact_optional_string(object.get("old_path")),
         new_path: compact_optional_string(object.get("new_path")),
@@ -836,6 +920,11 @@ fn parse_compact_file_summary(file: &Value) -> Option<ChangeSetFileSummary> {
         deleted_line_count: compact_usize(object.get("deleted_line_count")),
         content_bytes: compact_optional_usize(object.get("content_bytes")),
         content_lines: compact_optional_usize(object.get("content_lines")),
+        delete_content_mode: if change == ChangeSetFileChangeKind::Delete {
+            ChangeSetDeleteContentMode::parse(object.get("content_mode"))
+        } else {
+            None
+        },
         patch_present: object
             .get("patch_present")
             .and_then(Value::as_bool)
@@ -990,6 +1079,19 @@ fn split_normalized_lines(text: &str) -> Vec<String> {
     }
 }
 
+/// Counts logical lifecycle-content lines while ignoring one purely trailing newline marker.
+/// 统计生命周期内容的逻辑行数，并忽略一个纯粹表示文件结尾的尾随换行。
+fn count_change_set_content_lines(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let mut line_count = text.split('\n').count();
+    if text.ends_with('\n') {
+        line_count = line_count.saturating_sub(1);
+    }
+    line_count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,6 +1191,11 @@ mod tests {
         assert_eq!(summary.stats.inserted_line_count, 1);
         assert_eq!(summary.stats.deleted_line_count, 1);
         assert_eq!(summary.files.len(), 4);
+        assert_eq!(
+            summary.files[2].delete_content_mode,
+            Some(ChangeSetDeleteContentMode::Full)
+        );
+        assert_eq!(summary.files[2].content_lines, Some(1));
         assert_eq!(summary.diagnostics.len(), 1);
         assert_eq!(
             summary.verification.status,
@@ -1100,6 +1207,42 @@ mod tests {
         assert!(runtime_notice.contains("Renamed source path still exists"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Verifies truncated delete lifecycle records preserve the large-delete summary without requiring one inline full body.
+    /// 验证截断 delete 生命周期记录会保留大删除摘要，而不再要求内联完整正文。
+    #[test]
+    fn compact_change_set_host_result_preserves_truncated_delete_summary_metadata() {
+        let host_result = json!({
+            "kind": "change_set",
+            "payload": {
+                "mode": "applied",
+                "summary": "Applied one large file deletion.",
+                "files": [{
+                    "change": "delete",
+                    "path": "D:/demo/large-delete.lua",
+                    "content_mode": "truncated",
+                    "total_line_count": 12345,
+                    "content_head": "deleted line 1\ndeleted line 2",
+                    "content_tail": "deleted line 12344\ndeleted line 12345"
+                }]
+            }
+        });
+
+        let compacted =
+            compact_change_set_host_result(&host_result).expect("change_set host result");
+        let payload = compacted["payload"].clone();
+        let summary =
+            change_set_modal_summary_from_payload(&payload).expect("compact summary should parse");
+        assert_eq!(summary.stats.file_count, 1);
+        assert_eq!(summary.stats.delete_count, 1);
+        assert_eq!(summary.files.len(), 1);
+        assert_eq!(
+            summary.files[0].delete_content_mode,
+            Some(ChangeSetDeleteContentMode::Truncated)
+        );
+        assert_eq!(summary.files[0].content_lines, Some(12345));
+        assert_eq!(summary.files[0].content_bytes, None);
     }
 
     /// Verifies preview payloads skip filesystem verification and therefore do not emit warning notices.

@@ -1908,16 +1908,28 @@ fn format_change_set_file_summary_line(file: &ChangeSetFileSummary) -> String {
             file.inserted_line_count,
             file.deleted_line_count,
         ),
-        ChangeSetFileChangeKind::Delete => format!(
-            "[delete] {} ({}, {} 行)",
-            file.path.as_deref().unwrap_or("未知路径"),
-            file.content_bytes
-                .map(|value| format!("{value} B"))
-                .unwrap_or_else(|| String::from("-")),
-            file.content_lines
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| String::from("-")),
-        ),
+        ChangeSetFileChangeKind::Delete => match file
+            .delete_content_mode
+            .unwrap_or(crate::tooling::change_set::ChangeSetDeleteContentMode::Full)
+        {
+            crate::tooling::change_set::ChangeSetDeleteContentMode::Full => format!(
+                "[delete] {} ({}, {} 行)",
+                file.path.as_deref().unwrap_or("未知路径"),
+                file.content_bytes
+                    .map(|value| format!("{value} B"))
+                    .unwrap_or_else(|| String::from("-")),
+                file.content_lines
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| String::from("-")),
+            ),
+            crate::tooling::change_set::ChangeSetDeleteContentMode::Truncated => format!(
+                "[delete] {} (截断摘要, {} 行)",
+                file.path.as_deref().unwrap_or("未知路径"),
+                file.content_lines
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| String::from("-")),
+            ),
+        },
         ChangeSetFileChangeKind::Rename => format!(
             "[rename] {} -> {}",
             file.old_path.as_deref().unwrap_or("未知旧路径"),
