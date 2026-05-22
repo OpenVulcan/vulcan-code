@@ -84,6 +84,14 @@
 - `tooling/bridge.rs` 中判断某个 skill 是否声明 `LUASKILL_SID` 时，优先看 `input_schema.properties`，只把旧版 `parameters` 作为回退。
 - 如果某个 skill 包本身还没升级到 `input_schema` / `input_schema_file`，即使宿主已经升级到 0.4.3，也拿不到完整 schema 能力；此时要去更新 skill 包本身，而不是继续在宿主里手搓特例 schema。
 - 当前会触发严格 schema 问题的典型 LuaSkills 技能有 `vulcan-codekit`、`vulcan-curl`、`vulcan-testkit`；排查时优先检查 skill 包是否提供完整 schema。
+- 0.4.3 新增的技能操作进度当前已经接到 GUI：宿主在 `apps/vulcan-code-gui/src/runtime_support/luaskills_runtime.rs` 里通过 `set_skill_operation_progress_callback` 把事件写入运行时句柄队列，工作台再按 Tick 轮询消费。
+- 当前 GUI 展示链路位于 `apps/vulcan-code-gui/src/app_shell/mod.rs` 与 `apps/vulcan-code-gui/src/app_shell/views/mod.rs`：
+  - 顶部 LuaSkills 面板会显示当前操作、阶段、百分比、字节进度、来源和消息。
+  - 对应技能行会显示“安装中 / 更新中”这类紧凑徽标与当前阶段。
+- 当前要注意上游粒度并不完全一致：安装 / 更新能拿到细粒度 phase，卸载 / 启用 / 停用更多还是宿主侧合成的粗粒度“进行中”状态；如果后续上游补了更细 phase，优先直接接 callback，不要再加宿主特判。
+- 一个很容易漏掉的坑：`LuaSkillsRuntimeHandle` 内部引擎即使已经 reload / enable / disable / update 成功，`RuntimeFoundation` 里的 `luaskills_tools` 仍然是构建时快照，不会自动跟着变。
+  - 因此在 `LuaSkillsBootstrapFinished`、`LuaSkillsCatalogLoaded`、`LuaSkillsManagementFinished` 这几个节点之后，必须显式调用 `refresh_runtime_foundation()`，否则工具表会表现成“要再手动触发一次别的操作才同步”。
+  - 这个问题的症状通常是：技能明明已经启用/停用/更新成功，但 AI 可见工具集合没有立刻变化。
 
 ### 11. OpenRouter / Gemini 工具 schema 兼容层
 - 当前 OpenRouter 经 Google AI Studio 路由时，对函数工具 schema 的校验明显严于通用 JSON Schema；不要假设“上游 schema 合法 = Gemini 一定接受”。

@@ -140,7 +140,10 @@ fn normalize_schema_multi_type_union(object: &mut serde_json::Map<String, Value>
             nullable = true;
             continue;
         }
-        if !normalized_types.iter().any(|existing| existing == type_name) {
+        if !normalized_types
+            .iter()
+            .any(|existing| existing == type_name)
+        {
             normalized_types.push(type_name.to_string());
         }
     }
@@ -383,10 +386,16 @@ mod tests {
         normalize_provider_tool_parameters_schema(&mut schema);
 
         assert_eq!(schema["oneOf"][0]["type"], json!("object"));
-        assert_eq!(schema["oneOf"][0]["properties"]["program"]["type"], json!("string"));
+        assert_eq!(
+            schema["oneOf"][0]["properties"]["program"]["type"],
+            json!("string")
+        );
         assert_eq!(schema["oneOf"][0]["additionalProperties"], json!(false));
         assert_eq!(schema["oneOf"][1]["type"], json!("object"));
-        assert_eq!(schema["oneOf"][1]["properties"]["log"]["type"], json!("string"));
+        assert_eq!(
+            schema["oneOf"][1]["properties"]["log"]["type"],
+            json!("string")
+        );
         assert_eq!(schema["oneOf"][1]["additionalProperties"], json!(false));
     }
 

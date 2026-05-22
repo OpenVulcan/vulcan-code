@@ -15,11 +15,12 @@ use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeDatabaseProviderMode,
     LuaRuntimeHostOptions, LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig,
     RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeInvocationResult, RuntimeRequestContext,
-    RuntimeSkillRoot, SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
-    SkillManager, SkillManagerConfig, SkillMeta, SkillUninstallOptions,
+    RuntimeSkillOperationProgressEvent, RuntimeSkillRoot, SkillInstallRequest,
+    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    SkillUninstallOptions, set_skill_operation_progress_callback,
 };
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -27,6 +28,10 @@ use std::sync::{Arc, Mutex};
 /// Relative configuration file path that declares the host-managed ROOT skill bootstrap set.
 /// 声明宿主管理 ROOT 技能引导集合的相对配置文件路径。
 const ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH: &str = "config/luaskills_root_skills.yaml";
+
+/// Maximum queued LuaSkills progress event count retained for GUI polling snapshots.
+/// 为图形界面轮询快照保留的 LuaSkills 进度事件最大排队数量。
+const LUASKILLS_PROGRESS_EVENT_QUEUE_LIMIT: usize = 256;
 
 /// Long-lived LuaSkills runtime handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面保留的长生命周期 LuaSkills 运行时句柄。
@@ -47,6 +52,9 @@ pub struct LuaSkillsRuntimeHandle {
     /// Number of runtime entries currently visible to the host.
     /// 当前对宿主可见的运行时入口数量。
     pub entry_count: usize,
+    /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for GUI polling.
+    /// 保存细粒度 LuaSkills 操作进度事件并供图形界面轮询的共享 FIFO 队列。
+    pub operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
 }
 
 impl std::fmt::Debug for LuaSkillsRuntimeHandle {
@@ -59,6 +67,14 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
             .field("system_lua_lib_dir", &self.system_lua_lib_dir)
             .field("skill_roots", &self.skill_roots)
             .field("entry_count", &self.entry_count)
+            .field(
+                "operation_progress_event_count",
+                &self
+                    .operation_progress_events
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .len(),
+            )
             .finish()
     }
 }
@@ -323,6 +339,8 @@ fn bootstrap_luaskills_runtime_blocking(
         .map_err(|error| format!("加载 LuaSkills 技能根失败：{error}"))?;
 
     let entry_count = engine.list_entries().len();
+    let operation_progress_events = Arc::new(Mutex::new(VecDeque::new()));
+    install_luaskills_operation_progress_callback(operation_progress_events.clone());
 
     Ok(LuaSkillsBootstrapReport {
         handle: LuaSkillsRuntimeHandle {
@@ -331,8 +349,25 @@ fn bootstrap_luaskills_runtime_blocking(
             system_lua_lib_dir,
             skill_roots,
             entry_count,
+            operation_progress_events,
         },
     })
+}
+
+/// Installs one process-wide LuaSkills progress callback that forwards events into the shared GUI queue.
+/// 安装一个进程级 LuaSkills 进度回调，并将事件转发到共享图形界面队列。
+fn install_luaskills_operation_progress_callback(
+    operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
+) {
+    set_skill_operation_progress_callback(Some(Arc::new(move |event| {
+        let mut guard = operation_progress_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.push_back(event.clone());
+        while guard.len() > LUASKILLS_PROGRESS_EVENT_QUEUE_LIMIT {
+            guard.pop_front();
+        }
+    })));
 }
 
 /// Execute one LuaSkills host operation on a dedicated blocking thread and return its result.
@@ -528,6 +563,18 @@ pub async fn load_luaskills_catalog(
     run_luaskills_blocking_task("luaskills-catalog", move || {
         load_luaskills_catalog_blocking(&handle)
     })
+}
+
+/// Drains every queued LuaSkills operation progress event captured for one runtime handle.
+/// 取出某个运行时句柄当前捕获的全部已排队 LuaSkills 操作进度事件。
+pub fn drain_luaskills_operation_progress_events(
+    handle: &LuaSkillsRuntimeHandle,
+) -> Vec<RuntimeSkillOperationProgressEvent> {
+    let mut guard = handle
+        .operation_progress_events
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.drain(..).collect()
 }
 
 /// Rebuild the visible LuaSkills catalog inside one blocking host thread.

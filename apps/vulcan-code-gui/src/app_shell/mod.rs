@@ -129,6 +129,7 @@ use iced::{
 };
 use iced_aw::date_picker::Date;
 use iced_fonts::{CODICON_FONT_BYTES, LUCIDE_FONT_BYTES, codicon, lucide};
+use luaskills::{RuntimeSkillOperationProgressEvent, SkillInstallSourceType, SkillLifecycleAction};
 use rodio::{Decoder, OutputStream, Sink};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -612,6 +613,10 @@ const WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT: f32 = 360.0;
 /// Poll interval used to mirror pending ask/question runtime requests into the main workbench modal layer.
 /// 用于把 ask/question 运行时待回答请求镜像到主工作台弹层的轮询时间间隔。
 const QUESTION_RUNTIME_POLL_TICK_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Poll interval used to mirror queued LuaSkills lifecycle progress events into the management panel.
+/// 用于把已排队 LuaSkills 生命周期进度事件镜像到管理面板的轮询时间间隔。
+const LUASKILLS_PROGRESS_POLL_TICK_INTERVAL: Duration = Duration::from_millis(120);
 
 /// Shared fixed width used by the reusable blocking notice modal card.
 /// 可复用阻塞提示弹窗卡片使用的共享固定宽度。
@@ -3378,6 +3383,9 @@ pub struct VulcanWorkbench {
     /// Whether one LuaSkills catalog or lifecycle operation is still running in the background.
     /// 当前是否仍有某个 LuaSkills 清单或生命周期操作在后台执行。
     luaskills_operation_in_flight: bool,
+    /// Latest fine-grained LuaSkills lifecycle progress snapshot mirrored from the runtime callback queue.
+    /// 从运行时回调队列镜像得到的最新细粒度 LuaSkills 生命周期进度快照。
+    luaskills_operation_progress: Option<LuaSkillsOperationProgressState>,
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
@@ -4602,6 +4610,289 @@ impl WorkbenchOpenRouterEndpointChoice {
         } else {
             parts.join(" · ")
         }
+    }
+}
+
+/// Visual lifecycle kind used by the LuaSkills management panel progress surface.
+/// LuaSkills 管理面板进度表面使用的可视化生命周期类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LuaSkillsOperationVisualKind {
+    /// Catalog refresh initiated from the panel header.
+    /// 从面板标题栏发起的目录刷新。
+    Refresh,
+    /// Managed skill install initiated from the install form.
+    /// 从安装表单发起的受管技能安装。
+    Install,
+    /// Managed skill update initiated from one visible skill row.
+    /// 从某条可见技能行发起的受管技能更新。
+    Update,
+    /// Enable action initiated from one visible skill row.
+    /// 从某条可见技能行发起的启用操作。
+    Enable,
+    /// Disable action initiated from one visible skill row.
+    /// 从某条可见技能行发起的停用操作。
+    Disable,
+    /// Uninstall action initiated from one visible skill row.
+    /// 从某条可见技能行发起的卸载操作。
+    Uninstall,
+}
+
+impl LuaSkillsOperationVisualKind {
+    /// Returns the user-facing verb label of the current operation kind.
+    /// 返回当前操作类型的面向用户动词标签。
+    fn label(self) -> &'static str {
+        match self {
+            Self::Refresh => "刷新",
+            Self::Install => "安装",
+            Self::Update => "更新",
+            Self::Enable => "启用",
+            Self::Disable => "停用",
+            Self::Uninstall => "卸载",
+        }
+    }
+
+    /// Returns the in-progress label rendered by compact badges while the operation is still running.
+    /// 返回操作仍在进行时供紧凑徽标渲染的进行中标签。
+    fn active_label(self) -> &'static str {
+        match self {
+            Self::Refresh => "刷新中",
+            Self::Install => "安装中",
+            Self::Update => "更新中",
+            Self::Enable => "启用中",
+            Self::Disable => "停用中",
+            Self::Uninstall => "卸载中",
+        }
+    }
+}
+
+/// Latest LuaSkills lifecycle progress snapshot mirrored from the runtime callback queue.
+/// 从运行时回调队列镜像得到的最新 LuaSkills 生命周期进度快照。
+#[derive(Debug, Clone)]
+struct LuaSkillsOperationProgressState {
+    /// Stable operation identifier shared by all runtime events from the current lifecycle action.
+    /// 当前生命周期动作全部运行时事件共享的稳定操作标识符。
+    operation_id: String,
+    /// High-level GUI operation kind currently represented by the snapshot.
+    /// 当前快照所表示的高层图形界面操作类型。
+    action_kind: LuaSkillsOperationVisualKind,
+    /// Optional stable target skill identifier.
+    /// 可选的稳定目标技能标识符。
+    skill_id: Option<String>,
+    /// Optional named runtime root targeted by the current operation.
+    /// 当前操作目标的可选命名运行时根。
+    root_name: Option<String>,
+    /// Machine-readable progress phase mirrored from the runtime callback.
+    /// 从运行时回调镜像而来的机器可读进度阶段。
+    phase: String,
+    /// Machine-readable progress status mirrored from the runtime callback.
+    /// 从运行时回调镜像而来的机器可读进度状态。
+    status: String,
+    /// Optional determinate completion percentage for the current phase.
+    /// 当前阶段的可选确定性完成百分比。
+    percent: Option<f64>,
+    /// Optional completed byte count for download-oriented phases.
+    /// 面向下载阶段的可选已完成字节数。
+    bytes_done: Option<u64>,
+    /// Optional total byte count for download-oriented phases.
+    /// 面向下载阶段的可选总字节数。
+    bytes_total: Option<u64>,
+    /// Optional managed source type involved in the current phase.
+    /// 当前阶段涉及的可选受管来源类型。
+    source_type: Option<SkillInstallSourceType>,
+    /// Optional managed source locator involved in the current phase.
+    /// 当前阶段涉及的可选受管来源定位值。
+    source_locator: Option<String>,
+    /// Optional human-readable runtime message attached to the current phase.
+    /// 附着在当前阶段上的可选人类可读运行时消息。
+    message: Option<String>,
+}
+
+impl LuaSkillsOperationProgressState {
+    /// Builds one synthetic queued snapshot before the runtime emits finer-grained progress events.
+    /// 在运行时发出更细粒度进度事件之前构造一条合成排队快照。
+    fn queued(
+        action_kind: LuaSkillsOperationVisualKind,
+        skill_id: Option<String>,
+        root_name: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let stable_skill_id = skill_id.as_deref().unwrap_or("catalog");
+        Self {
+            operation_id: format!("gui-{}-{stable_skill_id}", action_kind.label()),
+            action_kind,
+            skill_id,
+            root_name,
+            phase: String::from("queued"),
+            status: String::from("started"),
+            percent: None,
+            bytes_done: None,
+            bytes_total: None,
+            source_type: None,
+            source_locator: None,
+            message: Some(message.into()),
+        }
+    }
+
+    /// Mirrors one runtime progress event onto the current GUI snapshot.
+    /// 将一条运行时进度事件镜像到当前图形界面快照。
+    fn apply_runtime_event(&mut self, event: &RuntimeSkillOperationProgressEvent) {
+        self.operation_id = event.operation_id.clone();
+        self.skill_id = event.skill_id.clone().or_else(|| self.skill_id.clone());
+        self.root_name = event.root_name.clone().or_else(|| self.root_name.clone());
+        self.phase = event.phase.clone();
+        self.status = event.status.clone();
+        self.percent = event.percent;
+        self.bytes_done = event.bytes_done;
+        self.bytes_total = event.bytes_total;
+        self.source_type = event.source_type;
+        self.source_locator = event.source_locator.clone();
+        self.message = event.message.clone();
+    }
+
+    /// Returns whether the current snapshot refers to the provided visible skill row.
+    /// 返回当前快照是否指向给定的可见技能行。
+    fn matches_skill(&self, skill_id: &str) -> bool {
+        self.skill_id.as_deref() == Some(skill_id)
+    }
+
+    /// Returns the optional normalized progress-bar value expected by iced.
+    /// 返回 iced 进度条期望的可选归一化进度值。
+    fn progress_fraction(&self) -> Option<f32> {
+        self.percent
+            .map(|percent| (percent.clamp(0.0, 100.0) / 100.0) as f32)
+    }
+
+    /// Returns the primary user-facing heading rendered by the panel progress card.
+    /// 返回渲染在面板进度卡片中的主要面向用户标题。
+    fn title_text(&self) -> String {
+        match self.skill_id.as_deref() {
+            Some(skill_id) => format!("{}技能 {skill_id}", self.action_kind.label()),
+            None => format!("{} LuaSkills 目录", self.action_kind.label()),
+        }
+    }
+
+    /// Returns the compact badge label rendered inside visible skill rows.
+    /// 返回渲染在可见技能行内部的紧凑徽标标签。
+    fn badge_text(&self) -> String {
+        if let Some(percent) = self.percent {
+            format!("{} · {:.0}%", self.action_kind.active_label(), percent)
+        } else {
+            format!(
+                "{} · {}",
+                self.action_kind.active_label(),
+                self.phase_label()
+            )
+        }
+    }
+
+    /// Returns the normalized human-readable phase label for the current snapshot.
+    /// 返回当前快照对应的规范化人类可读阶段标签。
+    fn phase_label(&self) -> String {
+        format_luaskills_progress_phase_label(&self.phase)
+    }
+
+    /// Returns the compact status line rendered above the optional detail rows.
+    /// 返回渲染在可选详情行上方的紧凑状态文本。
+    fn status_line(&self) -> String {
+        let mut parts = vec![self.phase_label()];
+        if let Some(percent) = self.percent {
+            parts.push(format!("{percent:.0}%"));
+        } else if self.status == "cached" {
+            parts.push(String::from("命中缓存"));
+        } else if self.status != "started" {
+            parts.push(format_luaskills_progress_status_label(&self.status).to_string());
+        }
+        if let (Some(done), Some(total)) = (self.bytes_done, self.bytes_total) {
+            parts.push(format!(
+                "{} / {}",
+                format_luaskills_progress_bytes(done),
+                format_luaskills_progress_bytes(total)
+            ));
+        }
+        parts.join(" · ")
+    }
+
+    /// Returns the optional managed source summary rendered in the progress detail area.
+    /// 返回渲染在进度详情区域中的可选受管来源摘要。
+    fn source_line(&self) -> Option<String> {
+        let source_locator = self.source_locator.as_ref()?;
+        let source_label = match self.source_type {
+            Some(SkillInstallSourceType::Github) => "GitHub",
+            Some(SkillInstallSourceType::Url) => "包地址",
+            Some(SkillInstallSourceType::OfficialHub) => "Official Hub",
+            Some(SkillInstallSourceType::PrivateUrlManifest) => "Private URL Manifest",
+            None => "来源",
+        };
+        Some(format!("{source_label} · {source_locator}"))
+    }
+
+    /// Returns the single-line panel notice mirrored into the header message area.
+    /// 返回镜像到标题消息区域中的单行面板提示文本。
+    fn notice_text(&self) -> String {
+        let mut summary = format!("{} · {}", self.title_text(), self.status_line());
+        if let Some(message) = self
+            .message
+            .as_ref()
+            .map(|message| message.trim())
+            .filter(|message| !message.is_empty())
+        {
+            summary.push_str(" · ");
+            summary.push_str(message);
+        }
+        summary
+    }
+}
+
+/// Formats one machine-readable LuaSkills progress phase into a user-facing Chinese label.
+/// 将一条机器可读 LuaSkills 进度阶段格式化为面向用户的中文标签。
+fn format_luaskills_progress_phase_label(phase: &str) -> String {
+    match phase {
+        "queued" => String::from("已排队"),
+        "validating_request" => String::from("校验请求"),
+        "resolving_source" => String::from("解析来源"),
+        "resolving_manifest" => String::from("解析清单"),
+        "downloading_archive" => String::from("下载归档"),
+        "extracting_archive" => String::from("解压归档"),
+        "validating_package" => String::from("校验包内容"),
+        "staging_install" => String::from("写入安装目录"),
+        "staging_update" => String::from("替换技能目录"),
+        "reloading_runtime" => String::from("重载运行时"),
+        "committing" => String::from("提交变更"),
+        "completed" => String::from("已完成"),
+        "failed" => String::from("失败"),
+        other => other.replace('_', " "),
+    }
+}
+
+/// Formats one machine-readable LuaSkills progress status into a user-facing Chinese label.
+/// 将一条机器可读 LuaSkills 进度状态格式化为面向用户的中文标签。
+fn format_luaskills_progress_status_label(status: &str) -> &'static str {
+    match status {
+        "started" => "已开始",
+        "progress" => "进行中",
+        "completed" => "已完成",
+        "cached" => "命中缓存",
+        "failed" => "失败",
+        "blocked" => "已阻止",
+        _ => "进行中",
+    }
+}
+
+/// Formats one raw byte count into a compact user-facing progress label.
+/// 将一段原始字节数格式化为紧凑的面向用户进度标签。
+fn format_luaskills_progress_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let value = bytes as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -6604,6 +6895,9 @@ enum Message {
     /// Applies one freshly loaded LuaSkills catalog snapshot from the embedded host runtime.
     /// 应用一份来自嵌入式宿主运行时的最新 LuaSkills 技能目录快照。
     LuaSkillsCatalogLoaded(Result<LuaSkillsCatalog, String>),
+    /// Polls queued LuaSkills lifecycle progress events from the embedded host runtime.
+    /// 从嵌入式宿主运行时轮询已排队的 LuaSkills 生命周期进度事件。
+    PollLuaSkillsOperationProgressTick,
     /// Requests reloading the visible LuaSkills catalog from the embedded host runtime.
     /// 请求从嵌入式宿主运行时重新载入可见 LuaSkills 技能目录。
     RefreshLuaSkillsCatalog,
@@ -7477,6 +7771,7 @@ impl VulcanWorkbench {
             luaskills_install_skill_id: String::new(),
             luaskills_install_source: String::new(),
             luaskills_operation_in_flight: false,
+            luaskills_operation_progress: None,
             provider_configuration,
             ai_tool_configuration,
             agent_profile_catalog,
@@ -7648,6 +7943,7 @@ impl VulcanWorkbench {
                 self.luaskills_install_skill_id.clear();
                 self.luaskills_install_source.clear();
                 self.luaskills_operation_in_flight = false;
+                self.luaskills_operation_progress = None;
                 self.task_projects.clear();
                 self.archived_task_projects.clear();
                 self.sessions.clear();
@@ -7779,6 +8075,7 @@ impl VulcanWorkbench {
                         });
                         let luaskills_handle = report.handle.clone();
                         self.luaskills_runtime = Some(report.handle);
+                        self.refresh_runtime_foundation();
                         self.luaskills_operation_in_flight = true;
                         self.luaskills_notice =
                             String::from("LuaSkills 运行时已就绪，正在载入技能目录。");
@@ -8048,6 +8345,10 @@ impl VulcanWorkbench {
             }
             Message::LuaSkillsCatalogLoaded(result) => {
                 self.luaskills_operation_in_flight = false;
+                self.luaskills_operation_progress = None;
+                if let Some(handle) = self.luaskills_runtime.as_ref() {
+                    let _ = luaskills_runtime::drain_luaskills_operation_progress_events(handle);
+                }
 
                 match result {
                     Ok(catalog) => {
@@ -8072,7 +8373,12 @@ impl VulcanWorkbench {
                         );
                     }
                 }
+                self.refresh_runtime_foundation();
 
+                Task::none()
+            }
+            Message::PollLuaSkillsOperationProgressTick => {
+                self.poll_luaskills_operation_progress();
                 Task::none()
             }
             Message::McpRuntimeBootstrapped(result) => {
@@ -8106,7 +8412,12 @@ impl VulcanWorkbench {
                 }
 
                 self.luaskills_operation_in_flight = true;
-                self.luaskills_notice = String::from("正在刷新 LuaSkills 技能目录。");
+                self.begin_luaskills_panel_operation(
+                    LuaSkillsOperationVisualKind::Refresh,
+                    None,
+                    None,
+                    String::from("正在刷新 LuaSkills 技能目录。"),
+                );
                 Task::perform(
                     luaskills_runtime::perform_luaskills_management_action(
                         handle,
@@ -8146,17 +8457,23 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
 
+                let install_skill_id = if self.luaskills_install_skill_id.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.luaskills_install_skill_id.clone())
+                };
                 let action = LuaSkillsManagementAction::Install {
-                    skill_id: if self.luaskills_install_skill_id.trim().is_empty() {
-                        None
-                    } else {
-                        Some(self.luaskills_install_skill_id.clone())
-                    },
+                    skill_id: install_skill_id.clone(),
                     source: self.luaskills_install_source.clone(),
                     source_type: self.luaskills_install_source_choice,
                 };
                 self.luaskills_operation_in_flight = true;
-                self.luaskills_notice = String::from("正在安装 LuaSkills 技能。");
+                self.begin_luaskills_panel_operation(
+                    LuaSkillsOperationVisualKind::Install,
+                    install_skill_id,
+                    Some(String::from("USER")),
+                    String::from("正在安装 LuaSkills 技能。"),
+                );
                 Task::perform(
                     luaskills_runtime::perform_luaskills_management_action(handle, action),
                     Message::LuaSkillsManagementFinished,
@@ -8175,7 +8492,12 @@ impl VulcanWorkbench {
                 }
 
                 self.luaskills_operation_in_flight = true;
-                self.luaskills_notice = format!("正在更新技能 `{skill_id}`。");
+                self.begin_luaskills_panel_operation(
+                    LuaSkillsOperationVisualKind::Update,
+                    Some(skill_id.clone()),
+                    None,
+                    format!("正在更新技能 `{skill_id}`。"),
+                );
                 Task::perform(
                     luaskills_runtime::perform_luaskills_management_action(
                         handle,
@@ -8197,7 +8519,12 @@ impl VulcanWorkbench {
                 }
 
                 self.luaskills_operation_in_flight = true;
-                self.luaskills_notice = format!("正在启用技能 `{skill_id}`。");
+                self.begin_luaskills_panel_operation(
+                    LuaSkillsOperationVisualKind::Enable,
+                    Some(skill_id.clone()),
+                    None,
+                    format!("正在启用技能 `{skill_id}`。"),
+                );
                 Task::perform(
                     luaskills_runtime::perform_luaskills_management_action(
                         handle,
@@ -8219,7 +8546,12 @@ impl VulcanWorkbench {
                 }
 
                 self.luaskills_operation_in_flight = true;
-                self.luaskills_notice = format!("正在停用技能 `{skill_id}`。");
+                self.begin_luaskills_panel_operation(
+                    LuaSkillsOperationVisualKind::Disable,
+                    Some(skill_id.clone()),
+                    None,
+                    format!("正在停用技能 `{skill_id}`。"),
+                );
                 Task::perform(
                     luaskills_runtime::perform_luaskills_management_action(
                         handle,
@@ -8241,7 +8573,12 @@ impl VulcanWorkbench {
                 }
 
                 self.luaskills_operation_in_flight = true;
-                self.luaskills_notice = format!("正在卸载技能 `{skill_id}`。");
+                self.begin_luaskills_panel_operation(
+                    LuaSkillsOperationVisualKind::Uninstall,
+                    Some(skill_id.clone()),
+                    None,
+                    format!("正在卸载技能 `{skill_id}`。"),
+                );
                 Task::perform(
                     luaskills_runtime::perform_luaskills_management_action(
                         handle,
@@ -8252,6 +8589,10 @@ impl VulcanWorkbench {
             }
             Message::LuaSkillsManagementFinished(result) => {
                 self.luaskills_operation_in_flight = false;
+                self.luaskills_operation_progress = None;
+                if let Some(handle) = self.luaskills_runtime.as_ref() {
+                    let _ = luaskills_runtime::drain_luaskills_operation_progress_events(handle);
+                }
 
                 match result {
                     Ok(report) => {
@@ -8270,6 +8611,7 @@ impl VulcanWorkbench {
                         self.push_activity(ActivityLevel::Warning, "LuaSkills 管理操作失败", error);
                     }
                 }
+                self.refresh_runtime_foundation();
 
                 Task::none()
             }
@@ -11986,6 +12328,83 @@ impl VulcanWorkbench {
                 Task::none()
             }
         }
+    }
+
+    /// Starts one panel-scoped LuaSkills operation and seeds a synthetic progress snapshot before runtime events arrive.
+    /// 启动一次面板作用域内的 LuaSkills 操作，并在运行时事件到达前写入一条合成进度快照。
+    fn begin_luaskills_panel_operation(
+        &mut self,
+        action_kind: LuaSkillsOperationVisualKind,
+        skill_id: Option<String>,
+        root_name: Option<String>,
+        message: String,
+    ) {
+        if let Some(handle) = self.luaskills_runtime.as_ref() {
+            let _ = luaskills_runtime::drain_luaskills_operation_progress_events(handle);
+        }
+        self.luaskills_operation_progress = Some(LuaSkillsOperationProgressState::queued(
+            action_kind,
+            skill_id,
+            root_name,
+            message.clone(),
+        ));
+        self.luaskills_notice = message.clone();
+        self.status_message = message;
+    }
+
+    /// Drains queued LuaSkills lifecycle progress events from the runtime handle and mirrors the newest snapshot into the panel state.
+    /// 从运行时句柄中取出已排队的 LuaSkills 生命周期进度事件，并将最新快照镜像到面板状态。
+    fn poll_luaskills_operation_progress(&mut self) {
+        let Some(handle) = self.luaskills_runtime.as_ref() else {
+            return;
+        };
+        let queued_events = luaskills_runtime::drain_luaskills_operation_progress_events(handle);
+        if queued_events.is_empty() {
+            return;
+        }
+        for event in queued_events {
+            self.apply_luaskills_operation_progress_event(event);
+        }
+    }
+
+    /// Applies one runtime-originated LuaSkills progress event to the panel-local snapshot and notices.
+    /// 将一条来自运行时的 LuaSkills 进度事件应用到面板本地快照与提示文案。
+    fn apply_luaskills_operation_progress_event(
+        &mut self,
+        event: RuntimeSkillOperationProgressEvent,
+    ) {
+        let action_kind = match event.action {
+            SkillLifecycleAction::Install => LuaSkillsOperationVisualKind::Install,
+            SkillLifecycleAction::Update => LuaSkillsOperationVisualKind::Update,
+            SkillLifecycleAction::Reload => LuaSkillsOperationVisualKind::Refresh,
+            SkillLifecycleAction::Uninstall => LuaSkillsOperationVisualKind::Uninstall,
+            SkillLifecycleAction::Enable => LuaSkillsOperationVisualKind::Enable,
+            SkillLifecycleAction::Disable => LuaSkillsOperationVisualKind::Disable,
+        };
+        let mut progress_state = self
+            .luaskills_operation_progress
+            .clone()
+            .unwrap_or_else(|| {
+                LuaSkillsOperationProgressState::queued(
+                    action_kind,
+                    event.skill_id.clone(),
+                    event.root_name.clone(),
+                    String::from("LuaSkills 管理操作正在执行。"),
+                )
+            });
+        if progress_state.operation_id != event.operation_id {
+            progress_state = LuaSkillsOperationProgressState::queued(
+                action_kind,
+                event.skill_id.clone(),
+                event.root_name.clone(),
+                String::from("LuaSkills 管理操作正在执行。"),
+            );
+        }
+        progress_state.action_kind = action_kind;
+        progress_state.apply_runtime_event(&event);
+        self.luaskills_notice = progress_state.notice_text();
+        self.status_message = self.luaskills_notice.clone();
+        self.luaskills_operation_progress = Some(progress_state);
     }
 
     /// 返回当前被选中的会话（如果存在）。

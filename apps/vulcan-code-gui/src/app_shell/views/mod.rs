@@ -4303,16 +4303,54 @@ impl VulcanWorkbench {
             install_button = install_button.on_press(Message::InstallLuaSkill);
         }
 
-        let install_controls = container(
-            column![
-                row![
-                    text("技能目录").size(18),
-                    space::horizontal().width(Fill),
-                    refresh_button,
+        let progress_card: Option<Element<'_, Message>> =
+            self.luaskills_operation_progress.as_ref().map(|progress| {
+                let mut progress_body: iced::widget::Column<'_, Message> = column![
+                    row![
+                        text(progress.title_text()).size(14),
+                        space::horizontal().width(Fill),
+                        text(progress.status_line()).size(12),
+                    ]
+                    .align_y(Center)
                 ]
-                .align_y(Center),
-                summary_lines,
-                text(&self.luaskills_notice).size(12),
+                .spacing(8);
+                if let Some(progress_value) = progress.progress_fraction() {
+                    progress_body = progress_body.push(progress_bar(0.0..=1.0, progress_value));
+                }
+                if let Some(source_line) = progress.source_line() {
+                    progress_body = progress_body.push(text(source_line).size(12));
+                }
+                if let Some(message) = progress
+                    .message
+                    .as_ref()
+                    .map(|message| message.trim())
+                    .filter(|message| !message.is_empty())
+                {
+                    progress_body = progress_body.push(text(message).size(12));
+                }
+                container(progress_body)
+                    .padding(12)
+                    .style(container::rounded_box)
+                    .width(Fill)
+                    .into()
+            });
+
+        let mut install_controls_body = column![
+            row![
+                text("技能目录").size(18),
+                space::horizontal().width(Fill),
+                refresh_button,
+            ]
+            .align_y(Center),
+            summary_lines,
+            text(&self.luaskills_notice).size(12),
+        ]
+        .spacing(10);
+        if let Some(progress_card) = progress_card {
+            install_controls_body = install_controls_body.push(progress_card);
+        }
+        install_controls_body = install_controls_body
+            .push(
                 row([
                     LuaSkillsInstallSourceChoice::Github,
                     LuaSkillsInstallSourceChoice::Url,
@@ -4329,26 +4367,32 @@ impl VulcanWorkbench {
                 }))
                 .spacing(18)
                 .align_y(Center),
+            )
+            .push(
                 text_input(
                     "可选：显式技能标识符，例如 vulcan-codekit",
                     &self.luaskills_install_skill_id,
                 )
                 .on_input(Message::LuaSkillsInstallSkillIdChanged)
                 .padding(10),
+            )
+            .push(
                 text_input(source_placeholder, &self.luaskills_install_source)
                     .on_input(Message::LuaSkillsInstallSourceChanged)
                     .padding(10),
+            )
+            .push(
                 row![
                     install_button,
-                    text("说明：GitHub 与包地址都走 LuaSkills 0.4.0 的受管安装链。").size(12),
+                    text("说明：GitHub 与包地址都走 LuaSkills 0.4.3 的受管安装链，并会回传细粒度进度。").size(12),
                 ]
                 .spacing(10)
                 .align_y(Center),
-            ]
-            .spacing(10),
-        )
-        .padding(16)
-        .style(container::bordered_box);
+            );
+
+        let install_controls = container(install_controls_body)
+            .padding(16)
+            .style(container::bordered_box);
 
         let skills_column = match &self.luaskills_catalog {
             Some(catalog) if catalog.skills.is_empty() => {
@@ -4719,6 +4763,16 @@ impl VulcanWorkbench {
             "已停用"
         };
         let manage_text = if skill.managed { "受管" } else { "非受管" };
+        let active_progress = self
+            .luaskills_operation_progress
+            .as_ref()
+            .filter(|progress| progress.matches_skill(&skill.skill_id));
+        let progress_badge: Option<Element<'_, Message>> = active_progress.map(|progress| {
+            container(text(progress.badge_text()).size(11))
+                .padding([4, 8])
+                .style(container::rounded_box)
+                .into()
+        });
 
         let mut action_row = row![].spacing(8).align_y(Center);
         if skill.enabled {
@@ -4757,39 +4811,47 @@ impl VulcanWorkbench {
             action_row = action_row.push(uninstall_button);
         }
 
-        let detail_rows = if let Some(disabled_reason) = &skill.disabled_reason {
-            column![
-                text(format!(
-                    "{} · {} · 根 {} · 运行时入口 {}",
-                    status_text, manage_text, skill.root_name, skill.entry_count
-                ))
-                .size(12),
-                text(format!("来源：{source_text}")).size(12),
-                text(format!("停用原因：{disabled_reason}")).size(12),
-                text(format!("路径：{}", skill.skill_dir.display())).size(12),
-            ]
-            .spacing(4)
-        } else {
-            column![
-                text(format!(
-                    "{} · {} · 根 {} · 运行时入口 {}",
-                    status_text, manage_text, skill.root_name, skill.entry_count
-                ))
-                .size(12),
-                text(format!("来源：{source_text}")).size(12),
-                text(format!("路径：{}", skill.skill_dir.display())).size(12),
-            ]
-            .spacing(4)
-        };
+        let mut detail_rows = column![
+            text(format!(
+                "{} · {} · 根 {} · 运行时入口 {}",
+                status_text, manage_text, skill.root_name, skill.entry_count
+            ))
+            .size(12),
+            text(format!("来源：{source_text}")).size(12),
+        ]
+        .spacing(4);
+        if let Some(disabled_reason) = &skill.disabled_reason {
+            detail_rows = detail_rows.push(text(format!("停用原因：{disabled_reason}")).size(12));
+        }
+        if let Some(progress) = active_progress {
+            detail_rows =
+                detail_rows.push(text(format!("当前进度：{}", progress.status_line())).size(12));
+            if let Some(message) = progress
+                .message
+                .as_ref()
+                .map(|message| message.trim())
+                .filter(|message| !message.is_empty())
+            {
+                detail_rows = detail_rows.push(text(message).size(12));
+            }
+        }
+        detail_rows =
+            detail_rows.push(text(format!("路径：{}", skill.skill_dir.display())).size(12));
 
         container(
             column![
-                row![
-                    text(format!("{}  v{}", skill.display_name, skill.version)).size(16),
-                    space::horizontal().width(Fill),
-                    text(format!("ID: {}", skill.skill_id)).size(12),
-                ]
-                .align_y(Center),
+                {
+                    let mut title_row =
+                        row![text(format!("{}  v{}", skill.display_name, skill.version)).size(16)]
+                            .spacing(8)
+                            .align_y(Center);
+                    if let Some(progress_badge) = progress_badge {
+                        title_row = title_row.push(progress_badge);
+                    }
+                    title_row
+                        .push(space::horizontal().width(Fill))
+                        .push(text(format!("ID: {}", skill.skill_id)).size(12))
+                },
                 detail_rows,
                 action_row,
             ]
@@ -5385,6 +5447,14 @@ impl VulcanWorkbench {
             iced::time::every(QUESTION_RUNTIME_POLL_TICK_INTERVAL)
                 .map(|_| Message::QuestionRuntimePollTick);
 
+        let luaskills_progress_poll_subscription =
+            if self.luaskills_operation_in_flight && self.luaskills_runtime.is_some() {
+                iced::time::every(LUASKILLS_PROGRESS_POLL_TICK_INTERVAL)
+                    .map(|_| Message::PollLuaSkillsOperationProgressTick)
+            } else {
+                Subscription::none()
+            };
+
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
@@ -5398,6 +5468,7 @@ impl VulcanWorkbench {
             thinking_modal_animation_subscription,
             runtime_progress_animation_subscription,
             question_runtime_poll_subscription,
+            luaskills_progress_poll_subscription,
         ])
     }
 
