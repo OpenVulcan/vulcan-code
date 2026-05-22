@@ -538,6 +538,14 @@ const COMPOSER_ATTACHMENT_REMOVE_BUTTON_SIZE: f32 = 20.0;
 /// 主提示词输入框允许暂存的最大附件数量。
 const MAX_COMPOSER_ATTACHMENTS: usize = 10;
 
+/// Shared maximum visible height used by the inline slash-command suggestion panel shown under the composer.
+/// 显示在提示词输入框下方的内联 slash 指令建议面板使用的共享最大可视高度。
+const COMPOSER_SLASH_COMMAND_PANEL_MAX_HEIGHT: f32 = 156.0;
+
+/// Shared fixed row height used by one slash-command suggestion item.
+/// 单条 slash 指令建议项使用的共享固定行高。
+const COMPOSER_SLASH_COMMAND_ROW_HEIGHT: f32 = 46.0;
+
 /// Shared fixed horizontal inset kept on both sides of the pending-prompt queue panel above the composer.
 /// 主提示词输入框上方待发送队列面板两侧保留的共享水平留白。
 const COMPOSER_PENDING_QUEUE_PANEL_SIDE_INSET: f32 = 25.0;
@@ -3133,6 +3141,9 @@ pub struct VulcanWorkbench {
     /// Prompt composer editor buffer used by the main Build/Plan input surface.
     /// 主 Build/Plan 输入表面使用的提示词编辑器缓冲区。
     composer_buffer: text_editor::Content,
+    /// Runtime-only slash-command suggestion state currently derived from the composer text.
+    /// 当前根据提示词文本推导出的仅运行时存在的 slash 指令建议状态。
+    composer_slash_command: Option<ComposerSlashCommandState>,
     /// Structured multimodal attachments currently staged beside the prompt composer text.
     /// 当前与提示词文本一起暂存的结构化多模态附件集合。
     composer_attachments: Vec<ConversationAttachment>,
@@ -5288,6 +5299,127 @@ fn format_openrouter_throughput_tokens_per_second(value: Option<f64>) -> Option<
 /// 供应用状态与紧凑选择器界面复用的共享工作台推理档位别名。
 type WorkbenchReasoningEffort = ReasoningEffortLevel;
 
+/// Supported slash commands that may be triggered directly from the main AI Coding composer.
+/// 可直接从主 AI Coding 输入框触发的受支持 slash 指令集合。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComposerSlashCommand {
+    /// Opens the existing workbench model picker.
+    /// 打开现有工作台模型选择器。
+    Model,
+    /// Immediately compacts the current session context.
+    /// 立即压缩当前会话上下文。
+    Compact,
+    /// Opens the existing workbench reasoning-effort picker.
+    /// 打开现有工作台思考级别选择器。
+    Reasoning,
+}
+
+impl ComposerSlashCommand {
+    /// Returns every supported slash command in stable display order.
+    /// 返回按稳定显示顺序排列的全部受支持 slash 指令。
+    const ALL: [Self; 3] = [Self::Model, Self::Compact, Self::Reasoning];
+
+    /// Returns the canonical slash trigger text used by exact activation checks and list rendering.
+    /// 返回供精确激活检查与列表渲染使用的规范 slash 触发文本。
+    const fn trigger(self) -> &'static str {
+        match self {
+            Self::Model => "/model",
+            Self::Compact => "/compact",
+            Self::Reasoning => "/reasoning",
+        }
+    }
+
+    /// Returns the keyword portion after the leading slash for filter matching.
+    /// 返回用于过滤匹配的去掉前导斜杠后的关键字部分。
+    const fn keyword(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Compact => "compact",
+            Self::Reasoning => "reasoning",
+        }
+    }
+
+    /// Returns the concise human-readable action summary shown in the inline suggestion panel.
+    /// 返回展示在内联建议面板中的简短人类可读动作摘要。
+    const fn summary(self) -> &'static str {
+        match self {
+            Self::Model => "选择当前模型",
+            Self::Compact => "立即压缩当前会话上下文",
+            Self::Reasoning => "选择当前思考级别",
+        }
+    }
+
+    /// Returns whether the command should stay visible for the provided slash filter prefix.
+    /// 返回在给定 slash 过滤前缀下该指令是否应继续可见。
+    fn matches_filter(self, filter_text: &str) -> bool {
+        self.keyword().starts_with(filter_text)
+    }
+
+    /// Resolves one command from an exact composer input string when direct activation is allowed.
+    /// 当允许直接激活时，根据输入框中的精确文本解析对应指令。
+    fn from_exact_input(input: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|command| command.trigger().eq_ignore_ascii_case(input))
+    }
+}
+
+/// Runtime-only slash-command panel state derived from the current composer text.
+/// 根据当前输入框文本推导出的仅运行时存在的 slash 指令面板状态。
+#[derive(Debug, Clone)]
+struct ComposerSlashCommandState {
+    /// Current raw composer text that triggered the slash-command suggestion flow.
+    /// 触发 slash 指令建议流的当前原始输入框文本。
+    raw_input: String,
+    /// Current normalized filter text after stripping the leading slash.
+    /// 去掉前导斜杠后得到的当前规范化过滤文本。
+    filter_text: String,
+    /// Current visible command list after applying the filter.
+    /// 应用过滤条件后当前可见的命令列表。
+    visible_commands: Vec<ComposerSlashCommand>,
+    /// Currently highlighted visible command index used by keyboard navigation.
+    /// 供键盘导航使用的当前高亮可见命令索引。
+    highlighted_index: Option<usize>,
+}
+
+impl ComposerSlashCommandState {
+    /// Returns the currently highlighted command when the inline panel is visible.
+    /// 返回内联面板可见时当前高亮的命令。
+    fn highlighted_command(&self) -> Option<ComposerSlashCommand> {
+        let highlighted_index = self.highlighted_index?;
+        self.visible_commands.get(highlighted_index).copied()
+    }
+}
+
+/// Builds one runtime slash-command panel state from the latest composer text when the text still represents a supported slash query.
+/// 当文本仍表示受支持的 slash 查询时，根据最新输入框文本构建运行时 slash 指令面板状态。
+fn build_composer_slash_command_state(composer_text: &str) -> Option<ComposerSlashCommandState> {
+    if !composer_text.starts_with('/') {
+        return None;
+    }
+
+    let filter_text = composer_text
+        .strip_prefix('/')
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let visible_commands = ComposerSlashCommand::ALL
+        .into_iter()
+        .filter(|command| {
+            filter_text.is_empty() || command.matches_filter(filter_text.as_str())
+        })
+        .collect::<Vec<_>>();
+    if visible_commands.is_empty() {
+        return None;
+    }
+
+    Some(ComposerSlashCommandState {
+        raw_input: composer_text.to_string(),
+        filter_text,
+        visible_commands,
+        highlighted_index: Some(0),
+    })
+}
+
 /// Editable user-agent form state mirrored into the dedicated user-agent markdown directory.
 /// 映射回独立用户 Agent Markdown 目录的可编辑用户 Agent 表单状态。
 #[derive(Debug, Clone)]
@@ -6375,6 +6507,18 @@ enum Message {
     /// Applies one text-editor action inside the main prompt composer.
     /// 应用主提示词编辑器中的一条文本编辑动作。
     ComposerEditorAction(text_editor::Action),
+    /// Moves the highlighted slash-command suggestion one row upward inside the composer inline panel.
+    /// 将提示词输入框内联面板中的高亮 slash 指令建议向上移动一行。
+    ComposerSlashCommandMoveSelectionUp,
+    /// Moves the highlighted slash-command suggestion one row downward inside the composer inline panel.
+    /// 将提示词输入框内联面板中的高亮 slash 指令建议向下移动一行。
+    ComposerSlashCommandMoveSelectionDown,
+    /// Activates one slash-command suggestion from the composer inline panel.
+    /// 从提示词输入框内联面板激活某条 slash 指令建议。
+    ActivateComposerSlashCommand(ComposerSlashCommand),
+    /// Dismisses the inline slash-command suggestion panel while preserving the current composer text.
+    /// 在保留当前提示词文本的前提下关闭内联 slash 指令建议面板。
+    DismissComposerSlashCommandPanel,
     /// Restores the previous composer snapshot requested by the undo shortcut.
     /// 恢复由撤销快捷键请求的上一条提示词快照。
     ComposerUndo,
@@ -7996,6 +8140,7 @@ impl VulcanWorkbench {
             workspace_path: String::from(r"D:\openvulcan\vulcan-code"),
             composer: String::new(),
             composer_buffer: text_editor::Content::with_text(""),
+            composer_slash_command: None,
             composer_attachments: Vec::new(),
             workbench_notice_modal: None,
             active_question_modal: None,
@@ -9375,11 +9520,35 @@ impl VulcanWorkbench {
             }
             Message::ComposerChanged(value) => {
                 self.composer = value;
+                self.refresh_composer_slash_command_state();
                 self.save_selected_session_composer_draft();
                 self.persist_workspace_snapshot_task()
             }
-            Message::ComposerEditorAction(action) => self.apply_composer_editor_action(action),
-            Message::ComposerUndo => self.restore_latest_composer_undo_snapshot(),
+            Message::ComposerEditorAction(action) => {
+                let task = self.apply_composer_editor_action(action);
+                self.refresh_composer_slash_command_state();
+                task
+            }
+            Message::ComposerSlashCommandMoveSelectionUp => {
+                self.move_composer_slash_command_highlight(false);
+                Task::none()
+            }
+            Message::ComposerSlashCommandMoveSelectionDown => {
+                self.move_composer_slash_command_highlight(true);
+                Task::none()
+            }
+            Message::ActivateComposerSlashCommand(command) => {
+                self.activate_composer_slash_command(command)
+            }
+            Message::DismissComposerSlashCommandPanel => {
+                self.dismiss_composer_slash_command_panel();
+                Task::none()
+            }
+            Message::ComposerUndo => {
+                let task = self.restore_latest_composer_undo_snapshot();
+                self.refresh_composer_slash_command_state();
+                task
+            }
             Message::AddComposerAttachments => self.add_composer_attachments(),
             Message::PasteComposerClipboardContents => self.paste_composer_clipboard(false),
             Message::PasteComposerClipboardAttachments => self.paste_composer_clipboard(true),
@@ -9556,6 +9725,10 @@ impl VulcanWorkbench {
             }
             Message::SubmitQuestionModal => self.submit_active_question_modal(),
             Message::DismissTopLevelOverlay => {
+                if self.composer_slash_command_panel_state().is_some() {
+                    self.dismiss_composer_slash_command_panel();
+                    return Task::none();
+                }
                 if self.workbench_context_menu.take().is_some() {
                     self.composer_context_clipboard_text = None;
                     return Task::none();
@@ -10530,7 +10703,10 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
-            Message::OpenWorkbenchModelPicker => self.open_workbench_model_picker(),
+            Message::OpenWorkbenchModelPicker => {
+                self.dismiss_composer_slash_command_panel();
+                self.open_workbench_model_picker()
+            }
             Message::CloseWorkbenchModelPicker => {
                 self.workbench_openrouter_endpoint_picker =
                     WorkbenchOpenRouterEndpointPickerState::default();
@@ -10542,6 +10718,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::OpenWorkbenchReasoningPicker => {
+                self.dismiss_composer_slash_command_panel();
                 self.workbench_model_picker_open = false;
                 self.workbench_openrouter_endpoint_picker =
                     WorkbenchOpenRouterEndpointPickerState::default();
@@ -13194,6 +13371,7 @@ impl VulcanWorkbench {
             self.composer_scrollbar_pointer_y = None;
             self.composer_scrollbar_drag_grab_offset = None;
             self.dismiss_workbench_context_menu();
+            self.refresh_composer_slash_command_state();
             return;
         }
 
@@ -13205,6 +13383,117 @@ impl VulcanWorkbench {
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
         self.dismiss_workbench_context_menu();
+        self.refresh_composer_slash_command_state();
+    }
+
+    /// Replaces the current composer text while preserving staged attachments, undo safety, and transient UI state.
+    /// 在保留已暂存附件、撤销安全性与临时界面状态的前提下替换当前输入框文本。
+    fn replace_composer_text_preserving_attachments(&mut self, next_text: impl Into<String>) {
+        let next_text = next_text.into();
+        self.push_composer_undo_snapshot();
+        self.composer = next_text.clone();
+        self.composer_buffer = text_editor::Content::with_text(&next_text);
+        self.composer_drag_hover_labels.clear();
+        self.composer_scroll_offset = 0.0;
+        self.composer_scrollbar_pointer_y = None;
+        self.composer_scrollbar_drag_grab_offset = None;
+        self.dismiss_workbench_context_menu();
+        self.refresh_composer_slash_command_state();
+        self.save_selected_session_composer_draft();
+    }
+
+    /// Rebuilds the runtime-only slash-command suggestion state from the latest composer text.
+    /// 根据最新提示词文本重建仅运行时存在的 slash 指令建议状态。
+    fn refresh_composer_slash_command_state(&mut self) {
+        self.composer_slash_command = build_composer_slash_command_state(&self.composer);
+    }
+
+    /// Returns whether any blocking overlay should suppress the inline slash-command suggestion panel.
+    /// 返回是否存在应压制内联 slash 指令建议面板的阻塞式遮罩层。
+    fn top_level_overlay_blocks_composer_slash_commands(&self) -> bool {
+        self.workbench_notice_modal.is_some()
+            || self.active_question_modal.is_some()
+            || self.workbench_image_preview_modal.is_some()
+            || self.ai_capability_vendor_picker.is_some()
+            || self.ai_capability_vendor_editor.is_some()
+            || self.ai_capability_target_picker.is_some()
+            || self.ai_capability_routing_picker.is_some()
+            || self.provider_editor.is_some()
+            || self.provider_model_picker.is_some()
+            || self.provider_model_override_editor.is_some()
+            || self.mcp_server_editor_open
+            || self.project_settings_project_id.is_some()
+            || self.workbench_ai_capability_panel_open
+            || self.workbench_model_picker_open
+            || self.workbench_openrouter_endpoint_picker.open
+            || self.workbench_reasoning_picker_open
+            || self.workspace_history_search.panel_open
+            || self.about_license_active_document_id.is_some()
+            || self.workbench_context_menu.is_some()
+    }
+
+    /// Returns the active inline slash-command suggestion state when no blocking overlay has taken priority.
+    /// 返回在没有阻塞式遮罩层抢占优先级时处于激活态的内联 slash 指令建议状态。
+    fn composer_slash_command_panel_state(&self) -> Option<&ComposerSlashCommandState> {
+        if self.top_level_overlay_blocks_composer_slash_commands() {
+            return None;
+        }
+
+        self.composer_slash_command.as_ref()
+    }
+
+    /// Returns the currently highlighted slash-command suggestion when the inline panel is active.
+    /// 返回内联面板激活时当前高亮的 slash 指令建议。
+    fn highlighted_composer_slash_command(&self) -> Option<ComposerSlashCommand> {
+        self.composer_slash_command_panel_state()?
+            .highlighted_command()
+    }
+
+    /// Returns the directly activatable slash command when the composer text exactly matches one canonical trigger.
+    /// 返回提示词文本与某个规范触发词完全匹配时可被直接激活的 slash 指令。
+    fn exact_composer_slash_command(&self) -> Option<ComposerSlashCommand> {
+        let state = self.composer_slash_command_panel_state()?;
+        ComposerSlashCommand::from_exact_input(&state.raw_input)
+    }
+
+    /// Moves the highlighted slash-command suggestion within the inline panel and wraps around at list edges.
+    /// 在内联面板内移动高亮 slash 指令建议，并在列表边缘处循环。
+    fn move_composer_slash_command_highlight(&mut self, forward: bool) {
+        let Some(state) = self.composer_slash_command.as_mut() else {
+            return;
+        };
+        let command_count = state.visible_commands.len();
+        if command_count == 0 {
+            state.highlighted_index = None;
+            return;
+        }
+
+        let next_index = match (state.highlighted_index, forward) {
+            (Some(index), true) => (index + 1) % command_count,
+            (Some(index), false) => index.checked_sub(1).unwrap_or(command_count - 1),
+            (None, _) => 0,
+        };
+        state.highlighted_index = Some(next_index);
+    }
+
+    /// Dismisses the inline slash-command suggestion panel without mutating the current composer text.
+    /// 在不修改当前提示词文本的前提下关闭内联 slash 指令建议面板。
+    fn dismiss_composer_slash_command_panel(&mut self) {
+        self.composer_slash_command = None;
+    }
+
+    /// Activates one slash command by clearing the composer text first and then dispatching the corresponding workbench action.
+    /// 先清空输入框中的 slash 文本，再分发对应工作台动作，以激活某条 slash 指令。
+    fn activate_composer_slash_command(&mut self, command: ComposerSlashCommand) -> Task<Message> {
+        self.replace_composer_text_preserving_attachments(String::new());
+        let command_task = match command {
+            ComposerSlashCommand::Model => self.open_workbench_model_picker(),
+            ComposerSlashCommand::Compact => self.execute_manual_selected_session_history_compaction(),
+            ComposerSlashCommand::Reasoning => Task::done(Message::OpenWorkbenchReasoningPicker),
+        };
+        let persist_task = self.persist_workspace_snapshot_task();
+
+        Task::batch([command_task, persist_task])
     }
 
     /// Replaces the main composer buffer with the provided prompt text and focuses the editor again.
@@ -13242,6 +13531,7 @@ impl VulcanWorkbench {
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
         self.dismiss_workbench_context_menu();
+        self.refresh_composer_slash_command_state();
         self.save_selected_session_composer_draft();
         Ok(operation::focus(COMPOSER_EDITOR_ID))
     }
@@ -13267,6 +13557,7 @@ impl VulcanWorkbench {
         self.composer_scrollbar_pointer_y = None;
         self.composer_scrollbar_drag_grab_offset = None;
         self.dismiss_workbench_context_menu();
+        self.refresh_composer_slash_command_state();
         self.save_selected_session_composer_draft();
     }
 
@@ -15592,6 +15883,104 @@ impl VulcanWorkbench {
         runtime_state.updated_at = created_at.to_string();
     }
 
+    /// Applies one prepared compaction result to the current session state, persists its checkpoint, and refreshes context usage diagnostics.
+    /// 将一份已准备好的压缩结果应用到当前会话状态，持久化其检查点，并刷新上下文占用诊断。
+    fn apply_session_history_compaction_result(
+        &mut self,
+        session_id: SessionId,
+        compaction_result: crate::skills::session::CompactionSkillResult,
+        activity_title: &str,
+        activity_detail: String,
+    ) {
+        let summary_message_id =
+            self.push_session_derived_record(session_id, compaction_result.summary_record.clone());
+        let checkpoint = compaction_result.materialize_checkpoint(summary_message_id);
+        let created_at = checkpoint.created_at.clone();
+        let compaction_id = checkpoint.id.clone();
+        let context_start_message_id = checkpoint.context_start_message_id.clone();
+        let summary_message_id = checkpoint.summary_message_id.clone();
+        self.session_compactions
+            .entry(session_id)
+            .or_default()
+            .push(checkpoint);
+        let runtime_state_updated_at = created_at.clone();
+        {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state.last_compaction_id = Some(compaction_id);
+            runtime_state.context_start_message_id = context_start_message_id;
+            runtime_state.updated_at = created_at;
+        }
+        if let Some(summary_message_id) = summary_message_id {
+            self.compact_session_conversation_history(
+                session_id,
+                &summary_message_id,
+                &compaction_result.summary_record.body,
+                &runtime_state_updated_at,
+            );
+        }
+        self.push_activity(ActivityLevel::Info, activity_title, activity_detail);
+        self.sync_context_usage_from_session_budget(session_id);
+    }
+
+    /// Tries to compact the current selected session immediately when the user invokes the slash command manually.
+    /// 当用户手动调用 slash 指令时，立即尝试压缩当前选中会话。
+    fn execute_manual_selected_session_history_compaction(&mut self) -> Task<Message> {
+        let Some(session_id) = self.selected_session().map(|session| session.id) else {
+            self.status_message = String::from("当前没有可执行手动压缩的会话。");
+            return operation::focus(COMPOSER_EDITOR_ID);
+        };
+        if self.selected_session_has_busy_execution_lane() {
+            self.status_message =
+                String::from("当前会话仍有运行中的执行链路，暂时无法执行手动上下文压缩。");
+            return operation::focus(COMPOSER_EDITOR_ID);
+        }
+
+        let messages = self.session_context_history(session_id);
+        if messages.is_empty() {
+            self.status_message = String::from("当前会话暂时没有可压缩的历史上下文。");
+            return operation::focus(COMPOSER_EDITOR_ID);
+        }
+
+        let runtime_state_snapshot = self
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let full_session_messages =
+            conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
+        let context_budget = self.resolve_session_context_budget_snapshot(
+            session_id,
+            &runtime_state_snapshot,
+            &messages,
+        );
+        let Some(compaction_result) = self.session_skill_chain.run_compaction_skill(
+            CompactionSkillInput {
+                session_id,
+                messages: &messages,
+                all_messages: &full_session_messages,
+                runtime_state: &runtime_state_snapshot,
+                policy: ContextCompactionPolicy::default(),
+            },
+        ) else {
+            self.sync_context_usage_from_session_budget(session_id);
+            self.status_message = String::from("当前会话暂时没有可压缩的历史上下文。");
+            return operation::focus(COMPOSER_EDITOR_ID);
+        };
+
+        let budget_note = context_budget
+            .as_ref()
+            .map(ContextBudgetSnapshot::summary_note)
+            .unwrap_or_else(|| String::from("当前未提供预算快照"));
+        self.apply_session_history_compaction_result(
+            session_id,
+            compaction_result,
+            "手动触发上下文压缩",
+            format!("会话 #{session_id} 已通过 slash 指令执行手动压缩：{budget_note}。"),
+        );
+        self.status_message = format!("当前会话已执行手动上下文压缩：{budget_note}。");
+        operation::focus(COMPOSER_EDITOR_ID)
+    }
+
     /// Returns the mutable runtime-state snapshot for the target session, creating one default row on demand.
     /// 返回目标会话对应的可变运行时状态快照，并在缺失时按需创建默认行。
     fn ensure_session_runtime_state_mut(
@@ -16078,54 +16467,28 @@ impl VulcanWorkbench {
             self.sync_context_usage_from_session_budget(session_id);
             return;
         }
-        let Some(compaction_result) =
-            self.session_skill_chain
-                .run_compaction_skill(CompactionSkillInput {
-                    session_id,
-                    messages: &messages,
-                    all_messages: &full_session_messages,
-                    runtime_state: &runtime_state_snapshot,
-                    policy: ContextCompactionPolicy::default(),
-                })
+        let Some(compaction_result) = self.session_skill_chain.run_compaction_skill(
+            CompactionSkillInput {
+                session_id,
+                messages: &messages,
+                all_messages: &full_session_messages,
+                runtime_state: &runtime_state_snapshot,
+                policy: ContextCompactionPolicy::default(),
+            },
+        )
         else {
             self.sync_context_usage_from_session_budget(session_id);
             return;
         };
-        let summary_message_id =
-            self.push_session_derived_record(session_id, compaction_result.summary_record.clone());
-        let checkpoint = compaction_result.materialize_checkpoint(summary_message_id);
-        let created_at = checkpoint.created_at.clone();
-        let compaction_id = checkpoint.id.clone();
-        let context_start_message_id = checkpoint.context_start_message_id.clone();
-        let summary_message_id = checkpoint.summary_message_id.clone();
-        self.session_compactions
-            .entry(session_id)
-            .or_default()
-            .push(checkpoint);
-        let runtime_state_updated_at = created_at.clone();
-        {
-            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state.last_compaction_id = Some(compaction_id);
-            runtime_state.context_start_message_id = context_start_message_id;
-            runtime_state.updated_at = created_at;
-        }
-        if let Some(summary_message_id) = summary_message_id {
-            self.compact_session_conversation_history(
-                session_id,
-                &summary_message_id,
-                &compaction_result.summary_record.body,
-                &runtime_state_updated_at,
-            );
-        }
-        self.push_activity(
-            ActivityLevel::Info,
+        self.apply_session_history_compaction_result(
+            session_id,
+            compaction_result,
             "上下文预算触发压缩",
             format!(
                 "会话 #{session_id} 已根据预算快照执行压缩：{}。",
                 context_budget.summary_note()
             ),
         );
-        self.sync_context_usage_from_session_budget(session_id);
     }
 
     /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
@@ -17816,7 +18179,8 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandSessionToolModalSummary, ToolModalPresentation, VulcanWorkbench,
+        CommandSessionToolModalSummary, ComposerSlashCommand, ToolModalPresentation,
+        VulcanWorkbench, build_composer_slash_command_state,
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
         build_command_session_stop_result_metadata, build_session_turn_stats_from_state,
         clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
@@ -18311,6 +18675,113 @@ mod tests {
         assert!(!composer_text_has_submittable_content("   \n\t  "));
         assert!(composer_text_has_submittable_content("执行这个任务"));
         assert!(composer_text_has_submittable_content("\n  执行这个任务  "));
+    }
+
+    /// Verifies entering a bare slash exposes all supported inline slash commands in stable order.
+    /// 验证输入单独的斜杠时会按稳定顺序展示全部受支持的内联 slash 指令。
+    #[test]
+    fn composer_slash_command_state_lists_all_commands_for_root_trigger() {
+        let state =
+            build_composer_slash_command_state("/").expect("single slash should open commands");
+
+        assert_eq!(state.filter_text, "");
+        assert_eq!(
+            state.visible_commands,
+            vec![
+                ComposerSlashCommand::Model,
+                ComposerSlashCommand::Compact,
+                ComposerSlashCommand::Reasoning,
+            ]
+        );
+        assert_eq!(state.highlighted_index, Some(0));
+    }
+
+    /// Verifies unsupported slash inputs fall back to ordinary text while exact commands still support direct activation.
+    /// 验证不受支持的 slash 输入会回退为普通文本，而精确命令仍支持直接激活。
+    #[test]
+    fn composer_slash_command_state_rejects_unknown_queries_and_requires_exact_activation() {
+        let filtered_state =
+            build_composer_slash_command_state("/m").expect("prefix match should stay visible");
+        assert_eq!(
+            filtered_state.visible_commands,
+            vec![ComposerSlashCommand::Model]
+        );
+
+        assert!(build_composer_slash_command_state("/ xasd").is_none());
+        assert!(build_composer_slash_command_state("/abc 撒旦法撒旦").is_none());
+        assert_eq!(
+            ComposerSlashCommand::from_exact_input("/model"),
+            Some(ComposerSlashCommand::Model)
+        );
+        assert_eq!(ComposerSlashCommand::from_exact_input("/model test"), None);
+    }
+
+    /// Verifies the manual slash-triggered compaction path creates a checkpoint once the session history contains more turns than the retained tail budget.
+    /// 验证当会话历史轮次数超过保留尾部预算后，手动 slash 压缩路径能够创建压缩检查点。
+    #[test]
+    fn manual_selected_session_history_compaction_creates_checkpoint() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71001);
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "手动压缩测试"));
+        workbench.selected_session = session_id;
+        let mut messages = Vec::new();
+        for turn_index in 0..5 {
+            let user_ordinal = turn_index * 2 + 1;
+            let assistant_ordinal = user_ordinal + 1;
+            messages.push(SessionMessageEntry {
+                id: format!("user-{user_ordinal}"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户"),
+                body: format!("第 {} 轮用户问题", turn_index + 1),
+                metadata: None,
+                created_at: user_ordinal.to_string(),
+            });
+            messages.push(SessionMessageEntry {
+                id: format!("assistant-{assistant_ordinal}"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: format!("第 {} 轮助手回答", turn_index + 1),
+                metadata: None,
+                created_at: assistant_ordinal.to_string(),
+            });
+        }
+        let conversation_state =
+            crate::conversation_protocol::conversation_state_from_session_messages(&messages);
+        workbench.session_messages.insert(session_id, messages);
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                conversation_state,
+                updated_at: String::from("10"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        let _task = workbench.execute_manual_selected_session_history_compaction();
+
+        assert_eq!(
+            workbench.session_compactions.get(&session_id).map(Vec::len),
+            Some(1)
+        );
+        assert!(
+            workbench
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|state| state.last_compaction_id.as_ref())
+                .is_some()
+        );
+        assert!(
+            workbench.status_message.contains("手动上下文压缩"),
+            "unexpected status message: {}",
+            workbench.status_message
+        );
     }
 
     /// Verifies that the background legacy-maintenance queue includes visible and archived sessions once.

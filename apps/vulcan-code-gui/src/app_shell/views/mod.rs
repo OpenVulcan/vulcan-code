@@ -3277,6 +3277,78 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Builds the inline slash-command suggestion panel shown under the composer when the current text still matches supported slash commands.
+    /// 构建显示在提示词输入框下方、并在当前文本仍匹配受支持 slash 指令时可见的内联建议面板。
+    pub(super) fn view_composer_slash_command_panel(&self) -> Option<Element<'_, Message>> {
+        let state = self.composer_slash_command_panel_state()?;
+        let palette = self.app_theme.extended_palette();
+        let panel_height = (state.visible_commands.len() as f32 * COMPOSER_SLASH_COMMAND_ROW_HEIGHT)
+            .min(COMPOSER_SLASH_COMMAND_PANEL_MAX_HEIGHT);
+        let panel_title = if state.filter_text.is_empty() {
+            String::from("Slash 指令")
+        } else {
+            format!("Slash 指令 · {}", state.filter_text)
+        };
+        let command_rows = column(state.visible_commands.iter().enumerate().map(
+            |(index, command)| {
+                let is_selected = state.highlighted_index == Some(index);
+                button(
+                    container(
+                        row![
+                            container(
+                                text(command.trigger())
+                                    .size(13)
+                                    .color(if is_selected {
+                                        palette.primary.strong.color
+                                    } else {
+                                        palette.background.base.text
+                                    }),
+                            )
+                            .width(96),
+                            column![
+                                text(command.summary()).size(13),
+                                text("上下选择后回车，或完整输入后直接回车激活")
+                                    .size(11)
+                                    .color(palette.background.base.text.scale_alpha(0.56)),
+                            ]
+                            .spacing(2)
+                            .width(Fill),
+                        ]
+                        .spacing(10)
+                        .align_y(Center),
+                    )
+                    .width(Fill)
+                    .center_y(Fill),
+                )
+                .width(Fill)
+                .height(COMPOSER_SLASH_COMMAND_ROW_HEIGHT)
+                .padding([0, 8])
+                .style(move |theme, status| {
+                    style::workbench_model_picker_option_button_style(theme, status, is_selected)
+                })
+                .on_press(Message::ActivateComposerSlashCommand(*command))
+                .into()
+            },
+        ))
+        .spacing(2);
+
+        Some(
+            container(
+                column![
+                    text(panel_title)
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.70)),
+                    container(command_rows).height(panel_height),
+                ]
+                .spacing(6),
+            )
+            .padding([8, 10])
+            .width(Fill)
+            .style(style::main_task_tree_menu_style)
+            .into(),
+        )
+    }
+
     /// Returns the current estimated visible line count of the main prompt composer.
     /// 返回主提示词编辑器当前估算得到的可见行数量。
     pub(super) fn composer_line_count(&self) -> usize {
@@ -3394,6 +3466,9 @@ impl VulcanWorkbench {
     pub(super) fn view_composer_editor_surface(&self) -> Element<'_, Message> {
         let visible_height = self.composer_editor_height();
         let can_submit = self.composer_has_submittable_content();
+        let slash_panel_visible = self.composer_slash_command_panel_state().is_some();
+        let highlighted_slash_command = self.highlighted_composer_slash_command();
+        let exact_slash_command = self.exact_composer_slash_command();
 
         let editor = text_editor(&self.composer_buffer)
             .id(COMPOSER_EDITOR_ID)
@@ -3427,10 +3502,29 @@ impl VulcanWorkbench {
                         Message::PasteComposerClipboardContents,
                     ))
                 }
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) if slash_panel_visible => {
+                    Some(text_editor::Binding::Custom(
+                        Message::ComposerSlashCommandMoveSelectionUp,
+                    ))
+                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowDown) if slash_panel_visible => {
+                    Some(text_editor::Binding::Custom(
+                        Message::ComposerSlashCommandMoveSelectionDown,
+                    ))
+                }
+                keyboard::Key::Named(keyboard::key::Named::Escape) if slash_panel_visible => {
+                    Some(text_editor::Binding::Custom(
+                        Message::DismissComposerSlashCommandPanel,
+                    ))
+                }
                 keyboard::Key::Named(keyboard::key::Named::Enter)
                     if !key_press.modifiers.shift() =>
                 {
-                    if can_submit {
+                    if let Some(command) = exact_slash_command.or(highlighted_slash_command) {
+                        Some(text_editor::Binding::Custom(
+                            Message::ActivateComposerSlashCommand(command),
+                        ))
+                    } else if can_submit {
                         Some(text_editor::Binding::Custom(Message::StartRun))
                     } else {
                         Some(text_editor::Binding::Sequence(Vec::new()))
@@ -3907,6 +4001,9 @@ impl VulcanWorkbench {
         }
         composer_editor_stack_column =
             composer_editor_stack_column.push(self.view_inline_composer_editor());
+        if let Some(slash_panel) = self.view_composer_slash_command_panel() {
+            composer_editor_stack_column = composer_editor_stack_column.push(slash_panel);
+        }
         if !self.composer_attachments.is_empty() {
             composer_editor_stack_column =
                 composer_editor_stack_column.push(self.view_composer_attachment_strip());
