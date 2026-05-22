@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+use crate::agent_runtime::question_runtime::{QuestionRuntime, build_question_tool_candidate};
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_tool_candidate};
 use crate::image_understanding_compat::{
     configured_understand_image_parameters_schema, execute_configured_understand_image,
@@ -83,6 +84,7 @@ pub fn resolve_ai_tool_fallback_aliases(
 /// 根据当前 GUI 运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
     task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
     native_catalog: NativeToolCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
@@ -99,6 +101,9 @@ pub fn build_vulcan_tools_manager(
     let task_candidate = build_task_tool_candidate(task_runtime);
     occupied_public_tool_ids.insert(task_candidate.descriptor.id.clone());
     candidates.push(task_candidate);
+    let ask_candidate = build_question_tool_candidate(question_runtime, "ask");
+    occupied_public_tool_ids.insert(ask_candidate.descriptor.id.clone());
+    candidates.push(ask_candidate);
 
     for tool_id in candidate_native_tool_ids {
         let Some(definition) = native_catalog.definition(&tool_id) else {

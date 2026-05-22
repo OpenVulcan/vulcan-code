@@ -3,6 +3,7 @@
 
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
+use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_launch_payload::{
     RuntimeStreamLaunch, build_runtime_stream_launch_payload,
@@ -25,6 +26,7 @@ pub(crate) async fn prepare_runtime_stream_launch(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
@@ -34,6 +36,7 @@ pub(crate) async fn prepare_runtime_stream_launch(
         luaskills_runtime,
         mcp_runtime_access,
         task_runtime,
+        question_runtime,
         command_session_runtime,
         request,
     )?;

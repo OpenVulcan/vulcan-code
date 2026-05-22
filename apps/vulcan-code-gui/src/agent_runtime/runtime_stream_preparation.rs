@@ -6,6 +6,7 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
 };
 use crate::agent_runtime::execution_preparation::prepare_execution;
+use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_preparation_failure::build_preparation_failure_report;
 use crate::agent_runtime::runtime_stream_preparation_resources::{
@@ -64,6 +65,7 @@ pub(crate) fn prepare_runtime_launch_input(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
@@ -73,6 +75,7 @@ pub(crate) fn prepare_runtime_launch_input(
         luaskills_runtime,
         mcp_runtime_access,
         task_runtime,
+        question_runtime,
         command_session_runtime,
         request,
     );

@@ -4,6 +4,7 @@
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
+use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
@@ -23,6 +24,7 @@ pub fn stream_runtime_run(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime: Option<McpRuntimeAccess>,
     task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
@@ -33,6 +35,7 @@ pub fn stream_runtime_run(
         luaskills_runtime,
         mcp_runtime_access,
         task_runtime,
+        question_runtime,
         command_session_runtime,
         request,
     )
@@ -46,6 +49,7 @@ fn stream_runtime_run_with_access(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
@@ -56,6 +60,7 @@ fn stream_runtime_run_with_access(
             luaskills_runtime.clone(),
             mcp_runtime_access,
             task_runtime,
+            question_runtime,
             command_session_runtime,
             request,
         ).await {

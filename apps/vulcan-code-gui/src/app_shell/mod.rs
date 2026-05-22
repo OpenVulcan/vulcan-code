@@ -31,6 +31,7 @@ use crate::agent_runtime::provider_protocol_bridge::{
     attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
 };
 use crate::agent_runtime::provider_stream_projection::is_provider_tool_boundary_runtime_event;
+use crate::agent_runtime::question_runtime::{QuestionOption, QuestionPrompt, QuestionRequest};
 use crate::agent_runtime::task_runtime::DetachedTaskRuntimeEvent;
 use crate::agent_runtime::{
     self, ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
@@ -591,6 +592,10 @@ const WORKBENCH_OPENROUTER_ENDPOINT_PICKER_MODAL_WIDTH: f32 = 760.0;
 /// OpenRouter 二级供应商选择弹窗内部滚动结果列表使用的共享固定高度。
 const WORKBENCH_OPENROUTER_ENDPOINT_PICKER_LIST_HEIGHT: f32 = 360.0;
 
+/// Poll interval used to mirror pending ask/question runtime requests into the main workbench modal layer.
+/// 用于把 ask/question 运行时待回答请求镜像到主工作台弹层的轮询时间间隔。
+const QUESTION_RUNTIME_POLL_TICK_INTERVAL: Duration = Duration::from_millis(250);
+
 /// Shared fixed width used by the reusable blocking notice modal card.
 /// 可复用阻塞提示弹窗卡片使用的共享固定宽度。
 const WORKBENCH_NOTICE_MODAL_WIDTH: f32 = 460.0;
@@ -606,6 +611,18 @@ const WORKBENCH_NOTICE_MODAL_HEADER_HEIGHT: f32 = 36.0;
 /// Shared fixed width used by each reusable blocking notice modal action button.
 /// 可复用阻塞提示弹窗每个操作按钮使用的共享固定宽度。
 const WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH: f32 = 118.0;
+
+/// Shared fixed width used by the blocking ask/question modal card.
+/// 阻塞式 ask/question 弹窗卡片使用的共享固定宽度。
+const WORKBENCH_QUESTION_MODAL_WIDTH: f32 = 920.0;
+
+/// Shared fixed height used by the blocking ask/question modal card.
+/// 阻塞式 ask/question 弹窗卡片使用的共享固定高度。
+const WORKBENCH_QUESTION_MODAL_HEIGHT: f32 = 680.0;
+
+/// Shared fixed height used by the blocking ask/question modal header.
+/// 阻塞式 ask/question 弹窗标题栏使用的共享固定高度。
+const WORKBENCH_QUESTION_MODAL_HEADER_HEIGHT: f32 = 40.0;
 
 /// Ratio of the main window reserved by the blocking image-preview modal card.
 /// 阻塞式图片预览弹窗卡片相对于主窗口保留的尺寸比例。
@@ -2698,6 +2715,72 @@ struct WorkbenchNoticeModalState {
     confirm_action: WorkbenchNoticeConfirmAction,
 }
 
+/// Per-question editable answer draft retained while the blocking ask/question modal is visible.
+/// 阻塞式 ask/question 弹窗可见期间保留的逐题可编辑答案草稿。
+#[derive(Debug, Clone, Default)]
+struct WorkbenchQuestionAnswerDraft {
+    /// Selected option labels currently staged for this question.
+    /// 当前为该问题暂存的已选选项标签集合。
+    selected_labels: Vec<String>,
+    /// Whether the built-in custom-answer lane is currently enabled for this question.
+    /// 当前该问题是否启用了内置“其他回答”通道。
+    custom_selected: bool,
+    /// Free-text answer staged for the built-in custom-answer lane.
+    /// 当前为内置“其他回答”通道暂存的自由文本回答。
+    custom_text: String,
+}
+
+/// Active stage shown by the blocking ask/question modal while one runtime request is waiting for the user.
+/// 单条运行时问答请求等待用户期间阻塞式 ask/question 弹窗展示的当前阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchQuestionModalStage {
+    /// Question-by-question editing stage used to gather or adjust each answer draft.
+    /// 逐题编辑阶段，用于收集或调整每道题的答案草稿。
+    Answering,
+    /// Final confirmation stage used to review every answer before submission.
+    /// 最终确认阶段，用于在提交前复核所有答案。
+    Confirming,
+}
+
+/// Origin describing how the current ask/question modal was opened.
+/// 描述当前 ask/question 弹窗是通过哪条链路打开的来源标记。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchQuestionModalOrigin {
+    /// Runtime-backed ask request created by a real model tool invocation.
+    /// 由真实模型工具调用创建的运行时 ask 请求。
+    Runtime,
+    /// Local example-panel debugging flow used only for ask-style iteration.
+    /// 仅用于 ask 样式迭代的本地示例面板调试链路。
+    AskDebug,
+}
+
+/// Blocking ask/question modal state mirrored from the shared question runtime while one tool call is waiting for user input.
+/// 当某条工具调用正在等待用户输入时，从共享问题运行时镜像而来的阻塞式 ask/question 弹窗状态。
+#[derive(Debug, Clone)]
+struct WorkbenchQuestionModalState {
+    /// Canonical pending request currently being answered by the user.
+    /// 当前正由用户作答的规范待回答请求。
+    request: QuestionRequest,
+    /// Source that opened the current modal so submit/cancel can route correctly.
+    /// 打开当前弹窗的来源，用于让提交与取消动作走到正确分支。
+    origin: WorkbenchQuestionModalOrigin,
+    /// Ordered answer drafts aligned with the request question array.
+    /// 与请求问题数组一一对齐的有序答案草稿集合。
+    drafts: Vec<WorkbenchQuestionAnswerDraft>,
+    /// Zero-based question index currently shown in the editor stage.
+    /// 当前编辑阶段正在展示的零基问题下标。
+    active_question_index: usize,
+    /// Zero-based highlighted option index inside the active question, including the synthetic custom-answer row.
+    /// 当前激活问题内部高亮的零基选项下标，包含合成的“其他回答”行。
+    active_option_index: usize,
+    /// Current modal stage used to switch between answer editing and final confirmation.
+    /// 当前弹窗阶段，用于在答案编辑与最终确认之间切换。
+    stage: WorkbenchQuestionModalStage,
+    /// Optional inline validation error shown when the user tries to submit incomplete answers.
+    /// 当用户尝试提交不完整答案时展示的可选内联校验错误文本。
+    validation_error: Option<String>,
+}
+
 /// Blocking image preview modal state opened from one staged image attachment tile.
 /// 从已暂存图片附件方格打开的阻塞式图片预览弹窗状态。
 #[derive(Debug, Clone)]
@@ -2917,6 +3000,9 @@ pub struct VulcanWorkbench {
     /// Reusable blocking notice modal currently shown above all main-workbench content.
     /// 当前显示在所有主工作台内容之上的可复用阻塞提示弹窗。
     workbench_notice_modal: Option<WorkbenchNoticeModalState>,
+    /// Blocking ask/question modal currently shown while one model-visible structured-question tool call is waiting for the user.
+    /// 当前在某条模型可见结构化提问工具调用等待用户时显示的阻塞式 ask/question 弹窗。
+    active_question_modal: Option<WorkbenchQuestionModalState>,
     /// Blocking image preview modal currently opened from one staged composer attachment.
     /// 当前从某个已暂存提示词附件打开的阻塞式图片预览弹窗。
     workbench_image_preview_modal: Option<WorkbenchImagePreviewModalState>,
@@ -5745,6 +5831,9 @@ enum Message {
     /// Requests opening or focusing the dedicated diff preview window.
     /// 请求打开或聚焦独立 Diff 预览窗口。
     OpenDiffWindow,
+    /// Opens the local ask debug modal from the example panel for style iteration.
+    /// 从示例面板打开本地 ask 调试弹窗，供样式迭代使用。
+    OpenAskDebugModal,
     /// Records that one custom title bar drag region has been pressed.
     /// 记录某个自定义标题栏拖拽区域已被按下。
     WindowTitleBarPressed(window::Id),
@@ -5892,6 +5981,53 @@ enum Message {
     /// Closes the currently visible reusable workbench notice modal without changing domain state.
     /// 关闭当前可见的可复用工作台提示弹窗且不修改业务状态。
     CloseWorkbenchNoticeModal,
+    /// Polls the shared question runtime and mirrors the oldest pending ask/question request into the main workbench modal layer.
+    /// 轮询共享问题运行时，并把最早的待回答 ask/question 请求镜像到主工作台弹层。
+    QuestionRuntimePollTick,
+    /// Toggles one structured or custom option row inside the currently visible ask/question modal.
+    /// 在当前可见的 ask/question 弹窗中切换一条结构化或自定义选项行。
+    QuestionModalOptionPressed {
+        /// Zero-based question index inside the pending request.
+        /// 待回答请求中的零基问题下标。
+        question_index: usize,
+        /// Zero-based option index inside the rendered list, where the last row is the synthetic custom-answer entry.
+        /// 当前渲染列表中的零基选项下标，其中最后一行代表合成的“其他回答”条目。
+        option_index: usize,
+    },
+    /// Updates the custom free-text answer draft for one prompt inside the currently visible ask/question modal.
+    /// 更新当前可见 ask/question 弹窗内某个提示的自定义自由文本答案草稿。
+    QuestionModalCustomTextChanged {
+        /// Zero-based question index inside the pending request.
+        /// 待回答请求中的零基问题下标。
+        question_index: usize,
+        /// Latest custom free-text answer draft entered by the user.
+        /// 用户输入的最新自定义自由文本答案草稿。
+        value: String,
+    },
+    /// Selects one question tab inside the currently visible ask/question modal and returns the modal to the editing stage.
+    /// 选择当前可见 ask/question 弹窗中的某个问题标签，并让弹窗回到编辑阶段。
+    QuestionModalSelectQuestionTab(usize),
+    /// Moves the active ask/question modal editor to the previous question.
+    /// 将当前 ask/question 弹窗编辑焦点移动到上一道问题。
+    QuestionModalMoveToPreviousQuestion,
+    /// Moves the active ask/question modal editor to the next question.
+    /// 将当前 ask/question 弹窗编辑焦点移动到下一道问题。
+    QuestionModalMoveToNextQuestion,
+    /// Toggles the currently highlighted option row inside the active ask/question modal question.
+    /// 在当前 ask/question 弹窗的激活问题中切换当前高亮选项行。
+    QuestionModalToggleHighlightedOption,
+    /// Validates every draft and enters the final confirmation stage for the current ask/question modal.
+    /// 校验全部答案草稿并让当前 ask/question 弹窗进入最终确认阶段。
+    QuestionModalOpenConfirmStage,
+    /// Returns the current ask/question modal from the confirmation stage back to answer editing.
+    /// 让当前 ask/question 弹窗从确认阶段返回到答案编辑阶段。
+    QuestionModalBackToEditing,
+    /// Submits the currently visible ask/question modal back into the shared question runtime.
+    /// 将当前可见 ask/question 弹窗提交回共享问题运行时。
+    SubmitQuestionModal,
+    /// Rejects the currently visible ask/question modal and resumes the waiting tool call with a cancellation error.
+    /// 拒绝当前可见 ask/question 弹窗，并以取消错误恢复等待中的工具调用。
+    RejectQuestionModal,
     /// Dismisses the top-most keyboard-driven overlay, preferring the reusable notice modal before legacy overlays.
     /// 关闭键盘驱动的最顶层遮罩，优先处理可复用提示弹窗再回退到旧弹层。
     DismissTopLevelOverlay,
@@ -7198,6 +7334,7 @@ impl VulcanWorkbench {
             composer_buffer: text_editor::Content::with_text(""),
             composer_attachments: Vec::new(),
             workbench_notice_modal: None,
+            active_question_modal: None,
             workbench_image_preview_modal: None,
             generated_audio_playback: None,
             composer_drag_hover_labels: Vec::new(),
@@ -8140,6 +8277,12 @@ impl VulcanWorkbench {
                     open_diff_window.map(Message::DiffWindowOpened)
                 }
             }
+            Message::OpenAskDebugModal => {
+                self.active_question_modal = Some(Self::build_ask_debug_question_modal_state());
+                self.status_message =
+                    String::from("已打开 ask 调试弹窗，可直接验证不同问题类型与样式。");
+                Task::none()
+            }
             Message::WindowTitleBarPressed(window_id) => {
                 self.pending_title_bar_drag = self
                     .title_bar_pointer_position
@@ -8546,6 +8689,49 @@ impl VulcanWorkbench {
                 self.workbench_notice_modal = None;
                 Task::none()
             }
+            Message::QuestionRuntimePollTick => {
+                self.sync_active_question_modal_from_runtime();
+                Task::none()
+            }
+            Message::QuestionModalOptionPressed {
+                question_index,
+                option_index,
+            } => {
+                self.toggle_active_question_modal_option(question_index, option_index);
+                Task::none()
+            }
+            Message::QuestionModalCustomTextChanged {
+                question_index,
+                value,
+            } => {
+                self.update_active_question_modal_custom_answer(question_index, value);
+                Task::none()
+            }
+            Message::QuestionModalSelectQuestionTab(question_index) => {
+                self.select_active_question_modal_question(question_index);
+                Task::none()
+            }
+            Message::QuestionModalMoveToPreviousQuestion => {
+                self.move_active_question_modal_question(false);
+                Task::none()
+            }
+            Message::QuestionModalMoveToNextQuestion => {
+                self.move_active_question_modal_question(true);
+                Task::none()
+            }
+            Message::QuestionModalToggleHighlightedOption => {
+                self.toggle_active_question_modal_highlighted_option();
+                Task::none()
+            }
+            Message::QuestionModalOpenConfirmStage => {
+                self.open_active_question_modal_confirm_stage()
+            }
+            Message::QuestionModalBackToEditing => {
+                self.return_active_question_modal_to_editing();
+                Task::none()
+            }
+            Message::SubmitQuestionModal => self.submit_active_question_modal(),
+            Message::RejectQuestionModal => self.reject_active_question_modal(),
             Message::DismissTopLevelOverlay => {
                 if self.workbench_context_menu.take().is_some() {
                     self.composer_context_clipboard_text = None;
@@ -8553,6 +8739,15 @@ impl VulcanWorkbench {
                 }
                 if self.workbench_image_preview_modal.take().is_some() {
                     return Task::none();
+                }
+                if self.active_question_modal.is_some() {
+                    if self.active_question_modal_stage()
+                        == Some(WorkbenchQuestionModalStage::Confirming)
+                    {
+                        self.return_active_question_modal_to_editing();
+                        return Task::none();
+                    }
+                    return self.reject_active_question_modal();
                 }
                 if self.ai_capability_vendor_editor.take().is_some() {
                     return Task::none();
@@ -8638,6 +8833,17 @@ impl VulcanWorkbench {
                 if self.workbench_reasoning_picker_open {
                     self.workbench_reasoning_picker_open = false;
                     return Task::none();
+                }
+                if self.active_question_modal.is_some() {
+                    return match self.active_question_modal_stage() {
+                        Some(WorkbenchQuestionModalStage::Answering) => {
+                            self.open_active_question_modal_confirm_stage()
+                        }
+                        Some(WorkbenchQuestionModalStage::Confirming) => {
+                            self.submit_active_question_modal()
+                        }
+                        None => Task::none(),
+                    };
                 }
                 if self.workbench_notice_modal.is_some() {
                     return self.confirm_workbench_notice_modal();
@@ -9532,6 +9738,10 @@ impl VulcanWorkbench {
                     .unwrap_or_else(Task::none)
             }
             Message::WorkbenchModelPickerMoveSelectionUp => {
+                if self.active_question_modal.is_some() {
+                    self.move_active_question_modal_option(false);
+                    return Task::none();
+                }
                 if !self.workbench_model_picker_open {
                     return Task::none();
                 }
@@ -9552,6 +9762,10 @@ impl VulcanWorkbench {
                     .unwrap_or_else(Task::none)
             }
             Message::WorkbenchModelPickerMoveSelectionDown => {
+                if self.active_question_modal.is_some() {
+                    self.move_active_question_modal_option(true);
+                    return Task::none();
+                }
                 if !self.workbench_model_picker_open {
                     return Task::none();
                 }
@@ -12155,6 +12369,680 @@ impl VulcanWorkbench {
                 self.rebuild_missing_session_after_confirmation(session_id)
             }
         }
+    }
+
+    /// Builds one fresh blocking ask/question modal state from a pending runtime request.
+    /// 根据一条待处理运行时请求构建一份新的阻塞式 ask/question 弹窗状态。
+    fn build_question_modal_state(request: QuestionRequest) -> WorkbenchQuestionModalState {
+        let drafts = request
+            .questions
+            .iter()
+            .map(Self::build_question_modal_answer_draft)
+            .collect::<Vec<_>>();
+        let active_option_index = request
+            .questions
+            .first()
+            .zip(drafts.first())
+            .map(|(question, draft)| Self::default_question_modal_option_index(question, draft))
+            .unwrap_or(0);
+        WorkbenchQuestionModalState {
+            request,
+            origin: WorkbenchQuestionModalOrigin::Runtime,
+            drafts,
+            active_question_index: 0,
+            active_option_index,
+            stage: WorkbenchQuestionModalStage::Answering,
+            validation_error: None,
+        }
+    }
+
+    /// Builds one local ask debug modal state that enumerates representative question types for style tuning.
+    /// 构建一份本地 ask 调试弹窗状态，枚举具有代表性的问题类型以便进行样式调试。
+    fn build_ask_debug_question_modal_state() -> WorkbenchQuestionModalState {
+        let request = QuestionRequest {
+            id: String::from("ask-debug-preview"),
+            session_id: SessionId::nil(),
+            sequence: 0,
+            questions: Self::build_ask_debug_questions(),
+        };
+        let mut state = Self::build_question_modal_state(request);
+        state.origin = WorkbenchQuestionModalOrigin::AskDebug;
+        state
+    }
+
+    /// Builds one representative ask debug question list that covers single-choice, multi-choice, and free-text prompts.
+    /// 构建一组具有代表性的 ask 调试题目，覆盖单选、多选与自由文本问题。
+    fn build_ask_debug_questions() -> Vec<QuestionPrompt> {
+        vec![
+            QuestionPrompt {
+                question: String::from("Which overall density feels best for the ask modal?"),
+                header: String::from("Density"),
+                options: vec![
+                    QuestionOption {
+                        label: String::from("Compact"),
+                        description: String::from(
+                            "Tighter spacing and higher information density.",
+                        ),
+                    },
+                    QuestionOption {
+                        label: String::from("Balanced"),
+                        description: String::from("Moderate spacing with clear grouping."),
+                    },
+                    QuestionOption {
+                        label: String::from("Spacious"),
+                        description: String::from("Larger spacing and more breathing room."),
+                    },
+                ],
+                multiple: Some(false),
+            },
+            QuestionPrompt {
+                question: String::from(
+                    "Which interactions should remain visible in the modal itself?",
+                ),
+                header: String::from("Visible Hints"),
+                options: vec![
+                    QuestionOption {
+                        label: String::from("Keyboard"),
+                        description: String::from("Show key-driven interaction hints."),
+                    },
+                    QuestionOption {
+                        label: String::from("Mouse"),
+                        description: String::from("Show click-oriented helper text."),
+                    },
+                    QuestionOption {
+                        label: String::from("Stage"),
+                        description: String::from(
+                            "Show progress like question count or confirm state.",
+                        ),
+                    },
+                ],
+                multiple: Some(true),
+            },
+            QuestionPrompt {
+                question: String::from("What wording should the confirm page emphasize most?"),
+                header: String::from("Confirm Copy"),
+                options: vec![],
+                multiple: Some(false),
+            },
+            QuestionPrompt {
+                question: String::from(
+                    "Which option row style reads best for long labels and descriptions?",
+                ),
+                header: String::from("Option Style"),
+                options: vec![
+                    QuestionOption {
+                        label: String::from("Dense Row"),
+                        description: String::from("Compact row with subdued description."),
+                    },
+                    QuestionOption {
+                        label: String::from("Card Row"),
+                        description: String::from(
+                            "More obvious card separation and larger hit area.",
+                        ),
+                    },
+                    QuestionOption {
+                        label: String::from("Minimal"),
+                        description: String::from(
+                            "Primary label only unless extra detail is necessary.",
+                        ),
+                    },
+                ],
+                multiple: Some(false),
+            },
+        ]
+    }
+
+    /// Writes one host-result-like ask debug payload into the patch/scaffold preview so the style sandbox can inspect the final returned content.
+    /// 将接近真实 host result 的 ask 调试载荷写入补丁与骨架预览区，以便样式沙盒检查最终回传内容。
+    fn apply_ask_debug_answers_to_preview(
+        &mut self,
+        questions: &[QuestionPrompt],
+        answers: &[Vec<String>],
+    ) -> Result<(), String> {
+        let question_payload = questions
+            .iter()
+            .map(|question| {
+                json!({
+                    "question": question.question,
+                    "header": question.header,
+                    "options": question.options.iter().map(|option| {
+                        json!({
+                            "label": option.label,
+                            "description": option.description,
+                        })
+                    }).collect::<Vec<_>>(),
+                    "multiple": question.multiple,
+                })
+            })
+            .collect::<Vec<_>>();
+        let rendered_answers = questions
+            .iter()
+            .zip(answers.iter())
+            .map(|(question, answer)| {
+                json!({
+                    "header": question.header,
+                    "question": question.question,
+                    "rendered_answer": answer.join(", "),
+                })
+            })
+            .collect::<Vec<_>>();
+        let preview_text = serde_json::to_string_pretty(&json!({
+            "kind": "ask",
+            "tool_name": "ask",
+            "question_count": questions.len(),
+            "questions": question_payload,
+            "answers": answers,
+            "rendered_answers": rendered_answers,
+        }))
+        .map_err(|error| format!("ask 调试结果序列化失败：{error}"))?;
+        self.editor_content = text_editor::Content::with_text(&preview_text);
+        Ok(())
+    }
+
+    /// Builds one default answer draft for a single ask/question prompt while preserving the always-available custom-answer lane.
+    /// 为单条 ask/question 提示构建默认答案草稿，并保留始终可用的“其他回答”通道。
+    fn build_question_modal_answer_draft(
+        question: &QuestionPrompt,
+    ) -> WorkbenchQuestionAnswerDraft {
+        WorkbenchQuestionAnswerDraft {
+            selected_labels: Vec::new(),
+            custom_selected: question.options.is_empty(),
+            custom_text: String::new(),
+        }
+    }
+
+    /// Returns the active stage of the currently visible ask/question modal, if any.
+    /// 返回当前可见 ask/question 弹窗的激活阶段（如果存在）。
+    fn active_question_modal_stage(&self) -> Option<WorkbenchQuestionModalStage> {
+        self.active_question_modal.as_ref().map(|state| state.stage)
+    }
+
+    /// Returns the origin of the currently visible ask/question modal, if any.
+    /// 返回当前可见 ask/question 弹窗的来源标记（如果存在）。
+    fn active_question_modal_origin(&self) -> Option<WorkbenchQuestionModalOrigin> {
+        self.active_question_modal
+            .as_ref()
+            .map(|state| state.origin)
+    }
+
+    /// Returns the rendered option count for one ask/question prompt, including the synthetic custom-answer row.
+    /// 返回单条 ask/question 提示的渲染选项数量，包含合成的“其他回答”行。
+    fn question_modal_option_count(question: &QuestionPrompt) -> usize {
+        question.options.len().saturating_add(1)
+    }
+
+    /// Returns the rendered option index occupied by the synthetic custom-answer row for one prompt.
+    /// 返回某条提示中合成“其他回答”行所占据的渲染选项下标。
+    fn question_modal_custom_option_index(question: &QuestionPrompt) -> usize {
+        question.options.len()
+    }
+
+    /// Returns the best default highlighted option index for one question draft when the editor lands on that question.
+    /// 返回编辑器切换到某道题时该题草稿最合适的默认高亮选项下标。
+    fn default_question_modal_option_index(
+        question: &QuestionPrompt,
+        draft: &WorkbenchQuestionAnswerDraft,
+    ) -> usize {
+        if draft.custom_selected {
+            return Self::question_modal_custom_option_index(question);
+        }
+
+        draft
+            .selected_labels
+            .iter()
+            .find_map(|selected_label| {
+                question
+                    .options
+                    .iter()
+                    .position(|option| option.label == *selected_label)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Reconciles one mirrored ask/question modal state with the latest runtime request shape while preserving in-progress drafts.
+    /// 在保留进行中草稿的前提下，让镜像 ask/question 弹窗状态与最新运行时请求结构重新对齐。
+    fn reconcile_question_modal_state(state: &mut WorkbenchQuestionModalState) {
+        let question_count = state.request.questions.len();
+
+        if state.drafts.len() > question_count {
+            state.drafts.truncate(question_count);
+        } else {
+            for question in state.request.questions.iter().skip(state.drafts.len()) {
+                state
+                    .drafts
+                    .push(Self::build_question_modal_answer_draft(question));
+            }
+        }
+
+        if question_count == 0 {
+            state.active_question_index = 0;
+            state.active_option_index = 0;
+            state.stage = WorkbenchQuestionModalStage::Answering;
+            return;
+        }
+
+        state.active_question_index = state
+            .active_question_index
+            .min(question_count.saturating_sub(1));
+        let active_question = &state.request.questions[state.active_question_index];
+        let max_option_index = Self::question_modal_option_count(active_question).saturating_sub(1);
+        state.active_option_index = state.active_option_index.min(max_option_index);
+    }
+
+    /// Mirrors the oldest pending ask/question runtime request into the main workbench modal layer while preserving in-progress drafts for the currently visible request.
+    /// 将最早的待回答 ask/question 运行时请求镜像到主工作台弹层，同时为当前可见请求保留进行中的答案草稿。
+    fn sync_active_question_modal_from_runtime(&mut self) {
+        let pending_requests = match self.runtime_foundation.question_runtime().list_pending() {
+            Ok(requests) => requests,
+            Err(error) => {
+                self.status_message = error;
+                return;
+            }
+        };
+        let Some(next_request) = pending_requests.into_iter().next() else {
+            if self.active_question_modal_origin() != Some(WorkbenchQuestionModalOrigin::AskDebug) {
+                self.active_question_modal = None;
+            }
+            return;
+        };
+        if let Some(state) = self
+            .active_question_modal
+            .as_mut()
+            .filter(|state| state.request.id == next_request.id)
+        {
+            state.request = next_request;
+            Self::reconcile_question_modal_state(state);
+            return;
+        }
+        self.active_question_modal = Some(Self::build_question_modal_state(next_request));
+        self.status_message = String::from("当前执行正在等待你回答补充问题。");
+    }
+
+    /// Selects one question inside the active ask/question modal and restores the editing stage around it.
+    /// 选中当前 ask/question 弹窗中的某个问题，并围绕它恢复编辑阶段。
+    fn select_active_question_modal_question(&mut self, question_index: usize) {
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return;
+        };
+        if question_index >= state.request.questions.len() {
+            return;
+        }
+
+        state.active_question_index = question_index;
+        state.stage = WorkbenchQuestionModalStage::Answering;
+        state.validation_error = None;
+        if let Some((question, draft)) = state
+            .request
+            .questions
+            .get(question_index)
+            .zip(state.drafts.get(question_index))
+        {
+            state.active_option_index = Self::default_question_modal_option_index(question, draft);
+        }
+    }
+
+    /// Moves the active ask/question modal editor to the previous or next question with wrap-around navigation.
+    /// 使用循环导航将当前 ask/question 弹窗编辑器移动到上一题或下一题。
+    fn move_active_question_modal_question(&mut self, forward: bool) {
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return;
+        };
+        if state.stage != WorkbenchQuestionModalStage::Answering {
+            return;
+        }
+        let question_count = state.request.questions.len();
+        if question_count == 0 {
+            return;
+        }
+
+        state.active_question_index = if forward {
+            (state.active_question_index + 1) % question_count
+        } else if state.active_question_index == 0 {
+            question_count.saturating_sub(1)
+        } else {
+            state.active_question_index.saturating_sub(1)
+        };
+        state.validation_error = None;
+        if let Some((question, draft)) = state
+            .request
+            .questions
+            .get(state.active_question_index)
+            .zip(state.drafts.get(state.active_question_index))
+        {
+            state.active_option_index = Self::default_question_modal_option_index(question, draft);
+        }
+    }
+
+    /// Moves the highlighted option within the active ask/question modal question with wrap-around navigation.
+    /// 使用循环导航在当前 ask/question 弹窗激活问题内移动高亮选项。
+    fn move_active_question_modal_option(&mut self, forward: bool) {
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return;
+        };
+        if state.stage != WorkbenchQuestionModalStage::Answering {
+            return;
+        }
+        let Some(question) = state.request.questions.get(state.active_question_index) else {
+            return;
+        };
+        let option_count = Self::question_modal_option_count(question);
+        if option_count == 0 {
+            return;
+        }
+
+        state.active_option_index = if forward {
+            (state.active_option_index + 1) % option_count
+        } else if state.active_option_index == 0 {
+            option_count.saturating_sub(1)
+        } else {
+            state.active_option_index.saturating_sub(1)
+        };
+        state.validation_error = None;
+    }
+
+    /// Toggles the currently highlighted option row inside the active ask/question modal question.
+    /// 在当前 ask/question 弹窗激活问题中切换当前高亮选项行。
+    fn toggle_active_question_modal_highlighted_option(&mut self) {
+        let Some((question_index, option_index)) = self
+            .active_question_modal
+            .as_ref()
+            .map(|state| (state.active_question_index, state.active_option_index))
+        else {
+            return;
+        };
+
+        self.toggle_active_question_modal_option(question_index, option_index);
+    }
+
+    /// Toggles one structured or custom option row inside the currently visible ask/question modal draft state.
+    /// 在当前可见 ask/question 弹窗草稿状态中切换一条结构化或自定义选项行。
+    fn toggle_active_question_modal_option(&mut self, question_index: usize, option_index: usize) {
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return;
+        };
+        if question_index >= state.request.questions.len() || question_index >= state.drafts.len() {
+            return;
+        };
+        state.active_question_index = question_index;
+        state.active_option_index = option_index;
+        state.stage = WorkbenchQuestionModalStage::Answering;
+        state.validation_error = None;
+
+        let question = &state.request.questions[question_index];
+        let draft = &mut state.drafts[question_index];
+        let custom_option_index = Self::question_modal_custom_option_index(question);
+        let max_option_index = Self::question_modal_option_count(question).saturating_sub(1);
+        state.active_option_index = state.active_option_index.min(max_option_index);
+
+        if state.active_option_index == custom_option_index {
+            if question.options.is_empty() {
+                draft.custom_selected = true;
+                return;
+            }
+            if question.allows_multiple() {
+                draft.custom_selected = !draft.custom_selected;
+            } else if draft.custom_selected {
+                draft.custom_selected = false;
+            } else {
+                draft.selected_labels.clear();
+                draft.custom_selected = true;
+            }
+            return;
+        }
+
+        let Some(option_label) = question
+            .options
+            .get(state.active_option_index)
+            .map(|option| option.label.clone())
+        else {
+            return;
+        };
+
+        if question.allows_multiple() {
+            if let Some(existing_index) = draft
+                .selected_labels
+                .iter()
+                .position(|label| label == &option_label)
+            {
+                draft.selected_labels.remove(existing_index);
+            } else {
+                draft.selected_labels.push(option_label);
+            }
+            return;
+        }
+
+        if draft.selected_labels.len() == 1 && draft.selected_labels[0] == option_label {
+            draft.selected_labels.clear();
+        } else {
+            draft.selected_labels = vec![option_label];
+        }
+        draft.custom_selected = false;
+    }
+
+    /// Updates the custom free-text answer draft for one question inside the currently visible ask/question modal.
+    /// 更新当前可见 ask/question 弹窗内某个问题的自定义自由文本答案草稿。
+    fn update_active_question_modal_custom_answer(&mut self, question_index: usize, value: String) {
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return;
+        };
+        let Some(question) = state.request.questions.get(question_index) else {
+            return;
+        };
+        let Some(draft) = state.drafts.get_mut(question_index) else {
+            return;
+        };
+        state.active_question_index = question_index;
+        state.active_option_index = Self::question_modal_custom_option_index(question);
+        state.stage = WorkbenchQuestionModalStage::Answering;
+        draft.custom_text = value;
+        if question.options.is_empty() || !draft.custom_text.trim().is_empty() {
+            draft.custom_selected = true;
+        }
+        state.validation_error = None;
+    }
+
+    /// Collects the normalized answer strings for one question draft or returns a user-facing validation error.
+    /// 收集单题草稿的规范化答案字符串，若不完整则返回面向用户的校验错误。
+    fn collect_question_modal_prompt_answers(
+        question: &QuestionPrompt,
+        draft: &WorkbenchQuestionAnswerDraft,
+    ) -> Result<Vec<String>, String> {
+        let mut answers = draft.selected_labels.clone();
+        if draft.custom_selected || question.options.is_empty() {
+            let custom_answer = draft.custom_text.trim();
+            if custom_answer.is_empty() {
+                return if question.options.is_empty() {
+                    Err(format!("请先填写“{}”的回答。", question.header))
+                } else {
+                    Err(format!("请先填写“{}”的其他回答。", question.header))
+                };
+            }
+            answers.push(custom_answer.to_string());
+        }
+
+        if answers.is_empty() {
+            return if question.options.is_empty() {
+                Err(format!("请先填写“{}”的回答。", question.header))
+            } else {
+                Err(format!(
+                    "请先为“{}”选择答案或填写其他回答。",
+                    question.header
+                ))
+            };
+        }
+
+        Ok(answers)
+    }
+
+    /// Collects every pending answer from the active ask/question modal or returns the first validation failure with its question index.
+    /// 收集当前 ask/question 弹窗中的全部待提交答案，或返回首个校验失败及其问题下标。
+    fn collect_active_question_modal_answers(&self) -> Result<Vec<Vec<String>>, (usize, String)> {
+        let Some(state) = self.active_question_modal.as_ref() else {
+            return Ok(Vec::new());
+        };
+
+        state
+            .request
+            .questions
+            .iter()
+            .enumerate()
+            .map(|(question_index, question)| {
+                let Some(draft) = state.drafts.get(question_index) else {
+                    return Err((
+                        question_index,
+                        String::from("当前问题草稿状态不完整，请关闭后重试。"),
+                    ));
+                };
+                Self::collect_question_modal_prompt_answers(question, draft)
+                    .map_err(|error| (question_index, error))
+            })
+            .collect()
+    }
+
+    /// Returns the current ask/question modal from the confirmation stage back to answer editing.
+    /// 让当前 ask/question 弹窗从确认阶段返回到答案编辑阶段。
+    fn return_active_question_modal_to_editing(&mut self) {
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return;
+        };
+        state.stage = WorkbenchQuestionModalStage::Answering;
+        state.validation_error = None;
+    }
+
+    /// Validates every current answer draft and moves the ask/question modal into its final confirmation stage.
+    /// 校验当前全部答案草稿，并让 ask/question 弹窗进入最终确认阶段。
+    fn open_active_question_modal_confirm_stage(&mut self) -> Task<Message> {
+        let validation = self.collect_active_question_modal_answers();
+        let Some(state) = self.active_question_modal.as_mut() else {
+            return Task::none();
+        };
+
+        match validation {
+            Ok(_) => {
+                state.stage = WorkbenchQuestionModalStage::Confirming;
+                state.validation_error = None;
+            }
+            Err((question_index, error)) => {
+                state.stage = WorkbenchQuestionModalStage::Answering;
+                state.active_question_index = question_index;
+                state.validation_error = Some(error);
+                if let Some((question, draft)) = state
+                    .request
+                    .questions
+                    .get(question_index)
+                    .zip(state.drafts.get(question_index))
+                {
+                    state.active_option_index =
+                        Self::default_question_modal_option_index(question, draft);
+                }
+            }
+        }
+        Task::none()
+    }
+
+    /// Validates and submits the currently visible ask/question modal back into the shared runtime so the blocked tool invocation can continue.
+    /// 校验并提交当前可见 ask/question 弹窗到共享运行时，使被阻塞的工具调用继续执行。
+    fn submit_active_question_modal(&mut self) -> Task<Message> {
+        if self.active_question_modal_stage() == Some(WorkbenchQuestionModalStage::Answering) {
+            return self.open_active_question_modal_confirm_stage();
+        }
+
+        let validation = self.collect_active_question_modal_answers();
+        let (request_id, origin, questions, answers) = {
+            let Some(state) = self.active_question_modal.as_mut() else {
+                return Task::none();
+            };
+            match validation {
+                Ok(answers) => {
+                    state.validation_error = None;
+                    (
+                        state.request.id.clone(),
+                        state.origin,
+                        state.request.questions.clone(),
+                        answers,
+                    )
+                }
+                Err((question_index, error)) => {
+                    state.stage = WorkbenchQuestionModalStage::Answering;
+                    state.active_question_index = question_index;
+                    state.validation_error = Some(error);
+                    if let Some((question, draft)) = state
+                        .request
+                        .questions
+                        .get(question_index)
+                        .zip(state.drafts.get(question_index))
+                    {
+                        state.active_option_index =
+                            Self::default_question_modal_option_index(question, draft);
+                    }
+                    return Task::none();
+                }
+            }
+        };
+        if origin == WorkbenchQuestionModalOrigin::AskDebug {
+            match self.apply_ask_debug_answers_to_preview(&questions, &answers) {
+                Ok(()) => {
+                    self.active_question_modal = None;
+                    self.status_message =
+                        String::from("ask 调试回答已写入补丁与骨架预览，可继续调整样式。");
+                }
+                Err(error) => {
+                    if let Some(state) = self.active_question_modal.as_mut() {
+                        state.validation_error = Some(error);
+                    }
+                }
+            }
+            return Task::none();
+        }
+        match self
+            .runtime_foundation
+            .question_runtime()
+            .reply(&request_id, answers)
+        {
+            Ok(_) => {
+                self.active_question_modal = None;
+                self.status_message = String::from("补充问题已提交，正在继续执行。");
+            }
+            Err(error) => {
+                if let Some(state) = self.active_question_modal.as_mut() {
+                    state.validation_error = Some(error);
+                }
+            }
+        }
+        Task::none()
+    }
+
+    /// Rejects the currently visible ask/question modal and propagates a cancellation error back into the waiting tool invocation.
+    /// 拒绝当前可见 ask/question 弹窗，并把取消错误回传给等待中的工具调用。
+    fn reject_active_question_modal(&mut self) -> Task<Message> {
+        let Some((request_id, origin)) = self
+            .active_question_modal
+            .as_ref()
+            .map(|state| (state.request.id.clone(), state.origin))
+        else {
+            return Task::none();
+        };
+        if origin == WorkbenchQuestionModalOrigin::AskDebug {
+            self.active_question_modal = None;
+            self.status_message = String::from("已关闭 ask 调试弹窗。");
+            return Task::none();
+        }
+        match self
+            .runtime_foundation
+            .question_runtime()
+            .reject(&request_id)
+        {
+            Ok(_) => {
+                self.active_question_modal = None;
+                self.status_message = String::from("已取消当前补充问题，相关执行会按失败处理。");
+            }
+            Err(error) => {
+                if let Some(state) = self.active_question_modal.as_mut() {
+                    state.validation_error = Some(error);
+                }
+            }
+        }
+        Task::none()
     }
 
     /// Removes one configured model provider after the user explicitly confirms the destructive action.

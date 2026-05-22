@@ -286,6 +286,9 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_workbench_notice_modal() {
             layered_surfaces.push(overlay);
         }
+        if let Some(overlay) = self.view_workbench_question_modal() {
+            layered_surfaces.push(overlay);
+        }
         if let Some(overlay) = self.view_workbench_image_preview_modal() {
             layered_surfaces.push(overlay);
         }
@@ -753,6 +756,439 @@ impl VulcanWorkbench {
             .padding([20, 22])
             .width(WORKBENCH_NOTICE_MODAL_WIDTH)
             .height(WORKBENCH_NOTICE_MODAL_HEIGHT)
+            .style(style::startup_overlay_card_style);
+        let backdrop =
+            mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Noop);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
+    }
+
+    /// Builds the blocking ask/question modal shown while one structured follow-up tool call is waiting for the user.
+    /// 构建在某条结构化跟进提问工具调用等待用户时显示的阻塞式 ask/question 弹窗。
+    pub(super) fn view_workbench_question_modal(&self) -> Option<Element<'_, Message>> {
+        let modal = self.active_question_modal.as_ref()?;
+        if modal.request.questions.is_empty() {
+            return None;
+        }
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(28)
+        .height(28)
+        .padding(0)
+        .style(style::workbench_notice_modal_close_button_style)
+        .on_press(Message::RejectQuestionModal);
+        let question_count = modal.request.questions.len();
+        let active_question_index = modal
+            .active_question_index
+            .min(question_count.saturating_sub(1));
+        let modal_subtitle = match modal.stage {
+            WorkbenchQuestionModalStage::Answering => {
+                format!("第 {}/{} 题", active_question_index + 1, question_count)
+            }
+            WorkbenchQuestionModalStage::Confirming => {
+                format!("确认 {} 个问题的回答", question_count)
+            }
+        };
+        let action_button = |label: &'static str, message: Option<Message>, primary: bool| {
+            let button = button(container(text(label).size(14)).width(Fill).center(Fill))
+                .width(132)
+                .padding([9, 14])
+                .style(if primary {
+                    style::workbench_notice_modal_confirm_button_style
+                } else {
+                    style::workbench_notice_modal_secondary_button_style
+                });
+            if let Some(message) = message {
+                button.on_press(message)
+            } else {
+                button
+            }
+        };
+        let question_tabs =
+            row(modal
+                .request
+                .questions
+                .iter()
+                .enumerate()
+                .map(|(question_index, question)| {
+                    let draft = modal
+                        .drafts
+                        .get(question_index)
+                        .cloned()
+                        .unwrap_or_default();
+                    let is_answered =
+                        Self::collect_question_modal_prompt_answers(question, &draft).is_ok();
+                    let is_active = question_index == active_question_index;
+                    button(
+                        container(
+                            row![
+                                text(if is_answered { "●" } else { "○" }).size(10).color(
+                                    if is_answered {
+                                        palette.success.strong.color
+                                    } else {
+                                        palette.background.base.text.scale_alpha(0.40)
+                                    }
+                                ),
+                                container(
+                                    text(format!("{:02} {}", question_index + 1, question.header))
+                                        .size(13)
+                                )
+                                .width(Fill)
+                                .clip(true),
+                            ]
+                            .spacing(8)
+                            .align_y(Center)
+                            .width(Fill),
+                        )
+                        .width(Fill)
+                        .center_y(Fill),
+                    )
+                    .width(120)
+                    .height(36)
+                    .padding([0, 10])
+                    .style(move |theme, status| {
+                        style::workbench_model_picker_option_button_style(
+                            theme,
+                            status,
+                            modal.stage == WorkbenchQuestionModalStage::Answering && is_active,
+                        )
+                    })
+                    .on_press(Message::QuestionModalSelectQuestionTab(question_index))
+                    .into()
+                }))
+            .spacing(8)
+            .align_y(Center);
+        let question_tabs_surface: Element<'_, Message> =
+            scrollable(container(question_tabs).width(Shrink))
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::default(),
+                ))
+                .height(42)
+                .width(Fill)
+                .into();
+        let body_surface: Element<'_, Message> = match modal.stage {
+            WorkbenchQuestionModalStage::Answering => {
+                let current_question = modal.request.questions.get(active_question_index)?;
+                let current_draft = modal
+                    .drafts
+                    .get(active_question_index)
+                    .cloned()
+                    .unwrap_or_default();
+                let custom_option_index =
+                    Self::question_modal_custom_option_index(current_question);
+                let option_list =
+                    current_question
+                        .options
+                        .iter()
+                        .enumerate()
+                        .map(|(option_index, option)| {
+                            let is_selected = current_draft
+                                .selected_labels
+                                .iter()
+                                .any(|selected_label| selected_label == &option.label);
+                            let is_highlighted = option_index == modal.active_option_index;
+                            let has_description = !option.description.trim().is_empty();
+                            let indicator: Element<'_, Message> = if is_highlighted {
+                                codicon::chevron_right()
+                                    .size(14)
+                                    .line_height(1.0)
+                                    .color(palette.primary.base.color)
+                                    .into()
+                            } else {
+                                text("").size(14).into()
+                            };
+                            let description_surface: Element<'_, Message> = if has_description {
+                                container(
+                                    text(option.description.as_str())
+                                        .size(12)
+                                        .color(palette.background.base.text.scale_alpha(0.54))
+                                        .wrapping(iced::advanced::text::Wrapping::None),
+                                )
+                                .width(Fill)
+                                .clip(true)
+                                .into()
+                            } else {
+                                space::vertical().height(0).into()
+                            };
+                            button(
+                                container(
+                                    column![
+                                        row![
+                                            container(indicator).width(18).center_y(Fill),
+                                            text(if is_selected { "[x]" } else { "[ ]" }).size(13),
+                                            container(text(option.label.as_str()).size(14))
+                                                .width(Fill)
+                                                .clip(true),
+                                        ]
+                                        .spacing(10)
+                                        .align_y(Center),
+                                        description_surface,
+                                    ]
+                                    .spacing(if has_description { 4 } else { 0 }),
+                                )
+                                .width(Fill),
+                            )
+                            .width(Fill)
+                            .height(if has_description { 56 } else { 42 })
+                            .padding([0, 12])
+                            .style(move |theme, status| {
+                                style::workbench_model_picker_option_button_style(
+                                    theme,
+                                    status,
+                                    is_highlighted,
+                                )
+                            })
+                            .on_press(Message::QuestionModalOptionPressed {
+                                question_index: active_question_index,
+                                option_index,
+                            })
+                            .into()
+                        });
+                let custom_row = {
+                    let is_selected =
+                        current_draft.custom_selected || current_question.options.is_empty();
+                    let is_highlighted = custom_option_index == modal.active_option_index;
+                    let indicator: Element<'_, Message> = if is_highlighted {
+                        codicon::chevron_right()
+                            .size(14)
+                            .line_height(1.0)
+                            .color(palette.primary.base.color)
+                            .into()
+                    } else {
+                        text("").size(14).into()
+                    };
+                    button(
+                        container(
+                            column![
+                                row![
+                                    container(indicator).width(18).center_y(Fill),
+                                    text(if is_selected { "[x]" } else { "[ ]" }).size(13),
+                                    container(text("其他回答").size(14)).width(Fill).clip(true),
+                                ]
+                                .spacing(10)
+                                .align_y(Center),
+                            ]
+                            .spacing(0),
+                        )
+                        .width(Fill),
+                    )
+                    .width(Fill)
+                    .height(42)
+                    .padding([0, 12])
+                    .style(move |theme, status| {
+                        style::workbench_model_picker_option_button_style(
+                            theme,
+                            status,
+                            is_highlighted,
+                        )
+                    })
+                    .on_press(Message::QuestionModalOptionPressed {
+                        question_index: active_question_index,
+                        option_index: custom_option_index,
+                    })
+                    .into()
+                };
+                let option_column =
+                    column(option_list.chain(std::iter::once(custom_row))).spacing(8);
+                let custom_input_surface: Element<'_, Message> =
+                    if current_draft.custom_selected || current_question.options.is_empty() {
+                        text_input("请输入自定义回答", &current_draft.custom_text)
+                            .on_input(move |value| Message::QuestionModalCustomTextChanged {
+                                question_index: active_question_index,
+                                value,
+                            })
+                            .on_submit(Message::ConfirmTopLevelOverlay)
+                            .padding([10, 12])
+                            .into()
+                    } else {
+                        space::vertical().height(0).into()
+                    };
+                let navigation_row = row![
+                    action_button("取消", Some(Message::RejectQuestionModal), false),
+                    space::horizontal(),
+                    action_button(
+                        "上一题",
+                        (question_count > 1)
+                            .then_some(Message::QuestionModalMoveToPreviousQuestion),
+                        false
+                    ),
+                    action_button(
+                        "下一题",
+                        (question_count > 1).then_some(Message::QuestionModalMoveToNextQuestion),
+                        false
+                    ),
+                    action_button(
+                        "进入确认",
+                        Some(Message::QuestionModalOpenConfirmStage),
+                        true
+                    ),
+                ]
+                .spacing(10)
+                .align_y(Center);
+                column![
+                    row![
+                        text(if current_question.allows_multiple() {
+                            "多选"
+                        } else {
+                            "单选"
+                        })
+                        .size(12)
+                        .color(palette.primary.base.color),
+                        space::horizontal(),
+                        text("左右切题")
+                            .size(12)
+                            .color(palette.background.base.text.scale_alpha(0.48)),
+                    ]
+                    .align_y(Center),
+                    text(current_question.question.as_str())
+                        .size(18)
+                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                    scrollable(option_column).width(Fill).height(Fill),
+                    custom_input_surface,
+                    navigation_row,
+                ]
+                .spacing(12)
+                .height(Fill)
+                .into()
+            }
+            WorkbenchQuestionModalStage::Confirming => {
+                let summary_cards = column(modal.request.questions.iter().enumerate().map(
+                    |(question_index, question)| {
+                        let draft = modal
+                            .drafts
+                            .get(question_index)
+                            .cloned()
+                            .unwrap_or_default();
+                        let answers = Self::collect_question_modal_prompt_answers(question, &draft)
+                            .unwrap_or_else(|_| vec![String::from("未填写")]);
+                        container(
+                            row![
+                                column![
+                                    text(format!("{:02} {}", question_index + 1, question.header))
+                                        .size(12)
+                                        .color(palette.primary.base.color),
+                                    text(question.question.as_str())
+                                        .size(14)
+                                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                                    text(answers.join(" / "))
+                                        .size(13)
+                                        .color(palette.background.base.text.scale_alpha(0.74))
+                                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                                ]
+                                .spacing(6)
+                                .width(Fill),
+                                button(text("修改").size(12))
+                                    .padding([4, 8])
+                                    .style(style::workbench_notice_modal_secondary_button_style)
+                                    .on_press(Message::QuestionModalSelectQuestionTab(
+                                        question_index
+                                    )),
+                            ]
+                            .spacing(12)
+                            .align_y(Center),
+                        )
+                        .padding([12, 14])
+                        .width(Fill)
+                        .style(|theme: &Theme| {
+                            let palette = theme.extended_palette();
+                            iced::widget::container::Style {
+                                background: Some(Background::Color(
+                                    palette.background.weak.color.scale_alpha(0.24),
+                                )),
+                                border: Border {
+                                    radius: 12.0.into(),
+                                    width: 1.0,
+                                    color: palette.background.strong.color.scale_alpha(0.16),
+                                },
+                                ..Default::default()
+                            }
+                        })
+                        .into()
+                    },
+                ))
+                .spacing(12);
+                let action_row = row![
+                    action_button("返回修改", Some(Message::QuestionModalBackToEditing), false),
+                    space::horizontal(),
+                    action_button("确认提交", Some(Message::SubmitQuestionModal), true),
+                ]
+                .spacing(10)
+                .align_y(Center);
+                column![
+                    scrollable(summary_cards).width(Fill).height(Fill),
+                    action_row,
+                ]
+                .spacing(12)
+                .height(Fill)
+                .into()
+            }
+        };
+        let validation_surface: Element<'_, Message> =
+            if let Some(error) = modal.validation_error.as_deref() {
+                container(
+                    text(error)
+                        .size(13)
+                        .color(iced::color!(0xB91C1C))
+                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                )
+                .width(Fill)
+                .into()
+            } else {
+                space::vertical().height(0).into()
+            };
+        let modal_body = column![
+            row![
+                text("回答问题").size(18),
+                container(
+                    text(modal_subtitle)
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.52)),
+                )
+                .padding([4, 8]),
+                space::horizontal(),
+                close_button,
+            ]
+            .spacing(10)
+            .align_y(Center)
+            .height(WORKBENCH_QUESTION_MODAL_HEADER_HEIGHT),
+            question_tabs_surface,
+            body_surface,
+            validation_surface,
+        ]
+        .spacing(12)
+        .height(Fill);
+        let modal_card = container(modal_body)
+            .padding([22, 24])
+            .width(WORKBENCH_QUESTION_MODAL_WIDTH)
+            .height(WORKBENCH_QUESTION_MODAL_HEIGHT)
             .style(style::startup_overlay_card_style);
         let backdrop =
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Noop);
@@ -3391,6 +3827,7 @@ impl VulcanWorkbench {
 
     /// Builds the reusable workspace surface shown by the example panel.
     /// 构建由示例面板承载的可复用工作区主体。
+    #[allow(dead_code)]
     pub(super) fn view_workspace_surface(&self) -> Element<'_, Message> {
         // Capture the current focus so the pane closure can render focus hints without borrowing issues.
         // 捕获当前焦点状态，使面板闭包可以在不引发借用冲突的情况下渲染焦点提示。
@@ -3437,30 +3874,165 @@ impl VulcanWorkbench {
     /// Builds the example panel content using the shared workspace surface without an extra outer frame.
     /// 使用共享工作区主体构建示例面板内容，并且不再额外包裹外层边框。
     pub(super) fn view_example_panel(&self) -> Element<'_, Message> {
-        let panel_header = row![
-            column![
-                text(MainDisplayPanel::Example.localized_section_title(self.current_locale()))
-                    .size(22),
-                text(MainDisplayPanel::Example.localized_description(self.current_locale()))
-                    .size(13),
-            ]
-            .spacing(4),
-            space::horizontal(),
-            action_button(
-                self.t(I18nKey::WorkbenchNewSessionAction),
-                self.t(I18nKey::WorkbenchNewSessionHint),
-                Message::CreateSession,
-            ),
+        let top_row = row![
+            container(self.view_example_workspace_entry_card())
+                .width(FillPortion(3))
+                .height(Fill),
+            container(self.view_example_diff_window_launcher_card())
+                .width(FillPortion(2))
+                .height(Fill),
         ]
-        .spacing(10)
-        .align_y(Center);
+        .spacing(14)
+        .height(156);
 
-        column![
-            container(panel_header).padding([4, 2]),
-            self.view_workspace_surface(),
+        let bottom_row = row![
+            container(self.view_example_editor_preview_card())
+                .width(FillPortion(2))
+                .height(Fill),
+            container(self.view_example_diff_panel_card())
+                .width(FillPortion(3))
+                .height(Fill),
         ]
-        .spacing(12)
+        .spacing(14)
+        .height(Fill);
+
+        column![top_row, bottom_row].spacing(14).height(Fill).into()
+    }
+
+    /// Builds the workspace-entry card dedicated to the example-panel style sandbox.
+    /// 构建专供示例面板样式沙盒使用的工作区入口卡片。
+    fn view_example_workspace_entry_card(&self) -> Element<'_, Message> {
+        container(
+            column![
+                text("工作区入口").size(18),
+                text_input("请输入仓库路径", &self.workspace_path)
+                    .on_input(Message::WorkspacePathChanged)
+                    .padding(12),
+                row![
+                    action_button(
+                        "立即扫描",
+                        "重新加载当前工作区的 Git Diff。",
+                        Message::ScanWorkspace
+                    ),
+                    action_button(
+                        "ask 调试",
+                        "打开 ask 调试弹窗并在提交后回写预览结果。",
+                        Message::OpenAskDebugModal
+                    ),
+                ]
+                .spacing(10),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
         .height(Fill)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds the patch/scaffold preview card dedicated to the example-panel ask-debug sandbox.
+    /// 构建专供示例面板 ask 调试沙盒使用的补丁与骨架预览卡片。
+    fn view_example_editor_preview_card(&self) -> Element<'_, Message> {
+        container(
+            column![
+                text("补丁与骨架预览").size(18),
+                text_editor(&self.editor_content)
+                    .height(Fill)
+                    .padding(14)
+                    .size(CODE_EDITOR_TEXT_SIZE)
+                    .line_height(Pixels(CODE_EDITOR_LINE_HEIGHT))
+                    .wrapping(iced::advanced::text::Wrapping::None)
+                    .font(theme::code_font())
+                    .highlight_with::<iced::highlighter::Highlighter>(
+                        iced::highlighter::Settings {
+                            theme: theme::code_theme(&self.app_theme),
+                            token: String::from("json"),
+                        },
+                        theme::code_highlight_format,
+                    )
+                    .on_action(Message::EditorActionPerformed),
+            ]
+            .spacing(12)
+            .height(Fill),
+        )
+        .padding(16)
+        .height(Fill)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds the embedded Git diff card dedicated to the example-panel style sandbox.
+    /// 构建专供示例面板样式沙盒使用的内嵌 Git diff 卡片。
+    fn view_example_diff_panel_card(&self) -> Element<'_, Message> {
+        container(
+            column![
+                row![
+                    text("Git Diff").size(18),
+                    space::horizontal(),
+                    action_button(
+                        "重新扫描",
+                        "重新加载当前工作区的 Git Diff。",
+                        Message::ScanWorkspace
+                    ),
+                ]
+                .align_y(Center),
+                container(self.view_diff_panel())
+                    .height(Fill)
+                    .style(container::rounded_box),
+            ]
+            .spacing(12)
+            .height(Fill),
+        )
+        .padding(16)
+        .height(Fill)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Builds the dedicated diff-window launcher card used by the example-panel style sandbox.
+    /// 构建供示例面板样式沙盒使用的独立 Diff 窗口启动卡片。
+    fn view_example_diff_window_launcher_card(&self) -> Element<'_, Message> {
+        container(
+            column![
+                text("Git Diff 独立窗口").size(18),
+                row![
+                    action_button(
+                        if self.diff_window_id.is_some() {
+                            "定位窗口"
+                        } else {
+                            "打开窗口"
+                        },
+                        "打开或聚焦独立的 Git Diff 窗口。",
+                        Message::OpenDiffWindow
+                    ),
+                    space::horizontal(),
+                    text(if self.diff_window_id.is_some() {
+                        "已打开"
+                    } else {
+                        "未打开"
+                    })
+                    .size(12)
+                    .color(
+                        self.app_theme
+                            .extended_palette()
+                            .background
+                            .base
+                            .text
+                            .scale_alpha(0.54)
+                    ),
+                ]
+                .align_y(Center),
+                container(text(&self.diff_summary).size(13))
+                    .width(Fill)
+                    .height(Fill)
+                    .clip(true),
+            ]
+            .spacing(12)
+            .height(Fill),
+        )
+        .padding(16)
+        .height(Fill)
+        .style(container::bordered_box)
         .into()
     }
 
@@ -4683,6 +5255,10 @@ impl VulcanWorkbench {
             Subscription::none()
         };
 
+        let question_runtime_poll_subscription =
+            iced::time::every(QUESTION_RUNTIME_POLL_TICK_INTERVAL)
+                .map(|_| Message::QuestionRuntimePollTick);
+
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
@@ -4695,6 +5271,7 @@ impl VulcanWorkbench {
             thinking_overlay_follow_tail_subscription,
             thinking_modal_animation_subscription,
             runtime_progress_animation_subscription,
+            question_runtime_poll_subscription,
         ])
     }
 
@@ -4702,7 +5279,7 @@ impl VulcanWorkbench {
     /// 当按键组合匹配时，将某个原始运行时事件映射为顶层面板切换快捷键消息。
     pub(super) fn map_main_panel_shortcut_event(
         event: iced::Event,
-        _status: iced::event::Status,
+        status: iced::event::Status,
         _window_id: window::Id,
     ) -> Option<Message> {
         match event {
@@ -4724,6 +5301,32 @@ impl VulcanWorkbench {
                 repeat,
                 ..
             }) if !repeat => Some(Message::DismissTopLevelOverlay),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::ArrowLeft),
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && !modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                Some(Message::QuestionModalMoveToPreviousQuestion)
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::ArrowRight),
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && !modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                Some(Message::QuestionModalMoveToNextQuestion)
+            }
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::ArrowUp),
                 modifiers,
@@ -4762,6 +5365,26 @@ impl VulcanWorkbench {
                 && !modifiers.logo() =>
             {
                 Some(Message::ConfirmTopLevelOverlay)
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                repeat,
+                ..
+            }) if !repeat
+                && matches!(status, iced::event::Status::Ignored)
+                && !modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.logo() =>
+            {
+                match key.as_ref() {
+                    keyboard::Key::Named(keyboard::key::Named::Space)
+                    | keyboard::Key::Character(" ") => {
+                        Some(Message::QuestionModalToggleHighlightedOption)
+                    }
+                    _ => None,
+                }
             }
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key,

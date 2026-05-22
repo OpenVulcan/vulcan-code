@@ -42,6 +42,7 @@ pub(crate) fn prepare_execution(
     let ai_tool_fallback_aliases = resolve_ai_tool_fallback_aliases(&model_blueprint);
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
+        foundation.question_runtime(),
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),

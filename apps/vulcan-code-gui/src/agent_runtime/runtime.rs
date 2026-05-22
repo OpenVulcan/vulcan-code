@@ -6,6 +6,7 @@ use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeSkillKind,
     RuntimeToolPolicyDefinition,
 };
+use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::{LuaSkillsRuntimeHandle, list_luaskills_tool_entries};
 use crate::mcp::{
@@ -81,6 +82,9 @@ pub struct RuntimeFoundation {
     /// Shared resumable task runtime reused across turns and child task chains.
     /// 在多轮执行与子任务链之间复用的共享可恢复任务运行时。
     task_runtime: Arc<TaskRuntime>,
+    /// Shared structured-question runtime reused across turns so ask tool calls can survive runtime refreshes while still waiting for GUI input.
+    /// 在多轮执行之间复用的共享结构化问题运行时，使 ask 工具在等待图形界面输入期间也能穿越运行时刷新继续存活。
+    question_runtime: Arc<QuestionRuntime>,
     /// Shared command-session runtime reused across turns so long-lived shell sessions can survive execution refreshes.
     /// 在多轮执行之间复用的共享命令会话运行时，使长生命周期 shell 会话能够穿越执行刷新继续存活。
     command_session_runtime: Arc<CommandSessionRuntime>,
@@ -111,6 +115,7 @@ impl RuntimeFoundation {
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         mcp_runtime_access: Option<McpRuntimeAccess>,
         task_runtime: Arc<TaskRuntime>,
+        question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
     ) -> Self {
         Self::build_with_task_runtime(
@@ -119,6 +124,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             mcp_runtime_access.unwrap_or_else(|| configured_mcp_runtime_access(config)),
             task_runtime,
+            question_runtime,
             command_session_runtime,
         )
     }
@@ -137,6 +143,7 @@ impl RuntimeFoundation {
             luaskills_runtime,
             mcp_runtime_access,
             Arc::new(TaskRuntime::new()),
+            Arc::new(QuestionRuntime::new()),
             Arc::new(CommandSessionRuntime::new()),
         )
     }
@@ -149,6 +156,7 @@ impl RuntimeFoundation {
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         mcp_runtime_access: McpRuntimeAccess,
         task_runtime: Arc<TaskRuntime>,
+        question_runtime: Arc<QuestionRuntime>,
         command_session_runtime: Arc<CommandSessionRuntime>,
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
@@ -176,6 +184,7 @@ impl RuntimeFoundation {
             mcp_runtime_access,
             warnings,
             task_runtime,
+            question_runtime,
             command_session_runtime,
         }
     }
@@ -277,6 +286,12 @@ impl RuntimeFoundation {
     /// 返回当前基础架构使用的共享可恢复任务运行时。
     pub fn task_runtime(&self) -> Arc<TaskRuntime> {
         Arc::clone(&self.task_runtime)
+    }
+
+    /// Returns the shared structured-question runtime used by the current foundation.
+    /// 返回当前基础架构使用的共享结构化问题运行时。
+    pub fn question_runtime(&self) -> Arc<QuestionRuntime> {
+        Arc::clone(&self.question_runtime)
     }
 
     /// Returns the shared command-session runtime used by the current foundation.

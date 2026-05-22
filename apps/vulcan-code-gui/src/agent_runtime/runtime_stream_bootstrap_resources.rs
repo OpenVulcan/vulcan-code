@@ -58,6 +58,7 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
     let task_runtime = foundation.task_runtime();
     let tools_manager = build_vulcan_tools_manager(
         Arc::clone(&task_runtime),
+        foundation.question_runtime(),
         foundation.native_tool_catalog().clone(),
         luaskills_runtime,
         (!preparation.workspace_path.is_empty())

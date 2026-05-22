@@ -3,6 +3,7 @@
 
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
+use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
@@ -33,6 +34,7 @@ pub(crate) fn build_runtime_preparation_resources(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
@@ -42,6 +44,7 @@ pub(crate) fn build_runtime_preparation_resources(
         luaskills_runtime.clone(),
         Some(mcp_runtime_access),
         task_runtime,
+        question_runtime,
         command_session_runtime,
     );
 

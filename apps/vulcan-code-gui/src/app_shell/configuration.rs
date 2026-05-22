@@ -2168,6 +2168,7 @@ impl VulcanWorkbench {
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     pub(super) fn refresh_runtime_foundation(&mut self) {
         let task_runtime = self.runtime_foundation.task_runtime();
+        let question_runtime = self.runtime_foundation.question_runtime();
         let command_session_runtime = self.runtime_foundation.command_session_runtime();
         self.runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
             &self.provider_configuration,
@@ -2175,6 +2176,7 @@ impl VulcanWorkbench {
             self.luaskills_runtime.clone(),
             self.mcp_runtime.clone(),
             task_runtime,
+            question_runtime,
             command_session_runtime,
         );
         self.last_execution_preparation = None;
