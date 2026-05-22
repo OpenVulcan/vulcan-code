@@ -7693,9 +7693,20 @@ impl VulcanWorkbench {
         &'a self,
         project: &'a TaskProjectSummary,
     ) -> Element<'a, Message> {
-        let preview_button = button("预览清理范围")
-            .style(button::secondary)
-            .on_press(Message::PreviewProjectAttachmentCleanup);
+        let cleanup_busy = self.project_attachment_cleanup_busy();
+        let preview_button = {
+            let preview_button = button(if self.project_attachment_cleanup_preview_in_flight {
+                "预览中..."
+            } else {
+                "预览清理范围"
+            })
+            .style(button::secondary);
+            if cleanup_busy {
+                preview_button
+            } else {
+                preview_button.on_press(Message::PreviewProjectAttachmentCleanup)
+            }
+        };
         let cleanup_preview_can_execute = self
             .project_attachment_cleanup_preview
             .as_ref()
@@ -7705,8 +7716,13 @@ impl VulcanWorkbench {
                         == self.project_attachment_cleanup_cutoff_date.to_string()
             });
         let execute_button = {
-            let execute_button = button("执行清理").style(button::primary);
-            if cleanup_preview_can_execute {
+            let execute_button = button(if self.project_attachment_cleanup_execution_in_flight {
+                "清理中..."
+            } else {
+                "执行清理"
+            })
+            .style(button::primary);
+            if cleanup_preview_can_execute && !cleanup_busy {
                 execute_button.on_press(Message::ExecuteProjectAttachmentCleanup)
             } else {
                 execute_button
@@ -7729,8 +7745,12 @@ impl VulcanWorkbench {
             .width(Fill),
         )
         .padding([8, 12])
-        .style(button::secondary)
-        .on_press(Message::OpenProjectAttachmentCleanupDatePicker);
+        .style(button::secondary);
+        let date_button = if cleanup_busy {
+            date_button
+        } else {
+            date_button.on_press(Message::OpenProjectAttachmentCleanupDatePicker)
+        };
         let date_picker_control: Element<'a, Message> = date_picker(
             self.project_attachment_cleanup_date_picker_open,
             self.project_attachment_cleanup_cutoff_date,
@@ -7793,33 +7813,57 @@ impl VulcanWorkbench {
                 date_picker_control,
                 column![
                     row![
-                        checkbox(self.project_attachment_cleanup_selection.image)
-                            .label("图片")
-                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
-                                ConversationAttachmentKind::Image,
-                                enabled,
-                            )),
-                        checkbox(self.project_attachment_cleanup_selection.audio)
-                            .label("音频")
-                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
-                                ConversationAttachmentKind::Audio,
-                                enabled,
-                            )),
+                        {
+                            let image_checkbox = checkbox(self.project_attachment_cleanup_selection.image)
+                                .label("图片");
+                            if cleanup_busy {
+                                image_checkbox
+                            } else {
+                                image_checkbox.on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                    ConversationAttachmentKind::Image,
+                                    enabled,
+                                ))
+                            }
+                        },
+                        {
+                            let audio_checkbox = checkbox(self.project_attachment_cleanup_selection.audio)
+                                .label("音频");
+                            if cleanup_busy {
+                                audio_checkbox
+                            } else {
+                                audio_checkbox.on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                    ConversationAttachmentKind::Audio,
+                                    enabled,
+                                ))
+                            }
+                        },
                     ]
                     .spacing(12),
                     row![
-                        checkbox(self.project_attachment_cleanup_selection.video)
-                            .label("视频")
-                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
-                                ConversationAttachmentKind::Video,
-                                enabled,
-                            )),
-                        checkbox(self.project_attachment_cleanup_selection.pdf)
-                            .label("PDF")
-                            .on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
-                                ConversationAttachmentKind::Pdf,
-                                enabled,
-                            )),
+                        {
+                            let video_checkbox = checkbox(self.project_attachment_cleanup_selection.video)
+                                .label("视频");
+                            if cleanup_busy {
+                                video_checkbox
+                            } else {
+                                video_checkbox.on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                    ConversationAttachmentKind::Video,
+                                    enabled,
+                                ))
+                            }
+                        },
+                        {
+                            let pdf_checkbox = checkbox(self.project_attachment_cleanup_selection.pdf)
+                                .label("PDF");
+                            if cleanup_busy {
+                                pdf_checkbox
+                            } else {
+                                pdf_checkbox.on_toggle(|enabled| Message::ProjectAttachmentCleanupKindToggled(
+                                    ConversationAttachmentKind::Pdf,
+                                    enabled,
+                                ))
+                            }
+                        },
                     ]
                     .spacing(12),
                 ]

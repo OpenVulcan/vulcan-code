@@ -127,6 +127,125 @@ impl VulcanWorkbench {
         self.task_project_by_id(project_id)
     }
 
+    /// Returns whether the project attachment cleanup card currently has a background preview or execution task in flight.
+    /// 返回项目附件清理卡片当前是否存在后台预览或执行任务正在进行。
+    pub(super) fn project_attachment_cleanup_busy(&self) -> bool {
+        self.project_attachment_cleanup_preview_in_flight
+            || self.project_attachment_cleanup_execution_in_flight
+    }
+
+    /// Builds the current project attachment cleanup task context from the visible project settings modal state.
+    /// 根据当前可见的项目设置弹窗状态构建项目附件清理任务上下文。
+    pub(super) fn active_project_attachment_cleanup_context(
+        &self,
+    ) -> Option<ProjectAttachmentCleanupTaskContext> {
+        let project = self.project_settings_task_project()?;
+        Some(ProjectAttachmentCleanupTaskContext {
+            project_id: project.id.clone(),
+            project_title: project.title.clone(),
+            workspace_path: project.path.clone(),
+            cutoff_date_text: self.project_attachment_cleanup_cutoff_date.to_string(),
+            selection: self.project_attachment_cleanup_selection,
+        })
+    }
+
+    /// Returns whether the provided cleanup context still matches the currently visible project and cleanup filters.
+    /// 返回给定清理上下文是否仍与当前可见项目及清理筛选条件一致。
+    pub(super) fn project_attachment_cleanup_context_matches_current(
+        &self,
+        context: &ProjectAttachmentCleanupTaskContext,
+    ) -> bool {
+        self.project_attachment_cleanup_project_matches_current(context)
+            && self.project_attachment_cleanup_cutoff_date.to_string() == context.cutoff_date_text
+            && self.project_attachment_cleanup_selection == context.selection
+    }
+
+    /// Returns whether the provided cleanup context still belongs to the project currently shown in the settings modal.
+    /// 返回给定清理上下文是否仍属于当前设置弹窗展示的项目。
+    pub(super) fn project_attachment_cleanup_project_matches_current(
+        &self,
+        context: &ProjectAttachmentCleanupTaskContext,
+    ) -> bool {
+        self.project_settings_project_id.as_deref() == Some(context.project_id.as_str())
+    }
+
+    /// Starts one background preview task for the current project attachment cleanup selection.
+    /// 为当前项目附件清理选择启动一条后台预览任务。
+    pub(super) fn start_project_attachment_cleanup_preview(
+        &mut self,
+        context: ProjectAttachmentCleanupTaskContext,
+    ) -> Task<Message> {
+        self.project_attachment_cleanup_preview_in_flight = true;
+        self.project_attachment_cleanup_notice =
+            format!("正在为项目 `{}` 生成附件清理预览。", context.project_title);
+        self.status_message = self.project_attachment_cleanup_notice.clone();
+
+        let task_context = context.clone();
+        let message_context = context;
+        Task::perform(
+            async move {
+                preview_attachment_cleanup(
+                    &task_context.workspace_path,
+                    &task_context.cutoff_date_text,
+                    task_context.selection,
+                )
+            },
+            move |result| {
+                Message::ProjectAttachmentCleanupPreviewFinished(message_context.clone(), result)
+            },
+        )
+    }
+
+    /// Starts one background cleanup execution task after the user confirms the destructive action.
+    /// 在用户确认破坏性操作后启动一条后台清理执行任务。
+    pub(super) fn start_project_attachment_cleanup_execution(
+        &mut self,
+        request: ProjectAttachmentCleanupExecutionRequest,
+    ) -> Task<Message> {
+        self.project_attachment_cleanup_execution_in_flight = true;
+        self.project_attachment_cleanup_notice = format!(
+            "正在清理项目 `{}` 的历史附件缓存。",
+            request.context.project_title
+        );
+        self.status_message = self.project_attachment_cleanup_notice.clone();
+
+        let task_request = request.clone();
+        let message_context = request.context;
+        Task::perform(
+            async move {
+                let current_preview = preview_attachment_cleanup(
+                    &task_request.context.workspace_path,
+                    &task_request.context.cutoff_date_text,
+                    task_request.context.selection,
+                )?;
+                if current_preview != task_request.expected_preview {
+                    return Ok(ProjectAttachmentCleanupExecutionOutcome::PreviewChanged {
+                        preview: current_preview,
+                    });
+                }
+
+                let report = execute_attachment_cleanup(
+                    &task_request.context.workspace_path,
+                    &task_request.context.cutoff_date_text,
+                    task_request.context.selection,
+                )?;
+                let refreshed_preview = preview_attachment_cleanup(
+                    &task_request.context.workspace_path,
+                    &task_request.context.cutoff_date_text,
+                    task_request.context.selection,
+                )
+                .ok();
+                Ok(ProjectAttachmentCleanupExecutionOutcome::Executed {
+                    report,
+                    refreshed_preview,
+                })
+            },
+            move |result| {
+                Message::ProjectAttachmentCleanupExecutionFinished(message_context.clone(), result)
+            },
+        )
+    }
+
     /// Resolves the project-space root that should own managed attachment assets for one session.
     /// 解析单个会话的托管附件资产应归属的项目空间根目录。
     pub(super) fn attachment_workspace_path_for_session(&self, session_id: SessionId) -> String {

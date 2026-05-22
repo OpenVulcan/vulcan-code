@@ -766,15 +766,19 @@ pub fn execute_attachment_cleanup(
     let mut impacted_sessions = BTreeSet::new();
     let mut delete_failure_reason_changed = false;
 
-    for (index, planned_path) in matched_indices.into_iter().zip(planned_paths.into_iter()) {
+    for &index in &matched_indices {
         {
             let record = &mut document.assets[index];
             record.purged_at_local_text = Some(purge_timestamp.local_timestamp_text.clone());
             record.purged_at_unix_millis = Some(purge_timestamp.unix_millis);
             record.purge_reason = Some(format!("purged-before-{}", cutoff_text));
         }
+    }
+    if !matched_indices.is_empty() {
         save_attachment_asset_index_document(&asset_root, &document)?;
+    }
 
+    for (index, planned_path) in matched_indices.into_iter().zip(planned_paths.into_iter()) {
         let record = &document.assets[index];
         purged_asset_count += 1;
         purged_byte_len = purged_byte_len.saturating_add(record.byte_len.unwrap_or(0));

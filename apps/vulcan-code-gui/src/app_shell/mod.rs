@@ -2685,6 +2685,62 @@ struct ComposerUndoSnapshot {
     attachment_workspace_path: Option<String>,
 }
 
+/// Stable project-scoped attachment-cleanup task context captured before a background preview or execution starts.
+/// 在后台预览或执行开始前捕获的稳定项目级附件清理任务上下文。
+#[derive(Debug, Clone)]
+struct ProjectAttachmentCleanupTaskContext {
+    /// Stable project identifier that owns the cleanup task.
+    /// 拥有该清理任务的稳定项目标识。
+    project_id: String,
+    /// Human-readable project title used by notices and status rows.
+    /// 供提示与状态栏复用的人类可读项目标题。
+    project_title: String,
+    /// Absolute workspace path that owns the managed attachment store.
+    /// 拥有托管附件存储的绝对工作区路径。
+    workspace_path: String,
+    /// Canonical cutoff date string captured for the task.
+    /// 为该任务捕获的规范截止日期字符串。
+    cutoff_date_text: String,
+    /// Attachment-kind selection captured for the task.
+    /// 为该任务捕获的附件类型选择状态。
+    selection: AttachmentCleanupSelection,
+}
+
+/// Validated cleanup execution request carried by the workbench confirmation modal.
+/// 由工作台确认弹窗携带的已校验清理执行请求。
+#[derive(Debug, Clone)]
+struct ProjectAttachmentCleanupExecutionRequest {
+    /// Immutable task context used by the eventual background execution.
+    /// 最终后台执行所使用的不可变任务上下文。
+    context: ProjectAttachmentCleanupTaskContext,
+    /// Preview snapshot that the user explicitly confirmed before execution.
+    /// 用户在执行前显式确认过的预览快照。
+    expected_preview: AttachmentCleanupPreview,
+}
+
+/// Completion outcome returned by one background project attachment cleanup execution.
+/// 单次后台项目附件清理执行返回的完成结果。
+#[derive(Debug, Clone)]
+enum ProjectAttachmentCleanupExecutionOutcome {
+    /// Cleanup completed and optionally produced one follow-up preview built from the post-cleanup state.
+    /// 清理已完成，并可选产出一份根据清理后状态构建的后续预览。
+    Executed {
+        /// Final cleanup execution report shown to the user.
+        /// 展示给用户的最终清理执行报告。
+        report: AttachmentCleanupReport,
+        /// Best-effort refreshed preview built after execution completes.
+        /// 执行完成后按最佳努力构建的刷新预览。
+        refreshed_preview: Option<AttachmentCleanupPreview>,
+    },
+    /// Cleanup did not run because the revalidated preview changed before the destructive phase started.
+    /// 由于破坏性阶段开始前重新校验得到的预览已变化，因此清理未真正执行。
+    PreviewChanged {
+        /// Fresh preview that superseded the previously confirmed snapshot.
+        /// 取代旧确认快照的最新预览。
+        preview: AttachmentCleanupPreview,
+    },
+}
+
 /// Confirm action carried by the reusable blocking notice modal.
 /// 可复用阻塞提示弹窗携带的确认动作。
 #[derive(Debug, Clone)]
@@ -2729,6 +2785,13 @@ enum WorkbenchNoticeConfirmAction {
         /// Stable session identifier whose persisted body files are missing.
         /// 持久化正文文件已丢失的稳定会话标识。
         session_id: SessionId,
+    },
+    /// Executes one previously previewed project-scoped attachment cleanup after the user confirms the destructive action.
+    /// 在用户确认破坏性操作后执行一条此前已预览的项目级附件清理请求。
+    ExecuteProjectAttachmentCleanup {
+        /// Cleanup execution request captured at confirmation time.
+        /// 确认时捕获的清理执行请求。
+        request: ProjectAttachmentCleanupExecutionRequest,
     },
 }
 
@@ -3537,6 +3600,12 @@ pub struct VulcanWorkbench {
     /// Modal-scoped notice rendered beside the project-scoped cleanup controls.
     /// 展示在项目级清理控件旁边的弹窗局部提示信息。
     project_attachment_cleanup_notice: String,
+    /// Whether one project-scoped attachment cleanup preview is currently running in the background.
+    /// 当前是否有一条项目级附件清理预览正在后台运行。
+    project_attachment_cleanup_preview_in_flight: bool,
+    /// Whether one project-scoped attachment cleanup execution is currently running in the background.
+    /// 当前是否有一条项目级附件清理执行正在后台运行。
+    project_attachment_cleanup_execution_in_flight: bool,
     /// Latest validated execution preparation snapshot built from the current runtime state.
     /// 根据当前运行时状态构建出的最近一次执行准备快照。
     last_execution_preparation: Option<ExecutionPreparation>,
@@ -6990,9 +7059,21 @@ enum Message {
     /// Builds one preview for the current project-scoped attachment cleanup selection.
     /// 为当前项目级附件清理选择构建一份预览。
     PreviewProjectAttachmentCleanup,
+    /// Applies the finished result of one background project-scoped attachment cleanup preview task.
+    /// 应用一条后台项目级附件清理预览任务的完成结果。
+    ProjectAttachmentCleanupPreviewFinished(
+        ProjectAttachmentCleanupTaskContext,
+        Result<AttachmentCleanupPreview, String>,
+    ),
     /// Executes one destructive project-scoped attachment cleanup using the current selection.
     /// 使用当前选择执行一次破坏性的项目级附件清理。
     ExecuteProjectAttachmentCleanup,
+    /// Applies the finished result of one background project-scoped attachment cleanup execution task.
+    /// 应用一条后台项目级附件清理执行任务的完成结果。
+    ProjectAttachmentCleanupExecutionFinished(
+        ProjectAttachmentCleanupTaskContext,
+        Result<ProjectAttachmentCleanupExecutionOutcome, String>,
+    ),
     /// Application theme selected from the pick list.
     /// 从下拉选择框中选择了应用主题。
     ThemeSelected(Theme),
@@ -7861,6 +7942,8 @@ impl VulcanWorkbench {
             project_attachment_cleanup_notice: String::from(
                 "选择截止日期后可先预览当前项目将被清理的历史附件缓存，再执行实际清理。",
             ),
+            project_attachment_cleanup_preview_in_flight: false,
+            project_attachment_cleanup_execution_in_flight: false,
             last_execution_preparation: None,
             last_mcp_discovery_rows: Vec::new(),
             last_mcp_discovery_errors: Vec::new(),
@@ -10821,6 +10904,11 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ProjectAttachmentCleanupDateSelected(date) => {
+                if self.project_attachment_cleanup_busy() {
+                    self.status_message =
+                        String::from("当前项目附件清理仍在处理中，请稍候再修改清理条件。");
+                    return Task::none();
+                }
                 self.project_attachment_cleanup_cutoff_date = date;
                 self.project_attachment_cleanup_date_picker_open = false;
                 self.project_attachment_cleanup_preview = None;
@@ -10829,6 +10917,11 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ProjectAttachmentCleanupKindToggled(kind, enabled) => {
+                if self.project_attachment_cleanup_busy() {
+                    self.status_message =
+                        String::from("当前项目附件清理仍在处理中，请稍候再修改清理条件。");
+                    return Task::none();
+                }
                 match kind {
                     ConversationAttachmentKind::Image => {
                         self.project_attachment_cleanup_selection.image = enabled;
@@ -10851,52 +10944,71 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::PreviewProjectAttachmentCleanup => {
-                let Some(project) = self.project_settings_task_project().cloned() else {
+                if self.project_attachment_cleanup_busy() {
+                    self.project_attachment_cleanup_notice =
+                        String::from("当前项目附件清理仍在处理中，请稍候。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                }
+                let Some(context) = self.active_project_attachment_cleanup_context() else {
                     self.project_attachment_cleanup_notice =
                         String::from("无法预览清理范围：项目已经不存在。");
                     self.status_message = self.project_attachment_cleanup_notice.clone();
                     return Task::none();
                 };
-                let cutoff_date = self.project_attachment_cleanup_cutoff_date.to_string();
-                match preview_attachment_cleanup(
-                    &project.path,
-                    &cutoff_date,
-                    self.project_attachment_cleanup_selection,
-                ) {
+                self.start_project_attachment_cleanup_preview(context)
+            }
+            Message::ProjectAttachmentCleanupPreviewFinished(context, result) => {
+                self.project_attachment_cleanup_preview_in_flight = false;
+                match result {
                     Ok(preview) => {
-                        let preview_summary =
-                            self.format_attachment_cleanup_preview_summary(&preview);
-                        self.project_attachment_cleanup_preview = Some(preview);
-                        self.project_attachment_cleanup_last_report = None;
-                        self.project_attachment_cleanup_notice = format!(
-                            "已生成项目 `{}` 的附件清理预览：{preview_summary}",
-                            project.title
-                        );
-                        self.status_message = self.project_attachment_cleanup_notice.clone();
+                        if self.project_attachment_cleanup_context_matches_current(&context) {
+                            let preview_summary =
+                                self.format_attachment_cleanup_preview_summary(&preview);
+                            self.project_attachment_cleanup_preview = Some(preview);
+                            self.project_attachment_cleanup_last_report = None;
+                            self.project_attachment_cleanup_notice = format!(
+                                "已生成项目 `{}` 的附件清理预览：{preview_summary}",
+                                context.project_title
+                            );
+                            self.status_message = self.project_attachment_cleanup_notice.clone();
+                        }
                     }
                     Err(error) => {
-                        self.project_attachment_cleanup_preview = None;
-                        self.project_attachment_cleanup_notice = error.clone();
-                        self.status_message = error;
+                        if self.project_attachment_cleanup_context_matches_current(&context) {
+                            self.project_attachment_cleanup_preview = None;
+                            self.project_attachment_cleanup_notice = error.clone();
+                            self.status_message = error;
+                        } else {
+                            self.status_message = format!(
+                                "项目 `{}` 的附件清理预览失败：{error}",
+                                context.project_title
+                            );
+                        }
                     }
                 }
                 Task::none()
             }
             Message::ExecuteProjectAttachmentCleanup => {
-                let Some(project) = self.project_settings_task_project().cloned() else {
+                if self.project_attachment_cleanup_busy() {
+                    self.project_attachment_cleanup_notice =
+                        String::from("当前项目附件清理仍在处理中，请稍候。");
+                    self.status_message = self.project_attachment_cleanup_notice.clone();
+                    return Task::none();
+                }
+                let Some(context) = self.active_project_attachment_cleanup_context() else {
                     self.project_attachment_cleanup_notice =
                         String::from("无法执行清理：项目已经不存在。");
                     self.status_message = self.project_attachment_cleanup_notice.clone();
                     return Task::none();
                 };
-                let cutoff_date = self.project_attachment_cleanup_cutoff_date.to_string();
                 let Some(preview) = self.project_attachment_cleanup_preview.clone() else {
                     self.project_attachment_cleanup_notice =
                         String::from("请先预览当前项目的附件清理范围，再执行实际清理。");
                     self.status_message = self.project_attachment_cleanup_notice.clone();
                     return Task::none();
                 };
-                if preview.cutoff_date_text != cutoff_date {
+                if preview.cutoff_date_text != context.cutoff_date_text {
                     self.project_attachment_cleanup_preview = None;
                     self.project_attachment_cleanup_notice =
                         String::from("清理截止日期已经变化，请重新预览后再执行。");
@@ -10909,68 +11021,62 @@ impl VulcanWorkbench {
                     self.status_message = self.project_attachment_cleanup_notice.clone();
                     return Task::none();
                 }
-                let current_preview = match preview_attachment_cleanup(
-                    &project.path,
-                    &cutoff_date,
-                    self.project_attachment_cleanup_selection,
-                ) {
-                    Ok(current_preview) => current_preview,
-                    Err(error) => {
-                        self.project_attachment_cleanup_notice = error.clone();
-                        self.status_message = error;
-                        return Task::none();
-                    }
-                };
-                if current_preview != preview {
-                    let preview_summary =
-                        self.format_attachment_cleanup_preview_summary(&current_preview);
-                    self.project_attachment_cleanup_preview = Some(current_preview);
-                    self.project_attachment_cleanup_notice = format!(
-                        "项目 `{}` 的附件清理范围已经变化，已刷新预览：{preview_summary}。请确认后再次执行。",
-                        project.title
-                    );
-                    self.status_message = self.project_attachment_cleanup_notice.clone();
-                    return Task::none();
-                }
                 let preview_summary = self.format_attachment_cleanup_preview_summary(&preview);
-                let confirmation = rfd::MessageDialog::new()
-                    .set_level(rfd::MessageLevel::Warning)
-                    .set_title("确认清理项目附件缓存")
-                    .set_description(format!(
+                self.show_workbench_confirmation_modal(
+                    "确认清理项目附件缓存",
+                    format!(
                         "将清理项目 `{}` 的历史附件缓存：{}\n\n清理后，旧会话中的这些附件会撤销回放，不再发送给模型。是否继续？",
-                        project.title, preview_summary
-                    ))
-                    .set_buttons(rfd::MessageButtons::YesNo)
-                    .show();
-                if confirmation != rfd::MessageDialogResult::Yes {
-                    self.project_attachment_cleanup_notice =
-                        String::from("已取消项目附件缓存清理。");
-                    self.status_message = self.project_attachment_cleanup_notice.clone();
-                    return Task::none();
-                }
-                match execute_attachment_cleanup(
-                    &project.path,
-                    &cutoff_date,
-                    self.project_attachment_cleanup_selection,
-                ) {
-                    Ok(report) => {
+                        context.project_title, preview_summary
+                    ),
+                    "继续清理",
+                    "取消",
+                    WorkbenchNoticeConfirmAction::ExecuteProjectAttachmentCleanup {
+                        request: ProjectAttachmentCleanupExecutionRequest {
+                            context,
+                            expected_preview: preview,
+                        },
+                    },
+                );
+                Task::none()
+            }
+            Message::ProjectAttachmentCleanupExecutionFinished(context, result) => {
+                self.project_attachment_cleanup_execution_in_flight = false;
+                match result {
+                    Ok(ProjectAttachmentCleanupExecutionOutcome::Executed {
+                        report,
+                        refreshed_preview,
+                    }) => {
                         let report_summary = self.format_attachment_cleanup_report_summary(&report);
-                        self.project_attachment_cleanup_last_report = Some(report);
-                        self.project_attachment_cleanup_preview = preview_attachment_cleanup(
-                            &project.path,
-                            &cutoff_date,
-                            self.project_attachment_cleanup_selection,
-                        )
-                        .ok();
-                        self.project_attachment_cleanup_notice = format!(
+                        self.status_message = format!(
                             "项目 `{}` 的历史附件缓存清理已完成：{report_summary}",
-                            project.title
+                            context.project_title
                         );
-                        self.status_message = self.project_attachment_cleanup_notice.clone();
+                        if self.project_attachment_cleanup_project_matches_current(&context) {
+                            self.project_attachment_cleanup_last_report = Some(report);
+                            if self.project_attachment_cleanup_context_matches_current(&context) {
+                                self.project_attachment_cleanup_preview = refreshed_preview;
+                            }
+                            self.project_attachment_cleanup_notice = self.status_message.clone();
+                        }
+                    }
+                    Ok(ProjectAttachmentCleanupExecutionOutcome::PreviewChanged { preview }) => {
+                        let preview_summary =
+                            self.format_attachment_cleanup_preview_summary(&preview);
+                        self.status_message = format!(
+                            "项目 `{}` 的附件清理范围已经变化，已刷新预览：{preview_summary}。请确认后再次执行。",
+                            context.project_title
+                        );
+                        if self.project_attachment_cleanup_project_matches_current(&context) {
+                            self.project_attachment_cleanup_preview = Some(preview);
+                            self.project_attachment_cleanup_notice = self.status_message.clone();
+                        }
                     }
                     Err(error) => {
-                        self.project_attachment_cleanup_notice = error.clone();
-                        self.status_message = error;
+                        self.status_message =
+                            format!("项目 `{}` 的附件清理失败：{error}", context.project_title);
+                        if self.project_attachment_cleanup_project_matches_current(&context) {
+                            self.project_attachment_cleanup_notice = error;
+                        }
                     }
                 }
                 Task::none()
@@ -12889,6 +12995,9 @@ impl VulcanWorkbench {
             }
             WorkbenchNoticeConfirmAction::RebuildMissingSession { session_id } => {
                 self.rebuild_missing_session_after_confirmation(session_id)
+            }
+            WorkbenchNoticeConfirmAction::ExecuteProjectAttachmentCleanup { request } => {
+                self.start_project_attachment_cleanup_execution(request)
             }
         }
     }
