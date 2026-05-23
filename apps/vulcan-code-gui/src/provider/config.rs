@@ -4400,8 +4400,8 @@ pub struct PersistedControllerConfiguration {
     /// 注册客户端时使用的默认租约 TTL。
     #[serde(default = "default_controller_default_lease_ttl_secs")]
     pub default_lease_ttl_secs: u64,
-    /// Per-attempt connection timeout used by the SDK.
-    /// SDK 使用的单次连接超时时长。
+    /// Per-attempt transport timeout reused by the SDK for controller connection and RPC requests.
+    /// SDK 复用在控制器连接与 RPC 请求上的单次传输超时时长。
     #[serde(default = "default_controller_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
     /// Total startup wait timeout used after auto-spawn.
@@ -5236,10 +5236,10 @@ fn default_controller_default_lease_ttl_secs() -> u64 {
     120
 }
 
-/// Returns the default connection timeout used by the shared controller configuration.
-/// 返回共享控制器配置使用的默认连接超时时长。
+/// Returns the default transport timeout used by the shared controller configuration for controller connection and RPC requests.
+/// 返回共享控制器配置在控制器连接与 RPC 请求上共用的默认传输超时时长。
 fn default_controller_connect_timeout_secs() -> u64 {
-    5
+    30
 }
 
 /// Returns the default startup timeout used by the shared controller configuration.

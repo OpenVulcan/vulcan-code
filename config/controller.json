@@ -5,7 +5,7 @@
   "minimumUptimeSecs": 300,
   "idleTimeoutSecs": 900,
   "defaultLeaseTtlSecs": 120,
-  "connectTimeoutSecs": 5,
+  "connectTimeoutSecs": 30,
   "startupTimeoutSecs": 15,
   "startupRetryIntervalMs": 250,
   "leaseRenewIntervalSecs": 30

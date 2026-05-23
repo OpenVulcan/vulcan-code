@@ -122,7 +122,7 @@ use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
     self, SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS, SESSION_HISTORY_SEARCH_RESULT_LIMIT,
     SessionHistoryPage, SessionHydrationSnapshot, SessionMaintenanceReport,
-    WorkspaceHistorySearchPage, WorkspaceSnapshot,
+    WorkspaceHistorySearchPage, WorkspaceSnapshot, WorkspaceSnapshotPersistOutcome,
 };
 use crate::{AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale};
 use iced::advanced::widget::operation::focusable::unfocus;
@@ -6465,7 +6465,7 @@ enum Message {
     ProjectTempMaintenanceFinished(Result<(), String>),
     /// Applies the completed workspace-state persistence result after one user-visible mutation.
     /// 应用某次用户可见变更后已完成的工作台状态持久化结果。
-    WorkspaceStatePersisted(Result<(), String>),
+    WorkspaceStatePersisted(Result<WorkspaceSnapshotPersistOutcome, String>),
     /// Main workbench window opened successfully.
     /// 主工作台窗口已成功打开。
     MainWindowOpened(window::Id),
@@ -8900,9 +8900,23 @@ impl VulcanWorkbench {
                 } else {
                     Task::none()
                 };
-                if let Err(error) = result {
-                    self.status_message = format!("工作台状态保存失败：{error}");
-                    self.push_activity(ActivityLevel::Warning, "工作台状态保存失败", error);
+                match result {
+                    Ok(outcome) if !outcome.is_clean() => {
+                        self.status_message =
+                            String::from("工作台状态已保存，但历史搜索索引同步被延后。");
+                        for warning in outcome.warnings {
+                            self.push_activity(
+                                ActivityLevel::Warning,
+                                "工作台历史搜索延后同步",
+                                warning,
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        self.status_message = format!("工作台状态保存失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "工作台状态保存失败", error);
+                    }
                 }
 
                 next_persist_task

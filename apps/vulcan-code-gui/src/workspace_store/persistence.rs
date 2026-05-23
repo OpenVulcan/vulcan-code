@@ -264,7 +264,8 @@ pub(super) fn legacy_inline_message_chunk_count(content_chars: i64) -> Result<us
 pub async fn persist_workspace_snapshot(
     controller: ControllerRuntimeHandle,
     snapshot: &WorkspaceSnapshot,
-) -> Result<(), String> {
+) -> Result<WorkspaceSnapshotPersistOutcome, String> {
+    let mut warnings = Vec::new();
     let existing_active_project_ids = query_active_project_ids(&controller).await?;
     let existing_active_session_ids = query_active_session_ids(&controller).await?;
     let visible_project_ids = snapshot
@@ -322,6 +323,7 @@ pub async fn persist_workspace_snapshot(
         &controller,
         &existing_active_session_ids,
         &visible_session_ids,
+        &mut warnings,
     )
     .await?;
     replace_session_event_stores(
@@ -334,6 +336,7 @@ pub async fn persist_workspace_snapshot(
         &snapshot.archived_session_messages,
         &snapshot.archived_session_compactions,
         &snapshot.archived_session_runtime_state,
+        &mut warnings,
     )
     .await?;
     replace_session_compactions(
@@ -352,7 +355,9 @@ pub async fn persist_workspace_snapshot(
         &snapshot.archived_session_runtime_state,
         &snapshot.hydrated_session_ids,
     )
-    .await
+    .await?;
+
+    Ok(WorkspaceSnapshotPersistOutcome { warnings })
 }
 
 /// Queries one persisted session summary row so single-session maintenance can reuse the event-store writer without a full workspace snapshot.
@@ -733,6 +738,7 @@ async fn archive_missing_sessions(
     controller: &ControllerRuntimeHandle,
     existing_active_ids: &BTreeSet<String>,
     visible_ids: &BTreeSet<String>,
+    warnings: &mut Vec<String>,
 ) -> Result<(), String> {
     let missing_ids = existing_active_ids
         .iter()
@@ -766,12 +772,19 @@ async fn archive_missing_sessions(
         )
         .await
         .map_err(|error| format!("软归档会话失败：{error}"))?;
-    delete_workspace_history_search_documents_for_session_ids(
+    if let Err(error) = delete_workspace_history_search_documents_for_session_ids(
         controller,
         &missing_ids,
         "删除已软归档会话的搜索索引失败",
     )
-    .await?;
+    .await
+    {
+        warnings.push(workspace_history_search_sync_warning(
+            "软归档缺失会话后清理历史搜索索引失败",
+            missing_ids.len(),
+            &error,
+        ));
+    }
 
     Ok(())
 }
@@ -788,6 +801,7 @@ async fn replace_session_event_stores(
     archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     archived_session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
     archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    warnings: &mut Vec<String>,
 ) -> Result<(), String> {
     let all_sessions = sessions
         .iter()
@@ -839,12 +853,21 @@ async fn replace_session_event_stores(
         .filter(|session| rewrite_session_ids.contains(&session.id))
         .map(|session| session.id.to_string())
         .collect::<Vec<_>>();
-    delete_workspace_history_search_documents_for_session_ids(
+    let mut search_projection_ready = true;
+    if let Err(error) = delete_workspace_history_search_documents_for_session_ids(
         controller,
         &session_ids,
         "删除旧工作台历史搜索索引失败",
     )
-    .await?;
+    .await
+    {
+        warnings.push(workspace_history_search_sync_warning(
+            "重写会话事件存储前清理历史搜索索引失败",
+            session_ids.len(),
+            &error,
+        ));
+        search_projection_ready = false;
+    }
     delete_session_scoped_rows(
         controller,
         "workspace_history_search_docs",
@@ -876,9 +899,31 @@ async fn replace_session_event_stores(
 
     upsert_session_event_store_session_rows(controller, &persisted_results).await?;
     upsert_session_turn_index_rows(controller, &persisted_results).await?;
-    upsert_session_event_search_documents(controller, &persisted_results).await?;
+    if search_projection_ready {
+        if let Err(error) =
+            upsert_session_event_search_documents(controller, &persisted_results).await
+        {
+            warnings.push(workspace_history_search_sync_warning(
+                "重写会话事件存储后补写历史搜索索引失败",
+                session_ids.len(),
+                &error,
+            ));
+        }
+    }
 
     Ok(())
+}
+
+/// Builds one non-fatal warning describing that auxiliary workspace-history search synchronization lagged behind a successful snapshot save.
+/// 构建一条非致命告警，用于描述辅助工作台历史搜索同步落后于一次成功的快照保存。
+fn workspace_history_search_sync_warning(
+    operation: &str,
+    session_count: usize,
+    error: &str,
+) -> String {
+    format!(
+        "{operation}：涉及 {session_count} 个会话。核心工作台状态已继续保存，但历史搜索索引需要稍后重建。原始错误：{error}"
+    )
 }
 
 /// Collects the session identifiers whose canonical event-store files must actually be rewritten during one snapshot flush.

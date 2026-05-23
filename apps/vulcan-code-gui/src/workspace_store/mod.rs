@@ -49,6 +49,23 @@ pub use persistence::{
 };
 pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 
+/// Describes the completed workspace-snapshot persistence pass, including any non-fatal auxiliary warnings.
+/// 描述一次已完成的工作台快照持久化过程，并携带所有非致命的辅助告警。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceSnapshotPersistOutcome {
+    /// Non-fatal warnings collected while synchronizing auxiliary projections such as workspace-history search.
+    /// 在同步工作台历史搜索等辅助投影期间收集到的非致命告警。
+    pub warnings: Vec<String>,
+}
+
+impl WorkspaceSnapshotPersistOutcome {
+    /// Returns whether the persistence pass completed without any auxiliary warnings.
+    /// 返回本次持久化是否在没有任何辅助告警的情况下完成。
+    pub fn is_clean(&self) -> bool {
+        self.warnings.is_empty()
+    }
+}
+
 #[cfg(test)]
 use self::persistence::{
     assign_session_message_turn_indexes, legacy_inline_message_chunk_count,
