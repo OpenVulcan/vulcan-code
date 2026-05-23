@@ -464,6 +464,9 @@ fn measure_rendered_media_card_node(
         media_card_outer_size(media_card_node, capped_width, media_card_node.show_caption);
     let outer_x = match media_card_node.horizontal_placement {
         super::scene::RenderedParagraphHorizontalPlacement::Leading => widget_bounds.x,
+        super::scene::RenderedParagraphHorizontalPlacement::Center => {
+            widget_bounds.x + ((available_width - outer_width) / 2.0).max(0.0)
+        }
         super::scene::RenderedParagraphHorizontalPlacement::Trailing => {
             widget_bounds.x + (available_width - outer_width).max(0.0)
         }
@@ -969,6 +972,9 @@ pub(super) fn resolve_paragraph_outer_bounds(
     let outer_x = match paragraph_node.horizontal_placement {
         super::scene::RenderedParagraphHorizontalPlacement::Leading => {
             widget_bounds.x + paragraph_node.indent_left
+        }
+        super::scene::RenderedParagraphHorizontalPlacement::Center => {
+            widget_bounds.x + ((widget_bounds.width - outer_width) / 2.0).max(0.0)
         }
         super::scene::RenderedParagraphHorizontalPlacement::Trailing => {
             widget_bounds.x + widget_bounds.width - outer_width

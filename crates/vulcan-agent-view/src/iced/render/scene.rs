@@ -539,6 +539,10 @@ pub(super) enum RenderedParagraphHorizontalPlacement {
     /// Places the paragraph box along the leading edge of the transcript flow.
     /// 将段落框放置在转录流的起始侧。
     Leading,
+    /// Places the paragraph box in the horizontal center of the transcript flow.
+    /// 将段落框放置在转录流的水平居中位置。
+    #[allow(dead_code)]
+    Center,
     /// Places the paragraph box along the trailing edge of the transcript flow.
     /// 将段落框放置在转录流的末端侧。
     Trailing,

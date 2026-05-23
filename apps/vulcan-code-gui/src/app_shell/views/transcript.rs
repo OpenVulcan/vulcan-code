@@ -3,7 +3,6 @@
 
 use super::super::helpers::*;
 use super::*;
-use iced::Alignment;
 use iced::widget::column;
 
 /// Shared visible width reserved by the default vertical transcript scrollbar when content overflows.
@@ -659,7 +658,7 @@ impl VulcanWorkbench {
         let hint_label: Element<'_, Message> = if !has_hint_label {
             space::vertical().height(0).into()
         } else {
-            hint_column.spacing(8).align_x(Alignment::End).into()
+            hint_column.spacing(8).into()
         };
         let bottom_reserved_height = if self
             .selected_subagent_task_panel_state()
@@ -674,13 +673,9 @@ impl VulcanWorkbench {
             container(
                 column![
                     space::vertical().height(Fill),
-                    row![space::horizontal().width(Fill), hint_label]
-                        .width(Fill)
-                        .align_y(Center),
+                    container(hint_label).width(Fill).center_x(Fill),
                     space::vertical().height(if should_show_jump_button { 8.0 } else { 0.0 }),
-                    row![space::horizontal().width(Fill), button]
-                        .width(Fill)
-                        .align_y(Center),
+                    container(button).width(Fill).center_x(Fill),
                 ]
                 .width(Fill)
                 .height(Fill),
