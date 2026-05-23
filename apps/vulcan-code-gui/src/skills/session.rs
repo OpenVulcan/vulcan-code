@@ -46,13 +46,10 @@ impl SessionDerivedSkillChain {
         self.summary_skill.execute(input)
     }
 
-    /// Runs the compaction skill and produces a hidden summary plus the next checkpoint metadata.
-    /// 运行压缩技能，并产出隐藏摘要与下一枚检查点元数据。
-    pub fn run_compaction_skill(
-        &self,
-        input: CompactionSkillInput<'_>,
-    ) -> Option<CompactionSkillResult> {
-        self.compaction_skill.execute(input)
+    /// Plans one compaction window and returns the source slice plus checkpoint metadata when compaction is needed.
+    /// 规划一次压缩窗口，并在需要压缩时返回源消息切片与检查点元数据。
+    pub fn plan_compaction(&self, input: CompactionSkillInput<'_>) -> Option<CompactionPlan> {
+        self.compaction_skill.plan(input)
     }
 }
 
@@ -166,6 +163,36 @@ pub struct CompactionSkillResult {
     pub created_at: String,
 }
 
+/// Planned context-compaction window extracted before any real summarization request is dispatched.
+/// 在派发真实总结请求之前提取出的上下文压缩规划窗口。
+#[derive(Debug, Clone)]
+pub struct CompactionPlan {
+    /// Owning session identifier.
+    /// 所属会话标识。
+    pub session_id: SessionId,
+    /// Context-participating source messages that should be summarized into the next synthetic prompt.
+    /// 需要被总结为下一条合成提示词的参与上下文源消息集合。
+    pub source_messages: Vec<SessionMessageEntry>,
+    /// Optional source tail message identifier covered by the planned compaction window.
+    /// 被计划压缩窗口覆盖的可选源历史尾消息标识。
+    pub source_until_message_id: Option<String>,
+    /// Optional last user-turn index covered by the compaction source window.
+    /// 被压缩源窗口覆盖的可选最后一个用户轮次索引。
+    pub source_until_turn_index: Option<i64>,
+    /// Optional first retained user-turn index kept verbatim after the compaction rewrite.
+    /// 压缩改写后按原样保留的可选第一个用户轮次索引。
+    pub retained_tail_start_turn_index: Option<i64>,
+    /// Stable compaction identifier prepared for the next checkpoint.
+    /// 为下一枚检查点准备的稳定压缩标识。
+    pub compaction_id: String,
+    /// Created-at timestamp for the next checkpoint.
+    /// 下一枚检查点的创建时间戳。
+    pub created_at: String,
+    /// Policy used when the compaction window was planned.
+    /// 规划该压缩窗口时使用的策略。
+    pub policy: ContextCompactionPolicy,
+}
+
 impl CompactionSkillResult {
     /// Materializes the final compaction checkpoint once the hidden summary message has been persisted.
     /// 当隐藏摘要消息已经持久化后，物化最终压缩检查点。
@@ -179,6 +206,23 @@ impl CompactionSkillResult {
             summary_message_id: Some(summary_message_id),
             created_at: self.created_at.clone(),
         }
+    }
+
+    /// Builds one prompt-based compaction result from a model-produced summary text.
+    /// 根据模型产出的总结文本构建一份提示词式压缩结果。
+    pub fn from_model_summary(
+        plan: &CompactionPlan,
+        summary_text: impl Into<String>,
+    ) -> CompactionSkillResult {
+        build_compaction_result_from_summary_text(plan, summary_text.into())
+    }
+
+    /// Builds one fallback compaction result from the legacy host-side summary lines when the model compaction request cannot complete.
+    /// 当模型压缩请求无法完成时，根据旧版宿主侧摘要行构建一份回退压缩结果。
+    pub fn from_legacy_plan(plan: &CompactionPlan) -> CompactionSkillResult {
+        let summary_text =
+            build_legacy_compaction_summary_text(&plan.source_messages, plan.policy.prune);
+        build_compaction_result_from_summary_text(plan, summary_text)
     }
 }
 
@@ -304,9 +348,9 @@ struct SessionTailSegment {
 }
 
 impl CompactionSkill {
-    /// Executes the compaction step and returns a hidden summary plus checkpoint metadata when compaction is needed.
-    /// 执行压缩步骤，并在需要压缩时返回隐藏摘要与检查点元数据。
-    fn execute(&self, input: CompactionSkillInput<'_>) -> Option<CompactionSkillResult> {
+    /// Plans the compaction step and returns the source slice plus checkpoint metadata when compaction is needed.
+    /// 规划压缩步骤，并在需要压缩时返回源消息切片与检查点元数据。
+    fn plan(&self, input: CompactionSkillInput<'_>) -> Option<CompactionPlan> {
         let context_start_index = input
             .runtime_state
             .context_start_message_id
@@ -337,30 +381,96 @@ impl CompactionSkill {
         let retained_tail_start_turn_index = context_candidates
             .get(retained_tail_start)
             .and_then(|message| absolute_turn_index_for_message(input.all_messages, &message.id));
-        let summary_body = compaction_source
-            .iter()
-            .map(|message| compaction_summary_line_for_message(message, input.policy.prune))
-            .collect::<Vec<_>>()
-            .join("\n");
         let created_at = current_unix_millis_text();
 
-        Some(CompactionSkillResult {
-            summary_record: SessionDerivedRecord {
-                kind: SessionMessageKind::Assistant,
-                record_kind: SessionMessageRecordKind::CompactionSummary,
-                title: String::from("Context Compaction Summary"),
-                body: format!(
-                    "The following summary is retained for future context reconstruction and stays hidden in the default UI.\n\n{}",
-                    summary_body
-                ),
-            },
+        Some(CompactionPlan {
+            session_id: input.session_id,
+            source_messages: compaction_source.to_vec(),
             source_until_message_id,
             source_until_turn_index,
             retained_tail_start_turn_index,
             compaction_id: format!("session-{}-compaction-{created_at}", input.session_id),
             created_at,
+            policy: input.policy,
         })
     }
+}
+
+/// Builds the internal user prompt used to ask the model for one compact continuation summary.
+/// 构建用于请求模型生成紧凑续写总结的内部用户提示词。
+pub(crate) fn build_compaction_request_prompt() -> String {
+    String::from(
+        "Summarize the earlier session context into a compact continuation brief for an AI coding workflow.\n\
+\n\
+Requirements:\n\
+- Preserve the user's main goal, constraints, decisions, accepted tradeoffs, and unfinished work.\n\
+- Mention concrete file paths, symbols, commands, errors, and verification results when they still matter.\n\
+- Highlight any pending next steps or follow-up checks.\n\
+- Prefer dense factual prose or short headings over storytelling.\n\
+- Do not greet, do not ask follow-up questions, and do not mention tools.\n\
+- Return plain text only without code fences.\n\
+- Assume newer messages will remain below this summary, so do not repeat them.",
+    )
+}
+
+/// Builds the synthetic continuation prompt injected as the first user message after compaction completes.
+/// 构建在压缩完成后注入为首条用户消息的合成续写提示词。
+pub(crate) fn build_compaction_continuation_prompt(summary_text: &str) -> String {
+    let normalized_summary = normalize_compaction_summary_text(summary_text);
+    format!(
+        "This session is being continued from earlier context that was compacted to fit the model context window.\n\
+\n\
+Earlier context summary:\n\
+{normalized_summary}\n\
+\n\
+Continue from the newer messages below without restarting the conversation, repeating this summary, or asking for the same information again."
+    )
+}
+
+/// Normalizes one compaction summary into a non-empty plain-text block before it becomes the synthetic continuation prompt body.
+/// 在把压缩总结转换为合成续写提示词正文之前，将其规范化为非空纯文本块。
+fn normalize_compaction_summary_text(summary_text: &str) -> String {
+    let trimmed = summary_text.trim();
+    if trimmed.is_empty() {
+        String::from("No earlier context details were preserved.")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Builds one prompt-shaped compaction result from an already prepared summary text and one planned compaction window.
+/// 根据一段已准备好的总结文本与一份压缩规划窗口构建提示词形态的压缩结果。
+fn build_compaction_result_from_summary_text(
+    plan: &CompactionPlan,
+    summary_text: String,
+) -> CompactionSkillResult {
+    let continuation_prompt = build_compaction_continuation_prompt(&summary_text);
+    CompactionSkillResult {
+        summary_record: SessionDerivedRecord {
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::CompactionSummary,
+            title: String::from("Context Continuation Prompt"),
+            body: continuation_prompt,
+        },
+        source_until_message_id: plan.source_until_message_id.clone(),
+        source_until_turn_index: plan.source_until_turn_index,
+        retained_tail_start_turn_index: plan.retained_tail_start_turn_index,
+        compaction_id: plan.compaction_id.clone(),
+        created_at: plan.created_at.clone(),
+    }
+}
+
+/// Builds the legacy host-side summary text retained as a fallback when prompt-based model compaction cannot complete.
+/// 构建在提示词式模型压缩无法完成时保留的旧版宿主侧回退总结文本。
+fn build_legacy_compaction_summary_text(
+    messages: &[SessionMessageEntry],
+    prune_tools: bool,
+) -> String {
+    messages
+        .iter()
+        .map(|message| compaction_summary_line_for_message(message, prune_tools))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Resolves the absolute persisted user-turn index for one transcript message identifier by replaying user-turn boundaries over the full session transcript history.
@@ -681,6 +791,89 @@ mod tests {
             metadata: None,
             created_at: String::from("1"),
         }
+    }
+
+    /// Verifies compaction planning extracts a non-empty historical source window together with stable checkpoint metadata.
+    /// 验证压缩规划会提取非空历史源窗口，并附带稳定的检查点元数据。
+    #[test]
+    fn plan_compaction_captures_source_window_metadata() {
+        let mut messages = Vec::new();
+        for turn_index in 0..5 {
+            messages.push(test_message(
+                &format!("u{}", turn_index + 1),
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                &format!("user turn {}", turn_index + 1),
+            ));
+            messages.push(test_message(
+                &format!("a{}", turn_index + 1),
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                &format!("assistant turn {}", turn_index + 1),
+            ));
+        }
+        let runtime_state = SessionRuntimeStateEntry {
+            conversation_state: crate::conversation_protocol::conversation_state_from_session_messages(
+                &messages,
+            ),
+            ..SessionRuntimeStateEntry::default()
+        };
+        let skill = CompactionSkill;
+        let plan = skill
+            .plan(CompactionSkillInput {
+                session_id: SessionId::from_u128(71001),
+                messages: &messages,
+                all_messages: &messages,
+                runtime_state: &runtime_state,
+                policy: ContextCompactionPolicy::default(),
+            })
+            .expect("compaction plan");
+
+        assert!(!plan.source_messages.is_empty());
+        assert!(plan.source_messages.len() < messages.len());
+        assert_eq!(
+            plan.source_until_message_id,
+            plan.source_messages.last().map(|message| message.id.clone())
+        );
+        assert!(plan.source_until_turn_index.is_some());
+        assert!(plan.retained_tail_start_turn_index.is_some());
+    }
+
+    /// Verifies model-produced compaction results become synthetic user continuation prompts instead of assistant summaries.
+    /// 验证模型产出的压缩结果会变成合成的用户续写提示词，而不是助手摘要。
+    #[test]
+    fn model_compaction_result_uses_user_continuation_prompt() {
+        let plan = CompactionPlan {
+            session_id: SessionId::from_u128(71002),
+            source_messages: vec![test_message(
+                "u1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "Investigate the failing slash command flow.",
+            )],
+            source_until_message_id: Some(String::from("u1")),
+            source_until_turn_index: Some(0),
+            retained_tail_start_turn_index: Some(1),
+            compaction_id: String::from("session-71002-compaction-test"),
+            created_at: String::from("10"),
+            policy: ContextCompactionPolicy::default(),
+        };
+
+        let result =
+            CompactionSkillResult::from_model_summary(&plan, "Goal: preserve slash command behavior.");
+
+        assert_eq!(result.summary_record.kind, SessionMessageKind::User);
+        assert_eq!(
+            result.summary_record.record_kind,
+            SessionMessageRecordKind::CompactionSummary
+        );
+        assert!(result.summary_record.body.contains("Earlier context summary"));
+        assert!(
+            result
+                .summary_record
+                .body
+                .contains("Goal: preserve slash command behavior.")
+        );
     }
 
     /// Verifies tail-turn retention keeps the requested recent user turn window.

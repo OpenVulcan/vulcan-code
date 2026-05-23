@@ -11,6 +11,7 @@ pub(crate) mod model;
 mod oauth_flow;
 mod pending_prompt_queue;
 mod perf;
+mod session_prompt_compaction;
 #[path = "../session/loading.rs"]
 mod session_loading;
 #[path = "../session/projection.rs"]
@@ -23,6 +24,9 @@ use self::about_licenses::*;
 use self::helpers::*;
 use self::oauth_flow::*;
 use self::perf::*;
+use self::session_prompt_compaction::{
+    PromptCompactionExecution, PromptCompactionJobRequest, execute_prompt_compaction_job,
+};
 
 use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
 use crate::agent_runtime::config::{
@@ -104,6 +108,7 @@ use crate::skills::{
     CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
     SummarySkillInput, TitleAgentInput,
 };
+use crate::skills::session::{CompactionPlan, CompactionSkillResult};
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
 use crate::tooling::change_set::{
@@ -3496,6 +3501,9 @@ pub struct VulcanWorkbench {
     /// Per-session active real-AI run state keyed by session identifier.
     /// 以会话标识为键保存的按会话划分活动真实 AI 运行状态。
     active_runs: BTreeMap<SessionId, ActiveSessionRunState>,
+    /// Per-session active prompt-compaction task state keyed by session identifier.
+    /// 以会话标识为键保存的按会话划分活动提示词压缩任务状态。
+    active_session_compactions: BTreeMap<SessionId, ActiveSessionCompactionState>,
     /// Session identifiers currently waiting for the next provider-visible response chunk after a request has already been sent.
     /// 已经发送请求、但仍在等待下一段 Provider 可见响应块的会话标识集合。
     pending_provider_response_sessions: BTreeSet<SessionId>,
@@ -4330,6 +4338,32 @@ struct ActiveSessionRunState {
     /// Abort handle used to stop the session-specific in-flight AI call.
     /// 用于停止该会话专属进行中 AI 调用的中止句柄。
     handle: task::Handle,
+}
+
+/// Active prompt-compaction task state retained while one internal summary request is still running.
+/// 在单次内部总结请求仍在运行时保留的活动提示词压缩任务状态。
+struct ActiveSessionCompactionState {
+    /// Monotonic task identifier used to reject stale compaction completions for this session.
+    /// 用于拒绝该会话过期压缩完成回调的单调任务标识。
+    run_id: u64,
+    /// Abort handle used to stop the session-specific in-flight compaction request.
+    /// 用于停止该会话专属进行中压缩请求的中止句柄。
+    handle: task::Handle,
+    /// Session phase that should be restored after the compaction task settles normally.
+    /// 压缩任务正常收敛后应恢复的会话阶段。
+    previous_phase: SessionRunPhase,
+}
+
+/// Trigger source used to label one prompt-based session compaction run.
+/// 用于标记单次提示词式会话压缩运行来源的触发器类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionPromptCompactionTrigger {
+    /// User explicitly invoked `/compact` from the composer slash panel.
+    /// 用户通过输入框 slash 面板显式调用了 `/compact`。
+    ManualSlash,
+    /// Context budget policy automatically triggered compaction after a normal run finished.
+    /// 上下文预算策略在普通运行结束后自动触发了压缩。
+    BudgetAuto,
 }
 
 /// Stable archived-item deletion target retained while the user is going through the destructive second confirmation.
@@ -7634,6 +7668,28 @@ enum Message {
         /// 由异步运行时流发出的具体增量事件。
         event: ExecutionStreamEvent,
     },
+    /// Applies the terminal result returned by one internal prompt-based session-compaction task.
+    /// 应用单次内部提示词式会话压缩任务返回的终态结果。
+    SessionPromptCompactionFinished {
+        /// Monotonic compaction-task identifier used to discard stale completions after stop or restart.
+        /// 用于在停止或重启后丢弃过期完成回调的单调压缩任务标识。
+        run_id: u64,
+        /// Session identifier that owns the compaction task.
+        /// 拥有该压缩任务的会话标识。
+        session_id: SessionId,
+        /// Trigger source that started the compaction task.
+        /// 启动该压缩任务的触发来源。
+        trigger: SessionPromptCompactionTrigger,
+        /// Human-readable budget note captured when the compaction task was scheduled.
+        /// 在调度压缩任务时捕获的人类可读预算说明。
+        budget_note: String,
+        /// Planned compaction window used to build a fallback result when the model summary is unavailable.
+        /// 当模型总结不可用时用于构建回退结果的已规划压缩窗口。
+        plan: CompactionPlan,
+        /// Terminal compaction execution result returned by the internal summary task.
+        /// 由内部总结任务返回的终态压缩执行结果。
+        result: Result<PromptCompactionExecution, String>,
+    },
     /// Applies one detached background subagent event emitted after the parent run has already resumed or finished.
     /// 应用一条在父运行恢复或结束之后发出的分离后台子代理事件。
     DetachedSubagentTaskEvent {
@@ -8260,6 +8316,7 @@ impl VulcanWorkbench {
             agent_transcript_surface_mode: AgentTranscriptSurfaceMode::DetailCards,
             session_run_phases: BTreeMap::new(),
             active_runs: BTreeMap::new(),
+            active_session_compactions: BTreeMap::new(),
             pending_provider_response_sessions: BTreeSet::new(),
             runtime_progress_animation_frame: 0,
             next_run_id: 1,
@@ -8513,6 +8570,7 @@ impl VulcanWorkbench {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
                 self.session_run_phases.clear();
                 self.active_runs.clear();
+                self.active_session_compactions.clear();
                 self.pending_provider_response_sessions.clear();
                 self.runtime_progress_animation_frame = 0;
                 self.expanded_task_projects.clear();
@@ -12946,6 +13004,55 @@ impl VulcanWorkbench {
                     }
                 }
             }
+            Message::SessionPromptCompactionFinished {
+                run_id,
+                session_id,
+                trigger,
+                budget_note,
+                plan,
+                result,
+            } => {
+                let Some(active_session_id) = self.active_compaction_session_id_for_run_id(run_id)
+                else {
+                    return Task::none();
+                };
+                if active_session_id != session_id {
+                    return Task::none();
+                }
+                let Some(active_state) = self.take_active_compaction_state(session_id) else {
+                    return Task::none();
+                };
+
+                match result {
+                    Ok(execution) => self.finish_session_prompt_compaction(
+                        session_id,
+                        trigger,
+                        budget_note,
+                        active_state.previous_phase,
+                        execution,
+                    ),
+                    Err(error) => {
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "提示词压缩回退",
+                            format!(
+                                "会话 #{session_id} 的提示词式压缩未返回可用总结，已回退到宿主侧摘要：{error}"
+                            ),
+                        );
+                        self.finish_session_prompt_compaction(
+                            session_id,
+                            trigger,
+                            budget_note,
+                            active_state.previous_phase,
+                            PromptCompactionExecution {
+                                compaction_result: CompactionSkillResult::from_legacy_plan(&plan),
+                                fallback_used: true,
+                                provider_request_count: 0,
+                            },
+                        )
+                    }
+                }
+            }
             Message::DetachedSubagentTaskEvent { task_id, event } => match event {
                 DetachedTaskRuntimeEvent::ChildExecution(event) => match event {
                     ExecutionStreamEvent::Prepared(_) => Task::none(),
@@ -15863,6 +15970,7 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
         summary_message_id: &str,
+        summary_kind: SessionMessageKind,
         summary_body: &str,
         created_at: &str,
     ) {
@@ -15871,6 +15979,7 @@ impl VulcanWorkbench {
         compact_conversation_with_summary(
             &mut runtime_state.conversation_state,
             summary_message_id.to_string(),
+            summary_kind,
             summary_body.to_string(),
             created_at.to_string(),
             ContextCompactionPolicy::default(),
@@ -15881,6 +15990,8 @@ impl VulcanWorkbench {
             ContextCompactionPolicy::default(),
         );
         runtime_state.updated_at = created_at.to_string();
+        self.sync_session_messages_from_conversation_state(session_id);
+        self.refresh_session_agent_view_buffers(session_id);
     }
 
     /// Applies one prepared compaction result to the current session state, persists its checkpoint, and refreshes context usage diagnostics.
@@ -15888,7 +15999,7 @@ impl VulcanWorkbench {
     fn apply_session_history_compaction_result(
         &mut self,
         session_id: SessionId,
-        compaction_result: crate::skills::session::CompactionSkillResult,
+        compaction_result: CompactionSkillResult,
         activity_title: &str,
         activity_detail: String,
     ) {
@@ -15914,6 +16025,7 @@ impl VulcanWorkbench {
             self.compact_session_conversation_history(
                 session_id,
                 &summary_message_id,
+                compaction_result.summary_record.kind,
                 &compaction_result.summary_record.body,
                 &runtime_state_updated_at,
             );
@@ -15922,8 +16034,168 @@ impl VulcanWorkbench {
         self.sync_context_usage_from_session_budget(session_id);
     }
 
-    /// Tries to compact the current selected session immediately when the user invokes the slash command manually.
-    /// 当用户手动调用 slash 指令时，立即尝试压缩当前选中会话。
+    /// Starts one prompt-based session compaction task or immediately falls back to the legacy host-side summary when internal execution prerequisites are unavailable.
+    /// 启动一次提示词式会话压缩任务；若内部执行前提缺失，则立即回退到旧版宿主侧摘要。
+    fn start_session_prompt_compaction(
+        &mut self,
+        session_id: SessionId,
+        trigger: SessionPromptCompactionTrigger,
+        plan: CompactionPlan,
+        budget_note: String,
+    ) -> Task<Message> {
+        if self.session_has_active_compaction(session_id) {
+            return Task::none();
+        }
+
+        debug_assert_eq!(plan.session_id, session_id);
+        let previous_phase = self.session_run_phase_for(session_id);
+        let session_title = self
+            .session_by_id(session_id)
+            .map(|session| session.title.clone())
+            .unwrap_or_else(|| format!("会话 #{session_id}"));
+        let workspace_path = self
+            .workspace_path_for_session_id(session_id)
+            .unwrap_or_else(|| self.workspace_path.clone());
+        let model_reference = self.preferred_model_reference_for_session_compaction(session_id);
+        let provider_configuration =
+            self.provider_configuration_for_model_reference(model_reference.as_ref());
+        let runtime_options = self.current_pending_prompt_runtime_options();
+        let ai_tool_configuration =
+            self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
+        let Some(mcp_runtime_access) = self.mcp_runtime.clone() else {
+            return self.finish_session_prompt_compaction(
+                session_id,
+                trigger,
+                budget_note,
+                previous_phase,
+                PromptCompactionExecution {
+                    compaction_result: CompactionSkillResult::from_legacy_plan(&plan),
+                    fallback_used: true,
+                    provider_request_count: 0,
+                },
+            );
+        };
+
+        let request = PromptCompactionJobRequest {
+            session_id,
+            session_title,
+            workspace_path,
+            plan: plan.clone(),
+            provider_configuration,
+            model_reference,
+            reasoning_effort: runtime_options.reasoning_effort,
+            ai_tool_configuration,
+            agent_profile_catalog: self.agent_profile_catalog.clone(),
+            luaskills_runtime: self.luaskills_runtime.clone(),
+            mcp_runtime_access,
+            task_runtime: self.runtime_foundation.task_runtime(),
+            question_runtime: self.runtime_foundation.question_runtime(),
+            command_session_runtime: self.runtime_foundation.command_session_runtime(),
+        };
+
+        self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
+        self.status_message = match trigger {
+            SessionPromptCompactionTrigger::ManualSlash => {
+                String::from("正在为当前会话生成压缩总结，请稍候。")
+            }
+            SessionPromptCompactionTrigger::BudgetAuto => {
+                String::from("当前会话正在根据上下文预算生成压缩总结，请稍候。")
+            }
+        };
+
+        let run_id = self.next_run_id;
+        self.next_run_id = self.next_run_id.saturating_add(1);
+        let (run_task, run_handle) = Task::perform(execute_prompt_compaction_job(request), {
+            move |result| Message::SessionPromptCompactionFinished {
+                run_id,
+                session_id,
+                trigger,
+                budget_note,
+                plan,
+                result,
+            }
+        })
+        .abortable();
+        self.active_session_compactions.insert(
+            session_id,
+            ActiveSessionCompactionState {
+                run_id,
+                handle: run_handle,
+                previous_phase,
+            },
+        );
+
+        run_task
+    }
+
+    /// Applies the terminal prompt-compaction result, restores the previous session phase, and refreshes persistence and queue dispatch.
+    /// 应用提示词压缩终态结果，恢复先前会话阶段，并刷新持久化与队列派发。
+    fn finish_session_prompt_compaction(
+        &mut self,
+        session_id: SessionId,
+        trigger: SessionPromptCompactionTrigger,
+        budget_note: String,
+        previous_phase: SessionRunPhase,
+        execution: PromptCompactionExecution,
+    ) -> Task<Message> {
+        let activity_title = match trigger {
+            SessionPromptCompactionTrigger::ManualSlash => "手动触发上下文压缩",
+            SessionPromptCompactionTrigger::BudgetAuto => "上下文预算触发压缩",
+        };
+        let provider_request_note = if execution.provider_request_count > 0 {
+            format!(" 本次压缩共发起 {} 次 Provider 请求。", execution.provider_request_count)
+        } else {
+            String::new()
+        };
+        let activity_detail = match (trigger, execution.fallback_used) {
+            (SessionPromptCompactionTrigger::ManualSlash, false) => {
+                format!(
+                    "会话 #{session_id} 已通过 slash 指令执行提示词式手动压缩：{budget_note}。{provider_request_note}"
+                )
+            }
+            (SessionPromptCompactionTrigger::ManualSlash, true) => format!(
+                "会话 #{session_id} 的提示词式手动压缩已回退到宿主侧摘要：{budget_note}。{provider_request_note}"
+            ),
+            (SessionPromptCompactionTrigger::BudgetAuto, false) => {
+                format!(
+                    "会话 #{session_id} 已根据预算快照执行提示词式压缩：{budget_note}。{provider_request_note}"
+                )
+            }
+            (SessionPromptCompactionTrigger::BudgetAuto, true) => format!(
+                "会话 #{session_id} 的提示词式预算压缩已回退到宿主侧摘要：{budget_note}。{provider_request_note}"
+            ),
+        };
+        self.apply_session_history_compaction_result(
+            session_id,
+            execution.compaction_result,
+            activity_title,
+            activity_detail,
+        );
+        self.set_session_run_phase(session_id, previous_phase);
+        self.status_message = match (trigger, execution.fallback_used) {
+            (SessionPromptCompactionTrigger::ManualSlash, false) => {
+                format!("当前会话已执行手动上下文压缩：{budget_note}。")
+            }
+            (SessionPromptCompactionTrigger::ManualSlash, true) => format!(
+                "当前会话已执行手动上下文压缩，但模型总结失败，已回退到宿主侧摘要：{budget_note}。"
+            ),
+            (SessionPromptCompactionTrigger::BudgetAuto, false) => {
+                format!("当前会话已根据预算完成上下文压缩：{budget_note}。")
+            }
+            (SessionPromptCompactionTrigger::BudgetAuto, true) => format!(
+                "当前会话已根据预算完成上下文压缩，但模型总结失败，已回退到宿主侧摘要：{budget_note}。"
+            ),
+        };
+
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+            self.maybe_start_next_pending_prompt(session_id, false),
+        ])
+    }
+
+    /// Tries to compact the current selected session through the prompt-based summary pipeline when the user invokes the slash command manually.
+    /// 当用户手动调用 slash 指令时，通过提示词式总结链路尝试压缩当前选中会话。
     fn execute_manual_selected_session_history_compaction(&mut self) -> Task<Message> {
         let Some(session_id) = self.selected_session().map(|session| session.id) else {
             self.status_message = String::from("当前没有可执行手动压缩的会话。");
@@ -15953,7 +16225,7 @@ impl VulcanWorkbench {
             &runtime_state_snapshot,
             &messages,
         );
-        let Some(compaction_result) = self.session_skill_chain.run_compaction_skill(
+        let Some(plan) = self.session_skill_chain.plan_compaction(
             CompactionSkillInput {
                 session_id,
                 messages: &messages,
@@ -15971,14 +16243,15 @@ impl VulcanWorkbench {
             .as_ref()
             .map(ContextBudgetSnapshot::summary_note)
             .unwrap_or_else(|| String::from("当前未提供预算快照"));
-        self.apply_session_history_compaction_result(
-            session_id,
-            compaction_result,
-            "手动触发上下文压缩",
-            format!("会话 #{session_id} 已通过 slash 指令执行手动压缩：{budget_note}。"),
-        );
-        self.status_message = format!("当前会话已执行手动上下文压缩：{budget_note}。");
-        operation::focus(COMPOSER_EDITOR_ID)
+        Task::batch([
+            self.start_session_prompt_compaction(
+                session_id,
+                SessionPromptCompactionTrigger::ManualSlash,
+                plan,
+                budget_note,
+            ),
+            operation::focus(COMPOSER_EDITOR_ID),
+        ])
     }
 
     /// Returns the mutable runtime-state snapshot for the target session, creating one default row on demand.
@@ -16429,13 +16702,14 @@ impl VulcanWorkbench {
                 Some(report.provider_request_count),
             );
         }
-        self.maybe_compact_session_history(session_id);
+        let compaction_task = self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.refresh_session_agent_view_buffers(session_id);
         self.refresh_subagent_navigation_round_visibility(session_id);
 
         Task::batch([
+            compaction_task,
             self.persist_workspace_snapshot_task(),
             self.maybe_follow_selected_session_transcript_tail(session_id),
             self.maybe_start_next_pending_prompt(session_id, false),
@@ -16444,10 +16718,10 @@ impl VulcanWorkbench {
 
     /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
     /// 当可见历史增长到当前阈值以上时创建一条隐藏压缩摘要。
-    fn maybe_compact_session_history(&mut self, session_id: SessionId) {
+    fn maybe_compact_session_history(&mut self, session_id: SessionId) -> Task<Message> {
         let messages = self.session_context_history(session_id);
         if messages.is_empty() {
-            return;
+            return Task::none();
         }
         let runtime_state_snapshot = self
             .session_runtime_state
@@ -16461,13 +16735,13 @@ impl VulcanWorkbench {
             &runtime_state_snapshot,
             &messages,
         ) else {
-            return;
+            return Task::none();
         };
         if !context_budget.should_compact() {
             self.sync_context_usage_from_session_budget(session_id);
-            return;
+            return Task::none();
         }
-        let Some(compaction_result) = self.session_skill_chain.run_compaction_skill(
+        let Some(plan) = self.session_skill_chain.plan_compaction(
             CompactionSkillInput {
                 session_id,
                 messages: &messages,
@@ -16478,17 +16752,14 @@ impl VulcanWorkbench {
         )
         else {
             self.sync_context_usage_from_session_budget(session_id);
-            return;
+            return Task::none();
         };
-        self.apply_session_history_compaction_result(
+        self.start_session_prompt_compaction(
             session_id,
-            compaction_result,
-            "上下文预算触发压缩",
-            format!(
-                "会话 #{session_id} 已根据预算快照执行压缩：{}。",
-                context_budget.summary_note()
-            ),
-        );
+            SessionPromptCompactionTrigger::BudgetAuto,
+            plan,
+            context_budget.summary_note(),
+        )
     }
 
     /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
@@ -16721,6 +16992,7 @@ impl VulcanWorkbench {
         self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
         self.active_runs.clear();
+        self.active_session_compactions.clear();
         self.pending_provider_response_sessions.clear();
         self.runtime_progress_animation_frame = 0;
         self.expanded_task_projects = snapshot.expanded_task_projects;
@@ -17239,6 +17511,12 @@ impl VulcanWorkbench {
         self.active_runs.contains_key(&session_id)
     }
 
+    /// Returns whether one specific session currently owns an active prompt-compaction task.
+    /// 返回某个指定会话当前是否拥有活动的提示词压缩任务。
+    fn session_has_active_compaction(&self, session_id: SessionId) -> bool {
+        self.active_session_compactions.contains_key(&session_id)
+    }
+
     /// Returns whether any lightweight runtime-progress animation still needs ticking.
     /// 返回当前是否仍有任一轻量运行进度动画需要继续 Tick。
     fn has_runtime_progress_animation_work(&self) -> bool {
@@ -17319,6 +17597,15 @@ impl VulcanWorkbench {
         self.active_runs.remove(&session_id)
     }
 
+    /// Removes and returns the active prompt-compaction state tracked for one session.
+    /// 移除并返回某个会话当前跟踪的活动提示词压缩状态。
+    fn take_active_compaction_state(
+        &mut self,
+        session_id: SessionId,
+    ) -> Option<ActiveSessionCompactionState> {
+        self.active_session_compactions.remove(&session_id)
+    }
+
     /// Returns the session identifier that owns the provided run identifier, if it is still active.
     /// 返回持有指定运行标识的会话标识（如果该运行仍然处于活动状态）。
     fn active_run_session_id_for_run_id(&self, run_id: u64) -> Option<SessionId> {
@@ -17326,6 +17613,20 @@ impl VulcanWorkbench {
             .iter()
             .find_map(|(session_id, active_run)| {
                 if active_run.run_id == run_id {
+                    Some(*session_id)
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Returns the session identifier that owns the provided prompt-compaction task identifier, if it is still active.
+    /// 返回持有指定提示词压缩任务标识的会话标识（如果该任务仍然处于活动状态）。
+    fn active_compaction_session_id_for_run_id(&self, run_id: u64) -> Option<SessionId> {
+        self.active_session_compactions
+            .iter()
+            .find_map(|(session_id, active_compaction)| {
+                if active_compaction.run_id == run_id {
                     Some(*session_id)
                 } else {
                     None
@@ -18179,8 +18480,8 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandSessionToolModalSummary, ComposerSlashCommand, ToolModalPresentation,
-        VulcanWorkbench, build_composer_slash_command_state,
+        ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand,
+        Message, ToolModalPresentation, VulcanWorkbench, build_composer_slash_command_state,
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
         build_command_session_stop_result_metadata, build_session_turn_stats_from_state,
         clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
@@ -18194,13 +18495,17 @@ mod tests {
         tool_modal_presentation_from_agent_view_attributes, value_as_f64,
     };
     use crate::app_shell::markdown;
+    use crate::context_budget::ContextCompactionPolicy;
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
         SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
-        SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
+        SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary,
+        SessionTurnStatsStatus,
     };
+    use crate::skills::session::{CompactionPlan, CompactionSkillResult};
     use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
     use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
+    use iced::Task;
     use iced::widget::text_editor;
     use serde_json::{Value, json};
     use std::path::PathBuf;
@@ -18716,10 +19021,10 @@ mod tests {
         assert_eq!(ComposerSlashCommand::from_exact_input("/model test"), None);
     }
 
-    /// Verifies the manual slash-triggered compaction path creates a checkpoint once the session history contains more turns than the retained tail budget.
-    /// 验证当会话历史轮次数超过保留尾部预算后，手动 slash 压缩路径能够创建压缩检查点。
+    /// Verifies applying one prompt-style compaction result creates a checkpoint and rewrites the canonical anchor to a synthetic user continuation prompt.
+    /// 验证应用一份提示词式压缩结果会创建检查点，并将规范锚点改写为合成的用户续写提示词。
     #[test]
-    fn manual_selected_session_history_compaction_creates_checkpoint() {
+    fn apply_session_history_compaction_result_creates_checkpoint_for_prompt_summary() {
         let (mut workbench, _task) = VulcanWorkbench::new();
         let session_id = SessionId::from_u128(71001);
         workbench.sessions.clear();
@@ -18764,7 +19069,30 @@ mod tests {
             },
         );
 
-        let _task = workbench.execute_manual_selected_session_history_compaction();
+        let plan = CompactionPlan {
+            session_id,
+            source_messages: workbench
+                .session_messages
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default(),
+            source_until_message_id: Some(String::from("assistant-4")),
+            source_until_turn_index: Some(1),
+            retained_tail_start_turn_index: Some(2),
+            compaction_id: String::from("test-compaction-001"),
+            created_at: String::from("20"),
+            policy: ContextCompactionPolicy::default(),
+        };
+        let compaction_result = CompactionSkillResult::from_model_summary(
+            &plan,
+            "Keep using the synthetic continuation prompt for future turns.",
+        );
+        workbench.apply_session_history_compaction_result(
+            session_id,
+            compaction_result,
+            "测试上下文压缩",
+            String::from("测试压缩已完成。"),
+        );
 
         assert_eq!(
             workbench.session_compactions.get(&session_id).map(Vec::len),
@@ -18777,11 +19105,47 @@ mod tests {
                 .and_then(|state| state.last_compaction_id.as_ref())
                 .is_some()
         );
+        assert!(matches!(
+            workbench
+                .session_conversation_state(session_id)
+                .messages
+                .first()
+                .map(|message| &message.payload),
+            Some(crate::conversation_protocol::SessionConversationPayload::UserText {
+                text,
+                ..
+            }) if text.contains("Earlier context summary")
+        ));
         assert!(
-            workbench.status_message.contains("手动上下文压缩"),
-            "unexpected status message: {}",
-            workbench.status_message
+            workbench
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|state| state.context_start_message_id.as_deref())
+                .is_some()
         );
+    }
+
+    /// Verifies active prompt-compaction state keeps the session on the blocking system-work lane so queued prompts do not auto-dispatch early.
+    /// 验证活动提示词压缩状态会让会话持续占用阻塞型系统工作通道，从而避免排队提示词过早自动派发。
+    #[test]
+    fn session_has_blocking_system_prompt_work_includes_active_compaction() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71002);
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "压缩忙碌状态测试"));
+        let (_task, handle) = Task::perform(async {}, |_| Message::Noop).abortable();
+        workbench.active_session_compactions.insert(
+            session_id,
+            ActiveSessionCompactionState {
+                run_id: 42,
+                handle,
+                previous_phase: SessionRunPhase::Ready,
+            },
+        );
+
+        assert!(workbench.session_has_blocking_system_prompt_work(session_id));
     }
 
     /// Verifies that the background legacy-maintenance queue includes visible and archived sessions once.

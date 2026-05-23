@@ -95,6 +95,7 @@ impl VulcanWorkbench {
     /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、内部排队回调以及运行中的子代理。
     pub(super) fn session_has_blocking_system_prompt_work(&self, session_id: SessionId) -> bool {
         self.session_has_active_run(session_id)
+            || self.session_has_active_compaction(session_id)
             || !self.session_pending_prompt_queue(session_id).is_empty()
             || self.session_has_running_subagent_tasks(session_id)
     }
@@ -1018,6 +1019,9 @@ impl VulcanWorkbench {
         if self.session_has_active_run(session_id) {
             return Task::none();
         }
+        if self.session_has_active_compaction(session_id) {
+            return Task::none();
+        }
         if !allow_from_stopped_phase
             && self.session_run_phase_for(session_id) == SessionRunPhase::Stopped
         {
@@ -1069,6 +1073,9 @@ impl VulcanWorkbench {
     pub(super) fn stop_all_session_work(&mut self, session_id: SessionId) -> Task<Message> {
         if self.session_has_active_run(session_id) {
             return self.stop_session_run_for_session(session_id, false);
+        }
+        if self.session_has_active_compaction(session_id) {
+            return self.stop_session_prompt_compaction_for_session(session_id);
         }
         let had_running_subagents = self.session_has_running_subagent_tasks(session_id);
         let cleared_system_queue = self.clear_session_pending_prompt_queue(session_id, true);
@@ -1191,6 +1198,52 @@ impl VulcanWorkbench {
             self.persist_workspace_snapshot_task(),
             self.maybe_follow_selected_session_transcript_tail(session_id),
             next_prompt_task,
+        ])
+    }
+
+    /// Stops one specific prompt-compaction task together with queued system work owned by the same session.
+    /// 停止某个指定会话拥有的提示词压缩任务及其同属的排队系统工作。
+    pub(super) fn stop_session_prompt_compaction_for_session(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        let Some(active_compaction) = self.take_active_compaction_state(session_id) else {
+            self.status_message = String::from("当前没有正在执行的上下文压缩任务。");
+            return Task::none();
+        };
+
+        active_compaction.handle.abort();
+
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Blocked;
+            session.last_updated_label = String::from("刚刚");
+        }
+
+        self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.mark_running_subagent_tasks_stopped(session_id);
+        self.clear_session_pending_prompt_queue(session_id, true);
+        self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
+        self.status_message = String::from("已停止当前会话的上下文压缩任务与等待中的系统消息。");
+        self.push_session_message(
+            session_id,
+            SessionMessageKind::Assistant,
+            "压缩已停止",
+            "已按用户请求停止当前会话的上下文压缩任务；较新的上下文不会被改写，等待中的系统消息也已一并停止。",
+        );
+        self.push_activity(
+            ActivityLevel::Warning,
+            "会话压缩任务已停止",
+            "当前会话的提示词式上下文压缩已被用户中止；若仍需要缩短上下文窗口，可稍后再次手动触发压缩。",
+        );
+        self.refresh_subagent_navigation_round_visibility(session_id);
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
         ])
     }
 

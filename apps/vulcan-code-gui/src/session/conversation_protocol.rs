@@ -320,23 +320,34 @@ pub fn append_record_body_delta(
 pub fn compact_conversation_with_summary(
     state: &mut SessionConversationState,
     summary_message_id: impl Into<String>,
+    summary_kind: SessionMessageKind,
     summary_body: impl Into<String>,
     updated_at: impl Into<String>,
     policy: ContextCompactionPolicy,
 ) {
     let retained_tail = canonical_recent_tail_messages(&state.messages, policy);
     let mut compacted_messages = Vec::with_capacity(retained_tail.len() + 1);
-    compacted_messages.push(SessionConversationMessage {
+    let summary_text = summary_body.into();
+    let summary_message = SessionConversationMessage {
         id: summary_message_id.into(),
-        payload: SessionConversationPayload::Assistant {
-            text: summary_body.into(),
-            reasoning: String::new(),
-            provider_message_id: None,
-            provider_message_state: None,
-            usage: None,
-            tool_calls: Vec::new(),
+        payload: match summary_kind {
+            SessionMessageKind::User => SessionConversationPayload::UserText {
+                text: summary_text.clone(),
+                attachments: Vec::new(),
+            },
+            SessionMessageKind::Assistant | SessionMessageKind::Error => {
+                SessionConversationPayload::Assistant {
+                    text: summary_text,
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                }
+            }
         },
-    });
+    };
+    compacted_messages.push(summary_message);
     compacted_messages.extend(retained_tail);
     state.messages = compacted_messages;
     state.continuation.last_provider_message_id = None;
@@ -1379,7 +1390,14 @@ mod tests {
             ..ContextCompactionPolicy::default()
         };
 
-        compact_conversation_with_summary(&mut state, "summary", "摘要", "2", policy);
+        compact_conversation_with_summary(
+            &mut state,
+            "summary",
+            SessionMessageKind::Assistant,
+            "摘要",
+            "2",
+            policy,
+        );
 
         assert_eq!(state.messages.len(), 4);
         assert!(matches!(
@@ -1394,6 +1412,68 @@ mod tests {
             &state.messages[3].payload,
             SessionConversationPayload::ToolResult { text, .. }
                 if text == COMPACTED_TOOL_RESULT_PLACEHOLDER
+        ));
+    }
+
+    /// Verifies prompt-based compaction can inject the retained summary as a synthetic user message before the preserved recent tail.
+    /// 验证提示词式压缩能够在保留的最近尾部之前把总结注入为合成用户消息。
+    #[test]
+    fn compact_conversation_accepts_user_summary_prompt() {
+        let mut state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("old-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("旧任务"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("old-assistant"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("旧结论"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("recent-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("继续修复"),
+                        attachments: Vec::new(),
+                    },
+                },
+            ],
+            records: Vec::new(),
+            continuation: SessionProviderContinuationState::default(),
+        };
+        let policy = ContextCompactionPolicy {
+            tail_turns: 1,
+            preserve_recent_tokens: 4_096,
+            ..ContextCompactionPolicy::default()
+        };
+
+        compact_conversation_with_summary(
+            &mut state,
+            "summary",
+            SessionMessageKind::User,
+            "Earlier context summary",
+            "2",
+            policy,
+        );
+
+        assert_eq!(state.messages.len(), 2);
+        assert!(matches!(
+            &state.messages[0].payload,
+            SessionConversationPayload::UserText { text, attachments }
+                if text == "Earlier context summary" && attachments.is_empty()
+        ));
+        assert!(matches!(
+            &state.messages[1].payload,
+            SessionConversationPayload::UserText { text, .. } if text == "继续修复"
         ));
     }
 

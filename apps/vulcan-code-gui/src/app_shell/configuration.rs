@@ -1220,6 +1220,34 @@ impl VulcanWorkbench {
         })
     }
 
+    /// Resolves the preferred provider/model reference used by one session-scoped prompt-compaction task.
+    /// 解析单个会话级提示词压缩任务应优先使用的 Provider/Model 引用。
+    pub(super) fn preferred_model_reference_for_session_compaction(
+        &self,
+        session_id: SessionId,
+    ) -> Option<PendingPromptModelReference> {
+        if let Some(runtime_state) = self.session_runtime_state(session_id)
+            && let (Some(active_provider_id), Some(active_model_id)) = (
+                runtime_state.active_provider_id.as_deref(),
+                runtime_state.active_model_id.as_deref(),
+            )
+        {
+            return Some(PendingPromptModelReference {
+                provider_id: active_provider_id.to_string(),
+                model_id: active_model_id.to_string(),
+                provider_label: provider_config::provider_summary(active_provider_id),
+                model_name: provider_config::model_summary(
+                    active_provider_id,
+                    active_model_id,
+                    &self.provider_configuration,
+                ),
+                openrouter_endpoint_route: runtime_state.active_openrouter_endpoint_route.clone(),
+            });
+        }
+
+        self.current_pending_prompt_model_reference()
+    }
+
     /// Captures the currently selected workbench runtime controls for a queued prompt.
     /// 为排队提示词捕获当前选中的工作台运行控制参数。
     pub(super) fn current_pending_prompt_runtime_options(&self) -> PendingPromptRuntimeOptions {
@@ -1279,14 +1307,14 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Clones the provider configuration and overrides only the active model for one queued prompt run.
-    /// 克隆供应商配置，并仅为单次排队提示词运行覆盖激活模型。
-    pub(super) fn provider_configuration_for_prompt_entry(
+    /// Clones the provider configuration and overrides only the active model for one explicit model reference.
+    /// 克隆供应商配置，并仅针对一份显式模型引用覆盖当前激活模型。
+    pub(super) fn provider_configuration_for_model_reference(
         &self,
-        prompt_entry: &PendingSessionPromptEntry,
+        model_reference: Option<&PendingPromptModelReference>,
     ) -> ProviderConfigurationFile {
         let mut config = self.provider_configuration.clone();
-        if let Some(model_reference) = prompt_entry.model_reference.as_ref() {
+        if let Some(model_reference) = model_reference {
             config.model = Some(format!(
                 "{}/{}",
                 model_reference.provider_id, model_reference.model_id
@@ -1300,6 +1328,15 @@ impl VulcanWorkbench {
             }
         }
         config
+    }
+
+    /// Clones the provider configuration and overrides only the active model for one queued prompt run.
+    /// 克隆供应商配置，并仅为单次排队提示词运行覆盖激活模型。
+    pub(super) fn provider_configuration_for_prompt_entry(
+        &self,
+        prompt_entry: &PendingSessionPromptEntry,
+    ) -> ProviderConfigurationFile {
+        self.provider_configuration_for_model_reference(prompt_entry.model_reference.as_ref())
     }
 
     /// Requests one workbench model switch, prompting first when staged attachments would be dropped by the target model.
