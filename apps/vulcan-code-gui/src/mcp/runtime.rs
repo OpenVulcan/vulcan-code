@@ -442,15 +442,36 @@ struct McpRuntimeServerSnapshot {
     /// Latest connection or refresh warning, if any.
     /// 最近一次连接或刷新警告（如果存在）。
     last_error: Option<String>,
-    /// Currently registered tool descriptors for this server.
-    /// 当前为该服务器注册的工具描述集合。
+    /// Currently live tool descriptors registered from the active transport.
+    /// 当前从活动传输注册得到的实时工具描述集合。
     tools: Vec<McpRuntimeToolDescriptor>,
+    /// Last successfully discovered tool descriptors retained across reconnect attempts.
+    /// 在重连尝试之间保留的最后一次成功发现的工具描述集合。
+    cached_tools: Vec<McpRuntimeToolDescriptor>,
     /// Number of prompts currently reported by this server.
     /// 当前由该服务器报告的 prompt 数量。
     prompt_count: usize,
     /// Number of resources currently reported by this server.
     /// 当前由该服务器报告的资源数量。
     resource_count: usize,
+}
+
+impl McpRuntimeServerSnapshot {
+    /// Returns the tool descriptors that should stay visible to upper host layers for the current connectivity state.
+    /// 返回在当前连通状态下应继续对上层宿主可见的工具描述集合。
+    fn visible_tool_descriptors(&self) -> &[McpRuntimeToolDescriptor] {
+        match self.status {
+            McpRuntimeServerStatus::Connected => &self.tools,
+            McpRuntimeServerStatus::Connecting | McpRuntimeServerStatus::Disconnected => {
+                if self.cached_tools.is_empty() {
+                    &self.tools
+                } else {
+                    &self.cached_tools
+                }
+            }
+            McpRuntimeServerStatus::Disabled => &self.tools,
+        }
+    }
 }
 
 /// Lightweight runtime-facing diagnostic view for one enabled MCP server.
@@ -758,8 +779,8 @@ impl McpRuntimeSnapshot {
     fn tool_descriptors(&self) -> Vec<McpRuntimeToolDescriptor> {
         self.servers
             .values()
-            .filter(|server| server.status == McpRuntimeServerStatus::Connected)
-            .flat_map(|server| server.tools.clone())
+            .filter(|server| server.enabled)
+            .flat_map(|server| server.visible_tool_descriptors().iter().cloned())
             .collect()
     }
 
@@ -1366,7 +1387,12 @@ fn update_server_status(
     {
         server.status = status;
         server.last_error = error;
-        server.tools = tools;
+        if status == McpRuntimeServerStatus::Connected {
+            server.cached_tools = tools.clone();
+            server.tools = tools;
+        } else {
+            server.tools = tools;
+        }
     }
 }
 
@@ -1417,6 +1443,7 @@ fn initial_server_snapshot(server: &McpServerConfig) -> McpRuntimeServerSnapshot
         },
         last_error: None,
         tools: Vec::new(),
+        cached_tools: Vec::new(),
         prompt_count: 0,
         resource_count: 0,
     }
@@ -1442,6 +1469,7 @@ mod tests {
             status: McpRuntimeServerStatus::Disabled,
             last_error: None,
             tools: Vec::new(),
+            cached_tools: Vec::new(),
             prompt_count: 0,
             resource_count: 0,
         }
@@ -1847,5 +1875,77 @@ mod tests {
         let views = snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::default());
         assert_eq!(views[0].id(), "mcp_server_a_read_file");
         assert_eq!(views[1].id(), "mcp_server_a_read_file_1");
+    }
+
+    /// Verifies reconnecting or disconnected servers can still expose the last successful tool snapshot to upper host layers.
+    /// 验证正在重连或已经断开的服务器仍可向上层宿主暴露最后一次成功的工具快照。
+    #[test]
+    fn filtered_tool_views_keep_cached_tools_while_server_is_offline() {
+        let connecting_tool = McpRuntimeToolDescriptor::new(
+            String::from("server-a"),
+            String::from("read_file"),
+            String::from("Read one file"),
+            serde_json::json!({}),
+        );
+        let disconnected_tool = McpRuntimeToolDescriptor::new(
+            String::from("server-b"),
+            String::from("edit_file"),
+            String::from("Edit one file"),
+            serde_json::json!({}),
+        );
+        let disabled_tool = McpRuntimeToolDescriptor::new(
+            String::from("server-c"),
+            String::from("delete_file"),
+            String::from("Delete one file"),
+            serde_json::json!({}),
+        );
+        let snapshot = McpRuntimeSnapshot {
+            servers: BTreeMap::from([
+                (
+                    String::from("server-a"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Server A"),
+                        enabled: true,
+                        transport_label: String::from("stdio"),
+                        endpoint_summary: String::from("server-a"),
+                        status: McpRuntimeServerStatus::Connecting,
+                        cached_tools: vec![connecting_tool.clone()],
+                        ..empty_server_snapshot()
+                    },
+                ),
+                (
+                    String::from("server-b"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Server B"),
+                        enabled: true,
+                        transport_label: String::from("http"),
+                        endpoint_summary: String::from("server-b"),
+                        status: McpRuntimeServerStatus::Disconnected,
+                        cached_tools: vec![disconnected_tool.clone()],
+                        ..empty_server_snapshot()
+                    },
+                ),
+                (
+                    String::from("server-c"),
+                    McpRuntimeServerSnapshot {
+                        name: String::from("Server C"),
+                        enabled: false,
+                        transport_label: String::from("sse"),
+                        endpoint_summary: String::from("server-c"),
+                        status: McpRuntimeServerStatus::Disabled,
+                        cached_tools: vec![disabled_tool],
+                        ..empty_server_snapshot()
+                    },
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            snapshot.filtered_tool_views(&McpRuntimeToolAllowlist::default()),
+            vec![
+                connecting_tool.host_tool_view(String::from("mcp_server_a_read_file")),
+                disconnected_tool.host_tool_view(String::from("mcp_server_b_edit_file")),
+            ]
+        );
     }
 }
