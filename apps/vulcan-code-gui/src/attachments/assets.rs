@@ -895,9 +895,10 @@ mod tests {
     fn resolve_managed_attachment_root_uses_workspace_vulcan_code_subtree() {
         let workspace_directory = unique_workspace_directory();
 
-        assert!(resolve_managed_attachment_root(&workspace_directory.to_string_lossy()).ends_with(
-            Path::new(".vulcan/code/attachments")
-        ));
+        assert!(
+            resolve_managed_attachment_root(&workspace_directory.to_string_lossy())
+                .ends_with(Path::new(".vulcan/code/attachments"))
+        );
 
         cleanup_workspace_directory(&workspace_directory);
     }

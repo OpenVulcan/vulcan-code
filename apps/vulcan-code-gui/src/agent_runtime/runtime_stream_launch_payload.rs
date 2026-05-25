@@ -150,6 +150,8 @@ mod tests {
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
             context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
         }
     }
 

@@ -202,6 +202,8 @@ impl CompactionSkillResult {
             source_until_message_id: self.source_until_message_id.clone(),
             source_until_turn_index: self.source_until_turn_index,
             context_start_message_id: Some(summary_message_id.clone()),
+            context_budget_fingerprint: None,
+            context_assembly_fingerprint: None,
             retained_tail_start_turn_index: self.retained_tail_start_turn_index,
             summary_message_id: Some(summary_message_id),
             created_at: self.created_at.clone(),
@@ -813,9 +815,8 @@ mod tests {
             ));
         }
         let runtime_state = SessionRuntimeStateEntry {
-            conversation_state: crate::conversation_protocol::conversation_state_from_session_messages(
-                &messages,
-            ),
+            conversation_state:
+                crate::conversation_protocol::conversation_state_from_session_messages(&messages),
             ..SessionRuntimeStateEntry::default()
         };
         let skill = CompactionSkill;
@@ -833,7 +834,9 @@ mod tests {
         assert!(plan.source_messages.len() < messages.len());
         assert_eq!(
             plan.source_until_message_id,
-            plan.source_messages.last().map(|message| message.id.clone())
+            plan.source_messages
+                .last()
+                .map(|message| message.id.clone())
         );
         assert!(plan.source_until_turn_index.is_some());
         assert!(plan.retained_tail_start_turn_index.is_some());
@@ -859,15 +862,22 @@ mod tests {
             policy: ContextCompactionPolicy::default(),
         };
 
-        let result =
-            CompactionSkillResult::from_model_summary(&plan, "Goal: preserve slash command behavior.");
+        let result = CompactionSkillResult::from_model_summary(
+            &plan,
+            "Goal: preserve slash command behavior.",
+        );
 
         assert_eq!(result.summary_record.kind, SessionMessageKind::User);
         assert_eq!(
             result.summary_record.record_kind,
             SessionMessageRecordKind::CompactionSummary
         );
-        assert!(result.summary_record.body.contains("Earlier context summary"));
+        assert!(
+            result
+                .summary_record
+                .body
+                .contains("Earlier context summary")
+        );
         assert!(
             result
                 .summary_record

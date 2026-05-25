@@ -742,6 +742,10 @@ pub async fn load_workspace_snapshot(
             active_openrouter_endpoint_route: None,
             last_compaction_id: row.last_compaction_id,
             context_start_message_id: row.context_start_message_id,
+            live_context_budget_fingerprint: None,
+            live_context_assembly_fingerprint: None,
+            anchor_context_budget_fingerprint: None,
+            anchor_context_assembly_fingerprint: None,
             ui_state: row
                 .ui_state_json
                 .as_deref()
@@ -1331,6 +1335,8 @@ fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompaction
         source_until_message_id: row.source_until_message_id,
         source_until_turn_index: row.source_until_turn_index,
         context_start_message_id: row.context_start_message_id,
+        context_budget_fingerprint: None,
+        context_assembly_fingerprint: None,
         retained_tail_start_turn_index: row.retained_tail_start_turn_index,
         summary_message_id: row.summary_message_id,
         created_at: row.created_at,
@@ -1347,6 +1353,10 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         active_openrouter_endpoint_route: None,
         last_compaction_id: row.last_compaction_id,
         context_start_message_id: row.context_start_message_id,
+        live_context_budget_fingerprint: None,
+        live_context_assembly_fingerprint: None,
+        anchor_context_budget_fingerprint: None,
+        anchor_context_assembly_fingerprint: None,
         ui_state: row
             .ui_state_json
             .as_deref()

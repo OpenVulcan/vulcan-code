@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use super::*;
+use crate::conversation_protocol::conversation_state_to_session_messages;
 
 /// Maintains the storage shape for one already hydrated session without scanning unrelated history.
 /// 在不扫描无关历史的前提下维护单个已水合会话的存储形态。
@@ -833,8 +834,7 @@ async fn replace_session_event_stores(
         let messages = session_messages
             .get(&session.id)
             .or_else(|| archived_session_messages.get(&session.id))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+            .map(Vec::as_slice);
         let runtime_state = session_runtime_state
             .get(&session.id)
             .or_else(|| archived_session_runtime_state.get(&session.id));
@@ -843,6 +843,16 @@ async fn replace_session_event_stores(
             .or_else(|| archived_session_compactions.get(&session.id))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let rebuilt_messages;
+        let messages = if let Some(messages) = messages {
+            messages
+        } else if let Some(runtime_state) = runtime_state {
+            rebuilt_messages =
+                conversation_state_to_session_messages(&runtime_state.conversation_state);
+            rebuilt_messages.as_slice()
+        } else {
+            &[]
+        };
         let persist_result =
             persist_session_event_store(session, messages, runtime_state, compactions)?;
         persisted_results.push((session.clone(), persist_result));

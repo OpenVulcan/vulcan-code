@@ -1145,6 +1145,43 @@ pub fn workbench_composer_panel_drag_target_style(
     }
 }
 
+/// Returns the circular context-orb style shown below the floating composer.
+/// 返回显示在悬浮输入区下方的圆形上下文指示盘样式。
+pub fn workbench_context_usage_orb_style(
+    _theme: &Theme,
+    background: Color,
+    border_color: Color,
+) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(background)),
+        text_color: Some(Color::WHITE),
+        border: Border {
+            radius: 999.0.into(),
+            width: 1.0,
+            color: border_color,
+        },
+        ..Default::default()
+    }
+}
+
+/// Returns the tooltip card style used by floating composer context diagnostics.
+/// 返回悬浮输入区上下文诊断提示卡使用的样式。
+pub fn workbench_context_usage_tooltip_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(Background::Color(
+            palette.background.base.color.scale_alpha(0.98),
+        )),
+        border: Border {
+            radius: 14.0.into(),
+            width: 1.0,
+            color: palette.background.strong.color.scale_alpha(0.24),
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the square preview-tile shell style used by staged composer attachments.
 /// 返回已暂存提示词附件使用的方形预览格外壳样式。
 pub fn workbench_composer_attachment_tile_style(theme: &Theme) -> container::Style {

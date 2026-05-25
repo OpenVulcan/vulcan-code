@@ -10,6 +10,7 @@ use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::context_budget::build_request_context_budget_snapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
+use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
 use vulcan_core::types::{
     CoreEvent as CoreControllerEvent, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
 };
@@ -37,6 +38,9 @@ pub(crate) fn apply_latest_request_snapshot(
         request_snapshot,
         observed_usage,
     ));
+    let context_assembly = build_provider_request_context_assembly(request_snapshot);
+    preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
+    preparation.context_assembly = Some(context_assembly);
     preparation.provider_request_preview_markdown =
         crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown(
             preparation,
@@ -254,6 +258,8 @@ mod tests {
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
             context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
         }
     }
 
@@ -410,6 +416,7 @@ mod tests {
         preparation.model_blueprint.capabilities.input_limit = Some(8_000);
         preparation.model_blueprint.capabilities.output_limit = Some(1_024);
         preparation.context_budget = Some(ContextBudgetSnapshot {
+            baseline_matches_active_runtime: true,
             observed_usage: Some(observed_usage.clone()),
             ..ContextBudgetSnapshot::default()
         });

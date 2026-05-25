@@ -5,6 +5,7 @@ use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_runtime_dispatch::DEFAULT_RUNTIME_MAX_TURNS_LIMIT;
 use serde_json::{Value, json};
+use vulcan_context::{ContextAssembly, build_provider_request_context_assembly};
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ProviderContinuation as CoreProviderContinuation,
@@ -51,6 +52,22 @@ pub(crate) fn build_provider_request_preview_markdown(
             )
         })
         .unwrap_or_else(|| String::from("尚未生成上下文预算快照"));
+    let context_baseline_markdown = preparation
+        .context_baseline
+        .as_ref()
+        .map(|baseline| {
+            format!(
+                "- 层数：`{}`\n- 指纹：`{}`",
+                baseline.layer_count, baseline.fingerprint
+            )
+        })
+        .unwrap_or_else(|| String::from("（尚未生成上下文基线）"));
+    let context_assembly = preparation
+        .context_assembly
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| build_provider_request_context_assembly(request_snapshot));
+    let context_layers_markdown = render_context_layers_markdown(&context_assembly);
     let tool_rows = if request_snapshot.tool_schemas.is_empty() {
         String::from("（本次请求未直接暴露工具 schema）")
     } else {
@@ -81,6 +98,10 @@ pub(crate) fn build_provider_request_preview_markdown(
             "- 历史上下文：`{}` 条\n",
             "- 工具数量：`{}` 个\n\n",
             "## Context Budget\n",
+            "{}\n\n",
+            "## Context Layers\n",
+            "{}\n\n",
+            "## Context Baseline\n",
             "{}\n\n",
             "## System Preamble\n",
             "{}\n\n",
@@ -119,6 +140,8 @@ pub(crate) fn build_provider_request_preview_markdown(
         request_snapshot.history.len(),
         request_snapshot.tool_schemas.len(),
         context_budget_label,
+        context_layers_markdown,
+        context_baseline_markdown,
         render_text_code_fence(&request_snapshot.system_prompt),
         continuation_markdown,
         outgoing_history_markdown,
@@ -128,6 +151,49 @@ pub(crate) fn build_provider_request_preview_markdown(
         request_headers_markdown,
         extra_body_markdown,
     )
+}
+
+/// Renders one compact layered-context summary for the request preview.
+/// 为请求预览渲染一份紧凑的分层上下文摘要。
+fn render_context_layers_markdown(assembly: &ContextAssembly) -> String {
+    if assembly.layers.is_empty() {
+        return String::from("（本次请求没有独立上下文层）");
+    }
+
+    assembly
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| {
+            let preview = layer.content.trim();
+            let preview = if preview.is_empty() {
+                String::from("（空）")
+            } else {
+                truncate_preview(preview, 120)
+            };
+            format!(
+                "- {}. {} · `{}` · 约 `{}` tokens · {}",
+                index + 1,
+                layer.kind.label(),
+                layer.label,
+                layer.token_estimate(),
+                preview
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Truncates one text preview to a display-safe length without breaking the request preview layout.
+/// 将一段文本预览截断到安全显示长度，避免破坏请求预览布局。
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let truncated = trimmed.chars().take(max_chars).collect::<String>();
+    format!("{truncated}…")
 }
 
 /// Renders the `vulcan-core` canonical history into a structured Markdown snapshot that is easier to inspect than one flattened prompt string.
@@ -435,6 +501,8 @@ mod tests {
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
             context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),
@@ -454,6 +522,9 @@ mod tests {
 
         assert!(markdown.contains("- 运行时：`Anthropic` · kind=`anthropic`"));
         assert!(markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages`"));
+        assert!(markdown.contains("## Context Layers"));
+        assert!(markdown.contains("## Context Baseline"));
+        assert!(markdown.contains("系统"));
         assert!(markdown.contains("## AI Specialized Tools"));
         assert!(markdown.contains("### `web_search` · 网页搜索"));
         assert!(markdown.contains("- 路由：Provider 原生"));

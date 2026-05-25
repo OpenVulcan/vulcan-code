@@ -31,6 +31,7 @@ vulcan-markdown.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true
 vulcan-core.workspace = true
+vulcan-context.workspace = true
 vldb-controller-client.workspace = true
 luaskills.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }

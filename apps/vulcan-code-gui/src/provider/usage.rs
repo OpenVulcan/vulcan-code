@@ -48,28 +48,6 @@ pub(crate) fn calibrated_input_token_estimate(
         .unwrap_or(estimated_input_tokens)
 }
 
-/// Builds one compact provider-usage label suitable for diagnostics and context-budget summaries.
-/// 构建一条适合诊断与上下文预算摘要展示的紧凑 Provider 用量标签。
-pub(crate) fn provider_usage_label(usage: &ProviderUsageSnapshot) -> String {
-    let input = usage
-        .input_tokens
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| String::from("?"));
-    let output = usage
-        .output_tokens
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| String::from("?"));
-    let reasoning = usage
-        .reasoning_tokens
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| String::from("?"));
-    let total = usage
-        .total_tokens
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| String::from("?"));
-    format!("最近实测 输入 {input} / 输出 {output} / 推理 {reasoning} / 总计 {total}")
-}
-
 #[cfg(test)]
 mod tests {
     //! Provider-usage regression tests covering extraction, persistence, and conservative calibration.

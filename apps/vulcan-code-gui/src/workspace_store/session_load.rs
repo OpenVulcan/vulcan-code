@@ -6,6 +6,7 @@
 use super::event_store::PersistedSessionEventRow;
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
+use std::collections::BTreeSet;
 
 /// Lightweight persisted session locator row used to resolve the file-backed event store.
 /// 用于解析文件化事件存储的轻量持久化会话定位行。
@@ -93,6 +94,36 @@ pub async fn load_session_hydration_snapshot(
         earliest_ordinal,
         has_more_history,
     })
+}
+
+/// Repairs duplicate canonical record ids inside one loaded conversation state so older broken sessions can recover during hydration.
+/// 修复单份已加载会话状态中的重复规范记录标识，确保旧的损坏会话能在水合阶段自动恢复。
+fn repair_duplicate_conversation_record_ids(
+    session_id: SessionId,
+    conversation_state: &mut SessionConversationState,
+) -> bool {
+    let mut seen_ids = BTreeSet::new();
+    let mut repaired = false;
+
+    for (record_index, record) in conversation_state.records.iter_mut().enumerate() {
+        if seen_ids.insert(record.id.clone()) {
+            continue;
+        }
+
+        let created_at = non_empty_timestamp_text(&record.created_at);
+        let mut candidate_id = format!("session-{session_id}-message-{created_at}-{record_index}");
+        let mut collision_suffix = 1usize;
+        while !seen_ids.insert(candidate_id.clone()) {
+            candidate_id = format!(
+                "session-{session_id}-message-{created_at}-{record_index}-{collision_suffix}"
+            );
+            collision_suffix = collision_suffix.saturating_add(1);
+        }
+        record.id = candidate_id;
+        repaired = true;
+    }
+
+    repaired
 }
 
 /// Lazily loads one older transcript page before the provided ordinal cursor.
@@ -475,6 +506,18 @@ async fn hydrate_session_runtime_state(
     runtime_state.context_start_message_id = runtime_state_cache
         .context_start_message_id
         .or(runtime_state.context_start_message_id);
+    runtime_state.live_context_budget_fingerprint = runtime_state_cache
+        .live_context_budget_fingerprint
+        .or(runtime_state.live_context_budget_fingerprint);
+    runtime_state.live_context_assembly_fingerprint = runtime_state_cache
+        .live_context_assembly_fingerprint
+        .or(runtime_state.live_context_assembly_fingerprint);
+    runtime_state.anchor_context_budget_fingerprint = runtime_state_cache
+        .anchor_context_budget_fingerprint
+        .or(runtime_state.anchor_context_budget_fingerprint);
+    runtime_state.anchor_context_assembly_fingerprint = runtime_state_cache
+        .anchor_context_assembly_fingerprint
+        .or(runtime_state.anchor_context_assembly_fingerprint);
     runtime_state.ui_state = runtime_state_cache.ui_state;
     runtime_state.last_provider_usage = runtime_state_cache
         .last_provider_usage
@@ -496,6 +539,22 @@ async fn hydrate_session_runtime_state(
         .as_ref()
         .and_then(|document| document.context_start_message_id.clone())
         .or(runtime_state.context_start_message_id);
+    runtime_state.live_context_budget_fingerprint = current_context_document
+        .as_ref()
+        .and_then(|document| document.live_context_budget_fingerprint.clone())
+        .or(runtime_state.live_context_budget_fingerprint);
+    runtime_state.live_context_assembly_fingerprint = current_context_document
+        .as_ref()
+        .and_then(|document| document.live_context_assembly_fingerprint.clone())
+        .or(runtime_state.live_context_assembly_fingerprint);
+    runtime_state.anchor_context_budget_fingerprint = current_context_document
+        .as_ref()
+        .and_then(|document| document.anchor_context_budget_fingerprint.clone())
+        .or(runtime_state.anchor_context_budget_fingerprint);
+    runtime_state.anchor_context_assembly_fingerprint = current_context_document
+        .as_ref()
+        .and_then(|document| document.anchor_context_assembly_fingerprint.clone())
+        .or(runtime_state.anchor_context_assembly_fingerprint);
     runtime_state.conversation_state.continuation =
         if runtime_state_cache.continuation.provider_id.is_some()
             || runtime_state_cache.continuation.model_id.is_some()
@@ -509,6 +568,8 @@ async fn hydrate_session_runtime_state(
         } else {
             runtime_state.conversation_state.continuation
         };
+    let _ =
+        repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
 
     Ok(Some(runtime_state))
 }
@@ -619,7 +680,9 @@ mod tests {
     //! 面向事件流会话的转录水合行为测试。
 
     use super::*;
-    use crate::conversation_protocol::append_assistant_text_message;
+    use crate::conversation_protocol::{
+        SessionConversationRecord, append_assistant_text_message,
+    };
 
     /// Builds one transcript message entry for session-load regression tests.
     /// 为会话加载回归测试构建一条转录消息项。
@@ -852,5 +915,51 @@ mod tests {
         assert_eq!(messages[0].body, "启动后要能看到我");
         assert_eq!(messages[1].body, "当然可以");
         assert!(tool_detail_messages.is_empty());
+    }
+
+    /// Verifies hydration repairs duplicate canonical record ids that were previously persisted by the broken runtime id generator.
+    /// 验证水合过程会修复旧版错误运行时标识生成器持久化下来的重复规范记录标识。
+    #[test]
+    fn repair_duplicate_conversation_record_ids_rewrites_later_duplicates() {
+        let session_id = SessionId::from_u128(0x30cf28c9);
+        let mut conversation_state = SessionConversationState {
+            messages: Vec::new(),
+            records: vec![
+                SessionConversationRecord {
+                    id: String::from("session-old-message-100-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("Summary"),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("100"),
+                },
+                SessionConversationRecord {
+                    id: String::from("session-old-message-100-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::TurnStats,
+                    visible: true,
+                    title: String::from("Turn Stats"),
+                    body: String::from("stats"),
+                    metadata: None,
+                    created_at: String::from("100"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+
+        let repaired =
+            repair_duplicate_conversation_record_ids(session_id, &mut conversation_state);
+
+        assert!(repaired);
+        assert_eq!(
+            conversation_state.records[0].id,
+            "session-old-message-100-1"
+        );
+        assert_eq!(
+            conversation_state.records[1].id,
+            format!("session-{session_id}-message-100-1")
+        );
     }
 }

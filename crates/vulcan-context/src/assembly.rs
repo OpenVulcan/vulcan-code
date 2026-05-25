@@ -1,0 +1,436 @@
+//! Layered context assembly primitives reused by request builders, previews, and future baseline tracking.
+//! 供请求构建、预览与后续基线追踪复用的分层上下文装配基础能力。
+
+use serde::{Deserialize, Serialize};
+use vulcan_core::types::{
+    ConversationMessage, ConversationPayload, ProviderRequestSnapshot, ProviderRequestToolSchema,
+};
+
+/// Logical layer kind inside one assembled context stack.
+/// 单个已装配上下文栈中的逻辑层类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContextLayerKind {
+    /// Fixed system-level instructions.
+    /// 固定系统级说明。
+    System,
+    /// Project-specific rules or local repository instructions.
+    /// 项目级规则或本地仓库说明。
+    ProjectRules,
+    /// Runtime-state details such as permissions, tools, or active mode.
+    /// 运行时状态细节，例如权限、工具或活动模式。
+    Runtime,
+    /// Recent canonical conversation history.
+    /// 最近的规范会话历史。
+    History,
+    /// Retrieved external or historical context.
+    /// 检索得到的外部或历史上下文。
+    Retrieval,
+    /// Compaction summary or retained tail after history rewrite.
+    /// 压缩摘要或历史重写后保留的尾部内容。
+    Compaction,
+    /// Tool-related context such as tool schemas or tool availability notes.
+    /// 工具相关上下文，例如工具 schema 或工具可用性说明。
+    Tools,
+    /// Direct user-authored instruction text.
+    /// 用户直接编写的指令文本。
+    User,
+}
+
+impl ContextLayerKind {
+    /// Returns one short display label for previews and diagnostics.
+    /// 返回供预览与诊断使用的一条简短显示标签。
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::System => "系统",
+            Self::ProjectRules => "项目规则",
+            Self::Runtime => "运行时",
+            Self::History => "历史",
+            Self::Retrieval => "检索",
+            Self::Compaction => "压缩",
+            Self::Tools => "工具",
+            Self::User => "用户",
+        }
+    }
+}
+
+/// One named context layer stored as plain text for later rendering and request assembly.
+/// 一条以纯文本保存、供后续渲染与请求装配使用的已命名上下文层。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextLayer {
+    /// Logical kind used to group and reorder the layer.
+    /// 用于分组与重排该层的逻辑类型。
+    pub kind: ContextLayerKind,
+    /// Human-readable label used by previews and diagnostics.
+    /// 供预览与诊断使用的人类可读标签。
+    pub label: String,
+    /// Plain-text payload carried by the layer.
+    /// 该层携带的纯文本载荷。
+    pub content: String,
+}
+
+impl ContextLayer {
+    /// Builds one new context layer from kind, label, and content.
+    /// 根据类型、标签与内容构建一条新的上下文层。
+    pub fn new(
+        kind: ContextLayerKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Returns whether this layer carries any visible text after trimming.
+    /// 返回该层在去除空白后是否仍然包含可见文本。
+    pub fn has_content(&self) -> bool {
+        !self.content.trim().is_empty()
+    }
+
+    /// Returns a lightweight token estimate for this layer using a character heuristic.
+    /// 使用字符启发式返回该层的轻量 Token 估算值。
+    pub fn token_estimate(&self) -> usize {
+        estimate_text_tokens(&self.content)
+    }
+}
+
+/// One assembled context stack that can be rendered, diffed, or summarized before a provider request.
+/// 一份可在 Provider 请求前渲染、对比或汇总的已装配上下文栈。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextAssembly {
+    /// Ordered context layers that will be combined into one request.
+    /// 将被组合进单次请求的有序上下文层集合。
+    pub layers: Vec<ContextLayer>,
+}
+
+impl ContextAssembly {
+    /// Builds one empty context assembly.
+    /// 构建一份空的上下文装配结果。
+    pub fn new() -> Self {
+        Self { layers: Vec::new() }
+    }
+
+    /// Appends one layer to the end of the assembly.
+    /// 向装配结果末尾追加一条上下文层。
+    pub fn push(&mut self, layer: ContextLayer) {
+        self.layers.push(layer);
+    }
+
+    /// Extends the assembly with multiple layers in order.
+    /// 按顺序用多条上下文层扩展装配结果。
+    pub fn extend(&mut self, layers: impl IntoIterator<Item = ContextLayer>) {
+        self.layers.extend(layers);
+    }
+
+    /// Returns whether the assembly currently contains no visible layers.
+    /// 返回该装配结果当前是否不包含任何可见层。
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+
+    /// Returns the total approximate token estimate across all layers.
+    /// 返回所有上下文层合计的近似 Token 估算值。
+    pub fn token_estimate(&self) -> usize {
+        self.layers.iter().map(ContextLayer::token_estimate).sum()
+    }
+
+    /// Returns one compact human-readable summary line for diagnostics and previews.
+    /// 返回一条供诊断与预览使用的紧凑人类可读摘要行。
+    pub fn summary_note(&self) -> String {
+        if self.layers.is_empty() {
+            return String::from("上下文为空");
+        }
+
+        let total_tokens = self.token_estimate();
+        let labels = self
+            .layers
+            .iter()
+            .map(|layer| format!("{}({})", layer.label, layer.token_estimate()))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        format!(
+            "{} 层 · 约 {} tokens · {}",
+            self.layers.len(),
+            total_tokens,
+            labels
+        )
+    }
+
+    /// Builds one layered assembly from a provider request snapshot.
+    /// 根据 Provider 请求快照构建一份分层上下文装配结果。
+    pub fn from_provider_request_snapshot(snapshot: &ProviderRequestSnapshot) -> Self {
+        let mut assembly = Self::new();
+
+        if !snapshot.system_prompt.trim().is_empty() {
+            assembly.push(ContextLayer::new(
+                ContextLayerKind::System,
+                "System Preamble",
+                snapshot.system_prompt.clone(),
+            ));
+        }
+
+        assembly.extend(snapshot.history.iter().enumerate().map(|(index, message)| {
+            ContextLayer::new(
+                ContextLayerKind::History,
+                format!("History #{} · {}", index + 1, render_message_role(message)),
+                render_message_layer_content(message),
+            )
+        }));
+
+        if !snapshot.prompt.trim().is_empty() {
+            assembly.push(ContextLayer::new(
+                ContextLayerKind::User,
+                "Effective Outgoing Prompt",
+                snapshot.prompt.clone(),
+            ));
+        }
+
+        assembly.extend(snapshot.tool_schemas.iter().map(render_tool_schema_layer));
+
+        assembly
+    }
+}
+
+/// Builds one layered context assembly from a provider request snapshot.
+/// 根据 Provider 请求快照构建一份分层上下文装配结果。
+pub fn build_provider_request_context_assembly(
+    snapshot: &ProviderRequestSnapshot,
+) -> ContextAssembly {
+    ContextAssembly::from_provider_request_snapshot(snapshot)
+}
+
+/// One stable baseline snapshot used to tell whether a later assembly still matches the previous shape.
+/// 用于判断后续装配结果是否仍匹配先前形态的稳定基线快照。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextBaseline {
+    /// Stable fingerprint that identifies one previously accepted context shape.
+    /// 标识某个先前已确认上下文形态的稳定指纹。
+    pub fingerprint: String,
+    /// Number of layers that were part of the baseline snapshot.
+    /// 该基线快照中包含的层数量。
+    pub layer_count: usize,
+}
+
+impl ContextBaseline {
+    /// Builds one baseline snapshot from the current assembly.
+    /// 根据当前装配结果构建一份基线快照。
+    pub fn from_assembly(assembly: &ContextAssembly) -> Self {
+        Self {
+            fingerprint: build_context_fingerprint(assembly),
+            layer_count: assembly.layers.len(),
+        }
+    }
+
+    /// Returns whether the provided assembly still matches this baseline exactly.
+    /// 返回给定装配结果是否仍与当前基线完全匹配。
+    pub fn matches(&self, assembly: &ContextAssembly) -> bool {
+        self.layer_count == assembly.layers.len()
+            && self.fingerprint == build_context_fingerprint(assembly)
+    }
+}
+
+/// Builds one stable fingerprint for a layered context assembly.
+/// 为分层上下文装配结果构建一份稳定指纹。
+pub fn build_context_fingerprint(assembly: &ContextAssembly) -> String {
+    assembly
+        .layers
+        .iter()
+        .map(|layer| {
+            format!(
+                "{:?}|{}|{}",
+                layer.kind,
+                layer.label.trim(),
+                layer.content.trim()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Renders one provider request tool schema as a dedicated context layer.
+/// 将单个 Provider 请求工具 schema 渲染为独立上下文层。
+fn render_tool_schema_layer(definition: &ProviderRequestToolSchema) -> ContextLayer {
+    ContextLayer::new(
+        ContextLayerKind::Tools,
+        format!("Tool Schema · {}", definition.id),
+        render_tool_schema_content(definition),
+    )
+}
+
+/// Renders one conversation message into a plain-text context layer payload.
+/// 将单条会话消息渲染为纯文本上下文层载荷。
+fn render_message_layer_content(message: &ConversationMessage) -> String {
+    match &message.payload {
+        ConversationPayload::UserText { text, attachments } => {
+            let mut sections = vec![text.trim().to_string()];
+            if !attachments.is_empty() {
+                sections.push(String::from("附件："));
+                sections.extend(attachments.iter().map(|attachment| {
+                    let byte_label = attachment
+                        .byte_len
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("未知"));
+                    format!(
+                        "- kind={:?} · file={} · mime={} · bytes={}",
+                        attachment.kind, attachment.file_name, attachment.mime_type, byte_label
+                    )
+                }));
+            }
+            sections
+                .into_iter()
+                .filter(|section| !section.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        ConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id,
+            tool_calls,
+            ..
+        } => {
+            let mut sections = Vec::new();
+            if !text.trim().is_empty() {
+                sections.push(format!("文本：\n{}", text.trim()));
+            }
+            if !reasoning.trim().is_empty() {
+                sections.push(format!("推理：\n{}", reasoning.trim()));
+            }
+            if let Some(provider_message_id) = provider_message_id.as_deref() {
+                sections.push(format!("provider_message_id={provider_message_id}"));
+            }
+            if !tool_calls.is_empty() {
+                sections.push(String::from("工具调用："));
+                sections.extend(tool_calls.iter().map(|tool_call| {
+                    let arguments = serde_json::to_string_pretty(&tool_call.arguments)
+                        .unwrap_or_else(|_| tool_call.arguments.to_string());
+                    format!(
+                        "- {} · id={} \n{}",
+                        tool_call.tool_name, tool_call.id, arguments
+                    )
+                }));
+            }
+            sections.join("\n")
+        }
+        ConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => {
+            let mut sections = vec![format!("tool_result_id={tool_result_id}")];
+            if let Some(tool_call_id) = tool_call_id.as_deref() {
+                sections.push(format!("tool_call_id={tool_call_id}"));
+            }
+            if !text.trim().is_empty() {
+                sections.push(text.trim().to_string());
+            }
+            sections.join("\n")
+        }
+    }
+}
+
+/// Renders one conversation message role as a short human-readable label.
+/// 将单条会话消息角色渲染为简短的人类可读标签。
+fn render_message_role(message: &ConversationMessage) -> &'static str {
+    match &message.payload {
+        ConversationPayload::UserText { .. } => "user",
+        ConversationPayload::Assistant { .. } => "assistant",
+        ConversationPayload::ToolResult { .. } => "tool_result",
+    }
+}
+
+/// Renders one provider request tool schema into a plain-text context layer payload.
+/// 将单个 Provider 请求工具 schema 渲染为纯文本上下文层载荷。
+fn render_tool_schema_content(definition: &ProviderRequestToolSchema) -> String {
+    let parameters = serde_json::to_string_pretty(&definition.parameters_schema)
+        .unwrap_or_else(|_| definition.parameters_schema.to_string());
+    format!(
+        "name={}\nsource={}\ndescription={}\n{}",
+        definition.name, definition.source_label, definition.description, parameters
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    //! Layered context assembly regression tests covering provider-request conversion and baseline stability.
+    //! 覆盖 Provider 请求转换与基线稳定性的分层上下文装配回归测试。
+
+    use super::{
+        ContextAssembly, ContextBaseline, ContextLayerKind, build_provider_request_context_assembly,
+    };
+    use serde_json::json;
+    use vulcan_core::types::{
+        ConversationMessage, ConversationPayload, ProviderContinuation, ProviderRequestSnapshot,
+        ProviderRequestToolSchema,
+    };
+
+    /// Builds one provider request snapshot that exercises all high-value context layers.
+    /// 构建一份覆盖高价值上下文层的 Provider 请求快照。
+    fn sample_snapshot() -> ProviderRequestSnapshot {
+        ProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::from("system"),
+            prompt: String::from("prompt"),
+            history: vec![ConversationMessage {
+                id: String::from("m1"),
+                payload: ConversationPayload::UserText {
+                    text: String::from("hello"),
+                    attachments: Vec::new(),
+                },
+            }],
+            temperature: None,
+            max_turns: 4,
+            tool_schemas: vec![ProviderRequestToolSchema {
+                id: String::from("tool-1"),
+                name: String::from("tool-1"),
+                description: String::from("tool"),
+                source_label: String::from("native"),
+                parameters_schema: json!({"type":"object","properties":{}}),
+            }],
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        }
+    }
+
+    /// Converts one provider request snapshot into visible context layers with a stable baseline.
+    /// 将一份 Provider 请求快照转换为可见上下文层，并保持稳定基线。
+    #[test]
+    fn provider_request_snapshot_builds_layered_context() {
+        let assembly = build_provider_request_context_assembly(&sample_snapshot());
+
+        assert_eq!(assembly.layers.len(), 4);
+        assert_eq!(assembly.layers[0].kind, ContextLayerKind::System);
+        assert_eq!(assembly.layers[1].kind, ContextLayerKind::History);
+        assert_eq!(assembly.layers[2].kind, ContextLayerKind::User);
+        assert_eq!(assembly.layers[3].kind, ContextLayerKind::Tools);
+        assert!(!assembly.summary_note().is_empty());
+    }
+
+    /// Keeps the baseline stable for identical layered context assemblies.
+    /// 对相同的分层上下文装配结果保持基线稳定。
+    #[test]
+    fn layered_context_baseline_matches_identical_assembly() {
+        let assembly = ContextAssembly::from_provider_request_snapshot(&sample_snapshot());
+        let baseline = ContextBaseline::from_assembly(&assembly);
+
+        assert!(baseline.matches(&assembly));
+        assert_eq!(baseline.layer_count, 4);
+        assert!(!baseline.fingerprint.is_empty());
+    }
+}
+
+/// Estimates one text payload using a lightweight character heuristic.
+/// 使用轻量字符启发式估算一段文本载荷。
+fn estimate_text_tokens(text: &str) -> usize {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+
+    let characters = trimmed.chars().count();
+    ((characters + 3usize) / 4usize).max(1usize)
+}

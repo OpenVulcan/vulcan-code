@@ -11,11 +11,11 @@ pub(crate) mod model;
 mod oauth_flow;
 mod pending_prompt_queue;
 mod perf;
-mod session_prompt_compaction;
 #[path = "../session/loading.rs"]
 mod session_loading;
 #[path = "../session/projection.rs"]
 mod session_projection;
+mod session_prompt_compaction;
 mod subagent_runtime;
 mod task_tree;
 mod views;
@@ -104,11 +104,11 @@ use crate::selectable_transcript::{
     view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,
 };
+use crate::skills::session::{CompactionPlan, CompactionSkillResult};
 use crate::skills::{
     CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
     SummarySkillInput, TitleAgentInput,
 };
-use crate::skills::session::{CompactionPlan, CompactionSkillResult};
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
 use crate::tooling::change_set::{
@@ -1215,27 +1215,75 @@ fn merge_projected_session_messages_into_existing_window(
         .cloned()
         .map(|message| (message.id.clone(), message))
         .collect::<BTreeMap<_, _>>();
+    let projected_index_by_id = projected_messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| (message.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
     let mut consumed_projected_ids = BTreeSet::new();
     let mut merged_messages =
         Vec::with_capacity(existing_messages.len().max(projected_messages.len()));
+    let mut latest_existing_projection_index = existing_messages
+        .iter()
+        .filter_map(|message| projected_index_by_id.get(&message.id).copied())
+        .max();
 
     for existing_message in existing_messages {
         if let Some(projected_message) = projected_by_id.get(&existing_message.id).cloned() {
             consumed_projected_ids.insert(existing_message.id.clone());
+            merged_messages.push(projected_message);
+        } else if let Some(projected_message) = projected_messages
+            .iter()
+            .find(|projected_message| {
+                !consumed_projected_ids.contains(&projected_message.id)
+                    && turn_stats_message_semantically_matches(existing_message, projected_message)
+            })
+            .cloned()
+        {
+            if let Some(projected_index) = projected_index_by_id.get(&projected_message.id).copied()
+            {
+                latest_existing_projection_index = Some(
+                    latest_existing_projection_index
+                        .map(|latest_index| latest_index.max(projected_index))
+                        .unwrap_or(projected_index),
+                );
+            }
+            consumed_projected_ids.insert(projected_message.id.clone());
             merged_messages.push(projected_message);
         } else {
             merged_messages.push(existing_message.clone());
         }
     }
 
-    for projected_message in projected_messages {
+    for (projected_index, projected_message) in projected_messages.into_iter().enumerate() {
         if consumed_projected_ids.contains(&projected_message.id) {
+            continue;
+        }
+        if latest_existing_projection_index
+            .is_some_and(|latest_index| projected_index <= latest_index)
+        {
             continue;
         }
         merged_messages.push(projected_message);
     }
 
     merged_messages
+}
+
+/// Returns whether two visible turn-statistics rows should be treated as the same logical row even when their runtime ids drift after reload or reprojection.
+/// 返回两条可见轮次统计行在重载或重新投影后即使运行时 id 漂移，也应视为同一逻辑行。
+fn turn_stats_message_semantically_matches(
+    existing_message: &SessionMessageEntry,
+    projected_message: &SessionMessageEntry,
+) -> bool {
+    existing_message.record_kind == SessionMessageRecordKind::TurnStats
+        && projected_message.record_kind == SessionMessageRecordKind::TurnStats
+        && existing_message.kind == projected_message.kind
+        && existing_message.visible == projected_message.visible
+        && existing_message.title == projected_message.title
+        && existing_message.body == projected_message.body
+        && existing_message.created_at == projected_message.created_at
+        && existing_message.metadata == projected_message.metadata
 }
 
 /// Returns whether one transcript message is a tool-detail row whose heavy body should stay out of the main UI projection.
@@ -2580,6 +2628,16 @@ fn parse_session_id_text(value: Option<&str>) -> Option<SessionId> {
         .and_then(|value| SessionId::parse_str(value).ok())
 }
 
+/// Builds one stable session record identifier from the canonical conversation record ordinal instead of the visible transcript window length.
+/// 基于规范会话记录序号而不是可见转录窗口长度，构建一条稳定的会话记录标识。
+fn build_session_record_message_id(
+    session_id: SessionId,
+    created_at: &str,
+    conversation_record_ordinal: usize,
+) -> String {
+    format!("session-{session_id}-message-{created_at}-{conversation_record_ordinal}")
+}
+
 /// Parses one persisted task-session payload object into a cacheable subagent task panel state.
 /// 将一份持久化 task 会话载荷对象解析为可缓存的子代理任务面板状态。
 fn parse_subagent_task_panel_payload(
@@ -3458,6 +3516,9 @@ pub struct VulcanWorkbench {
     /// Last provider-request preview buffers keyed by visible session id.
     /// 以可见会话标识为键保存的最后一次 Provider 请求预览缓冲区。
     session_last_api_request_buffers: BTreeMap<SessionId, text_editor::Content>,
+    /// Latest per-session API-request preview markdown cached before optional editor-buffer materialization.
+    /// 在可选编辑器缓冲区物化前缓存的按会话归属最近 API 请求预览 Markdown 原文。
+    session_last_api_request_markdowns: BTreeMap<SessionId, String>,
     /// Unified selectable transcript projections keyed by visible session id.
     /// 以可见会话标识为键保存的统一可选转录投影对象。
     session_agent_view_selectable_documents:
@@ -3749,6 +3810,9 @@ pub struct VulcanWorkbench {
     /// Human-readable context usage detail shown beside the budget bar.
     /// 展示在预算条旁边的人类可读上下文占用详情。
     context_usage_detail: String,
+    /// Latest visible context-budget snapshot mirrored into the workbench surface.
+    /// 镜像到工作台表面的最近一次可见上下文预算快照。
+    visible_context_budget_snapshot: Option<ContextBudgetSnapshot>,
     /// Whether plan-first workflow is enabled.
     /// 是否启用先计划后执行流程。
     generate_plan: bool,
@@ -5438,9 +5502,7 @@ fn build_composer_slash_command_state(composer_text: &str) -> Option<ComposerSla
         .to_ascii_lowercase();
     let visible_commands = ComposerSlashCommand::ALL
         .into_iter()
-        .filter(|command| {
-            filter_text.is_empty() || command.matches_filter(filter_text.as_str())
-        })
+        .filter(|command| filter_text.is_empty() || command.matches_filter(filter_text.as_str()))
         .collect::<Vec<_>>();
     if visible_commands.is_empty() {
         return None;
@@ -8302,6 +8364,7 @@ impl VulcanWorkbench {
             session_agent_view_buffers: BTreeMap::new(),
             session_agent_view_raw_buffers: BTreeMap::new(),
             session_last_api_request_buffers: BTreeMap::new(),
+            session_last_api_request_markdowns: BTreeMap::new(),
             session_agent_view_selectable_documents: BTreeMap::new(),
             session_agent_view_documents: BTreeMap::new(),
             session_inline_agent_view_documents: BTreeMap::new(),
@@ -8408,6 +8471,7 @@ impl VulcanWorkbench {
             temperature: 0.25,
             context_usage: 0.0,
             context_usage_detail: String::from("尚未生成预算快照"),
+            visible_context_budget_snapshot: None,
             generate_plan: false,
             run_cargo_check: true,
             persist_memory: true,
@@ -8555,6 +8619,7 @@ impl VulcanWorkbench {
                 self.session_agent_view_buffers.clear();
                 self.session_agent_view_raw_buffers.clear();
                 self.session_last_api_request_buffers.clear();
+                self.session_last_api_request_markdowns.clear();
                 self.session_agent_view_selectable_documents.clear();
                 self.session_agent_view_documents.clear();
                 self.session_inline_agent_view_documents.clear();
@@ -11844,6 +11909,7 @@ impl VulcanWorkbench {
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_subagent_panel = None;
                 self.rebuild_subagent_task_cache_for_session(session_id);
+                self.sync_context_usage_from_session_budget(session_id);
                 self.session_agent_view_follow_tail
                     .insert(session_id, !has_pending_search_navigation);
                 self.session_streaming_thinking_follow_tail
@@ -11896,6 +11962,7 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
+                self.ensure_session_last_api_request_preview_buffer(session_id);
                 Task::batch([
                     self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
                     self.maybe_follow_selected_session_transcript_tail(session_id),
@@ -12113,6 +12180,7 @@ impl VulcanWorkbench {
                     return Task::none();
                 };
 
+                self.ensure_session_last_api_request_preview_buffer(session_id);
                 if let Some(content) = self.session_last_api_request_buffers.get_mut(&session_id) {
                     content.perform(action);
                 }
@@ -12966,12 +13034,12 @@ impl VulcanWorkbench {
                             preparation.session_id,
                             preparation.provider_request_preview_markdown.clone(),
                         );
-                        self.last_execution_preparation = Some(preparation.clone());
                         self.sync_context_usage_from_preparation(Some(&preparation));
                         self.update_session_runtime_identity_from_preparation(
                             preparation.session_id,
                             &preparation,
                         );
+                        self.last_execution_preparation = Some(preparation);
                         self.status_message =
                             String::from("真实执行已开始，正在分离思考与输出并持续写入工作台。");
                         self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
@@ -13609,7 +13677,9 @@ impl VulcanWorkbench {
         self.replace_composer_text_preserving_attachments(String::new());
         let command_task = match command {
             ComposerSlashCommand::Model => self.open_workbench_model_picker(),
-            ComposerSlashCommand::Compact => self.execute_manual_selected_session_history_compaction(),
+            ComposerSlashCommand::Compact => {
+                self.execute_manual_selected_session_history_compaction()
+            }
             ComposerSlashCommand::Reasoning => Task::done(Message::OpenWorkbenchReasoningPicker),
         };
         let persist_task = self.persist_workspace_snapshot_task();
@@ -14731,11 +14801,24 @@ impl VulcanWorkbench {
     /// Builds one persistence-safe workspace snapshot that excludes transient draft sessions until they become real conversations.
     /// 构建一份可安全持久化的工作台快照，在临时草稿会话成为真实对话前将其排除在外。
     fn build_persistable_workspace_snapshot(&self) -> WorkspaceSnapshot {
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "build_persistable_workspace_snapshot",
+            format!(
+                "visible_sessions={} archived_sessions={} dirty_payload={} dirty_messages={}",
+                self.sessions.len(),
+                self.archived_sessions.len(),
+                self.dirty_session_payload_ids.len(),
+                self.dirty_session_message_ids.len()
+            ),
+        );
+        let mut phase_started_at = Instant::now();
         let visible_session_ids = self
             .task_projects
             .iter()
             .flat_map(|project| project.session_ids.iter().copied())
             .collect::<BTreeSet<_>>();
+        perf_trace.checkpoint("collect_visible_session_ids", phase_started_at);
+        phase_started_at = Instant::now();
         // Deduplicate active and archived session summaries by stable session id and let active sessions win whenever overlap still exists in memory.
         // 按稳定会话标识去重活动与归档会话摘要，并在内存里仍有重叠时优先保留活动会话。
         let mut visible_session_seen = BTreeSet::new();
@@ -14762,6 +14845,8 @@ impl VulcanWorkbench {
             .iter()
             .map(|session| session.id)
             .collect::<BTreeSet<_>>();
+        perf_trace.checkpoint("build_session_sets", phase_started_at);
+        phase_started_at = Instant::now();
         let selected_session = if visible_session_ids.contains(&self.selected_session)
             || archived_session_ids.contains(&self.selected_session)
         {
@@ -14791,36 +14876,32 @@ impl VulcanWorkbench {
                     || archived_session_ids.contains(session_id)
             })
             .collect::<BTreeSet<_>>();
+        perf_trace.checkpoint("resolve_dirty_sets", phase_started_at);
+        phase_started_at = Instant::now();
 
-        WorkspaceSnapshot {
+        let snapshot = WorkspaceSnapshot {
             task_projects: self.task_projects.clone(),
             archived_task_projects: self.archived_task_projects.clone(),
             sessions: visible_sessions,
             archived_sessions: archived_sessions.clone(),
             session_messages: self
-                .session_runtime_state
+                .session_messages
                 .iter()
                 .filter(|(session_id, _)| visible_session_ids.contains(session_id))
                 .filter(|(session_id, _)| replaceable_session_message_ids.contains(session_id))
-                .map(|(session_id, state)| {
-                    (
-                        *session_id,
-                        conversation_state_to_session_messages(&state.conversation_state),
-                    )
-                })
+                .filter(|(session_id, _)| !self.session_runtime_state.contains_key(session_id))
+                .map(|(session_id, messages)| (*session_id, messages.clone()))
                 .filter(|(_, messages)| !messages.is_empty())
                 .collect(),
             archived_session_messages: self
-                .archived_session_runtime_state
+                .archived_session_messages
                 .iter()
                 .filter(|(session_id, _)| archived_session_ids.contains(session_id))
                 .filter(|(session_id, _)| replaceable_session_message_ids.contains(session_id))
-                .map(|(session_id, state)| {
-                    (
-                        *session_id,
-                        conversation_state_to_session_messages(&state.conversation_state),
-                    )
+                .filter(|(session_id, _)| {
+                    !self.archived_session_runtime_state.contains_key(session_id)
                 })
+                .map(|(session_id, messages)| (*session_id, messages.clone()))
                 .filter(|(_, messages)| !messages.is_empty())
                 .collect(),
             session_compactions: self
@@ -14860,7 +14941,10 @@ impl VulcanWorkbench {
             expanded_task_projects: self.expanded_task_projects.clone(),
             selected_session,
             hydrated_session_ids: replaceable_session_payload_ids,
-        }
+        };
+        perf_trace.checkpoint("clone_snapshot_payloads", phase_started_at);
+        perf_trace.finish();
+        snapshot
     }
 
     /// Rebuilds the cached diff hunk payloads and refreshes visible buffers.
@@ -15356,28 +15440,21 @@ impl VulcanWorkbench {
         title: impl Into<String>,
         detail: impl Into<String>,
     ) {
+        let entry = ActivityEntry::new(level, title, detail);
+        let buffer = text_editor::Content::with_text(&entry.detail);
         // Insert at the front so the latest orchestration feedback remains visible immediately.
         // 采用头插方式，让最新的编排反馈可以被立即看到。
-        self.activities
-            .insert(0, ActivityEntry::new(level, title, detail));
+        self.activities.insert(0, entry);
+        self.activity_raw_buffers.insert(0, buffer);
 
         // Trim the log to a manageable size so the prototype stays readable.
         // 将日志修剪到可管理范围内，保证原型界面持续可读。
         if self.activities.len() > 8 {
             self.activities.truncate(8);
         }
-
-        self.rebuild_activity_raw_buffers();
-    }
-
-    /// Rebuilds all selectable activity-detail buffers from the current inspector log entries.
-    /// 根据当前检查面板日志项重建全部可选活动详情缓冲区。
-    fn rebuild_activity_raw_buffers(&mut self) {
-        self.activity_raw_buffers = self
-            .activities
-            .iter()
-            .map(|entry| text_editor::Content::with_text(&entry.detail))
-            .collect();
+        if self.activity_raw_buffers.len() > 8 {
+            self.activity_raw_buffers.truncate(8);
+        }
     }
 
     /// Appends one transcript message to the target session while preserving stable insertion order.
@@ -15477,33 +15554,33 @@ impl VulcanWorkbench {
         session_id: SessionId,
         entry: SessionMessageEntry,
     ) -> String {
-        let session_message_count = self
-            .session_messages
-            .get(&session_id)
-            .map(|messages| messages.len())
+        self.ensure_session_conversation_state_loaded(session_id);
+        let conversation_record_count = self
+            .session_runtime_state(session_id)
+            .map(|runtime_state| runtime_state.conversation_state.records.len())
             .unwrap_or(0);
-        let message_id = format!(
-            "session-{session_id}-message-{}-{session_message_count}",
-            current_unix_millis_text()
-        );
         let created_at = current_unix_millis_text();
+        let message_id =
+            build_session_record_message_id(session_id, &created_at, conversation_record_count);
         let materialized_entry = entry.with_runtime_metadata(message_id.clone(), created_at);
         let projection_entry = compact_tool_detail_message_for_projection(&materialized_entry);
         self.dirty_session_message_ids.insert(session_id);
         self.append_session_record_to_conversation(session_id, &materialized_entry);
         self.remember_tool_detail_message(session_id, &materialized_entry);
-        self.session_message_raw_buffers.insert(
-            message_id.clone(),
-            text_editor::Content::with_text(&projection_entry.body),
-        );
-        let (markdown_content, markdown_buffer) =
-            parse_selectable_markdown_body(&projection_entry.body, &self.app_theme);
-        self.session_message_markdown
-            .insert(message_id.clone(), markdown_content);
-        self.session_message_markdown_buffers
-            .insert(message_id.clone(), markdown_buffer);
-        self.sync_session_messages_from_conversation_state(session_id);
-        self.refresh_session_agent_view_buffers(session_id);
+        if materialized_entry.visible {
+            self.session_message_raw_buffers.insert(
+                message_id.clone(),
+                text_editor::Content::with_text(&projection_entry.body),
+            );
+            let (markdown_content, markdown_buffer) =
+                parse_selectable_markdown_body(&projection_entry.body, &self.app_theme);
+            self.session_message_markdown
+                .insert(message_id.clone(), markdown_content);
+            self.session_message_markdown_buffers
+                .insert(message_id.clone(), markdown_buffer);
+            self.sync_session_messages_from_conversation_state(session_id);
+            self.refresh_session_agent_view_buffers(session_id);
+        }
         message_id
     }
 
@@ -16019,11 +16096,29 @@ impl VulcanWorkbench {
     ) {
         let summary_message_id =
             self.push_session_derived_record(session_id, compaction_result.summary_record.clone());
-        let checkpoint = compaction_result.materialize_checkpoint(summary_message_id);
+        let mut checkpoint = compaction_result.materialize_checkpoint(summary_message_id);
         let created_at = checkpoint.created_at.clone();
         let compaction_id = checkpoint.id.clone();
         let context_start_message_id = checkpoint.context_start_message_id.clone();
         let summary_message_id = checkpoint.summary_message_id.clone();
+        let checkpoint_budget_fingerprint = checkpoint.context_budget_fingerprint.clone();
+        let checkpoint_assembly_fingerprint = checkpoint.context_assembly_fingerprint.clone();
+        if let Some(runtime_state_snapshot) = self.session_runtime_state.get(&session_id) {
+            checkpoint.context_budget_fingerprint = runtime_state_snapshot
+                .live_context_budget_fingerprint
+                .clone();
+            checkpoint.context_assembly_fingerprint = runtime_state_snapshot
+                .live_context_assembly_fingerprint
+                .clone();
+        }
+        let checkpoint_budget_fingerprint = checkpoint
+            .context_budget_fingerprint
+            .clone()
+            .or(checkpoint_budget_fingerprint);
+        let checkpoint_assembly_fingerprint = checkpoint
+            .context_assembly_fingerprint
+            .clone()
+            .or(checkpoint_assembly_fingerprint);
         self.session_compactions
             .entry(session_id)
             .or_default()
@@ -16033,6 +16128,8 @@ impl VulcanWorkbench {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
             runtime_state.last_compaction_id = Some(compaction_id);
             runtime_state.context_start_message_id = context_start_message_id;
+            runtime_state.anchor_context_budget_fingerprint = checkpoint_budget_fingerprint;
+            runtime_state.anchor_context_assembly_fingerprint = checkpoint_assembly_fingerprint;
             runtime_state.updated_at = created_at;
         }
         if let Some(summary_message_id) = summary_message_id {
@@ -16157,7 +16254,10 @@ impl VulcanWorkbench {
             SessionPromptCompactionTrigger::BudgetAuto => "上下文预算触发压缩",
         };
         let provider_request_note = if execution.provider_request_count > 0 {
-            format!(" 本次压缩共发起 {} 次 Provider 请求。", execution.provider_request_count)
+            format!(
+                " 本次压缩共发起 {} 次 Provider 请求。",
+                execution.provider_request_count
+            )
         } else {
             String::new()
         };
@@ -16238,16 +16338,18 @@ impl VulcanWorkbench {
             session_id,
             &runtime_state_snapshot,
             &messages,
+            false,
         );
-        let Some(plan) = self.session_skill_chain.plan_compaction(
-            CompactionSkillInput {
+        let Some(plan) = self
+            .session_skill_chain
+            .plan_compaction(CompactionSkillInput {
                 session_id,
                 messages: &messages,
                 all_messages: &full_session_messages,
                 runtime_state: &runtime_state_snapshot,
                 policy: ContextCompactionPolicy::default(),
-            },
-        ) else {
+            })
+        else {
             self.sync_context_usage_from_session_budget(session_id);
             self.status_message = String::from("当前会话暂时没有可压缩的历史上下文。");
             return operation::focus(COMPOSER_EDITOR_ID);
@@ -16358,11 +16460,24 @@ impl VulcanWorkbench {
     fn append_session_summary_output(
         &mut self,
         session_id: SessionId,
-        report: &ExecutionRunReport,
+        assistant_output: &str,
     ) -> String {
+        let report = ExecutionRunReport {
+            session_id,
+            preparation: None,
+            assistant_output: Some(assistant_output.to_string()),
+            thinking_output: None,
+            conversation_state: None,
+            provider_request_count: 0,
+            mcp_discovery_rows: Vec::new(),
+            mcp_discovery_errors: Vec::new(),
+            warnings: Vec::new(),
+            error: None,
+            controller_events: Vec::new(),
+        };
         let derived_record = self
             .session_skill_chain
-            .run_summary_skill(SummarySkillInput { report });
+            .run_summary_skill(SummarySkillInput { report: &report });
         self.push_session_derived_record(session_id, derived_record)
     }
 
@@ -16434,6 +16549,14 @@ impl VulcanWorkbench {
             .model_blueprint
             .openrouter_endpoint_route
             .clone();
+        runtime_state.live_context_budget_fingerprint = preparation
+            .context_budget
+            .as_ref()
+            .map(|context_budget| context_budget.fingerprint.clone());
+        runtime_state.live_context_assembly_fingerprint = preparation
+            .context_baseline
+            .as_ref()
+            .map(|context_baseline| context_baseline.fingerprint.clone());
         runtime_state.updated_at = current_unix_millis_text();
     }
 
@@ -16443,15 +16566,18 @@ impl VulcanWorkbench {
         let Some(preparation) = preparation else {
             self.context_usage = 0.0;
             self.context_usage_detail = String::from("尚未生成预算快照");
+            self.visible_context_budget_snapshot = None;
             return;
         };
 
         if let Some(context_budget) = preparation.context_budget.as_ref() {
             self.context_usage = context_budget.usage_percent();
             self.context_usage_detail = context_budget.summary_note();
+            self.visible_context_budget_snapshot = Some(context_budget.clone());
         } else {
             self.context_usage = 0.0;
             self.context_usage_detail = String::from("尚未生成预算快照");
+            self.visible_context_budget_snapshot = None;
         }
     }
 
@@ -16462,6 +16588,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
         runtime_state_snapshot: &SessionRuntimeStateEntry,
         _messages: &[SessionMessageEntry],
+        validate_anchor_baseline: bool,
     ) -> Option<ContextBudgetSnapshot> {
         let (provider_id, model_id, api_family, capabilities) = if let (
             Some(provider_id),
@@ -16524,7 +16651,7 @@ impl VulcanWorkbench {
                 Some(&capabilities),
             );
 
-        Some(build_projected_session_context_budget_snapshot(
+        let mut context_budget = build_projected_session_context_budget_snapshot(
             &provider_id,
             &model_id,
             api_family,
@@ -16534,7 +16661,26 @@ impl VulcanWorkbench {
             &core_snapshot.messages,
             visible_tool_count,
             runtime_state_snapshot.last_provider_usage.as_ref(),
-        ))
+        );
+        let has_anchor_baseline = runtime_state_snapshot.last_compaction_id.is_some()
+            || runtime_state_snapshot.context_start_message_id.is_some()
+            || runtime_state_snapshot
+                .anchor_context_budget_fingerprint
+                .is_some()
+            || runtime_state_snapshot
+                .anchor_context_assembly_fingerprint
+                .is_some();
+        if validate_anchor_baseline
+            && has_anchor_baseline
+            && let Some(previous_fingerprint) = runtime_state_snapshot
+                .anchor_context_budget_fingerprint
+                .as_deref()
+        {
+            context_budget.baseline_matches_active_runtime =
+                previous_fingerprint == context_budget.fingerprint;
+        }
+
+        Some(context_budget)
     }
 
     /// Synchronizes the visible workbench context bar from the latest session-scoped budget snapshot after compaction or session switching.
@@ -16555,38 +16701,76 @@ impl VulcanWorkbench {
             session_id,
             &runtime_state_snapshot,
             &messages,
+            false,
         );
 
         if let Some(context_budget) = context_budget {
             self.context_usage = context_budget.usage_percent();
             self.context_usage_detail = context_budget.summary_note();
+            self.visible_context_budget_snapshot = Some(context_budget);
+        } else {
+            self.context_usage = 0.0;
+            self.context_usage_detail = String::from("尚未生成预算快照");
+            self.visible_context_budget_snapshot = None;
         }
     }
 
     /// Finalizes one streamed execution report, updates visible session state, and appends hidden derived nodes.
     /// 完成一份流式执行报告，更新可见会话状态并追加隐藏派生节点。
     fn apply_execution_run_report(&mut self, report: ExecutionRunReport) -> Task<Message> {
-        let session_id = report.session_id;
-        self.last_mcp_discovery_rows = report.mcp_discovery_rows.clone();
-        self.last_mcp_discovery_errors = report.mcp_discovery_errors.clone();
+        let ExecutionRunReport {
+            session_id,
+            preparation,
+            assistant_output,
+            thinking_output,
+            conversation_state,
+            provider_request_count,
+            mcp_discovery_rows,
+            mcp_discovery_errors,
+            warnings,
+            error,
+            controller_events,
+        } = report;
+        let is_success = error.is_none();
+        let mut perf_trace = TranscriptPerfTrace::begin(
+            "apply_execution_run_report",
+            format!(
+                "session_id={session_id} success={} provider_requests={}",
+                is_success, provider_request_count
+            ),
+        );
+        let mut phase_started_at = Instant::now();
+        self.last_mcp_discovery_rows = mcp_discovery_rows;
+        self.last_mcp_discovery_errors = mcp_discovery_errors;
 
-        if let Some(preparation) = report.preparation.clone() {
+        if let Some(preparation) = preparation {
             self.sync_context_usage_from_preparation(Some(&preparation));
+            perf_trace.checkpoint("apply_preparation.context_usage", phase_started_at);
+            phase_started_at = Instant::now();
             self.replace_session_last_api_request_preview(
                 session_id,
                 preparation.provider_request_preview_markdown.clone(),
             );
-            self.last_execution_preparation = Some(preparation.clone());
+            perf_trace.checkpoint("apply_preparation.request_preview", phase_started_at);
+            phase_started_at = Instant::now();
             self.update_session_runtime_identity_from_preparation(session_id, &preparation);
+            perf_trace.checkpoint("apply_preparation.runtime_identity", phase_started_at);
+            phase_started_at = Instant::now();
 
             for warning in &preparation.warnings {
                 self.push_activity(ActivityLevel::Warning, "执行准备警告", warning.clone());
             }
+            perf_trace.checkpoint("apply_preparation.warning_activity", phase_started_at);
+            phase_started_at = Instant::now();
+            self.last_execution_preparation = Some(preparation);
+            perf_trace.checkpoint("apply_preparation.store_preparation", phase_started_at);
+            phase_started_at = Instant::now();
         }
+        perf_trace.checkpoint("apply_preparation", phase_started_at);
+        phase_started_at = Instant::now();
 
-        if report.error.is_some() {
-            if let Some(controller_error) = report
-                .controller_events
+        if error.is_some() {
+            if let Some(controller_error) = controller_events
                 .iter()
                 .rev()
                 .find(|event| matches!(event.kind, VulcanCoreEventKind::Error))
@@ -16599,11 +16783,13 @@ impl VulcanWorkbench {
             }
         }
 
-        for warning in &report.warnings {
+        for warning in &warnings {
             self.push_activity(ActivityLevel::Warning, "执行运行警告", warning.clone());
         }
+        perf_trace.checkpoint("apply_runtime_warnings", phase_started_at);
+        phase_started_at = Instant::now();
 
-        if let Some(next_conversation_state) = report.conversation_state.clone() {
+        if let Some(next_conversation_state) = conversation_state {
             self.ensure_session_conversation_state_loaded(session_id);
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
             let preserved_records = runtime_state.conversation_state.records.clone();
@@ -16616,16 +16802,18 @@ impl VulcanWorkbench {
             runtime_state.updated_at = current_unix_millis_text();
             self.sync_session_messages_from_conversation_state(session_id);
         }
+        perf_trace.checkpoint("sync_conversation_state", phase_started_at);
+        phase_started_at = Instant::now();
 
-        if report.is_success() {
-            let thinking_output = report
-                .thinking_output
-                .clone()
+        let mut summary_assistant_output: Option<String> = None;
+        if is_success {
+            let thinking_output = thinking_output
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
-            let assistant_output = report.assistant_output.clone().unwrap_or_else(|| {
+            let assistant_output = assistant_output.unwrap_or_else(|| {
                 String::from("The model completed the run but did not return visible text output.")
             });
+            summary_assistant_output = Some(assistant_output.clone());
 
             if thinking_output.is_some()
                 && !self
@@ -16671,10 +16859,8 @@ impl VulcanWorkbench {
                 format!("会话 #{session_id} 已完成真实模型执行并产出分离后的思考与输出。"),
             );
         } else {
-            let error = report
-                .error
-                .clone()
-                .unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。"));
+            let error =
+                error.unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。"));
 
             if let Some(session) = self
                 .sessions
@@ -16699,32 +16885,47 @@ impl VulcanWorkbench {
                 session_id,
                 &terminated_message_id,
                 SessionTurnStatsStatus::Failed,
-                Some(report.provider_request_count),
+                Some(provider_request_count),
             );
             self.set_session_run_phase(session_id, SessionRunPhase::Failed);
             self.status_message = error.clone();
             self.push_activity(ActivityLevel::Warning, "真实执行失败", error);
         }
+        perf_trace.checkpoint("update_visible_outputs", phase_started_at);
+        phase_started_at = Instant::now();
 
         self.refresh_session_queued_steps(session_id);
-        if report.is_success() {
-            let summary_message_id = self.append_session_summary_output(session_id, &report);
+        if is_success {
+            let summary_message_id = self.append_session_summary_output(
+                session_id,
+                summary_assistant_output.as_deref().unwrap_or(
+                    "The model completed the run but did not return visible text output.",
+                ),
+            );
             let _ = self.append_session_turn_stats(
                 session_id,
                 &summary_message_id,
                 SessionTurnStatsStatus::Completed,
-                Some(report.provider_request_count),
+                Some(provider_request_count),
             );
         }
+        perf_trace.checkpoint("append_hidden_summary_and_stats", phase_started_at);
+        phase_started_at = Instant::now();
         let compaction_task = self.maybe_compact_session_history(session_id);
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.refresh_session_agent_view_buffers(session_id);
         self.refresh_subagent_navigation_round_visibility(session_id);
+        perf_trace.checkpoint("finalize_followup_state", phase_started_at);
+        phase_started_at = Instant::now();
+
+        let persist_task = self.persist_workspace_snapshot_task();
+        perf_trace.checkpoint("build_persist_task", phase_started_at);
+        perf_trace.finish();
 
         Task::batch([
             compaction_task,
-            self.persist_workspace_snapshot_task(),
+            persist_task,
             self.maybe_follow_selected_session_transcript_tail(session_id),
             self.maybe_start_next_pending_prompt(session_id, false),
         ])
@@ -16733,21 +16934,22 @@ impl VulcanWorkbench {
     /// Creates one hidden compaction summary when the visible history grows beyond the current threshold.
     /// 当可见历史增长到当前阈值以上时创建一条隐藏压缩摘要。
     fn maybe_compact_session_history(&mut self, session_id: SessionId) -> Task<Message> {
-        let messages = self.session_context_history(session_id);
+        let mut messages = self.session_context_history(session_id);
         if messages.is_empty() {
             return Task::none();
         }
-        let runtime_state_snapshot = self
+        let mut runtime_state_snapshot = self
             .session_runtime_state
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
-        let full_session_messages =
+        let mut full_session_messages =
             conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
         let Some(context_budget) = self.resolve_session_context_budget_snapshot(
             session_id,
             &runtime_state_snapshot,
             &messages,
+            false,
         ) else {
             return Task::none();
         };
@@ -16755,15 +16957,49 @@ impl VulcanWorkbench {
             self.sync_context_usage_from_session_budget(session_id);
             return Task::none();
         }
-        let Some(plan) = self.session_skill_chain.plan_compaction(
-            CompactionSkillInput {
+        let Some(mut context_budget) = self.resolve_session_context_budget_snapshot(
+            session_id,
+            &runtime_state_snapshot,
+            &messages,
+            true,
+        ) else {
+            self.sync_context_usage_from_session_budget(session_id);
+            return Task::none();
+        };
+        if !context_budget.baseline_matches_active_runtime {
+            self.recover_session_context_anchor_from_baseline_mismatch(session_id, &context_budget);
+            messages = self.session_context_history(session_id);
+            if messages.is_empty() {
+                self.sync_context_usage_from_session_budget(session_id);
+                return Task::none();
+            }
+            runtime_state_snapshot = self
+                .session_runtime_state
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default();
+            full_session_messages =
+                conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
+            let Some(recomputed_budget) = self.resolve_session_context_budget_snapshot(
+                session_id,
+                &runtime_state_snapshot,
+                &messages,
+                false,
+            ) else {
+                self.sync_context_usage_from_session_budget(session_id);
+                return Task::none();
+            };
+            context_budget = recomputed_budget;
+        }
+        let Some(plan) = self
+            .session_skill_chain
+            .plan_compaction(CompactionSkillInput {
                 session_id,
                 messages: &messages,
                 all_messages: &full_session_messages,
                 runtime_state: &runtime_state_snapshot,
                 policy: ContextCompactionPolicy::default(),
-            },
-        )
+            })
         else {
             self.sync_context_usage_from_session_budget(session_id);
             return Task::none();
@@ -16774,6 +17010,35 @@ impl VulcanWorkbench {
             plan,
             context_budget.summary_note(),
         )
+    }
+
+    /// Resets one session's active compaction anchor and stored context fingerprints after the runtime shape no longer matches the previous baseline.
+    /// 当运行时形态不再匹配旧基线后，重置单个会话的活动压缩锚点与已存储上下文指纹。
+    fn recover_session_context_anchor_from_baseline_mismatch(
+        &mut self,
+        session_id: SessionId,
+        _context_budget: &ContextBudgetSnapshot,
+    ) {
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        let had_previous_anchor = runtime_state.last_compaction_id.is_some()
+            || runtime_state.context_start_message_id.is_some()
+            || runtime_state.anchor_context_budget_fingerprint.is_some()
+            || runtime_state.anchor_context_assembly_fingerprint.is_some();
+        runtime_state.last_compaction_id = None;
+        runtime_state.context_start_message_id = None;
+        runtime_state.anchor_context_budget_fingerprint = None;
+        runtime_state.anchor_context_assembly_fingerprint = None;
+        runtime_state.updated_at = current_unix_millis_text();
+
+        if had_previous_anchor {
+            let detail = format!(
+                "会话 #{session_id} 的上下文基线已失配，已清除旧压缩锚点并回退到完整上下文窗口。"
+            );
+            self.push_activity(ActivityLevel::Info, "上下文基线恢复", detail.clone());
+            if self.selected_session().map(|session| session.id) == Some(session_id) {
+                self.status_message = detail;
+            }
+        }
     }
 
     /// Builds the current model-facing context history for one session from the start or from the latest compaction anchor.
@@ -17156,6 +17421,7 @@ impl VulcanWorkbench {
         self.session_agent_view_buffers.remove(&session_id);
         self.session_agent_view_raw_buffers.remove(&session_id);
         self.session_last_api_request_buffers.remove(&session_id);
+        self.session_last_api_request_markdowns.remove(&session_id);
         self.session_agent_view_documents.remove(&session_id);
         self.session_inline_agent_view_documents.remove(&session_id);
         self.session_agent_view_block_collapsed.remove(&session_id);
@@ -18495,9 +18761,10 @@ impl VulcanWorkbench {
 mod tests {
     use super::{
         ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand,
-        Message, ToolModalPresentation, VulcanWorkbench, build_composer_slash_command_state,
+        Message, ToolModalPresentation, VulcanWorkbench,
         anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
-        build_command_session_stop_result_metadata, build_session_turn_stats_from_state,
+        build_command_session_stop_result_metadata, build_composer_slash_command_state,
+        build_session_record_message_id, build_session_turn_stats_from_state,
         clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
         composer_text_has_submittable_content, composer_visible_line_count,
         format_openrouter_percentage, format_openrouter_price_per_mtokens,
@@ -18509,7 +18776,8 @@ mod tests {
         tool_modal_presentation_from_agent_view_attributes, value_as_f64,
     };
     use crate::app_shell::markdown;
-    use crate::context_budget::ContextCompactionPolicy;
+    use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
+    use crate::conversation_protocol::SessionConversationState;
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
         SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
@@ -19077,6 +19345,8 @@ mod tests {
         workbench.session_runtime_state.insert(
             session_id,
             SessionRuntimeStateEntry {
+                live_context_budget_fingerprint: Some(String::from("budget-live")),
+                live_context_assembly_fingerprint: Some(String::from("assembly-live")),
                 conversation_state,
                 updated_at: String::from("10"),
                 ..SessionRuntimeStateEntry::default()
@@ -19137,6 +19407,190 @@ mod tests {
                 .and_then(|state| state.context_start_message_id.as_deref())
                 .is_some()
         );
+        assert_eq!(
+            workbench
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|state| state.anchor_context_budget_fingerprint.as_deref()),
+            Some("budget-live")
+        );
+        assert_eq!(
+            workbench
+                .session_compactions
+                .get(&session_id)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.context_budget_fingerprint.as_deref()),
+            Some("budget-live")
+        );
+    }
+
+    /// Verifies baseline mismatch recovery clears the active compaction anchor and stored context fingerprints before later automatic compaction runs.
+    /// 验证基线失配恢复会在后续自动压缩前清除活动压缩锚点与已存储上下文指纹。
+    #[test]
+    fn baseline_mismatch_recovery_clears_active_compaction_anchor() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71009);
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "基线恢复测试"));
+        workbench.selected_session = session_id;
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                last_compaction_id: Some(String::from("cp-restore-1")),
+                context_start_message_id: Some(String::from("summary-restore-1")),
+                live_context_budget_fingerprint: Some(String::from("budget-live")),
+                live_context_assembly_fingerprint: Some(String::from("assembly-live")),
+                anchor_context_budget_fingerprint: Some(String::from("budget-old")),
+                anchor_context_assembly_fingerprint: Some(String::from("assembly-old")),
+                updated_at: String::from("10"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        workbench.recover_session_context_anchor_from_baseline_mismatch(
+            session_id,
+            &ContextBudgetSnapshot {
+                baseline_matches_active_runtime: false,
+                fingerprint: String::from("budget-new"),
+                ..ContextBudgetSnapshot::default()
+            },
+        );
+
+        let runtime_state = workbench
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should exist");
+        assert!(runtime_state.last_compaction_id.is_none());
+        assert!(runtime_state.context_start_message_id.is_none());
+        assert!(runtime_state.anchor_context_budget_fingerprint.is_none());
+        assert!(runtime_state.anchor_context_assembly_fingerprint.is_none());
+        assert_eq!(
+            runtime_state.live_context_budget_fingerprint.as_deref(),
+            Some("budget-live")
+        );
+        assert_eq!(
+            runtime_state.live_context_assembly_fingerprint.as_deref(),
+            Some("assembly-live")
+        );
+        assert!(workbench.status_message.contains("上下文基线已失配"));
+    }
+
+    /// Verifies reopening one historical session without an established anchor baseline keeps the visible budget display stable instead of treating one live snapshot as a mismatch anchor.
+    /// 验证重新打开历史会话且尚未建立锚点基线时，可见预算展示会保持稳定，而不会把实时快照误当作失配锚点。
+    #[test]
+    fn session_budget_snapshot_without_anchor_keeps_baseline_match() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71010);
+        let active_choice = workbench
+            .active_workbench_model_choice()
+            .expect("active workbench model choice should exist");
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "预算展示测试"));
+        workbench.selected_session = session_id;
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_provider_id: Some(active_choice.provider_id.clone()),
+                active_model_id: Some(active_choice.model_id.clone()),
+                live_context_budget_fingerprint: Some(String::from("budget-old")),
+                conversation_state: SessionConversationState::default(),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        let runtime_state = workbench
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .expect("runtime state should exist");
+        let snapshot = workbench
+            .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false)
+            .expect("budget snapshot should be available");
+
+        assert!(snapshot.baseline_matches_active_runtime);
+    }
+
+    /// Verifies an established compaction anchor compares against the anchor fingerprint instead of the latest live request fingerprint.
+    /// 验证已建立的压缩锚点会对比锚点指纹，而不是对比最近一次实时请求指纹。
+    #[test]
+    fn session_budget_snapshot_with_anchor_uses_anchor_fingerprint() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71011);
+        let active_choice = workbench
+            .active_workbench_model_choice()
+            .expect("active workbench model choice should exist");
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "锚点预算测试"));
+        workbench.selected_session = session_id;
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_provider_id: Some(active_choice.provider_id.clone()),
+                active_model_id: Some(active_choice.model_id.clone()),
+                last_compaction_id: Some(String::from("cp-anchor-1")),
+                context_start_message_id: Some(String::from("summary-anchor-1")),
+                live_context_budget_fingerprint: Some(String::from("budget-live")),
+                anchor_context_budget_fingerprint: Some(String::from("budget-old")),
+                conversation_state: SessionConversationState::default(),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        let runtime_state = workbench
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .expect("runtime state should exist");
+        let snapshot = workbench
+            .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], true)
+            .expect("budget snapshot should be available");
+
+        assert!(!snapshot.baseline_matches_active_runtime);
+    }
+
+    /// Verifies the visible budget snapshot ignores stale anchor mismatches until the host is actually deciding whether compaction work should run.
+    /// 验证在宿主真正决定是否执行压缩前，可见预算快照会忽略陈旧锚点失配。
+    #[test]
+    fn session_budget_snapshot_display_ignores_anchor_mismatch() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71012);
+        let active_choice = workbench
+            .active_workbench_model_choice()
+            .expect("active workbench model choice should exist");
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "显示预算测试"));
+        workbench.selected_session = session_id;
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_provider_id: Some(active_choice.provider_id.clone()),
+                active_model_id: Some(active_choice.model_id.clone()),
+                last_compaction_id: Some(String::from("cp-display-1")),
+                context_start_message_id: Some(String::from("summary-display-1")),
+                anchor_context_budget_fingerprint: Some(String::from("budget-old")),
+                conversation_state: SessionConversationState::default(),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+
+        let runtime_state = workbench
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .expect("runtime state should exist");
+        let snapshot = workbench
+            .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false)
+            .expect("budget snapshot should be available");
+
+        assert!(snapshot.baseline_matches_active_runtime);
     }
 
     /// Verifies active prompt-compaction state keeps the session on the blocking system-work lane so queued prompts do not auto-dispatch early.
@@ -19587,6 +20041,215 @@ mod tests {
                 .get("payload")
                 .and_then(|payload| payload.get("conversation_state"))
                 .is_none()
+        );
+    }
+
+    /// Verifies transcript-window merge reuses one projected turn-stats row when only the runtime id drifted after reload, instead of keeping the stale row and appending a duplicate.
+    /// 验证当重载后仅有运行时 id 漂移时，转录窗口合并会复用投影出来的同一条 turn-stats 行，而不是保留旧行再追加重复项。
+    #[test]
+    fn merge_projected_messages_dedupes_semantically_identical_turn_stats() {
+        let stats_metadata = Some(json!({
+            "turn_stats": {
+                "status": "completed",
+                "provider_call_count": 1,
+                "tool_call_count": 0,
+                "input_tokens": 120,
+                "output_tokens": 24,
+                "reasoning_tokens": 0,
+                "total_tokens": 144,
+                "cached_input_tokens": 32,
+                "duration_ms": 900
+            }
+        }));
+        let existing_messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("随便输出点内容"),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("legacy-turn-stats-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · Completed"),
+                body: String::from("◔ 1 次调用 · 0 个工具 · 144 tokens"),
+                metadata: stats_metadata.clone(),
+                created_at: String::from("2"),
+            },
+        ];
+        let projected_messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("随便输出点内容"),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("projected-turn-stats-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · Completed"),
+                body: String::from("◔ 1 次调用 · 0 个工具 · 144 tokens"),
+                metadata: stats_metadata,
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("user-2"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("再来一次"),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+        ];
+
+        let merged = merge_projected_session_messages_into_existing_window(
+            &existing_messages,
+            projected_messages,
+        );
+
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+                .count(),
+            1
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user-1", "projected-turn-stats-1", "user-2"]
+        );
+    }
+
+    /// Verifies reprojection from a full canonical history only appends the genuinely new tail, instead of backfilling older unseen history rows into the already hydrated window.
+    /// 验证从完整规范历史重新投影时，只会追加真正的新尾部，而不会把旧的未加载历史行反向灌回已经水合的窗口。
+    #[test]
+    fn merge_projected_messages_keeps_hydrated_window_boundary_and_appends_new_tail_only() {
+        let existing_messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-2"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("第二轮"),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+            SessionMessageEntry {
+                id: String::from("turn-stats-2"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · Completed"),
+                body: String::from("◔ 1 次调用 · 0 个工具 · 144 tokens"),
+                metadata: Some(json!({
+                    "turn_stats": {
+                        "status": "completed",
+                        "provider_call_count": 1,
+                        "tool_call_count": 0,
+                        "input_tokens": 120,
+                        "output_tokens": 24,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 144
+                    }
+                })),
+                created_at: String::from("4"),
+            },
+        ];
+        let projected_messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("第一轮"),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("turn-stats-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · Completed"),
+                body: String::from("◔ 1 次调用 · 0 个工具 · 188 tokens"),
+                metadata: Some(json!({
+                    "turn_stats": {
+                        "status": "completed",
+                        "provider_call_count": 1,
+                        "tool_call_count": 0,
+                        "input_tokens": 160,
+                        "output_tokens": 28,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 188
+                    }
+                })),
+                created_at: String::from("2"),
+            },
+            existing_messages[0].clone(),
+            existing_messages[1].clone(),
+            SessionMessageEntry {
+                id: String::from("user-3"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("第三轮"),
+                metadata: None,
+                created_at: String::from("5"),
+            },
+        ];
+
+        let merged = merge_projected_session_messages_into_existing_window(
+            &existing_messages,
+            projected_messages,
+        );
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user-2", "turn-stats-2", "user-3"]
+        );
+    }
+
+    /// Verifies session record ids advance with canonical record ordinals so hidden and visible rows appended in the same millisecond cannot collide anymore.
+    /// 验证会话记录标识会随规范记录序号推进，确保同一毫秒内连续追加的隐藏行与可见行不再发生碰撞。
+    #[test]
+    fn session_record_message_id_uses_canonical_record_ordinal() {
+        let session_id = SessionId::from_u128(0x30cf28c9);
+        let created_at = "1779720972348";
+
+        let hidden_summary_id = build_session_record_message_id(session_id, created_at, 10);
+        let visible_turn_stats_id = build_session_record_message_id(session_id, created_at, 11);
+
+        assert_ne!(hidden_summary_id, visible_turn_stats_id);
+        assert_eq!(
+            hidden_summary_id,
+            format!("session-{session_id}-message-{created_at}-10")
+        );
+        assert_eq!(
+            visible_turn_stats_id,
+            format!("session-{session_id}-message-{created_at}-11")
         );
     }
 

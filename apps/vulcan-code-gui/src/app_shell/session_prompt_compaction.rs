@@ -10,7 +10,9 @@ use crate::agent_runtime::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::conversation_protocol::conversation_state_from_session_messages;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
-use crate::provider_config::{PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel};
+use crate::provider_config::{
+    PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
+};
 use crate::skills::session::{
     CompactionPlan, CompactionSkillResult, build_compaction_request_prompt,
 };
@@ -96,7 +98,8 @@ pub(super) struct PromptCompactionExecution {
 pub(super) async fn execute_prompt_compaction_job(
     request: PromptCompactionJobRequest,
 ) -> Result<PromptCompactionExecution, String> {
-    let source_conversation_state = conversation_state_from_session_messages(&request.plan.source_messages);
+    let source_conversation_state =
+        conversation_state_from_session_messages(&request.plan.source_messages);
     let launch_request = ExecutionPreparationRequest {
         session_id: request.session_id,
         session_title: request.session_title,
@@ -139,7 +142,11 @@ pub(super) async fn execute_prompt_compaction_job(
     futures_util::pin_mut!(runtime_stream);
     while let Some(event) = runtime_stream.next().await {
         if let crate::agent_runtime::ExecutionStreamEvent::Finished(report) = event {
-            return finalize_prompt_compaction_report(&request.plan, request.model_reference.as_ref(), report);
+            return finalize_prompt_compaction_report(
+                &request.plan,
+                request.model_reference.as_ref(),
+                report,
+            );
         }
     }
 

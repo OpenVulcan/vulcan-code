@@ -348,6 +348,29 @@ impl VulcanWorkbench {
         session_id: SessionId,
         preview_markdown: String,
     ) {
+        self.session_last_api_request_markdowns
+            .insert(session_id, preview_markdown.clone());
+        if let Some(content) = self.session_last_api_request_buffers.get_mut(&session_id) {
+            *content = text_editor::Content::with_text(&preview_markdown);
+        }
+    }
+
+    /// Materializes one session-scoped API-request preview buffer only when the request tab really needs a selectable editor surface.
+    /// 仅在请求页签真正需要可选择编辑器表面时物化单个会话级 API 请求预览缓冲区。
+    pub(super) fn ensure_session_last_api_request_preview_buffer(&mut self, session_id: SessionId) {
+        if self
+            .session_last_api_request_buffers
+            .contains_key(&session_id)
+        {
+            return;
+        }
+        let Some(preview_markdown) = self
+            .session_last_api_request_markdowns
+            .get(&session_id)
+            .cloned()
+        else {
+            return;
+        };
         self.session_last_api_request_buffers.insert(
             session_id,
             text_editor::Content::with_text(&preview_markdown),

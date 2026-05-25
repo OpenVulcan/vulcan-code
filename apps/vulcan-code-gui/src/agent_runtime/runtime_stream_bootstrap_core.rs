@@ -14,6 +14,7 @@ use crate::agent_runtime::provider_runtime_context::{
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
 use crate::context_budget::build_request_context_budget_snapshot;
 use crate::provider_usage::latest_provider_usage_from_conversation_state;
+use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
@@ -103,6 +104,9 @@ pub(crate) async fn seed_runtime_request_snapshot(
                 &request_snapshot,
                 observed_usage.as_ref(),
             ));
+            let context_assembly = build_provider_request_context_assembly(&request_snapshot);
+            preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
+            preparation.context_assembly = Some(context_assembly);
             preparation.provider_request_preview_markdown =
                 build_provider_request_preview_markdown(preparation, &request_snapshot);
             preparation.provider_request_snapshot_json =

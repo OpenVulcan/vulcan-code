@@ -136,6 +136,7 @@ impl VulcanWorkbench {
             let previous_workspace_path = self.selected_attachment_workspace_path();
             let previous_scope = self.composer_attachment_ref_scope();
             self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
+            self.sync_context_usage_from_session_budget(session_id);
         }
     }
 

@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-context"
+description = "Shared context-management primitives reused by host runtime and workspace UI."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+vulcan-core.workspace = true

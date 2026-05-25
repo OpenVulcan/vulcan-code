@@ -3,9 +3,11 @@
 
 use super::helpers::*;
 use super::*;
+use crate::ui::widgets::context_usage_orb::{self, ContextUsageOrbProps, ContextUsageOrbTone};
 use iced::widget::{column, opaque, pin, rich_text};
 use iced::{Background, Border, Color};
 use iced_aw::helpers::date_picker;
+use vulcan_context::{ContextBudgetSeverity, ContextLayerKind};
 
 mod about_licenses;
 mod ai_capability;
@@ -3282,7 +3284,8 @@ impl VulcanWorkbench {
     pub(super) fn view_composer_slash_command_panel(&self) -> Option<Element<'_, Message>> {
         let state = self.composer_slash_command_panel_state()?;
         let palette = self.app_theme.extended_palette();
-        let panel_height = (state.visible_commands.len() as f32 * COMPOSER_SLASH_COMMAND_ROW_HEIGHT)
+        let panel_height = (state.visible_commands.len() as f32
+            * COMPOSER_SLASH_COMMAND_ROW_HEIGHT)
             .min(COMPOSER_SLASH_COMMAND_PANEL_MAX_HEIGHT);
         let panel_title = if state.filter_text.is_empty() {
             String::from("Slash 指令")
@@ -3295,15 +3298,11 @@ impl VulcanWorkbench {
                 button(
                     container(
                         row![
-                            container(
-                                text(command.trigger())
-                                    .size(13)
-                                    .color(if is_selected {
-                                        palette.primary.strong.color
-                                    } else {
-                                        palette.background.base.text
-                                    }),
-                            )
+                            container(text(command.trigger()).size(13).color(if is_selected {
+                                palette.primary.strong.color
+                            } else {
+                                palette.background.base.text
+                            }),)
                             .width(96),
                             column![
                                 text(command.summary()).size(13),
@@ -3502,21 +3501,17 @@ impl VulcanWorkbench {
                         Message::PasteComposerClipboardContents,
                     ))
                 }
-                keyboard::Key::Named(keyboard::key::Named::ArrowUp) if slash_panel_visible => {
-                    Some(text_editor::Binding::Custom(
-                        Message::ComposerSlashCommandMoveSelectionUp,
-                    ))
-                }
+                keyboard::Key::Named(keyboard::key::Named::ArrowUp) if slash_panel_visible => Some(
+                    text_editor::Binding::Custom(Message::ComposerSlashCommandMoveSelectionUp),
+                ),
                 keyboard::Key::Named(keyboard::key::Named::ArrowDown) if slash_panel_visible => {
                     Some(text_editor::Binding::Custom(
                         Message::ComposerSlashCommandMoveSelectionDown,
                     ))
                 }
-                keyboard::Key::Named(keyboard::key::Named::Escape) if slash_panel_visible => {
-                    Some(text_editor::Binding::Custom(
-                        Message::DismissComposerSlashCommandPanel,
-                    ))
-                }
+                keyboard::Key::Named(keyboard::key::Named::Escape) if slash_panel_visible => Some(
+                    text_editor::Binding::Custom(Message::DismissComposerSlashCommandPanel),
+                ),
                 keyboard::Key::Named(keyboard::key::Named::Enter)
                     if !key_press.modifiers.shift() =>
                 {
@@ -3703,6 +3698,206 @@ impl VulcanWorkbench {
     /// 构建直接放置在浮动提示词面板内部的内联编辑器区域。
     pub(super) fn view_inline_composer_editor(&self) -> Element<'_, Message> {
         self.view_composer_editor_surface()
+    }
+
+    /// Builds the compact context-usage orb shown below the floating composer editor.
+    /// 构建显示在悬浮输入编辑器下方的紧凑上下文占用圆盘。
+    pub(super) fn view_composer_context_usage_orb(&self) -> Element<'_, Message> {
+        context_usage_orb::view_context_usage_orb(self.build_composer_context_usage_orb_props())
+    }
+
+    /// Builds the owned orb props consumed by the reusable context-usage widget.
+    /// 构建供可复用上下文占用部件消费的自有属性集合。
+    fn build_composer_context_usage_orb_props(&self) -> ContextUsageOrbProps {
+        let tone = self.resolve_composer_context_usage_orb_tone();
+        ContextUsageOrbProps {
+            percent: self.context_usage,
+            tooltip_title: String::from("上下文占用"),
+            tooltip_rows: self.composer_context_usage_diagnostic_rows(),
+            tone,
+            diameter: 40.0,
+        }
+    }
+
+    /// Builds the detailed tooltip rows shown by the floating composer context orb.
+    /// 构建悬浮输入区上下文圆盘展示的详细提示行。
+    fn composer_context_usage_diagnostic_rows(&self) -> Vec<String> {
+        let selected_session_id = self.selected_session().map(|session| session.id);
+        let runtime_state =
+            selected_session_id.and_then(|session_id| self.session_runtime_state.get(&session_id));
+        let preparation = self
+            .last_execution_preparation
+            .as_ref()
+            .filter(|preparation| selected_session_id == Some(preparation.session_id));
+        let context_budget = self.visible_context_budget_snapshot.as_ref();
+        let mut diagnostic_rows = Vec::new();
+
+        diagnostic_rows.push(format!(
+            "当前占用：{:.0}%",
+            self.context_usage.clamp(0.0, 100.0)
+        ));
+
+        if let Some(context_budget) = context_budget {
+            let status_label = match context_budget.severity {
+                ContextBudgetSeverity::Healthy => "正常",
+                ContextBudgetSeverity::Warning => "预警",
+                ContextBudgetSeverity::CompactSoon => "建议压缩",
+                ContextBudgetSeverity::Overflow => "预算溢出",
+            };
+            diagnostic_rows.push(format!("状态：{}", status_label));
+            diagnostic_rows.push(format!("输入预算：{}", context_budget.usage_label()));
+            diagnostic_rows.push(format!(
+                "组成：系统 {} · 历史 {} · 当前 {} · 工具 {}",
+                context_budget.estimated_system_tokens,
+                context_budget.estimated_history_tokens,
+                context_budget.estimated_prompt_tokens,
+                context_budget.estimated_tool_tokens
+            ));
+            diagnostic_rows.push(format!(
+                "预留：输出 {} · 推理 {} · 压缩 {}",
+                context_budget.reserved_output_tokens,
+                context_budget.reserved_reasoning_tokens,
+                context_budget.reserved_compaction_tokens
+            ));
+            diagnostic_rows.push(format!(
+                "总占用：{} tokens",
+                context_budget.estimated_total_tokens
+            ));
+            if !context_budget.baseline_matches_active_runtime {
+                diagnostic_rows.push(String::from(
+                    "恢复状态：基线失配，已回退完整上下文并等待新锚点。",
+                ));
+            }
+            if let Some(observed_usage) = context_budget.observed_usage.as_ref() {
+                diagnostic_rows.push(format!(
+                    "最近实测：输入 {} / 输出 {} / 推理 {} / 总计 {}",
+                    observed_usage
+                        .input_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("?")),
+                    observed_usage
+                        .output_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("?")),
+                    observed_usage
+                        .reasoning_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("?")),
+                    observed_usage
+                        .total_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("?")),
+                ));
+            }
+        }
+
+        if let Some(runtime_state) = runtime_state {
+            diagnostic_rows.push(if runtime_state.last_compaction_id.is_some() {
+                String::from("压缩锚点：已建立")
+            } else {
+                String::from("压缩锚点：尚未建立")
+            });
+        }
+
+        if let Some(preparation) = preparation {
+            if let Some(context_baseline) = preparation.context_baseline.as_ref() {
+                diagnostic_rows.push(format!("当前基线：{} 层", context_baseline.layer_count));
+            }
+        }
+
+        diagnostic_rows.extend(self.composer_context_layer_usage_rows());
+        diagnostic_rows
+    }
+
+    /// Resolves the context-orb visual tone and short status label from the latest visible budget state.
+    /// 根据最近一次可见预算状态解析上下文圆盘的视觉主题与简短状态标签。
+    fn resolve_composer_context_usage_orb_tone(&self) -> ContextUsageOrbTone {
+        match self.visible_context_budget_snapshot.as_ref() {
+            Some(context_budget) if !context_budget.baseline_matches_active_runtime => {
+                ContextUsageOrbTone {
+                    background: iced::color!(0x9A3412),
+                    border: iced::color!(0xFECBA1),
+                    track: iced::color!(0xFECBA1),
+                    progress: iced::color!(0x60A5FA),
+                    text_primary: Color::WHITE,
+                }
+            }
+            Some(context_budget) => match context_budget.severity {
+                ContextBudgetSeverity::Healthy => ContextUsageOrbTone {
+                    background: iced::color!(0x1F7A5C),
+                    border: iced::color!(0xA7F3D0),
+                    track: iced::color!(0x6EE7B7),
+                    progress: iced::color!(0x60A5FA),
+                    text_primary: Color::WHITE,
+                },
+                ContextBudgetSeverity::Warning => ContextUsageOrbTone {
+                    background: iced::color!(0xA16207),
+                    border: iced::color!(0xFDE68A),
+                    track: iced::color!(0xFCD34D),
+                    progress: iced::color!(0x60A5FA),
+                    text_primary: Color::WHITE,
+                },
+                ContextBudgetSeverity::CompactSoon => ContextUsageOrbTone {
+                    background: iced::color!(0xB45309),
+                    border: iced::color!(0xFDBA74),
+                    track: iced::color!(0xFB923C),
+                    progress: iced::color!(0x60A5FA),
+                    text_primary: Color::WHITE,
+                },
+                ContextBudgetSeverity::Overflow => ContextUsageOrbTone {
+                    background: iced::color!(0xB42318),
+                    border: iced::color!(0xFDA29B),
+                    track: iced::color!(0xFEA3B4),
+                    progress: iced::color!(0x60A5FA),
+                    text_primary: Color::WHITE,
+                },
+            },
+            None => ContextUsageOrbTone {
+                background: iced::color!(0x475467),
+                border: iced::color!(0xD0D5DD),
+                track: iced::color!(0x98A2B3),
+                progress: iced::color!(0x60A5FA),
+                text_primary: Color::WHITE,
+            },
+        }
+    }
+
+    /// Builds the aggregated context-layer usage rows reused by the context-orb tooltip.
+    /// 构建供上下文圆盘提示层复用的聚合上下文层占用行。
+    fn composer_context_layer_usage_rows(&self) -> Vec<String> {
+        let selected_session_id = self.selected_session().map(|session| session.id);
+        let Some(context_assembly) = self
+            .last_execution_preparation
+            .as_ref()
+            .filter(|preparation| selected_session_id == Some(preparation.session_id))
+            .and_then(|preparation| preparation.context_assembly.as_ref())
+        else {
+            return Vec::new();
+        };
+
+        let mut rows = Vec::new();
+        for kind in [
+            ContextLayerKind::System,
+            ContextLayerKind::ProjectRules,
+            ContextLayerKind::Runtime,
+            ContextLayerKind::History,
+            ContextLayerKind::Retrieval,
+            ContextLayerKind::Compaction,
+            ContextLayerKind::Tools,
+            ContextLayerKind::User,
+        ] {
+            let token_total = context_assembly
+                .layers
+                .iter()
+                .filter(|layer| layer.kind == kind)
+                .map(|layer| layer.token_estimate())
+                .sum::<usize>();
+            if token_total > 0 {
+                rows.push(format!("上下文层：{} {} tokens", kind.label(), token_total));
+            }
+        }
+
+        rows
     }
 
     /// Builds the compact transcript surface-mode switcher shown at the trailing end of the session-status row.
@@ -3964,6 +4159,7 @@ impl VulcanWorkbench {
             self.view_workbench_model_selector(),
             self.view_workbench_openrouter_endpoint_selector(),
             self.view_workbench_ai_capability_quick_controls(),
+            self.view_composer_context_usage_orb(),
             self.view_composer_attachment_button(),
         ]
         .spacing(COMPOSER_PANEL_CONTROL_GAP)

@@ -131,6 +131,8 @@ mod tests {
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
             context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -255,6 +257,8 @@ mod tests {
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
             context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -572,6 +576,8 @@ mod tests {
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
             context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 

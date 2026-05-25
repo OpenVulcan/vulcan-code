@@ -874,7 +874,10 @@ impl VulcanWorkbench {
                 self.session_last_api_request_buffers.get(&session_id),
                 Message::SelectedSessionDocumentApiRequestAction
                     as fn(text_editor::Action) -> Message,
-                self.t(I18nKey::TranscriptNoApiRequestSnapshot),
+                self.session_last_api_request_markdowns
+                    .get(&session_id)
+                    .cloned()
+                    .unwrap_or_else(|| self.t(I18nKey::TranscriptNoApiRequestSnapshot)),
             ),
         };
 

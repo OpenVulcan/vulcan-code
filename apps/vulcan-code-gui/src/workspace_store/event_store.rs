@@ -111,6 +111,22 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// Current context-start message identifier.
     /// 当前上下文起始消息标识。
     pub context_start_message_id: Option<String>,
+    /// Live budget fingerprint captured from the latest provider-facing request shape.
+    /// 从最近一次面向 Provider 请求形态捕获的实时预算指纹。
+    #[serde(default)]
+    pub live_context_budget_fingerprint: Option<String>,
+    /// Live layered-context fingerprint captured from the latest provider-facing request shape.
+    /// 从最近一次面向 Provider 请求形态捕获的实时分层上下文指纹。
+    #[serde(default)]
+    pub live_context_assembly_fingerprint: Option<String>,
+    /// Anchor budget fingerprint captured when the active compaction baseline was accepted.
+    /// 在接受当前压缩基线时捕获的锚点预算指纹。
+    #[serde(default, alias = "last_context_budget_fingerprint")]
+    pub anchor_context_budget_fingerprint: Option<String>,
+    /// Anchor layered-context fingerprint captured when the active compaction baseline was accepted.
+    /// 在接受当前压缩基线时捕获的锚点分层上下文指纹。
+    #[serde(default, alias = "last_context_assembly_fingerprint")]
+    pub anchor_context_assembly_fingerprint: Option<String>,
     /// Persisted transcript UI state.
     /// 持久化转录界面状态。
     pub ui_state: SessionTranscriptUiState,
@@ -141,6 +157,22 @@ pub(super) struct SessionEventStoreContextDocument {
     /// Optional context-start message identifier mirrored into the current context.
     /// 镜像进入当前上下文的可选上下文起始消息标识。
     pub context_start_message_id: Option<String>,
+    /// Optional live budget fingerprint mirrored into the current context.
+    /// 镜像进入当前上下文的可选实时预算指纹。
+    #[serde(default)]
+    pub live_context_budget_fingerprint: Option<String>,
+    /// Optional live layered-context fingerprint mirrored into the current context.
+    /// 镜像进入当前上下文的可选实时分层上下文指纹。
+    #[serde(default)]
+    pub live_context_assembly_fingerprint: Option<String>,
+    /// Optional anchor budget fingerprint mirrored into the current context.
+    /// 镜像进入当前上下文的可选锚点预算指纹。
+    #[serde(default, alias = "last_context_budget_fingerprint")]
+    pub anchor_context_budget_fingerprint: Option<String>,
+    /// Optional anchor layered-context fingerprint mirrored into the current context.
+    /// 镜像进入当前上下文的可选锚点分层上下文指纹。
+    #[serde(default, alias = "last_context_assembly_fingerprint")]
+    pub anchor_context_assembly_fingerprint: Option<String>,
     /// Unix-millis text describing when the current context was last refreshed.
     /// 描述当前上下文最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
@@ -192,6 +224,14 @@ pub(super) struct ContextCompactionCheckpoint {
     /// First message identifier that should seed the next active context window.
     /// 应作为下一段活跃上下文窗口起点的第一条消息标识。
     pub context_start_message_id: Option<String>,
+    /// Stable budget fingerprint captured when this checkpoint was produced.
+    /// 产出该检查点时捕获的稳定预算指纹。
+    #[serde(default)]
+    pub context_budget_fingerprint: Option<String>,
+    /// Stable layered-context fingerprint captured when this checkpoint was produced.
+    /// 产出该检查点时捕获的稳定分层上下文指纹。
+    #[serde(default)]
+    pub context_assembly_fingerprint: Option<String>,
     /// First retained user-turn index that remained verbatim after compaction.
     /// 压缩后仍按原样保留的第一个用户轮次索引。
     pub retained_tail_start_turn_index: Option<i64>,
@@ -624,6 +664,12 @@ fn runtime_state_to_store_document(
         active_openrouter_endpoint_route: runtime_state.active_openrouter_endpoint_route.clone(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
+        live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),
+        live_context_assembly_fingerprint: runtime_state.live_context_assembly_fingerprint.clone(),
+        anchor_context_budget_fingerprint: runtime_state.anchor_context_budget_fingerprint.clone(),
+        anchor_context_assembly_fingerprint: runtime_state
+            .anchor_context_assembly_fingerprint
+            .clone(),
         ui_state: runtime_state.ui_state.clone(),
         continuation: runtime_state.conversation_state.continuation.clone(),
         last_provider_usage: runtime_state.last_provider_usage.clone(),
@@ -643,6 +689,12 @@ fn runtime_state_to_context_document(
         project_id: project_id.to_string(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
+        live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),
+        live_context_assembly_fingerprint: runtime_state.live_context_assembly_fingerprint.clone(),
+        anchor_context_budget_fingerprint: runtime_state.anchor_context_budget_fingerprint.clone(),
+        anchor_context_assembly_fingerprint: runtime_state
+            .anchor_context_assembly_fingerprint
+            .clone(),
         updated_at: non_empty_timestamp_text(&runtime_state.updated_at),
         conversation_state: runtime_state.conversation_state.clone(),
     }
@@ -660,6 +712,10 @@ fn session_messages_to_context_document(
         project_id: project_id.to_string(),
         last_compaction_id: None,
         context_start_message_id: None,
+        live_context_budget_fingerprint: None,
+        live_context_assembly_fingerprint: None,
+        anchor_context_budget_fingerprint: None,
+        anchor_context_assembly_fingerprint: None,
         updated_at: current_unix_millis_text(),
         conversation_state: conversation_state_from_session_messages(messages),
     }
@@ -688,6 +744,10 @@ fn context_document_is_empty(document: &SessionEventStoreContextDocument) -> boo
             .is_none()
         && document.last_compaction_id.is_none()
         && document.context_start_message_id.is_none()
+        && document.live_context_budget_fingerprint.is_none()
+        && document.live_context_assembly_fingerprint.is_none()
+        && document.anchor_context_budget_fingerprint.is_none()
+        && document.anchor_context_assembly_fingerprint.is_none()
 }
 
 /// Writes all compaction checkpoint documents for one session store rewrite and returns the relative file list captured by the manifest.
@@ -715,6 +775,8 @@ fn checkpoint_entry_to_document(entry: &SessionCompactionEntry) -> ContextCompac
         source_until_message_id: entry.source_until_message_id.clone(),
         source_until_turn_index: entry.source_until_turn_index,
         context_start_message_id: entry.context_start_message_id.clone(),
+        context_budget_fingerprint: entry.context_budget_fingerprint.clone(),
+        context_assembly_fingerprint: entry.context_assembly_fingerprint.clone(),
         retained_tail_start_turn_index: entry.retained_tail_start_turn_index,
         summary_message_id: entry.summary_message_id.clone(),
         created_at: entry.created_at.clone(),
@@ -729,6 +791,8 @@ fn checkpoint_document_to_entry(document: ContextCompactionCheckpoint) -> Sessio
         source_until_message_id: document.source_until_message_id,
         source_until_turn_index: document.source_until_turn_index,
         context_start_message_id: document.context_start_message_id,
+        context_budget_fingerprint: document.context_budget_fingerprint,
+        context_assembly_fingerprint: document.context_assembly_fingerprint,
         retained_tail_start_turn_index: document.retained_tail_start_turn_index,
         summary_message_id: document.summary_message_id,
         created_at: document.created_at,
@@ -1526,6 +1590,8 @@ mod tests {
                 source_until_message_id: Some(String::from("u1")),
                 source_until_turn_index: Some(0),
                 context_start_message_id: Some(String::from("summary-1")),
+                context_budget_fingerprint: Some(String::from("budget-fp-1")),
+                context_assembly_fingerprint: Some(String::from("assembly-fp-1")),
                 retained_tail_start_turn_index: Some(1),
                 summary_message_id: Some(String::from("summary-1")),
                 created_at: String::from("100"),
@@ -1535,6 +1601,8 @@ mod tests {
                 source_until_message_id: Some(String::from("u2")),
                 source_until_turn_index: Some(1),
                 context_start_message_id: Some(String::from("summary-2")),
+                context_budget_fingerprint: Some(String::from("budget-fp-2")),
+                context_assembly_fingerprint: Some(String::from("assembly-fp-2")),
                 retained_tail_start_turn_index: Some(2),
                 summary_message_id: Some(String::from("summary-2")),
                 created_at: String::from("200"),
@@ -1552,6 +1620,14 @@ mod tests {
         assert_eq!(
             loaded[1].context_start_message_id.as_deref(),
             Some("summary-2")
+        );
+        assert_eq!(
+            loaded[1].context_budget_fingerprint.as_deref(),
+            Some("budget-fp-2")
+        );
+        assert_eq!(
+            loaded[1].context_assembly_fingerprint.as_deref(),
+            Some("assembly-fp-2")
         );
         remove_session_event_store(project_id, session.id).expect("cleanup persisted event-store");
     }
@@ -1576,6 +1652,10 @@ mod tests {
         let mut runtime_state = SessionRuntimeStateEntry {
             last_compaction_id: Some(String::from("cp-1")),
             context_start_message_id: Some(String::from("summary-1")),
+            live_context_budget_fingerprint: Some(String::from("budget-live-1")),
+            live_context_assembly_fingerprint: Some(String::from("assembly-live-1")),
+            anchor_context_budget_fingerprint: Some(String::from("budget-fp-1")),
+            anchor_context_assembly_fingerprint: Some(String::from("assembly-fp-1")),
             updated_at: String::from("123"),
             ..SessionRuntimeStateEntry::default()
         };
@@ -1592,6 +1672,22 @@ mod tests {
             .expect("expected current context document");
 
         assert_eq!(loaded.last_compaction_id.as_deref(), Some("cp-1"));
+        assert_eq!(
+            loaded.live_context_budget_fingerprint.as_deref(),
+            Some("budget-live-1")
+        );
+        assert_eq!(
+            loaded.live_context_assembly_fingerprint.as_deref(),
+            Some("assembly-live-1")
+        );
+        assert_eq!(
+            loaded.anchor_context_budget_fingerprint.as_deref(),
+            Some("budget-fp-1")
+        );
+        assert_eq!(
+            loaded.anchor_context_assembly_fingerprint.as_deref(),
+            Some("assembly-fp-1")
+        );
         assert_eq!(
             loaded.context_start_message_id.as_deref(),
             Some("summary-1")

@@ -7,6 +7,7 @@ use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
 use serde_json::Value;
+use vulcan_context::{ContextAssembly, ContextBaseline};
 use vulcan_core::types::ConversationAttachment;
 use vulcan_core::types::CoreEvent as CoreControllerEvent;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
@@ -108,6 +109,12 @@ pub struct ExecutionPreparation {
     /// Optional context-budget snapshot captured from the final provider-facing request shape.
     /// 从最终面向 Provider 的请求形态捕获到的可选上下文预算快照。
     pub context_budget: Option<ContextBudgetSnapshot>,
+    /// Optional layered context assembly captured from the final provider-facing request shape.
+    /// 从最终面向 Provider 的请求形态捕获到的可选分层上下文装配结果。
+    pub context_assembly: Option<ContextAssembly>,
+    /// Optional compact baseline snapshot derived from the current layered context assembly.
+    /// 从当前分层上下文装配结果派生出的可选紧凑基线快照。
+    pub context_baseline: Option<ContextBaseline>,
 }
 
 impl ExecutionPreparation {
@@ -204,6 +211,17 @@ impl ExecutionPreparation {
         if let Some(context_budget) = self.context_budget.as_ref() {
             rows.push(format!("预算：{}", context_budget.summary_note()));
             rows.push(format!("预算指纹：{}", context_budget.fingerprint));
+        }
+
+        if let Some(context_assembly) = self.context_assembly.as_ref() {
+            rows.push(format!("上下文层：{}", context_assembly.summary_note()));
+        }
+
+        if let Some(context_baseline) = self.context_baseline.as_ref() {
+            rows.push(format!(
+                "上下文基线：{} 层 · {}",
+                context_baseline.layer_count, context_baseline.fingerprint
+            ));
         }
 
         if !self.skill_names.is_empty() {

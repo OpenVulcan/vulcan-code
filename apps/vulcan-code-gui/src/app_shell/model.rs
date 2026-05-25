@@ -650,6 +650,14 @@ pub struct SessionCompactionEntry {
     /// First message identifier that should be used when rebuilding the next context window.
     /// 重建下一轮上下文窗口时应作为起点的第一条消息标识。
     pub context_start_message_id: Option<String>,
+    /// Stable budget fingerprint captured when this compaction checkpoint was created.
+    /// 创建该压缩检查点时捕获的稳定预算指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget_fingerprint: Option<String>,
+    /// Stable layered-context fingerprint captured when this compaction checkpoint was created.
+    /// 创建该压缩检查点时捕获的稳定分层上下文指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_assembly_fingerprint: Option<String>,
     /// First retained user-turn index that stayed verbatim after the compaction rewrite.
     /// 压缩改写后仍按原样保留的第一个用户轮次索引。
     pub retained_tail_start_turn_index: Option<i64>,
@@ -1095,6 +1103,30 @@ pub struct SessionRuntimeStateEntry {
     /// Current message identifier used as the next context reconstruction anchor.
     /// 当前用作下一轮上下文重建锚点的消息标识。
     pub context_start_message_id: Option<String>,
+    /// Live budget fingerprint captured from the latest provider-facing request shape.
+    /// 从最近一次面向 Provider 请求形态捕获的实时预算指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_context_budget_fingerprint: Option<String>,
+    /// Live layered-context fingerprint captured from the latest provider-facing request shape.
+    /// 从最近一次面向 Provider 请求形态捕获的实时分层上下文指纹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_context_assembly_fingerprint: Option<String>,
+    /// Anchor budget fingerprint captured when the active compaction baseline was accepted.
+    /// 在接受当前压缩基线时捕获的锚点预算指纹。
+    #[serde(
+        default,
+        alias = "last_context_budget_fingerprint",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub anchor_context_budget_fingerprint: Option<String>,
+    /// Anchor layered-context fingerprint captured when the active compaction baseline was accepted.
+    /// 在接受当前压缩基线时捕获的锚点分层上下文指纹。
+    #[serde(
+        default,
+        alias = "last_context_assembly_fingerprint",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub anchor_context_assembly_fingerprint: Option<String>,
     /// Persisted transcript UI state restored with the session runtime metadata.
     /// 随会话运行时元数据一起恢复的持久化转录界面状态。
     pub ui_state: SessionTranscriptUiState,

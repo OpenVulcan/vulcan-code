@@ -191,10 +191,7 @@ fn declared_openai_file_input_param_names(meta: Option<&Map<String, Value>>) -> 
 
 /// Masks the selected file-path parameters in one model-visible input schema so upstream models see a stable string-or-string-array contract.
 /// 对模型可见输入 Schema 中被选中的文件路径参数执行遮罩，使上游模型看到稳定的字符串或字符串数组契约。
-fn mask_input_schema_for_file_path_params(
-    input_schema: &mut Value,
-    file_params: &[String],
-) {
+fn mask_input_schema_for_file_path_params(input_schema: &mut Value, file_params: &[String]) {
     let Some(properties) = input_schema
         .as_object_mut()
         .and_then(|schema| schema.get_mut("properties"))
