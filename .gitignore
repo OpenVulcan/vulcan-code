@@ -26,7 +26,7 @@ target
 /target
 /third_party
 /.qwen
-/.vulcan-code/
+/.vulcan/
 /output
 /docs/plan/
 /docs/completed/

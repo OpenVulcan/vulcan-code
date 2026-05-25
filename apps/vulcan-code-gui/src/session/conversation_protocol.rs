@@ -1301,7 +1301,7 @@ mod tests {
                             "outputs": [{
                                 "kind": "image",
                                 "file_name": "generated-cover.png",
-                                "local_path": r"D:\workspace\.vulcan-code\attachments\images\generated-cover.png",
+                                "local_path": r"D:\workspace\.vulcan\code\attachments\images\generated-cover.png",
                                 "source_path": r"D:\workspace\exports\generated-cover.png",
                                 "mime_type": "image/png",
                                 "asset_id": "asset-generated-1",

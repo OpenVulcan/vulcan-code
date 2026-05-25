@@ -16,7 +16,11 @@ use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
 /// Stable hidden workspace directory used to retain host-managed attachment copies.
 /// 用于保留宿主管理附件副本的稳定隐藏工作区目录名称。
-const WORKSPACE_ATTACHMENT_DIR_NAME: &str = ".vulcan-code";
+const WORKSPACE_VULCAN_DIR_NAME: &str = ".vulcan";
+
+/// Stable nested workspace subtree used to group code-owned project data.
+/// 用于归拢代码托管项目数据的稳定工作区子树名称。
+const WORKSPACE_CODE_DIR_NAME: &str = "code";
 
 /// Stable leaf directory used below the host-managed attachment root.
 /// 宿主管理附件根目录下使用的稳定叶子目录名称。
@@ -53,8 +57,8 @@ pub struct AttachmentDescriptor {
     pub extension: &'static str,
 }
 
-/// Resolves the stable managed attachment root for the current workspace or falls back to the shared Vulcan home directory.
-/// 为当前工作区解析稳定的托管附件根目录，并在缺失时回退到共享 Vulcan 家目录。
+/// Resolves the stable managed attachment root for the current workspace or falls back to the shared Vulcan home code subtree.
+/// 为当前工作区解析稳定的托管附件根目录，并在缺失时回退到共享 Vulcan 家目录下的 code 子树。
 pub fn resolve_managed_attachment_root(workspace_path: &str) -> PathBuf {
     let trimmed_workspace = workspace_path.trim();
     if !trimmed_workspace.is_empty() {
@@ -68,15 +72,16 @@ pub fn resolve_managed_attachment_root(workspace_path: &str) -> PathBuf {
                 .unwrap_or(workspace_candidate)
         };
         return workspace_directory
-            .join(WORKSPACE_ATTACHMENT_DIR_NAME)
+            .join(WORKSPACE_VULCAN_DIR_NAME)
+            .join(WORKSPACE_CODE_DIR_NAME)
             .join(MANAGED_ATTACHMENT_DIR_NAME);
     }
 
     let home_directory = dirs::home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     home_directory
-        .join(".vulcan")
-        .join("vulcan-code")
+        .join(WORKSPACE_VULCAN_DIR_NAME)
+        .join(WORKSPACE_CODE_DIR_NAME)
         .join(MANAGED_ATTACHMENT_DIR_NAME)
 }
 
@@ -705,6 +710,7 @@ mod tests {
     use crate::workspace_path::{
         canonicalize_workspace_path, normalized_workspace_path_text_from_path,
     };
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
     use vulcan_core::types::ConversationAttachmentKind;
 
@@ -880,7 +886,20 @@ mod tests {
     fn resolve_managed_attachment_root_uses_shared_home_fallback() {
         let managed_root = resolve_managed_attachment_root("");
 
-        assert!(managed_root.to_string_lossy().contains("attachments"));
+        assert!(managed_root.ends_with(Path::new(".vulcan/code/attachments")));
+    }
+
+    /// Verifies the managed attachment root stays inside the workspace-local `.vulcan/code/attachments` subtree.
+    /// 验证托管附件根目录稳定落在工作区本地的 `.vulcan/code/attachments` 子树下。
+    #[test]
+    fn resolve_managed_attachment_root_uses_workspace_vulcan_code_subtree() {
+        let workspace_directory = unique_workspace_directory();
+
+        assert!(resolve_managed_attachment_root(&workspace_directory.to_string_lossy()).ends_with(
+            Path::new(".vulcan/code/attachments")
+        ));
+
+        cleanup_workspace_directory(&workspace_directory);
     }
 
     /// Verifies clipboard-style RGBA image bytes can be encoded into a PNG payload for managed staging.
