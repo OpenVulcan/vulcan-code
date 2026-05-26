@@ -71,7 +71,10 @@ pub(crate) fn execute_provider_prompt_stream(
         .or(preparation.temperature)
         .map(|value| value.clamp(0.0, 2.0) as f64)
         .filter(|_| preparation.model_blueprint.supports_temperature());
-    let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
+    let max_turns = preparation
+        .prompt_purpose
+        .max_turns_override()
+        .unwrap_or_else(|| resolve_runtime_default_max_turns_limit(active_agent));
     let model_id = preparation.model_blueprint.model_id.as_str();
     let base_url = preparation.model_blueprint.base_url.as_deref();
     let request_headers = match build_provider_request_headers(&preparation.model_blueprint) {

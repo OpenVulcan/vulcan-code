@@ -70,9 +70,12 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         ai_tool_configuration,
         resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),
     );
-    let resolved_tool_definitions = tools_manager
+    let mut resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)
         .definitions;
+    if preparation.prompt_purpose.disables_provider_tools() {
+        resolved_tool_definitions.clear();
+    }
     let mcp_overview = foundation.mcp_overview();
     let discovery_report = mcp_overview.discovery_report();
     let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =

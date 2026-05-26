@@ -54,6 +54,17 @@ pub(crate) fn prepare_execution(
         ai_tool_fallback_aliases.clone(),
     );
     let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
+    if request.prompt_purpose.disables_provider_tools() {
+        if !resolved_tools.descriptors.is_empty() {
+            warnings.push(format!(
+                "内部 `{}` 执行不允许工具调用，本轮已隐藏 {} 个工具。",
+                request.prompt_purpose.diagnostics_label(),
+                resolved_tools.descriptors.len()
+            ));
+        }
+        resolved_tools.descriptors.clear();
+        resolved_tools.definitions.clear();
+    }
 
     if workspace_path.is_empty() {
         warnings.push(String::from(
@@ -115,6 +126,7 @@ pub(crate) fn prepare_execution(
         execution_mode: request.execution_mode.clone(),
         temperature,
         prompt_configuration: config.prompt.clone(),
+        prompt_purpose: request.prompt_purpose,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors: resolved_tools.descriptors,
         delegate_agents: active_agent.delegates.clone(),

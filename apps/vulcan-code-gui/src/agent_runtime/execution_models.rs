@@ -44,6 +44,55 @@ pub struct ExecutionPreparationRequest {
     /// Effective AI-tool configuration snapshot locked for the current run.
     /// 为当前运行锁定的生效 AI 工具配置快照。
     pub ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Prompt purpose used to choose runtime prompt assembly and tool exposure.
+    /// 用于选择运行时提示词装配与工具暴露策略的提示词用途。
+    pub prompt_purpose: ExecutionPromptPurpose,
+}
+
+/// Runtime purpose attached to one provider-facing prompt execution.
+/// 附着在一次面向 Provider 的提示词执行上的运行时用途。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPromptPurpose {
+    /// Normal user-authored conversation turn.
+    /// 普通用户发起的会话回合。
+    UserTurn,
+    /// Internal context-compaction summary request.
+    /// 内部上下文压缩摘要请求。
+    ContextCompaction,
+}
+
+impl Default for ExecutionPromptPurpose {
+    /// Returns the default prompt purpose used by normal conversation turns.
+    /// 返回普通会话回合使用的默认提示词用途。
+    fn default() -> Self {
+        Self::UserTurn
+    }
+}
+
+impl ExecutionPromptPurpose {
+    /// Returns whether this purpose must hide provider-visible tools.
+    /// 返回该用途是否必须隐藏 Provider 可见工具。
+    pub const fn disables_provider_tools(self) -> bool {
+        matches!(self, Self::ContextCompaction)
+    }
+
+    /// Returns the maximum provider-turn override required by this purpose.
+    /// 返回该用途要求的最大 Provider 回合数覆盖值。
+    pub const fn max_turns_override(self) -> Option<usize> {
+        match self {
+            Self::UserTurn => None,
+            Self::ContextCompaction => Some(1),
+        }
+    }
+
+    /// Returns a compact diagnostics label for this prompt purpose.
+    /// 返回该提示词用途的紧凑诊断标签。
+    pub const fn diagnostics_label(self) -> &'static str {
+        match self {
+            Self::UserTurn => "user-turn",
+            Self::ContextCompaction => "context-compaction",
+        }
+    }
 }
 
 /// Prepared execution plan rendered by the GUI before real LLM execution begins.
@@ -89,6 +138,9 @@ pub struct ExecutionPreparation {
     /// Prompt-composer configuration captured for this run.
     /// 为本次运行捕获的提示词组合配置。
     pub prompt_configuration: PersistedPromptConfiguration,
+    /// Prompt purpose captured for this run.
+    /// 为本次运行捕获的提示词用途。
+    pub prompt_purpose: ExecutionPromptPurpose,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,

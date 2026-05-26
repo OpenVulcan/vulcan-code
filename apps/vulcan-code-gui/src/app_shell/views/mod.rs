@@ -38,6 +38,35 @@ fn prompt_composer_inspector_layer_preview(text: &str) -> String {
     format!("{}…", preview.chars().take(180).collect::<String>())
 }
 
+/// Extracts a short summary preview from one compaction-summary body without exposing the full prompt wrapper.
+/// 从单条压缩摘要正文中提取短预览，而不暴露完整的提示词包裹。
+fn composer_context_anchor_summary_preview(message: &SessionMessageEntry) -> String {
+    let summary_body = message
+        .body
+        .split_once("Earlier context summary:\n")
+        .map(|(_, summary)| summary)
+        .unwrap_or_else(|| message.body.as_str());
+    let summary_body = summary_body
+        .split_once("\n\nContinue from the newer messages below")
+        .map(|(summary, _)| summary)
+        .unwrap_or(summary_body);
+    crate::agent_runtime::provider_stream_projection::truncate_preview(summary_body, 64)
+}
+
+/// Builds one compact compaction-anchor row from the referenced summary message.
+/// 根据所引用的摘要消息构建一条紧凑的压缩锚点行。
+fn composer_context_anchor_reference_row(
+    message_id: &str,
+    message: &SessionMessageEntry,
+) -> String {
+    let summary_preview = composer_context_anchor_summary_preview(message);
+    if summary_preview.trim().is_empty() || summary_preview == "（空）" {
+        format!("压缩锚点：已建立 · 关联消息 {}", message_id)
+    } else {
+        format!("压缩锚点：已建立 · {}", summary_preview)
+    }
+}
+
 /// Stable input used to identify one project-rules watch subscription.
 /// 用于标识单个项目规则监听订阅的稳定输入。
 #[derive(Clone, Debug, Hash)]
@@ -3975,11 +4004,26 @@ impl VulcanWorkbench {
         }
 
         if let Some(runtime_state) = runtime_state {
-            diagnostic_rows.push(if runtime_state.last_compaction_id.is_some() {
+            let anchor_row = if let (Some(session_id), Some(context_start_message_id)) = (
+                selected_session_id,
+                runtime_state.context_start_message_id.as_deref(),
+            ) {
+                self.session_message_entry(session_id, context_start_message_id)
+                    .map(|message| {
+                        composer_context_anchor_reference_row(context_start_message_id, message)
+                    })
+                    .unwrap_or_else(|| {
+                        format!(
+                            "压缩锚点：已建立 · 关联消息 {}（已缺失）",
+                            context_start_message_id
+                        )
+                    })
+            } else if runtime_state.last_compaction_id.is_some() {
                 String::from("压缩锚点：已建立")
             } else {
                 String::from("压缩锚点：尚未建立")
-            });
+            };
+            diagnostic_rows.push(anchor_row);
         }
 
         if let Some(preparation) = preparation {
@@ -8924,7 +8968,8 @@ impl VulcanWorkbench {
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_history_search_preview_segments;
+    use super::{composer_context_anchor_reference_row, workspace_history_search_preview_segments};
+    use vulcan_context::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
     /// Verifies that preview markup is split into alternating plain and highlighted segments.
     /// 验证预览标记会被拆分成按顺序交替出现的普通片段与高亮片段。
@@ -8955,6 +9000,31 @@ mod tests {
                 (String::from("前缀 "), false),
                 (String::from("高亮尾段"), true),
             ]
+        );
+    }
+
+    /// Verifies that compaction-anchor rows stay short and only expose the linked summary message identity and headline.
+    /// 验证压缩锚点行保持短小，仅暴露关联摘要消息的身份与标题。
+    #[test]
+    fn composer_context_anchor_reference_row_uses_short_summary_identity() {
+        let message = SessionMessageEntry {
+            id: String::from("summary-anchor-1"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::CompactionSummary,
+            visible: false,
+            title: String::from("Context Continuation Prompt"),
+            body: String::from(
+                "This session is being continued from earlier context that was compacted to fit the model context window.\n\nEarlier context summary:\n保留了目标、工具、未完成项和基线状态。\n\nContinue from the newer messages below without restarting the conversation, repeating this summary, or asking for the same information again.",
+            ),
+            metadata: None,
+            created_at: String::from("20"),
+        };
+
+        let row = composer_context_anchor_reference_row("summary-anchor-1", &message);
+
+        assert_eq!(
+            row,
+            "压缩锚点：已建立 · 保留了目标、工具、未完成项和基线状态。"
         );
     }
 }

@@ -97,6 +97,7 @@ pub(crate) async fn bootstrap_runtime_stream(
         core_snapshot,
         core_controller,
     } = build_runtime_bootstrap_core(&preparation, request, active_agent.as_ref());
+    let prompt_purpose = preparation.prompt_purpose;
     seed_runtime_request_snapshot(
         &mut preparation,
         request,
@@ -105,6 +106,7 @@ pub(crate) async fn bootstrap_runtime_stream(
         &resolved_tool_definitions,
         crate::agent_runtime::provider_runtime_context::resolve_runtime_max_turns(
             active_agent.as_ref(),
+            prompt_purpose,
         ),
         &mut warnings,
     )

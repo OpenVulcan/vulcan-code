@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::{
-    ExecutionPreparation, persisted_personality_to_prompt_selection,
+    ExecutionPreparation, ExecutionPromptPurpose, persisted_personality_to_prompt_selection,
 };
 use crate::agent_runtime::prompt_composer_runtime::{
     record_runtime_prompt_composer_report, runtime_prompt_composer_engine,
@@ -117,9 +117,14 @@ fn build_runtime_prompt_assembly_input(
         "Current workspace: {}\nCurrent execution mode: {}",
         preparation.workspace_path, preparation.execution_mode
     ));
+    let custom_developer_segments =
+        build_prompt_purpose_developer_segments(preparation.prompt_purpose);
 
     PromptAssemblyInput {
-        mode: PromptAssemblyMode::Primary,
+        mode: match preparation.prompt_purpose {
+            ExecutionPromptPurpose::UserTurn => PromptAssemblyMode::Primary,
+            ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompaction,
+        },
         model: ModelDescriptor {
             family: preparation.model_blueprint.api_family_key().to_string(),
             model_id: preparation.model_blueprint.model_id.clone(),
@@ -150,10 +155,25 @@ fn build_runtime_prompt_assembly_input(
                 .collect(),
         ),
         subagent: None,
-        custom_developer_segments: Vec::new(),
+        custom_developer_segments,
         custom_user_segments: load_workspace_project_user_prompt(preparation)
             .into_iter()
             .collect(),
+    }
+}
+
+/// Builds developer-side runtime instructions required by a special prompt purpose.
+/// 构建特殊提示词用途所需的开发者侧运行时指令。
+fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
+    match purpose {
+        ExecutionPromptPurpose::UserTurn => Vec::new(),
+        ExecutionPromptPurpose::ContextCompaction => vec![String::from(
+            "Internal host task: summarize earlier conversation context for continuation.\n\
+             - Do not call tools.\n\
+             - Do not delegate.\n\
+             - Do not ask questions.\n\
+             - Return plain text only.",
+        )],
     }
 }
 
@@ -290,7 +310,11 @@ fn build_legacy_runtime_system_preamble(
 /// 为支持多轮工具调用的 Provider 解析一份可选的最大轮次覆盖值。
 pub(crate) fn resolve_runtime_max_turns(
     active_agent: Option<&RuntimeAgentDefinition>,
+    prompt_purpose: ExecutionPromptPurpose,
 ) -> Option<usize> {
+    if let Some(max_turns) = prompt_purpose.max_turns_override() {
+        return Some(max_turns);
+    }
     active_agent
         .and_then(|agent| agent.max_turns)
         .filter(|value| *value > 0)
@@ -424,6 +448,39 @@ mod tests {
         );
     }
 
+    /// Verifies context-compaction prompts use the prompt composer instead of a post-launch system suffix.
+    /// 验证上下文压缩提示词会使用提示词组合器，而不是启动后追加系统提示词后缀。
+    #[test]
+    fn runtime_prompt_layers_for_context_compaction_use_developer_layer() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.prompt_purpose = ExecutionPromptPurpose::ContextCompaction;
+        preparation.tool_descriptors = vec![vulcan_tools_manager::VulcanToolDescriptor {
+            id: String::from("shell_command"),
+            name: String::from("shell_command"),
+            description: String::from("Run one shell command"),
+            source: vulcan_tools_manager::VulcanToolSourceKind::Native,
+        }];
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .developer
+                .contains("Internal host task: summarize earlier conversation context")
+        );
+        assert!(
+            !layers
+                .provider_layers
+                .tool_guidance
+                .contains("shell_command")
+        );
+        assert!(layers.provider_layers.system.contains("VulcanCode"));
+    }
+
     /// Builds one minimal execution preparation for prompt-layer tests.
     /// 为提示词层测试构建一份最小执行准备。
     fn build_test_preparation(
@@ -444,6 +501,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: None,
             prompt_configuration,
+            prompt_purpose: ExecutionPromptPurpose::UserTurn,
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             delegate_agents: Vec::new(),

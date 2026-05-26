@@ -119,6 +119,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
+            prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("read_file"),
@@ -249,6 +250,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
+            prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("read_file"),
@@ -505,7 +507,17 @@ mod tests {
     /// 验证当未显式提供最大轮次覆盖值时，运行时会让多轮 Provider 保持不限制状态。
     #[test]
     fn runtime_max_turns_default_to_unlimited_without_override() {
-        assert_eq!(resolve_runtime_max_turns(None), None);
+        assert_eq!(
+            resolve_runtime_max_turns(None, crate::agent_runtime::ExecutionPromptPurpose::UserTurn),
+            None
+        );
+        assert_eq!(
+            resolve_runtime_max_turns(
+                None,
+                crate::agent_runtime::ExecutionPromptPurpose::ContextCompaction
+            ),
+            Some(1)
+        );
         assert_eq!(
             resolve_runtime_default_max_turns_limit(None),
             DEFAULT_RUNTIME_MAX_TURNS_LIMIT
@@ -528,7 +540,13 @@ mod tests {
             temperature: None,
             max_turns: None,
         };
-        assert_eq!(resolve_runtime_max_turns(Some(&worker_agent)), None);
+        assert_eq!(
+            resolve_runtime_max_turns(
+                Some(&worker_agent),
+                crate::agent_runtime::ExecutionPromptPurpose::UserTurn
+            ),
+            None
+        );
         assert_eq!(
             resolve_runtime_default_max_turns_limit(Some(&worker_agent)),
             DEFAULT_RUNTIME_MAX_TURNS_LIMIT
@@ -570,6 +588,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
+            prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("read_file"),
@@ -634,6 +653,7 @@ mod tests {
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
+            prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("shell_command"),

@@ -952,6 +952,7 @@ impl VulcanWorkbench {
             temperature: runtime_options.temperature,
             reasoning_effort: runtime_options.reasoning_effort,
             ai_tool_configuration,
+            prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
         };
 
         self.replace_session_runtime_events(session_id, Vec::new());

@@ -233,6 +233,48 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
     );
 }
 
+/// Verifies context-compaction mode excludes tool-help nodes while preserving runtime instructions.
+/// 验证上下文压缩模式会排除工具帮助节点，同时保留运行时指令。
+#[test]
+fn context_compaction_mode_excludes_tool_help_nodes() {
+    let engine = PromptComposerEngine::with_builtins();
+    let input = PromptAssemblyInput {
+        mode: PromptAssemblyMode::ContextCompaction,
+        model: ModelDescriptor {
+            family: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            supports_native_personality: false,
+        },
+        provider_prompt: Some(ProviderPromptSnapshot::new("Provider base")),
+        agent_prompt: None,
+        personality: PersonalitySelection::Disabled,
+        project_rules: None,
+        environment_context: Some(EnvironmentContextSnapshot::new("cwd=D:/repo")),
+        task_goal: None,
+        tool_catalog: ToolCatalogSnapshot::new(vec![ToolDescriptor {
+            id: String::from("shell_command"),
+            title: String::from("Shell"),
+            description: String::from("Run one shell command"),
+            help_text: Some(String::from("Do not appear in compaction mode.")),
+            schema_fingerprint: Some(String::from("schema-1")),
+        }]),
+        subagent: None,
+        custom_developer_segments: vec![String::from("Return plain text only.")],
+        custom_user_segments: Vec::new(),
+    };
+
+    let output = engine.compose(&input).expect("compose should succeed");
+
+    assert_eq!(output.diagnostics.strategy_id, "context-compaction");
+    assert!(output.tool_metadata_segments.is_empty());
+    assert!(
+        output
+            .render_developer_text()
+            .contains("Return plain text only.")
+    );
+    assert!(!output.render_tool_metadata_text().contains("shell_command"));
+}
+
 /// Verifies project-rule delta tracking distinguishes unchanged and changed snapshots.
 /// 验证项目规则增量跟踪能区分未变化与已变化快照。
 #[test]

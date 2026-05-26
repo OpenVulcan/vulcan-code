@@ -89,7 +89,9 @@ pub mod tool_runtime_bridge;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;
-pub use execution_models::{ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport};
+pub use execution_models::{
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
+};
 pub use runtime::RuntimeFoundation;
 pub use runtime_stream::stream_runtime_run;
 

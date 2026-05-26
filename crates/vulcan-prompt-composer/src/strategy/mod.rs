@@ -1,6 +1,9 @@
 //! Prompt assembly strategy definitions.
 //! 提示词装配策略定义。
 
+/// Context compaction strategy.
+/// 上下文压缩策略。
+pub mod compaction;
 /// Stable ordering helpers.
 /// 稳定排序辅助。
 pub mod ordering;

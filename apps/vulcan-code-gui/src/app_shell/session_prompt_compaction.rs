@@ -6,7 +6,9 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
-use crate::agent_runtime::{ExecutionPreparationRequest, ExecutionRunReport};
+use crate::agent_runtime::{
+    ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
+};
 use crate::context_compaction::{
     CompactionPlan, CompactionSkillResult, build_compaction_request_prompt,
 };
@@ -19,16 +21,6 @@ use crate::provider_config::{
 use crate::tooling::CommandSessionRuntime;
 use futures_util::StreamExt;
 use std::sync::Arc;
-
-/// Static system-prompt suffix that forces compaction requests into a plain-text, no-tools summarization mode.
-/// 强制压缩请求进入纯文本无工具总结模式的固定系统提示词后缀。
-const PROMPT_COMPACTION_SYSTEM_PREAMBLE_SUFFIX: &str = "\n\
-\n\
-Internal host task: summarize earlier conversation context for continuation.\n\
-- Do not call tools.\n\
-- Do not delegate.\n\
-- Do not ask questions.\n\
-- Return plain text only.";
 
 /// Immutable request payload required to execute one prompt-based compaction job.
 /// 执行单次提示词式压缩任务所需的不可变请求载荷。
@@ -110,6 +102,7 @@ pub(super) async fn execute_prompt_compaction_job(
         temperature: None,
         reasoning_effort: request.reasoning_effort,
         ai_tool_configuration: request.ai_tool_configuration,
+        prompt_purpose: ExecutionPromptPurpose::ContextCompaction,
     };
 
     let launch = prepare_runtime_stream_launch(
@@ -124,19 +117,12 @@ pub(super) async fn execute_prompt_compaction_job(
     )
     .await;
 
-    let mut launch = match launch {
+    let launch = match launch {
         Ok(launch) => launch,
         Err(report) => {
             return Ok(fallback_execution_from_report(&request.plan, &report));
         }
     };
-
-    launch.system_preamble = build_prompt_compaction_system_preamble(&launch.system_preamble);
-    launch.resolved_tool_definitions.clear();
-    launch.preparation.tool_descriptors.clear();
-    if let Some(active_agent) = launch.active_agent.as_mut() {
-        active_agent.max_turns = Some(1);
-    }
 
     let runtime_stream = drive_runtime_stream_launch(request.provider_configuration, launch);
     futures_util::pin_mut!(runtime_stream);
@@ -155,17 +141,6 @@ pub(super) async fn execute_prompt_compaction_job(
         fallback_used: true,
         provider_request_count: 0,
     })
-}
-
-/// Builds the effective system preamble for one internal prompt-compaction request by extending the normal runtime preamble with no-tools summarization instructions.
-/// 通过在常规运行时前导语后附加无工具总结指令，为内部提示词压缩请求构建生效系统前导语。
-fn build_prompt_compaction_system_preamble(base_preamble: &str) -> String {
-    let trimmed = base_preamble.trim();
-    if trimmed.is_empty() {
-        PROMPT_COMPACTION_SYSTEM_PREAMBLE_SUFFIX.trim().to_string()
-    } else {
-        format!("{trimmed}{PROMPT_COMPACTION_SYSTEM_PREAMBLE_SUFFIX}")
-    }
 }
 
 /// Finalizes one terminal execution report returned by the internal summary run into the prompt-based compaction result consumed by the workbench.

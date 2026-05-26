@@ -64,7 +64,7 @@ pub(crate) fn build_runtime_bootstrap_core(
             preparation,
             &system_preamble,
             runtime_prompt.provider_layers.clone(),
-            resolve_runtime_max_turns(active_agent),
+            resolve_runtime_max_turns(active_agent, preparation.prompt_purpose),
             resolve_provider_additional_params(&preparation.model_blueprint),
         ),
         core_snapshot.clone(),
