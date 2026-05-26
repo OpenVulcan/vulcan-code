@@ -3,6 +3,6 @@
 
 pub mod session;
 pub use session::{
-    CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
-    SummarySkillInput, TitleAgentInput,
+    ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput,
+    TitleAgentInput,
 };

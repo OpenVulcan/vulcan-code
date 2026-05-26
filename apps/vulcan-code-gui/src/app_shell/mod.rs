@@ -59,6 +59,10 @@ use crate::composer_parts::{
     build_composer_input_parts, composer_parts_have_submittable_content, composer_parts_label_text,
     composer_parts_preview_text, composer_parts_to_user_payload, composer_parts_transcript_body,
 };
+use crate::context_compaction::{
+    CompactionPlan, CompactionSkillInput, CompactionSkillResult, into_session_derived_record,
+    plan_compaction,
+};
 use crate::context_budget::{
     ContextBudgetSnapshot, ContextCompactionPolicy, build_projected_session_context_budget_snapshot,
 };
@@ -104,10 +108,9 @@ use crate::selectable_transcript::{
     view_selectable_rendered_transcript_shared_with_context_menu,
     view_selectable_rendered_transcript_with_context_menu,
 };
-use crate::skills::session::{CompactionPlan, CompactionSkillResult};
 use crate::skills::{
-    CompactionSkillInput, ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain,
-    SummarySkillInput, TitleAgentInput,
+    ExploreSkillInput, SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput,
+    TitleAgentInput,
 };
 use crate::style;
 use crate::theme::{self, ThemePaletteExt};
@@ -16095,8 +16098,10 @@ impl VulcanWorkbench {
         activity_title: &str,
         activity_detail: String,
     ) {
-        let summary_message_id =
-            self.push_session_derived_record(session_id, compaction_result.summary_record.clone());
+        let summary_message_id = self.push_session_derived_record(
+            session_id,
+            into_session_derived_record(compaction_result.summary_record.clone()),
+        );
         let mut checkpoint = compaction_result.materialize_checkpoint(summary_message_id);
         let created_at = checkpoint.created_at.clone();
         let compaction_id = checkpoint.id.clone();
@@ -16160,7 +16165,6 @@ impl VulcanWorkbench {
             return Task::none();
         }
 
-        debug_assert_eq!(plan.session_id, session_id);
         let previous_phase = self.session_run_phase_for(session_id);
         let session_title = self
             .session_by_id(session_id)
@@ -16342,15 +16346,13 @@ impl VulcanWorkbench {
             &messages,
             false,
         );
-        let Some(plan) = self
-            .session_skill_chain
-            .plan_compaction(CompactionSkillInput {
-                session_id,
-                messages: &messages,
-                all_messages: &full_session_messages,
-                runtime_state: &runtime_state_snapshot,
-                policy: ContextCompactionPolicy::default(),
-            })
+        let Some(plan) = plan_compaction(CompactionSkillInput {
+            session_label: &session_id.to_string(),
+            messages: &messages,
+            all_messages: &full_session_messages,
+            context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
+            policy: ContextCompactionPolicy::default(),
+        })
         else {
             self.sync_context_usage_from_session_budget(session_id);
             self.status_message = String::from("当前会话暂时没有可压缩的历史上下文。");
@@ -17018,15 +17020,13 @@ impl VulcanWorkbench {
             };
             context_budget = recomputed_budget;
         }
-        let Some(plan) = self
-            .session_skill_chain
-            .plan_compaction(CompactionSkillInput {
-                session_id,
-                messages: &messages,
-                all_messages: &full_session_messages,
-                runtime_state: &runtime_state_snapshot,
-                policy: ContextCompactionPolicy::default(),
-            })
+        let Some(plan) = plan_compaction(CompactionSkillInput {
+            session_label: &session_id.to_string(),
+            messages: &messages,
+            all_messages: &full_session_messages,
+            context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
+            policy: ContextCompactionPolicy::default(),
+        })
         else {
             self.sync_context_usage_from_session_budget(session_id);
             return Task::none();
@@ -18815,7 +18815,7 @@ mod tests {
         SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary,
         SessionTurnStatsStatus,
     };
-    use crate::skills::session::{CompactionPlan, CompactionSkillResult};
+    use crate::context_compaction::{CompactionPlan, CompactionSkillResult};
     use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
     use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
     use iced::Task;
@@ -19385,7 +19385,6 @@ mod tests {
         );
 
         let plan = CompactionPlan {
-            session_id,
             source_messages: workbench
                 .session_messages
                 .get(&session_id)

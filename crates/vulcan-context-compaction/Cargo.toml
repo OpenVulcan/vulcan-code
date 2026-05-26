@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-context-compaction"
+description = "Shared context-compaction planning and rewrite helpers reused by the host runtime and workspace UI."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+vulcan-context.workspace = true
+vulcan-core.workspace = true

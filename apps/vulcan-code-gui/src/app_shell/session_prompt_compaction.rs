@@ -8,13 +8,13 @@ use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::conversation_protocol::conversation_state_from_session_messages;
+use crate::context_compaction::{
+    CompactionPlan, CompactionSkillResult, build_compaction_request_prompt,
+};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::{
     PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
-};
-use crate::skills::session::{
-    CompactionPlan, CompactionSkillResult, build_compaction_request_prompt,
 };
 use crate::tooling::CommandSessionRuntime;
 use futures_util::StreamExt;

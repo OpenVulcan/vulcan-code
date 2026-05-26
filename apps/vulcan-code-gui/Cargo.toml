@@ -14,7 +14,7 @@ async-trait.workspace = true
 iced.workspace = true
 iced_aw.workspace = true
 iced_fonts.workspace = true
-iced_runtime = { path = "../../third_party/iced/runtime" }
+iced_runtime = { git = "https://github.com/lingeasy/iced.git", branch = "vulcan-code", package = "iced_runtime" }
 async-stream = "0.3.6"
 arboard = "3.6.1"
 base64 = "0.22.1"
@@ -32,6 +32,7 @@ vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true
 vulcan-core.workspace = true
 vulcan-context.workspace = true
+vulcan-context-compaction.workspace = true
 vldb-controller-client.workspace = true
 luaskills.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }

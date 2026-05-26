@@ -5,6 +5,8 @@ mod agent_runtime;
 mod app_shell;
 mod attachments;
 mod compat;
+mod context_compaction;
+mod context_management;
 mod i18n;
 mod mcp;
 mod profiles;
@@ -24,18 +26,19 @@ pub(crate) use compat::{
     image_understanding as image_understanding_compat, media_generation as media_generation_compat,
     web_search as web_search_compat,
 };
+pub(crate) use context_management::{budget as context_budget, protocol as conversation_protocol};
 pub(crate) use i18n::{
     AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale,
 };
 pub(crate) use profiles::agent_profile;
 pub(crate) use provider::ai_tool_configuration;
 pub(crate) use provider::catalog::ai_capability_provider_catalog;
-pub(crate) use provider::{
+pub(crate) use provider::{ 
     capabilities as provider_capabilities, config as provider_config,
     input_normalizer as provider_input_normalizer, usage as provider_usage,
 };
 pub(crate) use runtime_support::{luaskills_runtime, project_temp_maintenance, runtime_assets};
-pub(crate) use session::{agent_view, context_budget, conversation_protocol};
+pub(crate) use session::agent_view;
 pub(crate) use shared::{code_view, composer_parts, data_plane, diff, workspace_path};
 pub(crate) use tooling::bridge as vulcan_tools_bridge;
 pub(crate) use tooling::result_format as tool_result_format;

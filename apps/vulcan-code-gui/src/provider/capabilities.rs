@@ -101,18 +101,6 @@ pub struct ResolvedAiToolCapability {
 }
 
 impl ResolvedModelCapabilities {
-    /// Returns the effective input budget limit used by context-budget estimation and compaction checks.
-    /// 返回供上下文预算估算与压缩检查使用的生效输入预算上限。
-    pub fn effective_input_limit(&self) -> Option<usize> {
-        self.input_limit.or(self.context_limit)
-    }
-
-    /// Returns the effective output reserve limit used by context-budget estimation.
-    /// 返回供上下文预算估算使用的生效输出预留上限。
-    pub fn effective_output_limit(&self) -> Option<usize> {
-        self.output_limit
-    }
-
     /// Returns whether the selected model still behaves as text-only from the host perspective.
     /// 返回从宿主视角看当前选中模型是否仍表现为纯文本模型。
     pub fn is_text_only(&self) -> bool {

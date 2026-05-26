@@ -38,6 +38,7 @@ pub(crate) fn parse_provider_usage_from_json(raw: &str) -> Option<ProviderUsageS
 
 /// Returns the observed provider input-token count when the provider reported enough usage data.
 /// 当 Provider 返回了足够的用量数据时，返回实测输入 Token 数。
+#[cfg(test)]
 pub(crate) fn observed_input_tokens_from_usage(
     usage: Option<&ProviderUsageSnapshot>,
 ) -> Option<usize> {
@@ -58,6 +59,7 @@ pub(crate) fn observed_input_tokens_from_usage(
 
 /// Returns one calibrated input-token estimate, preferring provider-observed usage over host heuristics.
 /// 返回校准后的输入 Token 估算值，优先采用 Provider 实测用量而不是宿主启发式估算。
+#[cfg(test)]
 pub(crate) fn calibrated_input_token_estimate(
     estimated_input_tokens: usize,
     usage: Option<&ProviderUsageSnapshot>,

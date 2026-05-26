@@ -2,10 +2,29 @@
 //! 供宿主运行时与工作区界面复用的共享上下文管理基础能力。
 
 pub mod assembly;
+pub mod budget;
+pub mod protocol;
+pub mod transcript;
 
 pub use assembly::{
     ContextAssembly, ContextBaseline, ContextBaselineComparison, ContextLayer, ContextLayerKind,
     build_context_fingerprint, build_provider_request_context_assembly,
+};
+pub use budget::{
+    ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
+    ContextReasoningEffort, build_context_budget_fingerprint,
+    build_projected_session_context_budget_snapshot, build_request_context_budget_snapshot,
+    calibrated_input_token_estimate, observed_input_tokens_from_usage,
+};
+pub use protocol::{
+    SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
+    SessionConversationState, SessionConversationToolCall, SessionProviderContinuationState,
+    append_assistant_text_message, append_record, append_record_body_delta,
+    append_user_text_message, collect_host_visible_attachments, conversation_state_from_session_messages,
+    conversation_state_to_context_records, conversation_state_to_session_messages,
+};
+pub use transcript::{
+    SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
 };
 
 use vulcan_core::types::ProviderUsageSnapshot;
