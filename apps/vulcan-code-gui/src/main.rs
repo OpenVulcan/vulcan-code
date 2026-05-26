@@ -33,7 +33,7 @@ pub(crate) use i18n::{
 pub(crate) use profiles::agent_profile;
 pub(crate) use provider::ai_tool_configuration;
 pub(crate) use provider::catalog::ai_capability_provider_catalog;
-pub(crate) use provider::{ 
+pub(crate) use provider::{
     capabilities as provider_capabilities, config as provider_config,
     input_normalizer as provider_input_normalizer, usage as provider_usage,
 };

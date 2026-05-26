@@ -4,22 +4,173 @@
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_prompt_loader::load_provider_base_system_prompt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use vulcan_prompt_composer::{
+    AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, PersonalitySelection,
+    ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
+    PromptComposerEngine, ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+};
+
+/// Workspace-local project rules file name consumed by prompt composition.
+/// 提示词组合读取的工作区本地项目规则文件名。
+const WORKSPACE_PROJECT_RULES_FILE_NAME: &str = "AGENTS.md";
 
 /// Builds the effective runtime system prompt sent to the real provider agent.
 /// 构建发送给真实 Provider 代理的生效运行时系统提示词。
+#[cfg(test)]
 pub(crate) fn build_runtime_system_preamble(preparation: &ExecutionPreparation) -> String {
-    let mut sections = Vec::new();
-    sections.push(
-        load_provider_base_system_prompt(&preparation.model_blueprint)
-            .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent.")),
-    );
-    sections.push(format!("Current workspace: {}", preparation.workspace_path));
-    sections.push(format!(
-        "Current execution mode: {}",
-        preparation.execution_mode
+    build_runtime_system_preamble_for_agent(preparation, None)
+}
+
+/// Builds the effective runtime system prompt with optional active-agent context.
+/// 使用可选当前代理上下文构建生效运行时系统提示词。
+pub(crate) fn build_runtime_system_preamble_for_agent(
+    preparation: &ExecutionPreparation,
+    active_agent: Option<&RuntimeAgentDefinition>,
+) -> String {
+    let engine = PromptComposerEngine::with_builtins();
+    let input = build_runtime_prompt_assembly_input(preparation, active_agent);
+    let output = match engine.compose(&input) {
+        Ok(output) => output,
+        Err(error) => {
+            return build_legacy_runtime_system_preamble(preparation, Some(error.to_string()));
+        }
+    };
+
+    render_runtime_prompt_output(&output, preparation)
+}
+
+/// Builds the prompt-composer input used by the runtime bridge.
+/// 构建运行时桥接层使用的提示词组合输入。
+fn build_runtime_prompt_assembly_input(
+    preparation: &ExecutionPreparation,
+    active_agent: Option<&RuntimeAgentDefinition>,
+) -> PromptAssemblyInput {
+    let provider_prompt = load_provider_base_system_prompt(&preparation.model_blueprint)
+        .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent."));
+    let agent_prompt = active_agent
+        .map(|agent| agent.system_prompt.trim())
+        .filter(|text| !text.is_empty())
+        .map(|text| AgentPromptSnapshot::new(text.to_string()));
+    let environment_context = EnvironmentContextSnapshot::new(format!(
+        "Current workspace: {}\nCurrent execution mode: {}",
+        preparation.workspace_path, preparation.execution_mode
     ));
 
+    PromptAssemblyInput {
+        mode: PromptAssemblyMode::Primary,
+        model: ModelDescriptor {
+            family: preparation.model_blueprint.api_family_key().to_string(),
+            model_id: preparation.model_blueprint.model_id.clone(),
+            supports_native_personality: true,
+        },
+        provider_prompt: Some(ProviderPromptSnapshot::new(provider_prompt)),
+        agent_prompt,
+        personality: PersonalitySelection::Default,
+        project_rules: load_workspace_project_rules_snapshot(&preparation.workspace_path),
+        environment_context: Some(environment_context),
+        task_goal: None,
+        tool_catalog: ToolCatalogSnapshot::new(
+            preparation
+                .tool_descriptors
+                .iter()
+                .map(|tool| ToolDescriptor {
+                    id: tool.id.clone(),
+                    title: tool.name.clone(),
+                    description: tool.description.clone(),
+                    help_text: None,
+                    schema_fingerprint: None,
+                })
+                .collect(),
+        ),
+        subagent: None,
+        custom_developer_segments: Vec::new(),
+        custom_user_segments: Vec::new(),
+    }
+}
+
+/// Renders a composer output into the single provider system-preamble channel used today.
+/// 将组合结果渲染为当前 Provider 使用的单一系统前导语通道。
+fn render_runtime_prompt_output(
+    output: &PromptAssemblyOutput,
+    preparation: &ExecutionPreparation,
+) -> String {
+    let mut sections = Vec::new();
+    push_non_empty_section(&mut sections, output.render_system_text());
+    push_titled_section(
+        &mut sections,
+        "Developer Instructions",
+        output.render_developer_text(),
+    );
+    push_titled_section(&mut sections, "Runtime Context", output.render_user_text());
+    if sections.is_empty() {
+        return build_legacy_runtime_system_preamble(preparation, None);
+    }
+    sections.join("\n\n")
+}
+
+/// Loads one workspace-level project rules snapshot when `AGENTS.md` exists.
+/// 当 `AGENTS.md` 存在时加载一份工作区级项目规则快照。
+fn load_workspace_project_rules_snapshot(workspace_path: &str) -> Option<ProjectRulesSnapshot> {
+    let rules_path = workspace_project_rules_path(workspace_path)?;
+    let text = fs::read_to_string(&rules_path).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(ProjectRulesSnapshot::new(
+        rules_path.display().to_string(),
+        text.to_string(),
+    ))
+}
+
+/// Resolves the workspace-level project rules path.
+/// 解析工作区级项目规则路径。
+fn workspace_project_rules_path(workspace_path: &str) -> Option<PathBuf> {
+    let workspace = Path::new(workspace_path);
+    if workspace_path.trim().is_empty() || !workspace.is_dir() {
+        return None;
+    }
+    Some(workspace.join(WORKSPACE_PROJECT_RULES_FILE_NAME))
+}
+
+/// Builds the legacy fallback preamble when the new composer cannot assemble.
+/// 当新组合器无法装配时构建旧版回退系统前导语。
+fn build_legacy_runtime_system_preamble(
+    preparation: &ExecutionPreparation,
+    composer_error: Option<String>,
+) -> String {
+    let mut sections = vec![
+        load_provider_base_system_prompt(&preparation.model_blueprint)
+            .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent.")),
+        format!("Current workspace: {}", preparation.workspace_path),
+        format!("Current execution mode: {}", preparation.execution_mode),
+    ];
+    if let Some(error) = composer_error {
+        sections.push(format!(
+            "Prompt composer fallback: runtime prompt assembly failed: {error}"
+        ));
+    }
     sections.join("\n")
+}
+
+/// Push one raw section when it contains visible text.
+/// 当原始分节包含可见文本时推入该分节。
+fn push_non_empty_section(sections: &mut Vec<String>, body: String) {
+    let body = body.trim();
+    if !body.is_empty() {
+        sections.push(body.to_string());
+    }
+}
+
+/// Push one titled section when it contains visible text.
+/// 当带标题分节包含可见文本时推入该分节。
+fn push_titled_section(sections: &mut Vec<String>, title: &str, body: String) {
+    let body = body.trim();
+    if !body.is_empty() {
+        sections.push(format!("## {title}\n{body}"));
+    }
 }
 
 /// Resolves one optional max-turn override for multi-turn tool-calling providers.
@@ -31,4 +182,60 @@ pub(crate) fn resolve_runtime_max_turns(
         .and_then(|agent| agent.max_turns)
         .filter(|value| *value > 0)
         .map(|value| value as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Provider runtime context tests.
+    //! Provider 运行时上下文测试。
+
+    use super::*;
+
+    /// Verifies the project-rules loader reads a non-empty workspace AGENTS.md file.
+    /// 验证项目规则加载器会读取非空的工作区 AGENTS.md 文件。
+    #[test]
+    fn project_rules_loader_reads_workspace_agents_file() {
+        let root = unique_temp_dir("vulcan-project-rules-read");
+        fs::create_dir_all(&root).expect("create temp workspace");
+        let rules_path = root.join(WORKSPACE_PROJECT_RULES_FILE_NAME);
+        fs::write(&rules_path, "Rule A\n").expect("write project rules");
+
+        let snapshot = load_workspace_project_rules_snapshot(&root.display().to_string())
+            .expect("project rules should load");
+
+        assert_eq!(snapshot.text, "Rule A");
+        assert_eq!(snapshot.source, rules_path.display().to_string());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies missing or empty project rules are not injected.
+    /// 验证缺失或空白项目规则不会被注入。
+    #[test]
+    fn project_rules_loader_skips_missing_or_empty_agents_file() {
+        let missing_root = unique_temp_dir("vulcan-project-rules-missing");
+        fs::create_dir_all(&missing_root).expect("create missing workspace");
+        assert!(
+            load_workspace_project_rules_snapshot(&missing_root.display().to_string()).is_none()
+        );
+
+        let empty_root = unique_temp_dir("vulcan-project-rules-empty");
+        fs::create_dir_all(&empty_root).expect("create empty workspace");
+        fs::write(empty_root.join(WORKSPACE_PROJECT_RULES_FILE_NAME), " \n\t")
+            .expect("write empty project rules");
+        assert!(load_workspace_project_rules_snapshot(&empty_root.display().to_string()).is_none());
+
+        let _ = fs::remove_dir_all(missing_root);
+        let _ = fs::remove_dir_all(empty_root);
+    }
+
+    /// Builds one unique temporary directory for tests.
+    /// 为测试构建一个唯一临时目录。
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{suffix}"))
+    }
 }

@@ -27,6 +27,11 @@ use vulcan_core::tool::AllowAllToolPolicy;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
 };
+use vulcan_prompt_composer::{
+    ModelDescriptor, PersonalitySelection, PromptAssemblyInput, PromptAssemblyMode,
+    PromptAssemblyOutput, PromptComposerEngine, ProviderPromptSnapshot, SubagentSnapshot,
+    ToolCatalogSnapshot,
+};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
     VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
@@ -1637,7 +1642,87 @@ fn build_task_controller_config(
     }
 
     let mut config = base.clone();
-    let mut system_prompt = config.system_prompt.clone();
+    let mut system_prompt = build_subagent_clone_system_prompt(base, description, subagent)
+        .unwrap_or_else(|| build_legacy_task_system_prompt(base, description, subagent));
+    append_task_windows_path_guidance(&mut system_prompt);
+    if !system_prompt.trim().is_empty() {
+        config.system_prompt = system_prompt;
+    }
+    config
+}
+
+/// Builds a clone-mode subagent system prompt through the prompt composer.
+/// 通过提示词组合器构建分身模式子代理系统提示词。
+fn build_subagent_clone_system_prompt(
+    base: &CoreControllerConfig,
+    description: &Option<String>,
+    subagent: &Option<String>,
+) -> Option<String> {
+    let engine = PromptComposerEngine::with_builtins();
+    let output = engine
+        .compose(&PromptAssemblyInput {
+            mode: PromptAssemblyMode::SubagentClone,
+            model: ModelDescriptor {
+                family: base.provider_id.clone(),
+                model_id: base.model_id.clone(),
+                supports_native_personality: true,
+            },
+            provider_prompt: Some(ProviderPromptSnapshot::new(base.system_prompt.clone())),
+            agent_prompt: None,
+            personality: PersonalitySelection::Disabled,
+            project_rules: None,
+            environment_context: None,
+            task_goal: None,
+            tool_catalog: ToolCatalogSnapshot::new(Vec::new()),
+            subagent: Some(SubagentSnapshot {
+                identity: subagent
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("subagent")
+                    .to_string(),
+                task: description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("Continue the delegated task.")
+                    .to_string(),
+                delegation: Some(String::from(
+                    "Use the parent agent's existing context and return a concise result that the parent can merge back into the main flow.",
+                )),
+                functional_system_prompt: None,
+            }),
+            custom_developer_segments: Vec::new(),
+            custom_user_segments: Vec::new(),
+        })
+        .ok()?;
+
+    let prompt = render_subagent_prompt_output(&output);
+    (!prompt.trim().is_empty()).then_some(prompt)
+}
+
+/// Renders clone-mode subagent composer output into the current single system-prompt channel.
+/// 将分身模式子代理组合输出渲染到当前单一系统提示词通道。
+fn render_subagent_prompt_output(output: &PromptAssemblyOutput) -> String {
+    let mut sections = Vec::new();
+    push_task_prompt_section(&mut sections, output.render_system_text());
+    push_titled_task_prompt_section(
+        &mut sections,
+        "Subagent Developer Instructions",
+        output.render_developer_text(),
+    );
+    push_titled_task_prompt_section(&mut sections, "Subagent Context", output.render_user_text());
+    sections.join("\n\n")
+}
+
+/// Builds the legacy child-task prompt when composer assembly fails.
+/// 当组合器装配失败时构建旧版子任务提示词。
+fn build_legacy_task_system_prompt(
+    base: &CoreControllerConfig,
+    description: &Option<String>,
+    subagent: &Option<String>,
+) -> String {
+    let mut system_prompt = base.system_prompt.clone();
     if let Some(subagent) = subagent.as_ref().filter(|value| !value.trim().is_empty()) {
         system_prompt.push_str(&format!("\n\n[Subagent]\n{subagent}"));
     }
@@ -1647,11 +1732,25 @@ fn build_task_controller_config(
     {
         system_prompt.push_str(&format!("\n\n[Task]\n{description}"));
     }
-    append_task_windows_path_guidance(&mut system_prompt);
-    if !system_prompt.trim().is_empty() {
-        config.system_prompt = system_prompt;
+    system_prompt
+}
+
+/// Pushes one raw child-task prompt section when it has visible text.
+/// 当子任务原始提示词分节包含可见文本时推入该分节。
+fn push_task_prompt_section(sections: &mut Vec<String>, body: String) {
+    let body = body.trim();
+    if !body.is_empty() {
+        sections.push(body.to_string());
     }
-    config
+}
+
+/// Pushes one titled child-task prompt section when it has visible text.
+/// 当子任务带标题提示词分节包含可见文本时推入该分节。
+fn push_titled_task_prompt_section(sections: &mut Vec<String>, title: &str, body: String) {
+    let body = body.trim();
+    if !body.is_empty() {
+        sections.push(format!("## {title}\n{body}"));
+    }
 }
 
 /// Appends one Windows-specific filesystem path guidance block to the child task system prompt.
@@ -1705,14 +1804,64 @@ mod tests {
 
         let config = build_task_controller_config(&base, None, &description, &subagent);
 
-        assert!(config.system_prompt.contains("[Subagent]\nexplorer"));
+        assert!(config.system_prompt.contains("Subagent identity: explorer"));
         assert!(
             config
                 .system_prompt
-                .contains("[Task]\nAnalyze the current repository.")
+                .contains("Delegated task: Analyze the current repository.")
         );
         assert!(config.system_prompt.contains("[Filesystem Paths]"));
         assert!(config.system_prompt.contains(r"C:\repo\path"));
+    }
+
+    /// Verifies stored child-task controller configs are reused without recomposition.
+    /// 验证已存储的子任务控制器配置会直接复用而不会重新组合。
+    #[test]
+    fn build_task_controller_config_reuses_stored_config() {
+        let base = build_test_controller_config("Base prompt");
+        let stored = CoreControllerConfig {
+            provider_id: String::from("stored-provider"),
+            model_id: String::from("stored-model"),
+            system_prompt: String::from("Stored prompt"),
+            temperature: Some(0.7),
+            max_turns: 3,
+            additional_params: Some(json!({ "stored": true })),
+        };
+
+        let config = build_task_controller_config(
+            &base,
+            Some(stored.clone()),
+            &Some(String::from("Analyze the current repository.")),
+            &Some(String::from("explorer")),
+        );
+
+        assert_eq!(config.system_prompt, stored.system_prompt);
+        assert_eq!(config.provider_id, stored.provider_id);
+        assert_eq!(config.max_turns, stored.max_turns);
+    }
+
+    /// Verifies new child-task prompts use the clone-mode prompt composer shape.
+    /// 验证新建子任务提示词使用分身模式提示词组合器形态。
+    #[test]
+    fn build_task_controller_config_uses_subagent_clone_composer() {
+        let base = build_test_controller_config("Base prompt");
+        let description = Some(String::from("Analyze the current repository."));
+        let subagent = Some(String::from("explorer"));
+
+        let config = build_task_controller_config(&base, None, &description, &subagent);
+
+        assert!(config.system_prompt.contains("Base prompt"));
+        assert!(config.system_prompt.contains("Subagent identity: explorer"));
+        assert!(
+            config
+                .system_prompt
+                .contains("Delegated task: Analyze the current repository.")
+        );
+        assert!(
+            config
+                .system_prompt
+                .contains("Subagent Developer Instructions")
+        );
     }
 
     /// Verifies that caller-facing task identifiers are normalized consistently before being stored or looked up.

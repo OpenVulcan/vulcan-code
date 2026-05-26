@@ -20,8 +20,9 @@ pub use protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
     SessionConversationState, SessionConversationToolCall, SessionProviderContinuationState,
     append_assistant_text_message, append_record, append_record_body_delta,
-    append_user_text_message, collect_host_visible_attachments, conversation_state_from_session_messages,
-    conversation_state_to_context_records, conversation_state_to_session_messages,
+    append_user_text_message, collect_host_visible_attachments,
+    conversation_state_from_session_messages, conversation_state_to_context_records,
+    conversation_state_to_session_messages,
 };
 pub use transcript::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,

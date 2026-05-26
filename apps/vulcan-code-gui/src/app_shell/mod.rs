@@ -59,12 +59,12 @@ use crate::composer_parts::{
     build_composer_input_parts, composer_parts_have_submittable_content, composer_parts_label_text,
     composer_parts_preview_text, composer_parts_to_user_payload, composer_parts_transcript_body,
 };
+use crate::context_budget::{
+    ContextBudgetSnapshot, ContextCompactionPolicy, build_projected_session_context_budget_snapshot,
+};
 use crate::context_compaction::{
     CompactionPlan, CompactionSkillInput, CompactionSkillResult, into_session_derived_record,
     plan_compaction,
-};
-use crate::context_budget::{
-    ContextBudgetSnapshot, ContextCompactionPolicy, build_projected_session_context_budget_snapshot,
 };
 use crate::conversation_protocol::{
     SessionConversationRecord, SessionConversationState, append_assistant_text_message,
@@ -16352,8 +16352,7 @@ impl VulcanWorkbench {
             all_messages: &full_session_messages,
             context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
             policy: ContextCompactionPolicy::default(),
-        })
-        else {
+        }) else {
             self.sync_context_usage_from_session_budget(session_id);
             self.status_message = String::from("当前会话暂时没有可压缩的历史上下文。");
             return operation::focus(COMPOSER_EDITOR_ID);
@@ -17026,8 +17025,7 @@ impl VulcanWorkbench {
             all_messages: &full_session_messages,
             context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
             policy: ContextCompactionPolicy::default(),
-        })
-        else {
+        }) else {
             self.sync_context_usage_from_session_budget(session_id);
             return Task::none();
         };
@@ -18808,6 +18806,7 @@ mod tests {
     };
     use crate::app_shell::markdown;
     use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
+    use crate::context_compaction::{CompactionPlan, CompactionSkillResult};
     use crate::conversation_protocol::SessionConversationState;
     use crate::model::{
         PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
@@ -18815,7 +18814,6 @@ mod tests {
         SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary,
         SessionTurnStatsStatus,
     };
-    use crate::context_compaction::{CompactionPlan, CompactionSkillResult};
     use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
     use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
     use iced::Task;

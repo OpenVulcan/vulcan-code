@@ -19,8 +19,7 @@ const PROTOCOL_RECORD_COMPACTED_BODY_CHARS: usize = 12 * 1024;
 
 /// Placeholder text used when a retained recent tool result is too large to keep verbatim after compaction.
 /// 压缩后最近工具结果过大而无法原样保留时使用的占位文本。
-const COMPACTED_TOOL_RESULT_PLACEHOLDER: &str =
-    "Tool output omitted during context compaction to preserve provider protocol integrity. The full output remains available in the transcript.";
+const COMPACTED_TOOL_RESULT_PLACEHOLDER: &str = "Tool output omitted during context compaction to preserve provider protocol integrity. The full output remains available in the transcript.";
 
 /// Function pointer used to compact one `change_set` host result into its minimal transcript-safe form.
 /// 用于将一份 `change_set` 宿主结果压缩为最小可转录安全形态的函数指针。
@@ -176,7 +175,11 @@ fn canonical_tail_segments(messages: &[SessionConversationMessage]) -> Vec<Canon
         .iter()
         .enumerate()
         .filter_map(|(index, message)| {
-            matches!(&message.payload, SessionConversationPayload::UserText { .. }).then_some(index)
+            matches!(
+                &message.payload,
+                SessionConversationPayload::UserText { .. }
+            )
+            .then_some(index)
         })
         .collect::<Vec<_>>();
     if user_starts.is_empty() {
@@ -222,7 +225,10 @@ fn canonical_messages_with_compacted_tool_results(
 /// Estimates the canonical tail size with the same conservative shape used by compaction retention.
 /// 使用与压缩保留一致的保守形态估算规范尾部大小。
 fn canonical_tail_token_estimate(messages: &[SessionConversationMessage]) -> usize {
-    messages.iter().map(canonical_message_token_estimate).sum::<usize>()
+    messages
+        .iter()
+        .map(canonical_message_token_estimate)
+        .sum::<usize>()
 }
 
 /// Estimates one canonical message without consulting provider-specific tokenizers.
@@ -324,7 +330,9 @@ fn compact_historical_record(
             record.record_kind,
             SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
         ) {
-        String::from("Tool output was compacted. Re-run or open the original session detail if needed.")
+        String::from(
+            "Tool output was compacted. Re-run or open the original session detail if needed.",
+        )
     } else {
         truncate_compacted_record_body(&record.body)
     };
@@ -337,23 +345,27 @@ fn compact_historical_record(
 fn generated_attachment_tool_result_should_survive_compaction(
     record: &SessionConversationRecord,
 ) -> bool {
-    matches!(record.record_kind, SessionMessageRecordKind::ToolResultOutput)
-        && record
-            .metadata
-            .as_ref()
-            .and_then(resolve_generated_attachment_host_result_from_metadata)
-            .is_some()
+    matches!(
+        record.record_kind,
+        SessionMessageRecordKind::ToolResultOutput
+    ) && record
+        .metadata
+        .as_ref()
+        .and_then(resolve_generated_attachment_host_result_from_metadata)
+        .is_some()
 }
 
 /// Returns whether one canonical tool-result record carries `change_set` metadata that must remain transcript-visible after compaction.
 /// 返回一条规范工具结果记录是否携带必须在压缩后继续保留为转录可见的 `change_set` 元数据。
 fn change_set_tool_result_should_survive_compaction(record: &SessionConversationRecord) -> bool {
-    matches!(record.record_kind, SessionMessageRecordKind::ToolResultOutput)
-        && record
-            .metadata
-            .as_ref()
-            .and_then(resolve_change_set_host_result_from_metadata)
-            .is_some()
+    matches!(
+        record.record_kind,
+        SessionMessageRecordKind::ToolResultOutput
+    ) && record
+        .metadata
+        .as_ref()
+        .and_then(resolve_change_set_host_result_from_metadata)
+        .is_some()
 }
 
 /// Resolves the generated-attachments host-result payload from transcript metadata, accepting nested and flattened shapes.
@@ -458,8 +470,14 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
 
     let mut compact_output = serde_json::Map::new();
     compact_output.insert(String::from("kind"), Value::String(kind.to_string()));
-    compact_output.insert(String::from("file_name"), Value::String(file_name.to_string()));
-    compact_output.insert(String::from("local_path"), Value::String(local_path.to_string()));
+    compact_output.insert(
+        String::from("file_name"),
+        Value::String(file_name.to_string()),
+    );
+    compact_output.insert(
+        String::from("local_path"),
+        Value::String(local_path.to_string()),
+    );
 
     if let Some(mime_type) = output_object
         .get("mime_type")
@@ -467,7 +485,10 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        compact_output.insert(String::from("mime_type"), Value::String(mime_type.to_string()));
+        compact_output.insert(
+            String::from("mime_type"),
+            Value::String(mime_type.to_string()),
+        );
     }
     if let Some(byte_len) = output_object.get("byte_len").cloned() {
         compact_output.insert(String::from("byte_len"), byte_len);
@@ -478,7 +499,10 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        compact_output.insert(String::from("source_path"), Value::String(source_path.to_string()));
+        compact_output.insert(
+            String::from("source_path"),
+            Value::String(source_path.to_string()),
+        );
     }
     if let Some(preview_local_path) = output_object
         .get("preview_local_path")
@@ -497,7 +521,10 @@ fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        compact_output.insert(String::from("asset_id"), Value::String(asset_id.to_string()));
+        compact_output.insert(
+            String::from("asset_id"),
+            Value::String(asset_id.to_string()),
+        );
     }
 
     Some(Value::Object(compact_output))

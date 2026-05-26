@@ -242,7 +242,10 @@ fn build_compaction_result_from_summary_text(
 
 /// Builds the legacy host-side summary text retained as a fallback when prompt-based model compaction cannot complete.
 /// 构建在提示词式模型压缩无法完成时保留的旧版宿主侧回退总结文本。
-fn build_legacy_compaction_summary_text(messages: &[SessionMessageEntry], prune_tools: bool) -> String {
+fn build_legacy_compaction_summary_text(
+    messages: &[SessionMessageEntry],
+    prune_tools: bool,
+) -> String {
     messages
         .iter()
         .map(|message| compaction_summary_line_for_message(message, prune_tools))
@@ -252,7 +255,10 @@ fn build_legacy_compaction_summary_text(messages: &[SessionMessageEntry], prune_
 
 /// Resolves the absolute persisted user-turn index for one transcript message identifier by replaying user-turn boundaries over the full session transcript history.
 /// 通过在完整会话转录历史上重放用户轮次边界，解析某条转录消息标识对应的绝对持久化用户轮次索引。
-fn absolute_turn_index_for_message(messages: &[SessionMessageEntry], message_id: &str) -> Option<i64> {
+fn absolute_turn_index_for_message(
+    messages: &[SessionMessageEntry],
+    message_id: &str,
+) -> Option<i64> {
     let mut current_turn_index = -1_i64;
 
     for message in messages {
@@ -269,7 +275,10 @@ fn absolute_turn_index_for_message(messages: &[SessionMessageEntry], message_id:
 
 /// Selects the first context message that should remain verbatim after compaction.
 /// 选择压缩后应按原样保留的第一条上下文消息。
-fn recent_tail_start_index(messages: &[SessionMessageEntry], policy: ContextCompactionPolicy) -> usize {
+fn recent_tail_start_index(
+    messages: &[SessionMessageEntry],
+    policy: ContextCompactionPolicy,
+) -> usize {
     if messages.is_empty() {
         return 0;
     }
@@ -285,7 +294,8 @@ fn recent_tail_start_index(messages: &[SessionMessageEntry], policy: ContextComp
             break;
         }
         let segment_tokens = estimated_session_tail_tokens(&messages[segment.start..segment.end]);
-        if retained_turns == 0 || retained_tokens + segment_tokens <= policy.preserve_recent_tokens {
+        if retained_turns == 0 || retained_tokens + segment_tokens <= policy.preserve_recent_tokens
+        {
             retained_start = segment.start;
             retained_tokens = retained_tokens.saturating_add(segment_tokens);
             retained_turns += 1;
@@ -432,7 +442,9 @@ fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
         },
         SessionMessageRecordKind::ThinkingOutput => String::from("Thinking"),
         SessionMessageRecordKind::AssistantOutput => String::from("Output"),
-        SessionMessageRecordKind::ToolCallOutput => canonical_tool_summary_title(message, "Tool Call"),
+        SessionMessageRecordKind::ToolCallOutput => {
+            canonical_tool_summary_title(message, "Tool Call")
+        }
         SessionMessageRecordKind::ToolResultOutput => {
             canonical_tool_summary_title(message, "Tool Result")
         }

@@ -4,8 +4,9 @@
 use crate::skills::SessionDerivedRecord;
 
 pub use vulcan_context_compaction::{
-    CompactionPlan, CompactionPlanInput as CompactionSkillInput, CompactionResult as CompactionSkillResult,
-    CompactionSummaryRecord, build_compaction_request_prompt,
+    CompactionPlan, CompactionPlanInput as CompactionSkillInput,
+    CompactionResult as CompactionSkillResult, CompactionSummaryRecord,
+    build_compaction_request_prompt,
 };
 
 /// Plans one context-compaction window from the current transcript and runtime anchor.

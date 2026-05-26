@@ -199,7 +199,9 @@ pub fn append_record(state: &mut SessionConversationState, record: SessionConver
 
 /// Collects one latest-first unique attachment list from the canonical conversation window for host-side capability tools.
 /// 从规范会话窗口中收集一份按最新优先去重后的附件列表，供宿主侧能力工具使用。
-pub fn collect_host_visible_attachments(state: &SessionConversationState) -> Vec<ConversationAttachment> {
+pub fn collect_host_visible_attachments(
+    state: &SessionConversationState,
+) -> Vec<ConversationAttachment> {
     let mut seen_keys = BTreeSet::new();
     let mut attachments = Vec::new();
 
@@ -318,7 +320,9 @@ pub fn conversation_state_to_context_records(
 
 /// Converts one canonical session record back into the persisted transcript entry shape expected by the current GUI layer.
 /// 将单条规范会话记录重新转换为当前图形界面层期望的持久化转录条目形状。
-fn conversation_record_to_session_message(record: SessionConversationRecord) -> SessionMessageEntry {
+fn conversation_record_to_session_message(
+    record: SessionConversationRecord,
+) -> SessionMessageEntry {
     SessionMessageEntry {
         id: record.id,
         kind: record.kind,
@@ -337,14 +341,18 @@ fn session_message_to_protocol_message(
     message: &SessionMessageEntry,
 ) -> Option<SessionConversationMessage> {
     match message.kind {
-        SessionMessageKind::User if message.contributes_to_context() => Some(SessionConversationMessage {
-            id: message.id.clone(),
-            payload: SessionConversationPayload::UserText {
-                text: visible_user_message_canonical_text(message),
-                attachments: visible_user_message_transcript_attachments(message),
-            },
-        }),
-        SessionMessageKind::Assistant if assistant_record_can_seed_protocol(&message.record_kind) => {
+        SessionMessageKind::User if message.contributes_to_context() => {
+            Some(SessionConversationMessage {
+                id: message.id.clone(),
+                payload: SessionConversationPayload::UserText {
+                    text: visible_user_message_canonical_text(message),
+                    attachments: visible_user_message_transcript_attachments(message),
+                },
+            })
+        }
+        SessionMessageKind::Assistant
+            if assistant_record_can_seed_protocol(&message.record_kind) =>
+        {
             Some(SessionConversationMessage {
                 id: message.id.clone(),
                 payload: SessionConversationPayload::Assistant {
@@ -358,12 +366,18 @@ fn session_message_to_protocol_message(
             })
         }
         _ if message.contributes_to_context()
-            && matches!(message.record_kind, SessionMessageRecordKind::ToolCallOutput) =>
+            && matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolCallOutput
+            ) =>
         {
             tool_call_session_message_to_protocol_message(message)
         }
         _ if message.contributes_to_context()
-            && matches!(message.record_kind, SessionMessageRecordKind::ToolResultOutput) =>
+            && matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolResultOutput
+            ) =>
         {
             tool_result_session_message_to_protocol_message(message)
         }

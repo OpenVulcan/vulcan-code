@@ -4,18 +4,18 @@
 use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
 use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
+use vulcan_context::budget::{
+    ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
+    ContextReasoningEffort,
+};
 #[allow(unused_imports)]
 pub use vulcan_context::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
     ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy,
 };
-use vulcan_context::budget::{
-    ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
-    ContextReasoningEffort,
-};
 use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
-    ProviderUsageSnapshot,
+    ConversationMessage as CoreConversationMessage,
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot, ProviderUsageSnapshot,
 };
 
 /// Builds one exact request-facing budget snapshot from the final provider request snapshot.

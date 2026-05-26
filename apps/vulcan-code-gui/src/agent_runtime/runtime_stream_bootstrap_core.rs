@@ -9,7 +9,7 @@ use crate::agent_runtime::provider_request_controller_config::build_core_control
 use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
 use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
 use crate::agent_runtime::provider_runtime_context::{
-    build_runtime_system_preamble, resolve_runtime_max_turns,
+    build_runtime_system_preamble_for_agent, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
 use crate::context_budget::build_request_context_budget_snapshot;
@@ -46,7 +46,7 @@ pub(crate) fn build_runtime_bootstrap_core(
     request: &ExecutionPreparationRequest,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> RuntimeBootstrapCore {
-    let system_preamble = build_runtime_system_preamble(preparation);
+    let system_preamble = build_runtime_system_preamble_for_agent(preparation, active_agent);
     let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
     core_snapshot.messages = core_messages_to_provider_visible_history_for_model(
         &core_snapshot.messages,
