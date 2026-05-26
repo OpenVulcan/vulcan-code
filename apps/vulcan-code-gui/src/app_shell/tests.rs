@@ -1,3 +1,7 @@
+use super::workbench_model_state::{
+    format_openrouter_percentage, format_openrouter_price_per_mtokens,
+    format_openrouter_throughput_tokens_per_second, value_as_f64,
+};
 use super::{
     ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand, Message,
     ToolModalPresentation, VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
@@ -5,13 +9,11 @@ use super::{
     build_composer_slash_command_state, build_session_record_message_id,
     build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
     compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
-    composer_visible_line_count, format_openrouter_percentage, format_openrouter_price_per_mtokens,
-    format_openrouter_throughput_tokens_per_second, generated_attachments_from_tool_metadata,
+    composer_visible_line_count, generated_attachments_from_tool_metadata,
     merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
     pending_prompt_dispatch_index, prune_session_messages_to_limit,
     sanitize_workspace_history_search_query_input, session_event_store_missing_error,
     task_session_payload_from_tool_metadata, tool_modal_presentation_from_agent_view_attributes,
-    value_as_f64,
 };
 use crate::app_shell::markdown;
 use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
