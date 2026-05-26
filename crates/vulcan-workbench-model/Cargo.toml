@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-workbench-model"
+description = "Shared workbench-facing domain models for sessions, projects, and turn summaries."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+uuid.workspace = true
+vulcan-context.workspace = true

@@ -6161,6 +6161,7 @@ dependencies = [
  "vulcan-mcp-runtime",
  "vulcan-prompt-composer",
  "vulcan-tools-manager",
+ "vulcan-workbench-model",
 ]
 
 [[package]]
@@ -6242,6 +6243,15 @@ name = "vulcan-tools-manager"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "vulcan-workbench-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
+ "vulcan-context",
 ]
 
 [[package]]
