@@ -48,6 +48,7 @@ pub use personality::catalog::{PersonalityCatalog, PersonalityDefinition};
 pub use session::baseline::PromptSessionBaseline;
 pub use session::compaction::PromptCompactionSignal;
 pub use session::delta_state::{ProjectRulesDeltaKind, ProjectRulesDeltaState};
+pub use source::project_rules::{DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesFileCache};
 pub use source::snapshot::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
     SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,

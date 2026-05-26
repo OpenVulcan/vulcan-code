@@ -3,18 +3,19 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::ExecutionPreparation;
+use crate::agent_runtime::prompt_composer_runtime::runtime_prompt_composer_engine;
 use crate::agent_runtime::provider_prompt_loader::load_provider_base_system_prompt;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use vulcan_prompt_composer::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, PersonalitySelection,
-    ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
-    PromptComposerEngine, ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode,
+    PromptAssemblyOutput, ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
 };
 
-/// Workspace-local project rules file name consumed by prompt composition.
-/// 提示词组合读取的工作区本地项目规则文件名。
-const WORKSPACE_PROJECT_RULES_FILE_NAME: &str = "AGENTS.md";
+/// Process-wide project-rules source cache shared by provider runtime requests.
+/// Provider 运行时请求共享的进程级项目规则来源缓存。
+static PROJECT_RULES_FILE_CACHE: OnceLock<Mutex<ProjectRulesFileCache>> = OnceLock::new();
 
 /// Builds the effective runtime system prompt sent to the real provider agent.
 /// 构建发送给真实 Provider 代理的生效运行时系统提示词。
@@ -29,9 +30,8 @@ pub(crate) fn build_runtime_system_preamble_for_agent(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> String {
-    let engine = PromptComposerEngine::with_builtins();
     let input = build_runtime_prompt_assembly_input(preparation, active_agent);
-    let output = match engine.compose(&input) {
+    let output = match runtime_prompt_composer_engine().compose(&input) {
         Ok(output) => output,
         Err(error) => {
             return build_legacy_runtime_system_preamble(preparation, Some(error.to_string()));
@@ -103,6 +103,11 @@ fn render_runtime_prompt_output(
         "Developer Instructions",
         output.render_developer_text(),
     );
+    push_titled_section(
+        &mut sections,
+        "Tool Guidance",
+        output.render_tool_metadata_text(),
+    );
     push_titled_section(&mut sections, "Runtime Context", output.render_user_text());
     if sections.is_empty() {
         return build_legacy_runtime_system_preamble(preparation, None);
@@ -113,26 +118,35 @@ fn render_runtime_prompt_output(
 /// Loads one workspace-level project rules snapshot when `AGENTS.md` exists.
 /// 当 `AGENTS.md` 存在时加载一份工作区级项目规则快照。
 fn load_workspace_project_rules_snapshot(workspace_path: &str) -> Option<ProjectRulesSnapshot> {
-    let rules_path = workspace_project_rules_path(workspace_path)?;
-    let text = fs::read_to_string(&rules_path).ok()?;
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(ProjectRulesSnapshot::new(
-        rules_path.display().to_string(),
-        text.to_string(),
-    ))
+    let workspace = workspace_project_rules_path(workspace_path)?;
+    let cache = PROJECT_RULES_FILE_CACHE.get_or_init(|| Mutex::new(ProjectRulesFileCache::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.load_workspace_default(workspace).ok().flatten()
 }
 
-/// Resolves the workspace-level project rules path.
-/// 解析工作区级项目规则路径。
-fn workspace_project_rules_path(workspace_path: &str) -> Option<PathBuf> {
+/// Invalidate the cached workspace-level project rules snapshot.
+/// 使缓存中的工作区级项目规则快照失效。
+pub(crate) fn invalidate_workspace_project_rules_prompt_cache(workspace_path: &str) {
+    let Some(workspace) = workspace_project_rules_path(workspace_path) else {
+        return;
+    };
+    let cache = PROJECT_RULES_FILE_CACHE.get_or_init(|| Mutex::new(ProjectRulesFileCache::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.invalidate_workspace_default(workspace);
+}
+
+/// Resolves the workspace directory used by project-rules loading.
+/// 解析项目规则加载使用的工作区目录。
+fn workspace_project_rules_path(workspace_path: &str) -> Option<&Path> {
     let workspace = Path::new(workspace_path);
     if workspace_path.trim().is_empty() || !workspace.is_dir() {
         return None;
     }
-    Some(workspace.join(WORKSPACE_PROJECT_RULES_FILE_NAME))
+    Some(workspace)
 }
 
 /// Builds the legacy fallback preamble when the new composer cannot assemble.
@@ -190,6 +204,9 @@ mod tests {
     //! Provider 运行时上下文测试。
 
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use vulcan_prompt_composer::DEFAULT_PROJECT_RULES_FILE_NAME;
 
     /// Verifies the project-rules loader reads a non-empty workspace AGENTS.md file.
     /// 验证项目规则加载器会读取非空的工作区 AGENTS.md 文件。
@@ -197,7 +214,7 @@ mod tests {
     fn project_rules_loader_reads_workspace_agents_file() {
         let root = unique_temp_dir("vulcan-project-rules-read");
         fs::create_dir_all(&root).expect("create temp workspace");
-        let rules_path = root.join(WORKSPACE_PROJECT_RULES_FILE_NAME);
+        let rules_path = root.join(DEFAULT_PROJECT_RULES_FILE_NAME);
         fs::write(&rules_path, "Rule A\n").expect("write project rules");
 
         let snapshot = load_workspace_project_rules_snapshot(&root.display().to_string())
@@ -221,12 +238,35 @@ mod tests {
 
         let empty_root = unique_temp_dir("vulcan-project-rules-empty");
         fs::create_dir_all(&empty_root).expect("create empty workspace");
-        fs::write(empty_root.join(WORKSPACE_PROJECT_RULES_FILE_NAME), " \n\t")
+        fs::write(empty_root.join(DEFAULT_PROJECT_RULES_FILE_NAME), " \n\t")
             .expect("write empty project rules");
         assert!(load_workspace_project_rules_snapshot(&empty_root.display().to_string()).is_none());
 
         let _ = fs::remove_dir_all(missing_root);
         let _ = fs::remove_dir_all(empty_root);
+    }
+
+    /// Verifies external watcher events can invalidate the shared project-rules cache.
+    /// 验证外部监听事件可以使共享项目规则缓存失效。
+    #[test]
+    fn project_rules_loader_supports_explicit_cache_invalidation() {
+        let root = unique_temp_dir("vulcan-project-rules-invalidate");
+        fs::create_dir_all(&root).expect("create temp workspace");
+        let rules_path = root.join(DEFAULT_PROJECT_RULES_FILE_NAME);
+        fs::write(&rules_path, "Rule before\n").expect("write first rules");
+
+        let first = load_workspace_project_rules_snapshot(&root.display().to_string())
+            .expect("first project rules should load");
+        assert_eq!(first.text, "Rule before");
+
+        fs::write(&rules_path, "Rule after\n").expect("write second rules");
+        invalidate_workspace_project_rules_prompt_cache(&root.display().to_string());
+
+        let second = load_workspace_project_rules_snapshot(&root.display().to_string())
+            .expect("second project rules should load");
+        assert_eq!(second.text, "Rule after");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Builds one unique temporary directory for tests.

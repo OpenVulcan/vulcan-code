@@ -33,6 +33,7 @@ vulcan-tools-manager.workspace = true
 vulcan-core.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
+vulcan-file-watcher.workspace = true
 vulcan-prompt-composer.workspace = true
 vldb-controller-client.workspace = true
 luaskills.workspace = true

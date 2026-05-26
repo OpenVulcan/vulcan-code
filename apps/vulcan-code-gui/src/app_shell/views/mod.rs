@@ -16,6 +16,20 @@ mod settings_navigation;
 mod task_tree;
 mod transcript;
 
+/// Minimum delay used to coalesce project-rules filesystem bursts.
+/// 用于合并项目规则文件系统突发事件的最小延迟。
+const PROJECT_RULES_WATCH_THROTTLE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(250);
+
+/// Stable input used to identify one project-rules watch subscription.
+/// 用于标识单个项目规则监听订阅的稳定输入。
+#[derive(Clone, Debug, Hash)]
+struct ProjectRulesWatchSubscriptionInput {
+    /// Workspace directory whose default project rules should be watched.
+    /// 需要监听默认项目规则的工作区目录。
+    workspace_path: String,
+}
+
 /// Returns the active subagent dispatch list height needed for the current running task count.
 /// 返回当前运行中任务数量所需的活动子代理调度列表高度。
 fn subagent_navigation_panel_height(task_count: usize) -> f32 {
@@ -111,6 +125,52 @@ fn workspace_history_search_preview_rich_text<'a>(
             .collect::<Vec<_>>();
 
     rich_text(spans).size(12).width(Fill).into()
+}
+
+/// Builds a live watcher subscription for the active workspace `AGENTS.md`.
+/// 为当前工作区的 `AGENTS.md` 构建实时监听订阅。
+fn project_rules_watch_subscription(workspace_path: &str) -> Subscription<Message> {
+    let workspace_path = workspace_path.trim();
+    if workspace_path.is_empty() || !std::path::Path::new(workspace_path).is_dir() {
+        return Subscription::none();
+    }
+
+    let workspace_path = workspace_path.to_string();
+    Subscription::run_with(
+        ProjectRulesWatchSubscriptionInput { workspace_path },
+        project_rules_watch_stream,
+    )
+}
+
+/// Builds the asynchronous stream backing one project-rules watch subscription.
+/// 构建单个项目规则监听订阅背后的异步流。
+fn project_rules_watch_stream(
+    input: &ProjectRulesWatchSubscriptionInput,
+) -> futures_util::stream::BoxStream<'static, Message> {
+    let workspace_path = input.workspace_path.clone();
+    Box::pin(async_stream::stream! {
+        let target = vulcan_file_watcher::adapters::project_rules::ProjectRulesWatchTarget::workspace_default(
+            std::path::PathBuf::from(&workspace_path),
+        );
+
+        if let Ok(watcher) = vulcan_file_watcher::live::LiveFileWatcher::new() {
+            let watcher = std::sync::Arc::new(watcher);
+            let (subscriber, rx) = watcher.add_subscriber();
+            let _registration = subscriber.register_paths(vec![target.to_live_watch_path()]);
+            let mut rx = vulcan_file_watcher::live::ThrottledLiveWatchReceiver::new(
+                rx,
+                PROJECT_RULES_WATCH_THROTTLE_INTERVAL,
+            );
+
+            while let Some(event) = rx.recv().await {
+                if event.paths.iter().any(|path| target.matches_path(path)) {
+                    yield Message::ProjectRulesWatchChanged {
+                        workspace_path: workspace_path.clone(),
+                    };
+                }
+            }
+        }
+    })
 }
 
 impl VulcanWorkbench {
@@ -5961,6 +6021,9 @@ impl VulcanWorkbench {
                 Subscription::none()
             };
 
+        let project_rules_watch_subscription =
+            project_rules_watch_subscription(&self.workspace_path);
+
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
             window::resize_events()
@@ -5975,6 +6038,7 @@ impl VulcanWorkbench {
             runtime_progress_animation_subscription,
             question_runtime_poll_subscription,
             luaskills_progress_poll_subscription,
+            project_rules_watch_subscription,
         ])
     }
 

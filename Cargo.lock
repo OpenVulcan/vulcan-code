@@ -6156,6 +6156,7 @@ dependencies = [
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-core",
+ "vulcan-file-watcher",
  "vulcan-markdown",
  "vulcan-mcp-runtime",
  "vulcan-prompt-composer",

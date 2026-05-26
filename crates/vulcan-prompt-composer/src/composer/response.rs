@@ -55,4 +55,15 @@ impl PromptAssemblyOutput {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+
+    /// Join all tool-metadata bodies into one stable text block.
+    /// 将全部工具元数据正文拼接为稳定文本块。
+    pub fn render_tool_metadata_text(&self) -> String {
+        self.tool_metadata_segments
+            .iter()
+            .map(|segment| segment.body.as_str())
+            .filter(|body| !body.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
 }

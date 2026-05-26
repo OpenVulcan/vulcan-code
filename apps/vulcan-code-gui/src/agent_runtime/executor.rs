@@ -592,6 +592,63 @@ mod tests {
         assert!(preamble.contains("Current execution mode: Build"));
     }
 
+    /// Verifies runtime system preamble injects compact tool guidance without duplicating tool descriptions.
+    /// 验证运行时系统提示词会注入紧凑工具指导，但不会重复工具描述。
+    #[test]
+    fn runtime_system_preamble_injects_tool_guidance_without_description_duplication() {
+        let preparation = ExecutionPreparation {
+            session_id: uuid::Uuid::nil(),
+            session_title: String::from("测试会话"),
+            agent_id: String::from("default-agent"),
+            agent_name: String::from("默认代理"),
+            agent_kind: String::from("内置"),
+            model_blueprint: ProviderRuntimeBlueprint {
+                provider_id: String::from("openai"),
+                provider_name: String::from("OpenAI"),
+                runtime_kind: ProviderRuntimeKind::OpenAi,
+                runtime_label: String::from("OpenAI"),
+                model_id: String::from("gpt-test"),
+                model_name: String::from("GPT Test"),
+                openrouter_endpoint_route: None,
+                base_url: Some(String::from("https://api.example.test/v1")),
+                supports_remote_model_refresh: true,
+                credential_source: String::from("环境变量"),
+                user_agent: None,
+                extra_headers: BTreeMap::new(),
+                extra_body: json!({}),
+                reasoning: Default::default(),
+                capabilities: Default::default(),
+                interleaved_reasoning: None,
+            },
+            prompt_preview: String::from("请分析这段代码"),
+            workspace_path: String::from(r"D:\workspace"),
+            conversation_attachments: Vec::new(),
+            context_history_count: 2,
+            execution_mode: String::from("Build"),
+            temperature: Some(0.2),
+            skill_names: vec![String::from("codekit")],
+            tool_descriptors: vec![VulcanToolDescriptor {
+                id: String::from("shell_command"),
+                name: String::from("shell_command"),
+                description: String::from("FULL SHELL DESCRIPTION SHOULD NOT BE DUPLICATED"),
+                source: VulcanToolSourceKind::Native,
+            }],
+            delegate_agents: vec![String::from("delegate-a")],
+            enabled_mcp_servers: vec![String::from("demo-server")],
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+            context_budget: None,
+            context_assembly: None,
+            context_baseline: None,
+        };
+        let preamble = build_runtime_system_preamble(&preparation);
+
+        assert!(preamble.contains("## Tool Guidance"));
+        assert!(preamble.contains("Use shell_command for concrete local inspection"));
+        assert!(!preamble.contains("FULL SHELL DESCRIPTION SHOULD NOT BE DUPLICATED"));
+    }
+
     /// Verifies host-side tool-result correlation prefers provider call ids while still generating stable synthetic tool-result ids.
     /// 验证宿主侧工具结果关联会优先使用 Provider call id，同时仍生成稳定的合成工具结果标识。
     #[test]

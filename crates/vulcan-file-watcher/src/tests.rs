@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+use crate::adapters::project_rules::{
+    DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesWatchTarget, default_project_rules_route,
+};
 use crate::adapters::routing::{FileWatchRoute, FileWatchRouter};
 use crate::event::{FileWatchEvent, FileWatchEventKind};
 use crate::fs::polling::PollingFileWatcher;
@@ -77,6 +80,64 @@ fn file_watch_router_routes_recursive_events() {
     });
     assert_eq!(routed.len(), 1);
     assert_eq!(routed[0].route_id, "project-rules");
+}
+
+/// Verifies project-rules watch targets resolve the workspace AGENTS.md path.
+/// 验证项目规则监听目标会解析工作区 AGENTS.md 路径。
+#[test]
+fn project_rules_watch_target_resolves_agents_path() {
+    let target = ProjectRulesWatchTarget::workspace_default(PathBuf::from("D:/repo"));
+
+    assert_eq!(
+        target.rules_path(),
+        PathBuf::from("D:/repo").join(DEFAULT_PROJECT_RULES_FILE_NAME)
+    );
+    assert!(!target.to_file_watch_target().recursive);
+    assert!(!target.to_live_watch_path().recursive);
+}
+
+/// Verifies project-rules watch targets match direct and previous rename paths.
+/// 验证项目规则监听目标会匹配直接路径与重命名前路径。
+#[test]
+fn project_rules_watch_target_matches_events() {
+    let target = ProjectRulesWatchTarget::workspace_default(PathBuf::from("D:/repo"));
+    let rules_path = PathBuf::from("D:/repo").join(DEFAULT_PROJECT_RULES_FILE_NAME);
+
+    assert!(target.matches_event(&FileWatchEvent {
+        kind: FileWatchEventKind::Modified,
+        path: rules_path.clone(),
+        previous_path: None,
+    }));
+    assert!(target.matches_event(&FileWatchEvent {
+        kind: FileWatchEventKind::Renamed,
+        path: PathBuf::from("D:/repo/AGENTS.old.md"),
+        previous_path: Some(rules_path),
+    }));
+}
+
+/// Verifies default project-rules routes match the concrete rules file only.
+/// 验证默认项目规则路由只匹配具体规则文件。
+#[test]
+fn default_project_rules_route_matches_only_agents_file() {
+    let route = default_project_rules_route(PathBuf::from("D:/repo"));
+    let router = FileWatchRouter {
+        routes: vec![route],
+    };
+
+    let matched = router.route_event(&FileWatchEvent {
+        kind: FileWatchEventKind::Modified,
+        path: PathBuf::from("D:/repo/AGENTS.md"),
+        previous_path: None,
+    });
+    let unmatched = router.route_event(&FileWatchEvent {
+        kind: FileWatchEventKind::Modified,
+        path: PathBuf::from("D:/repo/src/main.rs"),
+        previous_path: None,
+    });
+
+    assert_eq!(matched.len(), 1);
+    assert!(matched[0].route_id.starts_with("project-rules:"));
+    assert!(unmatched.is_empty());
 }
 
 /// Build one unique temporary directory for tests.

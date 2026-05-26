@@ -5,6 +5,7 @@ use crate::composer::engine::PromptComposerEngine;
 use crate::composer::request::PromptAssemblyInput;
 use crate::composer::resources::PromptComposerResourceConfig;
 use crate::session::delta_state::{ProjectRulesDeltaKind, ProjectRulesDeltaState};
+use crate::source::project_rules::{DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesFileCache};
 use crate::source::snapshot::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
     TaskGoalSnapshot, ToolCatalogSnapshot,
@@ -109,6 +110,11 @@ fn resource_directories_override_personality_and_tool_help() {
             .iter()
             .any(|segment| segment.body.contains("custom-only checks"))
     );
+    assert!(
+        output
+            .render_tool_metadata_text()
+            .contains("custom-only checks")
+    );
 
     let _ = fs::remove_dir_all(root);
 }
@@ -159,6 +165,11 @@ fn tool_help_bundle_hits_cache_on_second_run() {
             .iter()
             .all(|segment| segment.from_cache)
     );
+    assert!(
+        second
+            .render_tool_metadata_text()
+            .contains("Use shell_command for concrete local inspection")
+    );
 }
 
 /// Verifies project-rule delta tracking distinguishes unchanged and changed snapshots.
@@ -176,6 +187,83 @@ fn project_rules_delta_state_tracks_changes() {
         ProjectRulesDeltaKind::Unchanged
     );
     assert_eq!(state.observe(Some(&third)), ProjectRulesDeltaKind::Changed);
+}
+
+/// Verifies project-rules file cache loads and reuses workspace AGENTS.md snapshots.
+/// 验证项目规则文件缓存会加载并复用工作区 AGENTS.md 快照。
+#[test]
+fn project_rules_file_cache_reuses_unchanged_snapshot() {
+    let root = unique_temp_dir("vulcan-project-rules-cache-reuse");
+    fs::create_dir_all(&root).expect("create workspace");
+    fs::write(root.join(DEFAULT_PROJECT_RULES_FILE_NAME), "Rule v1\n")
+        .expect("write project rules");
+
+    let mut cache = ProjectRulesFileCache::new();
+    let first = cache
+        .load_workspace_default(&root)
+        .expect("first load should succeed")
+        .expect("rules should exist");
+    let second = cache
+        .load_workspace_default(&root)
+        .expect("second load should succeed")
+        .expect("rules should still exist");
+
+    assert_eq!(first, second);
+    assert_eq!(cache.entry_count(), 1);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies project-rules file cache refreshes after content changes.
+/// 验证项目规则文件缓存会在内容变化后刷新。
+#[test]
+fn project_rules_file_cache_refreshes_changed_snapshot() {
+    let root = unique_temp_dir("vulcan-project-rules-cache-refresh");
+    fs::create_dir_all(&root).expect("create workspace");
+    let rules_path = root.join(DEFAULT_PROJECT_RULES_FILE_NAME);
+    fs::write(&rules_path, "Rule v1\n").expect("write first project rules");
+
+    let mut cache = ProjectRulesFileCache::new();
+    let first = cache
+        .load_workspace_default(&root)
+        .expect("first load should succeed")
+        .expect("rules should exist");
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    fs::write(&rules_path, "Rule v2 changed\n").expect("write second project rules");
+    let second = cache
+        .load_workspace_default(&root)
+        .expect("second load should succeed")
+        .expect("rules should still exist");
+
+    assert_ne!(first.content_hash, second.content_hash);
+    assert_eq!(second.text, "Rule v2 changed");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies manual invalidation removes cached project-rules entries.
+/// 验证手动失效会移除已缓存的项目规则条目。
+#[test]
+fn project_rules_file_cache_invalidates_workspace_entry() {
+    let root = unique_temp_dir("vulcan-project-rules-cache-invalidate");
+    fs::create_dir_all(&root).expect("create workspace");
+    fs::write(root.join(DEFAULT_PROJECT_RULES_FILE_NAME), "Rule v1\n")
+        .expect("write project rules");
+
+    let mut cache = ProjectRulesFileCache::new();
+    assert!(
+        cache
+            .load_workspace_default(&root)
+            .expect("load should succeed")
+            .is_some()
+    );
+    assert_eq!(cache.entry_count(), 1);
+
+    cache.invalidate_workspace_default(&root);
+
+    assert_eq!(cache.entry_count(), 0);
+
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Build one unique temporary directory for tests.

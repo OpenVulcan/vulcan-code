@@ -6600,6 +6600,13 @@ enum Message {
     /// Workspace path changed from the text input.
     /// 工作区路径在文本输入框中发生变化。
     WorkspacePathChanged(String),
+    /// Reports that workspace-level project rules may have changed on disk.
+    /// 回传工作区级项目规则可能已在磁盘上发生变化。
+    ProjectRulesWatchChanged {
+        /// Workspace path owning the changed project-rules file.
+        /// 拥有变化项目规则文件的工作区路径。
+        workspace_path: String,
+    },
     /// Prompt composer changed from the text input.
     /// 提示词输入框内容发生变化。
     ComposerChanged(String),
@@ -9656,6 +9663,12 @@ impl VulcanWorkbench {
             }
             Message::WorkspacePathChanged(value) => {
                 self.workspace_path = value;
+                Task::none()
+            }
+            Message::ProjectRulesWatchChanged { workspace_path } => {
+                crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_rules_prompt_cache(
+                    &workspace_path,
+                );
                 Task::none()
             }
             Message::ComposerChanged(value) => {

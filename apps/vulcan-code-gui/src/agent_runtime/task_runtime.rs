@@ -2,6 +2,7 @@
 //! 供宿主管理 task_id 续跑与嵌套子任务执行使用的可恢复任务会话运行时模块。
 
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::prompt_composer_runtime::runtime_prompt_composer_engine;
 use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
@@ -29,8 +30,7 @@ use vulcan_core::types::{
 };
 use vulcan_prompt_composer::{
     ModelDescriptor, PersonalitySelection, PromptAssemblyInput, PromptAssemblyMode,
-    PromptAssemblyOutput, PromptComposerEngine, ProviderPromptSnapshot, SubagentSnapshot,
-    ToolCatalogSnapshot,
+    PromptAssemblyOutput, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot,
 };
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
@@ -1658,8 +1658,7 @@ fn build_subagent_clone_system_prompt(
     description: &Option<String>,
     subagent: &Option<String>,
 ) -> Option<String> {
-    let engine = PromptComposerEngine::with_builtins();
-    let output = engine
+    let output = runtime_prompt_composer_engine()
         .compose(&PromptAssemblyInput {
             mode: PromptAssemblyMode::SubagentClone,
             model: ModelDescriptor {
@@ -1710,6 +1709,11 @@ fn render_subagent_prompt_output(output: &PromptAssemblyOutput) -> String {
         &mut sections,
         "Subagent Developer Instructions",
         output.render_developer_text(),
+    );
+    push_titled_task_prompt_section(
+        &mut sections,
+        "Subagent Tool Guidance",
+        output.render_tool_metadata_text(),
     );
     push_titled_task_prompt_section(&mut sections, "Subagent Context", output.render_user_text());
     sections.join("\n\n")
