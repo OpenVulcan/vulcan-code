@@ -57,6 +57,9 @@ pub struct SessionDerivedRecord {
     /// Internal body stored on the hidden node.
     /// 存储在隐藏节点上的内部正文。
     pub body: String,
+    /// Compact preview stored alongside the hidden node for diagnostics and tooltip reuse.
+    /// 与隐藏节点一起存储的紧凑预览，供诊断与 tooltip 复用。
+    pub preview: String,
 }
 
 /// Input consumed by the title-generation agent.
@@ -131,6 +134,7 @@ impl TitleAgent {
                 record_kind: SessionMessageRecordKind::TitleOutput,
                 title: String::from("标题生成"),
                 body: format!("系统已根据最新用户输入将当前会话标题更新为：{generated_title}"),
+                preview: generated_title.clone(),
             },
             generated_title,
         })
@@ -167,6 +171,15 @@ impl ExploreSkill {
             record_kind: SessionMessageRecordKind::ExploreOutput,
             title: String::from("Explore Context"),
             body,
+            preview: input
+                .project
+                .map(|project| format!("{} · {}", project.title, project.path))
+                .or_else(|| {
+                    input
+                        .project_id
+                        .map(|project_id| format!("project id {project_id}"))
+                })
+                .unwrap_or_else(|| input.workspace_path.to_string()),
         }
     }
 }
@@ -207,6 +220,23 @@ impl SummarySkill {
             record_kind: SessionMessageRecordKind::SummaryOutput,
             title: String::from("Execution Summary"),
             body,
+            preview: if input.report.is_success() {
+                input
+                    .report
+                    .assistant_output
+                    .as_deref()
+                    .map(|output| truncate_preview_lines(output, 2, 120))
+                    .unwrap_or_else(|| {
+                        String::from("The model did not return visible text output for this run.")
+                    })
+            } else {
+                input
+                    .report
+                    .error
+                    .as_deref()
+                    .map(|error| truncate_preview_lines(error, 1, 120))
+                    .unwrap_or_else(|| String::from("Unknown error"))
+            },
         }
     }
 }

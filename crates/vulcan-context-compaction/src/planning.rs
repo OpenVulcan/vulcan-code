@@ -23,6 +23,9 @@ pub struct CompactionSummaryRecord {
     /// Internal body stored on the hidden node.
     /// 存储在隐藏节点上的内部正文。
     pub body: String,
+    /// Compact preview extracted from the summary body for diagnostics and UI reuse.
+    /// 从摘要正文中提取的紧凑预览，供诊断与界面复用。
+    pub preview: String,
 }
 
 /// Input consumed by the context compaction planner.
@@ -230,6 +233,7 @@ fn build_compaction_result_from_summary_text(
             record_kind: SessionMessageRecordKind::CompactionSummary,
             title: String::from("Context Continuation Prompt"),
             body: continuation_prompt,
+            preview: truncate_preview_lines(&summary_text, 2, 88),
         },
         source_until_message_id: plan.source_until_message_id.clone(),
         source_until_turn_index: plan.source_until_turn_index,
@@ -531,4 +535,40 @@ fn current_unix_millis_text() -> String {
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies prompt-shaped compaction results keep a compact preview separate from the injected continuation body.
+    /// 验证提示词形态压缩结果会把紧凑预览与注入的续写正文分开保留。
+    #[test]
+    fn compaction_result_carries_compact_preview() {
+        let plan = CompactionPlan {
+            source_messages: Vec::new(),
+            source_until_message_id: Some(String::from("m-1")),
+            source_until_turn_index: Some(1),
+            retained_tail_start_turn_index: Some(2),
+            compaction_id: String::from("cp-1"),
+            created_at: String::from("20"),
+            policy: ContextCompactionPolicy::default(),
+        };
+
+        let result = CompactionResult::from_model_summary(
+            &plan,
+            "保留目标、约束和未完成工作，同时不要重复工具说明。",
+        );
+
+        assert_eq!(
+            result.summary_record.preview,
+            "保留目标、约束和未完成工作，同时不要重复工具说明。"
+        );
+        assert!(
+            result
+                .summary_record
+                .body
+                .contains("Earlier context summary:")
+        );
+    }
 }

@@ -23,5 +23,6 @@ pub fn into_session_derived_record(record: CompactionSummaryRecord) -> SessionDe
         record_kind: record.record_kind,
         title: record.title,
         body: record.body,
+        preview: record.preview,
     }
 }

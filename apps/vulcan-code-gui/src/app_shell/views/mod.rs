@@ -38,9 +38,20 @@ fn prompt_composer_inspector_layer_preview(text: &str) -> String {
     format!("{}…", preview.chars().take(180).collect::<String>())
 }
 
-/// Extracts a short summary preview from one compaction-summary body without exposing the full prompt wrapper.
-/// 从单条压缩摘要正文中提取短预览，而不暴露完整的提示词包裹。
+/// Extracts one short summary preview from compaction metadata or the summary body as a fallback.
+/// 从压缩元数据或摘要正文中提取一条短预览，元数据缺失时再回退正文。
 fn composer_context_anchor_summary_preview(message: &SessionMessageEntry) -> String {
+    if let Some(preview) = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("preview"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|preview| !preview.is_empty())
+    {
+        return preview.to_string();
+    }
+
     let summary_body = message
         .body
         .split_once("Earlier context summary:\n")
@@ -8969,6 +8980,7 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{composer_context_anchor_reference_row, workspace_history_search_preview_segments};
+    use serde_json::json;
     use vulcan_context::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
     /// Verifies that preview markup is split into alternating plain and highlighted segments.
@@ -9026,5 +9038,27 @@ mod tests {
             row,
             "压缩锚点：已建立 · 保留了目标、工具、未完成项和基线状态。"
         );
+    }
+
+    /// Verifies compaction anchor rows prefer metadata previews over parsing the synthetic continuation prompt body.
+    /// 验证压缩锚点行会优先使用元数据预览，而不是解析合成续写提示词正文。
+    #[test]
+    fn composer_context_anchor_reference_row_prefers_metadata_preview() {
+        let message = SessionMessageEntry {
+            id: String::from("summary-anchor-2"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::CompactionSummary,
+            visible: false,
+            title: String::from("Context Continuation Prompt"),
+            body: String::from("This body should not be parsed when preview metadata exists."),
+            metadata: Some(json!({
+                "preview": "保留目标与未完成工作",
+            })),
+            created_at: String::from("21"),
+        };
+
+        let row = composer_context_anchor_reference_row("summary-anchor-2", &message);
+
+        assert_eq!(row, "压缩锚点：已建立 · 保留目标与未完成工作");
     }
 }

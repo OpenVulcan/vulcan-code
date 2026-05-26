@@ -15916,10 +15916,20 @@ impl VulcanWorkbench {
         record_kind: SessionMessageRecordKind,
         title: impl Into<String>,
         body: impl Into<String>,
+        metadata: Option<Value>,
     ) -> String {
         self.append_session_message_entry(
             session_id,
-            SessionMessageEntry::hidden(kind, record_kind, title, body),
+            SessionMessageEntry {
+                id: String::new(),
+                kind,
+                record_kind,
+                visible: false,
+                title: title.into(),
+                body: body.into(),
+                metadata,
+                created_at: String::new(),
+            },
         )
     }
 
@@ -16400,6 +16410,9 @@ impl VulcanWorkbench {
             record.record_kind,
             record.title,
             record.body,
+            Some(json!({
+                "preview": record.preview,
+            })),
         );
         self.maybe_mirror_hidden_record_to_session_conversation(
             session_id,
@@ -16933,6 +16946,7 @@ impl VulcanWorkbench {
                 record_kind: SessionMessageRecordKind::TurnTerminated,
                 title: String::from("Turn Terminated"),
                 body: body.into(),
+                preview: String::new(),
             },
         )
     }
