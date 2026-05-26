@@ -31,12 +31,7 @@ pub(crate) use i18n::{
     AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale,
 };
 pub(crate) use profiles::agent_profile;
-pub(crate) use provider::ai_tool_configuration;
-pub(crate) use provider::catalog::ai_capability_provider_catalog;
-pub(crate) use provider::{
-    capabilities as provider_capabilities, config as provider_config,
-    input_normalizer as provider_input_normalizer, usage as provider_usage,
-};
+pub(crate) use provider::{input_normalizer as provider_input_normalizer, usage as provider_usage};
 pub(crate) use runtime_support::{luaskills_runtime, project_temp_maintenance};
 pub(crate) use session::agent_view;
 pub(crate) use shared::{code_view, composer_parts, data_plane, diff, workspace_path};
@@ -44,6 +39,11 @@ pub(crate) use tooling::bridge as vulcan_tools_bridge;
 pub(crate) use tooling::result_format as tool_result_format;
 pub(crate) use ui::widgets::{selectable_transcript, wheel_passthrough};
 pub(crate) use ui::{style, theme};
+pub(crate) use vulcan_provider_config::ai_tool_configuration;
+pub(crate) use vulcan_provider_config::catalog::ai_capability_provider_catalog;
+pub(crate) use vulcan_provider_config::{
+    capabilities as provider_capabilities, config as provider_config,
+};
 pub(crate) use vulcan_runtime_assets as runtime_assets;
 
 /// Starts the GUI application bootstrap sequence.

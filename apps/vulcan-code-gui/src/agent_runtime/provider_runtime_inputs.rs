@@ -122,7 +122,7 @@ mod tests {
     use super::resolve_provider_additional_params;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
-    use crate::provider::capabilities::ResolvedModelCapabilities;
+    use crate::provider_capabilities::ResolvedModelCapabilities;
     use crate::provider_config::{OpenRouterEndpointRouteSelection, ProviderRuntimeKind};
     use serde_json::json;
     use std::collections::BTreeMap;

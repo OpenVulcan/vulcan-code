@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/vulcan-code-gui",
+    "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
     "crates/vulcan-workbench-model",
     "crates/vulcan-context",
@@ -39,6 +40,7 @@ vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
 vulcan-core = { path = "crates/vulcan-core" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
+vulcan-provider-config = { path = "crates/vulcan-provider-config" }
 vulcan-context = { path = "crates/vulcan-context" }
 vulcan-context-compaction = { path = "crates/vulcan-context-compaction" }
 vulcan-prompt-composer = { path = "crates/vulcan-prompt-composer" }

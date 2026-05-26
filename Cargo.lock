@@ -6160,6 +6160,7 @@ dependencies = [
  "vulcan-markdown",
  "vulcan-mcp-runtime",
  "vulcan-prompt-composer",
+ "vulcan-provider-config",
  "vulcan-runtime-assets",
  "vulcan-tools-manager",
  "vulcan-workbench-model",
@@ -6238,6 +6239,18 @@ dependencies = [
 [[package]]
 name = "vulcan-prompt-composer"
 version = "0.1.0"
+
+[[package]]
+name = "vulcan-provider-config"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "vulcan-core",
+ "vulcan-runtime-assets",
+]
 
 [[package]]
 name = "vulcan-runtime-assets"
