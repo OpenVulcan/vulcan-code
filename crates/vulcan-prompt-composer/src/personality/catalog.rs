@@ -28,6 +28,9 @@ pub struct PersonalityDefinition {
     /// Whether the definition is built in.
     /// 该定义是否为内置项。
     pub builtin: bool,
+    /// Human-readable source label for diagnostics.
+    /// 供诊断使用的人类可读来源标签。
+    pub source_label: String,
 }
 
 impl PersonalityDefinition {
@@ -40,6 +43,7 @@ impl PersonalityDefinition {
             text: text.trim().to_string(),
             fingerprint: stable_text_hash(text.trim()),
             builtin: true,
+            source_label: format!("Built-in personality `{id}`"),
         }
     }
 }
@@ -114,6 +118,7 @@ impl PersonalityCatalog {
                 text: trimmed.to_string(),
                 fingerprint: stable_text_hash(trimmed),
                 builtin: false,
+                source_label: format!("User personality resource `{}`", path.display()),
             };
             catalog
                 .definitions
@@ -148,6 +153,7 @@ impl PersonalityCatalog {
                 text: text.trim().to_string(),
                 fingerprint: stable_text_hash(text.trim()),
                 builtin: false,
+                source_label: format!("Inline personality `{id}`"),
             })),
         }
     }

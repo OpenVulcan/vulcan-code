@@ -13,7 +13,7 @@ pub struct MemoryPromptCache {
     node_entries: RwLock<HashMap<String, PromptSegment>>,
     /// Cached bundle outputs keyed by bundle cache key.
     /// 按组合缓存键存储的组合输出缓存。
-    bundle_entries: RwLock<HashMap<String, PromptSegment>>,
+    bundle_entries: RwLock<HashMap<String, Vec<PromptSegment>>>,
 }
 
 impl MemoryPromptCache {
@@ -43,19 +43,24 @@ impl MemoryPromptCache {
 
     /// Read one bundle-cached segment.
     /// 读取一个组合缓存片段。
-    pub fn get_bundle(&self, cache_key: &str) -> Option<PromptSegment> {
+    pub fn get_bundle(&self, cache_key: &str) -> Option<Vec<PromptSegment>> {
         self.bundle_entries
             .read()
             .ok()
             .and_then(|entries| entries.get(cache_key).cloned())
-            .map(|segment| segment.cached_copy())
+            .map(|segments| {
+                segments
+                    .into_iter()
+                    .map(|segment| segment.cached_copy())
+                    .collect()
+            })
     }
 
-    /// Store one bundle-cached segment.
-    /// 存储一个组合缓存片段。
-    pub fn put_bundle(&self, segment: PromptSegment) {
+    /// Store one bundle-cached segment list.
+    /// 存储一组组合缓存片段。
+    pub fn put_bundle(&self, cache_key: String, segments: Vec<PromptSegment>) {
         if let Ok(mut entries) = self.bundle_entries.write() {
-            entries.insert(segment.cache_key.clone(), segment);
+            entries.insert(cache_key, segments);
         }
     }
 

@@ -3288,6 +3288,40 @@ pub struct VulcanWorkbench {
     /// Selectable Markdown buffer rendered in the inspector guide.
     /// 渲染在检查面板指引中的可选 Markdown 缓冲区。
     quick_guide_markdown_buffer: text_editor::Content,
+    /// Latest prompt-composer inspector Markdown cached for copy and selection.
+    /// 为复制与选择缓存的最近提示词组合检查器 Markdown。
+    prompt_composer_inspector_markdown: String,
+    /// Latest prompt-composer system-layer text cached for focused copy.
+    /// 为定向复制缓存的最近提示词组合系统层文本。
+    prompt_composer_inspector_system_text: String,
+    /// Latest prompt-composer developer-layer text cached for focused copy.
+    /// 为定向复制缓存的最近提示词组合开发者层文本。
+    prompt_composer_inspector_developer_text: String,
+    /// Latest prompt-composer tool-metadata-layer text cached for focused copy.
+    /// 为定向复制缓存的最近提示词组合工具元数据层文本。
+    prompt_composer_inspector_tool_metadata_text: String,
+    /// Latest prompt-composer user-context-layer text cached for focused copy.
+    /// 为定向复制缓存的最近提示词组合用户上下文层文本。
+    prompt_composer_inspector_user_text: String,
+    /// Read-only Markdown buffer rendered in the prompt-composer inspector card.
+    /// 渲染在提示词组合检查器卡片中的只读 Markdown 缓冲区。
+    prompt_composer_inspector_buffer: text_editor::Content,
+    /// Read-only text buffers rendered by individual prompt-composer inspector layers.
+    /// 由各个提示词组合检查器分层渲染的只读文本缓冲区。
+    prompt_composer_inspector_layer_buffers:
+        BTreeMap<PromptComposerInspectorLayer, text_editor::Content>,
+    /// Full prompt-composer segment bodies keyed by stable inspector segment keys.
+    /// 以稳定检查器节点键索引的完整提示词组合片段正文。
+    prompt_composer_inspector_segment_texts: BTreeMap<String, String>,
+    /// Read-only text buffers rendered by expanded prompt-composer segment details.
+    /// 由已展开提示词组合节点明细渲染的只读文本缓冲区。
+    prompt_composer_inspector_segment_buffers: BTreeMap<String, text_editor::Content>,
+    /// Expanded prompt-composer inspector layers.
+    /// 当前展开的提示词组合检查器分层集合。
+    prompt_composer_inspector_expanded_layers: BTreeSet<PromptComposerInspectorLayer>,
+    /// Expanded prompt-composer inspector segment identifiers.
+    /// 当前展开的提示词组合检查器节点标识集合。
+    prompt_composer_inspector_expanded_segments: BTreeSet<String>,
     /// Application-side license catalog rendered by the dedicated About settings page.
     /// 由专用关于设置页渲染的应用侧许可证目录。
     about_license_catalog: AboutLicenseCatalog,
@@ -6135,6 +6169,77 @@ enum SettingsSection {
     ArchivedRestore,
 }
 
+/// Prompt-composer inspector layers shown in runtime diagnostics.
+/// 运行诊断中展示的提示词组合检查器分层。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PromptComposerInspectorLayer {
+    /// System instruction layer sent to the provider when supported.
+    /// 发送给 Provider 的系统指令层。
+    System,
+    /// Developer instruction layer used for personality and policy guidance.
+    /// 用于人格与策略指引的开发者指令层。
+    Developer,
+    /// Tool metadata layer used for tool-help guidance.
+    /// 用于工具帮助说明的工具元数据层。
+    ToolMetadata,
+    /// User-context layer used for project rules and runtime context.
+    /// 用于项目规则与运行上下文的用户上下文层。
+    UserContext,
+}
+
+impl PromptComposerInspectorLayer {
+    /// Ordered list of all prompt-composer inspector layers.
+    /// 提示词组合检查器全部分层的稳定顺序。
+    const ALL: [Self; 4] = [
+        Self::System,
+        Self::Developer,
+        Self::ToolMetadata,
+        Self::UserContext,
+    ];
+
+    /// Returns the Chinese display name for one layer.
+    /// 返回单个分层的中文展示名称。
+    const fn label(self) -> &'static str {
+        match self {
+            Self::System => "系统层",
+            Self::Developer => "开发者层",
+            Self::ToolMetadata => "工具元数据层",
+            Self::UserContext => "用户上下文层",
+        }
+    }
+
+    /// Returns the debug target label used by prompt-composer segment reports.
+    /// 返回提示词组合片段报告使用的调试目标层标签。
+    const fn target_label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Developer => "Developer",
+            Self::ToolMetadata => "ToolMetadata",
+            Self::UserContext => "User",
+        }
+    }
+}
+
+/// Returns display text for an inspector layer while preserving empty-layer visibility.
+/// 返回检查器分层展示文本，并保证空分层仍然可见。
+fn prompt_composer_inspector_display_text(text: &str) -> String {
+    if text.trim().is_empty() {
+        String::from("（空）")
+    } else {
+        text.to_string()
+    }
+}
+
+/// Builds a stable per-report key for one prompt-composer segment row.
+/// 为单个提示词组合片段行构建稳定的单报告键。
+fn prompt_composer_inspector_segment_key(
+    segment_index: usize,
+    target_label: &str,
+    node_id: &str,
+) -> String {
+    format!("{segment_index}:{target_label}:{node_id}")
+}
+
 /// Describes why the About-page license catalog is being reloaded so status copy can stay precise.
 /// 描述关于页许可证目录重新加载的触发原因，以便状态文案保持准确。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7400,6 +7505,27 @@ enum Message {
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
+    /// Toggles one prompt-composer inspector layer body.
+    /// 切换单个提示词组合检查器分层正文。
+    TogglePromptComposerInspectorLayer(PromptComposerInspectorLayer),
+    /// Applies one read-only text editor action to one prompt-composer inspector layer buffer.
+    /// 向单个提示词组合检查器分层缓冲区应用一次只读文本编辑器动作。
+    PromptComposerInspectorLayerAction(PromptComposerInspectorLayer, text_editor::Action),
+    /// Toggles one prompt-composer inspector segment body.
+    /// 切换单个提示词组合检查器节点正文。
+    TogglePromptComposerInspectorSegment(String),
+    /// Applies one read-only text editor action to one prompt-composer inspector segment buffer.
+    /// 向单个提示词组合检查器节点缓冲区应用一次只读文本编辑器动作。
+    PromptComposerInspectorSegmentAction(String, text_editor::Action),
+    /// Copies the complete prompt-composer inspector report to the clipboard.
+    /// 将完整提示词组合检查器报告复制到剪贴板。
+    CopyPromptComposerInspectorReport,
+    /// Copies one prompt-composer inspector layer to the clipboard.
+    /// 将单个提示词组合检查器分层复制到剪贴板。
+    CopyPromptComposerInspectorLayer(PromptComposerInspectorLayer),
+    /// Copies one prompt-composer inspector segment to the clipboard.
+    /// 将单个提示词组合检查器节点复制到剪贴板。
+    CopyPromptComposerInspectorSegment(String),
     /// Applies the finished result of one background About-page license catalog loading task.
     /// 应用一条后台关于页许可证目录加载任务的完成结果。
     AboutLicenseCatalogLoaded(u64, Result<AboutLicenseCatalog, String>),
@@ -7854,6 +7980,128 @@ impl VulcanWorkbench {
         );
     }
 
+    /// Refreshes the prompt-composer inspector cache from the latest runtime report.
+    /// 从最近的运行时报告刷新提示词组合检查器缓存。
+    fn refresh_prompt_composer_inspector_buffer(&mut self) {
+        let Some(report) =
+            crate::agent_runtime::prompt_composer_runtime::latest_runtime_prompt_composer_report()
+        else {
+            self.prompt_composer_inspector_markdown.clear();
+            self.prompt_composer_inspector_system_text.clear();
+            self.prompt_composer_inspector_developer_text.clear();
+            self.prompt_composer_inspector_tool_metadata_text.clear();
+            self.prompt_composer_inspector_user_text.clear();
+            self.prompt_composer_inspector_buffer = text_editor::Content::with_text("");
+            self.prompt_composer_inspector_layer_buffers.clear();
+            self.prompt_composer_inspector_segment_texts.clear();
+            self.prompt_composer_inspector_segment_buffers.clear();
+            self.prompt_composer_inspector_expanded_segments.clear();
+            return;
+        };
+
+        if self.prompt_composer_inspector_markdown == report.markdown
+            && self.prompt_composer_inspector_system_text == report.system_text
+            && self.prompt_composer_inspector_developer_text == report.developer_text
+            && self.prompt_composer_inspector_tool_metadata_text == report.tool_metadata_text
+            && self.prompt_composer_inspector_user_text == report.user_text
+        {
+            return;
+        }
+
+        self.prompt_composer_inspector_markdown = report.markdown;
+        self.prompt_composer_inspector_system_text = report.system_text;
+        self.prompt_composer_inspector_developer_text = report.developer_text;
+        self.prompt_composer_inspector_tool_metadata_text = report.tool_metadata_text;
+        self.prompt_composer_inspector_user_text = report.user_text;
+        self.prompt_composer_inspector_buffer =
+            text_editor::Content::with_text(&self.prompt_composer_inspector_markdown);
+        self.prompt_composer_inspector_layer_buffers.clear();
+        for layer in PromptComposerInspectorLayer::ALL {
+            let layer_text = prompt_composer_inspector_display_text(
+                self.prompt_composer_inspector_layer_text(layer),
+            );
+            self.prompt_composer_inspector_layer_buffers
+                .insert(layer, text_editor::Content::with_text(&layer_text));
+        }
+        self.prompt_composer_inspector_segment_texts.clear();
+        self.prompt_composer_inspector_segment_buffers.clear();
+        self.prompt_composer_inspector_expanded_segments.clear();
+        for (index, segment) in report.segments.iter().enumerate() {
+            let segment_key = prompt_composer_inspector_segment_key(
+                index,
+                &segment.target_label,
+                &segment.node_id,
+            );
+            self.prompt_composer_inspector_segment_buffers.insert(
+                segment_key.clone(),
+                text_editor::Content::with_text(&prompt_composer_inspector_display_text(
+                    &segment.body,
+                )),
+            );
+            self.prompt_composer_inspector_segment_texts
+                .insert(segment_key, segment.body.clone());
+        }
+    }
+
+    /// Returns the cached text for one prompt-composer inspector layer.
+    /// 返回单个提示词组合检查器分层的缓存文本。
+    fn prompt_composer_inspector_layer_text(&self, layer: PromptComposerInspectorLayer) -> &str {
+        match layer {
+            PromptComposerInspectorLayer::System => &self.prompt_composer_inspector_system_text,
+            PromptComposerInspectorLayer::Developer => {
+                &self.prompt_composer_inspector_developer_text
+            }
+            PromptComposerInspectorLayer::ToolMetadata => {
+                &self.prompt_composer_inspector_tool_metadata_text
+            }
+            PromptComposerInspectorLayer::UserContext => &self.prompt_composer_inspector_user_text,
+        }
+    }
+
+    /// Copies one prompt-composer inspector layer to the clipboard when available.
+    /// 在可用时将单个提示词组合检查器分层复制到剪贴板。
+    fn copy_prompt_composer_inspector_layer(
+        &mut self,
+        layer: PromptComposerInspectorLayer,
+    ) -> Task<Message> {
+        if self
+            .prompt_composer_inspector_layer_text(layer)
+            .trim()
+            .is_empty()
+        {
+            self.refresh_prompt_composer_inspector_buffer();
+        }
+        let layer_text = self.prompt_composer_inspector_layer_text(layer).to_string();
+        if layer_text.trim().is_empty() {
+            self.status_message = format!("{}暂无可复制内容。", layer.label());
+            Task::none()
+        } else {
+            self.status_message = format!("已复制{}提示词。", layer.label());
+            clipboard::write(layer_text).discard()
+        }
+    }
+
+    /// Copies one prompt-composer segment to the clipboard when available.
+    /// 在可用时将单个提示词组合片段复制到剪贴板。
+    fn copy_prompt_composer_inspector_segment(&mut self, segment_key: String) -> Task<Message> {
+        if let Some(segment_text) = self
+            .prompt_composer_inspector_segment_texts
+            .get(&segment_key)
+            .cloned()
+        {
+            if segment_text.trim().is_empty() {
+                self.status_message = String::from("该节点暂无可复制内容。");
+                Task::none()
+            } else {
+                self.status_message = String::from("已复制提示词节点正文。");
+                clipboard::write(segment_text).discard()
+            }
+        } else {
+            self.status_message = String::from("该节点正文缓存已失效，请重新执行一次会话。");
+            Task::none()
+        }
+    }
+
     /// Returns whether entering the About-page section should trigger the first lazy catalog load automatically.
     /// 返回进入关于页分区时是否应自动触发首次延迟目录加载。
     fn should_auto_start_about_license_catalog_reload(&self, section_changed: bool) -> bool {
@@ -8297,6 +8545,17 @@ impl VulcanWorkbench {
             diff_scroll_offset: 0.0,
             diff_viewport_height: 0.0,
             quick_guide_markdown_buffer,
+            prompt_composer_inspector_markdown: String::new(),
+            prompt_composer_inspector_system_text: String::new(),
+            prompt_composer_inspector_developer_text: String::new(),
+            prompt_composer_inspector_tool_metadata_text: String::new(),
+            prompt_composer_inspector_user_text: String::new(),
+            prompt_composer_inspector_buffer: text_editor::Content::with_text(""),
+            prompt_composer_inspector_layer_buffers: BTreeMap::new(),
+            prompt_composer_inspector_segment_texts: BTreeMap::new(),
+            prompt_composer_inspector_segment_buffers: BTreeMap::new(),
+            prompt_composer_inspector_expanded_layers: BTreeSet::new(),
+            prompt_composer_inspector_expanded_segments: BTreeSet::new(),
             about_license_catalog,
             about_license_catalog_loading: false,
             about_license_catalog_load_error: None,
@@ -10194,6 +10453,9 @@ impl VulcanWorkbench {
                 if section.belongs_to_model_settings() {
                     self.settings_model_tree_expanded = true;
                 }
+                if section == SettingsSection::RuntimeDiagnostics {
+                    self.refresh_prompt_composer_inspector_buffer();
+                }
                 self.status_message = self.tf(
                     I18nKey::StatusSettingsSectionSwitched,
                     &[I18nArg::named(
@@ -11802,6 +12064,74 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::TogglePromptComposerInspectorLayer(layer) => {
+                if !self
+                    .prompt_composer_inspector_expanded_layers
+                    .remove(&layer)
+                {
+                    self.prompt_composer_inspector_expanded_layers.insert(layer);
+                    if !self
+                        .prompt_composer_inspector_layer_buffers
+                        .contains_key(&layer)
+                    {
+                        let layer_text = prompt_composer_inspector_display_text(
+                            self.prompt_composer_inspector_layer_text(layer),
+                        );
+                        self.prompt_composer_inspector_layer_buffers
+                            .insert(layer, text_editor::Content::with_text(&layer_text));
+                    }
+                }
+                Task::none()
+            }
+            Message::PromptComposerInspectorLayerAction(layer, action) => {
+                if !action.is_edit() {
+                    if let Some(content) =
+                        self.prompt_composer_inspector_layer_buffers.get_mut(&layer)
+                    {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::TogglePromptComposerInspectorSegment(segment_key) => {
+                if !self
+                    .prompt_composer_inspector_expanded_segments
+                    .remove(&segment_key)
+                {
+                    self.prompt_composer_inspector_expanded_segments
+                        .insert(segment_key);
+                }
+                Task::none()
+            }
+            Message::PromptComposerInspectorSegmentAction(segment_key, action) => {
+                if !action.is_edit() {
+                    if let Some(content) = self
+                        .prompt_composer_inspector_segment_buffers
+                        .get_mut(&segment_key)
+                    {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::CopyPromptComposerInspectorReport => {
+                if self.prompt_composer_inspector_markdown.trim().is_empty() {
+                    self.refresh_prompt_composer_inspector_buffer();
+                }
+                if self.prompt_composer_inspector_markdown.trim().is_empty() {
+                    self.status_message = String::from("暂无可复制的提示词组合报告。");
+                    Task::none()
+                } else {
+                    self.status_message = String::from("已复制完整提示词组合报告。");
+                    clipboard::write(self.prompt_composer_inspector_markdown.clone()).discard()
+                }
+            }
+            Message::CopyPromptComposerInspectorLayer(layer) => {
+                self.copy_prompt_composer_inspector_layer(layer)
+            }
+            Message::CopyPromptComposerInspectorSegment(segment_key) => {
+                self.copy_prompt_composer_inspector_segment(segment_key)
+            }
             Message::AboutLicenseCatalogLoaded(revision, result) => {
                 self.finish_about_license_catalog_reload(revision, result)
             }
@@ -13050,6 +13380,7 @@ impl VulcanWorkbench {
                             preparation.session_id,
                             preparation.provider_request_preview_markdown.clone(),
                         );
+                        self.refresh_prompt_composer_inspector_buffer();
                         self.sync_context_usage_from_preparation(Some(&preparation));
                         self.update_session_runtime_identity_from_preparation(
                             preparation.session_id,
@@ -16789,6 +17120,7 @@ impl VulcanWorkbench {
                 session_id,
                 preparation.provider_request_preview_markdown.clone(),
             );
+            self.refresh_prompt_composer_inspector_buffer();
             perf_trace.checkpoint("apply_preparation.request_preview", phase_started_at);
             phase_started_at = Instant::now();
             self.update_session_runtime_identity_from_preparation(session_id, &preparation);

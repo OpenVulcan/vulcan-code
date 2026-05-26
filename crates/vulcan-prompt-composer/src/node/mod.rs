@@ -27,6 +27,7 @@ pub fn render_node(
                 PromptTarget::System,
                 "Provider Base System Prompt",
                 &snapshot.text,
+                snapshot.source_label.clone(),
             )
         }),
         PlannedNode::AgentBaseSystem => input.agent_prompt.as_ref().map(|snapshot| {
@@ -39,6 +40,7 @@ pub fn render_node(
                 PromptTarget::System,
                 "Agent Base System Prompt",
                 &snapshot.text,
+                snapshot.source_label.clone(),
             )
         }),
         PlannedNode::FunctionalAgentSystem => input
@@ -56,6 +58,7 @@ pub fn render_node(
                     PromptTarget::System,
                     "Functional Agent System Prompt",
                     text,
+                    "Subagent functional system prompt",
                 )
             }),
         PlannedNode::Personality => personality.map(|definition| {
@@ -81,6 +84,7 @@ pub fn render_node(
                 target,
                 format!("Personality {}", definition.label),
                 &definition.text,
+                definition.source_label.clone(),
             )
         }),
         PlannedNode::ProjectRules => input.project_rules.as_ref().map(|snapshot| {
@@ -93,6 +97,7 @@ pub fn render_node(
                 PromptTarget::User,
                 format!("Project Rules {}", snapshot.source),
                 &snapshot.text,
+                format!("Project rules `{}`", snapshot.source),
             )
         }),
         PlannedNode::EnvironmentContext => input.environment_context.as_ref().map(|snapshot| {
@@ -105,6 +110,7 @@ pub fn render_node(
                 PromptTarget::User,
                 "Environment Context",
                 &snapshot.text,
+                "Runtime environment context",
             )
         }),
         PlannedNode::TaskGoal => input.task_goal.as_ref().map(|snapshot| {
@@ -117,6 +123,7 @@ pub fn render_node(
                 PromptTarget::User,
                 "Task Goal",
                 &snapshot.text,
+                "Runtime task goal",
             )
         }),
         PlannedNode::SubagentIdentity => input.subagent.as_ref().map(|snapshot| {
@@ -141,6 +148,7 @@ pub fn render_node(
                 PromptTarget::Developer,
                 "Subagent Identity",
                 body,
+                format!("Runtime subagent delegation `{}`", snapshot.identity),
             )
         }),
         PlannedNode::ToolHelpBundle => None,
@@ -159,18 +167,21 @@ fn build_cached_segment(
     target: PromptTarget,
     title: impl Into<String>,
     body: impl Into<String>,
+    source_label: impl Into<String>,
 ) -> Option<PromptSegment> {
     let cache_key = node_cache_key(namespace, fingerprint);
+    let source_label = source_label.into();
     if let Some(segment) = cache.get_node(&cache_key) {
         diagnostics.record_node_cache(&cache_key, true);
-        return Some(segment);
+        return Some(segment.with_source_label(source_label));
     }
     diagnostics.record_node_cache(&cache_key, false);
     let body = body.into();
     if body.trim().is_empty() {
         return None;
     }
-    let segment = PromptSegment::new(namespace, cache_key, kind, target, title, body);
+    let segment = PromptSegment::new(namespace, cache_key, kind, target, title, body)
+        .with_source_label(source_label);
     cache.put_node(segment.clone());
     Some(segment)
 }

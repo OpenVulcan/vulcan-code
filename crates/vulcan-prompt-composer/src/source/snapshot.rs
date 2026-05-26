@@ -11,6 +11,9 @@ pub struct ProviderPromptSnapshot {
     /// Stable text fingerprint.
     /// 稳定文本指纹。
     pub fingerprint: u64,
+    /// Human-readable source label for diagnostics.
+    /// 供诊断使用的人类可读来源标签。
+    pub source_label: String,
 }
 
 impl ProviderPromptSnapshot {
@@ -19,7 +22,18 @@ impl ProviderPromptSnapshot {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let fingerprint = stable_text_hash(&text);
-        Self { text, fingerprint }
+        Self {
+            text,
+            fingerprint,
+            source_label: String::from("Runtime provider base system prompt"),
+        }
+    }
+
+    /// Attach one human-readable source label to this provider prompt snapshot.
+    /// 为该 Provider 提示词快照附加人类可读来源标签。
+    pub fn with_source_label(mut self, source_label: impl Into<String>) -> Self {
+        self.source_label = source_label.into();
+        self
     }
 }
 
@@ -33,6 +47,9 @@ pub struct AgentPromptSnapshot {
     /// Stable text fingerprint.
     /// 稳定文本指纹。
     pub fingerprint: u64,
+    /// Human-readable source label for diagnostics.
+    /// 供诊断使用的人类可读来源标签。
+    pub source_label: String,
 }
 
 impl AgentPromptSnapshot {
@@ -41,7 +58,18 @@ impl AgentPromptSnapshot {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let fingerprint = stable_text_hash(&text);
-        Self { text, fingerprint }
+        Self {
+            text,
+            fingerprint,
+            source_label: String::from("Agent profile system prompt"),
+        }
+    }
+
+    /// Attach one human-readable source label to this agent prompt snapshot.
+    /// 为该 Agent 提示词快照附加人类可读来源标签。
+    pub fn with_source_label(mut self, source_label: impl Into<String>) -> Self {
+        self.source_label = source_label.into();
+        self
     }
 }
 

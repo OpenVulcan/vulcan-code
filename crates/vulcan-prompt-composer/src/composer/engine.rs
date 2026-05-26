@@ -88,23 +88,25 @@ impl PromptComposerEngine {
 
         let plan = strategy.build_plan(input);
         for planned_node in plan.nodes {
-            let maybe_segment =
-                if matches!(planned_node, crate::strategy::PlannedNode::ToolHelpBundle) {
-                    build_tool_help_bundle(
-                        &input.tool_catalog,
-                        &self.tool_help_registry,
-                        &self.cache,
-                        &mut output.diagnostics,
-                    )
-                } else {
-                    render_node(
-                        planned_node,
-                        input,
-                        personality.as_ref(),
-                        &self.cache,
-                        &mut output.diagnostics,
-                    )
-                };
+            if matches!(planned_node, crate::strategy::PlannedNode::ToolHelpBundle) {
+                for segment in build_tool_help_bundle(
+                    &input.tool_catalog,
+                    &self.tool_help_registry,
+                    &self.cache,
+                    &mut output.diagnostics,
+                ) {
+                    push_segment(&mut output, segment);
+                }
+                continue;
+            }
+
+            let maybe_segment = render_node(
+                planned_node,
+                input,
+                personality.as_ref(),
+                &self.cache,
+                &mut output.diagnostics,
+            );
             if let Some(segment) = maybe_segment {
                 push_segment(&mut output, segment);
             }
@@ -123,7 +125,8 @@ impl PromptComposerEngine {
                     PromptTarget::Developer,
                     format!("Custom Developer Segment {index}"),
                     custom_segment.clone(),
-                ),
+                )
+                .with_source_label(format!("Runtime custom developer segment {index}")),
             );
         }
         for (index, custom_segment) in input.custom_user_segments.iter().enumerate() {
@@ -139,7 +142,8 @@ impl PromptComposerEngine {
                     PromptTarget::User,
                     format!("Custom User Segment {index}"),
                     custom_segment.clone(),
-                ),
+                )
+                .with_source_label(format!("Runtime custom user segment {index}")),
             );
         }
 

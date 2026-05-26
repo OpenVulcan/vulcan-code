@@ -106,9 +106,23 @@ fn resource_directories_override_personality_and_tool_help() {
     );
     assert!(
         output
+            .developer_segments
+            .iter()
+            .any(|segment| segment.source_label.contains("User personality resource")),
+        "custom personality source should be visible"
+    );
+    assert!(
+        output
             .tool_metadata_segments
             .iter()
             .any(|segment| segment.body.contains("custom-only checks"))
+    );
+    assert!(
+        output
+            .tool_metadata_segments
+            .iter()
+            .any(|segment| segment.source_label.contains("User tool-help resource")),
+        "custom tool-help source should be visible"
     );
     assert!(
         output
@@ -119,10 +133,10 @@ fn resource_directories_override_personality_and_tool_help() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies tool-help bundle hits cache on the second run.
-/// 验证第二次执行时工具帮助组合会命中缓存。
+/// Verifies per-tool help segments keep bundle-level cache behavior.
+/// 验证逐工具帮助片段仍保留组合级缓存行为。
 #[test]
-fn tool_help_bundle_hits_cache_on_second_run() {
+fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
     let engine = PromptComposerEngine::with_builtins();
     let input = PromptAssemblyInput {
         mode: PromptAssemblyMode::Primary,
@@ -131,19 +145,34 @@ fn tool_help_bundle_hits_cache_on_second_run() {
             model_id: String::from("gpt-test"),
             supports_native_personality: false,
         },
-        provider_prompt: Some(ProviderPromptSnapshot::new("Provider base")),
-        agent_prompt: Some(AgentPromptSnapshot::new("Agent base")),
+        provider_prompt: Some(
+            ProviderPromptSnapshot::new("Provider base")
+                .with_source_label("Provider prompt resource `provider-test.txt`"),
+        ),
+        agent_prompt: Some(
+            AgentPromptSnapshot::new("Agent base")
+                .with_source_label("Agent prompt resource `agent-test.txt`"),
+        ),
         personality: PersonalitySelection::Disabled,
         project_rules: Some(ProjectRulesSnapshot::new("AGENTS.md", "Rule body")),
         environment_context: Some(EnvironmentContextSnapshot::new("cwd=D:/repo")),
         task_goal: Some(TaskGoalSnapshot::new("Inspect prompt system")),
-        tool_catalog: ToolCatalogSnapshot::new(vec![ToolDescriptor {
-            id: String::from("shell_command"),
-            title: String::from("Shell"),
-            description: String::from("Run one shell command"),
-            help_text: None,
-            schema_fingerprint: Some(String::from("schema-1")),
-        }]),
+        tool_catalog: ToolCatalogSnapshot::new(vec![
+            ToolDescriptor {
+                id: String::from("shell_command"),
+                title: String::from("Shell"),
+                description: String::from("Run one shell command"),
+                help_text: None,
+                schema_fingerprint: Some(String::from("schema-1")),
+            },
+            ToolDescriptor {
+                id: String::from("custom/tool"),
+                title: String::from("Custom"),
+                description: String::from("Run a custom helper"),
+                help_text: Some(String::from("Prefer this custom helper for custom checks.")),
+                schema_fingerprint: Some(String::from("schema-2")),
+            },
+        ]),
         subagent: None,
         custom_developer_segments: Vec::new(),
         custom_user_segments: Vec::new(),
@@ -154,6 +183,30 @@ fn tool_help_bundle_hits_cache_on_second_run() {
         .expect("first compose should succeed");
     assert_eq!(first.diagnostics.cache_report.bundle_hits, 0);
     assert_eq!(first.diagnostics.cache_report.bundle_misses, 1);
+    assert!(
+        first
+            .system_segments
+            .iter()
+            .any(|segment| segment.source_label.contains("provider-test.txt"))
+    );
+    assert!(
+        first
+            .system_segments
+            .iter()
+            .any(|segment| segment.source_label.contains("agent-test.txt"))
+    );
+    assert!(
+        first
+            .tool_metadata_segments
+            .iter()
+            .any(|segment| segment.node_id == "tool_help_shell_command")
+    );
+    assert!(
+        first
+            .tool_metadata_segments
+            .iter()
+            .any(|segment| segment.node_id == "tool_help_custom_tool")
+    );
 
     let second = engine
         .compose(&input)
@@ -165,10 +218,18 @@ fn tool_help_bundle_hits_cache_on_second_run() {
             .iter()
             .all(|segment| segment.from_cache)
     );
+    assert_eq!(second.tool_metadata_segments.len(), 2);
     assert!(
         second
             .render_tool_metadata_text()
             .contains("Use shell_command for concrete local inspection")
+    );
+    assert!(
+        second
+            .tool_metadata_segments
+            .iter()
+            .any(|segment| segment.source_label.contains("Built-in tool help")),
+        "cached tool-help segment should retain source labels"
     );
 }
 

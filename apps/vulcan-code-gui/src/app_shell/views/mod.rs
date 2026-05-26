@@ -21,6 +21,19 @@ mod transcript;
 const PROJECT_RULES_WATCH_THROTTLE_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(250);
 
+/// Builds a compact preview for one prompt-composer inspector layer.
+/// 为单个提示词组合检查器分层构建紧凑预览。
+fn prompt_composer_inspector_layer_preview(text: &str) -> String {
+    let preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if preview.trim().is_empty() {
+        return String::from("（空）");
+    }
+    if preview.chars().count() <= 180 {
+        return preview;
+    }
+    format!("{}…", preview.chars().take(180).collect::<String>())
+}
+
 /// Stable input used to identify one project-rules watch subscription.
 /// 用于标识单个项目规则监听订阅的稳定输入。
 #[derive(Clone, Debug, Hash)]
@@ -7456,12 +7469,331 @@ impl VulcanWorkbench {
         column![
             self.view_runtime_selector_settings_card(),
             self.view_runtime_execution_card(),
+            self.view_prompt_composer_inspector_card(),
             self.view_policy_controls_card(),
             self.view_integration_guide_card(),
             self.view_activity_log_card(),
         ]
         .spacing(14)
         .into()
+    }
+
+    /// Renders the latest prompt-composer diagnostic report.
+    /// 渲染最近一次提示词组合诊断报告。
+    pub(super) fn view_prompt_composer_inspector_card(&self) -> Element<'_, Message> {
+        let palette = self.app_theme.extended_palette();
+        let Some(report) =
+            crate::agent_runtime::prompt_composer_runtime::latest_runtime_prompt_composer_report()
+        else {
+            return container(
+                column![
+                    text("提示词组合检查器").size(18),
+                    text("尚未捕获提示词组合报告。发送一次消息后，这里会显示系统提示词、人格式样、项目规则、工具说明和运行时上下文的组合结果。")
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.62)),
+                ]
+                .spacing(8),
+            )
+            .padding(16)
+            .style(container::bordered_box)
+            .into();
+        };
+
+        let cache_summary = format!(
+            "节点命中 {} / 未命中 {} · 组合命中 {} / 未命中 {}",
+            report.cache_report.node_hits,
+            report.cache_report.node_misses,
+            report.cache_report.bundle_hits,
+            report.cache_report.bundle_misses
+        );
+        let segment_list =
+            report
+                .segments
+                .iter()
+                .take(12)
+                .fold(column![].spacing(6), |column, segment| {
+                    column.push(
+                        text(format!(
+                            "• {} · {} · {} · {} chars · cache={} · source={} · {}",
+                            segment.node_id,
+                            segment.target_label,
+                            segment.title,
+                            segment.character_count,
+                            if segment.from_cache { "hit" } else { "miss" },
+                            segment.source_label,
+                            segment.preview
+                        ))
+                        .size(12),
+                    )
+                });
+        let hidden_count = report.segments.len().saturating_sub(12);
+        let segment_list = if hidden_count > 0 {
+            segment_list.push(
+                text(format!("另有 {hidden_count} 个片段，详见下方完整报告。"))
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.56)),
+            )
+        } else {
+            segment_list
+        };
+        let layer_cards = PromptComposerInspectorLayer::ALL.iter().copied().fold(
+            column![].spacing(8),
+            |column, layer| {
+                column.push(self.view_prompt_composer_inspector_layer_card(layer, &report))
+            },
+        );
+
+        container(
+            column![
+                text("提示词组合检查器").size(18),
+                row![
+                    button(text("复制完整报告").size(12))
+                        .padding([6, 10])
+                        .style(button::secondary)
+                        .on_press(Message::CopyPromptComposerInspectorReport),
+                ]
+                .spacing(8),
+                text(format!(
+                    "会话：{} · 模式：{} · 模型：{} · 策略：{} · 人格：{}",
+                    report.session_title,
+                    report.mode_label,
+                    report.model_id,
+                    report.strategy_id,
+                    report.personality_id.as_deref().unwrap_or("none")
+                ))
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.68)),
+                text(cache_summary)
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.68)),
+                container(segment_list)
+                    .padding(10)
+                    .width(Fill)
+                    .style(container::bordered_box),
+                layer_cards,
+            ]
+            .spacing(10),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Renders one prompt-composer inspector layer with fold and copy controls.
+    /// 渲染一个带折叠与复制控制的提示词组合检查器分层。
+    fn view_prompt_composer_inspector_layer_card(
+        &self,
+        layer: PromptComposerInspectorLayer,
+        report: &crate::agent_runtime::prompt_composer_runtime::RuntimePromptComposerReport,
+    ) -> Element<'_, Message> {
+        let palette = self.app_theme.extended_palette();
+        let layer_text = self.prompt_composer_inspector_layer_text(layer);
+        let char_count = layer_text.chars().count();
+        let segment_count = report
+            .segments
+            .iter()
+            .filter(|segment| segment.target_label == layer.target_label())
+            .count();
+        let cache_hits = report
+            .segments
+            .iter()
+            .filter(|segment| segment.target_label == layer.target_label() && segment.from_cache)
+            .count();
+        let cache_misses = segment_count.saturating_sub(cache_hits);
+        let is_expanded = self
+            .prompt_composer_inspector_expanded_layers
+            .contains(&layer);
+        let layer_buffer = self.prompt_composer_inspector_layer_buffers.get(&layer);
+        let layer_summary = format!(
+            "{} chars · {} 个片段 · cache hit {} / miss {}",
+            char_count, segment_count, cache_hits, cache_misses
+        );
+        let mut content = column![
+            row![
+                text(layer.label()).size(14),
+                space::horizontal(),
+                button(text(if is_expanded { "收起" } else { "展开" }).size(12))
+                    .padding([5, 9])
+                    .style(button::secondary)
+                    .on_press(Message::TogglePromptComposerInspectorLayer(layer)),
+                button(text("复制本层").size(12))
+                    .padding([5, 9])
+                    .style(button::secondary)
+                    .on_press(Message::CopyPromptComposerInspectorLayer(layer)),
+            ]
+            .spacing(8)
+            .align_y(Center),
+            text(layer_summary)
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.62)),
+        ]
+        .spacing(8);
+
+        if is_expanded {
+            content = content
+                .push(self.view_prompt_composer_inspector_layer_segment_details(layer, report));
+            content = content.push(
+                scrollable(
+                    container(self.view_workbench_code_preview_body(
+                        layer_buffer,
+                        prompt_composer_inspector_display_text(layer_text),
+                        "text",
+                        move |action| Message::PromptComposerInspectorLayerAction(layer, action),
+                    ))
+                    .padding(8)
+                    .width(Fill),
+                )
+                .height(220)
+                .width(Fill),
+            );
+        } else {
+            content = content.push(
+                text(prompt_composer_inspector_layer_preview(layer_text))
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.58)),
+            );
+        }
+
+        container(content)
+            .padding(10)
+            .width(Fill)
+            .style(container::bordered_box)
+            .into()
+    }
+
+    /// Renders node-level details for one prompt-composer inspector layer.
+    /// 渲染单个提示词组合检查器分层的节点级明细。
+    fn view_prompt_composer_inspector_layer_segment_details(
+        &self,
+        layer: PromptComposerInspectorLayer,
+        report: &crate::agent_runtime::prompt_composer_runtime::RuntimePromptComposerReport,
+    ) -> Element<'_, Message> {
+        let palette = self.app_theme.extended_palette();
+        let layer_segments = report
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| segment.target_label == layer.target_label())
+            .collect::<Vec<_>>();
+        let detail_rows = if layer_segments.is_empty() {
+            column![
+                text("节点明细").size(13),
+                text("本层暂无节点。")
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.58)),
+            ]
+            .spacing(6)
+        } else {
+            layer_segments.iter().fold(
+                column![
+                    text(format!("节点明细 · {} 个节点", layer_segments.len())).size(13),
+                    rule::horizontal(1),
+                ]
+                .spacing(6),
+                |column, (segment_index, segment)| {
+                    let segment_key = prompt_composer_inspector_segment_key(
+                        *segment_index,
+                        &segment.target_label,
+                        &segment.node_id,
+                    );
+                    let is_segment_expanded = self
+                        .prompt_composer_inspector_expanded_segments
+                        .contains(&segment_key);
+                    let segment_buffer = self
+                        .prompt_composer_inspector_segment_buffers
+                        .get(&segment_key);
+                    let mut segment_content = column![
+                        row![
+                            text(format!("`{}`", segment.node_id)).size(12),
+                            text(format!("· {}", segment.title))
+                                .size(12)
+                                .color(palette.background.base.text.scale_alpha(0.76)),
+                            space::horizontal(),
+                            text(if segment.from_cache {
+                                "cache hit"
+                            } else {
+                                "cache miss"
+                            })
+                            .size(11)
+                            .color(if segment.from_cache {
+                                palette.success.base.color
+                            } else {
+                                palette.warning.base.color
+                            }),
+                            button(
+                                text(if is_segment_expanded {
+                                    "收起"
+                                } else {
+                                    "展开"
+                                })
+                                .size(11)
+                            )
+                            .padding([4, 8])
+                            .style(button::secondary)
+                            .on_press(
+                                Message::TogglePromptComposerInspectorSegment(segment_key.clone(),)
+                            ),
+                            button(text("复制节点").size(11))
+                                .padding([4, 8])
+                                .style(button::secondary)
+                                .on_press(Message::CopyPromptComposerInspectorSegment(
+                                    segment_key.clone(),
+                                )),
+                        ]
+                        .spacing(6)
+                        .align_y(Center),
+                        text(format!(
+                            "{} · {} chars · {}",
+                            segment.kind_label, segment.character_count, segment.preview
+                        ))
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.58)),
+                        text(format!("来源：{}", segment.source_label))
+                            .size(12)
+                            .color(palette.background.base.text.scale_alpha(0.58)),
+                    ]
+                    .spacing(4);
+
+                    if is_segment_expanded {
+                        segment_content = segment_content.push(
+                            scrollable(
+                                container(self.view_workbench_code_preview_body(
+                                    segment_buffer,
+                                    prompt_composer_inspector_display_text(&segment.body),
+                                    "text",
+                                    {
+                                        let segment_key = segment_key.clone();
+                                        move |action| {
+                                            Message::PromptComposerInspectorSegmentAction(
+                                                segment_key.clone(),
+                                                action,
+                                            )
+                                        }
+                                    },
+                                ))
+                                .padding(6)
+                                .width(Fill),
+                            )
+                            .height(180)
+                            .width(Fill),
+                        );
+                    }
+
+                    column.push(
+                        container(segment_content)
+                            .padding(8)
+                            .width(Fill)
+                            .style(container::bordered_box),
+                    )
+                },
+            )
+        };
+
+        container(detail_rows)
+            .padding(8)
+            .width(Fill)
+            .style(container::bordered_box)
+            .into()
     }
 
     /// Renders the execution runtime card that exposes active-agent selection and the latest preparation snapshot.

@@ -135,6 +135,9 @@ pub struct PromptSegment {
     /// Final body text.
     /// 最终正文文本。
     pub body: String,
+    /// Human-readable source label for diagnostics.
+    /// 供诊断使用的人类可读来源标签。
+    pub source_label: String,
     /// Whether the segment came from cache.
     /// 片段是否来自缓存。
     pub from_cache: bool,
@@ -158,8 +161,16 @@ impl PromptSegment {
             target,
             title: title.into(),
             body: body.into(),
+            source_label: String::from("unspecified"),
             from_cache: false,
         }
+    }
+
+    /// Attach one human-readable source label to this segment.
+    /// 为该片段附加一个人类可读来源标签。
+    pub fn with_source_label(mut self, source_label: impl Into<String>) -> Self {
+        self.source_label = source_label.into();
+        self
     }
 
     /// Clone the segment and mark it as cache-backed.

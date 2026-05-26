@@ -19,6 +19,9 @@ pub struct ToolHelpEntry {
     /// Stable entry fingerprint.
     /// 稳定条目指纹。
     pub fingerprint: u64,
+    /// Human-readable source label for diagnostics.
+    /// 供诊断使用的人类可读来源标签。
+    pub source_label: String,
 }
 
 impl ToolHelpEntry {
@@ -32,7 +35,15 @@ impl ToolHelpEntry {
             tool_id,
             body,
             fingerprint,
+            source_label: String::from("Built-in tool help"),
         }
+    }
+
+    /// Attach one human-readable source label to this tool-help entry.
+    /// 为该工具帮助条目附加一个人类可读来源标签。
+    pub fn with_source_label(mut self, source_label: impl Into<String>) -> Self {
+        self.source_label = source_label.into();
+        self
     }
 }
 
@@ -105,7 +116,8 @@ impl ToolHelpRegistry {
             }
             self.entries.insert(
                 stem.to_string(),
-                ToolHelpEntry::new(stem.to_string(), trimmed.to_string()),
+                ToolHelpEntry::new(stem.to_string(), trimmed.to_string())
+                    .with_source_label(format!("User tool-help resource `{}`", path.display())),
             );
         }
         Ok(())

@@ -1666,7 +1666,10 @@ fn build_subagent_clone_system_prompt(
                 model_id: base.model_id.clone(),
                 supports_native_personality: true,
             },
-            provider_prompt: Some(ProviderPromptSnapshot::new(base.system_prompt.clone())),
+            provider_prompt: Some(
+                ProviderPromptSnapshot::new(base.system_prompt.clone())
+                    .with_source_label("Parent runtime system prompt"),
+            ),
             agent_prompt: None,
             personality: PersonalitySelection::Disabled,
             project_rules: None,

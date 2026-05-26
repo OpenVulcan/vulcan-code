@@ -41,17 +41,43 @@ const KIMI_SYSTEM_PROMPT_FILE_NAME: &str = "kimi.txt";
 /// Trinity 家族 Provider 提示词文件名。
 const TRINITY_SYSTEM_PROMPT_FILE_NAME: &str = "trinity.txt";
 
+/// Loaded provider base system prompt and its source label.
+/// 已加载的 Provider 基础系统提示词及其来源标签。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoadedProviderBaseSystemPrompt {
+    /// Sanitized prompt body text.
+    /// 已清洗的提示词正文。
+    pub text: String,
+    /// Human-readable source label for diagnostics.
+    /// 供诊断使用的人类可读来源标签。
+    pub source_label: String,
+}
+
 /// Loads one provider-family base system prompt from the editable resource directory.
 /// 从可编辑资源目录中加载对应 Provider 家族的基础系统提示词。
 pub(crate) fn load_provider_base_system_prompt(
     blueprint: &ProviderRuntimeBlueprint,
 ) -> Option<String> {
+    load_provider_base_system_prompt_with_source(blueprint).map(|prompt| prompt.text)
+}
+
+/// Loads one provider-family base system prompt with source information.
+/// 加载一份带来源信息的 Provider 家族基础系统提示词。
+pub(crate) fn load_provider_base_system_prompt_with_source(
+    blueprint: &ProviderRuntimeBlueprint,
+) -> Option<LoadedProviderBaseSystemPrompt> {
     let file_name = resolve_provider_base_prompt_file_name(blueprint);
     let packaged_prompt_path = runtime_assets::resolve_app_resources_directory()
         .join(SYSTEM_PROMPTS_DIR_NAME)
         .join(file_name);
     if let Some(prompt) = read_non_empty_system_prompt_file(&packaged_prompt_path) {
-        return Some(prompt);
+        return Some(LoadedProviderBaseSystemPrompt {
+            text: prompt,
+            source_label: format!(
+                "Provider prompt resource `{}`",
+                packaged_prompt_path.display()
+            ),
+        });
     }
 
     let source_prompt_path = runtime_assets::source_resource_directory()
@@ -59,7 +85,13 @@ pub(crate) fn load_provider_base_system_prompt(
         .join(file_name);
     if source_prompt_path != packaged_prompt_path {
         if let Some(prompt) = read_non_empty_system_prompt_file(&source_prompt_path) {
-            return Some(prompt);
+            return Some(LoadedProviderBaseSystemPrompt {
+                text: prompt,
+                source_label: format!(
+                    "Provider prompt resource `{}`",
+                    source_prompt_path.display()
+                ),
+            });
         }
     }
 
@@ -68,7 +100,13 @@ pub(crate) fn load_provider_base_system_prompt(
             .join(SYSTEM_PROMPTS_DIR_NAME)
             .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
         if let Some(prompt) = read_non_empty_system_prompt_file(&packaged_default_path) {
-            return Some(prompt);
+            return Some(LoadedProviderBaseSystemPrompt {
+                text: prompt,
+                source_label: format!(
+                    "Provider default prompt resource `{}`",
+                    packaged_default_path.display()
+                ),
+            });
         }
 
         let source_default_path = runtime_assets::source_resource_directory()
@@ -76,7 +114,13 @@ pub(crate) fn load_provider_base_system_prompt(
             .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
         if source_default_path != packaged_default_path {
             if let Some(prompt) = read_non_empty_system_prompt_file(&source_default_path) {
-                return Some(prompt);
+                return Some(LoadedProviderBaseSystemPrompt {
+                    text: prompt,
+                    source_label: format!(
+                        "Provider default prompt resource `{}`",
+                        source_default_path.display()
+                    ),
+                });
             }
         }
     }

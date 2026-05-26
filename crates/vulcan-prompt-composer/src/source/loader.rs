@@ -31,7 +31,12 @@ impl TextPromptResourceLoader {
     pub fn load_provider_prompt(
         path: &Path,
     ) -> Result<Option<ProviderPromptSnapshot>, PromptComposerError> {
-        Self::read_optional_text_file(path).map(|text| text.map(ProviderPromptSnapshot::new))
+        Self::read_optional_text_file(path).map(|text| {
+            text.map(|text| {
+                ProviderPromptSnapshot::new(text)
+                    .with_source_label(format!("Provider prompt resource `{}`", path.display()))
+            })
+        })
     }
 
     /// Load one agent prompt snapshot from the given file when available.
@@ -39,7 +44,12 @@ impl TextPromptResourceLoader {
     pub fn load_agent_prompt(
         path: &Path,
     ) -> Result<Option<AgentPromptSnapshot>, PromptComposerError> {
-        Self::read_optional_text_file(path).map(|text| text.map(AgentPromptSnapshot::new))
+        Self::read_optional_text_file(path).map(|text| {
+            text.map(|text| {
+                AgentPromptSnapshot::new(text)
+                    .with_source_label(format!("Agent prompt resource `{}`", path.display()))
+            })
+        })
     }
 
     /// Load one project-rules snapshot from the given file when available.

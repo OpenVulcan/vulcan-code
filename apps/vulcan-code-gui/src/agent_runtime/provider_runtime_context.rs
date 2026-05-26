@@ -3,8 +3,13 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::ExecutionPreparation;
-use crate::agent_runtime::prompt_composer_runtime::runtime_prompt_composer_engine;
-use crate::agent_runtime::provider_prompt_loader::load_provider_base_system_prompt;
+use crate::agent_runtime::prompt_composer_runtime::{
+    record_runtime_prompt_composer_report, runtime_prompt_composer_engine,
+};
+use crate::agent_runtime::provider_prompt_loader::{
+    LoadedProviderBaseSystemPrompt, load_provider_base_system_prompt,
+    load_provider_base_system_prompt_with_source,
+};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use vulcan_prompt_composer::{
@@ -37,6 +42,15 @@ pub(crate) fn build_runtime_system_preamble_for_agent(
             return build_legacy_runtime_system_preamble(preparation, Some(error.to_string()));
         }
     };
+    if active_agent.is_none() {
+        record_runtime_prompt_composer_report(
+            preparation.session_id.to_string(),
+            preparation.session_title.clone(),
+            "primary",
+            preparation.model_blueprint.model_id.clone(),
+            &output,
+        );
+    }
 
     render_runtime_prompt_output(&output, preparation)
 }
@@ -47,12 +61,10 @@ fn build_runtime_prompt_assembly_input(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> PromptAssemblyInput {
-    let provider_prompt = load_provider_base_system_prompt(&preparation.model_blueprint)
-        .unwrap_or_else(|| String::from("You are VulcanCode, an AI coding agent."));
-    let agent_prompt = active_agent
-        .map(|agent| agent.system_prompt.trim())
-        .filter(|text| !text.is_empty())
-        .map(|text| AgentPromptSnapshot::new(text.to_string()));
+    let provider_prompt =
+        load_provider_base_system_prompt_with_source(&preparation.model_blueprint)
+            .unwrap_or_else(default_provider_base_system_prompt);
+    let agent_prompt = active_agent.and_then(build_agent_prompt_snapshot);
     let environment_context = EnvironmentContextSnapshot::new(format!(
         "Current workspace: {}\nCurrent execution mode: {}",
         preparation.workspace_path, preparation.execution_mode
@@ -65,7 +77,10 @@ fn build_runtime_prompt_assembly_input(
             model_id: preparation.model_blueprint.model_id.clone(),
             supports_native_personality: true,
         },
-        provider_prompt: Some(ProviderPromptSnapshot::new(provider_prompt)),
+        provider_prompt: Some(
+            ProviderPromptSnapshot::new(provider_prompt.text)
+                .with_source_label(provider_prompt.source_label),
+        ),
         agent_prompt,
         personality: PersonalitySelection::Default,
         project_rules: load_workspace_project_rules_snapshot(&preparation.workspace_path),
@@ -88,6 +103,30 @@ fn build_runtime_prompt_assembly_input(
         custom_developer_segments: Vec::new(),
         custom_user_segments: Vec::new(),
     }
+}
+
+/// Builds the fallback provider prompt used when no resource file is available.
+/// 构建没有资源文件可用时使用的 Provider 回退提示词。
+fn default_provider_base_system_prompt() -> LoadedProviderBaseSystemPrompt {
+    LoadedProviderBaseSystemPrompt {
+        text: String::from("You are VulcanCode, an AI coding agent."),
+        source_label: String::from("Inline fallback provider prompt"),
+    }
+}
+
+/// Builds an agent prompt snapshot with a useful runtime source label.
+/// 构建带有可用运行时来源标签的 Agent 提示词快照。
+fn build_agent_prompt_snapshot(agent: &RuntimeAgentDefinition) -> Option<AgentPromptSnapshot> {
+    let text = agent.system_prompt.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(
+        AgentPromptSnapshot::new(text.to_string()).with_source_label(format!(
+            "Runtime agent `{}` ({}) system prompt",
+            agent.id, agent.name
+        )),
+    )
 }
 
 /// Renders a composer output into the single provider system-preamble channel used today.
