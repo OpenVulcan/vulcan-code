@@ -68,6 +68,27 @@ pub(super) struct VisibleDiffHunkSlice {
     pub(super) bottom_hidden_height: f32,
 }
 
+/// Loaded diff preview payload for the testing region.
+/// 用于测试区域的已加载 diff 预览载荷。
+#[derive(Debug, Clone)]
+pub(super) struct DiffPreviewPayload {
+    /// Footer and toast-like status message after the scan finishes.
+    /// 扫描完成后展示在底栏中的状态消息。
+    pub(super) status_message: String,
+    /// Human-readable summary for the diff preview header.
+    /// 供 diff 预览头部展示的人类可读摘要。
+    pub(super) summary: String,
+    /// Structured diff panel payload used by the workbench.
+    /// 提供给工作台使用的结构化 diff 面板载荷。
+    pub(super) panel: WorkspaceDiffPanel,
+    /// Number of changed entries detected in the workspace.
+    /// 在工作区中检测到的变更条目数量。
+    pub(super) changed_files: usize,
+    /// Activity level used to push the scan result into the runtime log.
+    /// 用于将扫描结果写入运行日志的活动级别。
+    pub(super) activity_level: ActivityLevel,
+}
+
 /// Active diff file descriptor derived from the current review scroll position.
 /// 根据当前审查滚动位置推导出的激活 diff 文件描述。
 #[derive(Debug, Clone, Copy)]

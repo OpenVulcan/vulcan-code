@@ -7,6 +7,21 @@ use crate::workspace_path::{
     normalize_workspace_path_text, normalized_workspace_path_text_from_path,
 };
 
+/// Icon kinds used by the hover action buttons inside the task-drawer tree.
+/// 任务抽屉树悬停动作按钮使用的图标类型。
+#[derive(Debug, Clone, Copy)]
+pub(super) enum TaskTreeActionIcon {
+    /// Adds one new project node by selecting a folder from disk.
+    /// 通过从磁盘选择文件夹来新增一个项目节点。
+    AddProjectFromFolder,
+    /// Creates a new child session under the current project node.
+    /// 在当前项目节点下创建新的子会话。
+    AddSession,
+    /// Archives the current session row.
+    /// 归档当前会话行。
+    Archive,
+}
+
 impl VulcanWorkbench {
     /// Returns the session summary matching one identifier, if it still exists.
     /// 返回与某个标识匹配的会话摘要（如果仍然存在）。

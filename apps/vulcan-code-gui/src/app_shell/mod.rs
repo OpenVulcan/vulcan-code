@@ -60,8 +60,8 @@ use self::configuration_state::{
 };
 use self::context_menu::{WorkbenchContextMenuItem, WorkbenchContextMenuState};
 use self::diff_state::{
-    ActiveDiffFile, DiffVisualSliceRange, VisibleDiffFileRange, VisibleDiffHunkSlice,
-    WindowControlIcon,
+    ActiveDiffFile, DiffPreviewPayload, DiffVisualSliceRange, VisibleDiffFileRange,
+    VisibleDiffHunkSlice, WindowControlIcon,
 };
 use self::integration_form_state::{
     AgentProfileFormState, DEFAULT_MCP_WORKING_DIRECTORY, McpKeyValueRowState, McpServerChoice,
@@ -86,6 +86,7 @@ use self::session_state::{
     SelectedSubagentTaskPanel, SessionPromptCompactionTrigger, SubagentTaskPanelState,
     SubagentTaskRunState,
 };
+use self::task_tree::TaskTreeActionIcon;
 use self::transcript_state::{
     CommandRunToolModalSummary, CommandSessionToolModalSummary, ModalSurfacePayload,
     ThinkingModalState, ToolModalPresentation, ToolModalState,
@@ -3788,42 +3789,6 @@ pub struct VulcanWorkbench {
     /// Status message displayed in the footer.
     /// 展示在底部状态栏中的状态消息。
     status_message: String,
-}
-
-/// Icon kinds used by the hover action buttons inside the task-drawer tree.
-/// 任务抽屉树悬停动作按钮使用的图标类型。
-#[derive(Debug, Clone, Copy)]
-enum TaskTreeActionIcon {
-    /// Adds one new project node by selecting a folder from disk.
-    /// 通过从磁盘选择文件夹来新增一个项目节点。
-    AddProjectFromFolder,
-    /// Creates a new child session under the current project node.
-    /// 在当前项目节点下创建新的子会话。
-    AddSession,
-    /// Archives the current session row.
-    /// 归档当前会话行。
-    Archive,
-}
-
-/// Loaded diff preview payload for the testing region.
-/// 用于测试区域的已加载 diff 预览载荷。
-#[derive(Debug, Clone)]
-struct DiffPreviewPayload {
-    /// Footer and toast-like status message after the scan finishes.
-    /// 扫描完成后展示在底栏中的状态消息。
-    status_message: String,
-    /// Human-readable summary for the diff preview header.
-    /// 供 diff 预览头部展示的人类可读摘要。
-    summary: String,
-    /// Structured diff panel payload used by the workbench.
-    /// 提供给工作台使用的结构化 diff 面板载荷。
-    panel: WorkspaceDiffPanel,
-    /// Number of changed entries detected in the workspace.
-    /// 在工作区中检测到的变更条目数量。
-    changed_files: usize,
-    /// Activity level used to push the scan result into the runtime log.
-    /// 用于将扫描结果写入运行日志的活动级别。
-    activity_level: ActivityLevel,
 }
 
 impl VulcanWorkbench {
