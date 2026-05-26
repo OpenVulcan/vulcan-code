@@ -3,4 +3,3 @@
 
 pub mod luaskills_runtime;
 pub mod project_temp_maintenance;
-pub mod runtime_assets;

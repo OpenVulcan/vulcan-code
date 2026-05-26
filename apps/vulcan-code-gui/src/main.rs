@@ -37,13 +37,14 @@ pub(crate) use provider::{
     capabilities as provider_capabilities, config as provider_config,
     input_normalizer as provider_input_normalizer, usage as provider_usage,
 };
-pub(crate) use runtime_support::{luaskills_runtime, project_temp_maintenance, runtime_assets};
+pub(crate) use runtime_support::{luaskills_runtime, project_temp_maintenance};
 pub(crate) use session::agent_view;
 pub(crate) use shared::{code_view, composer_parts, data_plane, diff, workspace_path};
 pub(crate) use tooling::bridge as vulcan_tools_bridge;
 pub(crate) use tooling::result_format as tool_result_format;
 pub(crate) use ui::widgets::{selectable_transcript, wheel_passthrough};
 pub(crate) use ui::{style, theme};
+pub(crate) use vulcan_runtime_assets as runtime_assets;
 
 /// Starts the GUI application bootstrap sequence.
 /// 启动图形界面应用的引导流程。

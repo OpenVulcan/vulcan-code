@@ -6160,6 +6160,7 @@ dependencies = [
  "vulcan-markdown",
  "vulcan-mcp-runtime",
  "vulcan-prompt-composer",
+ "vulcan-runtime-assets",
  "vulcan-tools-manager",
  "vulcan-workbench-model",
 ]
@@ -6236,6 +6237,10 @@ dependencies = [
 
 [[package]]
 name = "vulcan-prompt-composer"
+version = "0.1.0"
+
+[[package]]
+name = "vulcan-runtime-assets"
 version = "0.1.0"
 
 [[package]]

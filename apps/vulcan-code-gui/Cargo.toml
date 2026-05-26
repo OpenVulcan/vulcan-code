@@ -32,6 +32,7 @@ vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true
 vulcan-core.workspace = true
 vulcan-workbench-model.workspace = true
+vulcan-runtime-assets.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-file-watcher.workspace = true

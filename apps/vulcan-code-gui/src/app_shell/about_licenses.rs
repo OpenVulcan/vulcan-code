@@ -2,7 +2,7 @@
 //! 关于页面许可证目录发现与按需正文加载辅助逻辑。
 
 use super::*;
-use crate::runtime_support::runtime_assets;
+use crate::runtime_assets;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

@@ -1,0 +1,10 @@
+[package]
+name = "vulcan-runtime-assets"
+description = "Shared runtime asset and packaged output discovery helpers."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
