@@ -25,6 +25,23 @@ const PROJECT_RULES_WATCH_THROTTLE_INTERVAL: std::time::Duration =
 const PROMPT_RESOURCE_WATCH_THROTTLE_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(250);
 
+/// Returns the process-wide live file watcher shared by all GUI filesystem subscriptions.
+/// 返回供全部 GUI 文件系统订阅复用的进程级实时文件监听器。
+fn shared_live_file_watcher() -> Option<std::sync::Arc<vulcan_file_watcher::live::LiveFileWatcher>>
+{
+    static SHARED_LIVE_FILE_WATCHER: std::sync::OnceLock<
+        Option<std::sync::Arc<vulcan_file_watcher::live::LiveFileWatcher>>,
+    > = std::sync::OnceLock::new();
+
+    SHARED_LIVE_FILE_WATCHER
+        .get_or_init(|| {
+            vulcan_file_watcher::live::LiveFileWatcher::new()
+                .ok()
+                .map(std::sync::Arc::new)
+        })
+        .clone()
+}
+
 /// Builds a compact preview for one prompt-composer inspector layer.
 /// 为单个提示词组合检查器分层构建紧凑预览。
 fn prompt_composer_inspector_layer_preview(text: &str) -> String {
@@ -231,8 +248,7 @@ fn project_rules_watch_stream(
             std::path::PathBuf::from(&workspace_path),
         );
 
-        if let Ok(watcher) = vulcan_file_watcher::live::LiveFileWatcher::new() {
-            let watcher = std::sync::Arc::new(watcher);
+        if let Some(watcher) = shared_live_file_watcher() {
             let (subscriber, rx) = watcher.add_subscriber();
             let _registration = subscriber.register_paths(vec![target.to_live_watch_path()]);
             let mut rx = vulcan_file_watcher::live::ThrottledLiveWatchReceiver::new(
@@ -277,44 +293,20 @@ fn prompt_resource_watch_stream(
     let project_prompt_path = input.project_prompt_path.clone();
     let project_prompt_enabled = input.project_prompt_enabled;
     Box::pin(async_stream::stream! {
-        let mut watch_paths = Vec::new();
-        if let Some(home_dir) = dirs::home_dir() {
-            watch_paths.push(vulcan_file_watcher::live::LiveWatchPath {
-                path: home_dir.join(".vulcan").join("code").join("prompt"),
-                recursive: true,
-            });
-        }
-        let project_prompt_full_path = if project_prompt_enabled
-            && !workspace_path.trim().is_empty()
-            && !project_prompt_path.trim().is_empty()
-        {
-            let workspace = std::path::PathBuf::from(&workspace_path);
-            let relative = project_prompt_path.trim().trim_start_matches(['/', '\\']);
-            Some(workspace.join(relative))
-        } else {
-            None
-        };
-        if let Some(path) = project_prompt_full_path.clone() {
-            watch_paths.push(vulcan_file_watcher::live::LiveWatchPath {
-                path,
-                recursive: false,
-            });
-        }
-        if !workspace_path.trim().is_empty() {
-            watch_paths.push(vulcan_file_watcher::live::LiveWatchPath {
-                path: std::path::PathBuf::from(&workspace_path)
-                    .join(".vulcan")
-                    .join("code")
-                    .join("config.json"),
-                recursive: false,
-            });
-        }
+        let user_prompt_root = dirs::home_dir()
+            .map(|home_dir| home_dir.join(".vulcan").join("code").join("prompt"));
+        let target = vulcan_file_watcher::adapters::prompt_resources::PromptResourcesWatchTarget::new(
+            std::path::PathBuf::from(&workspace_path),
+            project_prompt_path,
+            project_prompt_enabled,
+            user_prompt_root,
+        );
+        let watch_paths = target.to_live_watch_paths();
         if watch_paths.is_empty() {
             return;
         }
 
-        if let Ok(watcher) = vulcan_file_watcher::live::LiveFileWatcher::new() {
-            let watcher = std::sync::Arc::new(watcher);
+        if let Some(watcher) = shared_live_file_watcher() {
             let (subscriber, rx) = watcher.add_subscriber();
             let _registration = subscriber.register_paths(watch_paths);
             let mut rx = vulcan_file_watcher::live::ThrottledLiveWatchReceiver::new(
@@ -323,16 +315,8 @@ fn prompt_resource_watch_stream(
             );
 
             while let Some(event) = rx.recv().await {
-                let project_config_path = (!workspace_path.trim().is_empty()).then(|| {
-                    std::path::PathBuf::from(&workspace_path)
-                        .join(".vulcan")
-                        .join("code")
-                        .join("config.json")
-                });
-                let kind = prompt_resource_watch_kind_for_paths(
-                    &event.paths,
-                    project_prompt_full_path.as_deref(),
-                    project_config_path.as_deref(),
+                let kind = prompt_resource_watch_kind_from_file_watcher(
+                    target.classify_paths(&event.paths),
                 );
                 yield Message::PromptResourcesWatchChanged {
                     workspace_path: workspace_path.clone(),
@@ -343,20 +327,22 @@ fn prompt_resource_watch_stream(
     })
 }
 
-/// Classifies prompt-resource watch paths into the narrowest cache invalidation kind.
-/// 将提示词资源监听路径分类为最窄的缓存失效类别。
-fn prompt_resource_watch_kind_for_paths(
-    paths: &[std::path::PathBuf],
-    project_prompt_path: Option<&std::path::Path>,
-    project_config_path: Option<&std::path::Path>,
+/// Converts reusable file-watcher prompt-resource categories into GUI cache-invalidation categories.
+/// 将可复用文件监听器提示词资源类别转换为 GUI 缓存失效类别。
+fn prompt_resource_watch_kind_from_file_watcher(
+    kind: vulcan_file_watcher::adapters::prompt_resources::PromptResourcesWatchKind,
 ) -> PromptResourceWatchKind {
-    if project_prompt_path.is_some_and(|target| paths.iter().any(|path| path == target)) {
-        return PromptResourceWatchKind::ProjectPrompt;
+    match kind {
+        vulcan_file_watcher::adapters::prompt_resources::PromptResourcesWatchKind::ProjectPrompt => {
+            PromptResourceWatchKind::ProjectPrompt
+        }
+        vulcan_file_watcher::adapters::prompt_resources::PromptResourcesWatchKind::ProjectConfiguration => {
+            PromptResourceWatchKind::ProjectPromptConfig
+        }
+        vulcan_file_watcher::adapters::prompt_resources::PromptResourcesWatchKind::UserPromptResources => {
+            PromptResourceWatchKind::UserPromptResources
+        }
     }
-    if project_config_path.is_some_and(|target| paths.iter().any(|path| path == target)) {
-        return PromptResourceWatchKind::ProjectPromptConfig;
-    }
-    PromptResourceWatchKind::UserPromptResources
 }
 
 impl VulcanWorkbench {
@@ -9136,8 +9122,8 @@ impl VulcanWorkbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        composer_context_anchor_reference_row, prompt_resource_watch_kind_for_paths,
-        workspace_history_search_preview_segments,
+        composer_context_anchor_reference_row, prompt_resource_watch_kind_from_file_watcher,
+        shared_live_file_watcher, workspace_history_search_preview_segments,
     };
     use crate::app_shell::PromptResourceWatchKind;
     use serde_json::json;
@@ -9180,34 +9166,46 @@ mod tests {
     /// 验证提示词资源监听路径会在缓存失效前完成分类。
     #[test]
     fn prompt_resource_watch_kind_classifies_specific_paths() {
-        let project_prompt = PathBuf::from("D:/repo/.vulcan/code/prompt.md");
-        let project_config = PathBuf::from("D:/repo/.vulcan/code/config.json");
-        let user_resource = PathBuf::from("C:/Users/me/.vulcan/code/prompt/personalities/a.md");
+        let target =
+            vulcan_file_watcher::adapters::prompt_resources::PromptResourcesWatchTarget::new(
+                PathBuf::from("D:/repo"),
+                ".vulcan/code/prompt.md",
+                true,
+                Some(PathBuf::from("C:/Users/me/.vulcan/code/prompt")),
+            );
 
         assert_eq!(
-            prompt_resource_watch_kind_for_paths(
-                std::slice::from_ref(&project_prompt),
-                Some(&project_prompt),
-                Some(&project_config),
+            prompt_resource_watch_kind_from_file_watcher(
+                target.classify_paths(&[PathBuf::from("D:/repo/.vulcan/code/prompt.md")])
             ),
             PromptResourceWatchKind::ProjectPrompt
         );
         assert_eq!(
-            prompt_resource_watch_kind_for_paths(
-                std::slice::from_ref(&project_config),
-                Some(&project_prompt),
-                Some(&project_config),
+            prompt_resource_watch_kind_from_file_watcher(
+                target.classify_paths(&[PathBuf::from("D:/repo/.vulcan/code/config.json")])
             ),
             PromptResourceWatchKind::ProjectPromptConfig
         );
         assert_eq!(
-            prompt_resource_watch_kind_for_paths(
-                std::slice::from_ref(&user_resource),
-                Some(&project_prompt),
-                Some(&project_config),
-            ),
+            prompt_resource_watch_kind_from_file_watcher(target.classify_paths(&[PathBuf::from(
+                "C:/Users/me/.vulcan/code/prompt/personalities/a.md"
+            )])),
             PromptResourceWatchKind::UserPromptResources
         );
+    }
+
+    /// Verifies GUI filesystem subscriptions reuse one shared live watcher backend.
+    /// 验证 GUI 文件系统订阅会复用同一个共享实时监听后端。
+    #[test]
+    fn shared_live_file_watcher_reuses_process_instance() {
+        let first = shared_live_file_watcher();
+        let second = shared_live_file_watcher();
+
+        match (first, second) {
+            (Some(first), Some(second)) => assert!(std::sync::Arc::ptr_eq(&first, &second)),
+            (None, None) => {}
+            _ => panic!("shared watcher initialization should be stable"),
+        }
     }
 
     /// Verifies that compaction-anchor rows stay short and only expose the linked summary message identity and headline.
