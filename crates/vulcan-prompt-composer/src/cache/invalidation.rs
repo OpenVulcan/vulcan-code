@@ -23,6 +23,9 @@ pub enum PromptInvalidationReason {
     /// Project rule file changed.
     /// 项目规则文件变化。
     ProjectRuleFileChanged,
+    /// Project prompt file changed.
+    /// 项目提示词文件变化。
+    ProjectPromptFileChanged,
     /// Agent profile changed.
     /// Agent 配置变化。
     AgentProfileChanged,

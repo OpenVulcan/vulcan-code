@@ -4,8 +4,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_context::{
     ContextCompactionPolicy, SessionCompactionEntry, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind,
+    SessionMessageRecordKind, estimate_mixed_language_text_tokens,
 };
+use vulcan_prompt_composer::build_context_compaction_request_prompt;
 
 /// Stateless summary record returned by one compaction result before the GUI turns it into its own hidden-node shape.
 /// 单次压缩结果返回的无状态摘要记录，供图形界面在落地前转换为自身隐藏节点形态。
@@ -181,18 +182,7 @@ impl CompactionResult {
 /// Builds the internal user prompt used to ask the model for one compact continuation summary.
 /// 构建用于请求模型生成紧凑续写总结的内部用户提示词。
 pub fn build_compaction_request_prompt() -> String {
-    String::from(
-        "Summarize the earlier session context into a compact continuation brief for an AI coding workflow.\n\
-\n\
-Requirements:\n\
-- Preserve the user's main goal, constraints, decisions, accepted tradeoffs, and unfinished work.\n\
-- Mention concrete file paths, symbols, commands, errors, and verification results when they still matter.\n\
-- Highlight any pending next steps or follow-up checks.\n\
-- Prefer dense factual prose or short headings over storytelling.\n\
-- Do not greet, do not ask follow-up questions, and do not mention tools.\n\
-- Return plain text only without code fences.\n\
-- Assume newer messages will remain below this summary, so do not repeat them.",
-    )
+    build_context_compaction_request_prompt()
 }
 
 /// Builds the synthetic continuation prompt injected as the first user message after compaction completes.
@@ -392,7 +382,7 @@ fn estimate_text_tokens(text: &str) -> usize {
     if trimmed.is_empty() {
         return 0;
     }
-    ((trimmed.chars().count() + 3usize) / 4usize).max(1usize)
+    estimate_mixed_language_text_tokens(trimmed).max(1usize)
 }
 
 /// Builds one compaction summary line and optionally prunes old tool-output bodies.

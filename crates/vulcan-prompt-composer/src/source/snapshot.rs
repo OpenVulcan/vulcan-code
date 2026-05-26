@@ -103,6 +103,36 @@ impl ProjectRulesSnapshot {
     }
 }
 
+/// Project-prompt snapshot such as `.vulcan/code/prompt.md`.
+/// 项目提示词快照，例如 `.vulcan/code/prompt.md`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectPromptSnapshot {
+    /// Source path or label.
+    /// 来源路径或标签。
+    pub source: String,
+    /// Full prompt text.
+    /// 完整提示词文本。
+    pub text: String,
+    /// Stable content hash.
+    /// 稳定内容哈希。
+    pub content_hash: u64,
+}
+
+impl ProjectPromptSnapshot {
+    /// Build one project-prompt snapshot from source and text.
+    /// 从来源与文本构建项目提示词快照。
+    pub fn new(source: impl Into<String>, text: impl Into<String>) -> Self {
+        let source = source.into();
+        let text = text.into();
+        let content_hash = stable_text_hash(&text);
+        Self {
+            source,
+            text,
+            content_hash,
+        }
+    }
+}
+
 /// Environment context snapshot.
 /// 环境上下文快照。
 #[derive(Debug, Clone, PartialEq, Eq)]

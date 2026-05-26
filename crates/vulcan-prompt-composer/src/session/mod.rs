@@ -13,3 +13,8 @@ pub mod delta_state;
 /// Output fingerprint helpers.
 /// 输出指纹辅助。
 pub mod fingerprint;
+
+pub use compaction::{
+    PromptCompactionSignal, build_context_compaction_developer_segment,
+    build_context_compaction_request_prompt,
+};

@@ -6179,6 +6179,7 @@ dependencies = [
  "serde_json",
  "vulcan-context",
  "vulcan-core",
+ "vulcan-prompt-composer",
 ]
 
 [[package]]

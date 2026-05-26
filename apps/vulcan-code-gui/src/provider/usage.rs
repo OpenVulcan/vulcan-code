@@ -14,7 +14,10 @@ pub(crate) fn latest_provider_usage_from_conversation_state(
         .iter()
         .rev()
         .find_map(|message| match &message.payload {
-            SessionConversationPayload::Assistant { usage, .. } => usage.clone(),
+            SessionConversationPayload::Assistant { usage, .. } => usage
+                .as_ref()
+                .filter(|snapshot| snapshot.has_any_tokens())
+                .cloned(),
             _ => None,
         })
 }
@@ -134,6 +137,53 @@ mod tests {
         assert_eq!(
             latest_provider_usage_from_conversation_state(&state),
             Some(latest_usage)
+        );
+    }
+
+    /// Skips empty assistant placeholders so aborted turns do not hide the last valid usage snapshot.
+    /// 跳过空的助手占位用量，避免中止轮次覆盖上一条有效用量快照。
+    #[test]
+    fn latest_provider_usage_skips_empty_assistant_placeholder() {
+        let valid_usage = ProviderUsageSnapshot {
+            input_tokens: Some(1536),
+            output_tokens: Some(128),
+            reasoning_tokens: Some(64),
+            total_tokens: Some(1728),
+            cached_input_tokens: Some(1024),
+            cache_creation_input_tokens: None,
+        };
+        let state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("assistant-valid"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("有效返回"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        tool_calls: Vec::new(),
+                        usage: Some(valid_usage.clone()),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("assistant-empty"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        tool_calls: Vec::new(),
+                        usage: Some(ProviderUsageSnapshot::default()),
+                    },
+                },
+            ],
+            records: Vec::new(),
+            continuation: Default::default(),
+        };
+
+        assert_eq!(
+            latest_provider_usage_from_conversation_state(&state),
+            Some(valid_usage)
         );
     }
 

@@ -1913,7 +1913,10 @@ pub(super) fn push_session_runtime_state_batch_rows(
                 optional_sqlite_string(&entry.context_start_message_id),
                 optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
                 optional_sqlite_string(&serialize_provider_usage_to_json(
-                    entry.last_provider_usage.as_ref(),
+                    entry
+                        .last_successful_provider_usage
+                        .as_ref()
+                        .or(entry.last_provider_usage.as_ref()),
                 )),
                 ControllerSqliteValue::Null,
                 optional_sqlite_string(&serialize_session_continuation_to_json(

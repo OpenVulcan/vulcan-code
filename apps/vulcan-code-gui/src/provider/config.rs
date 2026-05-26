@@ -4530,6 +4530,17 @@ impl PersistedPromptConfiguration {
     }
 }
 
+/// Project-local Vulcan Code configuration saved under one workspace.
+/// 保存到单个工作区下的项目级 Vulcan Code 配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVulcanCodeConfigurationFile {
+    /// Optional project-local prompt settings overriding only project prompt injection fields.
+    /// 可选的项目级提示词设置，仅覆盖项目提示词注入相关字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<PersistedPromptConfiguration>,
+}
+
 /// Returns the default workspace-relative project prompt path.
 /// 返回默认的工作区相对项目提示词路径。
 fn default_project_prompt_path() -> String {
@@ -4669,6 +4680,47 @@ pub fn configuration_file_path() -> PathBuf {
     });
 
     home.join(".vulcan").join("vulcan-code.json")
+}
+
+/// Returns the project-local Vulcan Code configuration file path for one workspace.
+/// 返回单个工作区的项目级 Vulcan Code 配置文件路径。
+pub fn project_configuration_file_path(workspace_path: &Path) -> PathBuf {
+    workspace_path
+        .join(".vulcan")
+        .join("code")
+        .join("config.json")
+}
+
+/// Loads one project-local Vulcan Code configuration file from disk.
+/// 从磁盘加载单个项目级 Vulcan Code 配置文件。
+pub fn load_project_configuration_file(
+    workspace_path: &Path,
+) -> Result<ProjectVulcanCodeConfigurationFile, String> {
+    let path = project_configuration_file_path(workspace_path);
+    if !path.exists() {
+        return Ok(ProjectVulcanCodeConfigurationFile::default());
+    }
+
+    let text =
+        fs::read_to_string(&path).map_err(|error| format!("读取项目配置文件失败：{}。", error))?;
+    serde_json::from_str(&text).map_err(|error| format!("解析项目配置文件失败：{}。", error))
+}
+
+/// Saves one project-local Vulcan Code configuration file back to disk.
+/// 将单个项目级 Vulcan Code 配置文件写回磁盘。
+pub fn save_project_configuration_file(
+    workspace_path: &Path,
+    config: &ProjectVulcanCodeConfigurationFile,
+) -> Result<(), String> {
+    let path = project_configuration_file_path(workspace_path);
+    let parent = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workspace_path.to_path_buf());
+    fs::create_dir_all(&parent).map_err(|error| format!("创建项目配置目录失败：{}。", error))?;
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("序列化项目配置失败：{}。", error))?;
+    fs::write(&path, content).map_err(|error| format!("写入项目配置失败：{}。", error))
 }
 
 /// Loads the shared controller bootstrap configuration from the runtime configuration directory.
@@ -5807,19 +5859,33 @@ mod tests {
         ModelInterleavedCapability, ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
         PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
         PersistedAiToolConfiguration, PersistedLuaSkillsConfiguration, PersistedProviderEntry,
-        PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderApiFamily,
-        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
-        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-        ProviderUsageCaptureConfig, ReasoningCapabilityKind, ReasoningEffortLevel,
-        ReasoningProfileConfig, SupportedProviderDefinition, WebSearchProviderDispatchMode,
-        WebSearchProviderKind, WebSearchRoutingMode, apply_provider_reasoning_model_overrides,
-        catalog_model_choices, effective_model_choices, extract_models_from_array,
-        filter_remote_model_choices, merge_embedded_model_metadata, merge_refreshed_models,
-        normalize_provider_configuration_for_save, persist_remote_models, remote_models_url,
+        PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
+        ProjectVulcanCodeConfigurationFile, ProviderApiFamily, ProviderBaseUrlConfig,
+        ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
+        ProviderModelDiscoveryKind, ProviderRuntimeKind, ProviderUsageCaptureConfig,
+        ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
+        WebSearchRoutingMode, apply_provider_reasoning_model_overrides, catalog_model_choices,
+        effective_model_choices, extract_models_from_array, filter_remote_model_choices,
+        load_project_configuration_file, merge_embedded_model_metadata, merge_refreshed_models,
+        normalize_provider_configuration_for_save, persist_remote_models,
+        project_configuration_file_path, remote_models_url, save_project_configuration_file,
         supported_provider_by_id,
     };
     use serde_json::{Map as JsonMap, json};
     use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Builds a unique temporary directory path for provider configuration tests.
+    /// 为 Provider 配置测试构建一个唯一临时目录路径。
+    fn unique_temp_dir(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{label}-{}-{nanos}", std::process::id()))
+    }
 
     /// Builds one minimal supported-provider definition used by the reasoning-selection tests.
     /// 构建供思考选择测试复用的最小受支持 Provider 定义。
@@ -7171,6 +7237,35 @@ mod tests {
                 .get("openrouter")
                 .is_some_and(|entry| entry.models.is_empty())
         );
+    }
+
+    /// Verifies project-local configuration files round-trip through the shared provider config helpers.
+    /// 验证项目本地配置文件可以通过共享 Provider 配置辅助函数完成读写往返。
+    #[test]
+    fn project_configuration_file_roundtrips_prompt_settings() {
+        let root = unique_temp_dir("vulcan-project-config-roundtrip");
+        let config = ProjectVulcanCodeConfigurationFile {
+            prompt: Some(super::PersistedPromptConfiguration {
+                project_prompt_enabled: false,
+                project_prompt_path: String::from(".vulcan/code/local-prompt.md"),
+                ..super::PersistedPromptConfiguration::default()
+            }),
+        };
+
+        save_project_configuration_file(&root, &config).expect("save project config");
+        let loaded = load_project_configuration_file(&root).expect("load project config");
+
+        assert_eq!(loaded, config);
+        assert!(
+            project_configuration_file_path(&root)
+                .to_string_lossy()
+                .ends_with(".vulcan\\code\\config.json")
+                || project_configuration_file_path(&root)
+                    .to_string_lossy()
+                    .ends_with(".vulcan/code/config.json")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Verifies remote catalog refresh only auto-enables newly discovered default models and keeps previously disabled default models disabled.

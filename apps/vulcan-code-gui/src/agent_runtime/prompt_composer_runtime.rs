@@ -4,8 +4,10 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use vulcan_prompt_composer::{
-    PromptAssemblyInput, PromptAssemblyOutput, PromptCacheReport, PromptComposerEngine,
-    PromptComposerError, PromptComposerResourceConfig, PromptSegment,
+    PromptAssemblyInput, PromptAssemblyOutput, PromptCacheEvent, PromptCacheReport,
+    PromptComposerEngine, PromptComposerError, PromptComposerResourceConfig,
+    PromptInvalidationEvent, PromptInvalidationReason, PromptSegment,
+    session::fingerprint::compute_assembly_fingerprint,
 };
 
 /// User-level Vulcan root directory name.
@@ -59,6 +61,15 @@ pub(crate) struct RuntimePromptComposerReport {
     /// Cache hit/miss counters.
     /// 缓存命中与未命中计数。
     pub cache_report: PromptCacheReport,
+    /// Stable fingerprint of the fully assembled prompt layers.
+    /// 完整装配提示词分层的稳定指纹。
+    pub assembly_fingerprint: u64,
+    /// Per-layer diagnostic summaries.
+    /// 按分层划分的诊断摘要。
+    pub layer_summaries: Vec<RuntimePromptComposerLayerReport>,
+    /// Detailed cache events recorded while composing the prompt.
+    /// 提示词组合过程中记录的详细缓存事件。
+    pub cache_events: Vec<RuntimePromptComposerCacheEventReport>,
     /// Rendered segment summaries.
     /// 渲染后的片段摘要。
     pub segments: Vec<RuntimePromptComposerSegmentReport>,
@@ -77,6 +88,51 @@ pub(crate) struct RuntimePromptComposerReport {
     /// Complete human-readable Markdown report.
     /// 完整的人类可读 Markdown 报告。
     pub markdown: String,
+}
+
+/// One prompt layer summary displayed in diagnostics.
+/// 诊断中展示的一条提示词分层摘要。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePromptComposerLayerReport {
+    /// Layer debug label.
+    /// 分层调试标签。
+    pub target_label: String,
+    /// Human-readable layer title.
+    /// 人类可读的分层标题。
+    pub title: String,
+    /// Approximate character count.
+    /// 近似字符数量。
+    pub character_count: usize,
+    /// Estimated token count using the shared mixed-language heuristic.
+    /// 使用共享混合语言启发式得到的估算 Token 数。
+    pub estimated_tokens: usize,
+    /// Number of prompt segments rendered into this layer.
+    /// 渲染到该分层中的提示词片段数量。
+    pub segment_count: usize,
+    /// Number of cache-hit segments rendered into this layer.
+    /// 渲染到该分层中的缓存命中片段数量。
+    pub cache_hits: usize,
+    /// Number of cache-miss segments rendered into this layer.
+    /// 渲染到该分层中的缓存未命中片段数量。
+    pub cache_misses: usize,
+    /// Stable fingerprint of this layer text.
+    /// 该分层文本的稳定指纹。
+    pub fingerprint: u64,
+}
+
+/// One cache event row displayed in diagnostics.
+/// 诊断中展示的一条缓存事件记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePromptComposerCacheEventReport {
+    /// Cache scope label.
+    /// 缓存作用域标签。
+    pub scope: String,
+    /// Cache key used for this event.
+    /// 该事件使用的缓存键。
+    pub cache_key: String,
+    /// Whether this event was a cache hit.
+    /// 该事件是否为缓存命中。
+    pub hit: bool,
 }
 
 /// One prompt segment row displayed in diagnostics.
@@ -104,6 +160,12 @@ pub(crate) struct RuntimePromptComposerSegmentReport {
     /// Approximate character count.
     /// 近似字符数量。
     pub character_count: usize,
+    /// Estimated token count using the shared mixed-language heuristic.
+    /// 使用共享混合语言启发式得到的估算 Token 数。
+    pub estimated_tokens: usize,
+    /// Stable cache key attached to the rendered segment.
+    /// 附着在渲染片段上的稳定缓存键。
+    pub cache_key: String,
     /// Full segment body text.
     /// 完整片段正文文本。
     pub body: String,
@@ -151,9 +213,18 @@ fn default_prompt_composer_resource_config() -> Option<PromptComposerResourceCon
 pub(crate) fn reload_runtime_prompt_composer_engine(
     resources: &PromptComposerResourceConfig,
 ) -> Result<(), PromptComposerError> {
-    let next_engine = Arc::new(PromptComposerEngine::with_resources(resources)?);
     let slot = RUNTIME_PROMPT_COMPOSER_ENGINE
         .get_or_init(|| RwLock::new(Arc::new(build_default_runtime_prompt_composer_engine())));
+    let reusable_cache = {
+        let guard = slot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.cache().clone()
+    };
+    let next_engine = Arc::new(PromptComposerEngine::with_resources_and_cache(
+        resources,
+        reusable_cache,
+    )?);
     let mut guard = slot
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -168,6 +239,54 @@ pub(crate) fn reload_default_runtime_prompt_composer_engine() -> Result<(), Prom
         reload_runtime_prompt_composer_engine(&resources)
     } else {
         reload_runtime_prompt_composer_engine(&PromptComposerResourceConfig::default())
+    }
+}
+
+/// Invalidate reusable prompt-composer cache entries for changed prompt resources.
+/// 为已变化的提示词资源使可复用组合器缓存条目失效。
+pub(crate) fn invalidate_runtime_prompt_composer_cache_for_reason(
+    reason: PromptInvalidationReason,
+) {
+    let prefixes = runtime_prompt_cache_prefixes_for_reason(&reason);
+    let event = PromptInvalidationEvent {
+        reason,
+        cache_key_prefixes: prefixes,
+    };
+    runtime_prompt_composer_engine()
+        .cache()
+        .apply_invalidation(&event);
+}
+
+/// Resolve cache-key prefixes affected by one runtime prompt invalidation reason.
+/// 解析一次运行时提示词失效原因影响的缓存键前缀。
+fn runtime_prompt_cache_prefixes_for_reason(reason: &PromptInvalidationReason) -> Vec<String> {
+    match reason {
+        PromptInvalidationReason::PersonalityChanged => vec![String::from("node:personality:")],
+        PromptInvalidationReason::ToolSchemaChanged
+        | PromptInvalidationReason::ToolVisibilityChanged
+        | PromptInvalidationReason::LuaSkillCatalogChanged => {
+            vec![
+                String::from("node:tool_help:"),
+                String::from("bundle:tool_help:"),
+            ]
+        }
+        PromptInvalidationReason::ProjectRuleFileChanged => {
+            vec![
+                String::from("node:project_rules:"),
+                String::from("node:custom_user:"),
+            ]
+        }
+        PromptInvalidationReason::ProjectPromptFileChanged => {
+            vec![String::from("node:custom_user:")]
+        }
+        PromptInvalidationReason::AgentProfileChanged => {
+            vec![String::from("node:agent_base_system:")]
+        }
+        PromptInvalidationReason::ModelChanged
+        | PromptInvalidationReason::ProviderFamilyChanged
+        | PromptInvalidationReason::SubagentModeChanged
+        | PromptInvalidationReason::SessionCompacted
+        | PromptInvalidationReason::SessionBaselineRebuilt => Vec::new(),
     }
 }
 
@@ -232,12 +351,26 @@ impl RuntimePromptComposerReport {
             .map(RuntimePromptComposerSegmentReport::from_segment)
             .collect::<Vec<_>>();
         let cache_report = output.diagnostics.cache_report.clone();
+        let cache_events = output
+            .diagnostics
+            .cache_events
+            .iter()
+            .map(RuntimePromptComposerCacheEventReport::from_event)
+            .collect::<Vec<_>>();
         let strategy_id = output.diagnostics.strategy_id.clone();
         let personality_id = output.diagnostics.personality_id.clone();
+        let assembly_fingerprint = compute_assembly_fingerprint(output);
         let system_text = output.render_system_text();
         let developer_text = output.render_developer_text();
         let tool_metadata_text = output.render_tool_metadata_text();
         let user_text = output.render_user_text();
+        let layer_summaries = build_prompt_composer_layer_reports(
+            &segments,
+            &system_text,
+            &developer_text,
+            &tool_metadata_text,
+            &user_text,
+        );
         let markdown = render_prompt_composer_report_markdown(
             &session_id,
             &session_title,
@@ -246,6 +379,9 @@ impl RuntimePromptComposerReport {
             &strategy_id,
             personality_id.as_deref(),
             &cache_report,
+            assembly_fingerprint,
+            &layer_summaries,
+            &cache_events,
             &segments,
             &system_text,
             &developer_text,
@@ -261,6 +397,9 @@ impl RuntimePromptComposerReport {
             strategy_id,
             personality_id,
             cache_report,
+            assembly_fingerprint,
+            layer_summaries,
+            cache_events,
             segments,
             system_text,
             developer_text,
@@ -271,22 +410,75 @@ impl RuntimePromptComposerReport {
     }
 }
 
+impl RuntimePromptComposerCacheEventReport {
+    /// Build one cache-event report row.
+    /// 构建一条缓存事件报告行。
+    fn from_event(event: &PromptCacheEvent) -> Self {
+        Self {
+            scope: event.scope.clone(),
+            cache_key: event.cache_key.clone(),
+            hit: event.hit,
+        }
+    }
+}
+
 impl RuntimePromptComposerSegmentReport {
     /// Build one segment report row.
     /// 构建一条片段报告行。
     fn from_segment(segment: &PromptSegment) -> Self {
         Self {
             node_id: segment.node_id.clone(),
+            cache_key: segment.cache_key.clone(),
             title: segment.title.clone(),
             target_label: format!("{:?}", segment.target),
             kind_label: format!("{:?}", segment.kind),
             source_label: segment.source_label.clone(),
             from_cache: segment.from_cache,
             character_count: segment.body.chars().count(),
+            estimated_tokens: estimate_prompt_report_tokens(&segment.body),
             body: segment.body.clone(),
             preview: truncate_prompt_report_preview(&segment.body, 96),
         }
     }
+}
+
+/// Builds per-layer prompt-composer diagnostic summaries.
+/// 构建按分层划分的提示词组合诊断摘要。
+fn build_prompt_composer_layer_reports(
+    segments: &[RuntimePromptComposerSegmentReport],
+    system_text: &str,
+    developer_text: &str,
+    tool_metadata_text: &str,
+    user_text: &str,
+) -> Vec<RuntimePromptComposerLayerReport> {
+    [
+        ("System", "系统层", system_text),
+        ("Developer", "开发者层", developer_text),
+        ("ToolMetadata", "工具元数据层", tool_metadata_text),
+        ("User", "用户上下文层", user_text),
+    ]
+    .into_iter()
+    .map(|(target_label, title, text)| {
+        let segment_count = segments
+            .iter()
+            .filter(|segment| segment.target_label == target_label)
+            .count();
+        let cache_hits = segments
+            .iter()
+            .filter(|segment| segment.target_label == target_label && segment.from_cache)
+            .count();
+        RuntimePromptComposerLayerReport {
+            target_label: target_label.to_string(),
+            title: title.to_string(),
+            character_count: text.chars().count(),
+            estimated_tokens: estimate_prompt_report_tokens(text),
+            segment_count,
+            cache_hits,
+            cache_misses: segment_count.saturating_sub(cache_hits),
+            fingerprint: vulcan_prompt_composer::source::hashing::stable_text_hash(text),
+        }
+    })
+    .collect()
 }
 
 /// Render a complete prompt-composer report as Markdown.
@@ -299,12 +491,62 @@ fn render_prompt_composer_report_markdown(
     strategy_id: &str,
     personality_id: Option<&str>,
     cache_report: &PromptCacheReport,
+    assembly_fingerprint: u64,
+    layer_summaries: &[RuntimePromptComposerLayerReport],
+    cache_events: &[RuntimePromptComposerCacheEventReport],
     segments: &[RuntimePromptComposerSegmentReport],
     system_text: &str,
     developer_text: &str,
     tool_metadata_text: &str,
     user_text: &str,
 ) -> String {
+    let total_estimated_tokens = layer_summaries
+        .iter()
+        .map(|layer| layer.estimated_tokens)
+        .sum::<usize>();
+    let layer_rows = if layer_summaries.is_empty() {
+        String::from("（无分层摘要）")
+    } else {
+        layer_summaries
+            .iter()
+            .map(|layer| {
+                format!(
+                    "- `{}` · {} chars · ~{} tokens · {} nodes · cache hit {} / miss {} · fp `{}`",
+                    layer.target_label,
+                    layer.character_count,
+                    layer.estimated_tokens,
+                    layer.segment_count,
+                    layer.cache_hits,
+                    layer.cache_misses,
+                    format_prompt_report_fingerprint(layer.fingerprint)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let cache_event_rows = if cache_events.is_empty() {
+        String::from("（无缓存事件）")
+    } else {
+        cache_events
+            .iter()
+            .take(24)
+            .map(|event| {
+                format!(
+                    "- `{}` · {} · {}",
+                    event.scope,
+                    if event.hit { "hit" } else { "miss" },
+                    event.cache_key
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let hidden_cache_event_count = cache_events.len().saturating_sub(24);
+    let cache_event_rows = if hidden_cache_event_count > 0 {
+        format!("{cache_event_rows}\n- ... {hidden_cache_event_count} more cache events")
+    } else {
+        cache_event_rows
+    };
     let segment_rows = if segments.is_empty() {
         String::from("（无提示词片段）")
     } else {
@@ -312,12 +554,14 @@ fn render_prompt_composer_report_markdown(
             .iter()
             .map(|segment| {
                 format!(
-                    "- `{}` · {} · {} · {} chars · cache={} · source={} · {}",
+                    "- `{}` · {} · {} · {} chars · ~{} tokens · cache={} · key=`{}` · source={} · {}",
                     segment.node_id,
                     segment.target_label,
                     segment.title,
                     segment.character_count,
+                    segment.estimated_tokens,
                     if segment.from_cache { "hit" } else { "miss" },
+                    segment.cache_key,
                     segment.source_label,
                     segment.preview
                 )
@@ -335,7 +579,13 @@ fn render_prompt_composer_report_markdown(
             "- Model: `{}`\n",
             "- Strategy: `{}`\n",
             "- Personality: `{}`\n",
+            "- Assembly fingerprint: `{}`\n",
+            "- Estimated prompt tokens: `{}`\n",
             "- Cache: node hit `{}` / miss `{}` · bundle hit `{}` / miss `{}`\n\n",
+            "## Layers\n",
+            "{}\n\n",
+            "## Cache Events\n",
+            "{}\n\n",
             "## Nodes\n",
             "{}\n\n",
             "## System\n",
@@ -353,10 +603,14 @@ fn render_prompt_composer_report_markdown(
         model_id,
         strategy_id,
         personality_id.unwrap_or("none"),
+        format_prompt_report_fingerprint(assembly_fingerprint),
+        total_estimated_tokens,
         cache_report.node_hits,
         cache_report.node_misses,
         cache_report.bundle_hits,
         cache_report.bundle_misses,
+        layer_rows,
+        cache_event_rows,
         segment_rows,
         fenced_prompt_report_text(system_text),
         fenced_prompt_report_text(developer_text),
@@ -372,6 +626,22 @@ fn fenced_prompt_report_text(text: &str) -> String {
         return String::from("（空）");
     }
     format!("````text\n{}\n````", text.trim())
+}
+
+/// Estimates tokens for prompt-report diagnostics using the shared mixed-language heuristic.
+/// 使用共享混合语言启发式为提示词报告诊断估算 Token。
+fn estimate_prompt_report_tokens(text: &str) -> usize {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    vulcan_context::estimate_mixed_language_text_tokens(trimmed).max(1usize)
+}
+
+/// Formats one prompt fingerprint as compact hexadecimal text.
+/// 将提示词指纹格式化为紧凑十六进制文本。
+fn format_prompt_report_fingerprint(fingerprint: u64) -> String {
+    format!("{fingerprint:016x}")
 }
 
 /// Truncate one prompt report preview by Unicode scalar count.
@@ -469,6 +739,49 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Verifies runtime resource reload keeps reusable cache entries that were not invalidated.
+    /// 验证运行时资源重载会保留未失效的可复用缓存条目。
+    #[test]
+    fn prompt_composer_runtime_reload_reuses_existing_cache() {
+        reload_runtime_prompt_composer_engine(&PromptComposerResourceConfig::default())
+            .expect("runtime composer should reset");
+
+        let input = PromptAssemblyInput {
+            mode: PromptAssemblyMode::Primary,
+            model: ModelDescriptor {
+                family: String::from("openai"),
+                model_id: String::from("gpt-test"),
+                supports_native_personality: false,
+            },
+            provider_prompt: Some(ProviderPromptSnapshot::new("Provider cached body")),
+            agent_prompt: None,
+            personality: PersonalitySelection::Disabled,
+            project_rules: None,
+            environment_context: None,
+            task_goal: None,
+            tool_catalog: ToolCatalogSnapshot::new(Vec::new()),
+            subagent: None,
+            custom_developer_segments: Vec::new(),
+            custom_user_segments: Vec::new(),
+        };
+
+        let first = runtime_prompt_composer_engine()
+            .compose(&input)
+            .expect("first compose should work");
+        assert_eq!(first.diagnostics.cache_report.node_hits, 0);
+
+        reload_runtime_prompt_composer_engine(&PromptComposerResourceConfig::default())
+            .expect("runtime composer should reload");
+        let second = runtime_prompt_composer_engine()
+            .compose(&input)
+            .expect("second compose should work");
+
+        assert!(
+            second.diagnostics.cache_report.node_hits > 0,
+            "provider base prompt should survive an unrelated resource reload"
+        );
+    }
+
     /// Verifies default prompt resource directories use the user `.vulcan/code` namespace.
     /// 验证默认提示词资源目录使用用户级 `.vulcan/code` 命名空间。
     #[test]
@@ -547,6 +860,18 @@ mod tests {
                 .any(|segment| segment.node_id == "tool_help_shell_command")
         );
         assert!(report.markdown.contains("Prompt Composer Inspector"));
+        assert!(report.assembly_fingerprint > 0);
+        assert!(
+            report
+                .layer_summaries
+                .iter()
+                .any(|layer| layer.target_label == "System" && layer.estimated_tokens > 0)
+        );
+        assert!(!report.cache_events.is_empty());
+        assert!(report.markdown.contains("Assembly fingerprint"));
+        assert!(report.markdown.contains("Estimated prompt tokens"));
+        assert!(report.markdown.contains("## Layers"));
+        assert!(report.markdown.contains("## Cache Events"));
         assert_eq!(report.system_text, "Provider system body");
         assert!(report.markdown.contains("Provider system body"));
         assert!(

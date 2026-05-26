@@ -522,9 +522,14 @@ async fn hydrate_session_runtime_state(
         .last_provider_request_preview_markdown
         .or(runtime_state.last_provider_request_preview_markdown);
     runtime_state.ui_state = runtime_state_cache.ui_state;
+    let cached_provider_usage = runtime_state_cache.last_provider_usage.clone();
     runtime_state.last_provider_usage = runtime_state_cache
         .last_provider_usage
         .or(runtime_state.last_provider_usage);
+    runtime_state.last_successful_provider_usage = runtime_state_cache
+        .last_successful_provider_usage
+        .or(cached_provider_usage)
+        .or(runtime_state.last_successful_provider_usage);
     runtime_state.updated_at = if runtime_state_cache.updated_at.trim().is_empty() {
         current_unix_millis_text()
     } else {

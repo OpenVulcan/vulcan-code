@@ -60,7 +60,8 @@ use crate::composer_parts::{
     composer_parts_preview_text, composer_parts_to_user_payload, composer_parts_transcript_body,
 };
 use crate::context_budget::{
-    ContextBudgetSnapshot, ContextCompactionPolicy, build_projected_session_context_budget_snapshot,
+    ContextBudgetSnapshot, ContextCompactionPolicy, apply_context_budget_anchor_baseline,
+    build_projected_session_context_budget_snapshot,
 };
 use crate::context_compaction::{
     CompactionPlan, CompactionSkillInput, CompactionSkillResult, into_session_derived_record,
@@ -94,10 +95,11 @@ use crate::provider_capabilities::resolve_effective_model_capabilities;
 use crate::provider_config::{
     self, AiToolKind, ModelChoice, NativeBridgeRoutingMode, PersistedAiToolConfiguration,
     PersistedControllerConfiguration, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
-    PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedPromptPersonalitySelection,
-    PersistedProviderEntry, PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile,
-    ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
-    SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS, WebSearchRoutingMode,
+    PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedPromptConfiguration,
+    PersistedPromptPersonalitySelection, PersistedProviderEntry, PersistedProviderOptions,
+    ProviderChoice, ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind,
+    ReasoningEffortLevel, ReasoningSelectionOption, SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS,
+    WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,
@@ -1231,17 +1233,25 @@ fn merge_projected_session_messages_into_existing_window(
         .filter_map(|message| projected_index_by_id.get(&message.id).copied())
         .max();
 
-    for existing_message in existing_messages {
+    for (existing_index, existing_message) in existing_messages.iter().enumerate() {
         if let Some(projected_message) = projected_by_id.get(&existing_message.id).cloned() {
             consumed_projected_ids.insert(existing_message.id.clone());
             merged_messages.push(projected_message);
         } else if let Some(projected_message) = projected_messages
             .iter()
-            .find(|projected_message| {
+            .enumerate()
+            .find(|(projected_index, projected_message)| {
                 !consumed_projected_ids.contains(&projected_message.id)
-                    && turn_stats_message_semantically_matches(existing_message, projected_message)
+                    && turn_stats_message_semantically_matches(
+                        existing_messages,
+                        existing_index,
+                        existing_message,
+                        &projected_messages,
+                        *projected_index,
+                        projected_message,
+                    )
             })
-            .cloned()
+            .map(|(_, projected_message)| projected_message.clone())
         {
             if let Some(projected_index) = projected_index_by_id.get(&projected_message.id).copied()
             {
@@ -1273,21 +1283,119 @@ fn merge_projected_session_messages_into_existing_window(
     merged_messages
 }
 
-/// Returns whether two visible turn-statistics rows should be treated as the same logical row even when their runtime ids drift after reload or reprojection.
-/// 返回两条可见轮次统计行在重载或重新投影后即使运行时 id 漂移，也应视为同一逻辑行。
+/// Returns whether two visible turn-statistics rows should be treated as the same logical row even when their runtime ids or recalculated payload fields drift after reload or reprojection.
+/// 返回两条可见轮次统计行在重载或重新投影后即使运行时 id 或重算后的载荷字段漂移，也应视为同一逻辑行。
 fn turn_stats_message_semantically_matches(
+    existing_messages: &[SessionMessageEntry],
+    existing_index: usize,
     existing_message: &SessionMessageEntry,
+    projected_messages: &[SessionMessageEntry],
+    projected_index: usize,
     projected_message: &SessionMessageEntry,
 ) -> bool {
-    existing_message.record_kind == SessionMessageRecordKind::TurnStats
-        && projected_message.record_kind == SessionMessageRecordKind::TurnStats
-        && existing_message.kind == projected_message.kind
-        && existing_message.visible == projected_message.visible
-        && existing_message.title == projected_message.title
-        && existing_message.body == projected_message.body
+    if existing_message.record_kind != SessionMessageRecordKind::TurnStats
+        || projected_message.record_kind != SessionMessageRecordKind::TurnStats
+        || existing_message.kind != projected_message.kind
+        || existing_message.visible != projected_message.visible
+        || existing_message.title != projected_message.title
+    {
+        return false;
+    }
+
+    if existing_message.body == projected_message.body
         && existing_message.created_at == projected_message.created_at
         && existing_message.metadata == projected_message.metadata
+    {
+        return true;
+    }
+
+    let existing_closing_record_id =
+        turn_stats_message_metadata_string(existing_message, "turn_closing_record_id");
+    let projected_closing_record_id =
+        turn_stats_message_metadata_string(projected_message, "turn_closing_record_id");
+    if existing_closing_record_id.is_some()
+        && existing_closing_record_id == projected_closing_record_id
+    {
+        return true;
+    }
+
+    let existing_anchor =
+        turn_stats_previous_visible_user_anchor(existing_messages, existing_index);
+    let projected_anchor =
+        turn_stats_previous_visible_user_anchor(projected_messages, projected_index);
+    existing_anchor.is_some() && existing_anchor == projected_anchor
 }
+
+/// Returns one structured anchor for a turn-stats row based on the visible user row that immediately precedes it.
+/// 根据紧邻其前的可见用户行返回该轮次统计行的结构化锚点。
+fn turn_stats_previous_visible_user_anchor(
+    messages: &[SessionMessageEntry],
+    turn_stats_index: usize,
+) -> Option<TurnStatsMergeAnchor> {
+    if turn_stats_index == 0 {
+        return None;
+    }
+
+    let user_message = messages[..turn_stats_index].iter().rev().find(|message| {
+        message.visible
+            && message.kind == SessionMessageKind::User
+            && message.record_kind == SessionMessageRecordKind::Transcript
+    })?;
+    Some(TurnStatsMergeAnchor {
+        user_record_id: Some(user_message.id.clone()),
+        user_created_at: Some(user_message.created_at.clone()),
+        user_text: Some(turn_stats_anchor_text(user_message)),
+    })
+}
+
+/// Returns one stable text anchor for a user row by preferring canonical metadata and falling back to the visible body.
+/// 为用户行返回稳定文本锚点，优先使用规范元数据，必要时回退到可见正文。
+fn turn_stats_anchor_text(message: &SessionMessageEntry) -> String {
+    let text = turn_stats_message_metadata_string(message, "canonical_user_text")
+        .unwrap_or_else(|| message.body.clone());
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Reads one string field from turn-stats metadata when it exists and is non-empty.
+/// 当轮次统计元数据中存在且非空时读取其中一个字符串字段。
+fn turn_stats_message_metadata_string(message: &SessionMessageEntry, key: &str) -> Option<String> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Stable merge anchor derived from the visible user row that belongs to one completed turn.
+/// 从属于某个已完成轮次的可见用户行派生出来的稳定合并锚点。
+#[derive(Debug, Clone)]
+struct TurnStatsMergeAnchor {
+    /// Stable visible user record identifier for the turn.
+    /// 该轮次的稳定可见用户记录标识。
+    user_record_id: Option<String>,
+    /// Stable creation timestamp of the visible user row.
+    /// 可见用户行的稳定创建时间戳。
+    user_created_at: Option<String>,
+    /// Normalized visible user text for legacy rows that do not yet carry dedicated anchor metadata.
+    /// 针对尚未携带专用锚点元数据的旧记录使用的归一化可见用户文本。
+    user_text: Option<String>,
+}
+
+impl PartialEq for TurnStatsMergeAnchor {
+    /// Compares two turn anchors using the strongest available stable fields first.
+    /// 按最强的稳定字段优先对比两个轮次锚点。
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.user_record_id, &other.user_record_id) {
+            (Some(left), Some(right)) => left == right,
+            _ => self.user_created_at == other.user_created_at && self.user_text == other.user_text,
+        }
+    }
+}
+
+impl Eq for TurnStatsMergeAnchor {}
 
 /// Returns whether one transcript message is a tool-detail row whose heavy body should stay out of the main UI projection.
 /// 返回一条转录消息是否为工具明细行，这类行的重型正文不应进入主界面投影。
@@ -3647,6 +3755,9 @@ pub struct VulcanWorkbench {
     /// Persisted provider configuration file loaded from `~/.vulcan/vulcan-code.json`.
     /// 从 `~/.vulcan/vulcan-code.json` 载入的持久化供应商配置文件。
     provider_configuration: ProviderConfigurationFile,
+    /// Editable project-level prompt settings draft for the currently selected workspace.
+    /// 当前选中工作区的可编辑项目级提示词设置草稿。
+    project_prompt_settings_draft: ProjectPromptSettingsDraft,
     /// Standalone AI capability tool configuration loaded from the dedicated Vulcan AI capability file.
     /// 从独立 Vulcan AI 能力配置文件载入的独立 AI 能力工具配置。
     ai_tool_configuration: PersistedAiToolConfiguration,
@@ -4467,6 +4578,21 @@ enum SessionPromptCompactionTrigger {
     BudgetAuto,
 }
 
+/// Prompt-resource watch event category used to avoid broad cache invalidation.
+/// 提示词资源监听事件类别，用于避免过宽的缓存失效。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptResourceWatchKind {
+    /// Workspace-local project prompt file changed.
+    /// 工作区本地项目提示词文件发生变化。
+    ProjectPrompt,
+    /// Workspace-local project prompt configuration changed.
+    /// 工作区本地项目提示词配置发生变化。
+    ProjectPromptConfig,
+    /// User-level prompt composer resources changed.
+    /// 用户级提示词组合资源发生变化。
+    UserPromptResources,
+}
+
 /// Stable archived-item deletion target retained while the user is going through the destructive second confirmation.
 /// 当用户正在经过破坏性二次确认流程时保留的稳定归档项删除目标。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4818,6 +4944,60 @@ impl std::fmt::Display for PromptPersonalityChoice {
     /// 渲染单个人格选择项的面向用户标签。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.label)
+    }
+}
+
+/// Editable project-level prompt configuration draft shown in prompt settings.
+/// 提示词设置页中展示的可编辑项目级提示词配置草稿。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectPromptSettingsDraft {
+    /// Workspace path owning this project-level configuration draft.
+    /// 拥有该项目级配置草稿的工作区路径。
+    workspace_path: String,
+    /// Whether the project prompt should be injected for this workspace.
+    /// 当前工作区是否注入项目提示词。
+    enabled: bool,
+    /// Workspace-relative project prompt file path typed by the user.
+    /// 用户输入的工作区相对项目提示词文件路径。
+    path: String,
+    /// Whether a project-local configuration file was found while loading the draft.
+    /// 载入草稿时是否发现项目本地配置文件。
+    has_project_override: bool,
+    /// Local settings notice shown beside the project prompt controls.
+    /// 显示在项目提示词控件旁的局部设置提示。
+    notice: String,
+}
+
+impl Default for ProjectPromptSettingsDraft {
+    /// Builds an empty project prompt settings draft before a workspace is resolved.
+    /// 在解析出工作区之前构建一份空的项目提示词设置草稿。
+    fn default() -> Self {
+        Self {
+            workspace_path: String::new(),
+            enabled: true,
+            path: String::from(".vulcan/code/prompt.md"),
+            has_project_override: false,
+            notice: String::from("尚未载入当前项目提示词配置。"),
+        }
+    }
+}
+
+impl ProjectPromptSettingsDraft {
+    /// Builds one draft from the current effective prompt configuration.
+    /// 基于当前生效提示词配置构建一份草稿。
+    fn from_effective_config(
+        workspace_path: String,
+        config: &PersistedPromptConfiguration,
+        has_project_override: bool,
+        notice: String,
+    ) -> Self {
+        Self {
+            workspace_path,
+            enabled: config.project_prompt_enabled,
+            path: config.project_prompt_path.clone(),
+            has_project_override,
+            notice,
+        }
     }
 }
 
@@ -6743,6 +6923,9 @@ enum Message {
         /// Workspace path associated with the prompt-resource watch.
         /// 与提示词资源监听关联的工作区路径。
         workspace_path: String,
+        /// Prompt-resource category that changed.
+        /// 发生变化的提示词资源类别。
+        kind: PromptResourceWatchKind,
     },
     /// Prompt composer changed from the text input.
     /// 提示词输入框内容发生变化。
@@ -7540,6 +7723,18 @@ enum Message {
     /// Project-level prompt injection toggle changed.
     /// 项目级提示词注入开关发生变化。
     ProjectPromptInjectionToggled(bool),
+    /// Project-local prompt override toggle changed in the prompt settings page.
+    /// 提示词设置页中的项目本地提示词覆盖开关发生变化。
+    ProjectPromptOverrideToggled(bool),
+    /// Project-local prompt file path changed in the prompt settings page.
+    /// 提示词设置页中的项目本地提示词文件路径发生变化。
+    ProjectPromptPathChanged(String),
+    /// Reloads the project-local prompt configuration draft from disk.
+    /// 从磁盘重新载入项目本地提示词配置草稿。
+    ReloadProjectPromptConfiguration,
+    /// Saves the project-local prompt configuration draft to disk.
+    /// 将项目本地提示词配置草稿保存到磁盘。
+    SaveProjectPromptConfiguration,
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
@@ -8051,16 +8246,8 @@ impl VulcanWorkbench {
         self.prompt_composer_inspector_developer_text = report.developer_text;
         self.prompt_composer_inspector_tool_metadata_text = report.tool_metadata_text;
         self.prompt_composer_inspector_user_text = report.user_text;
-        self.prompt_composer_inspector_buffer =
-            text_editor::Content::with_text(&self.prompt_composer_inspector_markdown);
+        self.prompt_composer_inspector_buffer = text_editor::Content::with_text("");
         self.prompt_composer_inspector_layer_buffers.clear();
-        for layer in PromptComposerInspectorLayer::ALL {
-            let layer_text = prompt_composer_inspector_display_text(
-                self.prompt_composer_inspector_layer_text(layer),
-            );
-            self.prompt_composer_inspector_layer_buffers
-                .insert(layer, text_editor::Content::with_text(&layer_text));
-        }
         self.prompt_composer_inspector_segment_texts.clear();
         self.prompt_composer_inspector_segment_buffers.clear();
         self.prompt_composer_inspector_expanded_segments.clear();
@@ -8079,6 +8266,58 @@ impl VulcanWorkbench {
             self.prompt_composer_inspector_segment_texts
                 .insert(segment_key, segment.body.clone());
         }
+        let expanded_layers = self
+            .prompt_composer_inspector_expanded_layers
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        for layer in expanded_layers {
+            self.ensure_prompt_composer_inspector_layer_buffer(layer);
+        }
+    }
+
+    /// Lazily materializes one prompt-composer layer editor buffer only when the layer is actually opened.
+    /// 仅在提示词组合检查器分层真正展开时，才惰性物化对应编辑器缓冲。
+    fn ensure_prompt_composer_inspector_layer_buffer(
+        &mut self,
+        layer: PromptComposerInspectorLayer,
+    ) {
+        if self
+            .prompt_composer_inspector_layer_buffers
+            .contains_key(&layer)
+        {
+            return;
+        }
+
+        let layer_text = prompt_composer_inspector_display_text(
+            self.prompt_composer_inspector_layer_text(layer),
+        );
+        self.prompt_composer_inspector_layer_buffers
+            .insert(layer, text_editor::Content::with_text(&layer_text));
+    }
+
+    /// Lazily materializes one prompt-composer segment editor buffer only when the node is actually opened.
+    /// 仅在提示词组合检查器节点真正展开时，才惰性物化对应编辑器缓冲。
+    fn ensure_prompt_composer_inspector_segment_buffer(&mut self, segment_key: &str) {
+        if self
+            .prompt_composer_inspector_segment_buffers
+            .contains_key(segment_key)
+        {
+            return;
+        }
+
+        let Some(segment_text) = self
+            .prompt_composer_inspector_segment_texts
+            .get(segment_key)
+            .cloned()
+        else {
+            return;
+        };
+        let display_text = prompt_composer_inspector_display_text(&segment_text);
+        self.prompt_composer_inspector_segment_buffers.insert(
+            segment_key.to_string(),
+            text_editor::Content::with_text(&display_text),
+        );
     }
 
     /// Returns the cached text for one prompt-composer inspector layer.
@@ -8704,6 +8943,7 @@ impl VulcanWorkbench {
             luaskills_operation_in_flight: false,
             luaskills_operation_progress: None,
             provider_configuration,
+            project_prompt_settings_draft: ProjectPromptSettingsDraft::default(),
             ai_tool_configuration,
             agent_profile_catalog,
             selected_user_agent_profile_id,
@@ -8787,6 +9027,7 @@ impl VulcanWorkbench {
         };
 
         let _ = application.reconcile_workbench_reasoning_effort_for_active_model();
+        application.reload_project_prompt_settings_draft();
 
         (
             application,
@@ -9966,19 +10207,59 @@ impl VulcanWorkbench {
                 crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_rules_prompt_cache(
                     &workspace_path,
                 );
+                crate::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_composer_cache_for_reason(
+                    vulcan_prompt_composer::PromptInvalidationReason::ProjectRuleFileChanged,
+                );
                 Task::none()
             }
-            Message::PromptResourcesWatchChanged { workspace_path } => {
-                crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_rules_prompt_cache(
-                    &workspace_path,
-                );
-                match crate::agent_runtime::prompt_composer_runtime::reload_default_runtime_prompt_composer_engine() {
-                    Ok(()) => {
+            Message::PromptResourcesWatchChanged {
+                workspace_path,
+                kind,
+            } => {
+                match kind {
+                    PromptResourceWatchKind::ProjectPrompt => {
+                        crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_user_prompt_cache(
+                            &workspace_path,
+                            &self.provider_configuration.prompt.project_prompt_path,
+                        );
+                        crate::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_composer_cache_for_reason(
+                            vulcan_prompt_composer::PromptInvalidationReason::ProjectPromptFileChanged,
+                        );
                         self.refresh_prompt_composer_inspector_buffer();
-                        self.status_message = String::from("提示词资源已变化，运行时提示词组合器已刷新。");
+                        self.status_message =
+                            String::from("项目提示词已变化，提示词用户上下文缓存已刷新。");
                     }
-                    Err(error) => {
-                        self.status_message = format!("提示词资源变化后刷新组合器失败：{error}");
+                    PromptResourceWatchKind::ProjectPromptConfig => {
+                        crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_user_prompt_cache(
+                            &workspace_path,
+                            &self.provider_configuration.prompt.project_prompt_path,
+                        );
+                        if self.project_prompt_settings_draft.workspace_path == workspace_path {
+                            self.reload_project_prompt_settings_draft();
+                        }
+                        crate::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_composer_cache_for_reason(
+                            vulcan_prompt_composer::PromptInvalidationReason::ProjectPromptFileChanged,
+                        );
+                        self.refresh_prompt_composer_inspector_buffer();
+                        self.status_message =
+                            String::from("项目提示词配置已变化，提示词用户上下文缓存已刷新。");
+                    }
+                    PromptResourceWatchKind::UserPromptResources => {
+                        crate::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_composer_cache_for_reason(
+                            vulcan_prompt_composer::PromptInvalidationReason::PersonalityChanged,
+                        );
+                        crate::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_composer_cache_for_reason(
+                            vulcan_prompt_composer::PromptInvalidationReason::ToolSchemaChanged,
+                        );
+                        match crate::agent_runtime::prompt_composer_runtime::reload_default_runtime_prompt_composer_engine() {
+                            Ok(()) => {
+                                self.refresh_prompt_composer_inspector_buffer();
+                                self.status_message = String::from("用户级提示词资源已变化，运行时提示词组合器已刷新。");
+                            }
+                            Err(error) => {
+                                self.status_message = format!("用户级提示词资源变化后刷新组合器失败：{error}");
+                            }
+                        }
                     }
                 }
                 Task::none()
@@ -10508,6 +10789,9 @@ impl VulcanWorkbench {
                 }
                 if section == SettingsSection::RuntimeDiagnostics {
                     self.refresh_prompt_composer_inspector_buffer();
+                }
+                if section == SettingsSection::PromptComposer {
+                    self.reload_project_prompt_settings_draft();
                 }
                 self.status_message = self.tf(
                     I18nKey::StatusSettingsSectionSwitched,
@@ -12149,6 +12433,37 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::ProjectPromptOverrideToggled(enabled) => {
+                self.ensure_project_prompt_settings_draft_current();
+                self.project_prompt_settings_draft.enabled = enabled;
+                self.project_prompt_settings_draft.notice =
+                    String::from("项目提示词覆盖已修改，点击保存后写入当前项目配置。");
+                Task::none()
+            }
+            Message::ProjectPromptPathChanged(value) => {
+                self.ensure_project_prompt_settings_draft_current();
+                self.project_prompt_settings_draft.path = value;
+                self.project_prompt_settings_draft.notice =
+                    String::from("项目提示词路径已修改，点击保存后写入当前项目配置。");
+                Task::none()
+            }
+            Message::ReloadProjectPromptConfiguration => {
+                self.reload_project_prompt_settings_draft();
+                self.status_message = self.project_prompt_settings_draft.notice.clone();
+                Task::none()
+            }
+            Message::SaveProjectPromptConfiguration => {
+                match self.save_project_prompt_settings_draft() {
+                    Ok(()) => {
+                        self.status_message = self.project_prompt_settings_draft.notice.clone();
+                    }
+                    Err(error) => {
+                        self.project_prompt_settings_draft.notice = error.clone();
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
             Message::QuickGuideMarkdownAction(action) => {
                 if !action.is_edit() {
                     self.quick_guide_markdown_buffer.perform(action);
@@ -12161,16 +12476,7 @@ impl VulcanWorkbench {
                     .remove(&layer)
                 {
                     self.prompt_composer_inspector_expanded_layers.insert(layer);
-                    if !self
-                        .prompt_composer_inspector_layer_buffers
-                        .contains_key(&layer)
-                    {
-                        let layer_text = prompt_composer_inspector_display_text(
-                            self.prompt_composer_inspector_layer_text(layer),
-                        );
-                        self.prompt_composer_inspector_layer_buffers
-                            .insert(layer, text_editor::Content::with_text(&layer_text));
-                    }
+                    self.ensure_prompt_composer_inspector_layer_buffer(layer);
                 }
                 Task::none()
             }
@@ -12189,8 +12495,10 @@ impl VulcanWorkbench {
                     .prompt_composer_inspector_expanded_segments
                     .remove(&segment_key)
                 {
+                    let opened_segment_key = segment_key.clone();
                     self.prompt_composer_inspector_expanded_segments
                         .insert(segment_key);
+                    self.ensure_prompt_composer_inspector_segment_buffer(&opened_segment_key);
                 }
                 Task::none()
             }
@@ -12342,6 +12650,7 @@ impl VulcanWorkbench {
                 self.hovered_task_session = Some(session_id);
                 self.clear_pending_prompt_drag_state();
                 self.sync_workspace_path_with_selected_session();
+                self.reload_project_prompt_settings_draft();
                 self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
                 self.clear_transcript_drag_auto_scrolls();
                 self.active_subagent_panel = None;
@@ -16920,6 +17229,7 @@ impl VulcanWorkbench {
             thinking_output: None,
             conversation_state: None,
             provider_request_count: 0,
+            last_successful_provider_usage: None,
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),
@@ -16971,6 +17281,7 @@ impl VulcanWorkbench {
         )?;
         let metadata = serde_json::to_value(json!({
             "turn_stats": turn_stats,
+            "turn_closing_record_id": closing_record_id,
         }))
         .ok();
         let title = format!("Turn Stats · {}", turn_stats.status.label());
@@ -17112,7 +17423,10 @@ impl VulcanWorkbench {
             ContextCompactionPolicy::default(),
             &core_snapshot.messages,
             visible_tool_count,
-            runtime_state_snapshot.last_provider_usage.as_ref(),
+            runtime_state_snapshot
+                .last_successful_provider_usage
+                .as_ref()
+                .or(runtime_state_snapshot.last_provider_usage.as_ref()),
         );
         let has_anchor_baseline = runtime_state_snapshot.last_compaction_id.is_some()
             || runtime_state_snapshot.context_start_message_id.is_some()
@@ -17123,35 +17437,18 @@ impl VulcanWorkbench {
                 .anchor_context_assembly_fingerprint
                 .is_some();
         if validate_anchor_baseline && has_anchor_baseline {
-            let mut mismatch_reasons = Vec::new();
-            if let Some(previous_budget_fingerprint) = runtime_state_snapshot
-                .anchor_context_budget_fingerprint
-                .as_deref()
-            {
-                context_budget.baseline_budget_fingerprint_matches =
-                    previous_budget_fingerprint == context_budget.fingerprint;
-                if !context_budget.baseline_budget_fingerprint_matches {
-                    mismatch_reasons.push(String::from("预算指纹变化"));
-                }
-            }
-            if let (Some(previous_assembly_fingerprint), Some(current_assembly_fingerprint)) = (
+            context_budget = apply_context_budget_anchor_baseline(
+                context_budget,
+                runtime_state_snapshot
+                    .anchor_context_budget_fingerprint
+                    .as_deref(),
                 runtime_state_snapshot
                     .anchor_context_assembly_fingerprint
                     .as_deref(),
                 runtime_state_snapshot
                     .live_context_assembly_fingerprint
                     .as_deref(),
-            ) {
-                context_budget.baseline_assembly_fingerprint_matches =
-                    previous_assembly_fingerprint == current_assembly_fingerprint;
-                if !context_budget.baseline_assembly_fingerprint_matches {
-                    mismatch_reasons.push(String::from("上下文层指纹变化"));
-                }
-            }
-            if !mismatch_reasons.is_empty() {
-                context_budget.baseline_matches_active_runtime = false;
-                context_budget.baseline_mismatch_reason = Some(mismatch_reasons.join(" · "));
-            }
+            );
         }
 
         Some(context_budget)
@@ -17199,6 +17496,7 @@ impl VulcanWorkbench {
             thinking_output,
             conversation_state,
             provider_request_count,
+            last_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -17270,12 +17568,19 @@ impl VulcanWorkbench {
             let preserved_records = runtime_state.conversation_state.records.clone();
             runtime_state.conversation_state = next_conversation_state;
             runtime_state.conversation_state.records = preserved_records;
-            if let Some(latest_provider_usage) =
-                crate::provider_usage::latest_provider_usage_from_conversation_state(
-                    &runtime_state.conversation_state,
-                )
-            {
-                runtime_state.last_provider_usage = Some(latest_provider_usage);
+            let latest_successful_provider_usage =
+                last_successful_provider_usage.clone().or_else(|| {
+                    if is_success {
+                        crate::provider_usage::latest_provider_usage_from_conversation_state(
+                            &runtime_state.conversation_state,
+                        )
+                    } else {
+                        None
+                    }
+                });
+            if let Some(successful_usage) = latest_successful_provider_usage {
+                runtime_state.last_provider_usage = Some(successful_usage.clone());
+                runtime_state.last_successful_provider_usage = Some(successful_usage);
             }
             runtime_state.updated_at = current_unix_millis_text();
             self.sync_session_messages_from_conversation_state(session_id);
@@ -20684,6 +20989,116 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["user-1", "projected-turn-stats-1", "user-2"]
         );
+    }
+
+    /// Verifies turn-stats rows still collapse to one visible row when the recalculated payload changes but the completed turn anchor stays the same.
+    /// 验证当重算后的载荷发生变化但已完成轮次锚点保持一致时，turn-stats 行仍会收敛为一条可见行。
+    #[test]
+    fn merge_projected_messages_dedupes_turn_stats_by_turn_anchor_when_payload_drifts() {
+        let existing_messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("随便输出点内容"),
+                metadata: Some(json!({
+                    "canonical_user_text": "随便输出点内容"
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("legacy-turn-stats-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · Completed"),
+                body: String::from("◔ 1 次调用 · 0 个工具 · 144 tokens"),
+                metadata: Some(json!({
+                    "turn_stats": {
+                        "status": "completed",
+                        "provider_call_count": 1,
+                        "tool_call_count": 0,
+                        "input_tokens": 120,
+                        "output_tokens": 24,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 144,
+                        "cached_input_tokens": 32,
+                        "duration_ms": 900
+                    }
+                })),
+                created_at: String::from("2"),
+            },
+        ];
+        let projected_messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("随便输出点内容"),
+                metadata: Some(json!({
+                    "canonical_user_text": "随便输出点内容"
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("projected-turn-stats-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · Completed"),
+                body: String::from("◔ 1 次调用 · 0 个工具 · 147 tokens"),
+                metadata: Some(json!({
+                    "turn_stats": {
+                        "status": "completed",
+                        "provider_call_count": 1,
+                        "tool_call_count": 0,
+                        "input_tokens": 121,
+                        "output_tokens": 26,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 147,
+                        "cached_input_tokens": 35,
+                        "duration_ms": 1000
+                    },
+                    "turn_closing_record_id": "assistant-1"
+                })),
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("user-2"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户输入"),
+                body: String::from("再来一次"),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+        ];
+
+        let merged = merge_projected_session_messages_into_existing_window(
+            &existing_messages,
+            projected_messages,
+        );
+
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+                .count(),
+            1
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user-1", "projected-turn-stats-1", "user-2"]
+        );
+        assert_eq!(merged[1].body, "◔ 1 次调用 · 0 个工具 · 147 tokens");
     }
 
     /// Verifies reprojection from a full canonical history only appends the genuinely new tail, instead of backfilling older unseen history rows into the already hydrated window.

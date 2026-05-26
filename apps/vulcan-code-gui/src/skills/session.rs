@@ -311,6 +311,7 @@ mod tests {
             thinking_output: None,
             conversation_state: None,
             provider_request_count: 0,
+            last_successful_provider_usage: None,
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),

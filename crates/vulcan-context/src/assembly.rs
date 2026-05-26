@@ -276,8 +276,8 @@ pub fn build_provider_request_context_assembly(
     ContextAssembly::from_provider_request_snapshot(snapshot)
 }
 
-/// One stable baseline snapshot used to tell whether a later assembly still matches the previous shape.
-/// 用于判断后续装配结果是否仍匹配先前形态的稳定基线快照。
+/// One stable baseline snapshot used to tell whether a later assembly still matches the stable non-volatile shape.
+/// 用于判断后续装配结果是否仍匹配稳定且非易变形态的基线快照。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextBaseline {
     /// Stable fingerprint that identifies one previously accepted context shape.
@@ -341,46 +341,77 @@ impl ContextBaselineComparison {
 }
 
 impl ContextBaseline {
-    /// Builds one baseline snapshot from the current assembly.
-    /// 根据当前装配结果构建一份基线快照。
+    /// Builds one baseline snapshot from the current stable assembly shape.
+    /// 根据当前稳定装配形态构建一份基线快照。
     pub fn from_assembly(assembly: &ContextAssembly) -> Self {
         Self {
-            fingerprint: build_context_fingerprint(assembly),
-            layer_count: assembly.layers.len(),
+            fingerprint: build_context_baseline_fingerprint(assembly),
+            layer_count: context_baseline_layer_count(assembly),
         }
     }
 
-    /// Returns whether the provided assembly still matches this baseline exactly.
-    /// 返回给定装配结果是否仍与当前基线完全匹配。
+    /// Returns whether the provided assembly still matches this stable baseline exactly.
+    /// 返回给定装配结果是否仍与当前稳定基线完全匹配。
     pub fn matches(&self, assembly: &ContextAssembly) -> bool {
-        self.layer_count == assembly.layers.len()
-            && self.fingerprint == build_context_fingerprint(assembly)
+        self.layer_count == context_baseline_layer_count(assembly)
+            && self.fingerprint == build_context_baseline_fingerprint(assembly)
     }
 
     /// Compares this baseline with one freshly assembled context stack and returns structured diagnostics.
     /// 将当前基线与一份新装配上下文栈对比，并返回结构化诊断结果。
     pub fn compare(&self, assembly: &ContextAssembly) -> ContextBaselineComparison {
-        let current_fingerprint = build_context_fingerprint(assembly);
-        let layer_count_matches = self.layer_count == assembly.layers.len();
+        let current_fingerprint = build_context_baseline_fingerprint(assembly);
+        let layer_count_matches = self.layer_count == context_baseline_layer_count(assembly);
         let fingerprint_matches = self.fingerprint == current_fingerprint;
         ContextBaselineComparison {
             matches: layer_count_matches && fingerprint_matches,
             layer_count_matches,
             fingerprint_matches,
             baseline_layer_count: self.layer_count,
-            current_layer_count: assembly.layers.len(),
+            current_layer_count: context_baseline_layer_count(assembly),
             baseline_fingerprint: self.fingerprint.clone(),
             current_fingerprint,
         }
     }
 }
 
-/// Builds one stable fingerprint for a layered context assembly.
-/// 为分层上下文装配结果构建一份稳定指纹。
+/// Builds one stable fingerprint for the full layered context assembly.
+/// 为完整分层上下文装配结果构建一份稳定指纹。
 pub fn build_context_fingerprint(assembly: &ContextAssembly) -> String {
-    assembly
-        .layers
-        .iter()
+    build_context_fingerprint_from_layers(assembly.layers.iter())
+}
+
+/// Builds one stable fingerprint for the non-volatile baseline layer subset.
+/// 为非易变的基线层子集构建一份稳定指纹。
+pub fn build_context_baseline_fingerprint(assembly: &ContextAssembly) -> String {
+    build_context_fingerprint_from_layers(context_baseline_layers(assembly))
+}
+
+/// Returns the number of baseline layers that participate in stable comparison.
+/// 返回参与稳定对比的基线层数量。
+fn context_baseline_layer_count(assembly: &ContextAssembly) -> usize {
+    context_baseline_layers(assembly).count()
+}
+
+/// Returns the context layers that remain part of the stable baseline comparison.
+/// 返回仍参与稳定基线对比的上下文层。
+fn context_baseline_layers(assembly: &ContextAssembly) -> impl Iterator<Item = &ContextLayer> {
+    assembly.layers.iter().filter(|layer| {
+        !matches!(
+            layer.kind,
+            ContextLayerKind::History | ContextLayerKind::User
+        )
+    })
+}
+
+/// Builds one stable fingerprint from any ordered layer iterator.
+/// 从任意有序层迭代器构建一份稳定指纹。
+fn build_context_fingerprint_from_layers<'a, I>(layers: I) -> String
+where
+    I: IntoIterator<Item = &'a ContextLayer>,
+{
+    layers
+        .into_iter()
         .map(|layer| {
             format!(
                 "{:?}|{}|{}",
@@ -506,8 +537,8 @@ mod tests {
     };
     use serde_json::json;
     use vulcan_core::types::{
-        ConversationMessage, ConversationPayload, ProviderContinuation, ProviderRequestSnapshot,
-        ProviderRequestToolSchema,
+        ConversationMessage, ConversationPayload, ProviderContinuation, ProviderPromptLayers,
+        ProviderRequestSnapshot, ProviderRequestToolSchema,
     };
 
     /// Builds one provider request snapshot that exercises all high-value context layers.
@@ -517,6 +548,7 @@ mod tests {
             provider_id: String::from("openai"),
             model_id: String::from("gpt-test"),
             system_prompt: String::from("system"),
+            prompt_layers: ProviderPromptLayers::default(),
             prompt: String::from("prompt"),
             history: vec![ConversationMessage {
                 id: String::from("m1"),
@@ -563,8 +595,30 @@ mod tests {
 
         assert!(baseline.matches(&assembly));
         assert!(baseline.compare(&assembly).matches);
-        assert_eq!(baseline.layer_count, 4);
+        assert_eq!(baseline.layer_count, 2);
         assert!(!baseline.fingerprint.is_empty());
+    }
+
+    /// Keeps the stable baseline unchanged when only history or current user text changes.
+    /// 仅当历史层或当前用户文本变化时，稳定基线保持不变。
+    #[test]
+    fn layered_context_baseline_ignores_history_and_user_text_changes() {
+        let assembly = ContextAssembly::from_provider_request_snapshot(&sample_snapshot());
+        let baseline = ContextBaseline::from_assembly(&assembly);
+        let mut changed_assembly = assembly.clone();
+        changed_assembly.layers[1].content = String::from("history changed");
+        changed_assembly.layers[2].content = String::from("user prompt changed");
+
+        let comparison = baseline.compare(&changed_assembly);
+
+        assert!(baseline.matches(&changed_assembly));
+        assert!(comparison.matches);
+        assert_eq!(comparison.baseline_layer_count, 2);
+        assert_eq!(comparison.current_layer_count, 2);
+        assert_eq!(
+            comparison.baseline_fingerprint,
+            comparison.current_fingerprint
+        );
     }
 
     /// Reports a structured mismatch when the assembled context changes after the baseline is captured.

@@ -11,9 +11,52 @@ use crate::provider_capabilities::{
 };
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedPromptPersonalitySelection, normalize_session_transcript_turn_page_size,
+    PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
+    ProjectVulcanCodeConfigurationFile, normalize_session_transcript_turn_page_size,
 };
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
+use std::path::PathBuf;
+use vulcan_prompt_composer::PersonalityCatalog;
+
+/// Loads user-defined prompt personalities for the settings picker.
+/// 为设置下拉框加载用户自定义提示词人格。
+fn load_user_prompt_personality_choices() -> Vec<PromptPersonalityChoice> {
+    let Some(directory) = user_prompt_personality_directory() else {
+        return Vec::new();
+    };
+    let Ok(catalog) = PersonalityCatalog::load_with_directory(&directory) else {
+        return Vec::new();
+    };
+    prompt_personality_choices_from_catalog(&catalog)
+}
+
+/// Converts custom personality catalog entries into settings picker choices.
+/// 将自定义人格目录条目转换为设置下拉选择项。
+fn prompt_personality_choices_from_catalog(
+    catalog: &PersonalityCatalog,
+) -> Vec<PromptPersonalityChoice> {
+    catalog
+        .definitions
+        .values()
+        .filter(|definition| !definition.builtin)
+        .map(|definition| PromptPersonalityChoice {
+            selection: PersistedPromptPersonalitySelection::Named(definition.id.clone()),
+            label: format!("自定义：{}", definition.label),
+        })
+        .collect()
+}
+
+/// Returns the user-level prompt personality resource directory.
+/// 返回用户级提示词人格资源目录。
+fn user_prompt_personality_directory() -> Option<PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join(".vulcan")
+            .join("code")
+            .join("prompt")
+            .join("personalities"),
+    )
+}
 
 impl VulcanWorkbench {
     /// Resolves the remembered initial workbench reasoning preference from persisted configuration and falls back to the shared medium preset when no prior selection exists.
@@ -106,7 +149,7 @@ impl VulcanWorkbench {
     /// Builds the prompt-personality picker choices rendered in prompt settings.
     /// 构建渲染在提示词设置中的人格选择项。
     pub(super) fn prompt_personality_picker_choices(&self) -> Vec<PromptPersonalityChoice> {
-        vec![
+        let mut choices = vec![
             PromptPersonalityChoice {
                 selection: PersistedPromptPersonalitySelection::Default,
                 label: String::from("亲和（默认）"),
@@ -119,7 +162,9 @@ impl VulcanWorkbench {
                 selection: PersistedPromptPersonalitySelection::Disabled,
                 label: String::from("禁用人格"),
             },
-        ]
+        ];
+        choices.extend(load_user_prompt_personality_choices());
+        choices
     }
 
     /// Returns the currently selected prompt-personality picker choice.
@@ -714,6 +759,114 @@ impl VulcanWorkbench {
     pub(super) fn persist_prompt_configuration(&mut self) -> Result<(), String> {
         provider_config::save_configuration_file(&self.provider_configuration)
             .map_err(|error| format!("保存提示词配置失败：{error}"))
+    }
+
+    /// Resolves the workspace path currently used by project-level prompt settings.
+    /// 解析项目级提示词设置当前使用的工作区路径。
+    pub(super) fn current_project_prompt_workspace_path(&self) -> Option<PathBuf> {
+        let workspace_path = self.selected_attachment_workspace_path();
+        let trimmed = workspace_path.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(PathBuf::from(trimmed))
+    }
+
+    /// Reloads the project-level prompt settings draft for the current workspace.
+    /// 为当前工作区重新载入项目级提示词设置草稿。
+    pub(super) fn reload_project_prompt_settings_draft(&mut self) {
+        let Some(workspace_path) = self.current_project_prompt_workspace_path() else {
+            self.project_prompt_settings_draft = ProjectPromptSettingsDraft::default();
+            return;
+        };
+        let workspace_text = workspace_path.display().to_string();
+        match provider_config::load_project_configuration_file(&workspace_path) {
+            Ok(project_config) => {
+                let has_project_override = project_config.prompt.is_some();
+                let effective_prompt = project_config
+                    .prompt
+                    .unwrap_or_else(|| self.provider_configuration.prompt.clone());
+                let notice = if has_project_override {
+                    format!(
+                        "已载入项目配置：{}",
+                        provider_config::project_configuration_file_path(&workspace_path).display()
+                    )
+                } else {
+                    String::from("当前项目未写入覆盖配置，正在使用全局默认提示词设置。")
+                };
+                self.project_prompt_settings_draft =
+                    ProjectPromptSettingsDraft::from_effective_config(
+                        workspace_text,
+                        &effective_prompt,
+                        has_project_override,
+                        notice,
+                    );
+            }
+            Err(error) => {
+                self.project_prompt_settings_draft =
+                    ProjectPromptSettingsDraft::from_effective_config(
+                        workspace_text,
+                        &self.provider_configuration.prompt,
+                        false,
+                        format!("载入项目提示词配置失败：{error}"),
+                    );
+            }
+        }
+    }
+
+    /// Ensures the project prompt draft matches the currently selected workspace.
+    /// 确保项目提示词草稿与当前选中的工作区保持一致。
+    pub(super) fn ensure_project_prompt_settings_draft_current(&mut self) {
+        let current_workspace = self
+            .current_project_prompt_workspace_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        if self.project_prompt_settings_draft.workspace_path != current_workspace {
+            self.reload_project_prompt_settings_draft();
+        }
+    }
+
+    /// Saves the current project-level prompt settings draft and refreshes prompt runtime state.
+    /// 保存当前项目级提示词设置草稿并刷新提示词运行时状态。
+    pub(super) fn save_project_prompt_settings_draft(&mut self) -> Result<(), String> {
+        self.ensure_project_prompt_settings_draft_current();
+        let Some(workspace_path) = self.current_project_prompt_workspace_path() else {
+            return Err(String::from("当前没有可写入项目提示词配置的工作区。"));
+        };
+        let trimmed_prompt_path = self.project_prompt_settings_draft.path.trim();
+        if trimmed_prompt_path.is_empty() {
+            return Err(String::from("项目提示词文件路径不能为空。"));
+        }
+        let normalized_prompt_path = trimmed_prompt_path
+            .trim_start_matches(['/', '\\'])
+            .to_string();
+        let project_prompt = PersistedPromptConfiguration {
+            personality: self.provider_configuration.prompt.personality.clone(),
+            project_prompt_enabled: self.project_prompt_settings_draft.enabled,
+            project_prompt_path: normalized_prompt_path.clone(),
+        };
+        let project_config = ProjectVulcanCodeConfigurationFile {
+            prompt: Some(project_prompt),
+        };
+        provider_config::save_project_configuration_file(&workspace_path, &project_config)?;
+        let normalized_prompt_path_for_cache = normalized_prompt_path.clone();
+        self.project_prompt_settings_draft.path = normalized_prompt_path;
+        self.project_prompt_settings_draft.has_project_override = true;
+        self.project_prompt_settings_draft.notice = format!(
+            "已保存项目提示词配置：{}",
+            provider_config::project_configuration_file_path(&workspace_path).display()
+        );
+        let workspace_path_text = workspace_path.display().to_string();
+        crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_user_prompt_cache(
+            &workspace_path_text,
+            &normalized_prompt_path_for_cache,
+        );
+        crate::agent_runtime::prompt_composer_runtime::invalidate_runtime_prompt_composer_cache_for_reason(
+            vulcan_prompt_composer::PromptInvalidationReason::ProjectPromptFileChanged,
+        );
+        self.refresh_runtime_foundation();
+        self.refresh_prompt_composer_inspector_buffer();
+        Ok(())
     }
 
     /// Returns the currently visible workbench model choices after applying the in-modal filter text.
@@ -2436,6 +2589,47 @@ impl VulcanWorkbench {
                 Message::SelectedMcpServerOAuthAuthorizationRemoved(server_id.clone(), result)
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Prompt configuration helper tests.
+    //! 提示词配置辅助测试。
+
+    use super::*;
+    use std::collections::BTreeMap;
+    use vulcan_prompt_composer::PersonalityDefinition;
+
+    /// Verifies custom personality choices come from user catalog entries only.
+    /// 验证自定义人格选项只来自用户目录条目。
+    #[test]
+    fn prompt_personality_choices_from_catalog_keeps_custom_entries_only() {
+        let builtin = PersonalityDefinition::builtin("friendly", "Friendly", "Friendly text");
+        let custom = PersonalityDefinition {
+            id: String::from("architect"),
+            label: String::from("Architect"),
+            text: String::from("Think like an architect."),
+            fingerprint: 42,
+            builtin: false,
+            source_label: String::from("test"),
+        };
+        let catalog = PersonalityCatalog {
+            default_id: String::from("friendly"),
+            definitions: BTreeMap::from([
+                (builtin.id.clone(), builtin),
+                (custom.id.clone(), custom),
+            ]),
+        };
+
+        let choices = prompt_personality_choices_from_catalog(&catalog);
+
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].label, "自定义：Architect");
+        assert_eq!(
+            choices[0].selection,
+            PersistedPromptPersonalitySelection::Named(String::from("architect"))
+        );
     }
 }
 

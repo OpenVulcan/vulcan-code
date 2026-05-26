@@ -46,12 +46,16 @@ pub use composer::response::PromptAssemblyOutput;
 pub use error::PromptComposerError;
 pub use personality::catalog::{PersonalityCatalog, PersonalityDefinition};
 pub use session::baseline::PromptSessionBaseline;
-pub use session::compaction::PromptCompactionSignal;
+pub use session::compaction::{
+    PromptCompactionSignal, build_context_compaction_developer_segment,
+    build_context_compaction_request_prompt,
+};
 pub use session::delta_state::{ProjectRulesDeltaKind, ProjectRulesDeltaState};
+pub use source::project_prompt::ProjectPromptFileCache;
 pub use source::project_rules::{DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesFileCache};
 pub use source::snapshot::{
-    AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
-    SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
+    AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectPromptSnapshot, ProjectRulesSnapshot,
+    ProviderPromptSnapshot, SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
 };
 pub use source::version::PromptSourceVersion;
 pub use tool_help::registry::{ToolHelpEntry, ToolHelpRegistry};

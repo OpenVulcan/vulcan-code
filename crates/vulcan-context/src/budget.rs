@@ -306,6 +306,45 @@ pub fn build_projected_session_context_budget_snapshot(
     }
 }
 
+/// Applies compaction-anchor baseline validation to one context-budget snapshot.
+/// 将压缩锚点基线校验结果应用到单个上下文预算快照。
+pub fn apply_context_budget_anchor_baseline(
+    mut snapshot: ContextBudgetSnapshot,
+    anchor_budget_fingerprint: Option<&str>,
+    anchor_assembly_fingerprint: Option<&str>,
+    live_assembly_fingerprint: Option<&str>,
+) -> ContextBudgetSnapshot {
+    let mut mismatch_reasons = Vec::new();
+
+    if let Some(previous_budget_fingerprint) = anchor_budget_fingerprint {
+        snapshot.baseline_budget_fingerprint_matches =
+            previous_budget_fingerprint == snapshot.fingerprint;
+        if !snapshot.baseline_budget_fingerprint_matches {
+            mismatch_reasons.push(String::from("预算指纹变化"));
+        }
+    }
+
+    if let (Some(previous_assembly_fingerprint), Some(current_assembly_fingerprint)) =
+        (anchor_assembly_fingerprint, live_assembly_fingerprint)
+    {
+        snapshot.baseline_assembly_fingerprint_matches =
+            previous_assembly_fingerprint == current_assembly_fingerprint;
+        if !snapshot.baseline_assembly_fingerprint_matches {
+            mismatch_reasons.push(String::from("上下文层指纹变化"));
+        }
+    }
+
+    if mismatch_reasons.is_empty() {
+        snapshot.baseline_matches_active_runtime = true;
+        snapshot.baseline_mismatch_reason = None;
+    } else {
+        snapshot.baseline_matches_active_runtime = false;
+        snapshot.baseline_mismatch_reason = Some(mismatch_reasons.join(" · "));
+    }
+
+    snapshot
+}
+
 /// Builds one stable budget fingerprint used by model-switch reconciliation and compaction-anchor invalidation.
 /// 构建供模型切换对齐与压缩锚点失效判断使用的稳定预算指纹。
 pub fn build_context_budget_fingerprint(
@@ -454,5 +493,113 @@ fn estimate_text_tokens(text: &str) -> usize {
     if trimmed.is_empty() {
         return 0;
     }
-    ((trimmed.chars().count() + 3usize) / 4usize).max(1usize)
+    estimate_mixed_language_text_tokens(trimmed).max(1usize)
+}
+
+/// Estimate mixed-language text with CJK characters counted close to one token each.
+/// 按中日韩字符约一字一 Token、ASCII 约四字符一 Token 的方式估算混合文本。
+pub fn estimate_mixed_language_text_tokens(text: &str) -> usize {
+    let mut ascii_run = 0usize;
+    let mut tokens = 0usize;
+    for character in text.chars() {
+        if character.is_ascii() {
+            ascii_run += 1;
+            continue;
+        }
+        if ascii_run > 0 {
+            tokens += (ascii_run + 3usize) / 4usize;
+            ascii_run = 0;
+        }
+        tokens += if is_cjk_character(character) {
+            1usize
+        } else {
+            2usize
+        };
+    }
+    if ascii_run > 0 {
+        tokens += (ascii_run + 3usize) / 4usize;
+    }
+    tokens
+}
+
+/// Return whether one character belongs to the common CJK text ranges.
+/// 返回单个字符是否属于常见中日韩文本范围。
+pub fn is_cjk_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x3040..=0x30FF
+            | 0xAC00..=0xD7AF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x2CEB0..=0x2EBEF
+            | 0x30000..=0x3134F
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    //! Context-budget estimation tests.
+    //! 上下文预算估算测试。
+
+    use super::*;
+
+    /// Verifies Chinese text is estimated close to one token per visible character.
+    /// 验证中文文本按接近每个可见字符一个 Token 估算。
+    #[test]
+    fn estimate_text_tokens_counts_chinese_characters_one_to_one() {
+        assert_eq!(estimate_text_tokens("你好世界"), 4);
+    }
+
+    /// Verifies ASCII text still uses the compact four-character heuristic.
+    /// 验证 ASCII 文本仍使用紧凑的四字符启发式估算。
+    #[test]
+    fn estimate_text_tokens_keeps_ascii_four_to_one() {
+        assert_eq!(estimate_text_tokens("abcdefgh"), 2);
+    }
+
+    /// Verifies provider-observed usage overrides local mixed-language estimates.
+    /// 验证 Provider 实测用量会覆盖本地混合语言估算。
+    #[test]
+    fn calibrated_input_token_estimate_prefers_observed_usage() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: Some(128),
+            output_tokens: Some(8),
+            reasoning_tokens: Some(4),
+            total_tokens: Some(140),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+        };
+
+        assert_eq!(calibrated_input_token_estimate(10, Some(&usage)), 128);
+    }
+
+    /// Verifies anchor validation reports both budget and assembly fingerprint drift.
+    /// 验证锚点校验会同时报告预算与分层上下文指纹漂移。
+    #[test]
+    fn apply_context_budget_anchor_baseline_reports_fingerprint_drift() {
+        let snapshot = ContextBudgetSnapshot {
+            fingerprint: String::from("budget-new"),
+            ..ContextBudgetSnapshot::default()
+        };
+
+        let validated = apply_context_budget_anchor_baseline(
+            snapshot,
+            Some("budget-old"),
+            Some("assembly-old"),
+            Some("assembly-new"),
+        );
+
+        assert!(!validated.baseline_matches_active_runtime);
+        assert!(!validated.baseline_budget_fingerprint_matches);
+        assert!(!validated.baseline_assembly_fingerprint_matches);
+        assert_eq!(
+            validated.baseline_mismatch_reason.as_deref(),
+            Some("预算指纹变化 · 上下文层指纹变化")
+        );
+    }
 }

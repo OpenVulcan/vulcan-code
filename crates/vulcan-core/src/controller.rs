@@ -8,8 +8,8 @@ use crate::tool::{VulcanToolExecutor, VulcanToolPolicy};
 use crate::types::{
     ControllerConfig, ControllerRunResult, ConversationMessage, ConversationPayload,
     ConversationRecord, ConversationSnapshot, CoreError, CoreEvent, CoreEventKind,
-    ProviderTurnDelta, ProviderTurnResponse, ToolInvocationRequest, ToolInvocationResult,
-    TranscriptRecordKind, TranscriptRole,
+    ProviderTurnDelta, ProviderTurnResponse, ProviderUsageSnapshot, ToolInvocationRequest,
+    ToolInvocationResult, TranscriptRecordKind, TranscriptRole,
 };
 use serde_json::{Map as JsonMap, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -57,6 +57,9 @@ pub struct VulcanCoreController {
     /// Local identifier counter used for synthesized message and record identifiers.
     /// 用于合成消息与记录标识的本地递增计数器。
     local_id_counter: u64,
+    /// Last successful provider usage captured during the current controller run.
+    /// 当前控制器运行期间捕获到的最近一次成功 Provider 用量。
+    last_successful_provider_usage: Option<ProviderUsageSnapshot>,
 }
 
 /// Collects provider-stream deltas during one request so the controller can apply them in order after the turn finishes.
@@ -87,6 +90,7 @@ impl VulcanCoreController {
             last_request_snapshot: None,
             events: Vec::new(),
             phase: ControllerPhase::Idle,
+            last_successful_provider_usage: None,
         }
     }
 
@@ -107,12 +111,19 @@ impl VulcanCoreController {
     pub fn replace_snapshot(&mut self, snapshot: ConversationSnapshot) {
         self.local_id_counter = derive_initial_local_id_counter(&snapshot);
         self.snapshot = snapshot;
+        self.last_successful_provider_usage = None;
     }
 
     /// Returns the latest captured request snapshot if one exists.
     /// 返回最近一次捕获到的请求快照（如果存在）。
     pub fn last_request_snapshot(&self) -> Option<&Value> {
         self.last_request_snapshot.as_ref()
+    }
+
+    /// Returns the most recent successful provider usage observed during the current controller run.
+    /// 返回当前控制器运行期间观测到的最近一次成功 Provider 用量。
+    pub fn last_successful_provider_usage(&self) -> Option<&ProviderUsageSnapshot> {
+        self.last_successful_provider_usage.as_ref()
     }
 
     /// Returns the current coarse-grained controller phase.
@@ -344,6 +355,10 @@ impl VulcanCoreController {
                 self.record_output(response.assistant_text.clone());
             }
 
+            if let Some(usage) = response.usage.clone() {
+                self.last_successful_provider_usage = Some(usage);
+            }
+
             let assistant_message_id = self.append_assistant_turn(&response);
             self.refresh_continuation(&response);
 
@@ -425,6 +440,10 @@ impl VulcanCoreController {
             let (response, deltas) = self.execute_provider_turn_streaming(adapter).await?;
             provider_turns_executed += 1;
             self.apply_provider_turn_deltas(&deltas);
+
+            if let Some(usage) = response.usage.clone() {
+                self.last_successful_provider_usage = Some(usage);
+            }
 
             let assistant_message_id = self.append_assistant_turn(&response);
             self.refresh_continuation(&response);
@@ -795,8 +814,8 @@ mod tests {
     use crate::provider::{VulcanProviderDeltaSink, VulcanStreamingProviderAdapter};
     use crate::tool::{AllowAllToolPolicy, ExactToolSetPolicy};
     use crate::types::{
-        ConversationPayload, ConversationToolCall, ProviderContinuation, ProviderRequestSnapshot,
-        ProviderRequestToolSchema, ProviderTurnDelta,
+        ConversationPayload, ConversationToolCall, ProviderContinuation, ProviderPromptLayers,
+        ProviderRequestSnapshot, ProviderRequestToolSchema, ProviderTurnDelta,
     };
     use async_trait::async_trait;
     use std::collections::{BTreeMap, VecDeque};

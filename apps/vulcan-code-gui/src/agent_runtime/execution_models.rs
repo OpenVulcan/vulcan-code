@@ -9,8 +9,9 @@ use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel}
 use crate::provider_config::{PersistedPromptConfiguration, PersistedPromptPersonalitySelection};
 use serde_json::Value;
 use vulcan_context::{ContextAssembly, ContextBaseline};
-use vulcan_core::types::ConversationAttachment;
-use vulcan_core::types::CoreEvent as CoreControllerEvent;
+use vulcan_core::types::{
+    ConversationAttachment, CoreEvent as CoreControllerEvent, ProviderUsageSnapshot,
+};
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 
 /// Minimal execution request captured from the current GUI state.
@@ -380,6 +381,9 @@ pub struct ExecutionRunReport {
     /// Number of real provider requests dispatched while this run was active.
     /// 本次运行期间真实发出的 Provider 请求次数。
     pub provider_request_count: usize,
+    /// Latest successful provider usage captured by this run, excluding failed or aborted calls.
+    /// 本次运行捕获到的最近一次成功 Provider 用量，不包含失败或中止调用。
+    pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     /// Successful MCP discovery summary rows collected during the run.
     /// 运行期间收集到的 MCP 成功发现摘要行集合。
     pub mcp_discovery_rows: Vec<String>,
@@ -411,6 +415,7 @@ impl ExecutionRunReport {
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
         controller_events: Vec<CoreControllerEvent>,
+        last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     ) -> Self {
         Self {
             session_id,
@@ -419,6 +424,7 @@ impl ExecutionRunReport {
             thinking_output,
             conversation_state,
             provider_request_count,
+            last_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -433,6 +439,7 @@ impl ExecutionRunReport {
         session_id: SessionId,
         preparation: Option<ExecutionPreparation>,
         provider_request_count: usize,
+        last_successful_provider_usage: Option<ProviderUsageSnapshot>,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -447,6 +454,7 @@ impl ExecutionRunReport {
             thinking_output: None,
             conversation_state,
             provider_request_count,
+            last_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,

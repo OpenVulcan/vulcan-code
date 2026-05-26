@@ -14,6 +14,7 @@ pub(crate) fn build_preparation_failure_report(
         session_id,
         None,
         0,
+        None,
         Vec::new(),
         Vec::new(),
         Vec::new(),

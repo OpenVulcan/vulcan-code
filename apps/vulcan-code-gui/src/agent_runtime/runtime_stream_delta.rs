@@ -12,7 +12,10 @@ use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use std::mem;
 use vulcan_core::controller::VulcanCoreController;
-use vulcan_core::types::ProviderRequestSnapshot as CoreProviderRequestSnapshot;
+use vulcan_core::types::{
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
+};
 
 /// Owns the mutable runtime-stream loop state that changes while provider deltas are consumed.
 /// 持有在消费 Provider 增量期间持续变化的运行时流式循环状态。
@@ -41,6 +44,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Final canonical conversation state returned by the provider loop, if it has arrived.
     /// 如果已经收到，则保存 Provider 循环返回的最终规范会话状态。
     final_conversation_state: Option<SessionConversationState>,
+    /// Latest successful provider usage emitted by the current provider loop.
+    /// 当前 Provider 循环发出的最近一次成功 Provider 用量。
+    last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
     /// Terminal provider error captured from the stream, if one has occurred.
     /// 如果已经发生，则保存从流中捕获到的终态 Provider 错误。
     terminal_error: Option<String>,
@@ -59,6 +65,7 @@ impl RuntimeStreamDeltaState {
             latest_request_snapshot: None,
             provider_request_count: 0,
             final_conversation_state: None,
+            last_successful_provider_usage: None,
             terminal_error: None,
         }
     }
@@ -103,6 +110,14 @@ impl RuntimeStreamDeltaState {
     /// 提取并返回从流中捕获到的最终规范会话状态。
     pub(crate) fn take_final_conversation_state(&mut self) -> Option<SessionConversationState> {
         self.final_conversation_state.take()
+    }
+
+    /// Drains and returns the latest successful provider usage captured during this stream.
+    /// 提取并返回本次流式执行期间捕获到的最近一次成功 Provider 用量。
+    pub(crate) fn take_last_successful_provider_usage(
+        &mut self,
+    ) -> Option<CoreProviderUsageSnapshot> {
+        self.last_successful_provider_usage.take()
     }
 
     /// Drains and returns the terminal stream error, if one has been captured.
@@ -223,8 +238,14 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             state.process_runtime_event(session_id, event)
         }
-        Ok(ProviderStreamDelta::FinalConversationState(conversation_state)) => {
+        Ok(ProviderStreamDelta::FinalConversationState(
+            conversation_state,
+            last_successful_provider_usage,
+        )) => {
             state.final_conversation_state = Some(conversation_state);
+            if let Some(usage) = last_successful_provider_usage {
+                state.last_successful_provider_usage = Some(usage);
+            }
             Vec::new()
         }
         Err(error) => {
@@ -352,6 +373,7 @@ mod tests {
             &mut state,
             Ok(ProviderStreamDelta::FinalConversationState(
                 SessionConversationState::default(),
+                None,
             )),
         );
         assert!(final_state_events.is_empty());

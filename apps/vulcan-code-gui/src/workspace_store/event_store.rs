@@ -140,6 +140,9 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// Persisted latest provider usage snapshot.
     /// 持久化最近一次 Provider 用量快照。
     pub last_provider_usage: Option<ProviderUsageSnapshot>,
+    /// Persisted latest successful provider usage snapshot.
+    /// 持久化最近一次成功 Provider 用量快照。
+    pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     /// Update timestamp captured for the runtime-state cache.
     /// 为运行时状态缓存捕获的更新时间戳。
     pub updated_at: String,
@@ -684,6 +687,7 @@ fn runtime_state_to_store_document(
         ui_state: runtime_state.ui_state.clone(),
         continuation: runtime_state.conversation_state.continuation.clone(),
         last_provider_usage: runtime_state.last_provider_usage.clone(),
+        last_successful_provider_usage: runtime_state.last_successful_provider_usage.clone(),
         updated_at: runtime_state.updated_at.clone(),
     }
 }

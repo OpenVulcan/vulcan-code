@@ -1182,6 +1182,20 @@ pub fn workbench_context_usage_tooltip_style(theme: &Theme) -> container::Style 
     }
 }
 
+/// Returns the transparent tooltip wrapper style that prevents a second square backing layer.
+/// 返回透明提示包装层样式，避免圆角提示卡外再出现一层直角背景。
+pub fn workbench_context_usage_tooltip_wrapper_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color::TRANSPARENT)),
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the square preview-tile shell style used by staged composer attachments.
 /// 返回已暂存提示词附件使用的方形预览格外壳样式。
 pub fn workbench_composer_attachment_tile_style(theme: &Theme) -> container::Style {

@@ -1,4 +1,4 @@
-use crate::cache::keys::bundle_cache_key;
+use crate::cache::keys::{bundle_cache_key, node_cache_key};
 use crate::cache::memory::MemoryPromptCache;
 use crate::composer::diagnostics::PromptComposerDiagnostics;
 use crate::source::hashing::stable_text_hash;
@@ -14,7 +14,7 @@ pub fn build_tool_help_bundle(
     cache: &MemoryPromptCache,
     diagnostics: &mut PromptComposerDiagnostics,
 ) -> Vec<PromptSegment> {
-    let bundle_fingerprints = tool_catalog
+    let tool_inputs = tool_catalog
         .tools
         .iter()
         .map(|tool| {
@@ -23,14 +23,19 @@ pub fn build_tool_help_bundle(
                 .get(&tool.id)
                 .map(|entry| entry.fingerprint)
                 .unwrap_or(0);
-            stable_text_hash(&format!(
+            let fingerprint = stable_text_hash(&format!(
                 "{}|{}|{}|{}",
                 tool.id,
                 tool.schema_fingerprint.as_deref().unwrap_or_default(),
                 inline_help,
                 registry_help
-            ))
+            ));
+            (tool, fingerprint)
         })
+        .collect::<Vec<_>>();
+    let bundle_fingerprints = tool_inputs
+        .iter()
+        .map(|(_, fingerprint)| *fingerprint)
         .collect::<Vec<_>>();
     let cache_key = bundle_cache_key("tool_help", &bundle_fingerprints);
     if let Some(segments) = cache.get_bundle(&cache_key) {
@@ -40,7 +45,15 @@ pub fn build_tool_help_bundle(
     diagnostics.record_bundle_cache(&cache_key, false);
 
     let mut segments = Vec::new();
-    for tool in &tool_catalog.tools {
+    for (tool, fingerprint) in tool_inputs {
+        let node_cache_key = node_cache_key("tool_help", fingerprint);
+        if let Some(segment) = cache.get_node(&node_cache_key) {
+            diagnostics.record_node_cache(&node_cache_key, true);
+            segments.push(segment);
+            continue;
+        }
+        diagnostics.record_node_cache(&node_cache_key, false);
+
         let inline_help = tool
             .help_text
             .as_deref()
@@ -66,17 +79,17 @@ pub fn build_tool_help_bundle(
                 tool.id, tool.id, trimmed
             );
             let node_id = format!("tool_help_{}", sanitize_tool_help_node_id(&tool.id));
-            segments.push(
-                PromptSegment::new(
-                    node_id,
-                    cache_key.clone(),
-                    PromptNodeKind::ToolMetadata,
-                    PromptTarget::ToolMetadata,
-                    format!("Tool Help {}", tool.id),
-                    body,
-                )
-                .with_source_label(source_label),
-            );
+            let segment = PromptSegment::new(
+                node_id,
+                node_cache_key,
+                PromptNodeKind::ToolMetadata,
+                PromptTarget::ToolMetadata,
+                format!("Tool Help {}", tool.id),
+                body,
+            )
+            .with_source_label(source_label);
+            cache.put_node(segment.clone());
+            segments.push(segment);
         }
     }
 

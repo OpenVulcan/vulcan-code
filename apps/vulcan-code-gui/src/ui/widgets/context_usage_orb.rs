@@ -93,6 +93,7 @@ pub fn view_context_usage_orb<Message: 'static>(
         build_context_usage_orb_tooltip(props.tooltip_title, props.tooltip_rows),
         tooltip::Position::Top,
     )
+    .style(style::workbench_context_usage_tooltip_wrapper_style)
     .into()
 }
 

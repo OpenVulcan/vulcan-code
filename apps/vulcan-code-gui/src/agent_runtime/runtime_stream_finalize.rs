@@ -13,6 +13,7 @@ use crate::model::SessionId;
 use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
 use vulcan_core::types::{
     CoreEvent as CoreControllerEvent, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
 /// Applies the latest request snapshot to the mutable preparation object when one is available.
@@ -74,6 +75,7 @@ pub(crate) fn build_failure_execution_report(
     session_id: SessionId,
     preparation: ExecutionPreparation,
     provider_request_count: usize,
+    last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
     mcp_discovery_rows: Vec<String>,
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
@@ -85,6 +87,7 @@ pub(crate) fn build_failure_execution_report(
         session_id,
         Some(preparation),
         provider_request_count,
+        last_successful_provider_usage,
         mcp_discovery_rows,
         mcp_discovery_errors,
         warnings,
@@ -107,6 +110,7 @@ pub(crate) fn build_success_execution_report(
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
     controller_events: Vec<CoreControllerEvent>,
+    last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
 ) -> ExecutionRunReport {
     ExecutionRunReport::success(
         session_id,
@@ -119,6 +123,7 @@ pub(crate) fn build_success_execution_report(
         mcp_discovery_errors,
         warnings,
         controller_events,
+        last_successful_provider_usage,
     )
 }
 
@@ -139,6 +144,7 @@ pub(crate) fn build_failure_terminal_events(
     }
     apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
     let last_safe_conversation_state = stream_state.take_final_conversation_state();
+    let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
     stream_state.controller_mut().mark_failed(error.clone());
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
@@ -149,6 +155,7 @@ pub(crate) fn build_failure_terminal_events(
             session_id,
             preparation,
             stream_state.provider_request_count(),
+            last_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -178,6 +185,7 @@ pub(crate) fn build_success_terminal_events(
     apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
 
     let normalized_output = normalize_assistant_output(stream_state.take_assistant_output());
+    let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
         event: build_output_completed_event(&normalized_output),
@@ -194,6 +202,7 @@ pub(crate) fn build_success_terminal_events(
             mcp_discovery_errors,
             warnings,
             stream_state.controller().events().to_vec(),
+            last_successful_provider_usage,
         ),
     ));
     events
@@ -343,6 +352,14 @@ mod tests {
             &mut stream_state,
             Ok(ProviderStreamDelta::FinalConversationState(
                 SessionConversationState::default(),
+                Some(ProviderUsageSnapshot {
+                    input_tokens: Some(100),
+                    output_tokens: Some(20),
+                    reasoning_tokens: None,
+                    total_tokens: Some(120),
+                    cached_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                }),
             )),
         );
 
@@ -364,6 +381,10 @@ mod tests {
                 && report.is_success()
                 && report.assistant_output.as_deref() == Some("最终答案")
                 && report.conversation_state.is_some()
+                && report
+                    .last_successful_provider_usage
+                    .as_ref()
+                    .and_then(|usage| usage.total_tokens) == Some(120)
                 && report.mcp_discovery_rows == vec![String::from("mcp-row")]
                 && report.warnings == vec![String::from("warning")]
         ));
@@ -393,6 +414,7 @@ mod tests {
             &mut stream_state,
             Ok(ProviderStreamDelta::FinalConversationState(
                 SessionConversationState::default(),
+                None,
             )),
         );
 

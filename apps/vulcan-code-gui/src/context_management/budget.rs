@@ -12,6 +12,7 @@ use vulcan_context::budget::{
 pub use vulcan_context::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
     ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy,
+    apply_context_budget_anchor_baseline,
 };
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,

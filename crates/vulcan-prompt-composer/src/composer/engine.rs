@@ -1,3 +1,4 @@
+use crate::cache::keys::node_cache_key;
 use crate::cache::memory::MemoryPromptCache;
 use crate::composer::request::PromptAssemblyInput;
 use crate::composer::resources::PromptComposerResourceConfig;
@@ -5,6 +6,7 @@ use crate::composer::response::PromptAssemblyOutput;
 use crate::error::PromptComposerError;
 use crate::node::render_node;
 use crate::personality::catalog::PersonalityCatalog;
+use crate::source::hashing::stable_text_hash;
 use crate::strategy::compaction::ContextCompactionStrategy;
 use crate::strategy::primary::PrimaryAgentStrategy;
 use crate::strategy::subagent_clone::SubagentCloneStrategy;
@@ -59,6 +61,15 @@ impl PromptComposerEngine {
     pub fn with_resources(
         resources: &PromptComposerResourceConfig,
     ) -> Result<Self, PromptComposerError> {
+        Self::with_resources_and_cache(resources, MemoryPromptCache::new())
+    }
+
+    /// Build one engine from optional resource directories and a reusable cache.
+    /// 基于可选资源目录与可复用缓存构建一个引擎。
+    pub fn with_resources_and_cache(
+        resources: &PromptComposerResourceConfig,
+        cache: MemoryPromptCache,
+    ) -> Result<Self, PromptComposerError> {
         let personality_catalog = match resources.personality_directory.as_deref() {
             Some(directory) => PersonalityCatalog::load_with_directory(directory)?,
             None => PersonalityCatalog::built_in(),
@@ -67,11 +78,7 @@ impl PromptComposerEngine {
             Some(directory) => ToolHelpRegistry::load_with_directory(directory)?,
             None => ToolHelpRegistry::built_in(),
         };
-        Ok(Self::new(
-            MemoryPromptCache::new(),
-            personality_catalog,
-            tool_help_registry,
-        ))
+        Ok(Self::new(cache, personality_catalog, tool_help_registry))
     }
 
     /// Assemble one structured prompt output.
@@ -117,35 +124,35 @@ impl PromptComposerEngine {
             if custom_segment.trim().is_empty() {
                 continue;
             }
-            push_segment(
-                &mut output,
-                PromptSegment::new(
-                    format!("custom_developer_{index}"),
-                    format!("custom:developer:{index}"),
-                    crate::types::PromptNodeKind::Developer,
-                    PromptTarget::Developer,
-                    format!("Custom Developer Segment {index}"),
-                    custom_segment.clone(),
-                )
-                .with_source_label(format!("Runtime custom developer segment {index}")),
+            let segment = build_cached_custom_segment(
+                &self.cache,
+                &mut output.diagnostics,
+                "custom_developer",
+                index,
+                crate::types::PromptNodeKind::Developer,
+                PromptTarget::Developer,
+                format!("Custom Developer Segment {index}"),
+                custom_segment,
+                format!("Runtime custom developer segment {index}"),
             );
+            push_segment(&mut output, segment);
         }
         for (index, custom_segment) in input.custom_user_segments.iter().enumerate() {
             if custom_segment.trim().is_empty() {
                 continue;
             }
-            push_segment(
-                &mut output,
-                PromptSegment::new(
-                    format!("custom_user_{index}"),
-                    format!("custom:user:{index}"),
-                    crate::types::PromptNodeKind::User,
-                    PromptTarget::User,
-                    format!("Custom User Segment {index}"),
-                    custom_segment.clone(),
-                )
-                .with_source_label(format!("Runtime custom user segment {index}")),
+            let segment = build_cached_custom_segment(
+                &self.cache,
+                &mut output.diagnostics,
+                "custom_user",
+                index,
+                crate::types::PromptNodeKind::User,
+                PromptTarget::User,
+                format!("Custom User Segment {index}"),
+                custom_segment,
+                format!("Runtime custom user segment {index}"),
             );
+            push_segment(&mut output, segment);
         }
 
         Ok(output)
@@ -179,4 +186,38 @@ fn push_segment(output: &mut PromptAssemblyOutput, segment: PromptSegment) {
         PromptTarget::ToolMetadata => output.tool_metadata_segments.push(segment),
         PromptTarget::DiagnosticsOnly => {}
     }
+}
+
+/// Build one cached runtime-provided custom segment.
+/// 构建一个带缓存的运行时自定义片段。
+fn build_cached_custom_segment(
+    cache: &MemoryPromptCache,
+    diagnostics: &mut crate::composer::diagnostics::PromptComposerDiagnostics,
+    namespace: &str,
+    index: usize,
+    kind: crate::types::PromptNodeKind,
+    target: PromptTarget,
+    title: impl Into<String>,
+    body: &str,
+    source_label: impl Into<String>,
+) -> PromptSegment {
+    let fingerprint = stable_text_hash(body);
+    let cache_key = node_cache_key(namespace, fingerprint);
+    let source_label = source_label.into();
+    if let Some(segment) = cache.get_node(&cache_key) {
+        diagnostics.record_node_cache(&cache_key, true);
+        return segment.with_source_label(source_label);
+    }
+    diagnostics.record_node_cache(&cache_key, false);
+    let segment = PromptSegment::new(
+        format!("{namespace}_{index}"),
+        cache_key,
+        kind,
+        target,
+        title,
+        body.to_string(),
+    )
+    .with_source_label(source_label);
+    cache.put_node(segment.clone());
+    segment
 }

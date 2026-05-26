@@ -735,6 +735,10 @@ pub async fn load_workspace_snapshot(
         BTreeMap::new();
     for row in runtime_state_rows {
         let session_id = parse_session_id(&row.session_id)?;
+        let provider_usage = row
+            .provider_usage_json
+            .as_deref()
+            .and_then(parse_provider_usage_from_json);
         let entry = SessionRuntimeStateEntry {
             active_agent_id: row.active_agent_id,
             active_provider_id: row.active_provider_id,
@@ -756,10 +760,8 @@ pub async fn load_workspace_snapshot(
                 row.conversation_state_json,
                 row.continuation_json,
             ),
-            last_provider_usage: row
-                .provider_usage_json
-                .as_deref()
-                .and_then(parse_provider_usage_from_json),
+            last_provider_usage: provider_usage.clone(),
+            last_successful_provider_usage: provider_usage,
             updated_at: row.updated_at,
         };
 
@@ -1347,6 +1349,10 @@ fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompaction
 /// Converts one persisted runtime row into the in-memory runtime-state shape.
 /// 将一条持久化运行时行转换为内存中的运行时状态结构。
 fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRuntimeStateEntry {
+    let provider_usage = row
+        .provider_usage_json
+        .as_deref()
+        .and_then(parse_provider_usage_from_json);
     SessionRuntimeStateEntry {
         active_agent_id: row.active_agent_id,
         active_provider_id: row.active_provider_id,
@@ -1368,10 +1374,8 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             row.conversation_state_json,
             row.continuation_json,
         ),
-        last_provider_usage: row
-            .provider_usage_json
-            .as_deref()
-            .and_then(parse_provider_usage_from_json),
+        last_provider_usage: provider_usage.clone(),
+        last_successful_provider_usage: provider_usage,
         updated_at: row.updated_at,
     }
 }

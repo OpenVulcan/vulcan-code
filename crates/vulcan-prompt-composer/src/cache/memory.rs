@@ -1,19 +1,19 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::cache::invalidation::PromptInvalidationEvent;
 use crate::types::PromptSegment;
 
 /// Process-local prompt cache.
 /// 进程内提示词缓存。
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryPromptCache {
     /// Cached node outputs keyed by node cache key.
     /// 按节点缓存键存储的节点输出缓存。
-    node_entries: RwLock<HashMap<String, PromptSegment>>,
+    node_entries: Arc<RwLock<HashMap<String, PromptSegment>>>,
     /// Cached bundle outputs keyed by bundle cache key.
     /// 按组合缓存键存储的组合输出缓存。
-    bundle_entries: RwLock<HashMap<String, Vec<PromptSegment>>>,
+    bundle_entries: Arc<RwLock<HashMap<String, Vec<PromptSegment>>>>,
 }
 
 impl MemoryPromptCache {

@@ -13,3 +13,4 @@ workspace = true
 serde_json = { workspace = true }
 vulcan-context.workspace = true
 vulcan-core.workspace = true
+vulcan-prompt-composer.workspace = true

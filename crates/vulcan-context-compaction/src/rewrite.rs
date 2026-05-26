@@ -5,7 +5,7 @@ use serde_json::Value;
 use vulcan_context::{
     ContextCompactionPolicy, SessionConversationMessage, SessionConversationPayload,
     SessionConversationRecord, SessionConversationState, SessionMessageKind,
-    SessionMessageRecordKind,
+    SessionMessageRecordKind, estimate_mixed_language_text_tokens,
 };
 use vulcan_core::types::ConversationAttachment;
 
@@ -290,7 +290,7 @@ fn estimate_compaction_text_tokens(text: &str) -> usize {
     if trimmed.is_empty() {
         return 0;
     }
-    ((trimmed.chars().count() + 3usize) / 4usize).max(1usize)
+    estimate_mixed_language_text_tokens(trimmed).max(1usize)
 }
 
 /// Returns whether one older record should survive record-level compaction.

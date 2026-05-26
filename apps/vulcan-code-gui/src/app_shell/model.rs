@@ -894,6 +894,9 @@ pub struct SessionRuntimeStateEntry {
     /// Latest provider usage snapshot retained for budget calibration across turns.
     /// 为跨轮预算校准保留的最近一次 Provider 用量快照。
     pub last_provider_usage: Option<ProviderUsageSnapshot>,
+    /// Latest successful provider usage snapshot captured from the final real provider turn.
+    /// 从最终真实 Provider 回合中捕获到的最近一次成功用量快照。
+    pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,

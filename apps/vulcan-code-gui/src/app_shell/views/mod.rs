@@ -38,6 +38,12 @@ fn prompt_composer_inspector_layer_preview(text: &str) -> String {
     format!("{}…", preview.chars().take(180).collect::<String>())
 }
 
+/// Formats one prompt-composer fingerprint for compact diagnostic display.
+/// 为紧凑诊断展示格式化一个提示词组合指纹。
+fn prompt_composer_inspector_fingerprint(fingerprint: u64) -> String {
+    format!("{fingerprint:016x}")
+}
+
 /// Extracts one short summary preview from compaction metadata or the summary body as a fallback.
 /// 从压缩元数据或摘要正文中提取一条短预览，元数据缺失时再回退正文。
 fn composer_context_anchor_summary_preview(message: &SessionMessageEntry) -> String {
@@ -294,6 +300,15 @@ fn prompt_resource_watch_stream(
                 recursive: false,
             });
         }
+        if !workspace_path.trim().is_empty() {
+            watch_paths.push(vulcan_file_watcher::live::LiveWatchPath {
+                path: std::path::PathBuf::from(&workspace_path)
+                    .join(".vulcan")
+                    .join("code")
+                    .join("config.json"),
+                recursive: false,
+            });
+        }
         if watch_paths.is_empty() {
             return;
         }
@@ -307,13 +322,41 @@ fn prompt_resource_watch_stream(
                 PROMPT_RESOURCE_WATCH_THROTTLE_INTERVAL,
             );
 
-            while rx.recv().await.is_some() {
+            while let Some(event) = rx.recv().await {
+                let project_config_path = (!workspace_path.trim().is_empty()).then(|| {
+                    std::path::PathBuf::from(&workspace_path)
+                        .join(".vulcan")
+                        .join("code")
+                        .join("config.json")
+                });
+                let kind = prompt_resource_watch_kind_for_paths(
+                    &event.paths,
+                    project_prompt_full_path.as_deref(),
+                    project_config_path.as_deref(),
+                );
                 yield Message::PromptResourcesWatchChanged {
                     workspace_path: workspace_path.clone(),
+                    kind,
                 };
             }
         }
     })
+}
+
+/// Classifies prompt-resource watch paths into the narrowest cache invalidation kind.
+/// 将提示词资源监听路径分类为最窄的缓存失效类别。
+fn prompt_resource_watch_kind_for_paths(
+    paths: &[std::path::PathBuf],
+    project_prompt_path: Option<&std::path::Path>,
+    project_config_path: Option<&std::path::Path>,
+) -> PromptResourceWatchKind {
+    if project_prompt_path.is_some_and(|target| paths.iter().any(|path| path == target)) {
+        return PromptResourceWatchKind::ProjectPrompt;
+    }
+    if project_config_path.is_some_and(|target| paths.iter().any(|path| path == target)) {
+        return PromptResourceWatchKind::ProjectPromptConfig;
+    }
+    PromptResourceWatchKind::UserPromptResources
 }
 
 impl VulcanWorkbench {
@@ -3918,7 +3961,7 @@ impl VulcanWorkbench {
             tooltip_title: String::from("上下文占用"),
             tooltip_rows: self.composer_context_usage_diagnostic_rows(),
             tone,
-            diameter: 40.0,
+            diameter: 34.0,
         }
     }
 
@@ -3936,11 +3979,6 @@ impl VulcanWorkbench {
         let mut request_breakdown_rows = self.composer_context_layer_usage_rows();
         let mut diagnostic_rows = Vec::new();
 
-        diagnostic_rows.push(format!(
-            "当前占用（输入）：{:.0}%",
-            self.context_usage.clamp(0.0, 100.0)
-        ));
-
         if let Some(context_budget) = context_budget {
             let has_observed_usage = context_budget.observed_usage.is_some();
             let input_source_label = if has_observed_usage {
@@ -3948,20 +3986,19 @@ impl VulcanWorkbench {
             } else {
                 "本地估算"
             };
-            let total_source_label = if has_observed_usage {
-                "实测输入+预留"
-            } else {
-                "估算输入+预留"
-            };
             let status_label = match context_budget.severity {
                 ContextBudgetSeverity::Healthy => "正常",
                 ContextBudgetSeverity::Warning => "预警",
                 ContextBudgetSeverity::CompactSoon => "建议压缩",
                 ContextBudgetSeverity::Overflow => "预算溢出",
             };
-            diagnostic_rows.push(format!("状态：{}", status_label));
             diagnostic_rows.push(format!(
-                "输入预算（{}）：{}",
+                "输入占用：{:.0}% · {}",
+                self.context_usage.clamp(0.0, 100.0),
+                status_label
+            ));
+            diagnostic_rows.push(format!(
+                "输入窗口（{}）：{}",
                 input_source_label,
                 context_budget.usage_label()
             ));
@@ -3976,13 +4013,9 @@ impl VulcanWorkbench {
                 context_budget.reserved_reasoning_tokens,
                 context_budget.reserved_compaction_tokens
             ));
-            diagnostic_rows.push(format!(
-                "端到端占用（{}）：{} tokens",
-                total_source_label, context_budget.estimated_total_tokens
-            ));
             if !context_budget.baseline_matches_active_runtime {
                 diagnostic_rows.push(format!(
-                    "恢复状态：基线失配（{}），已回退完整上下文并等待新锚点。",
+                    "恢复：基线失配（{}），已回退完整上下文。",
                     context_budget
                         .baseline_mismatch_reason
                         .as_deref()
@@ -4030,16 +4063,16 @@ impl VulcanWorkbench {
                         )
                     })
             } else if runtime_state.last_compaction_id.is_some() {
-                String::from("压缩锚点：已建立")
+                String::from("压缩状态：已使用摘要前文")
             } else {
-                String::from("压缩锚点：尚未建立")
+                String::from("压缩状态：尚未触发")
             };
             diagnostic_rows.push(anchor_row);
         }
 
         if let Some(preparation) = preparation {
             if let Some(context_baseline) = preparation.context_baseline.as_ref() {
-                diagnostic_rows.push(format!("当前基线：{} 层", context_baseline.layer_count));
+                diagnostic_rows.push(format!("上下文层：{} 层", context_baseline.layer_count));
             }
         }
 
@@ -4052,47 +4085,47 @@ impl VulcanWorkbench {
         match self.visible_context_budget_snapshot.as_ref() {
             Some(context_budget) if !context_budget.baseline_matches_active_runtime => {
                 ContextUsageOrbTone {
-                    background: iced::color!(0x9A3412),
-                    border: iced::color!(0xFECBA1),
-                    track: iced::color!(0xFECBA1),
+                    background: iced::color!(0x111827),
+                    border: iced::color!(0xFDBA74),
+                    track: iced::color!(0x334155),
                     progress: iced::color!(0x60A5FA),
                     text_primary: Color::WHITE,
                 }
             }
             Some(context_budget) => match context_budget.severity {
                 ContextBudgetSeverity::Healthy => ContextUsageOrbTone {
-                    background: iced::color!(0x1F7A5C),
-                    border: iced::color!(0xA7F3D0),
-                    track: iced::color!(0x6EE7B7),
+                    background: iced::color!(0x111827),
+                    border: iced::color!(0x38BDF8),
+                    track: iced::color!(0x334155),
                     progress: iced::color!(0x60A5FA),
                     text_primary: Color::WHITE,
                 },
                 ContextBudgetSeverity::Warning => ContextUsageOrbTone {
-                    background: iced::color!(0xA16207),
+                    background: iced::color!(0x111827),
                     border: iced::color!(0xFDE68A),
-                    track: iced::color!(0xFCD34D),
+                    track: iced::color!(0x334155),
                     progress: iced::color!(0x60A5FA),
                     text_primary: Color::WHITE,
                 },
                 ContextBudgetSeverity::CompactSoon => ContextUsageOrbTone {
-                    background: iced::color!(0xB45309),
+                    background: iced::color!(0x111827),
                     border: iced::color!(0xFDBA74),
-                    track: iced::color!(0xFB923C),
+                    track: iced::color!(0x334155),
                     progress: iced::color!(0x60A5FA),
                     text_primary: Color::WHITE,
                 },
                 ContextBudgetSeverity::Overflow => ContextUsageOrbTone {
-                    background: iced::color!(0xB42318),
+                    background: iced::color!(0x111827),
                     border: iced::color!(0xFDA29B),
-                    track: iced::color!(0xFEA3B4),
+                    track: iced::color!(0x334155),
                     progress: iced::color!(0x60A5FA),
                     text_primary: Color::WHITE,
                 },
             },
             None => ContextUsageOrbTone {
-                background: iced::color!(0x475467),
-                border: iced::color!(0xD0D5DD),
-                track: iced::color!(0x98A2B3),
+                background: iced::color!(0x111827),
+                border: iced::color!(0x64748B),
+                track: iced::color!(0x334155),
                 progress: iced::color!(0x60A5FA),
                 text_primary: Color::WHITE,
             },
@@ -7558,6 +7591,27 @@ impl VulcanWorkbench {
         let prompt_config = &self.provider_configuration.prompt;
         let project_prompt_path = prompt_config.project_prompt_path.clone();
         let personality_summary = prompt_config.personality.label();
+        let project_draft = &self.project_prompt_settings_draft;
+        let project_config_path = self
+            .current_project_prompt_workspace_path()
+            .map(|workspace| provider_config::project_configuration_file_path(&workspace))
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| String::from("当前没有可用工作区"));
+        let project_prompt_full_path = if project_draft.workspace_path.trim().is_empty()
+            || project_draft.path.trim().is_empty()
+        {
+            String::from("当前没有可用项目提示词文件")
+        } else {
+            std::path::PathBuf::from(&project_draft.workspace_path)
+                .join(project_draft.path.trim().trim_start_matches(['/', '\\']))
+                .display()
+                .to_string()
+        };
+        let override_summary = if project_draft.has_project_override {
+            "当前项目：已写入覆盖配置"
+        } else {
+            "当前项目：未写入覆盖配置，使用全局默认"
+        };
 
         container(
             column![
@@ -7566,6 +7620,8 @@ impl VulcanWorkbench {
                     "这里控制实际请求前的提示词组合方式；人格、项目级提示词会进入下一次 API 请求。"
                 )
                 .size(12),
+                rule::horizontal(1),
+                text("全局默认").size(14),
                 text("人格").size(12),
                 pick_list(
                     self.prompt_personality_picker_choices(),
@@ -7576,13 +7632,36 @@ impl VulcanWorkbench {
                 .placeholder("选择人格"),
                 text(format!("当前人格：{personality_summary}")).size(12),
                 checkbox(prompt_config.project_prompt_enabled)
-                    .label("启用项目级用户提示词")
+                    .label("全局默认启用项目级用户提示词")
                     .on_toggle(Message::ProjectPromptInjectionToggled),
                 text(format!("项目提示词文件：{project_prompt_path}")).size(12),
                 text(
-                    "当项目目录存在该文件时，内容会进入用户上下文层；文件变化会触发提示词缓存刷新。"
+                    "当项目没有自己的覆盖配置时，会使用这里的全局默认开关与路径。"
                 )
                 .size(12),
+                rule::horizontal(1),
+                text("当前项目覆盖").size(14),
+                text(format!("工作区：{}", project_draft.workspace_path)).size(12),
+                text(format!("配置文件：{project_config_path}")).size(12),
+                text(override_summary).size(12),
+                checkbox(project_draft.enabled)
+                    .label("当前项目启用用户提示词")
+                    .on_toggle(Message::ProjectPromptOverrideToggled),
+                text_input("例如 .vulcan/code/prompt.md", &project_draft.path)
+                    .on_input(Message::ProjectPromptPathChanged)
+                    .width(Fill),
+                text(format!("实际提示词文件：{project_prompt_full_path}")).size(12),
+                row![
+                    button(text("保存当前项目配置")).on_press(Message::SaveProjectPromptConfiguration),
+                    button(text("重新载入项目配置")).on_press(Message::ReloadProjectPromptConfiguration),
+                ]
+                .spacing(8),
+                text(&project_draft.notice).size(12),
+                text(
+                    "项目配置保存后会写入工作区 `.vulcan/code/config.json`，运行时只覆盖项目提示词开关与路径；人格仍使用全局设置。"
+                )
+                .size(12),
+                rule::horizontal(1),
                 text("自定义人格文件放在：~/.vulcan/code/prompt/personalities/{id}.md").size(12),
                 text("工具帮助文件放在：~/.vulcan/code/prompt/tool-help/{tool_id}.md").size(12),
             ]
@@ -7699,6 +7778,65 @@ impl VulcanWorkbench {
             report.cache_report.bundle_hits,
             report.cache_report.bundle_misses
         );
+        let total_estimated_tokens = report
+            .layer_summaries
+            .iter()
+            .map(|layer| layer.estimated_tokens)
+            .sum::<usize>();
+        let layer_summary_list =
+            report
+                .layer_summaries
+                .iter()
+                .fold(column![].spacing(6), |column, layer| {
+                    column.push(
+                    text(format!(
+                        "• {} · {} chars · ~{} tokens · {} 节点 · cache hit {} / miss {} · fp {}",
+                        layer.title,
+                        layer.character_count,
+                        layer.estimated_tokens,
+                        layer.segment_count,
+                        layer.cache_hits,
+                        layer.cache_misses,
+                        prompt_composer_inspector_fingerprint(layer.fingerprint)
+                    ))
+                    .size(12),
+                )
+                });
+        let cache_event_list =
+            report
+                .cache_events
+                .iter()
+                .take(8)
+                .fold(column![].spacing(4), |column, event| {
+                    column.push(
+                        text(format!(
+                            "• {} · {} · {}",
+                            event.scope,
+                            if event.hit { "hit" } else { "miss" },
+                            event.cache_key
+                        ))
+                        .size(12)
+                        .color(palette.background.base.text.scale_alpha(0.62)),
+                    )
+                });
+        let hidden_cache_event_count = report.cache_events.len().saturating_sub(8);
+        let cache_event_list = if hidden_cache_event_count > 0 {
+            cache_event_list.push(
+                text(format!(
+                    "另有 {hidden_cache_event_count} 条缓存事件，复制完整报告可查看。"
+                ))
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.56)),
+            )
+        } else if report.cache_events.is_empty() {
+            cache_event_list.push(
+                text("暂无缓存事件。")
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.56)),
+            )
+        } else {
+            cache_event_list
+        };
         let segment_list =
             report
                 .segments
@@ -7707,11 +7845,12 @@ impl VulcanWorkbench {
                 .fold(column![].spacing(6), |column, segment| {
                     column.push(
                         text(format!(
-                            "• {} · {} · {} · {} chars · cache={} · source={} · {}",
+                            "• {} · {} · {} · {} chars · ~{} tokens · cache={} · source={} · {}",
                             segment.node_id,
                             segment.target_label,
                             segment.title,
                             segment.character_count,
+                            segment.estimated_tokens,
                             if segment.from_cache { "hit" } else { "miss" },
                             segment.source_label,
                             segment.preview
@@ -7747,18 +7886,30 @@ impl VulcanWorkbench {
                 ]
                 .spacing(8),
                 text(format!(
-                    "会话：{} · 模式：{} · 模型：{} · 策略：{} · 人格：{}",
+                    "会话：{} · 模式：{} · 模型：{} · 策略：{} · 人格：{} · 装配指纹：{}",
                     report.session_title,
                     report.mode_label,
                     report.model_id,
                     report.strategy_id,
-                    report.personality_id.as_deref().unwrap_or("none")
+                    report.personality_id.as_deref().unwrap_or("none"),
+                    prompt_composer_inspector_fingerprint(report.assembly_fingerprint)
                 ))
                 .size(12)
                 .color(palette.background.base.text.scale_alpha(0.68)),
+                text(format!("估算提示词总量：~{total_estimated_tokens} tokens"))
+                    .size(12)
+                    .color(palette.background.base.text.scale_alpha(0.68)),
                 text(cache_summary)
                     .size(12)
                     .color(palette.background.base.text.scale_alpha(0.68)),
+                container(layer_summary_list)
+                    .padding(10)
+                    .width(Fill)
+                    .style(container::bordered_box),
+                container(cache_event_list)
+                    .padding(10)
+                    .width(Fill)
+                    .style(container::bordered_box),
                 container(segment_list)
                     .padding(10)
                     .width(Fill)
@@ -7781,26 +7932,27 @@ impl VulcanWorkbench {
     ) -> Element<'_, Message> {
         let palette = self.app_theme.extended_palette();
         let layer_text = self.prompt_composer_inspector_layer_text(layer);
-        let char_count = layer_text.chars().count();
-        let segment_count = report
-            .segments
+        let layer_report = report
+            .layer_summaries
             .iter()
-            .filter(|segment| segment.target_label == layer.target_label())
-            .count();
-        let cache_hits = report
-            .segments
-            .iter()
-            .filter(|segment| segment.target_label == layer.target_label() && segment.from_cache)
-            .count();
-        let cache_misses = segment_count.saturating_sub(cache_hits);
+            .find(|summary| summary.target_label == layer.target_label());
         let is_expanded = self
             .prompt_composer_inspector_expanded_layers
             .contains(&layer);
         let layer_buffer = self.prompt_composer_inspector_layer_buffers.get(&layer);
-        let layer_summary = format!(
-            "{} chars · {} 个片段 · cache hit {} / miss {}",
-            char_count, segment_count, cache_hits, cache_misses
-        );
+        let layer_summary = layer_report
+            .map(|summary| {
+                format!(
+                    "{} chars · ~{} tokens · {} 个片段 · cache hit {} / miss {} · fp {}",
+                    summary.character_count,
+                    summary.estimated_tokens,
+                    summary.segment_count,
+                    summary.cache_hits,
+                    summary.cache_misses,
+                    prompt_composer_inspector_fingerprint(summary.fingerprint)
+                )
+            })
+            .unwrap_or_else(|| format!("{} chars · 暂无分层诊断", layer_text.chars().count()));
         let mut content = column![
             row![
                 text(layer.label()).size(14),
@@ -7936,8 +8088,12 @@ impl VulcanWorkbench {
                         .spacing(6)
                         .align_y(Center),
                         text(format!(
-                            "{} · {} chars · {}",
-                            segment.kind_label, segment.character_count, segment.preview
+                            "{} · {} chars · ~{} tokens · key {} · {}",
+                            segment.kind_label,
+                            segment.character_count,
+                            segment.estimated_tokens,
+                            segment.cache_key,
+                            segment.preview
                         ))
                         .size(12)
                         .color(palette.background.base.text.scale_alpha(0.58)),
@@ -8979,8 +9135,13 @@ impl VulcanWorkbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{composer_context_anchor_reference_row, workspace_history_search_preview_segments};
+    use super::{
+        composer_context_anchor_reference_row, prompt_resource_watch_kind_for_paths,
+        workspace_history_search_preview_segments,
+    };
+    use crate::app_shell::PromptResourceWatchKind;
     use serde_json::json;
+    use std::path::PathBuf;
     use vulcan_context::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
     /// Verifies that preview markup is split into alternating plain and highlighted segments.
@@ -9012,6 +9173,40 @@ mod tests {
                 (String::from("前缀 "), false),
                 (String::from("高亮尾段"), true),
             ]
+        );
+    }
+
+    /// Verifies prompt-resource watch paths are classified before cache invalidation.
+    /// 验证提示词资源监听路径会在缓存失效前完成分类。
+    #[test]
+    fn prompt_resource_watch_kind_classifies_specific_paths() {
+        let project_prompt = PathBuf::from("D:/repo/.vulcan/code/prompt.md");
+        let project_config = PathBuf::from("D:/repo/.vulcan/code/config.json");
+        let user_resource = PathBuf::from("C:/Users/me/.vulcan/code/prompt/personalities/a.md");
+
+        assert_eq!(
+            prompt_resource_watch_kind_for_paths(
+                std::slice::from_ref(&project_prompt),
+                Some(&project_prompt),
+                Some(&project_config),
+            ),
+            PromptResourceWatchKind::ProjectPrompt
+        );
+        assert_eq!(
+            prompt_resource_watch_kind_for_paths(
+                std::slice::from_ref(&project_config),
+                Some(&project_prompt),
+                Some(&project_config),
+            ),
+            PromptResourceWatchKind::ProjectPromptConfig
+        );
+        assert_eq!(
+            prompt_resource_watch_kind_for_paths(
+                std::slice::from_ref(&user_resource),
+                Some(&project_prompt),
+                Some(&project_config),
+            ),
+            PromptResourceWatchKind::UserPromptResources
         );
     }
 

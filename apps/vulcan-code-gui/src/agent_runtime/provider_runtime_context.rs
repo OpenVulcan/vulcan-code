@@ -12,18 +12,23 @@ use crate::agent_runtime::provider_prompt_loader::{
     LoadedProviderBaseSystemPrompt, load_provider_base_system_prompt,
     load_provider_base_system_prompt_with_source,
 };
+use crate::provider_config::{PersistedPromptConfiguration, load_project_configuration_file};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use vulcan_core::types::ProviderPromptLayers as CoreProviderPromptLayers;
 use vulcan_prompt_composer::{
-    AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, ProjectRulesFileCache,
-    ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
-    ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, ProjectPromptFileCache,
+    ProjectPromptSnapshot, ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput,
+    PromptAssemblyMode, PromptAssemblyOutput, ProviderPromptSnapshot, ToolCatalogSnapshot,
+    ToolDescriptor, build_context_compaction_developer_segment,
 };
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
 /// Provider 运行时请求共享的进程级项目规则来源缓存。
 static PROJECT_RULES_FILE_CACHE: OnceLock<Mutex<ProjectRulesFileCache>> = OnceLock::new();
+/// Process-wide project-prompt source cache shared by provider runtime requests.
+/// Provider 运行时请求共享的进程级项目提示词来源缓存。
+static PROJECT_PROMPT_FILE_CACHE: OnceLock<Mutex<ProjectPromptFileCache>> = OnceLock::new();
 
 /// Builds the effective runtime system prompt sent to the real provider agent.
 /// 构建发送给真实 Provider 代理的生效运行时系统提示词。
@@ -167,13 +172,9 @@ fn build_runtime_prompt_assembly_input(
 fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
     match purpose {
         ExecutionPromptPurpose::UserTurn => Vec::new(),
-        ExecutionPromptPurpose::ContextCompaction => vec![String::from(
-            "Internal host task: summarize earlier conversation context for continuation.\n\
-             - Do not call tools.\n\
-             - Do not delegate.\n\
-             - Do not ask questions.\n\
-             - Return plain text only.",
-        )],
+        ExecutionPromptPurpose::ContextCompaction => {
+            vec![build_context_compaction_developer_segment()]
+        }
     }
 }
 
@@ -223,6 +224,25 @@ fn load_workspace_project_rules_snapshot(workspace_path: &str) -> Option<Project
     cache.load_workspace_default(workspace).ok().flatten()
 }
 
+/// Invalidate the cached workspace-local project prompt snapshot.
+/// 使缓存中的工作区本地项目提示词快照失效。
+pub(crate) fn invalidate_workspace_project_user_prompt_cache(
+    workspace_path: &str,
+    project_prompt_path: &str,
+) {
+    let Some(prompt_path) = workspace_project_prompt_path(
+        workspace_path,
+        project_prompt_path.trim().trim_start_matches(['/', '\\']),
+    ) else {
+        return;
+    };
+    let cache = PROJECT_PROMPT_FILE_CACHE.get_or_init(|| Mutex::new(ProjectPromptFileCache::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.invalidate_file(prompt_path);
+}
+
 /// Invalidate the cached workspace-level project rules snapshot.
 /// 使缓存中的工作区级项目规则快照失效。
 pub(crate) fn invalidate_workspace_project_rules_prompt_cache(workspace_path: &str) {
@@ -246,44 +266,81 @@ fn workspace_project_rules_path(workspace_path: &str) -> Option<&Path> {
     Some(workspace)
 }
 
+/// Resolves one workspace-local project prompt path.
+/// 解析单个工作区本地项目提示词路径。
+fn workspace_project_prompt_path(
+    workspace_path: &str,
+    project_prompt_path: &str,
+) -> Option<PathBuf> {
+    let workspace = Path::new(workspace_path);
+    if workspace_path.trim().is_empty()
+        || !workspace.is_dir()
+        || project_prompt_path.trim().is_empty()
+    {
+        return None;
+    }
+    Some(workspace.join(project_prompt_path))
+}
+
 /// Loads the workspace-local user prompt configured for prompt composition.
 /// 加载为提示词组合配置的工作区本地用户提示词。
 fn load_workspace_project_user_prompt(preparation: &ExecutionPreparation) -> Option<String> {
-    if !preparation.prompt_configuration.project_prompt_enabled {
+    let project_prompt_configuration = resolve_project_prompt_configuration(preparation);
+    if !project_prompt_configuration.project_prompt_enabled {
         return None;
     }
     let workspace = Path::new(&preparation.workspace_path);
     if preparation.workspace_path.trim().is_empty() || !workspace.is_dir() {
         return None;
     }
-    let relative_path = preparation
-        .prompt_configuration
+    let relative_path = project_prompt_configuration
         .project_prompt_path
         .trim()
         .trim_start_matches(['/', '\\']);
     if relative_path.is_empty() {
         return None;
     }
-    let prompt_path = workspace.join(relative_path);
-    read_project_user_prompt_file(&prompt_path).map(|text| {
-        format!(
-            "# Project User Prompt\nSource: {}\n\n{}",
-            prompt_path.display(),
-            text.trim()
-        )
-    })
+    let prompt_path = workspace_project_prompt_path(&preparation.workspace_path, relative_path)?;
+    let cache = PROJECT_PROMPT_FILE_CACHE.get_or_init(|| Mutex::new(ProjectPromptFileCache::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache
+        .load_file(&prompt_path)
+        .ok()
+        .flatten()
+        .map(|snapshot: ProjectPromptSnapshot| {
+            let text = snapshot.text.trim();
+            format!(
+                "# Project User Prompt\nSource: {}\n\n{}",
+                snapshot.source, text
+            )
+        })
 }
 
-/// Reads one project-local user prompt file when it exists and contains visible text.
-/// 当项目本地用户提示词文件存在且包含可见文本时读取该文件。
-fn read_project_user_prompt_file(path: &PathBuf) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+/// Resolve the effective project-prompt configuration for one workspace.
+/// 解析单个工作区的生效项目提示词配置。
+fn resolve_project_prompt_configuration(
+    preparation: &ExecutionPreparation,
+) -> PersistedPromptConfiguration {
+    let workspace = Path::new(&preparation.workspace_path);
+    if preparation.workspace_path.trim().is_empty() || !workspace.is_dir() {
+        return preparation.prompt_configuration.clone();
     }
+    let mut effective = preparation.prompt_configuration.clone();
+    if let Some(project_configuration) = load_workspace_project_prompt_configuration(workspace) {
+        effective.project_prompt_enabled = project_configuration.project_prompt_enabled;
+        effective.project_prompt_path = project_configuration.project_prompt_path;
+    }
+    effective
+}
+
+/// Load one workspace-local prompt configuration override when present.
+/// 当存在时加载一个工作区本地提示词配置覆盖。
+fn load_workspace_project_prompt_configuration(
+    workspace: &Path,
+) -> Option<PersistedPromptConfiguration> {
+    load_project_configuration_file(workspace).ok()?.prompt
 }
 
 /// Builds the legacy fallback preamble when the new composer cannot assemble.
@@ -332,7 +389,8 @@ mod tests {
     use crate::provider_config::{
         PersistedAiToolConfiguration, PersistedPromptConfiguration,
         PersistedPromptPersonalitySelection, PersistedProviderEntry, PersistedProviderOptions,
-        ProviderConfigurationFile, ReasoningEffortLevel,
+        ProjectVulcanCodeConfigurationFile, ProviderConfigurationFile, ReasoningEffortLevel,
+        save_project_configuration_file,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -422,6 +480,88 @@ mod tests {
                 .provider_layers
                 .runtime_context
                 .contains("Project user instruction")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies workspace-local prompt configuration can override the global project prompt path.
+    /// 验证工作区本地提示词配置可以覆盖全局项目提示词路径。
+    #[test]
+    fn runtime_prompt_layers_use_workspace_project_prompt_configuration() {
+        let root = unique_temp_dir("vulcan-project-prompt-config");
+        let prompt_dir = root.join(".vulcan").join("code");
+        fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
+        fs::write(
+            prompt_dir.join("custom-prompt.md"),
+            "Project override instruction",
+        )
+        .expect("write project override prompt");
+        fs::write(
+            prompt_dir.join("config.json"),
+            r#"{"prompt":{"projectPromptEnabled":true,"projectPromptPath":".vulcan/code/custom-prompt.md"}}"#,
+        )
+        .expect("write project prompt config");
+
+        let preparation = build_test_preparation(
+            root.display().to_string(),
+            PersistedPromptConfiguration {
+                project_prompt_enabled: false,
+                ..PersistedPromptConfiguration::default()
+            },
+        );
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .runtime_context
+                .contains("Project override instruction")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies workspace-local prompt configuration does not override the global personality choice.
+    /// 验证工作区本地提示词配置不会覆盖全局人格选择。
+    #[test]
+    fn runtime_prompt_layers_keep_global_personality_when_project_prompt_overrides() {
+        let root = unique_temp_dir("vulcan-project-prompt-personality");
+        let prompt_dir = root.join(".vulcan").join("code");
+        fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
+        fs::write(prompt_dir.join("prompt.md"), "Project prompt").expect("write project prompt");
+        let project_config = ProjectVulcanCodeConfigurationFile {
+            prompt: Some(PersistedPromptConfiguration {
+                personality: PersistedPromptPersonalitySelection::Default,
+                project_prompt_enabled: true,
+                project_prompt_path: String::from(".vulcan/code/prompt.md"),
+            }),
+        };
+        save_project_configuration_file(&root, &project_config)
+            .expect("write project prompt config");
+
+        let preparation = build_test_preparation(
+            root.display().to_string(),
+            PersistedPromptConfiguration {
+                personality: PersistedPromptPersonalitySelection::Disabled,
+                ..PersistedPromptConfiguration::default()
+            },
+        );
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert_eq!(
+            layers
+                .provider_layers
+                .system
+                .matches("You optimize for team morale")
+                .count(),
+            0
+        );
+        assert!(
+            layers
+                .provider_layers
+                .runtime_context
+                .contains("Project prompt")
         );
 
         let _ = fs::remove_dir_all(root);

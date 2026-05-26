@@ -4,11 +4,14 @@ use std::path::PathBuf;
 use crate::composer::engine::PromptComposerEngine;
 use crate::composer::request::PromptAssemblyInput;
 use crate::composer::resources::PromptComposerResourceConfig;
+use crate::session::compaction::{
+    build_context_compaction_developer_segment, build_context_compaction_request_prompt,
+};
 use crate::session::delta_state::{ProjectRulesDeltaKind, ProjectRulesDeltaState};
 use crate::source::project_rules::{DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesFileCache};
 use crate::source::snapshot::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ProjectRulesSnapshot, ProviderPromptSnapshot,
-    TaskGoalSnapshot, ToolCatalogSnapshot,
+    SubagentSnapshot, TaskGoalSnapshot, ToolCatalogSnapshot,
 };
 use crate::types::{ModelDescriptor, PersonalitySelection, PromptAssemblyMode, ToolDescriptor};
 
@@ -46,6 +49,21 @@ fn built_in_catalog_defaults_to_friendly() {
             .render_developer_text()
             .contains("supportive teammate")
     );
+}
+
+/// Verifies the context-compaction request and developer instructions stay on one shared source path.
+/// 验证上下文压缩请求与开发者指令保持同一份共享来源。
+#[test]
+fn context_compaction_prompt_helpers_share_one_source() {
+    let request_prompt = build_context_compaction_request_prompt();
+    let developer_segment = build_context_compaction_developer_segment();
+
+    assert!(request_prompt.contains("Summarize the earlier session context"));
+    assert!(
+        developer_segment.contains("Internal host task: summarize earlier conversation context")
+    );
+    assert!(!request_prompt.is_empty());
+    assert!(!developer_segment.is_empty());
 }
 
 /// Verifies directory resources can override personality and tool-help entries.
@@ -233,6 +251,38 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
     );
 }
 
+/// Verifies overlapping tool catalogs reuse per-tool cached segments across different bundles.
+/// 验证不同工具组合之间的重叠工具会复用逐工具缓存片段。
+#[test]
+fn overlapping_tool_catalogs_reuse_per_tool_cache_entries() {
+    let engine = PromptComposerEngine::with_builtins();
+    let first_input = prompt_input_with_tool_ids(&["tool_a", "shared_tool"]);
+    let second_input = prompt_input_with_tool_ids(&["shared_tool", "tool_b"]);
+
+    let first = engine
+        .compose(&first_input)
+        .expect("first compose should succeed");
+    assert_eq!(first.diagnostics.cache_report.node_hits, 0);
+    assert!(
+        first
+            .tool_metadata_segments
+            .iter()
+            .any(|segment| segment.node_id == "tool_help_shared_tool")
+    );
+
+    let second = engine
+        .compose(&second_input)
+        .expect("second compose should succeed");
+    assert_eq!(second.diagnostics.cache_report.bundle_hits, 0);
+    assert!(
+        second
+            .tool_metadata_segments
+            .iter()
+            .any(|segment| segment.node_id == "tool_help_shared_tool" && segment.from_cache),
+        "shared tool help should come from the node cache even when the bundle differs"
+    );
+}
+
 /// Verifies context-compaction mode excludes tool-help nodes while preserving runtime instructions.
 /// 验证上下文压缩模式会排除工具帮助节点，同时保留运行时指令。
 #[test]
@@ -273,6 +323,58 @@ fn context_compaction_mode_excludes_tool_help_nodes() {
             .contains("Return plain text only.")
     );
     assert!(!output.render_tool_metadata_text().contains("shell_command"));
+}
+
+/// Verifies clone-mode subagents inherit the base prompt and add delegation identity.
+/// 验证分身模式子代理会继承基础提示词并附加委托身份。
+#[test]
+fn subagent_clone_mode_adds_identity_without_functional_system_prompt() {
+    let engine = PromptComposerEngine::with_builtins();
+    let input = subagent_prompt_input(
+        PromptAssemblyMode::SubagentClone,
+        Some(String::from("Review the authentication changes.")),
+    );
+
+    let output = engine.compose(&input).expect("compose should succeed");
+
+    assert_eq!(output.diagnostics.strategy_id, "subagent_clone");
+    assert!(output.render_system_text().contains("Provider base"));
+    assert!(
+        output
+            .render_developer_text()
+            .contains("Subagent identity: code-reviewer")
+    );
+    assert!(
+        !output
+            .render_system_text()
+            .contains("Specialist reviewer mode")
+    );
+}
+
+/// Verifies functional-mode subagents add their specialist system prompt on top of the base prompt.
+/// 验证功能模式子代理会在基础提示词之上附加专家系统提示词。
+#[test]
+fn subagent_functional_mode_adds_specialist_system_prompt() {
+    let engine = PromptComposerEngine::with_builtins();
+    let input = subagent_prompt_input(
+        PromptAssemblyMode::SubagentFunctional,
+        Some(String::from("Specialist reviewer mode.")),
+    );
+
+    let output = engine.compose(&input).expect("compose should succeed");
+
+    assert_eq!(output.diagnostics.strategy_id, "subagent_functional");
+    assert!(output.render_system_text().contains("Provider base"));
+    assert!(
+        output
+            .render_system_text()
+            .contains("Specialist reviewer mode")
+    );
+    assert!(
+        output
+            .render_developer_text()
+            .contains("Subagent identity: code-reviewer")
+    );
 }
 
 /// Verifies project-rule delta tracking distinguishes unchanged and changed snapshots.
@@ -377,4 +479,69 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .expect("system time should be after epoch")
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{suffix}"))
+}
+
+/// Build one minimal prompt input with the requested visible tools.
+/// 使用指定可见工具构建一个最小提示词输入。
+fn prompt_input_with_tool_ids(tool_ids: &[&str]) -> PromptAssemblyInput {
+    PromptAssemblyInput {
+        mode: PromptAssemblyMode::Primary,
+        model: ModelDescriptor {
+            family: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            supports_native_personality: false,
+        },
+        provider_prompt: None,
+        agent_prompt: None,
+        personality: PersonalitySelection::Disabled,
+        project_rules: None,
+        environment_context: None,
+        task_goal: None,
+        tool_catalog: ToolCatalogSnapshot::new(
+            tool_ids
+                .iter()
+                .map(|tool_id| ToolDescriptor {
+                    id: (*tool_id).to_string(),
+                    title: (*tool_id).to_string(),
+                    description: format!("Tool {tool_id}"),
+                    help_text: Some(format!("Use {tool_id} when it matches the task.")),
+                    schema_fingerprint: Some(format!("schema:{tool_id}")),
+                })
+                .collect(),
+        ),
+        subagent: None,
+        custom_developer_segments: Vec::new(),
+        custom_user_segments: Vec::new(),
+    }
+}
+
+/// Build one minimal subagent prompt input for strategy tests.
+/// 为策略测试构建一个最小子代理提示词输入。
+fn subagent_prompt_input(
+    mode: PromptAssemblyMode,
+    functional_system_prompt: Option<String>,
+) -> PromptAssemblyInput {
+    PromptAssemblyInput {
+        mode,
+        model: ModelDescriptor {
+            family: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            supports_native_personality: false,
+        },
+        provider_prompt: Some(ProviderPromptSnapshot::new("Provider base")),
+        agent_prompt: Some(AgentPromptSnapshot::new("Agent base")),
+        personality: PersonalitySelection::Disabled,
+        project_rules: None,
+        environment_context: Some(EnvironmentContextSnapshot::new("cwd=D:/repo")),
+        task_goal: Some(TaskGoalSnapshot::new("Inspect delegated code")),
+        tool_catalog: ToolCatalogSnapshot::new(Vec::new()),
+        subagent: Some(SubagentSnapshot {
+            identity: String::from("code-reviewer"),
+            task: String::from("Review the authentication changes."),
+            delegation: Some(String::from("Return findings to the parent agent.")),
+            functional_system_prompt,
+        }),
+        custom_developer_segments: Vec::new(),
+        custom_user_segments: Vec::new(),
+    }
 }

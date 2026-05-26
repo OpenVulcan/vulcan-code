@@ -5,7 +5,10 @@ use crate::agent_runtime::events::RuntimeEvent;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
 use std::pin::Pin;
-use vulcan_core::types::ProviderRequestSnapshot as CoreProviderRequestSnapshot;
+use vulcan_core::types::{
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
+};
 
 /// Lightweight provider-stream delta emitted while one real run is still in progress.
 /// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
@@ -22,9 +25,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
-    /// Final canonical conversation state captured after one host-owned controller run finishes.
-    /// 在一次宿主自有控制器运行结束后捕获的最终规范会话状态。
-    FinalConversationState(SessionConversationState),
+    /// Final canonical conversation state plus the latest successful provider usage from the current run.
+    /// 当前运行结束后的最终规范会话状态，以及本次运行中最近一次成功 Provider 用量。
+    FinalConversationState(SessionConversationState, Option<CoreProviderUsageSnapshot>),
 }
 
 /// Boxed provider stream used by the runtime to forward thinking and output deltas incrementally.
