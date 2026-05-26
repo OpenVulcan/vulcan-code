@@ -3,6 +3,71 @@
 
 use super::*;
 
+/// One action row rendered by the shared workbench context menu.
+/// 由共享工作台右键菜单渲染的一行动作。
+#[derive(Debug, Clone)]
+pub(super) struct WorkbenchContextMenuItem {
+    /// User-facing label displayed inside the menu row.
+    /// 菜单行内部显示的面向用户标签。
+    pub(super) label: String,
+    /// Message emitted when the menu row is enabled and pressed.
+    /// 菜单行启用并被点击时发出的消息。
+    pub(super) message: Option<Message>,
+}
+
+/// Identifies the feature surface that opened the shared workbench context menu.
+/// 标识打开共享工作台右键菜单的功能表面。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkbenchContextMenuSource {
+    /// Menu opened from the prompt composer editor.
+    /// 从提示词编辑器打开的菜单。
+    Composer,
+    /// Menu opened from the left task tree.
+    /// 从左侧任务树打开的菜单。
+    TaskTree,
+    /// Menu opened from the rendered transcript surface.
+    /// 从渲染转录表面打开的菜单。
+    Transcript,
+}
+
+/// Runtime state for one open shared workbench context menu.
+/// 单个已打开共享工作台右键菜单的运行时状态。
+#[derive(Debug, Clone)]
+pub(super) struct WorkbenchContextMenuState {
+    /// Feature surface that opened this shared menu.
+    /// 打开此共享菜单的功能表面。
+    pub(super) source: WorkbenchContextMenuSource,
+    /// Window-relative position used to anchor the menu before clamping.
+    /// 进行边界钳制前用于锚定菜单的窗口相对位置。
+    pub(super) anchor: iced::Point,
+    /// Fixed width used to render the menu body.
+    /// 渲染菜单主体时使用的固定宽度。
+    pub(super) width: f32,
+    /// Ordered action rows shown inside the menu.
+    /// 菜单内部显示的有序动作行。
+    pub(super) items: Vec<WorkbenchContextMenuItem>,
+}
+
+impl WorkbenchContextMenuItem {
+    /// Builds one enabled shared context-menu item.
+    /// 构建一个启用状态的共享右键菜单项。
+    fn enabled(label: impl Into<String>, message: Message) -> Self {
+        Self {
+            label: label.into(),
+            message: Some(message),
+        }
+    }
+
+    /// Builds one disabled shared context-menu item.
+    /// 构建一个禁用状态的共享右键菜单项。
+    fn disabled(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            message: None,
+        }
+    }
+}
+
 impl VulcanWorkbench {
     /// Resolves the best root-window anchor from the tracked pointer and a fallback event position.
     /// 通过已跟踪指针与备用事件坐标解析最佳根窗口锚点。
