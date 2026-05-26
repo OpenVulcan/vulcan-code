@@ -3,6 +3,30 @@
 
 use super::*;
 
+/// One undo snapshot retained for the composer editor.
+/// 为提示词编辑器保留的一条撤销快照。
+#[derive(Debug, Clone)]
+pub(super) struct ComposerUndoSnapshot {
+    /// Full text payload captured before one mutating composer action.
+    /// 在某次会修改提示词内容的动作之前捕获的完整文本载荷。
+    pub(super) text: String,
+    /// Attachment list captured before one mutating composer action.
+    /// 在某次会修改提示词内容的动作之前捕获的附件列表。
+    pub(super) attachments: Vec<ConversationAttachment>,
+    /// Cursor and selection position captured before one mutating composer action.
+    /// 在某次会修改提示词内容的动作之前捕获的光标与选区位置。
+    pub(super) cursor: text_editor::Cursor,
+    /// Internal scroll offset mirrored from the composer editor at capture time.
+    /// 捕获快照时从提示词编辑器镜像得到的内部滚动偏移量。
+    pub(super) scroll_offset: f32,
+    /// Optional attachment lease scope retained by this undo snapshot.
+    /// 该撤销快照持有的可选附件租约作用域。
+    pub(super) attachment_ref_scope: Option<String>,
+    /// Optional workspace path that owns the retained attachment lease scope.
+    /// 持有所保留附件租约作用域的可选工作区路径。
+    pub(super) attachment_workspace_path: Option<String>,
+}
+
 impl VulcanWorkbench {
     /// Builds the transient lease scope used by the currently selected composer attachment strip.
     /// 构建当前选中输入框附件条使用的瞬时租约作用域。

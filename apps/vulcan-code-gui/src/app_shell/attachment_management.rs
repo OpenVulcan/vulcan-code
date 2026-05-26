@@ -3,6 +3,62 @@
 
 use super::*;
 
+/// Stable project-scoped attachment-cleanup task context captured before a background preview or execution starts.
+/// 在后台预览或执行开始前捕获的稳定项目级附件清理任务上下文。
+#[derive(Debug, Clone)]
+pub(super) struct ProjectAttachmentCleanupTaskContext {
+    /// Stable project identifier that owns the cleanup task.
+    /// 拥有该清理任务的稳定项目标识。
+    pub(super) project_id: String,
+    /// Human-readable project title used by notices and status rows.
+    /// 供提示与状态栏复用的人类可读项目标题。
+    pub(super) project_title: String,
+    /// Absolute workspace path that owns the managed attachment store.
+    /// 拥有托管附件存储的绝对工作区路径。
+    pub(super) workspace_path: String,
+    /// Canonical cutoff date string captured for the task.
+    /// 为该任务捕获的规范截止日期字符串。
+    pub(super) cutoff_date_text: String,
+    /// Attachment-kind selection captured for the task.
+    /// 为该任务捕获的附件类型选择状态。
+    pub(super) selection: AttachmentCleanupSelection,
+}
+
+/// Validated cleanup execution request carried by the workbench confirmation modal.
+/// 由工作台确认弹窗携带的已校验清理执行请求。
+#[derive(Debug, Clone)]
+pub(super) struct ProjectAttachmentCleanupExecutionRequest {
+    /// Immutable task context used by the eventual background execution.
+    /// 最终后台执行所使用的不可变任务上下文。
+    pub(super) context: ProjectAttachmentCleanupTaskContext,
+    /// Preview snapshot that the user explicitly confirmed before execution.
+    /// 用户在执行前显式确认过的预览快照。
+    pub(super) expected_preview: AttachmentCleanupPreview,
+}
+
+/// Completion outcome returned by one background project attachment cleanup execution.
+/// 单次后台项目附件清理执行返回的完成结果。
+#[derive(Debug, Clone)]
+pub(super) enum ProjectAttachmentCleanupExecutionOutcome {
+    /// Cleanup completed and optionally produced one follow-up preview built from the post-cleanup state.
+    /// 清理已完成，并可选产出一份根据清理后状态构建的后续预览。
+    Executed {
+        /// Final cleanup execution report shown to the user.
+        /// 展示给用户的最终清理执行报告。
+        report: AttachmentCleanupReport,
+        /// Best-effort refreshed preview built after execution completes.
+        /// 执行完成后按最佳努力构建的刷新预览。
+        refreshed_preview: Option<AttachmentCleanupPreview>,
+    },
+    /// Cleanup did not run because the revalidated preview changed before the destructive phase started.
+    /// 由于破坏性阶段开始前重新校验得到的预览已变化，因此清理未真正执行。
+    PreviewChanged {
+        /// Fresh preview that superseded the previously confirmed snapshot.
+        /// 取代旧确认快照的最新预览。
+        preview: AttachmentCleanupPreview,
+    },
+}
+
 impl VulcanWorkbench {
     /// Formats one raw attachment-cleanup byte count into a compact human-readable label for the settings card.
     /// 将原始附件清理字节数格式化为供设置卡片使用的紧凑可读标签。
