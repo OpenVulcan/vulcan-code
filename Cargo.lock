@@ -6121,6 +6121,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-change-set"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "vulcan-code-gui"
 version = "0.1.0"
 dependencies = [
@@ -6153,6 +6160,7 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-agent-view",
+ "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-core",
@@ -6164,6 +6172,7 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-tools-manager",
  "vulcan-workbench-model",
+ "vulcan-workspace-store",
 ]
 
 [[package]]
@@ -6270,6 +6279,26 @@ dependencies = [
  "serde",
  "uuid",
  "vulcan-context",
+ "vulcan-core",
+ "vulcan-provider-config",
+]
+
+[[package]]
+name = "vulcan-workspace-store"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "vldb-controller-client",
+ "vulcan-change-set",
+ "vulcan-context",
+ "vulcan-core",
+ "vulcan-provider-config",
+ "vulcan-runtime-assets",
+ "vulcan-workbench-model",
 ]
 
 [[package]]

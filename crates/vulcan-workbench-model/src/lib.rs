@@ -3,11 +3,18 @@
 
 mod activity;
 mod project;
+mod runtime_state;
 mod session;
 mod turn_stats;
 
 pub use activity::{ActivityEntry, ActivityLevel};
 pub use project::TaskProjectSummary;
+pub use runtime_state::{
+    PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
+    PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
+    PendingSessionPromptSource, SessionComposerDraftState, SessionRuntimeStateEntry,
+    SessionTranscriptUiState,
+};
 pub use session::{SessionId, SessionRunPhase, SessionState, SessionSummary, SessionTitleSource};
 pub use turn_stats::{SessionTurnStats, SessionTurnStatsStatus};
 pub use vulcan_context::{

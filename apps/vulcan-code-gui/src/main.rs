@@ -17,7 +17,6 @@ mod shared;
 mod skills;
 mod tooling;
 mod ui;
-mod workspace_store;
 
 pub(crate) use app_shell as app;
 pub(crate) use app_shell::model;
@@ -45,6 +44,7 @@ pub(crate) use vulcan_provider_config::{
     capabilities as provider_capabilities, config as provider_config,
 };
 pub(crate) use vulcan_runtime_assets as runtime_assets;
+pub(crate) use vulcan_workspace_store::workspace_store;
 
 /// Starts the GUI application bootstrap sequence.
 /// 启动图形界面应用的引导流程。

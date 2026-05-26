@@ -6,7 +6,7 @@ use vulcan_core::types::ProviderUsageSnapshot;
 
 /// Returns the most recent provider usage snapshot carried by the canonical conversation window.
 /// 返回规范会话窗口中携带的最近一次 Provider 用量快照。
-pub(crate) fn latest_provider_usage_from_conversation_state(
+pub fn latest_provider_usage_from_conversation_state(
     state: &SessionConversationState,
 ) -> Option<ProviderUsageSnapshot> {
     state

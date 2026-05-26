@@ -3,6 +3,7 @@
 
 pub mod code_view;
 pub mod composer_parts;
-pub mod data_plane;
 pub mod diff;
 pub mod workspace_path;
+
+pub use vulcan_workspace_store::data_plane;

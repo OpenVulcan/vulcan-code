@@ -38,7 +38,7 @@ use self::event_store::{
     load_session_event_store_runtime_state, persist_session_event_store,
     remove_session_event_store,
 };
-pub(crate) use self::event_store::{
+pub use self::event_store::{
     persist_session_event_store_context_current as persist_session_context_current_document,
     snapshot_session_event_store_context_before_user_prompt as snapshot_session_context_before_user_prompt,
 };

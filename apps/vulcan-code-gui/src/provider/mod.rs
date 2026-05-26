@@ -2,4 +2,5 @@
 //! 保留在应用 crate 内部的 GUI 本地 Provider 支撑模块。
 
 pub mod input_normalizer;
-pub mod usage;
+
+pub use vulcan_workspace_store::provider_usage as usage;

@@ -2,7 +2,6 @@
 //! compose 运行时基础架构使用的原生工具注册面。
 
 pub mod bridge;
-pub mod change_set;
 pub mod command_session_runtime;
 pub mod native;
 pub mod output_decode;
@@ -18,3 +17,4 @@ pub use public_name::{
     allocate_unique_public_tool_name, build_direct_public_tool_name,
     build_prefixed_public_tool_name,
 };
+pub use vulcan_change_set as change_set;

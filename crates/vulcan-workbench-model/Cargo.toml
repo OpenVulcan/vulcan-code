@@ -13,3 +13,5 @@ workspace = true
 serde.workspace = true
 uuid.workspace = true
 vulcan-context.workspace = true
+vulcan-core.workspace = true
+vulcan-provider-config.workspace = true

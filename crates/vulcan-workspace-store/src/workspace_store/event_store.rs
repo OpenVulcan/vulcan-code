@@ -545,7 +545,7 @@ pub(super) fn load_latest_session_event_store_context_snapshot(
 
 /// Persists the latest canonical current-context document for one session immediately.
 /// 立即持久化单个会话的最近规范当前上下文文档。
-pub(crate) fn persist_session_event_store_context_current(
+pub fn persist_session_event_store_context_current(
     project_id: &str,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
@@ -565,7 +565,7 @@ pub(crate) fn persist_session_event_store_context_current(
 
 /// Captures a historical context snapshot immediately before one new user prompt mutates the current context.
 /// 在一条新的用户提示词改变当前上下文之前立即捕获一份历史上下文快照。
-pub(crate) fn snapshot_session_event_store_context_before_user_prompt(
+pub fn snapshot_session_event_store_context_before_user_prompt(
     project_id: &str,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,

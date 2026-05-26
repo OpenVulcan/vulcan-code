@@ -16,7 +16,7 @@ pub const LUASKILLS_CHANGE_SET_HOST_RESULT_MAX_PAYLOAD_BYTES: u64 = 512 * 1024;
 /// Compact modal-ready summary derived from one canonical `change_set` payload.
 /// 从一份 canonical `change_set` 载荷派生出的紧凑弹层摘要。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangeSetModalSummary {
+pub struct ChangeSetModalSummary {
     /// Whether the source payload represents a preview-only edit plan or one already-applied filesystem mutation.
     /// 源载荷表示的是仅预览的编辑计划，还是已经落盘的文件系统变更。
     pub mode: ChangeSetMode,
@@ -40,7 +40,7 @@ pub(crate) struct ChangeSetModalSummary {
 /// Aggregated change counters shown by the GUI and used for compact inline summaries.
 /// 供图形界面展示并用于紧凑内联摘要的聚合变更计数。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangeSetStats {
+pub struct ChangeSetStats {
     /// Total file record count carried by the payload.
     /// 载荷携带的文件记录总数。
     pub file_count: usize,
@@ -67,7 +67,7 @@ pub(crate) struct ChangeSetStats {
 /// Compact per-file summary row shown inside the tool modal.
 /// 展示在工具弹层中的紧凑单文件摘要行。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangeSetFileSummary {
+pub struct ChangeSetFileSummary {
     /// Stable file change kind.
     /// 稳定的文件变更类型。
     pub change: ChangeSetFileChangeKind,
@@ -106,7 +106,7 @@ pub(crate) struct ChangeSetFileSummary {
 /// Compact diagnostic row derived from the original payload.
 /// 从原始载荷派生出的紧凑诊断行。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangeSetDiagnosticSummary {
+pub struct ChangeSetDiagnosticSummary {
     /// Diagnostic level reported by the producer.
     /// 产出方上报的诊断级别。
     pub level: String,
@@ -118,7 +118,7 @@ pub(crate) struct ChangeSetDiagnosticSummary {
 /// Host-side verification snapshot attached to compact `change_set` payloads.
 /// 附着在紧凑 `change_set` 载荷上的宿主侧校验快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangeSetVerificationSummary {
+pub struct ChangeSetVerificationSummary {
     /// High-level verification status reported by the host.
     /// 宿主上报的高层校验状态。
     pub status: ChangeSetVerificationStatus,
@@ -133,7 +133,7 @@ pub(crate) struct ChangeSetVerificationSummary {
 /// High-level verification status used by compact `change_set` summaries.
 /// 紧凑 `change_set` 摘要使用的高层校验状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChangeSetVerificationStatus {
+pub enum ChangeSetVerificationStatus {
     /// The payload is preview-only, so no filesystem verification is attempted.
     /// 载荷仅代表预览，因此不会尝试文件系统校验。
     Skipped,
@@ -148,7 +148,7 @@ pub(crate) enum ChangeSetVerificationStatus {
 impl ChangeSetVerificationStatus {
     /// Returns the stable lowercase string used inside compact payload metadata.
     /// 返回紧凑载荷元数据内部使用的稳定小写字符串。
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Skipped => "skipped",
             Self::Verified => "verified",
@@ -171,7 +171,7 @@ impl ChangeSetVerificationStatus {
 /// Canonical `change_set` mode declared by the producing tool.
 /// 产出工具声明的 canonical `change_set` 模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChangeSetMode {
+pub enum ChangeSetMode {
     /// The payload only previews edits that have not been applied yet.
     /// 当前载荷仅预览尚未落盘的编辑操作。
     Preview,
@@ -183,7 +183,7 @@ pub(crate) enum ChangeSetMode {
 impl ChangeSetMode {
     /// Returns the stable lowercase serialization value used by LuaSkills.
     /// 返回 LuaSkills 使用的稳定小写序列化值。
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Preview => "preview",
             Self::Applied => "applied",
@@ -204,7 +204,7 @@ impl ChangeSetMode {
 /// Supported file-level change kinds inside one compact `change_set` summary.
 /// 单个紧凑 `change_set` 摘要中支持的文件级变更类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChangeSetFileChangeKind {
+pub enum ChangeSetFileChangeKind {
     /// One newly created file.
     /// 一份新创建的文件。
     Create,
@@ -222,7 +222,7 @@ pub(crate) enum ChangeSetFileChangeKind {
 impl ChangeSetFileChangeKind {
     /// Returns the stable lowercase serialization value.
     /// 返回稳定的小写序列化值。
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Create => "create",
             Self::Modify => "modify",
@@ -247,7 +247,7 @@ impl ChangeSetFileChangeKind {
 /// Stable delete content mode used by canonical `change_set` delete lifecycle records.
 /// canonical `change_set` 删除生命周期记录使用的稳定删除内容模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChangeSetDeleteContentMode {
+pub enum ChangeSetDeleteContentMode {
     /// The deleted file body stays inline as full text.
     /// 被删除文件正文以内联全文形式保留。
     Full,
@@ -342,7 +342,7 @@ struct RawChangeSetFileRecord {
 
 /// Builds the host-result capability payload injected into LuaSkills request contexts.
 /// 构建注入到 LuaSkills 请求上下文中的宿主结果能力载荷。
-pub(crate) fn luaskills_change_set_host_result_capabilities() -> Value {
+pub fn luaskills_change_set_host_result_capabilities() -> Value {
     json!({
         "host_result": {
             "enabled": true,
@@ -354,7 +354,7 @@ pub(crate) fn luaskills_change_set_host_result_capabilities() -> Value {
 
 /// Compacts one raw `change_set` host-result object into the minimal shape needed by transcript projection, persistence, and tool-modal summaries.
 /// 将一份原始 `change_set` 宿主结果对象压缩成转录投影、持久化与工具弹层摘要所需的最小形态。
-pub(crate) fn compact_change_set_host_result(host_result: &Value) -> Option<Value> {
+pub fn compact_change_set_host_result(host_result: &Value) -> Option<Value> {
     let object = host_result.as_object()?;
     if object.get("kind").and_then(Value::as_str) != Some(CHANGE_SET_HOST_RESULT_KIND) {
         return None;
@@ -369,9 +369,7 @@ pub(crate) fn compact_change_set_host_result(host_result: &Value) -> Option<Valu
 
 /// Derives one modal-ready `change_set` summary from either a raw producer payload or an already-compacted host payload.
 /// 从原始产出载荷或已压缩宿主载荷中派生一份可供弹层使用的 `change_set` 摘要。
-pub(crate) fn change_set_modal_summary_from_payload(
-    payload: &Value,
-) -> Option<ChangeSetModalSummary> {
+pub fn change_set_modal_summary_from_payload(payload: &Value) -> Option<ChangeSetModalSummary> {
     let compact_payload = compact_change_set_payload(payload)?;
     let object = compact_payload.as_object()?;
     let mode = ChangeSetMode::parse(object.get("mode")?.as_str()?)?;
@@ -415,7 +413,7 @@ pub(crate) fn change_set_modal_summary_from_payload(
 
 /// Builds one English host-side warning notice from the current raw `change_set` payload when the just-applied filesystem state looks suspicious.
 /// 当当前原始 `change_set` 载荷对应的刚应用文件系统状态看起来可疑时，构建一条英文宿主侧警告提示。
-pub(crate) fn change_set_host_verification_notice(payload: &Value) -> Option<String> {
+pub fn change_set_host_verification_notice(payload: &Value) -> Option<String> {
     let object = payload.as_object()?;
     let mode = ChangeSetMode::parse(object.get("mode")?.as_str()?)?;
     if mode != ChangeSetMode::Applied {

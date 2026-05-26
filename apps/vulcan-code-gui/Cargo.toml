@@ -27,11 +27,13 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 rfd = "0.15.4"
 rodio = "0.20.1"
 vulcan-agent-view.workspace = true
+vulcan-change-set.workspace = true
 vulcan-markdown.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true
 vulcan-core.workspace = true
 vulcan-workbench-model.workspace = true
+vulcan-workspace-store.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-context.workspace = true
