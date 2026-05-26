@@ -6165,6 +6165,7 @@ dependencies = [
  "vulcan-context-compaction",
  "vulcan-core",
  "vulcan-file-watcher",
+ "vulcan-host-tools",
  "vulcan-markdown",
  "vulcan-mcp-runtime",
  "vulcan-prompt-composer",
@@ -6211,6 +6212,18 @@ dependencies = [
  "notify",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "vulcan-host-tools"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "sys-locale",
+ "tokio",
+ "uuid",
+ "vulcan-runtime-assets",
+ "vulcan-workbench-model",
 ]
 
 [[package]]

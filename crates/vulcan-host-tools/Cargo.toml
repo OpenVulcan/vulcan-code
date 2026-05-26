@@ -1,0 +1,18 @@
+[package]
+name = "vulcan-host-tools"
+description = "Shared host-side shell, output, and temp-file helpers for native tools."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+encoding_rs = "0.8.35"
+sys-locale = "0.3.2"
+tokio = { version = "1.52.2", features = ["macros", "process", "io-util", "sync", "time", "rt"] }
+uuid.workspace = true
+vulcan-runtime-assets.workspace = true
+vulcan-workbench-model.workspace = true

@@ -179,9 +179,8 @@ impl HostCommandShellSupport {
         }
     }
 
-    /// Builds one test-only support snapshot from explicit launcher rows and one optional configured default shell.
-    /// 根据显式启动器集合与可选配置默认 shell 构建一份仅供测试使用的支持快照。
-    #[cfg(test)]
+    /// Builds one explicit support snapshot from caller-provided launcher rows and one optional configured default shell.
+    /// 根据调用方提供的启动器集合与可选配置默认 shell 构建一份显式支持快照。
     pub fn from_test_parts(
         supported_shells: Vec<DetectedHostCommandShell>,
         configured_default_shell: Option<HostCommandShell>,

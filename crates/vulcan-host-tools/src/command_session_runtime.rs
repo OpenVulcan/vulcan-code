@@ -2,7 +2,7 @@
 //! 宿主管理的长生命周期 shell 会话与增量命令读写运行时。
 
 use crate::model::SessionId;
-use crate::tooling::output_decode::ShellOutputStreamDecoder;
+use crate::output_decode::ShellOutputStreamDecoder;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -34,9 +34,17 @@ const COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 512;
 /// 宿主管理命令会话观测到的一种稳定生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandSessionStatus {
+    /// Session process is still running and may emit more output.
+    /// 会话进程仍在运行，并且后续可能继续输出内容。
     Running,
+    /// Session process exited cleanly without an explicit host stop request.
+    /// 会话进程已自然正常退出，且并非宿主显式停止所致。
     Completed,
+    /// Session process exited with an error or the supervisor observed a fatal runtime failure.
+    /// 会话进程以错误方式退出，或监护逻辑观测到致命运行时失败。
     Failed,
+    /// Session process was stopped by the host before normal completion.
+    /// 会话进程在正常完成前被宿主主动停止。
     Stopped,
 }
 
@@ -57,7 +65,11 @@ impl CommandSessionStatus {
 /// 运行中的命令会话进程发出的一种输出流类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandSessionOutputStream {
+    /// Standard-output bytes emitted by the child process.
+    /// 子进程发出的标准输出字节流。
     Stdout,
+    /// Standard-error bytes emitted by the child process.
+    /// 子进程发出的标准错误字节流。
     Stderr,
 }
 

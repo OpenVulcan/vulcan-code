@@ -28,6 +28,7 @@ rfd = "0.15.4"
 rodio = "0.20.1"
 vulcan-agent-view.workspace = true
 vulcan-change-set.workspace = true
+vulcan-host-tools.workspace = true
 vulcan-markdown.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true

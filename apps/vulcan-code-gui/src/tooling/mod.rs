@@ -2,13 +2,11 @@
 //! compose 运行时基础架构使用的原生工具注册面。
 
 pub mod bridge;
-pub mod command_session_runtime;
 pub mod native;
-pub mod output_decode;
-pub mod public_name;
-pub mod result_format;
-pub mod shell_host;
 
+pub use vulcan_host_tools::{
+    command_session_runtime, output_decode, public_name, result_format, shell_host,
+};
 pub use command_session_runtime::CommandSessionRuntime;
 pub use native::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest, build_native_tool_catalog,

@@ -2,6 +2,7 @@
 members = [
     "apps/vulcan-code-gui",
     "crates/vulcan-change-set",
+    "crates/vulcan-host-tools",
     "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
     "crates/vulcan-workbench-model",
@@ -41,6 +42,7 @@ vulcan-iced-widget = { path = "crates/vulcan-iced-widget" }
 vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
 vulcan-core = { path = "crates/vulcan-core" }
 vulcan-change-set = { path = "crates/vulcan-change-set" }
+vulcan-host-tools = { path = "crates/vulcan-host-tools" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
