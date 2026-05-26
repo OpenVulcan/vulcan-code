@@ -5,6 +5,7 @@ use crate::agent_runtime::provider_attachment::{
     build_attachment_transport_error_text, build_missing_attachment_replay_text,
     read_provider_attachment,
 };
+use crate::agent_runtime::provider_prompt_layers::provider_fallback_system_prompt;
 use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropic_base_url;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
@@ -713,6 +714,7 @@ fn build_anthropic_request_payload(
         ..
     } = request;
 
+    let system_prompt = provider_fallback_system_prompt(&snapshot);
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
         Some(other) => {
@@ -728,12 +730,12 @@ fn build_anthropic_request_payload(
     payload.insert(String::from("max_tokens"), json!(max_tokens));
     payload.insert(String::from("stream"), Value::Bool(true));
 
-    if !snapshot.system_prompt.trim().is_empty() {
+    if !system_prompt.trim().is_empty() {
         payload.insert(
             String::from("system"),
             Value::Array(vec![json!({
                 "type": "text",
-                "text": snapshot.system_prompt
+                "text": system_prompt
             })]),
         );
     }
@@ -1250,6 +1252,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1341,6 +1346,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("分析图片"),
                 history: Vec::new(),
                 temperature: None,
@@ -1401,6 +1409,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("分析附件"),
                 history: Vec::new(),
                 temperature: None,
@@ -1460,6 +1471,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::new(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::new().clone(),
+                ),
                 prompt: String::new(),
                 history: Vec::new(),
                 temperature: None,
@@ -1520,6 +1534,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1592,6 +1609,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1670,6 +1690,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1782,6 +1805,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body 4"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1906,6 +1932,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body 4"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -2054,6 +2083,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -2123,6 +2155,9 @@ mod tests {
                 provider_id: String::from("anthropic"),
                 model_id: String::from("claude-sonnet-4-6"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("search and read"),
                 history: Vec::new(),
                 temperature: Some(0.2),

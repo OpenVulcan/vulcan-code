@@ -4446,6 +4446,96 @@ impl PersistedControllerConfiguration {
     }
 }
 
+/// Prompt-composer personality mode persisted in the shared Vulcan file.
+/// 持久化在共享 Vulcan 文件中的提示词组合人格模式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedPromptPersonalitySelection {
+    /// Use the built-in default personality.
+    /// 使用内置默认人格。
+    Default,
+    /// Use one named personality from built-in or user resources.
+    /// 使用来自内置或用户资源的具名人格。
+    Named(String),
+    /// Disable personality injection.
+    /// 禁用人格注入。
+    Disabled,
+}
+
+impl Default for PersistedPromptPersonalitySelection {
+    /// Returns the user-friendly built-in default personality selection.
+    /// 返回用户友好的内置默认人格选择。
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+/// Prompt-composer configuration persisted in the shared Vulcan file.
+/// 持久化在共享 Vulcan 文件中的提示词组合配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedPromptConfiguration {
+    /// Personality selection used by the main runtime prompt composer.
+    /// 主运行时提示词组合器使用的人格选择。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedPromptPersonalitySelection::is_default"
+    )]
+    pub personality: PersistedPromptPersonalitySelection,
+    /// Whether workspace-local `.vulcan/code/prompt.md` should be injected.
+    /// 是否注入工作区本地 `.vulcan/code/prompt.md`。
+    #[serde(default = "default_true")]
+    pub project_prompt_enabled: bool,
+    /// Workspace-relative project prompt file path.
+    /// 工作区相对项目提示词文件路径。
+    #[serde(default = "default_project_prompt_path")]
+    pub project_prompt_path: String,
+}
+
+impl Default for PersistedPromptConfiguration {
+    /// Builds the default prompt-composer configuration.
+    /// 构建默认提示词组合配置。
+    fn default() -> Self {
+        Self {
+            personality: PersistedPromptPersonalitySelection::Default,
+            project_prompt_enabled: true,
+            project_prompt_path: default_project_prompt_path(),
+        }
+    }
+}
+
+impl PersistedPromptPersonalitySelection {
+    /// Returns whether the personality selection is still the default value.
+    /// 返回人格选择是否仍为默认值。
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+
+    /// Returns the compact settings label for this personality selection.
+    /// 返回该人格选择在设置中使用的紧凑标签。
+    pub fn label(&self) -> String {
+        match self {
+            Self::Default => String::from("亲和（默认）"),
+            Self::Named(id) => format!("自定义：{id}"),
+            Self::Disabled => String::from("禁用人格"),
+        }
+    }
+}
+
+impl PersistedPromptConfiguration {
+    /// Returns whether the prompt configuration still equals built-in defaults.
+    /// 返回提示词配置是否仍等于内置默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Returns the default workspace-relative project prompt path.
+/// 返回默认的工作区相对项目提示词路径。
+fn default_project_prompt_path() -> String {
+    String::from(".vulcan/code/prompt.md")
+}
+
 /// Stable transcript turn-page size options exposed by the settings page.
 /// 设置页面暴露的稳定转录轮次分页选项集合。
 pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS: [usize; 4] = [20, 30, 40, 50];
@@ -4552,6 +4642,13 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedControllerConfiguration::is_default"
     )]
     pub controller: PersistedControllerConfiguration,
+    /// Persisted prompt-composer configuration.
+    /// 持久化的提示词组合配置。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedPromptConfiguration::is_default"
+    )]
+    pub prompt: PersistedPromptConfiguration,
 }
 
 /// Loads the supported provider catalog derived from the split provider resources.

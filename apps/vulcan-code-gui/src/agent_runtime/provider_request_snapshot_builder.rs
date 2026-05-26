@@ -5,11 +5,14 @@ use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
-use crate::agent_runtime::provider_request_controller_config::build_core_controller_config;
+use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_snapshot_adapter::PreviewSnapshotProviderAdapter;
 use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
 use crate::conversation_protocol::SessionConversationState;
-use vulcan_core::types::ProviderRequestSnapshot as CoreProviderRequestSnapshot;
+use vulcan_core::types::{
+    ProviderPromptLayers as CoreProviderPromptLayers,
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+};
 use vulcan_tools_manager::ResolvedToolDefinition;
 
 /// Builds one `vulcan-core` request snapshot from the current execution preparation and canonical session state.
@@ -18,6 +21,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
     preparation: &ExecutionPreparation,
     conversation_state: &SessionConversationState,
     system_preamble: &str,
+    prompt_layers: CoreProviderPromptLayers,
     prompt: &str,
     resolved_tools: &[ResolvedToolDefinition],
     max_turns_override: Option<usize>,
@@ -42,9 +46,10 @@ pub(crate) async fn build_core_provider_request_snapshot(
         Some(&preparation.model_blueprint.capabilities),
     );
     let mut controller = vulcan_core::controller::VulcanCoreController::new(
-        build_core_controller_config(
+        build_core_controller_config_with_layers(
             preparation,
             system_preamble,
+            prompt_layers,
             max_turns_override,
             additional_params.clone(),
         ),

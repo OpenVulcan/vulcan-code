@@ -142,6 +142,7 @@ mod tests {
             context_history_count: 1,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
+            prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             delegate_agents: Vec::new(),
@@ -195,6 +196,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-test"),
                 system_prompt: String::from("system"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    "system",
+                ),
                 temperature: Some(0.2),
                 max_turns: 4,
                 additional_params: None,

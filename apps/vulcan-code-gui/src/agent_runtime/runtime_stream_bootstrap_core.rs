@@ -5,11 +5,11 @@ use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
-use crate::agent_runtime::provider_request_controller_config::build_core_controller_config;
+use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
 use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
 use crate::agent_runtime::provider_runtime_context::{
-    build_runtime_system_preamble_for_agent, resolve_runtime_max_turns,
+    build_runtime_prompt_layers_for_agent, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
 use crate::context_budget::build_request_context_budget_snapshot;
@@ -19,6 +19,7 @@ use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
+    ProviderPromptLayers as CoreProviderPromptLayers,
 };
 use vulcan_tools_manager::ResolvedToolDefinition;
 
@@ -28,6 +29,9 @@ pub(crate) struct RuntimeBootstrapCore {
     /// Effective system preamble sent to the provider transport layer.
     /// 发送给 Provider 传输层的生效系统前导语。
     pub system_preamble: String,
+    /// Structured prompt layers sent through `vulcan-core` request snapshots.
+    /// 通过 `vulcan-core` 请求快照发送的结构化提示词层。
+    pub prompt_layers: CoreProviderPromptLayers,
     /// Provider-visible history reconstructed from canonical conversation messages.
     /// 从规范会话消息重建得到的 Provider 可见历史记录。
     pub request_history: Vec<CoreConversationMessage>,
@@ -46,7 +50,8 @@ pub(crate) fn build_runtime_bootstrap_core(
     request: &ExecutionPreparationRequest,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> RuntimeBootstrapCore {
-    let system_preamble = build_runtime_system_preamble_for_agent(preparation, active_agent);
+    let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent);
+    let system_preamble = runtime_prompt.fallback_text.clone();
     let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
     core_snapshot.messages = core_messages_to_provider_visible_history_for_model(
         &core_snapshot.messages,
@@ -55,9 +60,10 @@ pub(crate) fn build_runtime_bootstrap_core(
     );
     let request_history = core_snapshot.messages.clone();
     let core_controller = VulcanCoreController::new(
-        build_core_controller_config(
+        build_core_controller_config_with_layers(
             preparation,
             &system_preamble,
+            runtime_prompt.provider_layers.clone(),
             resolve_runtime_max_turns(active_agent),
             resolve_provider_additional_params(&preparation.model_blueprint),
         ),
@@ -66,6 +72,7 @@ pub(crate) fn build_runtime_bootstrap_core(
 
     RuntimeBootstrapCore {
         system_preamble,
+        prompt_layers: runtime_prompt.provider_layers,
         request_history,
         core_snapshot,
         core_controller,
@@ -78,6 +85,7 @@ pub(crate) async fn seed_runtime_request_snapshot(
     preparation: &mut ExecutionPreparation,
     request: &ExecutionPreparationRequest,
     system_preamble: &str,
+    prompt_layers: CoreProviderPromptLayers,
     resolved_tool_definitions: &[ResolvedToolDefinition],
     runtime_max_turns: Option<usize>,
     warnings: &mut Vec<String>,
@@ -86,6 +94,7 @@ pub(crate) async fn seed_runtime_request_snapshot(
         preparation,
         &request.conversation_state,
         system_preamble,
+        prompt_layers,
         request.prompt.trim(),
         resolved_tool_definitions,
         runtime_max_turns,

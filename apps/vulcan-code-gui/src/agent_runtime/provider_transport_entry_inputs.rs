@@ -9,7 +9,9 @@ use crate::model::SessionId;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
-use vulcan_core::types::ControllerConfig as CoreControllerConfig;
+use vulcan_core::types::{
+    ControllerConfig as CoreControllerConfig, ProviderPromptLayers as CoreProviderPromptLayers,
+};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Prepared host-controlled stream inputs shared by provider-specific entrypoints before they build the concrete adapter.
@@ -67,6 +69,7 @@ pub(crate) fn prepare_provider_transport_entry_inputs(
             provider_id,
             model_id,
             system_prompt: system_preamble.to_string(),
+            prompt_layers: CoreProviderPromptLayers::from_system_prompt(system_preamble),
             temperature,
             max_turns,
             additional_params,

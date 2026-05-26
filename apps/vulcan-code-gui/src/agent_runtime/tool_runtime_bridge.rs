@@ -287,6 +287,9 @@ mod tests {
                 provider_id: config.provider_id.clone(),
                 model_id: config.model_id.clone(),
                 system_prompt: config.system_prompt.clone(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    config.system_prompt.clone().clone(),
+                ),
                 prompt: String::from("controller-integration"),
                 history: snapshot.messages.clone(),
                 temperature: config.temperature,
@@ -434,6 +437,9 @@ mod tests {
                 provider_id: String::from("mock-openai"),
                 model_id: String::from("mock-model"),
                 system_prompt: String::from("system"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system").clone(),
+                ),
                 temperature: Some(0.2),
                 max_turns: 3,
                 additional_params: None,
@@ -509,6 +515,9 @@ mod tests {
                 provider_id: String::from("mock-openai"),
                 model_id: String::from("mock-model"),
                 system_prompt: String::from("system"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system").clone(),
+                ),
                 temperature: Some(0.2),
                 max_turns: 3,
                 additional_params: None,

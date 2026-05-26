@@ -84,6 +84,7 @@ mod tests {
             context_history_count: 2,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
+            prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             delegate_agents: Vec::new(),

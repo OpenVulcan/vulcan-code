@@ -282,6 +282,8 @@ impl LanguageRegistry {
                 I18nKey::SettingsSectionModelListDescription,
                 I18nKey::SettingsSectionRuntimeDiagnosticsLabel,
                 I18nKey::SettingsSectionRuntimeDiagnosticsDescription,
+                I18nKey::SettingsSectionPromptComposerLabel,
+                I18nKey::SettingsSectionPromptComposerDescription,
                 I18nKey::SettingsSectionAiCapabilityVendorsLabel,
                 I18nKey::SettingsSectionAiCapabilityVendorsDescription,
                 I18nKey::SettingsSectionAiCapabilityWebSearchLabel,

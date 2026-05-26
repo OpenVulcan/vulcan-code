@@ -165,6 +165,8 @@ pub enum I18nKey {
     SettingsSectionModelListDescription,
     SettingsSectionRuntimeDiagnosticsLabel,
     SettingsSectionRuntimeDiagnosticsDescription,
+    SettingsSectionPromptComposerLabel,
+    SettingsSectionPromptComposerDescription,
     SettingsSectionAiCapabilityVendorsLabel,
     SettingsSectionAiCapabilityVendorsDescription,
     SettingsSectionAiCapabilityWebSearchLabel,
@@ -387,6 +389,10 @@ impl I18nKey {
             }
             Self::SettingsSectionRuntimeDiagnosticsDescription => {
                 "settings.section_runtime_diagnostics_description"
+            }
+            Self::SettingsSectionPromptComposerLabel => "settings.section_prompt_composer_label",
+            Self::SettingsSectionPromptComposerDescription => {
+                "settings.section_prompt_composer_description"
             }
             Self::SettingsSectionAiCapabilityVendorsLabel => {
                 "settings.section_ai_capability_vendors_label"

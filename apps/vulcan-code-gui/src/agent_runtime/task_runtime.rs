@@ -1794,6 +1794,9 @@ mod tests {
             provider_id: String::from("provider"),
             model_id: String::from("model"),
             system_prompt: system_prompt.to_string(),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                system_prompt.to_string().clone(),
+            ),
             temperature: None,
             max_turns: 8,
             additional_params: None,
@@ -1830,6 +1833,9 @@ mod tests {
             provider_id: String::from("stored-provider"),
             model_id: String::from("stored-model"),
             system_prompt: String::from("Stored prompt"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("Stored prompt").clone(),
+            ),
             temperature: Some(0.7),
             max_turns: 3,
             additional_params: Some(json!({ "stored": true })),

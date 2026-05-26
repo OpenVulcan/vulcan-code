@@ -20,6 +20,10 @@ mod transcript;
 /// 用于合并项目规则文件系统突发事件的最小延迟。
 const PROJECT_RULES_WATCH_THROTTLE_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(250);
+/// Minimum delay used to coalesce prompt-resource filesystem bursts.
+/// 用于合并提示词资源文件系统突发事件的最小延迟。
+const PROMPT_RESOURCE_WATCH_THROTTLE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(250);
 
 /// Builds a compact preview for one prompt-composer inspector layer.
 /// 为单个提示词组合检查器分层构建紧凑预览。
@@ -41,6 +45,21 @@ struct ProjectRulesWatchSubscriptionInput {
     /// Workspace directory whose default project rules should be watched.
     /// 需要监听默认项目规则的工作区目录。
     workspace_path: String,
+}
+
+/// Stable input used to identify prompt-resource watch subscriptions.
+/// 用于标识提示词资源监听订阅的稳定输入。
+#[derive(Clone, Debug, Hash)]
+struct PromptResourceWatchSubscriptionInput {
+    /// Workspace directory whose project prompt should be watched.
+    /// 需要监听项目提示词的工作区目录。
+    workspace_path: String,
+    /// Workspace-relative project prompt file path.
+    /// 工作区相对项目提示词文件路径。
+    project_prompt_path: String,
+    /// Whether project prompt watching is enabled.
+    /// 是否启用项目提示词监听。
+    project_prompt_enabled: bool,
 }
 
 /// Returns the active subagent dispatch list height needed for the current running task count.
@@ -181,6 +200,77 @@ fn project_rules_watch_stream(
                         workspace_path: workspace_path.clone(),
                     };
                 }
+            }
+        }
+    })
+}
+
+/// Builds a live watcher subscription for prompt resource directories.
+/// 为提示词资源目录构建实时监听订阅。
+fn prompt_resource_watch_subscription(
+    workspace_path: &str,
+    project_prompt_path: &str,
+    project_prompt_enabled: bool,
+) -> Subscription<Message> {
+    Subscription::run_with(
+        PromptResourceWatchSubscriptionInput {
+            workspace_path: workspace_path.trim().to_string(),
+            project_prompt_path: project_prompt_path.trim().to_string(),
+            project_prompt_enabled,
+        },
+        prompt_resource_watch_stream,
+    )
+}
+
+/// Builds the asynchronous stream backing prompt-resource watching.
+/// 构建提示词资源监听背后的异步流。
+fn prompt_resource_watch_stream(
+    input: &PromptResourceWatchSubscriptionInput,
+) -> futures_util::stream::BoxStream<'static, Message> {
+    let workspace_path = input.workspace_path.clone();
+    let project_prompt_path = input.project_prompt_path.clone();
+    let project_prompt_enabled = input.project_prompt_enabled;
+    Box::pin(async_stream::stream! {
+        let mut watch_paths = Vec::new();
+        if let Some(home_dir) = dirs::home_dir() {
+            watch_paths.push(vulcan_file_watcher::live::LiveWatchPath {
+                path: home_dir.join(".vulcan").join("code").join("prompt"),
+                recursive: true,
+            });
+        }
+        let project_prompt_full_path = if project_prompt_enabled
+            && !workspace_path.trim().is_empty()
+            && !project_prompt_path.trim().is_empty()
+        {
+            let workspace = std::path::PathBuf::from(&workspace_path);
+            let relative = project_prompt_path.trim().trim_start_matches(['/', '\\']);
+            Some(workspace.join(relative))
+        } else {
+            None
+        };
+        if let Some(path) = project_prompt_full_path.clone() {
+            watch_paths.push(vulcan_file_watcher::live::LiveWatchPath {
+                path,
+                recursive: false,
+            });
+        }
+        if watch_paths.is_empty() {
+            return;
+        }
+
+        if let Ok(watcher) = vulcan_file_watcher::live::LiveFileWatcher::new() {
+            let watcher = std::sync::Arc::new(watcher);
+            let (subscriber, rx) = watcher.add_subscriber();
+            let _registration = subscriber.register_paths(watch_paths);
+            let mut rx = vulcan_file_watcher::live::ThrottledLiveWatchReceiver::new(
+                rx,
+                PROMPT_RESOURCE_WATCH_THROTTLE_INTERVAL,
+            );
+
+            while rx.recv().await.is_some() {
+                yield Message::PromptResourcesWatchChanged {
+                    workspace_path: workspace_path.clone(),
+                };
             }
         }
     })
@@ -5457,6 +5547,7 @@ impl VulcanWorkbench {
             SettingsSection::ModelProviders => self.view_provider_configuration_card(),
             SettingsSection::ModelList => self.view_provider_model_list_card(),
             SettingsSection::RuntimeDiagnostics => self.view_inspector(),
+            SettingsSection::PromptComposer => self.view_prompt_composer_settings_card(),
             SettingsSection::AiCapabilityVendors => self.view_ai_tool_configuration_card(),
             SettingsSection::AiCapabilityWebSearch => {
                 self.view_ai_capability_settings_page(AiToolKind::WebSearch)
@@ -6036,6 +6127,11 @@ impl VulcanWorkbench {
 
         let project_rules_watch_subscription =
             project_rules_watch_subscription(&self.workspace_path);
+        let prompt_resource_watch_subscription = prompt_resource_watch_subscription(
+            &self.workspace_path,
+            &self.provider_configuration.prompt.project_prompt_path,
+            self.provider_configuration.prompt.project_prompt_enabled,
+        );
 
         Subscription::batch([
             window::close_events().map(Message::WindowClosed),
@@ -6052,6 +6148,7 @@ impl VulcanWorkbench {
             question_runtime_poll_subscription,
             luaskills_progress_poll_subscription,
             project_rules_watch_subscription,
+            prompt_resource_watch_subscription,
         ])
     }
 
@@ -7392,6 +7489,47 @@ impl VulcanWorkbench {
                     self.t(I18nKey::SettingsTemperatureValueDefault)
                 }),
                 temperature_control,
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Renders the prompt-composer settings card.
+    /// 渲染提示词组合设置卡片。
+    pub(super) fn view_prompt_composer_settings_card(&self) -> Element<'_, Message> {
+        let prompt_config = &self.provider_configuration.prompt;
+        let project_prompt_path = prompt_config.project_prompt_path.clone();
+        let personality_summary = prompt_config.personality.label();
+
+        container(
+            column![
+                text("提示词组合").size(18),
+                text(
+                    "这里控制实际请求前的提示词组合方式；人格、项目级提示词会进入下一次 API 请求。"
+                )
+                .size(12),
+                text("人格").size(12),
+                pick_list(
+                    self.prompt_personality_picker_choices(),
+                    self.selected_prompt_personality_choice(),
+                    Message::PromptPersonalitySelected,
+                )
+                .width(Fill)
+                .placeholder("选择人格"),
+                text(format!("当前人格：{personality_summary}")).size(12),
+                checkbox(prompt_config.project_prompt_enabled)
+                    .label("启用项目级用户提示词")
+                    .on_toggle(Message::ProjectPromptInjectionToggled),
+                text(format!("项目提示词文件：{project_prompt_path}")).size(12),
+                text(
+                    "当项目目录存在该文件时，内容会进入用户上下文层；文件变化会触发提示词缓存刷新。"
+                )
+                .size(12),
+                text("自定义人格文件放在：~/.vulcan/code/prompt/personalities/{id}.md").size(12),
+                text("工具帮助文件放在：~/.vulcan/code/prompt/tool-help/{tool_id}.md").size(12),
             ]
             .spacing(12),
         )

@@ -11,6 +11,7 @@ pub mod prompt_composer_runtime;
 pub mod provider;
 pub mod provider_attachment;
 pub mod provider_native_tools;
+pub mod provider_prompt_layers;
 pub mod provider_prompt_loader;
 pub mod provider_protocol_anthropic_client;
 pub mod provider_protocol_anthropic_decoders;

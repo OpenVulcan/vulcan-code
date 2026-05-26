@@ -1,6 +1,7 @@
 //! Direct Cohere HTTP and SSE transport owned by the host runtime.
 //! 宿主运行时自有的 Cohere HTTP 与 SSE 直连传输模块。
 
+use crate::agent_runtime::provider_prompt_layers::provider_fallback_system_prompt;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
@@ -356,6 +357,7 @@ fn build_cohere_request_payload(
         ..
     } = request;
 
+    let system_prompt = provider_fallback_system_prompt(&snapshot);
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
         Some(other) => {
@@ -374,10 +376,10 @@ fn build_cohere_request_payload(
     }
 
     let mut messages = Vec::new();
-    if !snapshot.system_prompt.trim().is_empty() {
+    if !system_prompt.trim().is_empty() {
         messages.push(
             serde_json::to_value(CohereChatMessage::System {
-                content: snapshot.system_prompt,
+                content: system_prompt,
             })
             .map_err(|error| VulcanCoreError::InvalidState {
                 message: format!("Cohere 系统消息序列化失败：{error}"),
@@ -718,6 +720,9 @@ mod tests {
                 provider_id: String::from("cohere"),
                 model_id: String::from("command-a-reasoning-08-2025"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -814,6 +819,9 @@ mod tests {
                 provider_id: String::from("cohere"),
                 model_id: String::from("command-a-reasoning-08-2025"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("请转写音频"),
                 history: Vec::new(),
                 temperature: None,

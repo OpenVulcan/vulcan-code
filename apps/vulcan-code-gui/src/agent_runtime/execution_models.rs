@@ -6,6 +6,7 @@ use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
+use crate::provider_config::{PersistedPromptConfiguration, PersistedPromptPersonalitySelection};
 use serde_json::Value;
 use vulcan_context::{ContextAssembly, ContextBaseline};
 use vulcan_core::types::ConversationAttachment;
@@ -85,6 +86,9 @@ pub struct ExecutionPreparation {
     /// Optional sampling temperature captured for the run.
     /// 为本次运行捕获的可选采样温度。
     pub temperature: Option<f32>,
+    /// Prompt-composer configuration captured for this run.
+    /// 为本次运行捕获的提示词组合配置。
+    pub prompt_configuration: PersistedPromptConfiguration,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,
@@ -115,6 +119,24 @@ pub struct ExecutionPreparation {
     /// Optional compact baseline snapshot derived from the current layered context assembly.
     /// 从当前分层上下文装配结果派生出的可选紧凑基线快照。
     pub context_baseline: Option<ContextBaseline>,
+}
+
+/// Convert a persisted personality selection into prompt-composer input.
+/// 将持久化人格选择转换为提示词组合器输入。
+pub(crate) fn persisted_personality_to_prompt_selection(
+    selection: &PersistedPromptPersonalitySelection,
+) -> vulcan_prompt_composer::PersonalitySelection {
+    match selection {
+        PersistedPromptPersonalitySelection::Default => {
+            vulcan_prompt_composer::PersonalitySelection::Default
+        }
+        PersistedPromptPersonalitySelection::Named(id) => {
+            vulcan_prompt_composer::PersonalitySelection::Named(id.clone())
+        }
+        PersistedPromptPersonalitySelection::Disabled => {
+            vulcan_prompt_composer::PersonalitySelection::Disabled
+        }
+    }
 }
 
 impl ExecutionPreparation {

@@ -8,7 +8,8 @@ use serde_json::Value;
 use vulcan_core::provider::VulcanProviderAdapter;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
-    CoreError as VulcanCoreError, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    CoreError as VulcanCoreError, ProviderPromptLayers as CoreProviderPromptLayers,
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderRequestToolSchema as CoreProviderRequestToolSchema,
 };
 
@@ -81,6 +82,11 @@ impl VulcanProviderAdapter for PreviewSnapshotProviderAdapter {
             provider_id: config.provider_id.clone(),
             model_id: config.model_id.clone(),
             system_prompt: config.system_prompt.clone(),
+            prompt_layers: if config.prompt_layers.is_empty() {
+                CoreProviderPromptLayers::from_system_prompt(config.system_prompt.clone())
+            } else {
+                config.prompt_layers.clone()
+            },
             prompt: self.prompt.clone(),
             history: core_messages_to_provider_visible_history(&snapshot.messages),
             temperature: config.temperature,

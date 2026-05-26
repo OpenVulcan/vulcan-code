@@ -77,6 +77,7 @@ impl VulcanWorkbench {
             .push(
                 self.view_settings_navigation_top_level_button(SettingsSection::RuntimeDiagnostics),
             )
+            .push(self.view_settings_navigation_top_level_button(SettingsSection::PromptComposer))
             .push(self.view_settings_navigation_top_level_button(SettingsSection::AboutLicenses))
             .push(self.view_settings_navigation_top_level_button(SettingsSection::ArchivedRestore));
 
@@ -326,6 +327,11 @@ impl VulcanWorkbench {
                 .color(color)
                 .into(),
             SettingsSection::RuntimeDiagnostics => codicon::sync()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
+            SettingsSection::PromptComposer => lucide::file_text()
                 .size(15)
                 .line_height(1.0)
                 .color(color)

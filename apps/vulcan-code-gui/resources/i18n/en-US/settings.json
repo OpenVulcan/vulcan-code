@@ -23,6 +23,8 @@
   "settings.section_model_list_description": "Manage enabled models and per-model capability overrides.",
   "settings.section_runtime_diagnostics_label": "Runtime & Diagnostics",
   "settings.section_runtime_diagnostics_description": "Review runtime parameters, execution runtime, engineering policies, guides, and logs in one place.",
+  "settings.section_prompt_composer_label": "Prompts",
+  "settings.section_prompt_composer_description": "Manage prompt composition, personality style, and project-level prompt injection.",
   "settings.section_ai_capability_vendors_label": "Capability Providers",
   "settings.section_ai_capability_vendors_description": "Configure shared capability-provider credentials here so later capability pages can reuse them directly.",
   "settings.section_ai_capability_web_search_label": "Web Search",

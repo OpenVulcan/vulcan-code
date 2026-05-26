@@ -92,6 +92,7 @@ pub(crate) async fn bootstrap_runtime_stream(
     );
     let RuntimeBootstrapCore {
         system_preamble,
+        prompt_layers,
         request_history,
         core_snapshot,
         core_controller,
@@ -100,6 +101,7 @@ pub(crate) async fn bootstrap_runtime_stream(
         &mut preparation,
         request,
         &system_preamble,
+        prompt_layers,
         &resolved_tool_definitions,
         crate::agent_runtime::provider_runtime_context::resolve_runtime_max_turns(
             active_agent.as_ref(),

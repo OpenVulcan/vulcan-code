@@ -23,6 +23,8 @@
   "settings.section_model_list_description": "管理已启用模型与模型能力覆盖。",
   "settings.section_runtime_diagnostics_label": "运行与诊断",
   "settings.section_runtime_diagnostics_description": "集中查看运行参数、执行运行时、工程策略、指引与日志。",
+  "settings.section_prompt_composer_label": "提示词",
+  "settings.section_prompt_composer_description": "管理提示词组合、人格式样与项目级提示词注入。",
   "settings.section_ai_capability_vendors_label": "能力供应商",
   "settings.section_ai_capability_vendors_description": "先在这里配置共享能力供应商凭据，后续各能力页直接复用。",
   "settings.section_ai_capability_web_search_label": "联网搜索",

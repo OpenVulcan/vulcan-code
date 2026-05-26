@@ -114,6 +114,7 @@ pub(crate) fn prepare_execution(
         context_history_count: request.conversation_state.messages.len(),
         execution_mode: request.execution_mode.clone(),
         temperature,
+        prompt_configuration: config.prompt.clone(),
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors: resolved_tools.descriptors,
         delegate_agents: active_agent.delegates.clone(),

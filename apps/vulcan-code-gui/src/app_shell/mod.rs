@@ -94,9 +94,9 @@ use crate::provider_capabilities::resolve_effective_model_capabilities;
 use crate::provider_config::{
     self, AiToolKind, ModelChoice, NativeBridgeRoutingMode, PersistedAiToolConfiguration,
     PersistedControllerConfiguration, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
-    PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedProviderEntry,
-    PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
-    ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
+    PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedPromptPersonalitySelection,
+    PersistedProviderEntry, PersistedProviderOptions, ProviderChoice, ProviderConfigurationFile,
+    ProviderFieldKey, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningSelectionOption,
     SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS, WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
@@ -4801,6 +4801,26 @@ impl std::fmt::Display for CommandShellPickerChoice {
     }
 }
 
+/// Pick-list choice representing one prompt-composer personality mode.
+/// 表示单个提示词组合人格模式的下拉选择项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptPersonalityChoice {
+    /// Persisted personality selection represented by this choice.
+    /// 该选项代表的持久化人格选择。
+    selection: PersistedPromptPersonalitySelection,
+    /// Human-readable display label.
+    /// 人类可读显示标签。
+    label: String,
+}
+
+impl std::fmt::Display for PromptPersonalityChoice {
+    /// Renders the user-facing label of one personality picker item.
+    /// 渲染单个人格选择项的面向用户标签。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
 /// Workbench-scoped model option that keeps the visible model name and the owning provider label together.
 /// 工作台作用域内的模型选项，同时保留可见模型名称与所属供应商标签。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6128,6 +6148,9 @@ enum SettingsSection {
     /// Runtime tuning, execution diagnostics, and engineering guardrails.
     /// 运行调优、执行诊断与工程约束设置。
     RuntimeDiagnostics,
+    /// Prompt composer and personality configuration.
+    /// 提示词组合器与人格配置。
+    PromptComposer,
     /// Shared AI capability vendor credentials reused by multiple semantic tools.
     /// 被多个语义工具复用的共享 AI 能力供应商凭据。
     AiCapabilityVendors,
@@ -6257,6 +6280,7 @@ impl SettingsSection {
             Self::ModelProviders => I18nKey::SettingsSectionModelProvidersLabel,
             Self::ModelList => I18nKey::SettingsSectionModelListLabel,
             Self::RuntimeDiagnostics => I18nKey::SettingsSectionRuntimeDiagnosticsLabel,
+            Self::PromptComposer => I18nKey::SettingsSectionPromptComposerLabel,
             Self::AiCapabilityVendors => I18nKey::SettingsSectionAiCapabilityVendorsLabel,
             Self::AiCapabilityWebSearch => I18nKey::SettingsSectionAiCapabilityWebSearchLabel,
             Self::AiCapabilityUnderstandImage => {
@@ -6294,6 +6318,7 @@ impl SettingsSection {
             Self::ModelProviders => I18nKey::SettingsSectionModelProvidersDescription,
             Self::ModelList => I18nKey::SettingsSectionModelListDescription,
             Self::RuntimeDiagnostics => I18nKey::SettingsSectionRuntimeDiagnosticsDescription,
+            Self::PromptComposer => I18nKey::SettingsSectionPromptComposerDescription,
             Self::AiCapabilityVendors => I18nKey::SettingsSectionAiCapabilityVendorsDescription,
             Self::AiCapabilityWebSearch => I18nKey::SettingsSectionAiCapabilityWebSearchDescription,
             Self::AiCapabilityUnderstandImage => {
@@ -6710,6 +6735,13 @@ enum Message {
     ProjectRulesWatchChanged {
         /// Workspace path owning the changed project-rules file.
         /// 拥有变化项目规则文件的工作区路径。
+        workspace_path: String,
+    },
+    /// Reports that prompt resources may have changed on disk.
+    /// 回传提示词资源可能已在磁盘上发生变化。
+    PromptResourcesWatchChanged {
+        /// Workspace path associated with the prompt-resource watch.
+        /// 与提示词资源监听关联的工作区路径。
         workspace_path: String,
     },
     /// Prompt composer changed from the text input.
@@ -7502,6 +7534,12 @@ enum Message {
     /// Default command shell policy selected from the settings pick list.
     /// 从设置下拉选择框中选中了默认命令 shell 策略。
     CommandShellPreferenceSelected(CommandShellPickerChoice),
+    /// Prompt-composer personality selected from the settings pick list.
+    /// 从设置下拉选择框中选择了提示词组合人格。
+    PromptPersonalitySelected(PromptPersonalityChoice),
+    /// Project-level prompt injection toggle changed.
+    /// 项目级提示词注入开关发生变化。
+    ProjectPromptInjectionToggled(bool),
     /// Applies one read-only text editor action to the inspector guide Markdown buffer.
     /// 向检查面板指引 Markdown 缓冲区应用一次只读文本编辑器动作。
     QuickGuideMarkdownAction(text_editor::Action),
@@ -9930,6 +9968,21 @@ impl VulcanWorkbench {
                 );
                 Task::none()
             }
+            Message::PromptResourcesWatchChanged { workspace_path } => {
+                crate::agent_runtime::provider_runtime_context::invalidate_workspace_project_rules_prompt_cache(
+                    &workspace_path,
+                );
+                match crate::agent_runtime::prompt_composer_runtime::reload_default_runtime_prompt_composer_engine() {
+                    Ok(()) => {
+                        self.refresh_prompt_composer_inspector_buffer();
+                        self.status_message = String::from("提示词资源已变化，运行时提示词组合器已刷新。");
+                    }
+                    Err(error) => {
+                        self.status_message = format!("提示词资源变化后刷新组合器失败：{error}");
+                    }
+                }
+                Task::none()
+            }
             Message::ComposerChanged(value) => {
                 self.composer = value;
                 self.refresh_composer_slash_command_state();
@@ -12051,6 +12104,44 @@ impl VulcanWorkbench {
                 match self.persist_default_command_shell_preference(choice.shell) {
                     Ok(status_message) => {
                         self.status_message = status_message;
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::PromptPersonalitySelected(choice) => {
+                if self.provider_configuration.prompt.personality == choice.selection {
+                    return Task::none();
+                }
+                self.provider_configuration.prompt.personality = choice.selection;
+                match self.persist_prompt_configuration() {
+                    Ok(()) => {
+                        self.refresh_runtime_foundation();
+                        self.refresh_prompt_composer_inspector_buffer();
+                        self.status_message = format!("提示词人格已切换为 {}。", choice.label);
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProjectPromptInjectionToggled(enabled) => {
+                if self.provider_configuration.prompt.project_prompt_enabled == enabled {
+                    return Task::none();
+                }
+                self.provider_configuration.prompt.project_prompt_enabled = enabled;
+                match self.persist_prompt_configuration() {
+                    Ok(()) => {
+                        self.refresh_runtime_foundation();
+                        self.refresh_prompt_composer_inspector_buffer();
+                        self.status_message = if enabled {
+                            String::from("已启用项目级用户提示词注入。")
+                        } else {
+                            String::from("已禁用项目级用户提示词注入。")
+                        };
                     }
                     Err(error) => {
                         self.status_message = error;

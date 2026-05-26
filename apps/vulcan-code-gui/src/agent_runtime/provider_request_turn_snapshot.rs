@@ -13,6 +13,7 @@ use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderContinuation as CoreProviderContinuation,
+    ProviderPromptLayers as CoreProviderPromptLayers,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
 };
 
@@ -48,6 +49,7 @@ pub(crate) fn build_openai_compatible_turn_request_snapshot(
         provider_id: provider_id.to_string(),
         model_id: model_id.to_string(),
         system_prompt: system_preamble.to_string(),
+        prompt_layers: CoreProviderPromptLayers::from_system_prompt(system_preamble),
         prompt: render_provider_visible_prompt_message(current_prompt),
         history: core_messages_to_provider_visible_history(&core_snapshot.messages),
         temperature,

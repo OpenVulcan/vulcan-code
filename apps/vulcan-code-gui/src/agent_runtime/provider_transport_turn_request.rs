@@ -11,6 +11,7 @@ use serde_json::Value;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot, CoreError as VulcanCoreError,
+    ProviderPromptLayers as CoreProviderPromptLayers,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
 };
 
@@ -63,7 +64,10 @@ pub(crate) fn build_host_controlled_turn_request(
     let request_snapshot = build_openai_compatible_turn_request_snapshot(
         provider_id,
         model_id,
-        config.system_prompt.as_str(),
+        config
+            .prompt_layers
+            .render_or_legacy(config.system_prompt.as_str())
+            .as_str(),
         &snapshot.continuation,
         current_history_messages,
         current_prompt_message,
@@ -73,6 +77,14 @@ pub(crate) fn build_host_controlled_turn_request(
         request_headers,
         additional_params,
     );
+    let request_snapshot = CoreProviderRequestSnapshot {
+        prompt_layers: if config.prompt_layers.is_empty() {
+            CoreProviderPromptLayers::from_system_prompt(config.system_prompt.clone())
+        } else {
+            config.prompt_layers.clone()
+        },
+        ..request_snapshot
+    };
     let _ = live_sender.send(Ok(ProviderStreamDelta::RequestSnapshot(
         request_snapshot.clone(),
     )));

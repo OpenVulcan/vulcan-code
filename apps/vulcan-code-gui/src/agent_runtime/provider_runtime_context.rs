@@ -2,7 +2,9 @@
 //! 面向系统前导语与轮次预算解析的 Provider 运行时上下文辅助模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
-use crate::agent_runtime::execution_models::ExecutionPreparation;
+use crate::agent_runtime::execution_models::{
+    ExecutionPreparation, persisted_personality_to_prompt_selection,
+};
 use crate::agent_runtime::prompt_composer_runtime::{
     record_runtime_prompt_composer_report, runtime_prompt_composer_engine,
 };
@@ -10,12 +12,13 @@ use crate::agent_runtime::provider_prompt_loader::{
     LoadedProviderBaseSystemPrompt, load_provider_base_system_prompt,
     load_provider_base_system_prompt_with_source,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use vulcan_core::types::ProviderPromptLayers as CoreProviderPromptLayers;
 use vulcan_prompt_composer::{
-    AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, PersonalitySelection,
-    ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode,
-    PromptAssemblyOutput, ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, ProjectRulesFileCache,
+    ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput,
+    ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
 };
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
@@ -26,20 +29,23 @@ static PROJECT_RULES_FILE_CACHE: OnceLock<Mutex<ProjectRulesFileCache>> = OnceLo
 /// 构建发送给真实 Provider 代理的生效运行时系统提示词。
 #[cfg(test)]
 pub(crate) fn build_runtime_system_preamble(preparation: &ExecutionPreparation) -> String {
-    build_runtime_system_preamble_for_agent(preparation, None)
+    build_runtime_prompt_layers_for_agent(preparation, None).fallback_text
 }
 
-/// Builds the effective runtime system prompt with optional active-agent context.
-/// 使用可选当前代理上下文构建生效运行时系统提示词。
-pub(crate) fn build_runtime_system_preamble_for_agent(
+/// Builds the effective layered runtime prompt sent to the real provider agent.
+/// 构建发送给真实 Provider 代理的生效分层运行时提示词。
+pub(crate) fn build_runtime_prompt_layers_for_agent(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
-) -> String {
+) -> RuntimePromptLayers {
     let input = build_runtime_prompt_assembly_input(preparation, active_agent);
     let output = match runtime_prompt_composer_engine().compose(&input) {
         Ok(output) => output,
         Err(error) => {
-            return build_legacy_runtime_system_preamble(preparation, Some(error.to_string()));
+            return RuntimePromptLayers::from_legacy(build_legacy_runtime_system_preamble(
+                preparation,
+                Some(error.to_string()),
+            ));
         }
     };
     if active_agent.is_none() {
@@ -52,7 +58,49 @@ pub(crate) fn build_runtime_system_preamble_for_agent(
         );
     }
 
-    render_runtime_prompt_output(&output, preparation)
+    RuntimePromptLayers::from_prompt_output(&output, preparation)
+}
+
+/// Runtime prompt layers plus the legacy fallback text used by old transport code.
+/// 运行时提示词层，以及旧传输代码使用的兼容回退文本。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePromptLayers {
+    /// Legacy fallback system-preamble text.
+    /// 旧版兼容系统前导语文本。
+    pub(crate) fallback_text: String,
+    /// Structured provider prompt layers.
+    /// 结构化 Provider 提示词层。
+    pub(crate) provider_layers: CoreProviderPromptLayers,
+}
+
+impl RuntimePromptLayers {
+    /// Build prompt layers from a legacy pre-rendered system prompt.
+    /// 从一份旧版预渲染系统提示词构建提示词层。
+    fn from_legacy(system_prompt: String) -> Self {
+        let provider_layers = CoreProviderPromptLayers::from_system_prompt(system_prompt.clone());
+        Self {
+            fallback_text: system_prompt,
+            provider_layers,
+        }
+    }
+
+    /// Build prompt layers from one prompt-composer output.
+    /// 从一份提示词组合器输出构建提示词层。
+    fn from_prompt_output(
+        output: &PromptAssemblyOutput,
+        preparation: &ExecutionPreparation,
+    ) -> Self {
+        let provider_layers = render_runtime_prompt_layers(output);
+        let fallback_text = if provider_layers.is_empty() {
+            build_legacy_runtime_system_preamble(preparation, None)
+        } else {
+            provider_layers.render_fallback_system_prompt()
+        };
+        Self {
+            fallback_text,
+            provider_layers,
+        }
+    }
 }
 
 /// Builds the prompt-composer input used by the runtime bridge.
@@ -82,7 +130,9 @@ fn build_runtime_prompt_assembly_input(
                 .with_source_label(provider_prompt.source_label),
         ),
         agent_prompt,
-        personality: PersonalitySelection::Default,
+        personality: persisted_personality_to_prompt_selection(
+            &preparation.prompt_configuration.personality,
+        ),
         project_rules: load_workspace_project_rules_snapshot(&preparation.workspace_path),
         environment_context: Some(environment_context),
         task_goal: None,
@@ -101,7 +151,9 @@ fn build_runtime_prompt_assembly_input(
         ),
         subagent: None,
         custom_developer_segments: Vec::new(),
-        custom_user_segments: Vec::new(),
+        custom_user_segments: load_workspace_project_user_prompt(preparation)
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -129,29 +181,15 @@ fn build_agent_prompt_snapshot(agent: &RuntimeAgentDefinition) -> Option<AgentPr
     )
 }
 
-/// Renders a composer output into the single provider system-preamble channel used today.
-/// 将组合结果渲染为当前 Provider 使用的单一系统前导语通道。
-fn render_runtime_prompt_output(
-    output: &PromptAssemblyOutput,
-    preparation: &ExecutionPreparation,
-) -> String {
-    let mut sections = Vec::new();
-    push_non_empty_section(&mut sections, output.render_system_text());
-    push_titled_section(
-        &mut sections,
-        "Developer Instructions",
-        output.render_developer_text(),
-    );
-    push_titled_section(
-        &mut sections,
-        "Tool Guidance",
-        output.render_tool_metadata_text(),
-    );
-    push_titled_section(&mut sections, "Runtime Context", output.render_user_text());
-    if sections.is_empty() {
-        return build_legacy_runtime_system_preamble(preparation, None);
+/// Renders one prompt-composer output into structured provider prompt layers.
+/// 将一份提示词组合器输出渲染为结构化 Provider 提示词层。
+fn render_runtime_prompt_layers(output: &PromptAssemblyOutput) -> CoreProviderPromptLayers {
+    CoreProviderPromptLayers {
+        system: output.render_system_text(),
+        developer: output.render_developer_text(),
+        tool_guidance: output.render_tool_metadata_text(),
+        runtime_context: output.render_user_text(),
     }
-    sections.join("\n\n")
 }
 
 /// Loads one workspace-level project rules snapshot when `AGENTS.md` exists.
@@ -188,6 +226,46 @@ fn workspace_project_rules_path(workspace_path: &str) -> Option<&Path> {
     Some(workspace)
 }
 
+/// Loads the workspace-local user prompt configured for prompt composition.
+/// 加载为提示词组合配置的工作区本地用户提示词。
+fn load_workspace_project_user_prompt(preparation: &ExecutionPreparation) -> Option<String> {
+    if !preparation.prompt_configuration.project_prompt_enabled {
+        return None;
+    }
+    let workspace = Path::new(&preparation.workspace_path);
+    if preparation.workspace_path.trim().is_empty() || !workspace.is_dir() {
+        return None;
+    }
+    let relative_path = preparation
+        .prompt_configuration
+        .project_prompt_path
+        .trim()
+        .trim_start_matches(['/', '\\']);
+    if relative_path.is_empty() {
+        return None;
+    }
+    let prompt_path = workspace.join(relative_path);
+    read_project_user_prompt_file(&prompt_path).map(|text| {
+        format!(
+            "# Project User Prompt\nSource: {}\n\n{}",
+            prompt_path.display(),
+            text.trim()
+        )
+    })
+}
+
+/// Reads one project-local user prompt file when it exists and contains visible text.
+/// 当项目本地用户提示词文件存在且包含可见文本时读取该文件。
+fn read_project_user_prompt_file(path: &PathBuf) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Builds the legacy fallback preamble when the new composer cannot assemble.
 /// 当新组合器无法装配时构建旧版回退系统前导语。
 fn build_legacy_runtime_system_preamble(
@@ -208,24 +286,6 @@ fn build_legacy_runtime_system_preamble(
     sections.join("\n")
 }
 
-/// Push one raw section when it contains visible text.
-/// 当原始分节包含可见文本时推入该分节。
-fn push_non_empty_section(sections: &mut Vec<String>, body: String) {
-    let body = body.trim();
-    if !body.is_empty() {
-        sections.push(body.to_string());
-    }
-}
-
-/// Push one titled section when it contains visible text.
-/// 当带标题分节包含可见文本时推入该分节。
-fn push_titled_section(sections: &mut Vec<String>, title: &str, body: String) {
-    let body = body.trim();
-    if !body.is_empty() {
-        sections.push(format!("## {title}\n{body}"));
-    }
-}
-
 /// Resolves one optional max-turn override for multi-turn tool-calling providers.
 /// 为支持多轮工具调用的 Provider 解析一份可选的最大轮次覆盖值。
 pub(crate) fn resolve_runtime_max_turns(
@@ -243,8 +303,17 @@ mod tests {
     //! Provider 运行时上下文测试。
 
     use super::*;
+    use crate::context_budget::ContextBudgetSnapshot;
+    use crate::model::SessionId;
+    use crate::provider_config::{
+        PersistedAiToolConfiguration, PersistedPromptConfiguration,
+        PersistedPromptPersonalitySelection, PersistedProviderEntry, PersistedProviderOptions,
+        ProviderConfigurationFile, ReasoningEffortLevel,
+    };
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use vulcan_context::{ContextAssembly, ContextBaseline};
     use vulcan_prompt_composer::DEFAULT_PROJECT_RULES_FILE_NAME;
 
     /// Verifies the project-rules loader reads a non-empty workspace AGENTS.md file.
@@ -306,6 +375,114 @@ mod tests {
         assert_eq!(second.text, "Rule after");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies workspace project prompts enter the runtime user-context layer.
+    /// 验证工作区项目提示词会进入运行时用户上下文层。
+    #[test]
+    fn runtime_prompt_layers_include_workspace_project_prompt() {
+        let root = unique_temp_dir("vulcan-project-user-prompt");
+        let prompt_dir = root.join(".vulcan").join("code");
+        fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
+        fs::write(prompt_dir.join("prompt.md"), "Project user instruction")
+            .expect("write project prompt");
+
+        let preparation = build_test_preparation(
+            root.display().to_string(),
+            PersistedPromptConfiguration::default(),
+        );
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .runtime_context
+                .contains("Project user instruction")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies persisted personality settings can disable personality injection.
+    /// 验证持久化人格设置可以禁用人格注入。
+    #[test]
+    fn runtime_prompt_layers_respect_disabled_personality_setting() {
+        let prompt_configuration = PersistedPromptConfiguration {
+            personality: PersistedPromptPersonalitySelection::Disabled,
+            ..PersistedPromptConfiguration::default()
+        };
+        let preparation = build_test_preparation(String::from("D:/missing"), prompt_configuration);
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert_eq!(
+            layers
+                .provider_layers
+                .system
+                .matches("You optimize for team morale")
+                .count(),
+            0
+        );
+    }
+
+    /// Builds one minimal execution preparation for prompt-layer tests.
+    /// 为提示词层测试构建一份最小执行准备。
+    fn build_test_preparation(
+        workspace_path: String,
+        prompt_configuration: PersistedPromptConfiguration,
+    ) -> ExecutionPreparation {
+        ExecutionPreparation {
+            session_id: SessionId::nil(),
+            session_title: String::from("test"),
+            agent_id: String::from("default"),
+            agent_name: String::from("Default"),
+            agent_kind: String::from("Primary"),
+            model_blueprint: sample_model_blueprint(),
+            prompt_preview: String::new(),
+            workspace_path,
+            conversation_attachments: Vec::new(),
+            context_history_count: 0,
+            execution_mode: String::from("Build"),
+            temperature: None,
+            prompt_configuration,
+            skill_names: Vec::new(),
+            tool_descriptors: Vec::new(),
+            delegate_agents: Vec::new(),
+            enabled_mcp_servers: Vec::new(),
+            warnings: Vec::new(),
+            provider_request_preview_markdown: String::new(),
+            provider_request_snapshot_json: None,
+            context_budget: Option::<ContextBudgetSnapshot>::None,
+            context_assembly: Option::<ContextAssembly>::None,
+            context_baseline: Option::<ContextBaseline>::None,
+        }
+    }
+
+    /// Builds one real provider blueprint through the catalog resolver.
+    /// 通过目录解析器构建一份真实供应商蓝图。
+    fn sample_model_blueprint() -> crate::agent_runtime::provider::ProviderRuntimeBlueprint {
+        let mut provider = BTreeMap::new();
+        provider.insert(
+            String::from("deepseek"),
+            PersistedProviderEntry {
+                name: Some(String::from("DeepSeek")),
+                options: PersistedProviderOptions {
+                    api_key: Some(String::from("test-key")),
+                    ..PersistedProviderOptions::default()
+                },
+                ..PersistedProviderEntry::default()
+            },
+        );
+        let config = ProviderConfigurationFile {
+            model: Some(String::from("deepseek/deepseek-v4-pro")),
+            provider,
+            ..ProviderConfigurationFile::default()
+        };
+        crate::agent_runtime::provider::resolve_active_provider_blueprint_with_ai_tools(
+            &config,
+            ReasoningEffortLevel::Off,
+            &PersistedAiToolConfiguration::default(),
+        )
+        .expect("provider blueprint should resolve")
     }
 
     /// Builds one unique temporary directory for tests.

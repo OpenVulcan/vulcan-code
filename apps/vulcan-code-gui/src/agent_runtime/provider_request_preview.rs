@@ -496,6 +496,7 @@ mod tests {
             context_history_count: 0,
             execution_mode: String::from("默认模式"),
             temperature: Some(0.2),
+            prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             delegate_agents: Vec::new(),
@@ -511,6 +512,9 @@ mod tests {
             provider_id: String::from("anthropic"),
             model_id: String::from("claude-sonnet-4-6"),
             system_prompt: String::from("system prompt"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("system prompt").clone(),
+            ),
             prompt: String::from("preview prompt"),
             history: Vec::new(),
             temperature: Some(0.2),

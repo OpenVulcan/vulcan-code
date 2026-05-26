@@ -11,7 +11,7 @@ use crate::provider_capabilities::{
 };
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    normalize_session_transcript_turn_page_size,
+    PersistedPromptPersonalitySelection, normalize_session_transcript_turn_page_size,
 };
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
 
@@ -100,6 +100,39 @@ impl VulcanWorkbench {
                 self.command_shell_picker_choices()
                     .into_iter()
                     .find(|choice| choice.shell.is_none())
+            })
+    }
+
+    /// Builds the prompt-personality picker choices rendered in prompt settings.
+    /// 构建渲染在提示词设置中的人格选择项。
+    pub(super) fn prompt_personality_picker_choices(&self) -> Vec<PromptPersonalityChoice> {
+        vec![
+            PromptPersonalityChoice {
+                selection: PersistedPromptPersonalitySelection::Default,
+                label: String::from("亲和（默认）"),
+            },
+            PromptPersonalityChoice {
+                selection: PersistedPromptPersonalitySelection::Named(String::from("pragmatic")),
+                label: String::from("专业务实"),
+            },
+            PromptPersonalityChoice {
+                selection: PersistedPromptPersonalitySelection::Disabled,
+                label: String::from("禁用人格"),
+            },
+        ]
+    }
+
+    /// Returns the currently selected prompt-personality picker choice.
+    /// 返回当前选中的提示词人格选择项。
+    pub(super) fn selected_prompt_personality_choice(&self) -> Option<PromptPersonalityChoice> {
+        self.prompt_personality_picker_choices()
+            .into_iter()
+            .find(|choice| choice.selection == self.provider_configuration.prompt.personality)
+            .or_else(|| {
+                Some(PromptPersonalityChoice {
+                    selection: self.provider_configuration.prompt.personality.clone(),
+                    label: self.provider_configuration.prompt.personality.label(),
+                })
             })
     }
 
@@ -674,6 +707,13 @@ impl VulcanWorkbench {
         };
 
         Ok(status_message)
+    }
+
+    /// Persists prompt-composer configuration back into the shared provider configuration file.
+    /// 将提示词组合配置持久化回共享 Provider 配置文件。
+    pub(super) fn persist_prompt_configuration(&mut self) -> Result<(), String> {
+        provider_config::save_configuration_file(&self.provider_configuration)
+            .map_err(|error| format!("保存提示词配置失败：{error}"))
     }
 
     /// Returns the currently visible workbench model choices after applying the in-modal filter text.

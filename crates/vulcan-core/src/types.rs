@@ -69,6 +69,10 @@ pub struct ControllerConfig {
     /// System prompt or preamble applied to every request.
     /// 作用于每一次请求的系统提示词或前置语。
     pub system_prompt: String,
+    /// Structured prompt layers applied to every request when available.
+    /// 可用时作用于每一次请求的结构化提示词层。
+    #[serde(default, skip_serializing_if = "ProviderPromptLayers::is_empty")]
+    pub prompt_layers: ProviderPromptLayers,
     /// Optional sampling temperature applied to the provider request.
     /// 作用于 Provider 请求的可选采样温度。
     pub temperature: Option<f64>,
@@ -418,6 +422,90 @@ pub struct ProviderUsageSnapshot {
     pub cache_creation_input_tokens: Option<usize>,
 }
 
+/// Represents structured provider prompt layers before transport-specific rendering.
+/// 表示传输专属渲染前的结构化 Provider 提示词层。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderPromptLayers {
+    /// System-level instructions.
+    /// 系统级指令。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub system: String,
+    /// Developer-level instructions.
+    /// 开发者级指令。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub developer: String,
+    /// Tool guidance generated outside provider-native tool schemas.
+    /// 在 Provider 原生工具 schema 之外生成的工具指导。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool_guidance: String,
+    /// Runtime/user-context instructions that should accompany the current request.
+    /// 应随当前请求携带的运行时或用户上下文指令。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub runtime_context: String,
+}
+
+impl ProviderPromptLayers {
+    /// Build layers from one legacy system prompt.
+    /// 从一份旧版系统提示词构建层信息。
+    pub fn from_system_prompt(system_prompt: impl Into<String>) -> Self {
+        Self {
+            system: system_prompt.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Returns whether all prompt layers are empty.
+    /// 返回所有提示词层是否均为空。
+    pub fn is_empty(&self) -> bool {
+        self.system.trim().is_empty()
+            && self.developer.trim().is_empty()
+            && self.tool_guidance.trim().is_empty()
+            && self.runtime_context.trim().is_empty()
+    }
+
+    /// Render layers into one stable fallback system prompt.
+    /// 将各层渲染为一份稳定的回退系统提示词。
+    pub fn render_fallback_system_prompt(&self) -> String {
+        let mut sections = Vec::new();
+        push_prompt_layer_section(&mut sections, None, &self.system);
+        push_prompt_layer_section(
+            &mut sections,
+            Some("Developer Instructions"),
+            &self.developer,
+        );
+        push_prompt_layer_section(&mut sections, Some("Tool Guidance"), &self.tool_guidance);
+        push_prompt_layer_section(
+            &mut sections,
+            Some("Runtime Context"),
+            &self.runtime_context,
+        );
+        sections.join("\n\n")
+    }
+
+    /// Return the fallback rendering, or the supplied legacy prompt when layers are empty.
+    /// 返回回退渲染；当层为空时返回给定的旧版提示词。
+    pub fn render_or_legacy(&self, legacy_system_prompt: &str) -> String {
+        if self.is_empty() {
+            legacy_system_prompt.trim().to_string()
+        } else {
+            self.render_fallback_system_prompt()
+        }
+    }
+}
+
+/// Push one optional titled prompt layer into a fallback render buffer.
+/// 将一个可选标题的提示词层推入回退渲染缓冲区。
+fn push_prompt_layer_section(sections: &mut Vec<String>, title: Option<&str>, body: &str) {
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    match title {
+        Some(title) => sections.push(format!("## {title}\n{body}")),
+        None => sections.push(body.to_string()),
+    }
+}
+
 impl ProviderUsageSnapshot {
     /// Returns whether the snapshot contains at least one concrete token count.
     /// 返回该快照是否至少包含一个具体 Token 数量。
@@ -508,6 +596,10 @@ pub struct ProviderRequestSnapshot {
     /// System prompt attached to the request.
     /// 附加到请求中的系统提示词。
     pub system_prompt: String,
+    /// Structured prompt layers attached to the request when available.
+    /// 可用时附加到请求中的结构化提示词层。
+    #[serde(default, skip_serializing_if = "ProviderPromptLayers::is_empty")]
+    pub prompt_layers: ProviderPromptLayers,
     /// Latest outgoing prompt message body attached to the request.
     /// 附加到请求中的最新出站提示消息正文。
     pub prompt: String,

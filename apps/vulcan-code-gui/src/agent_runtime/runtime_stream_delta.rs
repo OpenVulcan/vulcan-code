@@ -253,6 +253,9 @@ mod tests {
                 provider_id: String::from("mock-provider"),
                 model_id: String::from("mock-model"),
                 system_prompt: String::from("system"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system").clone(),
+                ),
                 temperature: Some(0.1),
                 max_turns: 4,
                 additional_params: None,

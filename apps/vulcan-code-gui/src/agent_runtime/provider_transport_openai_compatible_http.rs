@@ -5,6 +5,7 @@ use crate::agent_runtime::provider_attachment::{
     build_attachment_transport_error_text, build_missing_attachment_replay_text,
     read_provider_attachment,
 };
+use crate::agent_runtime::provider_prompt_layers::provider_fallback_system_prompt;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
     build_openai_compatible_turn_response, core_provider_turn_delta_to_runtime_delta,
@@ -631,6 +632,7 @@ fn build_openai_compatible_request_payload(
     let usage_policy =
         resolve_openai_compatible_streaming_usage_policy(snapshot.provider_id.as_str());
 
+    let system_prompt = provider_fallback_system_prompt(&snapshot);
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
         Some(other) => {
@@ -642,10 +644,10 @@ fn build_openai_compatible_request_payload(
     };
 
     let mut messages = Vec::new();
-    if !snapshot.system_prompt.trim().is_empty() {
+    if !system_prompt.trim().is_empty() {
         messages.push(json!({
             "role": "system",
-            "content": snapshot.system_prompt
+            "content": system_prompt
         }));
     }
     messages.extend(
@@ -1380,6 +1382,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-test"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1470,6 +1475,9 @@ mod tests {
                 provider_id: String::from("alibaba-coding-plan-cn"),
                 model_id: String::from("qwen3.6-plus"),
                 system_prompt: String::new(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::new().clone(),
+                ),
                 prompt: String::from("请搜索最新资料"),
                 history: Vec::new(),
                 temperature: None,
@@ -1532,6 +1540,9 @@ mod tests {
                 provider_id: String::from("deepseek"),
                 model_id: String::from("deepseek-v4-pro"),
                 system_prompt: String::new(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::new().clone(),
+                ),
                 prompt: String::from("hello"),
                 history: Vec::new(),
                 temperature: None,
@@ -1574,6 +1585,9 @@ mod tests {
                 provider_id: String::from("openrouter"),
                 model_id: String::from("openai/gpt-5"),
                 system_prompt: String::new(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::new().clone(),
+                ),
                 prompt: String::from("hello"),
                 history: Vec::new(),
                 temperature: None,
@@ -1747,6 +1761,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-test"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body 4"),
                 history: Vec::new(),
                 temperature: Some(0.2),
@@ -1872,6 +1889,9 @@ mod tests {
                 provider_id: String::from("deepseek"),
                 model_id: String::from("deepseek-v4-pro"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: None,
@@ -1944,6 +1964,9 @@ mod tests {
                 provider_id: String::from("deepseek"),
                 model_id: String::from("deepseek-v4-pro"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("继续"),
                 history: Vec::new(),
                 temperature: None,
@@ -2004,6 +2027,9 @@ mod tests {
                 provider_id: String::from("deepseek"),
                 model_id: String::from("deepseek-v4-pro"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("继续"),
                 history: Vec::new(),
                 temperature: None,
@@ -2077,6 +2103,9 @@ mod tests {
                 provider_id: String::from("openai-compatible"),
                 model_id: String::from("qwen-test"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("tool result body"),
                 history: Vec::new(),
                 temperature: None,
@@ -2184,6 +2213,9 @@ mod tests {
                     provider_id: String::from("openai-compatible"),
                     model_id: String::from("qwen-test"),
                     system_prompt: String::new(),
+                    prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                        String::new().clone(),
+                    ),
                     prompt: String::from("继续"),
                     history: Vec::new(),
                     temperature: None,
@@ -2208,6 +2240,9 @@ mod tests {
                     provider_id: String::from("openai-compatible"),
                     model_id: String::from("qwen-test"),
                     system_prompt: String::new(),
+                    prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                        String::new().clone(),
+                    ),
                     prompt: String::from("继续"),
                     history: Vec::new(),
                     temperature: None,
@@ -2327,6 +2362,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-4.1"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("请分析这张图"),
                 history: Vec::new(),
                 temperature: None,
@@ -2382,6 +2420,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-4.1"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("请转写这段音频"),
                 history: Vec::new(),
                 temperature: None,
@@ -2439,6 +2480,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-4.1"),
                 system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt").clone(),
+                ),
                 prompt: String::from("请分析这些附件"),
                 history: Vec::new(),
                 temperature: None,
@@ -2493,6 +2537,9 @@ mod tests {
                 provider_id: String::from("openai"),
                 model_id: String::from("gpt-4.1"),
                 system_prompt: String::new(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::new().clone(),
+                ),
                 prompt: String::new(),
                 history: Vec::new(),
                 temperature: None,
