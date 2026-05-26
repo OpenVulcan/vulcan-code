@@ -7,7 +7,7 @@ use crate::ui::widgets::context_usage_orb::{self, ContextUsageOrbProps, ContextU
 use iced::widget::{column, opaque, pin, rich_text};
 use iced::{Background, Border, Color};
 use iced_aw::helpers::date_picker;
-use vulcan_context::{ContextBudgetSeverity, ContextLayerKind};
+use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot, ContextLayerKind};
 
 mod about_licenses;
 mod ai_capability;
@@ -3730,14 +3730,26 @@ impl VulcanWorkbench {
             .as_ref()
             .filter(|preparation| selected_session_id == Some(preparation.session_id));
         let context_budget = self.visible_context_budget_snapshot.as_ref();
+        let mut request_breakdown_rows = self.composer_context_layer_usage_rows();
         let mut diagnostic_rows = Vec::new();
 
         diagnostic_rows.push(format!(
-            "当前占用：{:.0}%",
+            "当前占用（输入）：{:.0}%",
             self.context_usage.clamp(0.0, 100.0)
         ));
 
         if let Some(context_budget) = context_budget {
+            let has_observed_usage = context_budget.observed_usage.is_some();
+            let input_source_label = if has_observed_usage {
+                "API实测"
+            } else {
+                "本地估算"
+            };
+            let total_source_label = if has_observed_usage {
+                "实测输入+预留"
+            } else {
+                "估算输入+预留"
+            };
             let status_label = match context_budget.severity {
                 ContextBudgetSeverity::Healthy => "正常",
                 ContextBudgetSeverity::Warning => "预警",
@@ -3745,14 +3757,16 @@ impl VulcanWorkbench {
                 ContextBudgetSeverity::Overflow => "预算溢出",
             };
             diagnostic_rows.push(format!("状态：{}", status_label));
-            diagnostic_rows.push(format!("输入预算：{}", context_budget.usage_label()));
             diagnostic_rows.push(format!(
-                "组成：系统 {} · 历史 {} · 当前 {} · 工具 {}",
-                context_budget.estimated_system_tokens,
-                context_budget.estimated_history_tokens,
-                context_budget.estimated_prompt_tokens,
-                context_budget.estimated_tool_tokens
+                "输入预算（{}）：{}",
+                input_source_label,
+                context_budget.usage_label()
             ));
+            if request_breakdown_rows.is_empty() {
+                diagnostic_rows.extend(Self::context_budget_breakdown_rows(context_budget));
+            } else {
+                diagnostic_rows.append(&mut request_breakdown_rows);
+            }
             diagnostic_rows.push(format!(
                 "预留：输出 {} · 推理 {} · 压缩 {}",
                 context_budget.reserved_output_tokens,
@@ -3760,17 +3774,21 @@ impl VulcanWorkbench {
                 context_budget.reserved_compaction_tokens
             ));
             diagnostic_rows.push(format!(
-                "总占用：{} tokens",
-                context_budget.estimated_total_tokens
+                "端到端占用（{}）：{} tokens",
+                total_source_label, context_budget.estimated_total_tokens
             ));
             if !context_budget.baseline_matches_active_runtime {
-                diagnostic_rows.push(String::from(
-                    "恢复状态：基线失配，已回退完整上下文并等待新锚点。",
+                diagnostic_rows.push(format!(
+                    "恢复状态：基线失配（{}），已回退完整上下文并等待新锚点。",
+                    context_budget
+                        .baseline_mismatch_reason
+                        .as_deref()
+                        .unwrap_or("原因未记录")
                 ));
             }
             if let Some(observed_usage) = context_budget.observed_usage.as_ref() {
                 diagnostic_rows.push(format!(
-                    "最近实测：输入 {} / 输出 {} / 推理 {} / 总计 {}",
+                    "最近 API：输入 {} / 输出 {} / 推理 {} / 总计 {}",
                     observed_usage
                         .input_tokens
                         .map(|value| value.to_string())
@@ -3789,6 +3807,8 @@ impl VulcanWorkbench {
                         .unwrap_or_else(|| String::from("?")),
                 ));
             }
+        } else {
+            diagnostic_rows.append(&mut request_breakdown_rows);
         }
 
         if let Some(runtime_state) = runtime_state {
@@ -3805,7 +3825,6 @@ impl VulcanWorkbench {
             }
         }
 
-        diagnostic_rows.extend(self.composer_context_layer_usage_rows());
         diagnostic_rows
     }
 
@@ -3862,8 +3881,52 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Builds the aggregated context-layer usage rows reused by the context-orb tooltip.
-    /// 构建供上下文圆盘提示层复用的聚合上下文层占用行。
+    /// Builds one fallback local-estimate breakdown from the budget snapshot when no request assembly is available.
+    /// 当没有请求装配信息时，根据预算快照构建一份兜底本地估算拆分。
+    fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapshot) -> Vec<String> {
+        let local_estimate_total = context_budget
+            .estimated_system_tokens
+            .saturating_add(context_budget.estimated_history_tokens)
+            .saturating_add(context_budget.estimated_prompt_tokens)
+            .saturating_add(context_budget.estimated_tool_tokens);
+        Self::context_usage_part_rows(
+            "估算拆分（参考）",
+            vec![
+                (String::from("系统"), context_budget.estimated_system_tokens),
+                (
+                    String::from("历史"),
+                    context_budget.estimated_history_tokens,
+                ),
+                (String::from("当前"), context_budget.estimated_prompt_tokens),
+                (String::from("工具"), context_budget.estimated_tool_tokens),
+                (String::from("合计"), local_estimate_total),
+            ],
+        )
+    }
+
+    /// Builds compact tooltip rows from named token-estimate parts.
+    /// 根据命名 Token 估算分项构建紧凑提示行。
+    fn context_usage_part_rows(prefix: &str, parts: Vec<(String, usize)>) -> Vec<String> {
+        let labels = parts
+            .into_iter()
+            .filter(|(_, tokens)| *tokens > 0usize)
+            .map(|(label, tokens)| format!("{label} {tokens}"))
+            .collect::<Vec<_>>();
+        labels
+            .chunks(3)
+            .enumerate()
+            .map(|(index, chunk)| {
+                if index == 0usize {
+                    format!("{}：{}", prefix, chunk.join(" · "))
+                } else {
+                    format!("{}（续）：{}", prefix, chunk.join(" · "))
+                }
+            })
+            .collect()
+    }
+
+    /// Builds aggregated request-layer estimate rows reused by the context-orb tooltip.
+    /// 构建供上下文圆盘提示层复用的请求层聚合估算行。
     fn composer_context_layer_usage_rows(&self) -> Vec<String> {
         let selected_session_id = self.selected_session().map(|session| session.id);
         let Some(context_assembly) = self
@@ -3875,7 +3938,8 @@ impl VulcanWorkbench {
             return Vec::new();
         };
 
-        let mut rows = Vec::new();
+        let mut parts = Vec::new();
+        let mut estimate_total = 0usize;
         for kind in [
             ContextLayerKind::System,
             ContextLayerKind::ProjectRules,
@@ -3893,11 +3957,15 @@ impl VulcanWorkbench {
                 .map(|layer| layer.token_estimate())
                 .sum::<usize>();
             if token_total > 0 {
-                rows.push(format!("上下文层：{} {} tokens", kind.label(), token_total));
+                estimate_total = estimate_total.saturating_add(token_total);
+                parts.push((kind.label().to_string(), token_total));
             }
         }
+        if estimate_total > 0usize {
+            parts.push((String::from("合计"), estimate_total));
+        }
 
-        rows
+        Self::context_usage_part_rows("请求拆分（本地估算）", parts)
     }
 
     /// Builds the compact transcript surface-mode switcher shown at the trailing end of the session-status row.

@@ -52,21 +52,24 @@ pub(crate) fn build_provider_request_preview_markdown(
             )
         })
         .unwrap_or_else(|| String::from("尚未生成上下文预算快照"));
-    let context_baseline_markdown = preparation
-        .context_baseline
-        .as_ref()
-        .map(|baseline| {
-            format!(
-                "- 层数：`{}`\n- 指纹：`{}`",
-                baseline.layer_count, baseline.fingerprint
-            )
-        })
-        .unwrap_or_else(|| String::from("（尚未生成上下文基线）"));
     let context_assembly = preparation
         .context_assembly
         .as_ref()
         .cloned()
         .unwrap_or_else(|| build_provider_request_context_assembly(request_snapshot));
+    let context_baseline_markdown = preparation
+        .context_baseline
+        .as_ref()
+        .map(|baseline| {
+            let comparison = baseline.compare(&context_assembly);
+            format!(
+                "- 状态：{}\n- 层数：`{}`\n- 指纹：`{}`",
+                comparison.summary_note(),
+                baseline.layer_count,
+                baseline.fingerprint
+            )
+        })
+        .unwrap_or_else(|| String::from("（尚未生成上下文基线）"));
     let context_layers_markdown = render_context_layers_markdown(&context_assembly);
     let tool_rows = if request_snapshot.tool_schemas.is_empty() {
         String::from("（本次请求未直接暴露工具 schema）")

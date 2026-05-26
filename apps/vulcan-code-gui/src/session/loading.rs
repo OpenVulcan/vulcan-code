@@ -101,6 +101,10 @@ impl VulcanWorkbench {
             .any(|session| session.id == session_id);
         self.remember_tool_detail_messages(session_id, &snapshot.tool_detail_messages);
         self.remember_tool_detail_messages(session_id, &snapshot.messages);
+        let persisted_preview_markdown = snapshot
+            .runtime_state
+            .as_ref()
+            .and_then(|runtime_state| runtime_state.last_provider_request_preview_markdown.clone());
         let projected_messages = snapshot
             .messages
             .iter()
@@ -122,6 +126,12 @@ impl VulcanWorkbench {
             if let Some(runtime_state) = snapshot.runtime_state {
                 self.session_runtime_state.insert(session_id, runtime_state);
             }
+        }
+        if let Some(preview_markdown) = persisted_preview_markdown {
+            self.session_last_api_request_markdowns
+                .insert(session_id, preview_markdown);
+        } else {
+            self.session_last_api_request_markdowns.remove(&session_id);
         }
 
         self.rebuild_subagent_task_cache_for_session(session_id);

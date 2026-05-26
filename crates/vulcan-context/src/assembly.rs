@@ -164,11 +164,7 @@ impl ContextAssembly {
         let mut assembly = Self::new();
 
         if !snapshot.system_prompt.trim().is_empty() {
-            assembly.push(ContextLayer::new(
-                ContextLayerKind::System,
-                "System Preamble",
-                snapshot.system_prompt.clone(),
-            ));
+            assembly.extend(render_system_prompt_layers(&snapshot.system_prompt));
         }
 
         assembly.extend(snapshot.history.iter().enumerate().map(|(index, message)| {
@@ -193,6 +189,85 @@ impl ContextAssembly {
     }
 }
 
+/// Splits one provider system prompt into stable diagnostic layers without changing the outgoing request payload.
+/// 将单份 Provider 系统提示词拆成稳定诊断层，同时不改变实际发出的请求载荷。
+fn render_system_prompt_layers(system_prompt: &str) -> Vec<ContextLayer> {
+    let mut runtime_lines = Vec::new();
+    let mut non_runtime_lines = Vec::new();
+
+    for line in system_prompt.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Current workspace:")
+            || trimmed.starts_with("Current execution mode:")
+        {
+            runtime_lines.push(line.to_string());
+        } else {
+            non_runtime_lines.push(line.to_string());
+        }
+    }
+
+    let non_runtime_text = non_runtime_lines.join("\n");
+    let (system_text, project_rules_text) =
+        split_project_rules_from_system_prompt(&non_runtime_text);
+    let mut layers = Vec::new();
+
+    if !system_text.trim().is_empty() {
+        layers.push(ContextLayer::new(
+            ContextLayerKind::System,
+            "System Preamble",
+            system_text,
+        ));
+    }
+    if !project_rules_text.trim().is_empty() {
+        layers.push(ContextLayer::new(
+            ContextLayerKind::ProjectRules,
+            "Project Instructions",
+            project_rules_text,
+        ));
+    }
+    if !runtime_lines.is_empty() {
+        layers.push(ContextLayer::new(
+            ContextLayerKind::Runtime,
+            "Runtime Context",
+            runtime_lines.join("\n"),
+        ));
+    }
+
+    if layers.is_empty() {
+        layers.push(ContextLayer::new(
+            ContextLayerKind::System,
+            "System Preamble",
+            system_prompt.to_string(),
+        ));
+    }
+
+    layers
+}
+
+/// Separates repository/project instruction blocks from the base system prompt when known markers are present.
+/// 当存在已知标记时，将仓库或项目指令块从基础系统提示词中分离出来。
+fn split_project_rules_from_system_prompt(system_prompt: &str) -> (String, String) {
+    const PROJECT_RULE_MARKERS: [&str; 3] = [
+        "# AGENTS.md instructions",
+        "<INSTRUCTIONS>",
+        "--- project-doc ---",
+    ];
+
+    let marker_index = PROJECT_RULE_MARKERS
+        .iter()
+        .filter_map(|marker| system_prompt.find(marker))
+        .min();
+    let Some(marker_index) = marker_index else {
+        return (system_prompt.trim().to_string(), String::new());
+    };
+
+    let (system_text, project_rules_text) = system_prompt.split_at(marker_index);
+    (
+        system_text.trim().to_string(),
+        project_rules_text.trim().to_string(),
+    )
+}
+
 /// Builds one layered context assembly from a provider request snapshot.
 /// 根据 Provider 请求快照构建一份分层上下文装配结果。
 pub fn build_provider_request_context_assembly(
@@ -213,6 +288,58 @@ pub struct ContextBaseline {
     pub layer_count: usize,
 }
 
+/// Structured comparison between one stored context baseline and one freshly assembled context stack.
+/// 一份已存上下文基线与一份新装配上下文栈之间的结构化对比结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextBaselineComparison {
+    /// Whether both the layer count and fingerprint still match.
+    /// 层数与指纹是否都仍然匹配。
+    pub matches: bool,
+    /// Whether the layer count is unchanged.
+    /// 层数量是否保持不变。
+    pub layer_count_matches: bool,
+    /// Whether the full assembly fingerprint is unchanged.
+    /// 完整装配指纹是否保持不变。
+    pub fingerprint_matches: bool,
+    /// Number of layers stored in the baseline.
+    /// 基线中记录的层数量。
+    pub baseline_layer_count: usize,
+    /// Number of layers in the freshly assembled context.
+    /// 新装配上下文中的层数量。
+    pub current_layer_count: usize,
+    /// Fingerprint stored in the baseline.
+    /// 基线中记录的指纹。
+    pub baseline_fingerprint: String,
+    /// Fingerprint calculated from the freshly assembled context.
+    /// 从新装配上下文计算出的指纹。
+    pub current_fingerprint: String,
+}
+
+impl ContextBaselineComparison {
+    /// Returns one compact human-readable diagnostics sentence.
+    /// 返回一条紧凑的人类可读诊断语句。
+    pub fn summary_note(&self) -> String {
+        if self.matches {
+            return format!("基线匹配 · {} 层", self.current_layer_count);
+        }
+
+        let layer_label = if self.layer_count_matches {
+            format!("层数未变 {}", self.current_layer_count)
+        } else {
+            format!(
+                "层数变化 {} -> {}",
+                self.baseline_layer_count, self.current_layer_count
+            )
+        };
+        let fingerprint_label = if self.fingerprint_matches {
+            "指纹未变"
+        } else {
+            "指纹变化"
+        };
+        format!("基线失配 · {layer_label} · {fingerprint_label}")
+    }
+}
+
 impl ContextBaseline {
     /// Builds one baseline snapshot from the current assembly.
     /// 根据当前装配结果构建一份基线快照。
@@ -228,6 +355,23 @@ impl ContextBaseline {
     pub fn matches(&self, assembly: &ContextAssembly) -> bool {
         self.layer_count == assembly.layers.len()
             && self.fingerprint == build_context_fingerprint(assembly)
+    }
+
+    /// Compares this baseline with one freshly assembled context stack and returns structured diagnostics.
+    /// 将当前基线与一份新装配上下文栈对比，并返回结构化诊断结果。
+    pub fn compare(&self, assembly: &ContextAssembly) -> ContextBaselineComparison {
+        let current_fingerprint = build_context_fingerprint(assembly);
+        let layer_count_matches = self.layer_count == assembly.layers.len();
+        let fingerprint_matches = self.fingerprint == current_fingerprint;
+        ContextBaselineComparison {
+            matches: layer_count_matches && fingerprint_matches,
+            layer_count_matches,
+            fingerprint_matches,
+            baseline_layer_count: self.layer_count,
+            current_layer_count: assembly.layers.len(),
+            baseline_fingerprint: self.fingerprint.clone(),
+            current_fingerprint,
+        }
     }
 }
 
@@ -418,8 +562,49 @@ mod tests {
         let baseline = ContextBaseline::from_assembly(&assembly);
 
         assert!(baseline.matches(&assembly));
+        assert!(baseline.compare(&assembly).matches);
         assert_eq!(baseline.layer_count, 4);
         assert!(!baseline.fingerprint.is_empty());
+    }
+
+    /// Reports a structured mismatch when the assembled context changes after the baseline is captured.
+    /// 当基线捕获后装配上下文发生变化时，报告结构化失配结果。
+    #[test]
+    fn layered_context_baseline_reports_changed_assembly() {
+        let assembly = ContextAssembly::from_provider_request_snapshot(&sample_snapshot());
+        let baseline = ContextBaseline::from_assembly(&assembly);
+        let mut changed_assembly = assembly.clone();
+        changed_assembly.push(super::ContextLayer::new(
+            ContextLayerKind::Runtime,
+            "Runtime Context",
+            "Current execution mode: Build",
+        ));
+
+        let comparison = baseline.compare(&changed_assembly);
+
+        assert!(!comparison.matches);
+        assert!(!comparison.layer_count_matches);
+        assert!(!comparison.fingerprint_matches);
+        assert!(comparison.summary_note().contains("基线失配"));
+    }
+
+    /// Splits embedded project and runtime instructions out of the provider system prompt for diagnostics.
+    /// 为诊断展示从 Provider 系统提示词中拆出内嵌项目指令与运行时指令。
+    #[test]
+    fn provider_request_snapshot_splits_system_project_and_runtime_layers() {
+        let mut snapshot = sample_snapshot();
+        snapshot.system_prompt = String::from(
+            "base instructions\n\n# AGENTS.md instructions for D:\\repo\n<INSTRUCTIONS>\nproject rules\n</INSTRUCTIONS>\nCurrent workspace: D:\\repo\nCurrent execution mode: Build",
+        );
+
+        let assembly = build_provider_request_context_assembly(&snapshot);
+
+        assert_eq!(assembly.layers[0].kind, ContextLayerKind::System);
+        assert_eq!(assembly.layers[1].kind, ContextLayerKind::ProjectRules);
+        assert_eq!(assembly.layers[2].kind, ContextLayerKind::Runtime);
+        assert!(assembly.layers[0].content.contains("base instructions"));
+        assert!(assembly.layers[1].content.contains("project rules"));
+        assert!(assembly.layers[2].content.contains("Current workspace"));
     }
 }
 

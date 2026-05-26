@@ -518,6 +518,9 @@ async fn hydrate_session_runtime_state(
     runtime_state.anchor_context_assembly_fingerprint = runtime_state_cache
         .anchor_context_assembly_fingerprint
         .or(runtime_state.anchor_context_assembly_fingerprint);
+    runtime_state.last_provider_request_preview_markdown = runtime_state_cache
+        .last_provider_request_preview_markdown
+        .or(runtime_state.last_provider_request_preview_markdown);
     runtime_state.ui_state = runtime_state_cache.ui_state;
     runtime_state.last_provider_usage = runtime_state_cache
         .last_provider_usage
@@ -555,6 +558,10 @@ async fn hydrate_session_runtime_state(
         .as_ref()
         .and_then(|document| document.anchor_context_assembly_fingerprint.clone())
         .or(runtime_state.anchor_context_assembly_fingerprint);
+    runtime_state.last_provider_request_preview_markdown = current_context_document
+        .as_ref()
+        .and_then(|document| document.last_provider_request_preview_markdown.clone())
+        .or(runtime_state.last_provider_request_preview_markdown);
     runtime_state.conversation_state.continuation =
         if runtime_state_cache.continuation.provider_id.is_some()
             || runtime_state_cache.continuation.model_id.is_some()
@@ -680,9 +687,7 @@ mod tests {
     //! 面向事件流会话的转录水合行为测试。
 
     use super::*;
-    use crate::conversation_protocol::{
-        SessionConversationRecord, append_assistant_text_message,
-    };
+    use crate::conversation_protocol::{SessionConversationRecord, append_assistant_text_message};
 
     /// Builds one transcript message entry for session-load regression tests.
     /// 为会话加载回归测试构建一条转录消息项。
@@ -807,6 +812,8 @@ mod tests {
             String::from("当前上下文正文"),
         );
         runtime_state.context_start_message_id = Some(String::from("summary-ctx"));
+        runtime_state.last_provider_request_preview_markdown =
+            Some(String::from("# Hydrated Provider Preview"));
 
         persist_session_event_store(&session, &transcript_messages, Some(&runtime_state), &[])
             .expect("persist hydrate context store");
@@ -832,6 +839,10 @@ mod tests {
         assert_eq!(
             hydrated.context_start_message_id.as_deref(),
             Some("summary-ctx")
+        );
+        assert_eq!(
+            hydrated.last_provider_request_preview_markdown.as_deref(),
+            Some("# Hydrated Provider Preview")
         );
         remove_session_event_store(project_id, session_id).expect("cleanup hydrate event-store");
     }

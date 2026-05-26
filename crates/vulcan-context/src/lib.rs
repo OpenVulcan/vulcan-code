@@ -4,8 +4,8 @@
 pub mod assembly;
 
 pub use assembly::{
-    ContextAssembly, ContextBaseline, ContextLayer, ContextLayerKind, build_context_fingerprint,
-    build_provider_request_context_assembly,
+    ContextAssembly, ContextBaseline, ContextBaselineComparison, ContextLayer, ContextLayerKind,
+    build_context_fingerprint, build_provider_request_context_assembly,
 };
 
 use vulcan_core::types::ProviderUsageSnapshot;
@@ -50,8 +50,8 @@ impl Default for ContextCompactionPolicy {
         Self {
             auto: true,
             prune: true,
-            tail_turns: 4,
-            preserve_recent_tokens: 8_192,
+            tail_turns: 1,
+            preserve_recent_tokens: 2_048,
             reserved: 2_048,
         }
     }
@@ -85,7 +85,7 @@ impl Default for ContextBudgetSeverity {
 
 /// Structured context-budget snapshot reused by execution previews, compaction checks, and runtime summaries.
 /// 供执行预览、压缩检查与运行时摘要复用的结构化上下文预算快照。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ContextBudgetSnapshot {
     /// Stable budget fingerprint used to detect whether one previous compaction anchor still matches the active runtime shape.
     /// 用于判断旧压缩锚点是否仍匹配当前运行时形态的稳定预算指纹。
@@ -111,6 +111,15 @@ pub struct ContextBudgetSnapshot {
     /// Whether the current runtime shape still matches the last accepted budget baseline.
     /// 当前运行时形态是否仍匹配最近一次已接受的预算基线。
     pub baseline_matches_active_runtime: bool,
+    /// Whether the anchor budget fingerprint still matches the active runtime budget fingerprint.
+    /// 锚点预算指纹是否仍匹配当前运行时预算指纹。
+    pub baseline_budget_fingerprint_matches: bool,
+    /// Whether the anchor layered-context fingerprint still matches the active runtime layered-context fingerprint.
+    /// 锚点分层上下文指纹是否仍匹配当前运行时分层上下文指纹。
+    pub baseline_assembly_fingerprint_matches: bool,
+    /// Optional human-readable mismatch reason recorded when the active runtime no longer matches the anchor baseline.
+    /// 当当前运行时不再匹配锚点基线时记录的可选人类可读失配原因。
+    pub baseline_mismatch_reason: Option<String>,
     /// Estimated system-prompt token cost.
     /// 系统提示词的估算 Token 成本。
     pub estimated_system_tokens: usize,
@@ -138,6 +147,35 @@ pub struct ContextBudgetSnapshot {
     /// Final severity bucket used by diagnostics and compaction thresholds.
     /// 供诊断与压缩阈值使用的最终严重级别分桶。
     pub severity: ContextBudgetSeverity,
+}
+
+impl Default for ContextBudgetSnapshot {
+    /// Builds the empty budget snapshot used before any explicit context-budget estimation has been performed.
+    /// 构建在尚未执行显式上下文预算估算前使用的空预算快照。
+    fn default() -> Self {
+        Self {
+            fingerprint: String::new(),
+            context_limit: None,
+            effective_input_limit: None,
+            reserved_output_tokens: 0,
+            reserved_reasoning_tokens: 0,
+            reserved_compaction_tokens: 0,
+            compaction_auto_enabled: false,
+            baseline_matches_active_runtime: true,
+            baseline_budget_fingerprint_matches: true,
+            baseline_assembly_fingerprint_matches: true,
+            baseline_mismatch_reason: None,
+            estimated_system_tokens: 0,
+            estimated_history_tokens: 0,
+            estimated_prompt_tokens: 0,
+            estimated_tool_tokens: 0,
+            estimated_input_tokens: 0,
+            estimated_total_tokens: 0,
+            usage_ratio: 0.0,
+            observed_usage: None,
+            severity: ContextBudgetSeverity::Healthy,
+        }
+    }
 }
 
 impl ContextBudgetSnapshot {
@@ -186,14 +224,32 @@ impl ContextBudgetSnapshot {
         } else {
             "基线失配"
         };
+        let baseline_reason_suffix = self
+            .baseline_mismatch_reason
+            .as_deref()
+            .map(|reason| format!(" · {reason}"))
+            .unwrap_or_default();
         let context_limit_label = self
             .context_limit
             .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("未声明"));
+        let input_source_label = if self.observed_usage.is_some() {
+            "输入(实测)"
+        } else {
+            "输入(估算)"
+        };
+        let breakdown_label = if self.observed_usage.is_some() {
+            "本地估算拆分"
+        } else {
+            "估算拆分"
+        };
         format!(
-            "{severity_label} · {baseline_label} · 上下文窗 {} · 输入 {} · 系统 {} / 历史 {} / 当前 {} / 工具 {} · 总占用 {} · 输出预留 {} · 推理预留 {} · 压缩预留 {}{}",
+            "{severity_label} · {baseline_label}{} · 上下文窗 {} · {} {} · {} 系统 {} / 历史 {} / 当前 {} / 工具 {} · 端到端占用 {} · 输出预留 {} · 推理预留 {} · 压缩预留 {}{}",
+            baseline_reason_suffix,
             context_limit_label,
+            input_source_label,
             self.usage_label(),
+            breakdown_label,
             self.estimated_system_tokens,
             self.estimated_history_tokens,
             self.estimated_prompt_tokens,

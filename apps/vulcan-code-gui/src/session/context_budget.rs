@@ -73,6 +73,9 @@ pub fn build_request_context_budget_snapshot(
         reserved_compaction_tokens,
         compaction_auto_enabled: false,
         baseline_matches_active_runtime: true,
+        baseline_budget_fingerprint_matches: true,
+        baseline_assembly_fingerprint_matches: true,
+        baseline_mismatch_reason: None,
         estimated_system_tokens,
         estimated_history_tokens,
         estimated_prompt_tokens,
@@ -140,6 +143,9 @@ pub fn build_projected_session_context_budget_snapshot(
         reserved_compaction_tokens,
         compaction_auto_enabled: compaction_policy.auto,
         baseline_matches_active_runtime: true,
+        baseline_budget_fingerprint_matches: true,
+        baseline_assembly_fingerprint_matches: true,
+        baseline_mismatch_reason: None,
         estimated_system_tokens,
         estimated_history_tokens,
         estimated_prompt_tokens,
@@ -297,15 +303,24 @@ fn estimate_tool_schema_tokens(definition: &CoreProviderRequestToolSchema) -> us
         + 32usize
 }
 
-/// Estimates the token footprint of one text payload using a lightweight character heuristic.
-/// 使用轻量字符启发式估算单段文本载荷的 Token 占用。
+/// Estimates the token footprint of one text payload, counting non-ASCII characters one-to-one.
+/// 估算单段文本载荷的 Token 占用，并按一比一统计非 ASCII 字符。
 fn estimate_text_tokens(text: &str) -> usize {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return 0;
     }
-    let characters = trimmed.chars().count();
-    ((characters + 3usize) / 4usize).max(1usize)
+    let mut ascii_characters = 0usize;
+    let mut non_ascii_tokens = 0usize;
+    for character in trimmed.chars() {
+        if character.is_ascii() {
+            ascii_characters += 1usize;
+        } else {
+            non_ascii_tokens += 1usize;
+        }
+    }
+    let ascii_tokens = (ascii_characters + 3usize) / 4usize;
+    (non_ascii_tokens + ascii_tokens).max(1usize)
 }
 
 /// Estimates the token footprint of one JSON payload by serializing it into a compact string first.
@@ -467,10 +482,10 @@ mod tests {
         assert!(snapshot.fingerprint.contains("openai|gpt-test"));
     }
 
-    /// Uses the latest observed usage snapshot as a conservative floor for subsequent request estimates.
-    /// 使用最近一次实测用量快照作为后续请求估算的保守下限。
+    /// Uses the latest observed usage snapshot as the primary source for subsequent request estimates.
+    /// 使用最近一次实测用量快照作为后续请求估算的主要来源。
     #[test]
-    fn request_context_budget_snapshot_uses_observed_usage_as_floor() {
+    fn request_context_budget_snapshot_prefers_observed_usage() {
         let capabilities = test_capabilities();
         let request_snapshot = ProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -507,6 +522,80 @@ mod tests {
         assert_eq!(snapshot.observed_usage, Some(observed_usage.clone()));
         assert_eq!(snapshot.estimated_input_tokens, 2048);
         assert!(snapshot.summary_note().contains("最近实测 输入 2048"));
+    }
+
+    /// Keeps provider-observed usage authoritative even when host-side estimates are larger.
+    /// 即使宿主侧估算更大，也保持 Provider 实测用量的权威性。
+    #[test]
+    fn request_context_budget_snapshot_does_not_raise_observed_usage_to_host_estimate() {
+        let capabilities = test_capabilities();
+        let request_snapshot = ProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::new(),
+            prompt: "A".repeat(8192),
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        };
+        let observed_usage = ProviderUsageSnapshot {
+            input_tokens: Some(128),
+            output_tokens: Some(32),
+            reasoning_tokens: None,
+            total_tokens: Some(160),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+        };
+
+        let snapshot = build_request_context_budget_snapshot(
+            "openai",
+            "gpt-test",
+            ProviderApiFamily::OpenAiResponses,
+            &capabilities,
+            &ProviderRuntimeReasoningResolution::default(),
+            &request_snapshot,
+            Some(&observed_usage),
+        );
+
+        assert!(snapshot.estimated_prompt_tokens > 128);
+        assert_eq!(snapshot.estimated_input_tokens, 128);
+    }
+
+    /// Counts Chinese prompt characters as one token each when no provider observation is available.
+    /// 当没有 Provider 实测值时，将中文提示词字符按每字一个 Token 统计。
+    #[test]
+    fn request_context_budget_snapshot_counts_chinese_characters_one_to_one() {
+        let capabilities = test_capabilities();
+        let request_snapshot = ProviderRequestSnapshot {
+            provider_id: String::from("openai"),
+            model_id: String::from("gpt-test"),
+            system_prompt: String::new(),
+            prompt: String::from("中文测试"),
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: ProviderContinuation::default(),
+        };
+
+        let snapshot = build_request_context_budget_snapshot(
+            "openai",
+            "gpt-test",
+            ProviderApiFamily::OpenAiResponses,
+            &capabilities,
+            &ProviderRuntimeReasoningResolution::default(),
+            &request_snapshot,
+            None,
+        );
+
+        assert_eq!(snapshot.estimated_prompt_tokens, 4);
+        assert_eq!(snapshot.estimated_input_tokens, 4);
     }
 
     /// Promotes large session histories into the compaction bucket when the estimated ratio crosses the configured threshold.

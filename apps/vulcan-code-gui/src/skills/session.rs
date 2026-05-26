@@ -161,6 +161,9 @@ pub struct CompactionSkillResult {
     /// Created-at timestamp for the new checkpoint.
     /// 新检查点的创建时间戳。
     pub created_at: String,
+    /// Policy that must be used when applying this compaction result to the canonical conversation.
+    /// 将该压缩结果应用到规范会话时必须使用的策略。
+    pub policy: ContextCompactionPolicy,
 }
 
 /// Planned context-compaction window extracted before any real summarization request is dispatched.
@@ -459,6 +462,7 @@ fn build_compaction_result_from_summary_text(
         retained_tail_start_turn_index: plan.retained_tail_start_turn_index,
         compaction_id: plan.compaction_id.clone(),
         created_at: plan.created_at.clone(),
+        policy: plan.policy,
     }
 }
 
@@ -859,7 +863,11 @@ mod tests {
             retained_tail_start_turn_index: Some(1),
             compaction_id: String::from("session-71002-compaction-test"),
             created_at: String::from("10"),
-            policy: ContextCompactionPolicy::default(),
+            policy: ContextCompactionPolicy {
+                tail_turns: 2,
+                preserve_recent_tokens: 512,
+                ..ContextCompactionPolicy::default()
+            },
         };
 
         let result = CompactionSkillResult::from_model_summary(
@@ -884,6 +892,7 @@ mod tests {
                 .body
                 .contains("Goal: preserve slash command behavior.")
         );
+        assert_eq!(result.policy, plan.policy);
     }
 
     /// Verifies tail-turn retention keeps the requested recent user turn window.

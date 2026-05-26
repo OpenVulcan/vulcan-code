@@ -36,16 +36,33 @@ pub(crate) fn parse_provider_usage_from_json(raw: &str) -> Option<ProviderUsageS
         .filter(ProviderUsageSnapshot::has_any_tokens)
 }
 
-/// Returns one conservative calibrated input-token estimate using the latest observed provider usage as a floor.
-/// 使用最近一次实测 Provider 用量作为下限，返回一份保守校准后的输入 Token 估算值。
+/// Returns the observed provider input-token count when the provider reported enough usage data.
+/// 当 Provider 返回了足够的用量数据时，返回实测输入 Token 数。
+pub(crate) fn observed_input_tokens_from_usage(
+    usage: Option<&ProviderUsageSnapshot>,
+) -> Option<usize> {
+    let snapshot = usage?;
+    if let Some(input_tokens) = snapshot.input_tokens {
+        return Some(input_tokens);
+    }
+    snapshot.total_tokens.map(|total_tokens| {
+        let known_non_input_tokens = snapshot
+            .output_tokens
+            .unwrap_or(0usize)
+            .saturating_add(snapshot.reasoning_tokens.unwrap_or(0usize));
+        total_tokens
+            .saturating_sub(known_non_input_tokens)
+            .max(1usize)
+    })
+}
+
+/// Returns one calibrated input-token estimate, preferring provider-observed usage over host heuristics.
+/// 返回校准后的输入 Token 估算值，优先采用 Provider 实测用量而不是宿主启发式估算。
 pub(crate) fn calibrated_input_token_estimate(
     estimated_input_tokens: usize,
     usage: Option<&ProviderUsageSnapshot>,
 ) -> usize {
-    usage
-        .and_then(|snapshot| snapshot.input_tokens.or(snapshot.total_tokens))
-        .map(|observed| observed.max(estimated_input_tokens))
-        .unwrap_or(estimated_input_tokens)
+    observed_input_tokens_from_usage(usage).unwrap_or(estimated_input_tokens)
 }
 
 #[cfg(test)]
@@ -55,7 +72,8 @@ mod tests {
 
     use super::{
         calibrated_input_token_estimate, latest_provider_usage_from_conversation_state,
-        parse_provider_usage_from_json, serialize_provider_usage_to_json,
+        observed_input_tokens_from_usage, parse_provider_usage_from_json,
+        serialize_provider_usage_to_json,
     };
     use crate::conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload, SessionConversationState,
@@ -139,10 +157,10 @@ mod tests {
         assert!(parse_provider_usage_from_json("{}").is_none());
     }
 
-    /// Uses the latest observed provider usage as a floor so host estimates remain conservative.
-    /// 使用最近一次实测 Provider 用量作为下限，确保宿主估算保持保守。
+    /// Prefers latest observed provider input usage over host estimates when both values are available.
+    /// 当实测 Provider 输入用量与宿主估算同时存在时，优先采用实测值。
     #[test]
-    fn calibrated_input_token_estimate_uses_observed_usage_as_floor() {
+    fn calibrated_input_token_estimate_prefers_observed_input_usage() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(4096),
             output_tokens: Some(512),
@@ -153,7 +171,25 @@ mod tests {
         };
 
         assert_eq!(calibrated_input_token_estimate(1024, Some(&usage)), 4096);
-        assert_eq!(calibrated_input_token_estimate(8192, Some(&usage)), 8192);
+        assert_eq!(calibrated_input_token_estimate(8192, Some(&usage)), 4096);
         assert_eq!(calibrated_input_token_estimate(1024, None), 1024);
+    }
+
+    /// Derives observed input usage from total minus known output-side tokens when direct input usage is missing.
+    /// 当缺少直接输入用量时，通过总量减去已知输出侧 Token 推导输入用量。
+    #[test]
+    fn observed_input_tokens_from_usage_derives_from_total_when_needed() {
+        let usage = ProviderUsageSnapshot {
+            input_tokens: None,
+            output_tokens: Some(256),
+            reasoning_tokens: Some(128),
+            total_tokens: Some(1408),
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+        };
+
+        assert_eq!(observed_input_tokens_from_usage(Some(&usage)), Some(1024));
+        assert_eq!(calibrated_input_token_estimate(4096, Some(&usage)), 1024);
+        assert_eq!(observed_input_tokens_from_usage(None), None);
     }
 }

@@ -127,6 +127,10 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// 在接受当前压缩基线时捕获的锚点分层上下文指纹。
     #[serde(default, alias = "last_context_assembly_fingerprint")]
     pub anchor_context_assembly_fingerprint: Option<String>,
+    /// Last persisted provider-request preview Markdown used by the request-preview transcript tab after hydration.
+    /// 供水合后请求预览转录页签使用的最近一次持久化 Provider 请求预览 Markdown。
+    #[serde(default)]
+    pub last_provider_request_preview_markdown: Option<String>,
     /// Persisted transcript UI state.
     /// 持久化转录界面状态。
     pub ui_state: SessionTranscriptUiState,
@@ -173,6 +177,10 @@ pub(super) struct SessionEventStoreContextDocument {
     /// 镜像进入当前上下文的可选锚点分层上下文指纹。
     #[serde(default, alias = "last_context_assembly_fingerprint")]
     pub anchor_context_assembly_fingerprint: Option<String>,
+    /// Last persisted provider-request preview Markdown mirrored into the current context.
+    /// 镜像进入当前上下文的最近一次持久化 Provider 请求预览 Markdown。
+    #[serde(default)]
+    pub last_provider_request_preview_markdown: Option<String>,
     /// Unix-millis text describing when the current context was last refreshed.
     /// 描述当前上下文最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
@@ -670,6 +678,9 @@ fn runtime_state_to_store_document(
         anchor_context_assembly_fingerprint: runtime_state
             .anchor_context_assembly_fingerprint
             .clone(),
+        last_provider_request_preview_markdown: runtime_state
+            .last_provider_request_preview_markdown
+            .clone(),
         ui_state: runtime_state.ui_state.clone(),
         continuation: runtime_state.conversation_state.continuation.clone(),
         last_provider_usage: runtime_state.last_provider_usage.clone(),
@@ -695,6 +706,9 @@ fn runtime_state_to_context_document(
         anchor_context_assembly_fingerprint: runtime_state
             .anchor_context_assembly_fingerprint
             .clone(),
+        last_provider_request_preview_markdown: runtime_state
+            .last_provider_request_preview_markdown
+            .clone(),
         updated_at: non_empty_timestamp_text(&runtime_state.updated_at),
         conversation_state: runtime_state.conversation_state.clone(),
     }
@@ -716,6 +730,7 @@ fn session_messages_to_context_document(
         live_context_assembly_fingerprint: None,
         anchor_context_budget_fingerprint: None,
         anchor_context_assembly_fingerprint: None,
+        last_provider_request_preview_markdown: None,
         updated_at: current_unix_millis_text(),
         conversation_state: conversation_state_from_session_messages(messages),
     }
@@ -748,6 +763,7 @@ fn context_document_is_empty(document: &SessionEventStoreContextDocument) -> boo
         && document.live_context_assembly_fingerprint.is_none()
         && document.anchor_context_budget_fingerprint.is_none()
         && document.anchor_context_assembly_fingerprint.is_none()
+        && document.last_provider_request_preview_markdown.is_none()
 }
 
 /// Writes all compaction checkpoint documents for one session store rewrite and returns the relative file list captured by the manifest.
@@ -1656,6 +1672,7 @@ mod tests {
             live_context_assembly_fingerprint: Some(String::from("assembly-live-1")),
             anchor_context_budget_fingerprint: Some(String::from("budget-fp-1")),
             anchor_context_assembly_fingerprint: Some(String::from("assembly-fp-1")),
+            last_provider_request_preview_markdown: Some(String::from("# Provider Preview")),
             updated_at: String::from("123"),
             ..SessionRuntimeStateEntry::default()
         };
@@ -1687,6 +1704,10 @@ mod tests {
         assert_eq!(
             loaded.anchor_context_assembly_fingerprint.as_deref(),
             Some("assembly-fp-1")
+        );
+        assert_eq!(
+            loaded.last_provider_request_preview_markdown.as_deref(),
+            Some("# Provider Preview")
         );
         assert_eq!(
             loaded.context_start_message_id.as_deref(),

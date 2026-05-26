@@ -16064,6 +16064,7 @@ impl VulcanWorkbench {
         summary_kind: SessionMessageKind,
         summary_body: &str,
         created_at: &str,
+        policy: ContextCompactionPolicy,
     ) {
         self.ensure_session_conversation_state_loaded(session_id);
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
@@ -16073,12 +16074,12 @@ impl VulcanWorkbench {
             summary_kind,
             summary_body.to_string(),
             created_at.to_string(),
-            ContextCompactionPolicy::default(),
+            policy,
         );
         compact_conversation_records_after_summary(
             &mut runtime_state.conversation_state,
             summary_message_id,
-            ContextCompactionPolicy::default(),
+            policy,
         );
         runtime_state.updated_at = created_at.to_string();
         self.sync_session_messages_from_conversation_state(session_id);
@@ -16139,6 +16140,7 @@ impl VulcanWorkbench {
                 compaction_result.summary_record.kind,
                 &compaction_result.summary_record.body,
                 &runtime_state_updated_at,
+                compaction_result.policy,
             );
         }
         self.push_activity(ActivityLevel::Info, activity_title, activity_detail);
@@ -16670,14 +16672,36 @@ impl VulcanWorkbench {
             || runtime_state_snapshot
                 .anchor_context_assembly_fingerprint
                 .is_some();
-        if validate_anchor_baseline
-            && has_anchor_baseline
-            && let Some(previous_fingerprint) = runtime_state_snapshot
+        if validate_anchor_baseline && has_anchor_baseline {
+            let mut mismatch_reasons = Vec::new();
+            if let Some(previous_budget_fingerprint) = runtime_state_snapshot
                 .anchor_context_budget_fingerprint
                 .as_deref()
-        {
-            context_budget.baseline_matches_active_runtime =
-                previous_fingerprint == context_budget.fingerprint;
+            {
+                context_budget.baseline_budget_fingerprint_matches =
+                    previous_budget_fingerprint == context_budget.fingerprint;
+                if !context_budget.baseline_budget_fingerprint_matches {
+                    mismatch_reasons.push(String::from("预算指纹变化"));
+                }
+            }
+            if let (Some(previous_assembly_fingerprint), Some(current_assembly_fingerprint)) = (
+                runtime_state_snapshot
+                    .anchor_context_assembly_fingerprint
+                    .as_deref(),
+                runtime_state_snapshot
+                    .live_context_assembly_fingerprint
+                    .as_deref(),
+            ) {
+                context_budget.baseline_assembly_fingerprint_matches =
+                    previous_assembly_fingerprint == current_assembly_fingerprint;
+                if !context_budget.baseline_assembly_fingerprint_matches {
+                    mismatch_reasons.push(String::from("上下文层指纹变化"));
+                }
+            }
+            if !mismatch_reasons.is_empty() {
+                context_budget.baseline_matches_active_runtime = false;
+                context_budget.baseline_mismatch_reason = Some(mismatch_reasons.join(" · "));
+            }
         }
 
         Some(context_budget)
@@ -16795,10 +16819,13 @@ impl VulcanWorkbench {
             let preserved_records = runtime_state.conversation_state.records.clone();
             runtime_state.conversation_state = next_conversation_state;
             runtime_state.conversation_state.records = preserved_records;
-            runtime_state.last_provider_usage =
+            if let Some(latest_provider_usage) =
                 crate::provider_usage::latest_provider_usage_from_conversation_state(
                     &runtime_state.conversation_state,
-                );
+                )
+            {
+                runtime_state.last_provider_usage = Some(latest_provider_usage);
+            }
             runtime_state.updated_at = current_unix_millis_text();
             self.sync_session_messages_from_conversation_state(session_id);
         }
@@ -17017,7 +17044,7 @@ impl VulcanWorkbench {
     fn recover_session_context_anchor_from_baseline_mismatch(
         &mut self,
         session_id: SessionId,
-        _context_budget: &ContextBudgetSnapshot,
+        context_budget: &ContextBudgetSnapshot,
     ) {
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
         let had_previous_anchor = runtime_state.last_compaction_id.is_some()
@@ -17031,8 +17058,12 @@ impl VulcanWorkbench {
         runtime_state.updated_at = current_unix_millis_text();
 
         if had_previous_anchor {
+            let mismatch_reason = context_budget
+                .baseline_mismatch_reason
+                .as_deref()
+                .unwrap_or("基线结构已变化");
             let detail = format!(
-                "会话 #{session_id} 的上下文基线已失配，已清除旧压缩锚点并回退到完整上下文窗口。"
+                "会话 #{session_id} 的上下文基线已失配（{mismatch_reason}），已清除旧压缩锚点并回退到完整上下文窗口。"
             );
             self.push_activity(ActivityLevel::Info, "上下文基线恢复", detail.clone());
             if self.selected_session().map(|session| session.id) == Some(session_id) {
@@ -19377,6 +19408,7 @@ mod tests {
             "测试上下文压缩",
             String::from("测试压缩已完成。"),
         );
+        let compacted_conversation = workbench.session_conversation_state(session_id);
 
         assert_eq!(
             workbench.session_compactions.get(&session_id).map(Vec::len),
@@ -19390,8 +19422,7 @@ mod tests {
                 .is_some()
         );
         assert!(matches!(
-            workbench
-                .session_conversation_state(session_id)
+            compacted_conversation
                 .messages
                 .first()
                 .map(|message| &message.payload),
@@ -19400,6 +19431,7 @@ mod tests {
                 ..
             }) if text.contains("Earlier context summary")
         ));
+        assert_eq!(compacted_conversation.messages.len(), 3);
         assert!(
             workbench
                 .session_runtime_state
@@ -19552,6 +19584,12 @@ mod tests {
             .expect("budget snapshot should be available");
 
         assert!(!snapshot.baseline_matches_active_runtime);
+        assert!(!snapshot.baseline_budget_fingerprint_matches);
+        assert!(snapshot.baseline_assembly_fingerprint_matches);
+        assert_eq!(
+            snapshot.baseline_mismatch_reason.as_deref(),
+            Some("预算指纹变化")
+        );
     }
 
     /// Verifies the visible budget snapshot ignores stale anchor mismatches until the host is actually deciding whether compaction work should run.
@@ -19591,6 +19629,70 @@ mod tests {
             .expect("budget snapshot should be available");
 
         assert!(snapshot.baseline_matches_active_runtime);
+    }
+
+    /// Verifies the compaction-anchor validation also detects layered-context fingerprint drift in addition to budget drift.
+    /// 验证压缩锚点校验除了预算漂移外，也会检测分层上下文指纹漂移。
+    #[test]
+    fn session_budget_snapshot_with_anchor_detects_assembly_fingerprint_mismatch() {
+        let (mut workbench, _task) = VulcanWorkbench::new();
+        let session_id = SessionId::from_u128(71013);
+        let active_choice = workbench
+            .active_workbench_model_choice()
+            .expect("active workbench model choice should exist");
+        workbench.sessions.clear();
+        workbench
+            .sessions
+            .push(test_session_summary(session_id, "装配锚点测试"));
+        workbench.selected_session = session_id;
+        workbench.session_runtime_state.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_provider_id: Some(active_choice.provider_id.clone()),
+                active_model_id: Some(active_choice.model_id.clone()),
+                last_compaction_id: Some(String::from("cp-assembly-1")),
+                context_start_message_id: Some(String::from("summary-assembly-1")),
+                live_context_budget_fingerprint: Some(String::from("budget-live")),
+                live_context_assembly_fingerprint: Some(String::from("assembly-live")),
+                anchor_context_budget_fingerprint: Some(String::from("budget-live")),
+                anchor_context_assembly_fingerprint: Some(String::from("assembly-old")),
+                conversation_state: SessionConversationState::default(),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+        let current_budget_fingerprint = {
+            let runtime_state = workbench
+                .session_runtime_state
+                .get(&session_id)
+                .cloned()
+                .expect("runtime state should exist");
+            workbench
+                .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false)
+                .expect("budget snapshot should be available")
+                .fingerprint
+        };
+        workbench
+            .session_runtime_state
+            .get_mut(&session_id)
+            .expect("runtime state should exist")
+            .anchor_context_budget_fingerprint = Some(current_budget_fingerprint);
+
+        let runtime_state = workbench
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .expect("runtime state should exist");
+        let snapshot = workbench
+            .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], true)
+            .expect("budget snapshot should be available");
+
+        assert!(!snapshot.baseline_matches_active_runtime);
+        assert!(snapshot.baseline_budget_fingerprint_matches);
+        assert!(!snapshot.baseline_assembly_fingerprint_matches);
+        assert_eq!(
+            snapshot.baseline_mismatch_reason.as_deref(),
+            Some("上下文层指纹变化")
+        );
     }
 
     /// Verifies active prompt-compaction state keeps the session on the blocking system-work lane so queued prompts do not auto-dispatch early.

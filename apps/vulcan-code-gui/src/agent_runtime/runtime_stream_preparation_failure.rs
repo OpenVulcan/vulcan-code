@@ -18,6 +18,7 @@ pub(crate) fn build_preparation_failure_report(
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        None,
         error,
     )
 }

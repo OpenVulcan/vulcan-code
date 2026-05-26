@@ -1127,6 +1127,10 @@ pub struct SessionRuntimeStateEntry {
         skip_serializing_if = "Option::is_none"
     )]
     pub anchor_context_assembly_fingerprint: Option<String>,
+    /// Last persisted provider-request preview Markdown used by the dedicated API request transcript tab.
+    /// 供专用 API 请求转录页签使用的最近一次持久化 Provider 请求预览 Markdown。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_provider_request_preview_markdown: Option<String>,
     /// Persisted transcript UI state restored with the session runtime metadata.
     /// 随会话运行时元数据一起恢复的持久化转录界面状态。
     pub ui_state: SessionTranscriptUiState,

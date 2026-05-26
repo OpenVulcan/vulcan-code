@@ -300,8 +300,8 @@ pub struct ExecutionRunReport {
     /// Assistant thinking output returned by the real provider call.
     /// 真实 Provider 调用返回的助手思考输出。
     pub thinking_output: Option<String>,
-    /// Canonical conversation state returned from the final host-controlled controller run when execution succeeds.
-    /// 当执行成功时由最终宿主控制器运行返回的规范会话状态。
+    /// Canonical conversation state returned from the last safe host-controlled controller boundary.
+    /// 从最后一个安全的宿主控制器边界返回的规范会话状态。
     pub conversation_state: Option<SessionConversationState>,
     /// Number of real provider requests dispatched while this run was active.
     /// 本次运行期间真实发出的 Provider 请求次数。
@@ -363,6 +363,7 @@ impl ExecutionRunReport {
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
         controller_events: Vec<CoreControllerEvent>,
+        conversation_state: Option<SessionConversationState>,
         error: impl Into<String>,
     ) -> Self {
         Self {
@@ -370,7 +371,7 @@ impl ExecutionRunReport {
             preparation,
             assistant_output: None,
             thinking_output: None,
-            conversation_state: None,
+            conversation_state,
             provider_request_count,
             mcp_discovery_rows,
             mcp_discovery_errors,

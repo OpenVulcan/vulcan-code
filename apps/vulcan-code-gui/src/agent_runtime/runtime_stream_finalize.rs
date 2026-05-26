@@ -78,6 +78,7 @@ pub(crate) fn build_failure_execution_report(
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
     controller_events: Vec<CoreControllerEvent>,
+    conversation_state: Option<SessionConversationState>,
     error: impl Into<String>,
 ) -> ExecutionRunReport {
     ExecutionRunReport::failure(
@@ -88,6 +89,7 @@ pub(crate) fn build_failure_execution_report(
         mcp_discovery_errors,
         warnings,
         controller_events,
+        conversation_state,
         error,
     )
 }
@@ -136,6 +138,7 @@ pub(crate) fn build_failure_terminal_events(
         events.push(thinking_completed_event);
     }
     apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
+    let last_safe_conversation_state = stream_state.take_final_conversation_state();
     stream_state.controller_mut().mark_failed(error.clone());
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
@@ -150,6 +153,7 @@ pub(crate) fn build_failure_terminal_events(
             mcp_discovery_errors,
             warnings,
             stream_state.controller().events().to_vec(),
+            last_safe_conversation_state,
             error,
         ),
     ));
@@ -357,8 +361,8 @@ mod tests {
         ));
     }
 
-    /// Emits failure terminal events in the expected order and captures the terminal error inside the final report.
-    /// 按预期顺序发出失败终态事件，并在最终报告中捕获终态错误。
+    /// Emits failure terminal events while preserving the last safe conversation state before the error.
+    /// 发出失败终态事件，同时保留错误前最后一个安全会话状态。
     #[test]
     fn failure_terminal_events_emit_failed_runtime_event_and_finished_report() {
         let session_id = Uuid::nil();
@@ -375,6 +379,13 @@ mod tests {
             session_id,
             &mut stream_state,
             Ok(ProviderStreamDelta::Thinking(String::from("先尝试执行"))),
+        );
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut stream_state,
+            Ok(ProviderStreamDelta::FinalConversationState(
+                SessionConversationState::default(),
+            )),
         );
 
         let events = build_failure_terminal_events(
@@ -395,15 +406,16 @@ mod tests {
                 ExecutionStreamEvent::Finished(report),
             ] if event.kind == RuntimeEventKind::Failed
                 && report.error.as_deref() == Some("provider failed")
+                && report.conversation_state.is_some()
                 && report.mcp_discovery_errors == vec![String::from("mcp-error")]
                 && report.warnings == vec![String::from("warning")]
         ));
     }
 
-    /// Rebuilds the latest request snapshot while preserving the previously observed usage floor for recalibration.
-    /// 在重建最新请求快照时保留先前观测到的用量下限，以便继续参与预算校准。
+    /// Rebuilds the latest request snapshot while preserving previously observed usage for recalibration.
+    /// 在重建最新请求快照时保留先前观测到的用量，以便继续参与预算校准。
     #[test]
-    fn apply_latest_request_snapshot_preserves_observed_usage_floor() {
+    fn apply_latest_request_snapshot_preserves_observed_usage() {
         let observed_usage = ProviderUsageSnapshot {
             input_tokens: Some(4096),
             output_tokens: Some(256),

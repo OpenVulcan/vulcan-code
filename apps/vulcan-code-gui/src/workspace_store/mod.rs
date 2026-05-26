@@ -746,6 +746,7 @@ pub async fn load_workspace_snapshot(
             live_context_assembly_fingerprint: None,
             anchor_context_budget_fingerprint: None,
             anchor_context_assembly_fingerprint: None,
+            last_provider_request_preview_markdown: None,
             ui_state: row
                 .ui_state_json
                 .as_deref()
@@ -1357,6 +1358,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         live_context_assembly_fingerprint: None,
         anchor_context_budget_fingerprint: None,
         anchor_context_assembly_fingerprint: None,
+        last_provider_request_preview_markdown: None,
         ui_state: row
             .ui_state_json
             .as_deref()

@@ -586,6 +586,8 @@ mod tests {
         assert!(!preamble.contains("LuaSkills 工具目录"));
         assert!(!preamble.contains("MCP 工具已真实注册"));
         assert!(!preamble.contains("可委派代理"));
+        assert!(!preamble.contains("Glob and Grep tools"));
+        assert!(!preamble.contains("multi_tool_use.parallel"));
         assert!(preamble.contains(r"Current workspace: D:\workspace"));
         assert!(preamble.contains("Current execution mode: Build"));
     }

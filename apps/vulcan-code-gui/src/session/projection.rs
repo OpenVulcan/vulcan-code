@@ -348,6 +348,14 @@ impl VulcanWorkbench {
         session_id: SessionId,
         preview_markdown: String,
     ) {
+        if let Some(runtime_state) = self.session_runtime_state.get_mut(&session_id) {
+            runtime_state.last_provider_request_preview_markdown = Some(preview_markdown.clone());
+            runtime_state.updated_at = current_unix_millis_text();
+        } else if let Some(runtime_state) = self.archived_session_runtime_state.get_mut(&session_id)
+        {
+            runtime_state.last_provider_request_preview_markdown = Some(preview_markdown.clone());
+            runtime_state.updated_at = current_unix_millis_text();
+        }
         self.session_last_api_request_markdowns
             .insert(session_id, preview_markdown.clone());
         if let Some(content) = self.session_last_api_request_buffers.get_mut(&session_id) {

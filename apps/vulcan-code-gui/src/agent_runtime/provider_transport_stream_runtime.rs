@@ -108,6 +108,11 @@ where
                     )));
                 }
                 Err(error) => {
+                    // Preserve only the controller snapshot before the terminal error is reported.
+                    // 只保留终态错误上报前的控制器快照，避免把损坏调用的流式输出写入上下文。
+                    let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
+                        core_snapshot_to_session_conversation_state(controller.snapshot()),
+                    )));
                     let _ = task_sender.send(Err(format!(
                         "{}流式执行失败：{}。",
                         provider_label_for_task,
