@@ -5,7 +5,9 @@ mod attachment_management;
 mod composer_attachments;
 mod configuration;
 mod context_menu;
+mod diff_state;
 mod helpers;
+mod interaction_state;
 mod media_preview;
 mod message;
 pub(crate) mod model;
@@ -35,6 +37,15 @@ use self::session_prompt_compaction::{
 };
 
 use self::context_menu::{WorkbenchContextMenuItem, WorkbenchContextMenuState};
+use self::diff_state::{
+    ActiveDiffFile, DiffVisualSliceRange, VisibleDiffFileRange, VisibleDiffHunkSlice,
+    WindowControlIcon,
+};
+use self::interaction_state::{
+    HoveredDiffLine, PendingAiCapabilityRouteDrag, PendingMainTaskPanelResize,
+    PendingPendingPromptDrag, PendingTaskProjectInteraction, PendingWindowTitleBarDrag,
+    WindowTitleBarPointer,
+};
 use self::message::Message;
 use self::session_state::{
     ActiveSessionCompactionState, ActiveSessionRunState, ActiveTranscriptDragAutoScroll,
@@ -3765,108 +3776,6 @@ enum AgentTranscriptSurfaceMode {
     ApiRequest,
 }
 
-/// Hover state describing the active visual line in one diff hunk.
-/// 描述某个 diff hunk 中当前激活可视行的悬停状态。
-#[derive(Debug, Clone)]
-struct HoveredDiffLine {
-    /// Stable hunk buffer key owning the hovered visual line.
-    /// 拥有当前悬停可视行的稳定 hunk 缓冲区键。
-    file_key: String,
-    /// Zero-based visual line index inside the current diff hunk body.
-    /// 当前 diff hunk 主体内从零开始的可视行索引。
-    line_index: usize,
-}
-
-/// Materialized visual-line slice range for one virtualized diff hunk editor.
-/// 单个虚拟化 Diff hunk 编辑器已物化的可视行切片范围。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DiffVisualSliceRange {
-    /// Inclusive start index of the visible visual-line slice.
-    /// 可视行切片的起始索引（包含）。
-    start: usize,
-    /// Exclusive end index of the visible visual-line slice.
-    /// 可视行切片的结束索引（不包含）。
-    end: usize,
-}
-
-/// Latest pointer position tracked inside one custom title bar drag region.
-/// 在某个自定义标题栏拖拽区域内追踪到的最近鼠标位置。
-#[derive(Debug, Clone, Copy)]
-struct WindowTitleBarPointer {
-    /// Window identifier owning the tracked title bar pointer position.
-    /// 拥有当前标题栏鼠标位置的窗口标识。
-    window_id: window::Id,
-    /// Latest pointer position relative to the title bar drag region.
-    /// 相对于标题栏拖拽区域的最近鼠标位置。
-    position: iced::Point,
-}
-
-/// Pending drag candidate captured from one custom title bar press.
-/// 从某次自定义标题栏按下动作中捕获的待确认拖动候选状态。
-#[derive(Debug, Clone, Copy)]
-struct PendingWindowTitleBarDrag {
-    /// Window identifier targeted by the future native drag request.
-    /// 未来原生拖动请求将作用到的窗口标识。
-    window_id: window::Id,
-    /// Pointer origin captured when the title bar was pressed.
-    /// 标题栏被按下时捕获到的鼠标起始位置。
-    origin: iced::Point,
-}
-
-/// Pending resize candidate captured from the main task drawer divider.
-/// 从主任务抽屉分隔柄捕获的待确认缩放候选状态。
-#[derive(Debug, Clone, Copy)]
-struct PendingMainTaskPanelResize {
-    /// Cursor x position captured when the drawer resize interaction started.
-    /// 任务抽屉缩放交互开始时捕获到的鼠标横向位置。
-    origin_x: f32,
-    /// Drawer width captured when the resize interaction started.
-    /// 任务抽屉缩放交互开始时捕获到的抽屉宽度。
-    initial_width: f32,
-}
-
-/// Pending interaction candidate captured from one project-row press inside the task tree.
-/// 从任务树某个项目行按下动作中捕获的待判定交互候选状态。
-#[derive(Debug, Clone)]
-struct PendingTaskProjectInteraction {
-    /// Stable identifier of the pressed project row.
-    /// 当前被按下项目行的稳定标识。
-    project_id: String,
-    /// Cursor origin captured when the interaction started.
-    /// 交互开始时捕获到的鼠标起始位置。
-    origin: iced::Point,
-}
-
-/// Pending drag candidate captured from one pending-prompt queue handle press.
-/// 从某次待发送队列拖拽柄按下动作中捕获的待确认拖拽候选状态。
-#[derive(Debug, Clone)]
-struct PendingPendingPromptDrag {
-    /// Stable root-session identifier that owns the queue being reordered.
-    /// 拥有当前重排队列的稳定根会话标识。
-    session_id: SessionId,
-    /// Stable queue-entry identifier that may turn into the active drag source.
-    /// 可能升级为激活拖拽源的稳定队列项标识。
-    entry_id: String,
-    /// Cursor origin captured when the drag candidate was pressed.
-    /// 按下拖拽候选时捕获到的鼠标起始位置。
-    origin: iced::Point,
-}
-
-/// Pending drag candidate captured from one AI capability route handle press.
-/// 从某次 AI 能力路由拖拽柄按下动作中捕获的待确认拖拽候选状态。
-#[derive(Debug, Clone)]
-struct PendingAiCapabilityRouteDrag {
-    /// Semantic capability owning the route currently being reordered.
-    /// 当前正在重排路由所属的语义能力。
-    capability_kind: AiToolKind,
-    /// Fully qualified `vendor/target` selector that may become the active drag source.
-    /// 可能升级为激活拖拽源的完整 `供应商/目标` 选择器。
-    target_selector: String,
-    /// Cursor origin captured when the drag candidate was pressed.
-    /// 按下拖拽候选时捕获到的鼠标起始位置。
-    origin: iced::Point,
-}
-
 /// Stable scope selection used by the left-panel workspace-history search.
 /// 左侧面板工作台历史搜索使用的稳定范围选择。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4068,89 +3977,6 @@ enum AiCapabilityRouteDropTarget {
     /// Inserts the dragged capability target at the end of the current capability route.
     /// 将正在拖拽的能力目标插入到当前能力路由尾部。
     End,
-}
-
-impl DiffVisualSliceRange {
-    /// Builds one normalized slice range constrained by the total visual-line count.
-    /// 根据总可视行数量构建一个规范化切片范围。
-    fn new(start: usize, end: usize, total_lines: usize) -> Self {
-        let bounded_start = start.min(total_lines);
-        let bounded_end = end.max(bounded_start).min(total_lines);
-
-        Self {
-            start: bounded_start,
-            end: bounded_end,
-        }
-    }
-
-    /// Returns the number of visual lines covered by the slice.
-    /// 返回该切片覆盖的可视行数量。
-    fn len(&self) -> usize {
-        self.end.saturating_sub(self.start)
-    }
-}
-
-/// Visible virtualized range of diff file cards inside the current review viewport.
-/// 当前审查视口内可见的虚拟化 Diff 文件卡片范围。
-#[derive(Debug, Clone, Copy)]
-struct VisibleDiffFileRange {
-    /// Inclusive start index of the visible file-card slice.
-    /// 可见文件卡片切片的起始索引（包含）。
-    start: usize,
-    /// Exclusive end index of the visible file-card slice.
-    /// 可见文件卡片切片的结束索引（不包含）。
-    end: usize,
-    /// Height spacer inserted before the first rendered file card.
-    /// 插入在首个渲染文件卡片之前的高度占位。
-    top_spacer_height: f32,
-    /// Height spacer inserted after the last rendered file card.
-    /// 插入在最后一个渲染文件卡片之后的高度占位。
-    bottom_spacer_height: f32,
-}
-
-/// One visible hunk slice together with the hidden-height spacers surrounding it.
-/// 单个可见 hunk 切片及其上下隐藏高度占位描述。
-#[derive(Debug, Clone, Copy)]
-struct VisibleDiffHunkSlice {
-    /// Visual-line slice range currently rendered inside the hunk editor.
-    /// 当前在 hunk 编辑器中渲染的可视行切片范围。
-    range: DiffVisualSliceRange,
-    /// Hidden height above the visible slice inside the full hunk block.
-    /// 整个 hunk 区块内位于可视切片上方的隐藏高度。
-    top_hidden_height: f32,
-    /// Hidden height below the visible slice inside the full hunk block.
-    /// 整个 hunk 区块内位于可视切片下方的隐藏高度。
-    bottom_hidden_height: f32,
-}
-
-/// Active diff file descriptor derived from the current review scroll position.
-/// 根据当前审查滚动位置推导出的激活 diff 文件描述。
-#[derive(Debug, Clone, Copy)]
-struct ActiveDiffFile<'a> {
-    /// Active file payload currently closest to the top of the review viewport.
-    /// 当前最接近审查视口顶部的激活文件载荷。
-    file: &'a DiffFile,
-    /// Whether the active file card is currently collapsed.
-    /// 当前激活文件卡片是否处于折叠状态。
-    is_collapsed: bool,
-}
-
-/// Semantic icon kind rendered inside one custom window control button.
-/// 渲染在单个自定义窗口控制按钮中的语义图标类型。
-#[derive(Debug, Clone, Copy)]
-enum WindowControlIcon {
-    /// Minimize-window affordance icon.
-    /// 最小化窗口操作图标。
-    Minimize,
-    /// Maximize-window affordance icon.
-    /// 最大化窗口操作图标。
-    Maximize,
-    /// Restore-window affordance icon displayed while maximized.
-    /// 窗口已最大化时显示的还原操作图标。
-    Restore,
-    /// Close-window affordance icon.
-    /// 关闭窗口操作图标。
-    Close,
 }
 
 /// Editable provider form state kept in sync with the persisted provider configuration file.
