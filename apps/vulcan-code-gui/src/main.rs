@@ -49,5 +49,6 @@ pub(crate) use vulcan_workspace_store::workspace_store;
 /// Starts the GUI application bootstrap sequence.
 /// 启动图形界面应用的引导流程。
 fn main() -> iced::Result {
+    app::mark_startup_trace("main:start");
     app::run()
 }

@@ -10,6 +10,7 @@ impl VulcanWorkbench {
         match message {
             Message::Noop => Task::none(),
             Message::BeginStartupBootstrap => {
+                mark_startup_trace("message:BeginStartupBootstrap");
                 self.startup_lifecycle = StartupLifecycle::Bootstrapping {
                     message: self.t(I18nKey::StatusInitializingDataPlane),
                 };
@@ -104,6 +105,7 @@ impl VulcanWorkbench {
                 )
             }
             Message::StartupBootstrapFinished(result) => {
+                mark_startup_trace("message:StartupBootstrapFinished");
                 match result {
                     Ok(report) => {
                         self.status_message = report.summary_text();
@@ -144,6 +146,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::LuaSkillsBootstrapFinished(result) => {
+                mark_startup_trace("message:LuaSkillsBootstrapFinished");
                 match result {
                     Ok(report) => {
                         self.status_message = report.summary_text();
@@ -190,6 +193,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::TokenBudgetRuntimeInitialized(token_budget_runtime) => {
+                mark_startup_trace("message:TokenBudgetRuntimeInitialized");
                 let status = token_budget_runtime.status_row();
                 let level = if token_budget_runtime.is_available() {
                     ActivityLevel::Success
@@ -241,6 +245,7 @@ impl VulcanWorkbench {
                 ])
             }
             Message::WorkspaceStateLoaded(result) => {
+                mark_startup_trace("message:WorkspaceStateLoaded");
                 match result {
                     Ok(snapshot) => {
                         self.apply_workspace_snapshot(snapshot);
@@ -491,6 +496,7 @@ impl VulcanWorkbench {
                 self.update_luaskills_message(luaskills_message)
             }
             Message::McpRuntimeBootstrapped(result) => {
+                mark_startup_trace("message:McpRuntimeBootstrapped");
                 match result {
                     Ok(runtime_access) => {
                         self.mcp_runtime = Some(runtime_access);
@@ -509,6 +515,7 @@ impl VulcanWorkbench {
                 self.load_selected_mcp_server_oauth_status_task()
             }
             Message::MainWindowOpened(window_id) => {
+                mark_startup_trace("message:MainWindowOpened");
                 self.main_window_id = Some(window_id);
                 window::is_maximized(window_id).map(move |maximized| {
                     Message::WindowMaximizedStateChanged(window_id, maximized)

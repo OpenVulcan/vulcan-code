@@ -36,6 +36,7 @@ mod session_projection_state;
 mod session_prompt_compaction;
 mod session_state;
 mod session_transcript_runtime;
+mod startup_trace;
 mod subagent_runtime;
 mod task_tree;
 #[cfg(test)]
@@ -1091,6 +1092,7 @@ fn session_event_store_missing_error(error: &str) -> bool {
 /// Launches the GUI application using the official iced crate.
 /// 使用官方 iced crate 启动图形界面应用。
 pub fn run() -> iced::Result {
+    mark_startup_trace("app_shell::run");
     iced::daemon(
         VulcanWorkbench::new,
         VulcanWorkbench::update,
@@ -1115,6 +1117,12 @@ pub fn run() -> iced::Result {
     .font(LUCIDE_FONT_BYTES)
     .font(iced_aw::ICED_AW_FONT_BYTES)
     .run()
+}
+
+/// Emits one opt-in startup trace mark for diagnostics.
+/// 为诊断输出一条可选启动追踪标记。
+pub(crate) fn mark_startup_trace(label: impl AsRef<str>) {
+    startup_trace::mark(label);
 }
 
 /// Root state for the AI coding desktop workbench.
@@ -1887,6 +1895,7 @@ impl VulcanWorkbench {
     /// Builds the initial state, seeded UI data, and pane layout.
     /// 构建初始状态、种子界面数据与面板布局。
     fn new() -> (Self, Task<Message>) {
+        mark_startup_trace("VulcanWorkbench::new:start");
         // Create the fixed three-column workbench layout for the first prototype.
         // 为首版原型创建固定的三栏工作台布局。
         let panes = pane_grid::State::with_configuration(pane_layout());
@@ -1911,6 +1920,7 @@ impl VulcanWorkbench {
                     format!("供应商配置载入失败，已回退到空配置：{error}"),
                 ),
             };
+        mark_startup_trace("VulcanWorkbench::new:provider-and-agent-config-loaded");
         let runtime_defaults_changed =
             agent_runtime::ensure_runtime_defaults(&mut provider_configuration);
         let mut agent_profile_catalog = match agent_profile::load_agent_profile_catalog() {
@@ -2017,6 +2027,7 @@ impl VulcanWorkbench {
                 }
             }
         };
+        mark_startup_trace("VulcanWorkbench::new:ai-tool-config-loaded");
         if runtime_defaults_changed
             || legacy_agent_migrated
             || ai_tool_configuration_migrated
@@ -2058,6 +2069,7 @@ impl VulcanWorkbench {
                 PersistedControllerConfiguration::default()
             }
         };
+        mark_startup_trace("VulcanWorkbench::new:controller-config-loaded");
         let supported_provider_choices = provider_config::supported_provider_choices();
         let selected_provider = Self::resolve_initial_provider_choice(
             &provider_configuration,
@@ -2091,6 +2103,7 @@ impl VulcanWorkbench {
             None,
             None,
         );
+        mark_startup_trace("VulcanWorkbench::new:runtime-foundation-built");
 
         let activities = ActivityEntry::seeded();
         let activity_raw_buffers = activities
@@ -2099,6 +2112,7 @@ impl VulcanWorkbench {
             .collect::<Vec<_>>();
         let placeholder_diff_panel = WorkspaceDiffPanel::placeholder();
         let (main_window_id, open_main_window) = window::open(main_window_settings());
+        mark_startup_trace("VulcanWorkbench::new:window-open-task-created");
         let app_theme = theme::default_theme();
         let language_manager =
             LanguageManager::new(Self::resolve_initial_locale(&provider_configuration));
@@ -2377,6 +2391,7 @@ impl VulcanWorkbench {
 
         let _ = application.reconcile_workbench_reasoning_effort_for_active_model();
         application.reload_project_prompt_settings_draft();
+        mark_startup_trace("VulcanWorkbench::new:state-built");
 
         (
             application,

@@ -9,6 +9,7 @@ impl VulcanWorkbench {
     pub(super) fn update_luaskills_message(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::LuaSkillsCatalogLoaded(result) => {
+                mark_startup_trace("message:LuaSkillsCatalogLoaded");
                 self.luaskills_operation_in_flight = false;
                 self.luaskills_operation_progress = None;
                 if let Some(handle) = self.luaskills_runtime.as_ref() {
