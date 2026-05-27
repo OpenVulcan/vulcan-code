@@ -1589,7 +1589,7 @@ impl VulcanWorkbench {
     /// 当没有请求装配信息时，根据预算快照构建一份兜底本地估算拆分。
     fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapshot) -> Vec<String> {
         let observed_input_tokens = Self::context_budget_observed_input_tokens(context_budget);
-        let mut parts = vec![
+        let raw_parts = vec![
             (String::from("系统"), context_budget.estimated_system_tokens),
             (
                 String::from("历史"),
@@ -1598,18 +1598,32 @@ impl VulcanWorkbench {
             (String::from("当前"), context_budget.estimated_prompt_tokens),
             (String::from("工具"), context_budget.estimated_tool_tokens),
         ];
-        let local_estimate_total = parts.iter().map(|(_, tokens)| *tokens).sum::<usize>();
+        let local_estimate_total = raw_parts.iter().map(|(_, tokens)| *tokens).sum::<usize>();
+        let mut rows = Vec::new();
         if let Some(observed_input_tokens) = observed_input_tokens {
-            parts = Self::calibrate_context_usage_parts(parts, observed_input_tokens);
+            rows.push(Self::context_budget_prediction_accuracy_row(
+                local_estimate_total,
+                observed_input_tokens,
+            ));
+            let mut predicted_parts = raw_parts.clone();
+            predicted_parts.push((String::from("合计"), local_estimate_total));
+            rows.extend(Self::context_usage_part_rows(
+                "预测拆分（预算器）",
+                predicted_parts,
+            ));
+            let mut calibrated_parts =
+                Self::calibrate_context_usage_parts(raw_parts, observed_input_tokens);
+            calibrated_parts.push((String::from("合计"), observed_input_tokens));
+            rows.extend(Self::context_usage_part_rows(
+                "校准拆分（实测）",
+                calibrated_parts,
+            ));
+            return rows;
         }
-        let display_total = observed_input_tokens.unwrap_or(local_estimate_total);
-        parts.push((String::from("合计"), display_total));
-        let prefix = if observed_input_tokens.is_some() {
-            "估算拆分（实测校准）"
-        } else {
-            "估算拆分（参考）"
-        };
-        Self::context_usage_part_rows(prefix, parts)
+
+        let mut raw_parts = raw_parts;
+        raw_parts.push((String::from("合计"), local_estimate_total));
+        Self::context_usage_part_rows("预测拆分（预算器）", raw_parts)
     }
 
     /// Builds compact tooltip rows from named token-estimate parts.
@@ -1648,6 +1662,37 @@ impl VulcanWorkbench {
                 .saturating_sub(observed_usage.reasoning_tokens.unwrap_or(0usize))
                 .max(1usize)
         })
+    }
+
+    /// Builds one compact prediction-quality row comparing budget-engine input estimate with provider-observed input usage.
+    /// 构建一条紧凑的预测质量行，用预算引擎输入估算与 Provider 实测输入用量做对比。
+    fn context_budget_prediction_accuracy_row(
+        predicted_input_tokens: usize,
+        observed_input_tokens: usize,
+    ) -> String {
+        if observed_input_tokens == 0usize {
+            return format!("预测准确度：预测 {predicted_input_tokens} / 实测 0 / 无法计算误差率");
+        }
+
+        let difference = predicted_input_tokens as i128 - observed_input_tokens as i128;
+        let absolute_difference = difference.unsigned_abs();
+        let error_ratio = absolute_difference as f64 / observed_input_tokens as f64 * 100.0;
+        let direction = if difference > 0 {
+            "偏高"
+        } else if difference < 0 {
+            "偏低"
+        } else {
+            "命中"
+        };
+
+        format!(
+            "预测准确度：预测 {} / 实测 {} / {} {}（{:.1}%）",
+            predicted_input_tokens,
+            observed_input_tokens,
+            direction,
+            absolute_difference,
+            error_ratio
+        )
     }
 
     /// Scales local context-layer estimates so their sum matches provider-observed input usage.
