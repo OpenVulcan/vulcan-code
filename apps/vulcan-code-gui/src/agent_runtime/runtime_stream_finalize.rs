@@ -1,6 +1,7 @@
 //! Runtime streaming finalization helpers for request snapshots, output events, and terminal reports.
 //! 面向请求快照、输出事件与终态报告的运行时流式收尾辅助模块。
 
+use crate::agent_runtime::context_request_mode::resolve_preparation_context_request_mode;
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionRunReport};
 use crate::agent_runtime::provider_stream_projection::{
@@ -42,6 +43,10 @@ pub(crate) fn apply_latest_request_snapshot(
     let context_assembly = build_provider_request_context_assembly(request_snapshot);
     preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
     preparation.context_assembly = Some(context_assembly);
+    preparation.context_request_mode = Some(resolve_preparation_context_request_mode(
+        preparation,
+        request_snapshot,
+    ));
     preparation.provider_request_preview_markdown =
         crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown(
             preparation,
@@ -275,6 +280,7 @@ mod tests {
             context_budget: None,
             context_assembly: None,
             context_baseline: None,
+            context_request_mode: None,
         }
     }
 

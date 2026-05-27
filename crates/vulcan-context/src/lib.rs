@@ -4,6 +4,7 @@
 pub mod assembly;
 pub mod budget;
 pub mod protocol;
+pub mod request_mode;
 pub mod transcript;
 
 pub use assembly::{
@@ -24,6 +25,10 @@ pub use protocol::{
     append_user_text_message, collect_host_visible_attachments,
     conversation_state_from_session_messages, conversation_state_to_context_records,
     conversation_state_to_session_messages,
+};
+pub use request_mode::{
+    ContextFullRequestReason, ContextIncrementalDisabledReason, ContextRequestMode,
+    ContextRequestModeInput, resolve_context_request_mode,
 };
 pub use transcript::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,

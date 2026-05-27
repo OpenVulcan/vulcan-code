@@ -137,6 +137,7 @@ pub(crate) fn prepare_execution(
         context_budget: None,
         context_assembly: None,
         context_baseline: None,
+        context_request_mode: None,
     })
 }
 

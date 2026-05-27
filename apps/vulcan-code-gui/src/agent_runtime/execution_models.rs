@@ -8,7 +8,7 @@ use crate::model::SessionId;
 use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
 use crate::provider_config::{PersistedPromptConfiguration, PersistedPromptPersonalitySelection};
 use serde_json::Value;
-use vulcan_context::{ContextAssembly, ContextBaseline};
+use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
 use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent, ProviderUsageSnapshot,
 };
@@ -172,6 +172,9 @@ pub struct ExecutionPreparation {
     /// Optional compact baseline snapshot derived from the current layered context assembly.
     /// 从当前分层上下文装配结果派生出的可选紧凑基线快照。
     pub context_baseline: Option<ContextBaseline>,
+    /// Optional context request send-mode diagnostic captured from the final request shape.
+    /// 从最终请求形态捕获的可选上下文请求发送模式诊断。
+    pub context_request_mode: Option<ContextRequestMode>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.
@@ -296,6 +299,13 @@ impl ExecutionPreparation {
             rows.push(format!(
                 "上下文基线：{} 层 · {}",
                 context_baseline.layer_count, context_baseline.fingerprint
+            ));
+        }
+
+        if let Some(context_request_mode) = self.context_request_mode.as_ref() {
+            rows.push(format!(
+                "上下文发送：{}",
+                context_request_mode.summary_note()
             ));
         }
 

@@ -652,6 +652,7 @@ mod tests {
             context_budget: Option::<ContextBudgetSnapshot>::None,
             context_assembly: Option::<ContextAssembly>::None,
             context_baseline: Option::<ContextBaseline>::None,
+            context_request_mode: None,
         }
     }
 

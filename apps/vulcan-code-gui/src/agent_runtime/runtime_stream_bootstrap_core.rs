@@ -2,6 +2,7 @@
 //! 面向运行时流 bootstrap 核心状态构建与请求快照播种的辅助模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
+use crate::agent_runtime::context_request_mode::resolve_preparation_context_request_mode;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
@@ -116,6 +117,10 @@ pub(crate) async fn seed_runtime_request_snapshot(
             let context_assembly = build_provider_request_context_assembly(&request_snapshot);
             preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
             preparation.context_assembly = Some(context_assembly);
+            preparation.context_request_mode = Some(resolve_preparation_context_request_mode(
+                preparation,
+                &request_snapshot,
+            ));
             preparation.provider_request_preview_markdown =
                 build_provider_request_preview_markdown(preparation, &request_snapshot);
             preparation.provider_request_snapshot_json =

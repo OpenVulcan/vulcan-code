@@ -70,6 +70,17 @@ pub(crate) fn build_provider_request_preview_markdown(
             )
         })
         .unwrap_or_else(|| String::from("（尚未生成上下文基线）"));
+    let context_request_mode_markdown = preparation
+        .context_request_mode
+        .as_ref()
+        .map(|mode| {
+            format!(
+                "- 模式：`{}`\n- 说明：{}",
+                mode.label(),
+                mode.summary_note()
+            )
+        })
+        .unwrap_or_else(|| String::from("（尚未生成上下文发送模式）"));
     let context_layers_markdown = render_context_layers_markdown(&context_assembly);
     let tool_rows = if request_snapshot.tool_schemas.is_empty() {
         String::from("（本次请求未直接暴露工具 schema）")
@@ -105,6 +116,8 @@ pub(crate) fn build_provider_request_preview_markdown(
             "## Context Layers\n",
             "{}\n\n",
             "## Context Baseline\n",
+            "{}\n\n",
+            "## Context Request Mode\n",
             "{}\n\n",
             "## System Preamble\n",
             "{}\n\n",
@@ -145,6 +158,7 @@ pub(crate) fn build_provider_request_preview_markdown(
         context_budget_label,
         context_layers_markdown,
         context_baseline_markdown,
+        context_request_mode_markdown,
         render_text_code_fence(&request_snapshot.system_prompt),
         continuation_markdown,
         outgoing_history_markdown,
@@ -443,6 +457,7 @@ mod tests {
     use serde_json::Value;
     use std::collections::BTreeMap;
     use uuid::Uuid;
+    use vulcan_context::{ContextFullRequestReason, ContextRequestMode};
     use vulcan_core::types::{
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -508,6 +523,9 @@ mod tests {
             context_budget: None,
             context_assembly: None,
             context_baseline: None,
+            context_request_mode: Some(ContextRequestMode::Full {
+                reason: ContextFullRequestReason::ProviderContinuationMissing,
+            }),
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),
@@ -532,6 +550,8 @@ mod tests {
         assert!(markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages`"));
         assert!(markdown.contains("## Context Layers"));
         assert!(markdown.contains("## Context Baseline"));
+        assert!(markdown.contains("## Context Request Mode"));
+        assert!(markdown.contains("- 模式：`全量上下文`"));
         assert!(markdown.contains("系统"));
         assert!(markdown.contains("## AI Specialized Tools"));
         assert!(markdown.contains("### `web_search` · 网页搜索"));

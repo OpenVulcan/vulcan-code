@@ -135,6 +135,7 @@ mod tests {
             context_budget: None,
             context_assembly: None,
             context_baseline: None,
+            context_request_mode: None,
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -266,6 +267,7 @@ mod tests {
             context_budget: None,
             context_assembly: None,
             context_baseline: None,
+            context_request_mode: None,
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -604,6 +606,7 @@ mod tests {
             context_budget: None,
             context_assembly: None,
             context_baseline: None,
+            context_request_mode: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -669,6 +672,7 @@ mod tests {
             context_budget: None,
             context_assembly: None,
             context_baseline: None,
+            context_request_mode: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 

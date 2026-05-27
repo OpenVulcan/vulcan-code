@@ -1518,6 +1518,12 @@ impl VulcanWorkbench {
         }
 
         if let Some(preparation) = preparation {
+            if let Some(context_request_mode) = preparation.context_request_mode.as_ref() {
+                diagnostic_rows.push(format!(
+                    "上下文发送：{}",
+                    context_request_mode.compact_note()
+                ));
+            }
             if let Some(context_baseline) = preparation.context_baseline.as_ref() {
                 diagnostic_rows.push(format!("上下文层：{} 层", context_baseline.layer_count));
             }
