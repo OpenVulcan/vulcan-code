@@ -72,6 +72,7 @@ pub mod provider_transport_turn_request;
 pub mod provider_transport_wire_capture;
 pub mod question_runtime;
 pub mod runtime;
+pub mod runtime_request_capture;
 pub mod runtime_stream;
 pub mod runtime_stream_bootstrap;
 pub mod runtime_stream_bootstrap_core;

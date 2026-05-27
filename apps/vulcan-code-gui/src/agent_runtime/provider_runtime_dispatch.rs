@@ -11,7 +11,9 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
-use crate::agent_runtime::provider_transport_wire_capture::provider_request_dry_run_enabled;
+use crate::agent_runtime::provider_transport_wire_capture::{
+    PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY, provider_request_dry_run_enabled,
+};
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::provider_capabilities::resolve_provider_api_key;
 use crate::provider_config::ProviderConfigurationFile;
@@ -52,21 +54,85 @@ pub(crate) fn execute_provider_prompt_stream(
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
+    execute_provider_prompt_stream_with_capture_mode(
+        config,
+        preparation,
+        active_agent,
+        system_preamble,
+        prompt,
+        request_history,
+        core_snapshot,
+        task_runtime,
+        tools_manager,
+        resolved_tools,
+        false,
+    )
+}
+
+/// Executes one provider prompt in capture-only mode and returns the final request as stream data without network dispatch.
+/// 以仅捕获模式执行一次 Provider 提示词调用，通过流数据返回最终请求且不进行网络发送。
+pub(crate) fn execute_provider_prompt_capture_stream(
+    config: &ProviderConfigurationFile,
+    preparation: &ExecutionPreparation,
+    active_agent: Option<&RuntimeAgentDefinition>,
+    system_preamble: &str,
+    prompt: &str,
+    request_history: Vec<CoreConversationMessage>,
+    core_snapshot: CoreConversationSnapshot,
+    task_runtime: Arc<TaskRuntime>,
+    tools_manager: VulcanToolsManager,
+    resolved_tools: Vec<ResolvedToolDefinition>,
+) -> ProviderDeltaStream {
+    execute_provider_prompt_stream_with_capture_mode(
+        config,
+        preparation,
+        active_agent,
+        system_preamble,
+        prompt,
+        request_history,
+        core_snapshot,
+        task_runtime,
+        tools_manager,
+        resolved_tools,
+        true,
+    )
+}
+
+/// Executes one provider prompt with an explicit request-capture switch shared by real and simulated paths.
+/// 使用真实路径与模拟路径共享的显式请求捕获开关执行一次 Provider 提示词调用。
+fn execute_provider_prompt_stream_with_capture_mode(
+    config: &ProviderConfigurationFile,
+    preparation: &ExecutionPreparation,
+    active_agent: Option<&RuntimeAgentDefinition>,
+    system_preamble: &str,
+    prompt: &str,
+    request_history: Vec<CoreConversationMessage>,
+    core_snapshot: CoreConversationSnapshot,
+    task_runtime: Arc<TaskRuntime>,
+    tools_manager: VulcanToolsManager,
+    resolved_tools: Vec<ResolvedToolDefinition>,
+    capture_only: bool,
+) -> ProviderDeltaStream {
     let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
         Ok(options) => options,
         Err(error) => return one_shot_provider_error_stream(error),
     };
-    let api_key = match resolve_provider_api_key(options, &preparation.model_blueprint.capabilities)
-    {
-        Ok(Some(api_key)) => api_key,
-        Ok(None) if provider_request_dry_run_enabled() => String::from("vulcan-dry-run-api-key"),
-        Ok(None) => {
-            return one_shot_provider_error_stream(format!(
-                "供应商 `{}` 当前缺少可用 API Key，无法启动真实执行。",
-                preparation.model_blueprint.provider_name
-            ));
+    let api_key = if capture_only {
+        PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY.to_string()
+    } else {
+        match resolve_provider_api_key(options, &preparation.model_blueprint.capabilities) {
+            Ok(Some(api_key)) => api_key,
+            Ok(None) if provider_request_dry_run_enabled() => {
+                PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY.to_string()
+            }
+            Ok(None) => {
+                return one_shot_provider_error_stream(format!(
+                    "供应商 `{}` 当前缺少可用 API Key，无法启动真实执行。",
+                    preparation.model_blueprint.provider_name
+                ));
+            }
+            Err(error) => return one_shot_provider_error_stream(error),
         }
-        Err(error) => return one_shot_provider_error_stream(error),
     };
     let temperature = active_agent
         .and_then(|agent| agent.temperature)

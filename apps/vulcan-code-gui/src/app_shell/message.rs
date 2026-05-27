@@ -1030,6 +1030,16 @@ pub(super) enum Message {
     /// Switches the unified transcript panel into the last-API-request preview mode.
     /// 将统一转录面板切换到最后一次 API 请求预览模式。
     ShowSelectedSessionDocumentApiRequest,
+    /// Reports the captured simulated API request for the selected session request tab.
+    /// 回传选中会话请求页签捕获到的模拟 API 请求。
+    SessionApiRequestSimulationFinished {
+        /// Session identifier that requested the simulated API preview.
+        /// 请求模拟 API 预览的会话标识。
+        session_id: SessionId,
+        /// Captured pretty JSON text or a diagnostic error message.
+        /// 捕获到的格式化 JSON 文本，或诊断错误信息。
+        result: Result<String, String>,
+    },
     /// Switches the transcript panel into the segmented rendered-preview mode.
     /// 将转录面板切换到分段渲染预览模式。
     ShowSelectedSessionDocumentDetailCards,

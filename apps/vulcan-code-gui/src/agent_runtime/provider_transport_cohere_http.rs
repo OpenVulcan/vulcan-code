@@ -24,7 +24,7 @@ use crate::agent_runtime::provider_transport_http_support::{
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use crate::agent_runtime::provider_transport_wire_capture::{
-    emit_provider_wire_request, provider_request_dry_run_response,
+    emit_provider_wire_request, provider_request_dry_run_active, provider_request_dry_run_response,
 };
 use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input;
@@ -95,6 +95,7 @@ where
     let client = build_cohere_http_client(provider_id, api_key, request_headers)?;
     let endpoint = build_cohere_chat_endpoint(base_url);
     let payload = build_cohere_request_payload(model_id, request, provider_tool_definitions)?;
+    let dry_run = provider_request_dry_run_active(api_key);
     let wire_request = emit_provider_wire_request(
         live_sender,
         provider_id,
@@ -103,8 +104,9 @@ where
         endpoint.as_str(),
         &wire_headers,
         &payload,
+        dry_run,
     );
-    if let Some(response) = provider_request_dry_run_response(&wire_request) {
+    if let Some(response) = provider_request_dry_run_response(&wire_request, dry_run) {
         return Ok(response);
     }
 

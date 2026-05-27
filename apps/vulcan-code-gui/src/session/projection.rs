@@ -363,6 +363,25 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Stores one transient request-tab preview without persisting it into session runtime state.
+    /// 保存一份临时请求页签预览内容，但不将其持久化写入会话运行时状态。
+    pub(super) fn replace_session_last_api_request_preview_buffer_only(
+        &mut self,
+        session_id: SessionId,
+        preview_markdown: String,
+    ) {
+        self.session_last_api_request_markdowns
+            .insert(session_id, preview_markdown.clone());
+        if let Some(content) = self.session_last_api_request_buffers.get_mut(&session_id) {
+            *content = text_editor::Content::with_text(&preview_markdown);
+        } else {
+            self.session_last_api_request_buffers.insert(
+                session_id,
+                text_editor::Content::with_text(&preview_markdown),
+            );
+        }
+    }
+
     /// Stores one session-scoped last-provider-request JSON payload for the dedicated request tab.
     /// 为专用请求页签保存一份按会话归属的最后一次 Provider 请求 JSON 载荷。
     pub(super) fn replace_session_last_api_request_from_preparation(

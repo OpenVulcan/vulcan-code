@@ -11,6 +11,10 @@ use vulcan_core::types::ProviderTurnResponse as CoreProviderTurnResponse;
 /// 让 Provider 传输层返回最终请求而不实际发送的环境变量。
 const PROVIDER_REQUEST_DRY_RUN_ENV: &str = "VULCAN_PROVIDER_REQUEST_DRY_RUN";
 
+/// Sentinel API key used by scoped request capture so transports never reach the network.
+/// 作用域化请求捕获使用的哨兵 API Key，确保传输层不会触达网络。
+pub(crate) const PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY: &str = "vulcan-dry-run-api-key";
+
 /// Emits the final provider-specific HTTP request shape to the live runtime stream.
 /// 将最终 Provider 专用 HTTP 请求形态发送到实时运行时流。
 ///
@@ -30,6 +34,8 @@ const PROVIDER_REQUEST_DRY_RUN_ENV: &str = "VULCAN_PROVIDER_REQUEST_DRY_RUN";
 /// `headers` 是最终请求头，捕获副本会隐藏敏感值。
 /// `body` is the exact JSON body passed to `reqwest`.
 /// `body` 是传给 `reqwest` 的精确 JSON 请求体。
+/// `dry_run` records whether this captured request is prevented from network dispatch.
+/// `dry_run` 记录这次捕获请求是否被阻止网络发送。
 ///
 /// # Returns
 /// 返回值
@@ -43,6 +49,7 @@ pub(crate) fn emit_provider_wire_request(
     endpoint: &str,
     headers: &HeaderMap,
     body: &Value,
+    dry_run: bool,
 ) -> Value {
     let wire_request = json!({
         "providerId": provider_id,
@@ -51,7 +58,7 @@ pub(crate) fn emit_provider_wire_request(
         "endpoint": endpoint,
         "headers": serialize_headers_for_wire_capture(headers),
         "body": body,
-        "dryRun": provider_request_dry_run_enabled(),
+        "dryRun": dry_run,
     });
     let _ = live_sender.send(Ok(ProviderStreamDelta::WireRequest(wire_request.clone())));
     wire_request
@@ -64,6 +71,8 @@ pub(crate) fn emit_provider_wire_request(
 /// 参数
 /// `wire_request` is the captured final request that would have been sent.
 /// `wire_request` 是原本即将发送的最终请求。
+/// `dry_run` decides whether to return a synthetic response instead of sending.
+/// `dry_run` 决定是否返回合成响应而不是继续发送。
 ///
 /// # Returns
 /// 返回值
@@ -71,8 +80,9 @@ pub(crate) fn emit_provider_wire_request(
 /// dry-run 启用时返回 `Some` 响应，否则返回 `None`。
 pub(crate) fn provider_request_dry_run_response(
     wire_request: &Value,
+    dry_run: bool,
 ) -> Option<CoreProviderTurnResponse> {
-    if !provider_request_dry_run_enabled() {
+    if !dry_run {
         return None;
     }
 
@@ -87,6 +97,38 @@ pub(crate) fn provider_request_dry_run_response(
         tool_calls: Vec::new(),
         continuation: None,
     })
+}
+
+/// Returns whether the scoped capture sentinel API key is active.
+/// 返回作用域化捕获哨兵 API Key 是否处于激活状态。
+///
+/// # Parameters
+/// 参数
+/// `api_key` is the adapter-level key passed into one provider transport.
+/// `api_key` 是传入单个 Provider 传输适配器的 API Key。
+///
+/// # Returns
+/// 返回值
+/// `true` when the key is the internal capture-only sentinel.
+/// 当该 key 是内部仅捕获哨兵值时返回 `true`。
+pub(crate) fn provider_request_capture_only_key_enabled(api_key: &str) -> bool {
+    api_key == PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY
+}
+
+/// Returns whether one provider transport turn should be captured without network dispatch.
+/// 返回单个 Provider 传输回合是否应仅捕获而不进行网络发送。
+///
+/// # Parameters
+/// 参数
+/// `api_key` is the adapter-level key passed into one provider transport.
+/// `api_key` 是传入单个 Provider 传输适配器的 API Key。
+///
+/// # Returns
+/// 返回值
+/// `true` when either process-wide dry-run or scoped capture-only mode is active.
+/// 当进程级 dry-run 或作用域化仅捕获模式任一启用时返回 `true`。
+pub(crate) fn provider_request_dry_run_active(api_key: &str) -> bool {
+    provider_request_dry_run_enabled() || provider_request_capture_only_key_enabled(api_key)
 }
 
 /// Returns whether provider request dry-run mode is enabled for this process.

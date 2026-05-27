@@ -4,6 +4,7 @@ mod about_licenses;
 mod agent_profile_management;
 mod ai_capability_runtime;
 mod ai_capability_state;
+mod api_request_preview;
 mod attachment_management;
 mod composer_attachments;
 mod composer_command_state;

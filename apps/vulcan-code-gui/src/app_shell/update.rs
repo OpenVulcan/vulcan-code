@@ -2790,7 +2790,18 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();
                 };
-                self.ensure_session_last_api_request_preview_buffer(session_id);
+                self.start_session_api_request_simulation(session_id)
+            }
+            Message::SessionApiRequestSimulationFinished { session_id, result } => {
+                let request_text = match result {
+                    Ok(request_text) => request_text,
+                    Err(error) => {
+                        super::api_request_preview::build_api_request_simulation_error_text(
+                            session_id, &error,
+                        )
+                    }
+                };
+                self.replace_session_last_api_request_preview_buffer_only(session_id, request_text);
                 Task::none()
             }
             Message::ShowSelectedSessionDocumentDetailCards => {
