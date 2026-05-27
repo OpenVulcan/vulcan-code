@@ -22,6 +22,7 @@ mod oauth_flow;
 mod panel_navigation_state;
 mod pending_prompt_queue;
 mod perf;
+mod project_settings_update;
 mod question_modal;
 mod session_live_runtime;
 #[path = "../session/loading.rs"]
