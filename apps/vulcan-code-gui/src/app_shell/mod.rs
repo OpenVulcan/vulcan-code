@@ -14,6 +14,7 @@ mod helpers;
 mod integration_form_state;
 mod interaction_state;
 mod luaskills_progress_state;
+mod luaskills_update;
 mod mcp_update;
 mod media_preview;
 mod message;
