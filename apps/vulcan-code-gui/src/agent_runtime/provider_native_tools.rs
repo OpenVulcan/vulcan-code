@@ -60,9 +60,7 @@ fn provider_native_ai_tool_patch(
                 .unwrap_or("web_search_preview");
             Some(json!({ "tools": [{ "type": tool_type }] }))
         }
-        (ProviderApiFamily::GoogleGeminiGenerateContent, AiToolKind::WebSearch) => {
-            Some(json!({ "tools": [{ "google_search": {} }] }))
-        }
+        (ProviderApiFamily::GoogleGeminiGenerateContent, AiToolKind::WebSearch) => None,
         (ProviderApiFamily::AnthropicMessages, AiToolKind::WebSearch) => {
             let tool_type = decision
                 .native_tool_type
@@ -198,5 +196,53 @@ mod tests {
         let patch = build_provider_native_ai_tool_additional_params(&blueprint).expect("patch");
 
         assert_eq!(patch["tools"][0]["type"], "web_search");
+    }
+
+    /// Does not generate Google Gemini native search patches because they conflict with coding function tools.
+    /// 不生成 Google Gemini 原生搜索补丁，因为它会与编码函数工具冲突。
+    #[test]
+    fn native_ai_tool_patch_omits_google_gemini_search() {
+        let blueprint = ProviderRuntimeBlueprint {
+            provider_id: String::from("google"),
+            provider_name: String::from("Google"),
+            runtime_kind: ProviderRuntimeKind::GoogleGemini,
+            runtime_label: String::from("Google Gemini"),
+            model_id: String::from("gemini-2.5-flash"),
+            model_name: String::from("Gemini 2.5 Flash"),
+            openrouter_endpoint_route: None,
+            base_url: None,
+            supports_remote_model_refresh: false,
+            credential_source: String::from("test"),
+            user_agent: None,
+            extra_headers: Default::default(),
+            extra_body: json!({}),
+            reasoning: ProviderRuntimeReasoningResolution {
+                requested_effort: ReasoningEffortLevel::Off,
+                source_label: String::from("接口默认"),
+                additional_params: None,
+                note: None,
+            },
+            capabilities: ResolvedModelCapabilities {
+                supports_tool_call: true,
+                ai_tools: vec![ResolvedAiToolCapability {
+                    kind: AiToolKind::WebSearch,
+                    policy: AiToolPolicy::ForceNative,
+                    native_provider_tool: true,
+                    native_tool_type: Some(String::from("google_search")),
+                    native_request_patch: None,
+                    fallback_tool_id: None,
+                    requires_approval: false,
+                    result_modalities: vec![String::from("text")],
+                    citation_support: true,
+                    source_label: String::from("模型声明"),
+                }],
+                ..ResolvedModelCapabilities::default()
+            },
+            interleaved_reasoning: None,
+        };
+
+        let patch = build_provider_native_ai_tool_additional_params(&blueprint);
+
+        assert!(patch.is_none());
     }
 }

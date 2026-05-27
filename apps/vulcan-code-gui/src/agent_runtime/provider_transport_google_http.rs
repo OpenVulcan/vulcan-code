@@ -373,13 +373,38 @@ fn build_google_gemini_request_payload(
         );
     }
 
+    remove_gemini_builtin_search_tools(&mut payload);
     append_gemini_function_tools(&mut payload, provider_tool_definitions)?;
 
     Ok(payload)
 }
 
-/// Appends Gemini function declarations without replacing provider-native AI tools already present in the payload.
-/// 追加 Gemini 函数声明，同时不替换载荷中已经存在的 Provider 原生 AI 工具。
+/// Removes Google Gemini built-in search tools from the request payload so coding function tools stay usable.
+/// 从请求载荷中移除 Google Gemini 内置搜索工具，确保编码函数工具保持可用。
+fn remove_gemini_builtin_search_tools(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    tools.retain(|tool| !gemini_tool_is_builtin_search(tool));
+    if tools.is_empty() {
+        object.remove("tools");
+    }
+}
+
+/// Returns whether one Gemini tool entry is a provider-native search tool that conflicts with function calling.
+/// 返回单条 Gemini 工具是否是会与函数调用冲突的 Provider 原生搜索工具。
+fn gemini_tool_is_builtin_search(tool: &Value) -> bool {
+    tool.as_object()
+        .map(|object| object.contains_key("google_search") || object.contains_key("googleSearch"))
+        .unwrap_or(false)
+}
+
+/// Appends Gemini function declarations after provider-native search tools have been removed from the payload.
+/// 在移除 Provider 原生搜索工具后追加 Gemini 函数声明。
 fn append_gemini_function_tools(
     payload: &mut Value,
     provider_tool_definitions: &[ProviderToolDefinition],
@@ -957,10 +982,10 @@ mod tests {
         );
     }
 
-    /// Verifies Gemini preserves provider-native tools while appending function declarations.
-    /// 验证 Gemini 会保留 Provider 原生工具，并继续追加函数声明。
+    /// Verifies Gemini removes provider-native search tools before appending function declarations.
+    /// 验证 Gemini 会在追加函数声明前移除 Provider 原生搜索工具。
     #[test]
-    fn gemini_request_payload_preserves_google_search_and_appends_function_tools() {
+    fn gemini_request_payload_removes_google_search_before_appending_function_tools() {
         let request = OpenAiCompatibleCoreTurnRequest {
             snapshot: CoreProviderRequestSnapshot {
                 provider_id: String::from("google"),
@@ -1001,15 +1026,55 @@ mod tests {
         )
         .expect("gemini request payload should build");
 
-        assert!(payload["tools"][0].get("google_search").is_some());
+        assert!(payload["tools"][0].get("google_search").is_none());
         assert_eq!(
-            payload["tools"][1]["functionDeclarations"][0]["name"],
+            payload["tools"][0]["functionDeclarations"][0]["name"],
             json!("read_file")
         );
         assert_eq!(
             payload["toolConfig"]["functionCallingConfig"]["mode"],
             json!("AUTO")
         );
+    }
+
+    /// Verifies Gemini drops stale provider-native search tools even when no function tools are available.
+    /// 验证即使没有函数工具，Gemini 也会移除陈旧的 Provider 原生搜索工具。
+    #[test]
+    fn gemini_request_payload_removes_google_search_without_function_tools() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-2.5-flash"),
+                system_prompt: String::new(),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::new(),
+                ),
+                prompt: String::from("写代码"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({
+                    "tools": [{ "google_search": {} }]
+                })),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("写代码"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload =
+            build_google_gemini_request_payload(request, &[]).expect("gemini request payload");
+
+        assert!(payload.get("tools").is_none());
     }
 
     /// Verifies Gemini tool-result conversion omits the native response `id` when the originating function call only had a local controller identifier.

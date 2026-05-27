@@ -558,12 +558,7 @@ fn inferred_provider_ai_tool_declarations(
             AiToolKind::WebSearch,
             "web_search_preview",
         )],
-        ("google", ProviderApiFamily::GoogleGeminiGenerateContent) => {
-            vec![AiToolDeclaration::provider_native(
-                AiToolKind::WebSearch,
-                "google_search",
-            )]
-        }
+        ("google", ProviderApiFamily::GoogleGeminiGenerateContent) => Vec::new(),
         ("anthropic", ProviderApiFamily::AnthropicMessages) => {
             vec![AiToolDeclaration::provider_native(
                 AiToolKind::WebSearch,
@@ -620,9 +615,6 @@ fn default_native_ai_tool_type(
 ) -> Option<&'static str> {
     match (api_family, kind) {
         (ProviderApiFamily::OpenAiResponses, AiToolKind::WebSearch) => Some("web_search_preview"),
-        (ProviderApiFamily::GoogleGeminiGenerateContent, AiToolKind::WebSearch) => {
-            Some("google_search")
-        }
         (ProviderApiFamily::AnthropicMessages, AiToolKind::WebSearch) => {
             Some("web_search_20250305")
         }
@@ -988,6 +980,24 @@ mod tests {
         assert_eq!(
             web_search.native_tool_type.as_deref(),
             Some("web_search_preview")
+        );
+    }
+
+    /// Does not infer Google Gemini native search because it cannot be combined with coding function tools.
+    /// 不推导 Google Gemini 原生搜索，因为它无法与编码函数工具组合使用。
+    #[test]
+    fn resolve_model_capabilities_does_not_infer_native_web_search_for_google_gemini() {
+        let mut definition = test_provider_definition();
+        definition.id = String::from("google");
+        definition.runtime = ProviderRuntimeKind::GoogleGemini;
+
+        let capabilities = resolve_model_capabilities(&definition, None);
+
+        assert!(
+            capabilities
+                .ai_tools
+                .iter()
+                .all(|tool| tool.kind != AiToolKind::WebSearch)
         );
     }
 
