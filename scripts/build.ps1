@@ -47,6 +47,7 @@ if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Ru
 }
 $AppResourcesRoot = Join-Path $ProjectDir "apps\vulcan-code-gui\resources"
 $AppLicenseResourcesRoot = Join-Path $AppResourcesRoot "licenses"
+$RuntimeAssetsResourcesRoot = Join-Path $ProjectDir "crates\vulcan-runtime-assets\resources"
 
 if ($Release -or ($args.Count -gt 0 -and $args[0] -eq "release")) {
     $OutDir = Join-Path $BaseOutDir "bin"
@@ -334,38 +335,38 @@ else {
     Write-Host "==> No third_party/luaskills_runtime found (run make deps first)"
 }
 
-# Sync application resources that must stay editable at runtime.
-# 同步运行时必须保持可编辑的应用资源。
-if (Test-Path (Join-Path $AppResourcesRoot "providers")) {
-    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "providers") -Destination (Join-Path $ResourcesOut "providers") | Out-Null
-    Write-Host "==> Provider catalog synced to $(Join-Path $ResourcesOut 'providers')\"
+# Sync shared runtime resources that are consumed outside the GUI crate.
+# 同步 GUI crate 之外也会消费的共享运行时资源。
+if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "providers")) {
+    Copy-DirectoryContents -Source (Join-Path $RuntimeAssetsResourcesRoot "providers") -Destination (Join-Path $ResourcesOut "providers") | Out-Null
+    Write-Host "==> Runtime provider catalog synced to $(Join-Path $ResourcesOut 'providers')\"
 }
 else {
-    Write-Host "==> No app provider catalog directory found"
+    Write-Host "==> No runtime provider catalog directory found"
 }
 
-if (Test-Path (Join-Path $AppResourcesRoot "ai-capability-providers")) {
-    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "ai-capability-providers") -Destination (Join-Path $ResourcesOut "ai-capability-providers") | Out-Null
-    Write-Host "==> AI capability provider catalog synced to $(Join-Path $ResourcesOut 'ai-capability-providers')\"
+if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "ai-capability-providers")) {
+    Copy-DirectoryContents -Source (Join-Path $RuntimeAssetsResourcesRoot "ai-capability-providers") -Destination (Join-Path $ResourcesOut "ai-capability-providers") | Out-Null
+    Write-Host "==> Runtime AI capability provider catalog synced to $(Join-Path $ResourcesOut 'ai-capability-providers')\"
 }
 else {
-    Write-Host "==> No app AI capability provider catalog directory found"
+    Write-Host "==> No runtime AI capability provider catalog directory found"
 }
 
-if (Test-Path (Join-Path $AppResourcesRoot "agent-prompts")) {
-    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "agent-prompts") -Destination (Join-Path $ResourcesOut "agent-prompts") | Out-Null
-    Write-Host "==> Agent prompt catalog synced to $(Join-Path $ResourcesOut 'agent-prompts')\"
+if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "agent-prompts")) {
+    Copy-DirectoryContents -Source (Join-Path $RuntimeAssetsResourcesRoot "agent-prompts") -Destination (Join-Path $ResourcesOut "agent-prompts") | Out-Null
+    Write-Host "==> Runtime agent prompt catalog synced to $(Join-Path $ResourcesOut 'agent-prompts')\"
 }
 else {
-    Write-Host "==> No app agent prompt catalog directory found"
+    Write-Host "==> No runtime agent prompt catalog directory found"
 }
 
-if (Test-Path (Join-Path $AppResourcesRoot "system-prompts")) {
-    Copy-DirectoryContents -Source (Join-Path $AppResourcesRoot "system-prompts") -Destination (Join-Path $ResourcesOut "system-prompts") | Out-Null
-    Write-Host "==> Provider system prompt catalog synced to $(Join-Path $ResourcesOut 'system-prompts')\"
+if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "system-prompts")) {
+    Copy-DirectoryContents -Source (Join-Path $RuntimeAssetsResourcesRoot "system-prompts") -Destination (Join-Path $ResourcesOut "system-prompts") | Out-Null
+    Write-Host "==> Runtime system prompt catalog synced to $(Join-Path $ResourcesOut 'system-prompts')\"
 }
 else {
-    Write-Host "==> No app provider system prompt catalog directory found"
+    Write-Host "==> No runtime system prompt catalog directory found"
 }
 
 if (Test-Path -LiteralPath $AppLicenseResourcesRoot) {

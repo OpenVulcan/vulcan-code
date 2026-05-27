@@ -146,7 +146,7 @@
   - 本地独有字段如 `usageCapture`、`reasoningProfile`、`modelRuntimeOverrides`、`extraHeaders` 等必须保留。
 - 同步脚本当前带结构守卫 `Assert-ProviderDefinitionShape`，用于防止把数组字段错误压成标量。
 - 这轮真实踩坑就是：如果把 `credentialEnvKeys`、`fields`、`inputModalities`、`outputModalities`、`aiTools` 之类数组字段写坏成字符串或对象，运行时会在加载 provider catalog 时 panic。
-- 不要直接编辑 `output/resources/providers` 作为长期来源；源资源目录以 `apps/vulcan-code-gui/resources/providers` 为准。
+- 不要直接编辑 `output/resources/providers` 作为长期来源；源资源目录以 `crates/vulcan-runtime-assets/resources/providers` 为准。
 
 ### 14. Provider 模型显示与 enabled_models 约定
 - UI 里大多数模型列表看的不是“完整 catalog”，而是 `effective_model_choices`；实现位于 `apps/vulcan-code-gui/src/provider/config.rs`。

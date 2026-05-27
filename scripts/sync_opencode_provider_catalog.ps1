@@ -813,9 +813,9 @@ function Write-SyncReport {
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 
 if (-not (Test-NonEmptyString -Value $ProviderDirectory)) {
-    # Default provider resource directory used by the local GUI application.
-    # 本地 GUI 应用默认使用的 provider 资源目录。
-    $ProviderDirectory = Join-Path $repositoryRoot "apps\vulcan-code-gui\resources\providers"
+    # Default provider catalog source owned by the shared runtime-assets crate.
+    # shared runtime-assets crate 持有的默认 provider catalog 源目录。
+    $ProviderDirectory = Join-Path $repositoryRoot "crates\vulcan-runtime-assets\resources\providers"
 }
 
 if (-not (Test-NonEmptyString -Value $ReportPath)) {

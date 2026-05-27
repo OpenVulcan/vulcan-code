@@ -818,7 +818,9 @@ fn resolve_generated_license_resource_directory() -> Option<PathBuf> {
 /// Resolves the static application license resource directory used by local development or packaged runs.
 /// 解析本地开发或打包运行时使用的静态应用许可证资源目录。
 fn resolve_static_license_resource_directory() -> Option<PathBuf> {
-    let path = runtime_assets::resolve_app_resources_directory().join("licenses");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("licenses");
     path.is_dir().then_some(path)
 }
 
