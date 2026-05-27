@@ -128,6 +128,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             request_history,
             core_snapshot,
             task_runtime,
+            token_budget_runtime.clone(),
             tools_manager,
             resolved_tool_definitions,
         );

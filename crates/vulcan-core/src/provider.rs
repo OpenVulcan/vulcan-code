@@ -36,6 +36,12 @@ pub trait VulcanProviderAdapter: Send + Sync {
     /// Sends one provider request and returns the raw provider response.
     /// 发送一份 Provider 请求并返回原始 Provider 响应。
     async fn execute_request(&self, request: Self::Request) -> Result<Self::Response, CoreError>;
+
+    /// Validates one freshly built request before the adapter sends it to the provider.
+    /// 在适配器向 Provider 发送请求前校验刚刚构建完成的请求。
+    fn validate_built_request(&self, _request: &Self::Request) -> Result<(), CoreError> {
+        Ok(())
+    }
 }
 
 /// Receives normalized provider-stream deltas while one request is still in flight.

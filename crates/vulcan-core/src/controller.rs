@@ -278,6 +278,16 @@ impl VulcanCoreController {
         A: VulcanProviderAdapter,
     {
         let request = self.build_request(adapter).await?;
+        if let Err(error) = adapter.validate_built_request(&request) {
+            self.phase = ControllerPhase::Failed;
+            self.push_event(CoreEvent {
+                kind: CoreEventKind::Error,
+                title: String::from("控制器失败"),
+                body: error.to_string(),
+                metadata: Some(Value::String(adapter.provider_id().to_string())),
+            });
+            return Err(error);
+        }
         self.phase = ControllerPhase::WaitingForProvider;
         match adapter.execute_request(request).await {
             Ok(response) => {
@@ -497,6 +507,10 @@ impl VulcanCoreController {
                 return Err(error);
             }
         };
+        if let Err(error) = adapter.validate_built_request(&request) {
+            self.mark_failed(error.to_string());
+            return Err(error);
+        }
         self.phase = ControllerPhase::WaitingForProvider;
         match adapter.execute_request(request).await {
             Ok(response) => {
@@ -526,6 +540,10 @@ impl VulcanCoreController {
                 return Err(error);
             }
         };
+        if let Err(error) = adapter.validate_built_request(&request) {
+            self.mark_failed(error.to_string());
+            return Err(error);
+        }
         self.phase = ControllerPhase::WaitingForProvider;
         let mut sink = BufferedProviderDeltaSink::default();
         match adapter.execute_request_streaming(request, &mut sink).await {

@@ -1,6 +1,7 @@
 //! Owned provider transport request models shared by the host-controlled transport router and executor.
 //! 供宿主控制传输路由层与执行器共享的自有 Provider 传输请求模型。
 
+use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily, ProviderRuntimeKind};
@@ -76,6 +77,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional model-scoped interleaved reasoning capability reused by OpenAI-compatible transports.
     /// 供 OpenAI 兼容传输链路复用的可选模型级交错推理能力描述。
     pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
+    /// Optional request-budget guard evaluated before the exact request is dispatched.
+    /// 在精确请求分发前执行的可选请求预算守卫。
+    pub(crate) request_budget_guard: Option<ProviderRequestBudgetGuard>,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -100,6 +104,7 @@ pub(crate) fn build_provider_transport_execution_request(
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
     interleaved_reasoning: Option<ModelInterleavedCapability>,
+    request_budget_guard: Option<ProviderRequestBudgetGuard>,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         api_family: runtime_kind.api_family(),
@@ -122,5 +127,6 @@ pub(crate) fn build_provider_transport_execution_request(
         resolved_tools,
         additional_params,
         interleaved_reasoning,
+        request_budget_guard,
     }
 }

@@ -237,9 +237,7 @@ pub fn build_request_context_budget_snapshot_with_policy_and_estimator(
     let reserved_compaction_tokens = compaction_policy
         .map(|policy| policy.reserved)
         .unwrap_or(0usize);
-    let compaction_auto_enabled = compaction_policy
-        .map(|policy| policy.auto)
-        .unwrap_or(false);
+    let compaction_auto_enabled = compaction_policy.map(|policy| policy.auto).unwrap_or(false);
     let estimated_system_tokens =
         estimate_text_tokens_for_model(model_id, estimator, &request_snapshot.system_prompt);
     let estimated_history_tokens = request_snapshot

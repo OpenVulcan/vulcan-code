@@ -35,16 +35,18 @@ pub(crate) fn apply_latest_request_snapshot(
         .context_budget
         .as_ref()
         .and_then(|budget| budget.observed_usage.as_ref());
-    preparation.context_budget = Some(build_request_context_compaction_budget_snapshot_with_estimator(
-        &preparation.model_blueprint.provider_id,
-        &preparation.model_blueprint.model_id,
-        preparation.model_blueprint.api_family(),
-        &preparation.model_blueprint.capabilities,
-        &preparation.model_blueprint.reasoning,
-        request_snapshot,
-        observed_usage,
-        token_estimator,
-    ));
+    preparation.context_budget = Some(
+        build_request_context_compaction_budget_snapshot_with_estimator(
+            &preparation.model_blueprint.provider_id,
+            &preparation.model_blueprint.model_id,
+            preparation.model_blueprint.api_family(),
+            &preparation.model_blueprint.capabilities,
+            &preparation.model_blueprint.reasoning,
+            request_snapshot,
+            observed_usage,
+            token_estimator,
+        ),
+    );
     let context_assembly = build_provider_request_context_assembly(request_snapshot);
     preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
     preparation.context_assembly = Some(context_assembly);

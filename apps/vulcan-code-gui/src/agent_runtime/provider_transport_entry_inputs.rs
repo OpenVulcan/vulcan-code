@@ -1,6 +1,7 @@
 //! Shared provider transport entry-input preparation helpers reused by provider-specific stream entrypoints.
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
+use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_tool_context::{
     PreparedHostToolRuntimeContext, prepare_host_tool_runtime_context,
 };
@@ -43,6 +44,9 @@ pub(crate) struct PreparedProviderTransportRuntimeInputs {
     /// Shared host-managed tool runtime context reused by concrete adapter constructors.
     /// 被具体适配器构造过程复用的共享宿主管理工具运行时上下文。
     pub(crate) tool_context: PreparedHostToolRuntimeContext,
+    /// Optional request-budget guard evaluated after exact request assembly and before provider dispatch.
+    /// 在精确请求装配后、Provider 分发前执行的可选请求预算守卫。
+    pub(crate) request_budget_guard: Option<ProviderRequestBudgetGuard>,
 }
 
 /// Prepares the shared provider transport entry inputs from lightweight borrowed arguments.
@@ -92,6 +96,7 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
     resolved_tools: &[ResolvedToolDefinition],
     session_id: SessionId,
     task_runtime: Arc<TaskRuntime>,
+    request_budget_guard: Option<ProviderRequestBudgetGuard>,
 ) -> PreparedProviderTransportRuntimeInputs {
     PreparedProviderTransportRuntimeInputs {
         entry_inputs: prepare_provider_transport_entry_inputs(
@@ -110,6 +115,7 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
             session_id,
             task_runtime,
         ),
+        request_budget_guard,
     }
 }
 

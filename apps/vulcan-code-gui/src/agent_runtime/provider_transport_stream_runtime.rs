@@ -8,8 +8,12 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
     PreparedProviderTransportEntryInputs, PreparedProviderTransportRuntimeInputs,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_request_budget::{
+    BudgetCheckedStreamingAdapter, ProviderRequestBudgetGuard,
+};
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRuntimeContext;
+use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
@@ -57,10 +61,13 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     provider_factory: F,
     runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
     provider_label: String,
+    request_budget_guard: Option<ProviderRequestBudgetGuard>,
 ) -> ProviderDeltaStream
 where
-    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
-        + Clone
+    A: VulcanStreamingProviderAdapter<
+            Request = OpenAiCompatibleCoreTurnRequest,
+            Response = CoreProviderTurnResponse,
+        > + Clone
         + Send
         + Sync
         + 'static,
@@ -74,7 +81,10 @@ where
             unbounded_channel::<Result<ProviderStreamDelta, String>>();
         let task_sender = live_sender.clone();
         let mut controller = VulcanCoreController::new(controller_config.clone(), core_snapshot);
-        let provider_adapter = provider_factory(live_sender.clone());
+        let provider_adapter = BudgetCheckedStreamingAdapter::new(
+            provider_factory(live_sender.clone()),
+            request_budget_guard.clone(),
+        );
         let tool_executor =
             StreamingRuntimeToolExecutor::new(runtime_bridge, live_sender.clone());
         let task_backend_guard = task_runtime.install_backend(
@@ -152,8 +162,10 @@ pub(crate) fn execute_host_controlled_stream_with_prepared_inputs<A, F>(
     provider_label: impl Into<String>,
 ) -> ProviderDeltaStream
 where
-    A: VulcanStreamingProviderAdapter<Response = CoreProviderTurnResponse>
-        + Clone
+    A: VulcanStreamingProviderAdapter<
+            Request = OpenAiCompatibleCoreTurnRequest,
+            Response = CoreProviderTurnResponse,
+        > + Clone
         + Send
         + Sync
         + 'static,
@@ -181,6 +193,7 @@ where
                 resolved_tool_definitions,
                 provider_tool_definitions,
             },
+        request_budget_guard,
     } = prepared_runtime_inputs;
 
     let adapter_inputs = PreparedProviderTransportAdapterInputs {
@@ -201,5 +214,6 @@ where
         move |live_sender| provider_factory(live_sender, adapter_inputs.clone()),
         runtime_bridge,
         provider_label,
+        request_budget_guard,
     )
 }

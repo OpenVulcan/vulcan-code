@@ -80,6 +80,7 @@ pub(crate) async fn capture_runtime_provider_wire_request(
         launch.request_history,
         launch.core_snapshot,
         launch.task_runtime,
+        launch.token_budget_runtime,
         launch.tools_manager,
         launch.resolved_tool_definitions,
     );

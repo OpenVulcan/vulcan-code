@@ -11,10 +11,12 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
+use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_wire_capture::{
     PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY, provider_request_dry_run_enabled,
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::provider_capabilities::resolve_provider_api_key;
 use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
@@ -51,6 +53,7 @@ pub(crate) fn execute_provider_prompt_stream(
     request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
@@ -63,6 +66,7 @@ pub(crate) fn execute_provider_prompt_stream(
         request_history,
         core_snapshot,
         task_runtime,
+        token_budget_runtime,
         tools_manager,
         resolved_tools,
         false,
@@ -80,6 +84,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
 ) -> ProviderDeltaStream {
@@ -92,6 +97,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         request_history,
         core_snapshot,
         task_runtime,
+        token_budget_runtime,
         tools_manager,
         resolved_tools,
         true,
@@ -109,6 +115,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     capture_only: bool,
@@ -150,6 +157,16 @@ fn execute_provider_prompt_stream_with_capture_mode(
         Err(error) => return one_shot_provider_error_stream(error),
     };
     let additional_params = resolve_provider_additional_params(&preparation.model_blueprint);
+    let request_budget_guard = (!capture_only).then(|| {
+        ProviderRequestBudgetGuard::new(
+            preparation.model_blueprint.provider_id.clone(),
+            preparation.model_blueprint.model_id.clone(),
+            preparation.model_blueprint.api_family(),
+            preparation.model_blueprint.capabilities.clone(),
+            preparation.model_blueprint.reasoning.clone(),
+            token_budget_runtime,
+        )
+    });
 
     execute_provider_transport_stream(build_provider_transport_execution_request(
         preparation.model_blueprint.runtime_kind,
@@ -171,5 +188,6 @@ fn execute_provider_prompt_stream_with_capture_mode(
         resolved_tools,
         additional_params,
         preparation.model_blueprint.interleaved_reasoning.clone(),
+        request_budget_guard,
     ))
 }

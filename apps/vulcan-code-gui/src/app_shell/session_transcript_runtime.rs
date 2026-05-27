@@ -1192,9 +1192,7 @@ impl VulcanWorkbench {
         let preparation = self
             .last_execution_preparation
             .as_ref()
-            .filter(|preparation| {
-                preparation.session_id == session_id
-            })?;
+            .filter(|preparation| preparation.session_id == session_id)?;
         let mut context_budget = preparation.context_budget.clone()?;
         let has_anchor_baseline = runtime_state_snapshot.last_compaction_id.is_some()
             || runtime_state_snapshot.context_start_message_id.is_some()

@@ -739,8 +739,8 @@ fn session_budget_snapshot_without_real_request_returns_none() {
         .get(&session_id)
         .cloned()
         .expect("runtime state should exist");
-    let snapshot = workbench
-        .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false);
+    let snapshot =
+        workbench.resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false);
 
     assert!(snapshot.is_none());
 }

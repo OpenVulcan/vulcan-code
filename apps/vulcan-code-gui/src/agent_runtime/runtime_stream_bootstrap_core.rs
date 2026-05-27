@@ -108,8 +108,8 @@ pub(crate) async fn seed_runtime_request_snapshot(
         Ok(request_snapshot) => {
             let observed_usage =
                 latest_provider_usage_from_conversation_state(&request.conversation_state);
-            preparation.context_budget =
-                Some(build_request_context_compaction_budget_snapshot_with_estimator(
+            preparation.context_budget = Some(
+                build_request_context_compaction_budget_snapshot_with_estimator(
                     &preparation.model_blueprint.provider_id,
                     &preparation.model_blueprint.model_id,
                     preparation.model_blueprint.api_family(),
@@ -118,7 +118,8 @@ pub(crate) async fn seed_runtime_request_snapshot(
                     &request_snapshot,
                     observed_usage.as_ref(),
                     token_estimator,
-                ));
+                ),
+            );
             let context_assembly = build_provider_request_context_assembly(&request_snapshot);
             preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
             preparation.context_assembly = Some(context_assembly);
