@@ -13,7 +13,7 @@ use crate::agent_runtime::provider_runtime_context::{
     build_runtime_prompt_layers_for_agent, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
-use crate::context_budget::build_request_context_budget_snapshot_with_estimator;
+use crate::context_budget::build_request_context_compaction_budget_snapshot_with_estimator;
 use crate::provider_usage::latest_provider_usage_from_conversation_state;
 use vulcan_context::{
     ContextBaseline, ContextTokenEstimator, build_provider_request_context_assembly,
@@ -109,7 +109,7 @@ pub(crate) async fn seed_runtime_request_snapshot(
             let observed_usage =
                 latest_provider_usage_from_conversation_state(&request.conversation_state);
             preparation.context_budget =
-                Some(build_request_context_budget_snapshot_with_estimator(
+                Some(build_request_context_compaction_budget_snapshot_with_estimator(
                     &preparation.model_blueprint.provider_id,
                     &preparation.model_blueprint.model_id,
                     preparation.model_blueprint.api_family(),

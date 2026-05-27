@@ -15,13 +15,12 @@ pub use vulcan_context::{
     apply_context_budget_anchor_baseline,
 };
 use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage,
     ProviderRequestSnapshot as CoreProviderRequestSnapshot, ProviderUsageSnapshot,
 };
 
-/// Builds one request-facing budget snapshot with an initialized token estimator.
-/// 使用已初始化的 Token 估算器构建一份面向请求的预算快照。
-pub fn build_request_context_budget_snapshot_with_estimator(
+/// Builds one request-facing compaction budget snapshot with an initialized token estimator.
+/// 使用已初始化的 Token 估算器构建一份面向真实请求的压缩预算快照。
+pub fn build_request_context_compaction_budget_snapshot_with_estimator(
     provider_id: &str,
     model_id: &str,
     api_family: ProviderApiFamily,
@@ -31,7 +30,7 @@ pub fn build_request_context_budget_snapshot_with_estimator(
     observed_usage: Option<&ProviderUsageSnapshot>,
     estimator: Option<&dyn ContextTokenEstimator>,
 ) -> ContextBudgetSnapshot {
-    vulcan_context::budget::build_request_context_budget_snapshot_with_estimator(
+    vulcan_context::budget::build_request_context_budget_snapshot_with_policy_and_estimator(
         provider_id,
         model_id,
         map_provider_api_family(api_family),
@@ -39,34 +38,7 @@ pub fn build_request_context_budget_snapshot_with_estimator(
         map_reasoning_effort(reasoning.requested_effort),
         request_snapshot,
         observed_usage,
-        estimator,
-    )
-}
-
-/// Builds one compaction-facing budget snapshot with an initialized token estimator.
-/// 使用已初始化的 Token 估算器构建一份面向压缩判断的预算快照。
-pub fn build_projected_session_context_budget_snapshot_with_estimator(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ProviderApiFamily,
-    capabilities: &ResolvedModelCapabilities,
-    reasoning_effort: ReasoningEffortLevel,
-    compaction_policy: ContextCompactionPolicy,
-    projected_messages: &[CoreConversationMessage],
-    visible_tool_count: usize,
-    observed_usage: Option<&ProviderUsageSnapshot>,
-    estimator: Option<&dyn ContextTokenEstimator>,
-) -> ContextBudgetSnapshot {
-    vulcan_context::budget::build_projected_session_context_budget_snapshot_with_estimator(
-        provider_id,
-        model_id,
-        map_provider_api_family(api_family),
-        &map_capabilities(capabilities),
-        map_reasoning_effort(reasoning_effort),
-        compaction_policy,
-        projected_messages,
-        visible_tool_count,
-        observed_usage,
+        Some(ContextCompactionPolicy::default()),
         estimator,
     )
 }

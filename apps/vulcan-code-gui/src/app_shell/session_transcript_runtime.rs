@@ -1164,7 +1164,7 @@ impl VulcanWorkbench {
     ) {
         let Some(preparation) = preparation else {
             self.context_usage = 0.0;
-            self.context_usage_detail = String::from("尚未生成预算快照");
+            self.context_usage_detail = String::from("等待下一次真实请求预算");
             self.visible_context_budget_snapshot = None;
             return;
         };
@@ -1175,13 +1175,13 @@ impl VulcanWorkbench {
             self.visible_context_budget_snapshot = Some(context_budget.clone());
         } else {
             self.context_usage = 0.0;
-            self.context_usage_detail = String::from("尚未生成预算快照");
+            self.context_usage_detail = String::from("等待下一次真实请求预算");
             self.visible_context_budget_snapshot = None;
         }
     }
 
-    /// Resolves one approximate context-budget snapshot from the remembered session runtime identity and visible transcript history.
-    /// 根据已记忆的会话运行时身份与可见转录历史解析一份近似上下文预算快照。
+    /// Resolves the latest request-facing context-budget snapshot captured from a real provider request.
+    /// 解析最近一次真实 Provider 请求捕获到的面向请求上下文预算快照。
     pub(super) fn resolve_session_context_budget_snapshot(
         &self,
         session_id: SessionId,
@@ -1189,83 +1189,13 @@ impl VulcanWorkbench {
         _messages: &[SessionMessageEntry],
         validate_anchor_baseline: bool,
     ) -> Option<ContextBudgetSnapshot> {
-        let (provider_id, model_id, api_family, capabilities) = if let (
-            Some(provider_id),
-            Some(model_id),
-        ) = (
-            runtime_state_snapshot.active_provider_id.as_deref(),
-            runtime_state_snapshot.active_model_id.as_deref(),
-        ) {
-            let definition = provider_config::supported_provider_by_id(provider_id)?;
-            let model =
-                provider_config::effective_model_choices(provider_id, &self.provider_configuration)
-                    .into_iter()
-                    .find(|entry| entry.id == model_id);
-            let capabilities = resolve_effective_model_capabilities(
-                definition,
-                model.as_ref(),
-                &self.ai_tool_configuration,
-            );
-            (
-                provider_id.to_string(),
-                model_id.to_string(),
-                definition.effective_api_family_for_model(Some(model_id)),
-                capabilities,
-            )
-        } else {
-            let active_choice = self.active_workbench_model_choice()?;
-            let definition = provider_config::supported_provider_by_id(&active_choice.provider_id)?;
-            let model = self.resolve_workbench_model_entry(&active_choice);
-            let capabilities = resolve_effective_model_capabilities(
-                definition,
-                model.as_ref(),
-                &self.ai_tool_configuration,
-            );
-            (
-                active_choice.provider_id.clone(),
-                active_choice.model_id.clone(),
-                definition.effective_api_family_for_model(Some(&active_choice.model_id)),
-                capabilities,
-            )
-        };
-        let visible_tool_count = self
+        let preparation = self
             .last_execution_preparation
             .as_ref()
             .filter(|preparation| {
                 preparation.session_id == session_id
-                    && preparation.model_blueprint.provider_id == provider_id
-                    && preparation.model_blueprint.model_id == model_id
-            })
-            .map(|preparation| preparation.tool_descriptors.len())
-            .unwrap_or(0usize);
-
-        let mut core_snapshot =
-            crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot(
-                &runtime_state_snapshot.conversation_state,
-            );
-        core_snapshot.messages =
-            crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model(
-                &core_snapshot.messages,
-                Some(api_family),
-                Some(&capabilities),
-            );
-
-        let token_budget_runtime = self.runtime_foundation.token_budget_runtime();
-        let mut context_budget = build_projected_session_context_budget_snapshot_with_estimator(
-            &provider_id,
-            &model_id,
-            api_family,
-            &capabilities,
-            self.workbench_reasoning_effort,
-            ContextCompactionPolicy::default(),
-            &core_snapshot.messages,
-            visible_tool_count,
-            runtime_state_snapshot
-                .last_successful_provider_usage
-                .as_ref()
-                .or(runtime_state_snapshot.last_provider_usage.as_ref()),
-            token_budget_runtime.estimator(),
-        );
+            })?;
+        let mut context_budget = preparation.context_budget.clone()?;
         let has_anchor_baseline = runtime_state_snapshot.last_compaction_id.is_some()
             || runtime_state_snapshot.context_start_message_id.is_some()
             || runtime_state_snapshot
@@ -1319,7 +1249,7 @@ impl VulcanWorkbench {
             self.visible_context_budget_snapshot = Some(context_budget);
         } else {
             self.context_usage = 0.0;
-            self.context_usage_detail = String::from("尚未生成预算快照");
+            self.context_usage_detail = String::from("等待下一次真实请求预算");
             self.visible_context_budget_snapshot = None;
         }
     }

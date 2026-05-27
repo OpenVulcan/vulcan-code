@@ -717,22 +717,17 @@ fn baseline_mismatch_recovery_clears_active_compaction_anchor() {
 /// Verifies reopening one historical session without an established anchor baseline keeps the visible budget display stable instead of treating one live snapshot as a mismatch anchor.
 /// 验证重新打开历史会话且尚未建立锚点基线时，可见预算展示会保持稳定，而不会把实时快照误当作失配锚点。
 #[test]
-fn session_budget_snapshot_without_anchor_keeps_baseline_match() {
+fn session_budget_snapshot_without_real_request_returns_none() {
     let (mut workbench, _task) = VulcanWorkbench::new();
     let session_id = SessionId::from_u128(71010);
-    let active_choice = workbench
-        .active_workbench_model_choice()
-        .expect("active workbench model choice should exist");
     workbench.sessions.clear();
     workbench
         .sessions
-        .push(test_session_summary(session_id, "预算展示测试"));
+        .push(test_session_summary(session_id, "真实预算测试"));
     workbench.selected_session = session_id;
     workbench.session_runtime_state.insert(
         session_id,
         SessionRuntimeStateEntry {
-            active_provider_id: Some(active_choice.provider_id.clone()),
-            active_model_id: Some(active_choice.model_id.clone()),
             live_context_budget_fingerprint: Some(String::from("budget-old")),
             conversation_state: SessionConversationState::default(),
             ..SessionRuntimeStateEntry::default()
@@ -745,159 +740,9 @@ fn session_budget_snapshot_without_anchor_keeps_baseline_match() {
         .cloned()
         .expect("runtime state should exist");
     let snapshot = workbench
-        .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false)
-        .expect("budget snapshot should be available");
+        .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false);
 
-    assert!(snapshot.baseline_matches_active_runtime);
-}
-
-/// Verifies an established compaction anchor compares against the anchor fingerprint instead of the latest live request fingerprint.
-/// 验证已建立的压缩锚点会对比锚点指纹，而不是对比最近一次实时请求指纹。
-#[test]
-fn session_budget_snapshot_with_anchor_uses_anchor_fingerprint() {
-    let (mut workbench, _task) = VulcanWorkbench::new();
-    let session_id = SessionId::from_u128(71011);
-    let active_choice = workbench
-        .active_workbench_model_choice()
-        .expect("active workbench model choice should exist");
-    workbench.sessions.clear();
-    workbench
-        .sessions
-        .push(test_session_summary(session_id, "锚点预算测试"));
-    workbench.selected_session = session_id;
-    workbench.session_runtime_state.insert(
-        session_id,
-        SessionRuntimeStateEntry {
-            active_provider_id: Some(active_choice.provider_id.clone()),
-            active_model_id: Some(active_choice.model_id.clone()),
-            last_compaction_id: Some(String::from("cp-anchor-1")),
-            context_start_message_id: Some(String::from("summary-anchor-1")),
-            live_context_budget_fingerprint: Some(String::from("budget-live")),
-            anchor_context_budget_fingerprint: Some(String::from("budget-old")),
-            conversation_state: SessionConversationState::default(),
-            ..SessionRuntimeStateEntry::default()
-        },
-    );
-
-    let runtime_state = workbench
-        .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .expect("runtime state should exist");
-    let snapshot = workbench
-        .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], true)
-        .expect("budget snapshot should be available");
-
-    assert!(!snapshot.baseline_matches_active_runtime);
-    assert!(!snapshot.baseline_budget_fingerprint_matches);
-    assert!(snapshot.baseline_assembly_fingerprint_matches);
-    assert_eq!(
-        snapshot.baseline_mismatch_reason.as_deref(),
-        Some("预算指纹变化")
-    );
-}
-
-/// Verifies the visible budget snapshot ignores stale anchor mismatches until the host is actually deciding whether compaction work should run.
-/// 验证在宿主真正决定是否执行压缩前，可见预算快照会忽略陈旧锚点失配。
-#[test]
-fn session_budget_snapshot_display_ignores_anchor_mismatch() {
-    let (mut workbench, _task) = VulcanWorkbench::new();
-    let session_id = SessionId::from_u128(71012);
-    let active_choice = workbench
-        .active_workbench_model_choice()
-        .expect("active workbench model choice should exist");
-    workbench.sessions.clear();
-    workbench
-        .sessions
-        .push(test_session_summary(session_id, "显示预算测试"));
-    workbench.selected_session = session_id;
-    workbench.session_runtime_state.insert(
-        session_id,
-        SessionRuntimeStateEntry {
-            active_provider_id: Some(active_choice.provider_id.clone()),
-            active_model_id: Some(active_choice.model_id.clone()),
-            last_compaction_id: Some(String::from("cp-display-1")),
-            context_start_message_id: Some(String::from("summary-display-1")),
-            anchor_context_budget_fingerprint: Some(String::from("budget-old")),
-            conversation_state: SessionConversationState::default(),
-            ..SessionRuntimeStateEntry::default()
-        },
-    );
-
-    let runtime_state = workbench
-        .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .expect("runtime state should exist");
-    let snapshot = workbench
-        .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false)
-        .expect("budget snapshot should be available");
-
-    assert!(snapshot.baseline_matches_active_runtime);
-}
-
-/// Verifies the compaction-anchor validation also detects layered-context fingerprint drift in addition to budget drift.
-/// 验证压缩锚点校验除了预算漂移外，也会检测分层上下文指纹漂移。
-#[test]
-fn session_budget_snapshot_with_anchor_detects_assembly_fingerprint_mismatch() {
-    let (mut workbench, _task) = VulcanWorkbench::new();
-    let session_id = SessionId::from_u128(71013);
-    let active_choice = workbench
-        .active_workbench_model_choice()
-        .expect("active workbench model choice should exist");
-    workbench.sessions.clear();
-    workbench
-        .sessions
-        .push(test_session_summary(session_id, "装配锚点测试"));
-    workbench.selected_session = session_id;
-    workbench.session_runtime_state.insert(
-        session_id,
-        SessionRuntimeStateEntry {
-            active_provider_id: Some(active_choice.provider_id.clone()),
-            active_model_id: Some(active_choice.model_id.clone()),
-            last_compaction_id: Some(String::from("cp-assembly-1")),
-            context_start_message_id: Some(String::from("summary-assembly-1")),
-            live_context_budget_fingerprint: Some(String::from("budget-live")),
-            live_context_assembly_fingerprint: Some(String::from("assembly-live")),
-            anchor_context_budget_fingerprint: Some(String::from("budget-live")),
-            anchor_context_assembly_fingerprint: Some(String::from("assembly-old")),
-            conversation_state: SessionConversationState::default(),
-            ..SessionRuntimeStateEntry::default()
-        },
-    );
-    let current_budget_fingerprint = {
-        let runtime_state = workbench
-            .session_runtime_state
-            .get(&session_id)
-            .cloned()
-            .expect("runtime state should exist");
-        workbench
-            .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false)
-            .expect("budget snapshot should be available")
-            .fingerprint
-    };
-    workbench
-        .session_runtime_state
-        .get_mut(&session_id)
-        .expect("runtime state should exist")
-        .anchor_context_budget_fingerprint = Some(current_budget_fingerprint);
-
-    let runtime_state = workbench
-        .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .expect("runtime state should exist");
-    let snapshot = workbench
-        .resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], true)
-        .expect("budget snapshot should be available");
-
-    assert!(!snapshot.baseline_matches_active_runtime);
-    assert!(snapshot.baseline_budget_fingerprint_matches);
-    assert!(!snapshot.baseline_assembly_fingerprint_matches);
-    assert_eq!(
-        snapshot.baseline_mismatch_reason.as_deref(),
-        Some("上下文层指纹变化")
-    );
+    assert!(snapshot.is_none());
 }
 
 /// Verifies active prompt-compaction state keeps the session on the blocking system-work lane so queued prompts do not auto-dispatch early.

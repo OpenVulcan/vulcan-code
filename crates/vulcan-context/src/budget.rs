@@ -206,9 +206,40 @@ pub fn build_request_context_budget_snapshot_with_estimator(
     observed_usage: Option<&ProviderUsageSnapshot>,
     estimator: Option<&dyn ContextTokenEstimator>,
 ) -> ContextBudgetSnapshot {
+    build_request_context_budget_snapshot_with_policy_and_estimator(
+        provider_id,
+        model_id,
+        api_family,
+        capabilities,
+        reasoning,
+        request_snapshot,
+        observed_usage,
+        None,
+        estimator,
+    )
+}
+
+/// Builds one request-facing budget snapshot with an optional compaction policy and host token estimator.
+/// 使用可选压缩策略与宿主 Token 估算器构建一份面向真实请求的预算快照。
+pub fn build_request_context_budget_snapshot_with_policy_and_estimator(
+    provider_id: &str,
+    model_id: &str,
+    api_family: ContextProviderApiFamily,
+    capabilities: &ContextBudgetCapabilities,
+    reasoning: ContextReasoningEffort,
+    request_snapshot: &CoreProviderRequestSnapshot,
+    observed_usage: Option<&ProviderUsageSnapshot>,
+    compaction_policy: Option<ContextCompactionPolicy>,
+    estimator: Option<&dyn ContextTokenEstimator>,
+) -> ContextBudgetSnapshot {
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
-    let reserved_compaction_tokens = 0usize;
+    let reserved_compaction_tokens = compaction_policy
+        .map(|policy| policy.reserved)
+        .unwrap_or(0usize);
+    let compaction_auto_enabled = compaction_policy
+        .map(|policy| policy.auto)
+        .unwrap_or(false);
     let estimated_system_tokens =
         estimate_text_tokens_for_model(model_id, estimator, &request_snapshot.system_prompt);
     let estimated_history_tokens = request_snapshot
@@ -233,102 +264,6 @@ pub fn build_request_context_budget_snapshot_with_estimator(
         + reserved_reasoning_tokens
         + reserved_output_tokens
         + reserved_compaction_tokens;
-    let effective_input_limit = capabilities.effective_input_limit();
-    let usage_ratio = effective_input_limit
-        .map(|limit| calibrated_input_tokens as f32 / limit.max(1) as f32)
-        .unwrap_or(0.0);
-
-    ContextBudgetSnapshot {
-        fingerprint: build_context_budget_fingerprint(
-            provider_id,
-            model_id,
-            api_family,
-            capabilities,
-            reasoning,
-            request_snapshot.tool_schemas.len(),
-            None,
-        ),
-        context_limit: capabilities.context_limit,
-        effective_input_limit,
-        reserved_output_tokens,
-        reserved_reasoning_tokens,
-        reserved_compaction_tokens,
-        compaction_auto_enabled: false,
-        baseline_matches_active_runtime: true,
-        baseline_budget_fingerprint_matches: true,
-        baseline_assembly_fingerprint_matches: true,
-        baseline_mismatch_reason: None,
-        estimated_system_tokens,
-        estimated_history_tokens,
-        estimated_prompt_tokens,
-        estimated_tool_tokens,
-        estimated_input_tokens: calibrated_input_tokens,
-        estimated_total_tokens,
-        usage_ratio,
-        observed_usage: observed_usage.cloned(),
-        severity: resolve_budget_severity(usage_ratio),
-    }
-}
-
-/// Builds one compaction-facing budget snapshot from already projected provider-visible core messages.
-/// 根据已经投影完成的 Provider 可见 core 消息构建一份面向压缩判断的预算快照。
-pub fn build_projected_session_context_budget_snapshot(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ContextProviderApiFamily,
-    capabilities: &ContextBudgetCapabilities,
-    reasoning_effort: ContextReasoningEffort,
-    compaction_policy: ContextCompactionPolicy,
-    projected_messages: &[CoreConversationMessage],
-    visible_tool_count: usize,
-    observed_usage: Option<&ProviderUsageSnapshot>,
-) -> ContextBudgetSnapshot {
-    build_projected_session_context_budget_snapshot_with_estimator(
-        provider_id,
-        model_id,
-        api_family,
-        capabilities,
-        reasoning_effort,
-        compaction_policy,
-        projected_messages,
-        visible_tool_count,
-        observed_usage,
-        None,
-    )
-}
-
-/// Builds one compaction-facing budget snapshot with an optional host token estimator.
-/// 使用可选宿主 Token 估算器构建一份面向压缩判断的预算快照。
-pub fn build_projected_session_context_budget_snapshot_with_estimator(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ContextProviderApiFamily,
-    capabilities: &ContextBudgetCapabilities,
-    reasoning_effort: ContextReasoningEffort,
-    compaction_policy: ContextCompactionPolicy,
-    projected_messages: &[CoreConversationMessage],
-    visible_tool_count: usize,
-    observed_usage: Option<&ProviderUsageSnapshot>,
-    estimator: Option<&dyn ContextTokenEstimator>,
-) -> ContextBudgetSnapshot {
-    let reserved_reasoning_tokens = reasoning_token_reserve(reasoning_effort);
-    let reserved_output_tokens = resolve_output_token_reserve(capabilities);
-    let reserved_compaction_tokens = compaction_policy.reserved;
-    let estimated_history_tokens = projected_messages
-        .iter()
-        .map(|message| estimate_core_message_tokens(model_id, estimator, message))
-        .sum();
-    let estimated_tool_tokens = visible_tool_count * 96usize;
-    let estimated_system_tokens = 384usize;
-    let estimated_prompt_tokens = 0usize;
-    let estimated_input_tokens =
-        estimated_system_tokens + estimated_history_tokens + estimated_tool_tokens;
-    let calibrated_input_tokens =
-        calibrated_input_token_estimate(estimated_input_tokens, observed_usage);
-    let estimated_total_tokens = calibrated_input_tokens
-        + reserved_reasoning_tokens
-        + reserved_output_tokens
-        + reserved_compaction_tokens;
     let effective_input_limit = capabilities
         .effective_input_limit()
         .map(|limit| limit.saturating_sub(reserved_compaction_tokens).max(1usize));
@@ -342,16 +277,16 @@ pub fn build_projected_session_context_budget_snapshot_with_estimator(
             model_id,
             api_family,
             capabilities,
-            reasoning_effort,
-            visible_tool_count,
-            Some(compaction_policy),
+            reasoning,
+            request_snapshot.tool_schemas.len(),
+            compaction_policy,
         ),
         context_limit: capabilities.context_limit,
         effective_input_limit,
         reserved_output_tokens,
         reserved_reasoning_tokens,
         reserved_compaction_tokens,
-        compaction_auto_enabled: compaction_policy.auto,
+        compaction_auto_enabled,
         baseline_matches_active_runtime: true,
         baseline_budget_fingerprint_matches: true,
         baseline_assembly_fingerprint_matches: true,

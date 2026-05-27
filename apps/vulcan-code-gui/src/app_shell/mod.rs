@@ -164,7 +164,6 @@ use crate::composer_parts::{
 };
 use crate::context_budget::{
     ContextBudgetSnapshot, ContextCompactionPolicy, apply_context_budget_anchor_baseline,
-    build_projected_session_context_budget_snapshot_with_estimator,
 };
 use crate::context_compaction::{
     CompactionPlan, CompactionSkillInput, CompactionSkillResult, into_session_derived_record,

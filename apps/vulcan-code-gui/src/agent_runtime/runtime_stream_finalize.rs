@@ -8,7 +8,7 @@ use crate::agent_runtime::provider_stream_projection::{
     normalize_assistant_output, normalize_optional_stream_output,
 };
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
-use crate::context_budget::build_request_context_budget_snapshot_with_estimator;
+use crate::context_budget::build_request_context_compaction_budget_snapshot_with_estimator;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
@@ -35,7 +35,7 @@ pub(crate) fn apply_latest_request_snapshot(
         .context_budget
         .as_ref()
         .and_then(|budget| budget.observed_usage.as_ref());
-    preparation.context_budget = Some(build_request_context_budget_snapshot_with_estimator(
+    preparation.context_budget = Some(build_request_context_compaction_budget_snapshot_with_estimator(
         &preparation.model_blueprint.provider_id,
         &preparation.model_blueprint.model_id,
         preparation.model_blueprint.api_family(),
