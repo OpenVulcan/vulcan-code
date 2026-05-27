@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use vulcan_context::budget::ContextTokenEstimator;
-use vulcan_token_counter::TokenCounter;
+use vulcan_token_counter::{TokenCounter, TokenizerBackend};
+
+/// Environment variable that explicitly opts into the legacy `.tiktoken` backend.
+/// 显式启用旧版 `.tiktoken` 后端的环境变量。
+const ENABLE_TIKTOKEN_ENV: &str = "VULCAN_TOKEN_BUDGET_ENABLE_TIKTOKEN";
 
 /// Runtime-owned token budget calculator and its initialization diagnostics.
 /// 运行时持有的 Token 预算计算器及其初始化诊断信息。
@@ -17,6 +21,9 @@ pub struct TokenBudgetRuntime {
     /// Shared model-aware token counter available after successful initialization.
     /// 初始化成功后可用的共享模型感知 Token 统计器。
     counter: Option<Arc<TokenCounter>>,
+    /// Selected OpenAI-base tokenizer backend used by this runtime.
+    /// 该运行时使用的 OpenAI 基础 tokenizer 后端。
+    backend: TokenizerBackend,
     /// Current initialization state retained for diagnostics and UI summaries.
     /// 为诊断与界面摘要保留的当前初始化状态。
     state: TokenBudgetRuntimeState,
@@ -44,6 +51,7 @@ impl fmt::Debug for TokenBudgetRuntime {
         formatter
             .debug_struct("TokenBudgetRuntime")
             .field("resource_directory", &self.resource_directory)
+            .field("backend", &self.backend)
             .field("is_available", &self.is_available())
             .field("state", &self.state)
             .finish()
@@ -62,6 +70,7 @@ impl TokenBudgetRuntime {
         Self {
             resource_directory: vulcan_runtime_assets::resolve_tokenizer_resource_directory(),
             counter: None,
+            backend: Self::resolve_default_backend(),
             state: TokenBudgetRuntimeState::Pending,
         }
     }
@@ -91,6 +100,7 @@ impl TokenBudgetRuntime {
             Ok(runtime) => Arc::new(runtime),
             Err(error) => Arc::new(Self::failed_with_error(
                 vulcan_runtime_assets::resolve_tokenizer_resource_directory(),
+                Self::resolve_default_backend(),
                 format!("Token 预算初始化任务异常结束：{error}"),
             )),
         }
@@ -109,19 +119,47 @@ impl TokenBudgetRuntime {
     /// A runtime wrapper with diagnostics preserved even when initialization fails.
     /// 一个即使初始化失败也保留诊断信息的运行时包装对象。
     pub fn initialize_from_resource_directory(resource_directory: impl Into<PathBuf>) -> Self {
+        Self::initialize_from_resource_directory_with_backend(
+            resource_directory,
+            Self::resolve_default_backend(),
+        )
+    }
+
+    /// Initializes the shared token budget runtime from one explicit resource directory and backend.
+    /// 从一个显式资源目录与后端初始化共享 Token 预算运行时。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `resource_directory` points at the directory containing tokenizer assets.
+    /// `resource_directory` 指向包含 tokenizer 资产的目录。
+    /// `backend` selects whether OpenAI base encodings use `.tkz` or `.tiktoken`.
+    /// `backend` 选择 OpenAI 基础编码使用 `.tkz` 还是 `.tiktoken`。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A runtime wrapper with diagnostics preserved even when initialization fails.
+    /// 一个即使初始化失败也保留诊断信息的运行时包装对象。
+    pub fn initialize_from_resource_directory_with_backend(
+        resource_directory: impl Into<PathBuf>,
+        backend: TokenizerBackend,
+    ) -> Self {
         let resource_directory = resource_directory.into();
-        match TokenCounter::from_assets_dir(&resource_directory).and_then(|counter| {
-            counter.warm_up()?;
-            Ok(counter)
-        }) {
+        match TokenCounter::from_assets_dir_with_backend(&resource_directory, backend).and_then(
+            |counter| {
+                counter.warm_up()?;
+                Ok(counter)
+            },
+        ) {
             Ok(counter) => Self {
                 resource_directory,
                 counter: Some(Arc::new(counter)),
+                backend,
                 state: TokenBudgetRuntimeState::Ready,
             },
             Err(error) => Self {
                 resource_directory: resource_directory.clone(),
                 counter: None,
+                backend,
                 state: TokenBudgetRuntimeState::Failed(error.to_string()),
             },
         }
@@ -141,10 +179,15 @@ impl TokenBudgetRuntime {
     /// 返回值
     /// A runtime wrapper that preserves the failure and keeps estimates on the fallback path.
     /// 一个保留失败信息并让估算保持回退路径的运行时包装对象。
-    fn failed_with_error(resource_directory: impl Into<PathBuf>, error: impl Into<String>) -> Self {
+    fn failed_with_error(
+        resource_directory: impl Into<PathBuf>,
+        backend: TokenizerBackend,
+        error: impl Into<String>,
+    ) -> Self {
         Self {
             resource_directory: resource_directory.into(),
             counter: None,
+            backend,
             state: TokenBudgetRuntimeState::Failed(error.into()),
         }
     }
@@ -171,6 +214,17 @@ impl TokenBudgetRuntime {
         &self.resource_directory
     }
 
+    /// Returns the selected tokenizer backend for diagnostics.
+    /// 返回用于诊断的当前 tokenizer 后端。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The backend selected for OpenAI base encodings.
+    /// OpenAI 基础编码选择的后端。
+    pub const fn backend(&self) -> TokenizerBackend {
+        self.backend
+    }
+
     /// Returns this runtime as a context token estimator when initialization succeeded.
     /// 当初始化成功时将该运行时作为上下文 Token 估算器返回。
     ///
@@ -193,18 +247,45 @@ impl TokenBudgetRuntime {
     pub fn status_row(&self) -> String {
         match &self.state {
             TokenBudgetRuntimeState::Pending => format!(
-                "Token 预算计算器正在后台初始化：{}",
-                self.resource_directory().display()
+                "Token 预算计算器正在初始化：{}（后端：{}）",
+                self.resource_directory().display(),
+                self.backend().label()
             ),
             TokenBudgetRuntimeState::Ready => format!(
-                "Token 预算计算器已初始化：{}",
-                self.resource_directory().display()
+                "Token 预算计算器已初始化：{}（后端：{}）",
+                self.resource_directory().display(),
+                self.backend().label()
             ),
             TokenBudgetRuntimeState::Failed(error) => format!(
-                "Token 预算计算器不可用：{}（资源目录：{}）",
+                "Token 预算计算器不可用：{}（资源目录：{}，后端：{}）",
                 error,
-                self.resource_directory().display()
+                self.resource_directory().display(),
+                self.backend().label()
             ),
+        }
+    }
+
+    /// Resolves the default tokenizer backend from the temporary explicit opt-in switch.
+    /// 根据临时显式开关解析默认 tokenizer 后端。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `TokenizerBackend::Tokie` unless `VULCAN_TOKEN_BUDGET_ENABLE_TIKTOKEN` is truthy.
+    /// 除非 `VULCAN_TOKEN_BUDGET_ENABLE_TIKTOKEN` 为真值，否则返回 `TokenizerBackend::Tokie`。
+    fn resolve_default_backend() -> TokenizerBackend {
+        let enable_tiktoken = std::env::var(ENABLE_TIKTOKEN_ENV)
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        if enable_tiktoken {
+            TokenizerBackend::Wordchipper
+        } else {
+            TokenizerBackend::Tokie
         }
     }
 }

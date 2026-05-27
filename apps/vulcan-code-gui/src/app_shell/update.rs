@@ -157,42 +157,21 @@ impl VulcanWorkbench {
                                 report.handle.entry_count
                             ),
                         });
-                        let luaskills_handle = report.handle.clone();
                         self.luaskills_runtime = Some(report.handle);
                         self.refresh_runtime_foundation();
                         self.luaskills_operation_in_flight = true;
                         self.luaskills_notice =
                             String::from("LuaSkills 运行时已就绪，正在载入技能目录。");
-                        self.startup_lifecycle = StartupLifecycle::Ready;
-                        self.status_message =
-                            String::from("LuaSkills 运行时已就绪，正在后台加载工作台数据。");
-
-                        if let Some(controller_runtime) = self.controller_runtime.clone() {
-                            return Task::batch([
-                                Task::perform(
-                                    workspace_store::load_or_seed_workspace(controller_runtime),
-                                    Message::WorkspaceStateLoaded,
-                                ),
-                                Task::perform(
-                                    bootstrap_mcp_runtime_access(
-                                        self.provider_configuration.clone(),
-                                    ),
-                                    Message::McpRuntimeBootstrapped,
-                                ),
-                                Task::perform(
-                                    TokenBudgetRuntime::initialize_on_background_thread(),
-                                    Message::TokenBudgetRuntimeInitialized,
-                                ),
-                                Task::perform(
-                                    luaskills_runtime::load_luaskills_catalog(luaskills_handle),
-                                    Message::LuaSkillsCatalogLoaded,
-                                ),
-                            ]);
-                        }
-
-                        self.startup_lifecycle = StartupLifecycle::Failed {
-                            message: String::from("控制器运行时缺失，无法加载工作台数据。"),
+                        self.startup_lifecycle = StartupLifecycle::Bootstrapping {
+                            message: String::from("正在初始化 Token 预算运行时。"),
                         };
+                        self.status_message =
+                            String::from("LuaSkills 运行时已就绪，正在初始化 Token 预算运行时。");
+
+                        return Task::perform(
+                            TokenBudgetRuntime::initialize_on_background_thread(),
+                            Message::TokenBudgetRuntimeInitialized,
+                        );
                     }
                     Err(error) => {
                         self.status_message = format!("LuaSkills 运行时初始化失败：{error}");
@@ -229,7 +208,37 @@ impl VulcanWorkbench {
                 self.status_message = status.clone();
                 self.push_activity(level, title, status);
 
-                Task::none()
+                self.startup_lifecycle = StartupLifecycle::Ready;
+                self.status_message =
+                    String::from("Token 预算运行时已处理，正在后台加载工作台数据。");
+
+                let Some(controller_runtime) = self.controller_runtime.clone() else {
+                    self.startup_lifecycle = StartupLifecycle::Failed {
+                        message: String::from("控制器运行时缺失，无法加载工作台数据。"),
+                    };
+                    return Task::none();
+                };
+                let Some(luaskills_handle) = self.luaskills_runtime.clone() else {
+                    self.startup_lifecycle = StartupLifecycle::Failed {
+                        message: String::from("LuaSkills 运行时缺失，无法加载技能目录。"),
+                    };
+                    return Task::none();
+                };
+
+                Task::batch([
+                    Task::perform(
+                        workspace_store::load_or_seed_workspace(controller_runtime),
+                        Message::WorkspaceStateLoaded,
+                    ),
+                    Task::perform(
+                        bootstrap_mcp_runtime_access(self.provider_configuration.clone()),
+                        Message::McpRuntimeBootstrapped,
+                    ),
+                    Task::perform(
+                        luaskills_runtime::load_luaskills_catalog(luaskills_handle),
+                        Message::LuaSkillsCatalogLoaded,
+                    ),
+                ])
             }
             Message::WorkspaceStateLoaded(result) => {
                 match result {
