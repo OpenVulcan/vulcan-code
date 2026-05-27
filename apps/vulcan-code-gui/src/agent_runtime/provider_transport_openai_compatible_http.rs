@@ -28,6 +28,9 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::agent_runtime::provider_transport_wire_capture::{
+    emit_provider_wire_request, provider_request_dry_run_response,
+};
 use crate::provider_config::{
     ModelInterleavedCapability, OpenAiCompatibleStreamingUsageConfig,
     OpenAiCompatibleStreamingUsageSource, ProviderApiFamily, supported_provider_by_id,
@@ -400,6 +403,27 @@ where
         include_model_field,
         authorization_strategy,
     } = options;
+    let mut wire_headers = request_headers.clone();
+    match authorization_strategy {
+        OpenAiCompatibleAuthorizationStrategy::Bearer => ensure_bearer_authorization_header(
+            provider_id,
+            provider_label.as_str(),
+            api_key,
+            &mut wire_headers,
+        )?,
+        OpenAiCompatibleAuthorizationStrategy::StaticApiKeyHeader {
+            header_name,
+            header_label,
+        } => ensure_string_header(
+            provider_id,
+            provider_label.as_str(),
+            &mut wire_headers,
+            header_name,
+            api_key,
+            header_label,
+        )?,
+    }
+    ensure_json_content_type(&mut wire_headers);
     let client = build_openai_compatible_http_client(
         provider_id,
         provider_label.as_str(),
@@ -413,6 +437,18 @@ where
         provider_tool_definitions,
         include_model_field,
     )?;
+    let wire_request = emit_provider_wire_request(
+        live_sender,
+        provider_id,
+        model_id,
+        "POST",
+        endpoint.as_str(),
+        &wire_headers,
+        &payload,
+    );
+    if let Some(response) = provider_request_dry_run_response(&wire_request) {
+        return Ok(response);
+    }
     let mut response = client
         .post(endpoint)
         .json(&payload)

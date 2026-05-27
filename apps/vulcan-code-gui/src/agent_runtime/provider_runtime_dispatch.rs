@@ -11,6 +11,7 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
+use crate::agent_runtime::provider_transport_wire_capture::provider_request_dry_run_enabled;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::provider_capabilities::resolve_provider_api_key;
 use crate::provider_config::ProviderConfigurationFile;
@@ -58,6 +59,7 @@ pub(crate) fn execute_provider_prompt_stream(
     let api_key = match resolve_provider_api_key(options, &preparation.model_blueprint.capabilities)
     {
         Ok(Some(api_key)) => api_key,
+        Ok(None) if provider_request_dry_run_enabled() => String::from("vulcan-dry-run-api-key"),
         Ok(None) => {
             return one_shot_provider_error_stream(format!(
                 "供应商 `{}` 当前缺少可用 API Key，无法启动真实执行。",

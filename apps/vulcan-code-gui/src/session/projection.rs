@@ -371,9 +371,15 @@ impl VulcanWorkbench {
         preparation: &crate::agent_runtime::ExecutionPreparation,
     ) {
         let request_text = preparation
-            .provider_request_snapshot_json
+            .provider_wire_request_json
             .as_ref()
-            .and_then(|snapshot| serde_json::to_string_pretty(snapshot).ok())
+            .and_then(|request| serde_json::to_string_pretty(request).ok())
+            .or_else(|| {
+                preparation
+                    .provider_request_snapshot_json
+                    .as_ref()
+                    .and_then(|snapshot| serde_json::to_string_pretty(snapshot).ok())
+            })
             .unwrap_or_else(|| preparation.provider_request_preview_markdown.clone());
         self.replace_session_last_api_request_preview(session_id, request_text);
     }

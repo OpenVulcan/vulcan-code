@@ -25,6 +25,9 @@ use crate::agent_runtime::provider_transport_http_support::{
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::agent_runtime::provider_transport_wire_capture::{
+    emit_provider_wire_request, provider_request_dry_run_response,
+};
 use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input;
 use futures_util::StreamExt;
@@ -61,9 +64,31 @@ pub(crate) async fn execute_google_gemini_http_streaming_turn<S>(
 where
     S: VulcanProviderDeltaSink,
 {
+    let mut wire_headers = request_headers.clone();
+    ensure_string_header(
+        provider_id,
+        "Google Gemini",
+        &mut wire_headers,
+        "x-goog-api-key",
+        api_key,
+        "API Key ",
+    )?;
+    ensure_json_content_type(&mut wire_headers);
     let client = build_google_gemini_http_client(provider_id, api_key, request_headers)?;
     let endpoint = build_google_gemini_streaming_endpoint(base_url, model_id);
     let payload = build_google_gemini_request_payload(request, provider_tool_definitions)?;
+    let wire_request = emit_provider_wire_request(
+        live_sender,
+        provider_id,
+        model_id,
+        "POST",
+        endpoint.as_str(),
+        &wire_headers,
+        &payload,
+    );
+    if let Some(response) = provider_request_dry_run_response(&wire_request) {
+        return Ok(response);
+    }
 
     let mut response = client
         .post(endpoint)

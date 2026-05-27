@@ -4,6 +4,7 @@
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
+use serde_json::Value;
 use std::pin::Pin;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -16,6 +17,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Structured request snapshot captured right before the next provider request is dispatched.
     /// 在下一次 Provider 请求真正发出前捕获的结构化请求快照。
     RequestSnapshot(CoreProviderRequestSnapshot),
+    /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
+    /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
+    WireRequest(Value),
     /// Assistant thinking delta returned by the provider stream.
     /// Provider 流返回的助手思考增量。
     Thinking(String),

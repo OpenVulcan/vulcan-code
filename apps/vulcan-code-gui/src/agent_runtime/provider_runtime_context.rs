@@ -649,6 +649,7 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
+            provider_wire_request_json: None,
             context_budget: Option::<ContextBudgetSnapshot>::None,
             context_assembly: Option::<ContextAssembly>::None,
             context_baseline: Option::<ContextBaseline>::None,
