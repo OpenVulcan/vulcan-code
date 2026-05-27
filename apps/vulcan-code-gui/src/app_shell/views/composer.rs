@@ -1423,11 +1423,6 @@ impl VulcanWorkbench {
             .as_ref()
             .filter(|preparation| selected_session_id == Some(preparation.session_id));
         let context_budget = self.visible_context_budget_snapshot.as_ref();
-        let mut request_breakdown_rows = self.composer_context_layer_usage_rows(
-            context_budget
-                .map(|context_budget| context_budget.observed_usage.is_some())
-                .unwrap_or(false),
-        );
         let mut diagnostic_rows = Vec::new();
 
         if let Some(context_budget) = context_budget {
@@ -1453,14 +1448,11 @@ impl VulcanWorkbench {
                 input_source_label,
                 context_budget.usage_label()
             ));
-            if request_breakdown_rows.is_empty() {
-                diagnostic_rows.extend(Self::context_budget_breakdown_rows(context_budget));
-            } else {
-                diagnostic_rows.append(&mut request_breakdown_rows);
-            }
+            diagnostic_rows.extend(Self::context_budget_breakdown_rows(context_budget));
             if has_observed_usage {
-                diagnostic_rows
-                    .push(String::from("说明：API实测为准；拆分仅按本地估算定位大户。"));
+                diagnostic_rows.push(String::from(
+                    "说明：API实测为准；拆分已按实测输入比例校准。",
+                ));
             }
             diagnostic_rows.push(format!(
                 "预留：输出 {} · 推理 {} · 压缩 {}",
@@ -1499,6 +1491,7 @@ impl VulcanWorkbench {
                 ));
             }
         } else {
+            let mut request_breakdown_rows = self.composer_context_layer_usage_rows();
             diagnostic_rows.append(&mut request_breakdown_rows);
         }
 
@@ -1596,24 +1589,28 @@ impl VulcanWorkbench {
     /// Builds one fallback local-estimate breakdown from the budget snapshot when no request assembly is available.
     /// 当没有请求装配信息时，根据预算快照构建一份兜底本地估算拆分。
     fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapshot) -> Vec<String> {
-        let local_estimate_total = context_budget
-            .estimated_system_tokens
-            .saturating_add(context_budget.estimated_history_tokens)
-            .saturating_add(context_budget.estimated_prompt_tokens)
-            .saturating_add(context_budget.estimated_tool_tokens);
-        Self::context_usage_part_rows(
-            "估算拆分（参考）",
-            vec![
-                (String::from("系统"), context_budget.estimated_system_tokens),
-                (
-                    String::from("历史"),
-                    context_budget.estimated_history_tokens,
-                ),
-                (String::from("当前"), context_budget.estimated_prompt_tokens),
-                (String::from("工具"), context_budget.estimated_tool_tokens),
-                (String::from("合计"), local_estimate_total),
-            ],
-        )
+        let observed_input_tokens = Self::context_budget_observed_input_tokens(context_budget);
+        let mut parts = vec![
+            (String::from("系统"), context_budget.estimated_system_tokens),
+            (
+                String::from("历史"),
+                context_budget.estimated_history_tokens,
+            ),
+            (String::from("当前"), context_budget.estimated_prompt_tokens),
+            (String::from("工具"), context_budget.estimated_tool_tokens),
+        ];
+        let local_estimate_total = parts.iter().map(|(_, tokens)| *tokens).sum::<usize>();
+        if let Some(observed_input_tokens) = observed_input_tokens {
+            parts = Self::calibrate_context_usage_parts(parts, observed_input_tokens);
+        }
+        let display_total = observed_input_tokens.unwrap_or(local_estimate_total);
+        parts.push((String::from("合计"), display_total));
+        let prefix = if observed_input_tokens.is_some() {
+            "估算拆分（实测校准）"
+        } else {
+            "估算拆分（参考）"
+        };
+        Self::context_usage_part_rows(prefix, parts)
     }
 
     /// Builds compact tooltip rows from named token-estimate parts.
@@ -1639,7 +1636,7 @@ impl VulcanWorkbench {
 
     /// Builds aggregated request-layer estimate rows reused by the context-orb tooltip.
     /// 构建供上下文圆盘提示层复用的请求层聚合估算行。
-    fn composer_context_layer_usage_rows(&self, has_observed_usage: bool) -> Vec<String> {
+    fn composer_context_layer_usage_rows(&self) -> Vec<String> {
         let selected_session_id = self.selected_session().map(|session| session.id);
         let Some(context_assembly) = self
             .last_execution_preparation
@@ -1677,11 +1674,68 @@ impl VulcanWorkbench {
             parts.push((String::from("合计"), estimate_total));
         }
 
-        let prefix = if has_observed_usage {
-            "请求拆分（本地参考）"
-        } else {
-            "请求拆分（本地估算）"
-        };
-        Self::context_usage_part_rows(prefix, parts)
+        Self::context_usage_part_rows("请求拆分（本地估算）", parts)
+    }
+
+    /// Returns the provider-observed input token count carried by one context-budget snapshot.
+    /// 返回单份上下文预算快照中携带的 Provider 实测输入 Token 数。
+    fn context_budget_observed_input_tokens(
+        context_budget: &ContextBudgetSnapshot,
+    ) -> Option<usize> {
+        let observed_usage = context_budget.observed_usage.as_ref()?;
+        if let Some(input_tokens) = observed_usage.input_tokens {
+            return Some(input_tokens);
+        }
+        observed_usage.total_tokens.map(|total_tokens| {
+            total_tokens
+                .saturating_sub(observed_usage.output_tokens.unwrap_or(0usize))
+                .saturating_sub(observed_usage.reasoning_tokens.unwrap_or(0usize))
+                .max(1usize)
+        })
+    }
+
+    /// Scales local context-layer estimates so their sum matches provider-observed input usage.
+    /// 按 Provider 实测输入用量缩放本地上下文层估算，使分项合计与实测输入保持一致。
+    fn calibrate_context_usage_parts(
+        parts: Vec<(String, usize)>,
+        observed_input_tokens: usize,
+    ) -> Vec<(String, usize)> {
+        let local_total = parts.iter().map(|(_, tokens)| *tokens).sum::<usize>();
+        if local_total == 0usize || observed_input_tokens == 0usize {
+            return parts;
+        }
+
+        let mut scaled_parts = parts
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, tokens))| {
+                let scaled_product = (tokens as u128) * (observed_input_tokens as u128);
+                let scaled_tokens = (scaled_product / (local_total as u128)) as usize;
+                let remainder = (scaled_product % (local_total as u128)) as usize;
+                (index, label, scaled_tokens, remainder)
+            })
+            .collect::<Vec<_>>();
+        let scaled_total = scaled_parts
+            .iter()
+            .map(|(_, _, tokens, _)| *tokens)
+            .sum::<usize>();
+        let missing_tokens = observed_input_tokens.saturating_sub(scaled_total);
+        let mut remainder_order = scaled_parts
+            .iter()
+            .enumerate()
+            .map(|(position, (_, _, _, remainder))| (position, *remainder))
+            .collect::<Vec<_>>();
+        remainder_order
+            .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (position, _) in remainder_order.into_iter().take(missing_tokens) {
+            if let Some((_, _, tokens, _)) = scaled_parts.get_mut(position) {
+                *tokens = tokens.saturating_add(1usize);
+            }
+        }
+        scaled_parts.sort_by_key(|(index, _, _, _)| *index);
+        scaled_parts
+            .into_iter()
+            .map(|(_, label, tokens, _)| (label, tokens))
+            .collect()
     }
 }
