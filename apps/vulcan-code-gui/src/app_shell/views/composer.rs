@@ -1491,8 +1491,7 @@ impl VulcanWorkbench {
                 ));
             }
         } else {
-            let mut request_breakdown_rows = self.composer_context_layer_usage_rows();
-            diagnostic_rows.append(&mut request_breakdown_rows);
+            diagnostic_rows.push(String::from("请求拆分：等待预算引擎计算"));
         }
 
         if let Some(runtime_state) = runtime_state {
@@ -1632,49 +1631,6 @@ impl VulcanWorkbench {
                 }
             })
             .collect()
-    }
-
-    /// Builds aggregated request-layer estimate rows reused by the context-orb tooltip.
-    /// 构建供上下文圆盘提示层复用的请求层聚合估算行。
-    fn composer_context_layer_usage_rows(&self) -> Vec<String> {
-        let selected_session_id = self.selected_session().map(|session| session.id);
-        let Some(context_assembly) = self
-            .last_execution_preparation
-            .as_ref()
-            .filter(|preparation| selected_session_id == Some(preparation.session_id))
-            .and_then(|preparation| preparation.context_assembly.as_ref())
-        else {
-            return Vec::new();
-        };
-
-        let mut parts = Vec::new();
-        let mut estimate_total = 0usize;
-        for kind in [
-            ContextLayerKind::System,
-            ContextLayerKind::ProjectRules,
-            ContextLayerKind::Runtime,
-            ContextLayerKind::History,
-            ContextLayerKind::Retrieval,
-            ContextLayerKind::Compaction,
-            ContextLayerKind::Tools,
-            ContextLayerKind::User,
-        ] {
-            let token_total = context_assembly
-                .layers
-                .iter()
-                .filter(|layer| layer.kind == kind)
-                .map(|layer| layer.token_estimate())
-                .sum::<usize>();
-            if token_total > 0 {
-                estimate_total = estimate_total.saturating_add(token_total);
-                parts.push((kind.label().to_string(), token_total));
-            }
-        }
-        if estimate_total > 0usize {
-            parts.push((String::from("合计"), estimate_total));
-        }
-
-        Self::context_usage_part_rows("请求拆分（本地估算）", parts)
     }
 
     /// Returns the provider-observed input token count carried by one context-budget snapshot.

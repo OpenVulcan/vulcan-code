@@ -88,12 +88,6 @@ impl ContextLayer {
     pub fn has_content(&self) -> bool {
         !self.content.trim().is_empty()
     }
-
-    /// Returns a lightweight token estimate for this layer using a character heuristic.
-    /// 使用字符启发式返回该层的轻量 Token 估算值。
-    pub fn token_estimate(&self) -> usize {
-        estimate_text_tokens(&self.content)
-    }
 }
 
 /// One assembled context stack that can be rendered, diffed, or summarized before a provider request.
@@ -130,12 +124,6 @@ impl ContextAssembly {
         self.layers.is_empty()
     }
 
-    /// Returns the total approximate token estimate across all layers.
-    /// 返回所有上下文层合计的近似 Token 估算值。
-    pub fn token_estimate(&self) -> usize {
-        self.layers.iter().map(ContextLayer::token_estimate).sum()
-    }
-
     /// Returns one compact human-readable summary line for diagnostics and previews.
     /// 返回一条供诊断与预览使用的紧凑人类可读摘要行。
     pub fn summary_note(&self) -> String {
@@ -143,19 +131,13 @@ impl ContextAssembly {
             return String::from("上下文为空");
         }
 
-        let total_tokens = self.token_estimate();
         let labels = self
             .layers
             .iter()
-            .map(|layer| format!("{}({})", layer.label, layer.token_estimate()))
+            .map(|layer| layer.label.trim().to_string())
             .collect::<Vec<_>>()
             .join(" · ");
-        format!(
-            "{} 层 · 约 {} tokens · {}",
-            self.layers.len(),
-            total_tokens,
-            labels
-        )
+        format!("{} 层 · {}", self.layers.len(), labels)
     }
 
     /// Builds one layered assembly from a provider request snapshot.
@@ -660,16 +642,4 @@ mod tests {
         assert!(assembly.layers[1].content.contains("project rules"));
         assert!(assembly.layers[2].content.contains("Current workspace"));
     }
-}
-
-/// Estimates one text payload using a lightweight character heuristic.
-/// 使用轻量字符启发式估算一段文本载荷。
-fn estimate_text_tokens(text: &str) -> usize {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-
-    let characters = trimmed.chars().count();
-    ((characters + 3usize) / 4usize).max(1usize)
 }

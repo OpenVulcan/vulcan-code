@@ -189,11 +189,10 @@ fn render_context_layers_markdown(assembly: &ContextAssembly) -> String {
                 truncate_preview(preview, 120)
             };
             format!(
-                "- {}. {} · `{}` · 约 `{}` tokens · {}",
+                "- {}. {} · `{}` · {}",
                 index + 1,
                 layer.kind.label(),
                 layer.label,
-                layer.token_estimate(),
                 preview
             )
         })

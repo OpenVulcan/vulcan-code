@@ -7,7 +7,7 @@ use crate::ui::widgets::context_usage_orb::{self, ContextUsageOrbProps, ContextU
 use iced::widget::{column, opaque, pin, rich_text};
 use iced::{Background, Border, Color};
 use iced_aw::helpers::date_picker;
-use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot, ContextLayerKind};
+use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot};
 
 mod about_licenses;
 mod agents;
