@@ -17,6 +17,7 @@ members = [
     "crates/vulcan-iced-widget",
     "crates/vulcan-tools-manager",
     "crates/vulcan-core",
+    "crates/vulcan-token-counter",
 ]
 exclude = [
     "third_party/iced",
