@@ -23,6 +23,167 @@ const APPLICATION_LICENSE_DOCUMENT_ID: &str = "application-license";
 /// 即使外部源码树不可用也始终可见的内嵌应用 MIT 许可证文本。
 const APPLICATION_LICENSE_EMBEDDED_TEXT: &str = include_str!("../../../../LICENSE");
 
+/// Builds one read-only text-editor buffer used by one About-page license document body.
+/// 构建供单份关于页许可证文档正文使用的一份只读文本编辑器缓冲区。
+fn build_about_license_document_buffer(body: &str) -> text_editor::Content {
+    text_editor::Content::with_text(body)
+}
+
+impl VulcanWorkbench {
+    /// Returns whether entering the About-page section should trigger the first lazy catalog load automatically.
+    /// 返回进入关于页分区时是否应自动触发首次延迟目录加载。
+    pub(super) fn should_auto_start_about_license_catalog_reload(
+        &self,
+        section_changed: bool,
+    ) -> bool {
+        section_changed
+            && !self.about_license_catalog_loading
+            && (self.about_license_catalog_load_revision == 0
+                || self.about_license_catalog_load_error.is_some())
+    }
+
+    /// Starts one background worker-thread task that prepares the currently requested About-page document buffer on demand.
+    /// 按需启动一条后台工作线程任务，为当前请求的关于页文档准备正文缓冲区。
+    pub(super) fn start_about_license_document_buffer_load(
+        &mut self,
+        document_id: String,
+    ) -> Task<Message> {
+        let Some(document) = self.about_license_catalog.document(&document_id).cloned() else {
+            self.about_license_document_buffer_loading = false;
+            self.about_license_document_buffer_load_error =
+                Some(String::from("当前许可证文档正文不可用，无法展开显示。"));
+            return Task::none();
+        };
+
+        if self
+            .about_license_document_buffers
+            .contains_key(&document_id)
+        {
+            self.about_license_active_document_id = Some(document_id);
+            self.about_license_document_buffer_loading = false;
+            self.about_license_document_buffer_load_error = None;
+            return Task::none();
+        }
+
+        self.about_license_active_document_id = Some(document_id.clone());
+        self.about_license_document_buffer_loading = true;
+        self.about_license_document_buffer_load_error = None;
+        self.about_license_document_buffer_load_revision = self
+            .about_license_document_buffer_load_revision
+            .wrapping_add(1);
+        let revision = self.about_license_document_buffer_load_revision;
+
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    document
+                        .load_body_text()
+                        .map(|body| build_about_license_document_buffer(&body))
+                })
+                .await
+                .map_err(|error| format!("许可证正文后台缓冲任务加入失败：{error}"))
+                .and_then(|result| result)
+            },
+            move |result| Message::AboutLicenseDocumentBufferLoaded(revision, document_id, result),
+        )
+    }
+
+    /// Applies one finished About-page document-buffer result when it still matches the latest requested revision and document selection.
+    /// 应用一条已完成的关于页文档缓冲结果，并在其仍匹配最新请求修订号与当前文档选择时生效。
+    pub(super) fn finish_about_license_document_buffer_load(
+        &mut self,
+        revision: u64,
+        document_id: String,
+        result: Result<text_editor::Content, String>,
+    ) -> Task<Message> {
+        if revision != self.about_license_document_buffer_load_revision
+            || self.about_license_active_document_id.as_deref() != Some(document_id.as_str())
+        {
+            return Task::none();
+        }
+
+        self.about_license_document_buffer_loading = false;
+        match result {
+            Ok(content) => {
+                self.about_license_document_buffers
+                    .insert(document_id, content);
+                self.about_license_document_buffer_load_error = None;
+            }
+            Err(error) => {
+                self.about_license_document_buffer_load_error = Some(error.clone());
+                self.status_message = format!("许可证正文加载失败：{error}");
+            }
+        }
+
+        Task::none()
+    }
+
+    /// Starts one background worker-thread task that reloads the About-page license catalog while keeping already cached page state visible.
+    /// 启动一条后台工作线程任务以重新加载关于页许可证目录，并保留已缓存的页面状态继续可见。
+    pub(super) fn start_about_license_catalog_reload(
+        &mut self,
+        trigger: AboutLicenseCatalogLoadTrigger,
+    ) -> Task<Message> {
+        self.about_license_catalog_loading = true;
+        self.about_license_catalog_load_error = None;
+        self.about_license_catalog_load_revision =
+            self.about_license_catalog_load_revision.wrapping_add(1);
+        let revision = self.about_license_catalog_load_revision;
+        self.status_message = match trigger {
+            AboutLicenseCatalogLoadTrigger::OpenSection => String::from("正在后台加载许可证目录。"),
+        };
+
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(AboutLicenseCatalog::load)
+                    .await
+                    .map_err(|error| format!("许可证后台加载任务加入失败：{error}"))
+                    .and_then(|result| result)
+            },
+            move |result| Message::AboutLicenseCatalogLoaded(revision, result),
+        )
+    }
+
+    /// Applies one finished About-page license catalog load result when it still matches the latest requested revision.
+    /// 应用一条已完成的关于页许可证目录加载结果，并在其仍匹配最新请求修订号时生效。
+    pub(super) fn finish_about_license_catalog_reload(
+        &mut self,
+        revision: u64,
+        result: Result<AboutLicenseCatalog, String>,
+    ) -> Task<Message> {
+        if revision != self.about_license_catalog_load_revision {
+            return Task::none();
+        }
+
+        self.about_license_catalog_loading = false;
+        match result {
+            Ok(catalog) => {
+                let document_count = catalog.documents.len();
+                let active_document_id = self
+                    .about_license_active_document_id
+                    .clone()
+                    .filter(|document_id| catalog.document(document_id).is_some());
+                self.about_license_catalog = catalog;
+                self.status_message =
+                    format!("许可证目录已加载，共载入 {document_count} 条列表项。");
+                self.about_license_catalog_load_error = None;
+                self.about_license_document_buffers.clear();
+                self.about_license_document_buffer_loading = false;
+                self.about_license_document_buffer_load_error = None;
+                self.about_license_active_document_id = active_document_id.clone();
+                if let Some(document_id) = active_document_id {
+                    return self.start_about_license_document_buffer_load(document_id);
+                }
+            }
+            Err(error) => {
+                self.about_license_catalog_load_error = Some(error.clone());
+                self.status_message = format!("许可证目录加载失败：{error}");
+            }
+        }
+        Task::none()
+    }
+}
+
 /// One About-page document category used to render compact summaries and grouping hints.
 /// 关于页面文档的分类，用于渲染紧凑摘要与分组提示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
