@@ -363,6 +363,21 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Stores one session-scoped last-provider-request JSON payload for the dedicated request tab.
+    /// 为专用请求页签保存一份按会话归属的最后一次 Provider 请求 JSON 载荷。
+    pub(super) fn replace_session_last_api_request_from_preparation(
+        &mut self,
+        session_id: SessionId,
+        preparation: &crate::agent_runtime::ExecutionPreparation,
+    ) {
+        let request_text = preparation
+            .provider_request_snapshot_json
+            .as_ref()
+            .and_then(|snapshot| serde_json::to_string_pretty(snapshot).ok())
+            .unwrap_or_else(|| preparation.provider_request_preview_markdown.clone());
+        self.replace_session_last_api_request_preview(session_id, request_text);
+    }
+
     /// Materializes one session-scoped API-request preview buffer only when the request tab really needs a selectable editor surface.
     /// 仅在请求页签真正需要可选择编辑器表面时物化单个会话级 API 请求预览缓冲区。
     pub(super) fn ensure_session_last_api_request_preview_buffer(&mut self, session_id: SessionId) {

@@ -1360,10 +1360,7 @@ impl VulcanWorkbench {
             self.sync_context_usage_from_preparation(Some(&preparation));
             perf_trace.checkpoint("apply_preparation.context_usage", phase_started_at);
             phase_started_at = Instant::now();
-            self.replace_session_last_api_request_preview(
-                session_id,
-                preparation.provider_request_preview_markdown.clone(),
-            );
+            self.replace_session_last_api_request_from_preparation(session_id, &preparation);
             self.refresh_prompt_composer_inspector_buffer();
             perf_trace.checkpoint("apply_preparation.request_preview", phase_started_at);
             phase_started_at = Instant::now();

@@ -2791,11 +2791,7 @@ impl VulcanWorkbench {
                     return Task::none();
                 };
                 self.ensure_session_last_api_request_preview_buffer(session_id);
-                Task::batch([
-                    self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
-                    self.maybe_follow_selected_session_transcript_tail(session_id),
-                    self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
-                ])
+                Task::none()
             }
             Message::ShowSelectedSessionDocumentDetailCards => {
                 self.agent_transcript_surface_mode = AgentTranscriptSurfaceMode::DetailCards;
@@ -3858,9 +3854,9 @@ impl VulcanWorkbench {
                 match event {
                     ExecutionStreamEvent::Prepared(preparation) => {
                         let detail = preparation.summary_rows().join(" | ");
-                        self.replace_session_last_api_request_preview(
+                        self.replace_session_last_api_request_from_preparation(
                             preparation.session_id,
-                            preparation.provider_request_preview_markdown.clone(),
+                            &preparation,
                         );
                         self.refresh_prompt_composer_inspector_buffer();
                         self.sync_context_usage_from_preparation(Some(&preparation));

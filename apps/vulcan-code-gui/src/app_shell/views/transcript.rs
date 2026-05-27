@@ -836,53 +836,57 @@ impl VulcanWorkbench {
         &self,
         session_id: SessionId,
     ) -> Element<'_, Message> {
-        let (buffer, on_action, fallback_text) = match self.agent_transcript_surface_mode {
-            AgentTranscriptSurfaceMode::DetailCards => {
-                let buffer = self.session_agent_view_buffers.get(&session_id);
-                let fallback_text = if buffer.is_none() {
-                    self.session_agent_view_selectable_documents
+        let (buffer, on_action, fallback_text, syntax_token) =
+            match self.agent_transcript_surface_mode {
+                AgentTranscriptSurfaceMode::DetailCards => {
+                    let buffer = self.session_agent_view_buffers.get(&session_id);
+                    let fallback_text = if buffer.is_none() {
+                        self.session_agent_view_selectable_documents
+                            .get(&session_id)
+                            .map(|document| document.buffer().to_string())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    (
+                        buffer,
+                        Message::SelectedSessionDocumentStructuredAction
+                            as fn(text_editor::Action) -> Message,
+                        fallback_text,
+                        "markdown",
+                    )
+                }
+                AgentTranscriptSurfaceMode::RawSource => {
+                    let buffer = self.session_agent_view_raw_buffers.get(&session_id);
+                    let fallback_text = if buffer.is_none() {
+                        self.rendered_session_agent_view_document(session_id)
+                            .map(|document| agent_view_document_raw_source(&document))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    (
+                        buffer,
+                        Message::SelectedSessionDocumentRawSourceAction
+                            as fn(text_editor::Action) -> Message,
+                        fallback_text,
+                        "markdown",
+                    )
+                }
+                AgentTranscriptSurfaceMode::ApiRequest => (
+                    self.session_last_api_request_buffers.get(&session_id),
+                    Message::SelectedSessionDocumentApiRequestAction
+                        as fn(text_editor::Action) -> Message,
+                    self.session_last_api_request_markdowns
                         .get(&session_id)
-                        .map(|document| document.buffer().to_string())
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                (
-                    buffer,
-                    Message::SelectedSessionDocumentStructuredAction
-                        as fn(text_editor::Action) -> Message,
-                    fallback_text,
-                )
-            }
-            AgentTranscriptSurfaceMode::RawSource => {
-                let buffer = self.session_agent_view_raw_buffers.get(&session_id);
-                let fallback_text = if buffer.is_none() {
-                    self.rendered_session_agent_view_document(session_id)
-                        .map(|document| agent_view_document_raw_source(&document))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                (
-                    buffer,
-                    Message::SelectedSessionDocumentRawSourceAction
-                        as fn(text_editor::Action) -> Message,
-                    fallback_text,
-                )
-            }
-            AgentTranscriptSurfaceMode::ApiRequest => (
-                self.session_last_api_request_buffers.get(&session_id),
-                Message::SelectedSessionDocumentApiRequestAction
-                    as fn(text_editor::Action) -> Message,
-                self.session_last_api_request_markdowns
-                    .get(&session_id)
-                    .cloned()
-                    .unwrap_or_else(|| self.t(I18nKey::TranscriptNoApiRequestSnapshot)),
-            ),
-        };
+                        .cloned()
+                        .unwrap_or_else(|| self.t(I18nKey::TranscriptNoApiRequestSnapshot)),
+                    "json",
+                ),
+            };
 
         let body =
-            self.view_workbench_code_preview_body(buffer, fallback_text, "markdown", on_action);
+            self.view_workbench_code_preview_body(buffer, fallback_text, syntax_token, on_action);
         let body_flow = column![
             self.view_session_history_load_control(session_id),
             body,
