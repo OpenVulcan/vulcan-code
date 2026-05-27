@@ -6,7 +6,7 @@ use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
 use vulcan_context::budget::{
     ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
-    ContextReasoningEffort,
+    ContextReasoningEffort, ContextTokenEstimator,
 };
 #[allow(unused_imports)]
 pub use vulcan_context::{
@@ -19,9 +19,9 @@ use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot, ProviderUsageSnapshot,
 };
 
-/// Builds one exact request-facing budget snapshot from the final provider request snapshot.
-/// 根据最终 Provider 请求快照构建一份精确面向请求的预算快照。
-pub fn build_request_context_budget_snapshot(
+/// Builds one request-facing budget snapshot with an initialized token estimator.
+/// 使用已初始化的 Token 估算器构建一份面向请求的预算快照。
+pub fn build_request_context_budget_snapshot_with_estimator(
     provider_id: &str,
     model_id: &str,
     api_family: ProviderApiFamily,
@@ -29,8 +29,9 @@ pub fn build_request_context_budget_snapshot(
     reasoning: &ProviderRuntimeReasoningResolution,
     request_snapshot: &CoreProviderRequestSnapshot,
     observed_usage: Option<&ProviderUsageSnapshot>,
+    estimator: Option<&dyn ContextTokenEstimator>,
 ) -> ContextBudgetSnapshot {
-    vulcan_context::budget::build_request_context_budget_snapshot(
+    vulcan_context::budget::build_request_context_budget_snapshot_with_estimator(
         provider_id,
         model_id,
         map_provider_api_family(api_family),
@@ -38,12 +39,13 @@ pub fn build_request_context_budget_snapshot(
         map_reasoning_effort(reasoning.requested_effort),
         request_snapshot,
         observed_usage,
+        estimator,
     )
 }
 
-/// Builds one compaction-facing budget snapshot from already projected provider-visible core messages.
-/// 根据已经投影完成的 Provider 可见 core 消息构建一份面向压缩判断的预算快照。
-pub fn build_projected_session_context_budget_snapshot(
+/// Builds one compaction-facing budget snapshot with an initialized token estimator.
+/// 使用已初始化的 Token 估算器构建一份面向压缩判断的预算快照。
+pub fn build_projected_session_context_budget_snapshot_with_estimator(
     provider_id: &str,
     model_id: &str,
     api_family: ProviderApiFamily,
@@ -53,8 +55,9 @@ pub fn build_projected_session_context_budget_snapshot(
     projected_messages: &[CoreConversationMessage],
     visible_tool_count: usize,
     observed_usage: Option<&ProviderUsageSnapshot>,
+    estimator: Option<&dyn ContextTokenEstimator>,
 ) -> ContextBudgetSnapshot {
-    vulcan_context::budget::build_projected_session_context_budget_snapshot(
+    vulcan_context::budget::build_projected_session_context_budget_snapshot_with_estimator(
         provider_id,
         model_id,
         map_provider_api_family(api_family),
@@ -64,6 +67,7 @@ pub fn build_projected_session_context_budget_snapshot(
         projected_messages,
         visible_tool_count,
         observed_usage,
+        estimator,
     )
 }
 

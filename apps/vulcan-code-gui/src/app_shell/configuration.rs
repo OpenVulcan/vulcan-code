@@ -2426,6 +2426,7 @@ impl VulcanWorkbench {
         let task_runtime = self.runtime_foundation.task_runtime();
         let question_runtime = self.runtime_foundation.question_runtime();
         let command_session_runtime = self.runtime_foundation.command_session_runtime();
+        let token_budget_runtime = self.runtime_foundation.token_budget_runtime();
         self.runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
             &self.provider_configuration,
             &self.agent_profile_catalog,
@@ -2434,6 +2435,7 @@ impl VulcanWorkbench {
             task_runtime,
             question_runtime,
             command_session_runtime,
+            token_budget_runtime,
         );
         self.last_execution_preparation = None;
         self.last_mcp_discovery_rows.clear();

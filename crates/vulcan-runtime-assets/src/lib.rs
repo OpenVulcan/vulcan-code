@@ -23,6 +23,10 @@ const PROVIDERS_DIR_NAME: &str = "providers";
 /// 位于打包资源根目录下的相对 AI 能力提供方目录名称。
 const AI_CAPABILITY_PROVIDERS_DIR_NAME: &str = "ai-capability-providers";
 
+/// Relative tokenizer resource directory name nested below the packaged resources root.
+/// 位于打包资源根目录下的相对 tokenizer 资源目录名称。
+const TOKENIZERS_DIR_NAME: &str = "tokenizers";
+
 /// Relative Lua runtime packages directory name bundled into the output root.
 /// 打包到 output 根目录中的 Lua 运行时包目录名称。
 const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
@@ -56,6 +60,12 @@ pub fn resolve_provider_catalog_directory() -> PathBuf {
 /// 返回当前进程使用的生效 AI 能力提供方目录路径。
 pub fn resolve_ai_capability_provider_catalog_directory() -> PathBuf {
     resolve_app_resources_directory().join(AI_CAPABILITY_PROVIDERS_DIR_NAME)
+}
+
+/// Returns the effective tokenizer resource directory for the current process.
+/// 返回当前进程使用的生效 tokenizer 资源目录路径。
+pub fn resolve_tokenizer_resource_directory() -> PathBuf {
+    resolve_app_resources_directory().join(TOKENIZERS_DIR_NAME)
 }
 
 /// Returns the effective application resource directory for the current process.

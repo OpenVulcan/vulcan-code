@@ -12,6 +12,7 @@ use crate::agent_runtime::runtime_stream_preparation::{
     RuntimePreparedLaunchInput, prepare_runtime_launch_input,
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
@@ -28,6 +29,7 @@ pub(crate) async fn prepare_runtime_stream_launch(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     let prepared_launch_input = prepare_runtime_launch_input(
@@ -38,6 +40,7 @@ pub(crate) async fn prepare_runtime_stream_launch(
         task_runtime,
         question_runtime,
         command_session_runtime,
+        token_budget_runtime,
         request,
     )?;
     build_runtime_stream_launch_from_prepared_input(prepared_launch_input).await

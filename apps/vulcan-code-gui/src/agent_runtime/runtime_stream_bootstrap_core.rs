@@ -13,9 +13,11 @@ use crate::agent_runtime::provider_runtime_context::{
     build_runtime_prompt_layers_for_agent, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
-use crate::context_budget::build_request_context_budget_snapshot;
+use crate::context_budget::build_request_context_budget_snapshot_with_estimator;
 use crate::provider_usage::latest_provider_usage_from_conversation_state;
-use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
+use vulcan_context::{
+    ContextBaseline, ContextTokenEstimator, build_provider_request_context_assembly,
+};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
@@ -88,6 +90,7 @@ pub(crate) async fn seed_runtime_request_snapshot(
     system_preamble: &str,
     prompt_layers: CoreProviderPromptLayers,
     resolved_tool_definitions: &[ResolvedToolDefinition],
+    token_estimator: Option<&dyn ContextTokenEstimator>,
     runtime_max_turns: Option<usize>,
     warnings: &mut Vec<String>,
 ) {
@@ -105,15 +108,17 @@ pub(crate) async fn seed_runtime_request_snapshot(
         Ok(request_snapshot) => {
             let observed_usage =
                 latest_provider_usage_from_conversation_state(&request.conversation_state);
-            preparation.context_budget = Some(build_request_context_budget_snapshot(
-                &preparation.model_blueprint.provider_id,
-                &preparation.model_blueprint.model_id,
-                preparation.model_blueprint.api_family(),
-                &preparation.model_blueprint.capabilities,
-                &preparation.model_blueprint.reasoning,
-                &request_snapshot,
-                observed_usage.as_ref(),
-            ));
+            preparation.context_budget =
+                Some(build_request_context_budget_snapshot_with_estimator(
+                    &preparation.model_blueprint.provider_id,
+                    &preparation.model_blueprint.model_id,
+                    preparation.model_blueprint.api_family(),
+                    &preparation.model_blueprint.capabilities,
+                    &preparation.model_blueprint.reasoning,
+                    &request_snapshot,
+                    observed_usage.as_ref(),
+                    token_estimator,
+                ));
             let context_assembly = build_provider_request_context_assembly(&request_snapshot);
             preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
             preparation.context_assembly = Some(context_assembly);

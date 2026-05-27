@@ -13,6 +13,7 @@ use crate::agent_runtime::runtime_stream_preparation_resources::{
     RuntimePreparationResources, build_runtime_preparation_resources,
 };
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::{PersistedAiToolConfiguration, ProviderConfigurationFile};
@@ -67,6 +68,7 @@ pub(crate) fn prepare_runtime_launch_input(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
     let resources = build_runtime_preparation_resources(
@@ -77,6 +79,7 @@ pub(crate) fn prepare_runtime_launch_input(
         task_runtime,
         question_runtime,
         command_session_runtime,
+        token_budget_runtime,
         request,
     );
     let preparation = match prepare_execution(

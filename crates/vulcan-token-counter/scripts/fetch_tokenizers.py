@@ -70,10 +70,10 @@ PUBLIC_TKZ_FALLBACK_URLS = {
 
 
 def default_output_base() -> Path:
-    """Return this crate's default tokenizer resource directory.
-    返回本 crate 默认 tokenizer 资源目录。
+    """Return the workspace runtime-assets tokenizer resource directory.
+    返回 workspace runtime-assets tokenizer 资源目录。
     """
-    return Path(__file__).resolve().parents[1] / "resources" / "tokenizers"
+    return workspace_root() / "crates" / "vulcan-runtime-assets" / "resources" / "tokenizers"
 
 def crate_root() -> Path:
     """Return this crate's root directory.
@@ -191,7 +191,7 @@ def parse_args() -> argparse.Namespace:
         "--output-base",
         type=Path,
         default=default_output_base(),
-        help="Tokenizer resource root; defaults to this crate's resources/tokenizers directory.",
+        help="Tokenizer resource root; defaults to crates/vulcan-runtime-assets/resources/tokenizers.",
     )
     parser.add_argument(
         "--keep-source-json",

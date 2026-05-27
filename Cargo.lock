@@ -6491,6 +6491,7 @@ dependencies = [
  "vulcan-prompt-composer",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "vulcan-token-counter",
  "vulcan-tools-manager",
  "vulcan-workbench-model",
  "vulcan-workspace-store",

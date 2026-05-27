@@ -8,10 +8,12 @@ use crate::agent_runtime::provider_stream_projection::{
     normalize_assistant_output, normalize_optional_stream_output,
 };
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
-use crate::context_budget::build_request_context_budget_snapshot;
+use crate::context_budget::build_request_context_budget_snapshot_with_estimator;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
-use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
+use vulcan_context::{
+    ContextBaseline, ContextTokenEstimator, build_provider_request_context_assembly,
+};
 use vulcan_core::types::{
     CoreEvent as CoreControllerEvent, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
@@ -22,6 +24,7 @@ use vulcan_core::types::{
 pub(crate) fn apply_latest_request_snapshot(
     preparation: &mut ExecutionPreparation,
     request_snapshot: Option<&CoreProviderRequestSnapshot>,
+    token_estimator: Option<&dyn ContextTokenEstimator>,
 ) {
     let Some(request_snapshot) = request_snapshot else {
         return;
@@ -31,7 +34,7 @@ pub(crate) fn apply_latest_request_snapshot(
         .context_budget
         .as_ref()
         .and_then(|budget| budget.observed_usage.as_ref());
-    preparation.context_budget = Some(build_request_context_budget_snapshot(
+    preparation.context_budget = Some(build_request_context_budget_snapshot_with_estimator(
         &preparation.model_blueprint.provider_id,
         &preparation.model_blueprint.model_id,
         preparation.model_blueprint.api_family(),
@@ -39,6 +42,7 @@ pub(crate) fn apply_latest_request_snapshot(
         &preparation.model_blueprint.reasoning,
         request_snapshot,
         observed_usage,
+        token_estimator,
     ));
     let context_assembly = build_provider_request_context_assembly(request_snapshot);
     preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
@@ -141,13 +145,18 @@ pub(crate) fn build_failure_terminal_events(
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
     stream_state: &mut RuntimeStreamDeltaState,
+    token_estimator: Option<&dyn ContextTokenEstimator>,
     error: String,
 ) -> Vec<ExecutionStreamEvent> {
     let mut events = Vec::new();
     if let Some(thinking_completed_event) = stream_state.complete_pending_thinking(session_id) {
         events.push(thinking_completed_event);
     }
-    apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
+    apply_latest_request_snapshot(
+        &mut preparation,
+        stream_state.latest_request_snapshot(),
+        token_estimator,
+    );
     let last_safe_conversation_state = stream_state.take_final_conversation_state();
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
     stream_state.controller_mut().mark_failed(error.clone());
@@ -181,13 +190,18 @@ pub(crate) fn build_success_terminal_events(
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
     stream_state: &mut RuntimeStreamDeltaState,
+    token_estimator: Option<&dyn ContextTokenEstimator>,
 ) -> Vec<ExecutionStreamEvent> {
     let mut events = Vec::new();
     if let Some(thinking_completed_event) = stream_state.complete_pending_thinking(session_id) {
         events.push(thinking_completed_event);
     }
 
-    apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
+    apply_latest_request_snapshot(
+        &mut preparation,
+        stream_state.latest_request_snapshot(),
+        token_estimator,
+    );
 
     let normalized_output = normalize_assistant_output(stream_state.take_assistant_output());
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
@@ -376,6 +390,7 @@ mod tests {
             Vec::new(),
             vec![String::from("warning")],
             &mut stream_state,
+            None,
         );
 
         assert!(matches!(
@@ -431,6 +446,7 @@ mod tests {
             vec![String::from("mcp-error")],
             vec![String::from("warning")],
             &mut stream_state,
+            None,
             String::from("provider failed"),
         );
 
@@ -469,7 +485,7 @@ mod tests {
             ..ContextBudgetSnapshot::default()
         });
 
-        apply_latest_request_snapshot(&mut preparation, Some(&build_request_snapshot()));
+        apply_latest_request_snapshot(&mut preparation, Some(&build_request_snapshot()), None);
 
         let context_budget = preparation
             .context_budget

@@ -369,6 +369,14 @@ else {
     Write-Host "==> No runtime system prompt catalog directory found"
 }
 
+if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "tokenizers")) {
+    Copy-DirectoryContents -Source (Join-Path $RuntimeAssetsResourcesRoot "tokenizers") -Destination (Join-Path $ResourcesOut "tokenizers") | Out-Null
+    Write-Host "==> Runtime tokenizer resources synced to $(Join-Path $ResourcesOut 'tokenizers')\"
+}
+else {
+    Write-Host "==> No runtime tokenizer resource directory found"
+}
+
 if (Test-Path -LiteralPath $AppLicenseResourcesRoot) {
     Sync-ApplicationLicenseResources `
         -Source $AppLicenseResourcesRoot `

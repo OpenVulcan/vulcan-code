@@ -1,6 +1,6 @@
 # vulcan-token-counter
 
-`vulcan-token-counter` 是一个独立的上下文预算 crate。它现在采用“精确 `.tkz` 优先 + OpenAI 代理兜底”策略：OpenAI 模型使用 OpenAI BPE 精确统计，已内置 `.tkz` 的主流模型使用对应 tokenizer 精确统计，缺少资源的模型再使用 OpenAI BPE 代理并挂安全倍率。生产环境应由宿主把统一资源目录传给 `TokenCounter::from_assets_dir` 或 `TokenCounter::from_resources_dir`，`TokenCounter::new()` 只使用 crate 内开发资源目录作为默认值。
+`vulcan-token-counter` 是一个独立的上下文预算 crate。它现在采用“精确 `.tkz` 优先 + OpenAI 代理兜底”策略：OpenAI 模型使用 OpenAI BPE 精确统计，已内置 `.tkz` 的主流模型使用对应 tokenizer 精确统计，缺少资源的模型再使用 OpenAI BPE 代理并挂安全倍率。生产环境应由宿主把统一资源目录传给 `TokenCounter::from_assets_dir` 或 `TokenCounter::from_resources_dir`，`TokenCounter::new()` 默认使用 workspace 内 `vulcan-runtime-assets` 的 tokenizer 资源目录。
 
 ## 设计目标
 
@@ -29,13 +29,13 @@
 默认 `wordchipper` 后端需要两个 OpenAI `.tiktoken` 资源文件；实验性 `tokie` 后端需要对应 `.tkz` 文件：
 
 ```text
-crates/vulcan-token-counter/resources/tokenizers/openai/
+crates/vulcan-runtime-assets/resources/tokenizers/openai/
 ├── cl100k_base.tiktoken
 ├── cl100k_base.tkz
 ├── o200k_base.tiktoken
 └── o200k_base.tkz
 
-crates/vulcan-token-counter/resources/tokenizers/exact/
+crates/vulcan-runtime-assets/resources/tokenizers/exact/
 ├── deepseek/tokenizer.tkz
 ├── deepseek_r1/tokenizer.tkz
 ├── ernie/tokenizer.tkz
@@ -110,7 +110,7 @@ cargo run -p vulcan-token-counter --release --example measure -- crates/vulcan-t
 如果需要刷新或切换资源来源，使用脚本的强制重建模式：
 
 ```text
-python crates/vulcan-token-counter/scripts/fetch_tokenizers.py --force
+python scripts/fetch_tokenizers.py --force
 ```
 
 ## 为什么不再保留 HF 精确 tokenizer

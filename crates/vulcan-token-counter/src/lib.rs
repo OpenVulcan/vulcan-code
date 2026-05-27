@@ -1212,15 +1212,17 @@ impl Default for TokenCounter {
     }
 }
 
-/// Returns this crate's default tokenizer resource directory.
-/// 返回本 crate 默认 tokenizer 资源目录。
+/// Returns the workspace runtime-assets tokenizer resource directory.
+/// 返回 workspace runtime-assets tokenizer 资源目录。
 ///
 /// # Returns
 /// 返回值
-/// The `resources/tokenizers` path below this crate's manifest directory.
-/// 本 crate 清单目录下的 `resources/tokenizers` 路径。
+/// The shared `crates/vulcan-runtime-assets/resources/tokenizers` path below the workspace root.
+/// workspace 根目录下共享的 `crates/vulcan-runtime-assets/resources/tokenizers` 路径。
 pub fn default_tokenizer_resource_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("vulcan-runtime-assets")
         .join("resources")
         .join("tokenizers")
 }
@@ -1230,8 +1232,8 @@ pub fn default_tokenizer_resource_dir() -> PathBuf {
 ///
 /// # Returns
 /// 返回值
-/// The `resources/tokenizers/openai` path below this crate's manifest directory.
-/// 本 crate 清单目录下的 `resources/tokenizers/openai` 路径。
+/// The shared `resources/tokenizers/openai` directory below runtime-assets.
+/// runtime-assets 下共享的 `resources/tokenizers/openai` 目录。
 pub fn default_openai_resource_dir() -> PathBuf {
     default_tokenizer_resource_dir().join("openai")
 }

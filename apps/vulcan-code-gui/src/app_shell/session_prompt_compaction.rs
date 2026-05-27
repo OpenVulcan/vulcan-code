@@ -6,6 +6,7 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::agent_runtime::{
     ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
 };
@@ -68,6 +69,9 @@ pub(super) struct PromptCompactionJobRequest {
     /// Shared command-session runtime reused by the execution foundation.
     /// 供执行基础架构复用的共享命令会话运行时。
     pub command_session_runtime: Arc<CommandSessionRuntime>,
+    /// Shared token budget runtime reused by the execution foundation.
+    /// 供执行基础架构复用的共享 Token 预算运行时。
+    pub token_budget_runtime: Arc<TokenBudgetRuntime>,
 }
 
 /// Terminal result returned by one prompt-based compaction job after the internal summary request settles.
@@ -113,6 +117,7 @@ pub(super) async fn execute_prompt_compaction_job(
         request.task_runtime,
         request.question_runtime,
         request.command_session_runtime,
+        request.token_budget_runtime,
         launch_request,
     )
     .await;

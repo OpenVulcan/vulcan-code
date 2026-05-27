@@ -6,6 +6,7 @@ use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
 use crate::provider_config::ProviderConfigurationFile;
@@ -36,6 +37,7 @@ pub(crate) fn build_runtime_preparation_resources(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
     let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
@@ -46,6 +48,7 @@ pub(crate) fn build_runtime_preparation_resources(
         task_runtime,
         question_runtime,
         command_session_runtime,
+        token_budget_runtime,
     );
 
     RuntimePreparationResources {

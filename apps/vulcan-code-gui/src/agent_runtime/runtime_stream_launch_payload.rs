@@ -7,6 +7,7 @@ use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPrep
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
 use vulcan_core::types::{
@@ -33,6 +34,9 @@ pub(crate) struct RuntimeStreamLaunch {
     /// Shared resumable task runtime reused by the current execution turn.
     /// 被当前执行回合复用的共享可恢复任务运行时。
     pub task_runtime: Arc<TaskRuntime>,
+    /// Shared token-budget runtime reused for terminal budget backfills.
+    /// 用于终态预算回填的共享 Token 预算运行时。
+    pub token_budget_runtime: Arc<TokenBudgetRuntime>,
     /// Host-owned unified tool manager used by the transport layer.
     /// 供传输层使用的宿主自有统一工具管理器。
     pub tools_manager: VulcanToolsManager,
@@ -77,6 +81,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         preparation: bootstrap.preparation,
         active_agent: bootstrap.active_agent,
         task_runtime: bootstrap.task_runtime,
+        token_budget_runtime: bootstrap.token_budget_runtime,
         tools_manager: bootstrap.tools_manager,
         resolved_tool_definitions: bootstrap.resolved_tool_definitions,
         discovery_events: bootstrap.discovery_events,
@@ -213,6 +218,9 @@ mod tests {
             preparation: build_test_preparation(),
             active_agent: None,
             task_runtime: Arc::new(TaskRuntime::new()),
+            token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
+                std::env::temp_dir(),
+            )),
             tools_manager: VulcanToolsManager::default(),
             resolved_tool_definitions: Vec::new(),
             discovery_events: Vec::new(),

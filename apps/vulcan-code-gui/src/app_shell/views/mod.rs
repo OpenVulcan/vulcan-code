@@ -2526,6 +2526,7 @@ impl VulcanWorkbench {
                     summary.configured_mcp_server_count
                 ))
                 .size(12),
+                text(summary.token_budget_status.clone()).size(12),
                 content_rows,
                 warning_rows,
             ]

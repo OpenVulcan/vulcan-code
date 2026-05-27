@@ -11,6 +11,14 @@ use vulcan_core::types::{
     ProviderRequestToolSchema as CoreProviderRequestToolSchema, ProviderUsageSnapshot,
 };
 
+/// Host-provided model-aware text token estimator used by context budget calculation.
+/// 宿主提供的模型感知文本 Token 估算器，用于上下文预算计算。
+pub trait ContextTokenEstimator: Send + Sync {
+    /// Estimates one text payload for the active model and returns `None` when the estimator cannot serve the request.
+    /// 为当前模型估算单段文本；当估算器无法处理该请求时返回 `None`。
+    fn estimate_text_tokens(&self, model_id: &str, text: &str) -> Option<usize>;
+}
+
 /// Canonical provider API family used by context budget computation.
 /// 上下文预算计算使用的规范 Provider 接口族。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,20 +182,46 @@ pub fn build_request_context_budget_snapshot(
     request_snapshot: &CoreProviderRequestSnapshot,
     observed_usage: Option<&ProviderUsageSnapshot>,
 ) -> ContextBudgetSnapshot {
+    build_request_context_budget_snapshot_with_estimator(
+        provider_id,
+        model_id,
+        api_family,
+        capabilities,
+        reasoning,
+        request_snapshot,
+        observed_usage,
+        None,
+    )
+}
+
+/// Builds one exact request-facing budget snapshot with an optional host token estimator.
+/// 使用可选宿主 Token 估算器构建一份精确面向请求的预算快照。
+pub fn build_request_context_budget_snapshot_with_estimator(
+    provider_id: &str,
+    model_id: &str,
+    api_family: ContextProviderApiFamily,
+    capabilities: &ContextBudgetCapabilities,
+    reasoning: ContextReasoningEffort,
+    request_snapshot: &CoreProviderRequestSnapshot,
+    observed_usage: Option<&ProviderUsageSnapshot>,
+    estimator: Option<&dyn ContextTokenEstimator>,
+) -> ContextBudgetSnapshot {
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
     let reserved_compaction_tokens = 0usize;
-    let estimated_system_tokens = estimate_text_tokens(&request_snapshot.system_prompt);
+    let estimated_system_tokens =
+        estimate_text_tokens_for_model(model_id, estimator, &request_snapshot.system_prompt);
     let estimated_history_tokens = request_snapshot
         .history
         .iter()
-        .map(estimate_core_message_tokens)
+        .map(|message| estimate_core_message_tokens(model_id, estimator, message))
         .sum();
-    let estimated_prompt_tokens = estimate_text_tokens(&request_snapshot.prompt);
+    let estimated_prompt_tokens =
+        estimate_text_tokens_for_model(model_id, estimator, &request_snapshot.prompt);
     let estimated_tool_tokens = request_snapshot
         .tool_schemas
         .iter()
-        .map(estimate_tool_schema_tokens)
+        .map(|schema| estimate_tool_schema_tokens(model_id, estimator, schema))
         .sum();
     let estimated_input_tokens = estimated_system_tokens
         + estimated_history_tokens
@@ -249,12 +283,40 @@ pub fn build_projected_session_context_budget_snapshot(
     visible_tool_count: usize,
     observed_usage: Option<&ProviderUsageSnapshot>,
 ) -> ContextBudgetSnapshot {
+    build_projected_session_context_budget_snapshot_with_estimator(
+        provider_id,
+        model_id,
+        api_family,
+        capabilities,
+        reasoning_effort,
+        compaction_policy,
+        projected_messages,
+        visible_tool_count,
+        observed_usage,
+        None,
+    )
+}
+
+/// Builds one compaction-facing budget snapshot with an optional host token estimator.
+/// 使用可选宿主 Token 估算器构建一份面向压缩判断的预算快照。
+pub fn build_projected_session_context_budget_snapshot_with_estimator(
+    provider_id: &str,
+    model_id: &str,
+    api_family: ContextProviderApiFamily,
+    capabilities: &ContextBudgetCapabilities,
+    reasoning_effort: ContextReasoningEffort,
+    compaction_policy: ContextCompactionPolicy,
+    projected_messages: &[CoreConversationMessage],
+    visible_tool_count: usize,
+    observed_usage: Option<&ProviderUsageSnapshot>,
+    estimator: Option<&dyn ContextTokenEstimator>,
+) -> ContextBudgetSnapshot {
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning_effort);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
     let reserved_compaction_tokens = compaction_policy.reserved;
     let estimated_history_tokens = projected_messages
         .iter()
-        .map(estimate_core_message_tokens)
+        .map(|message| estimate_core_message_tokens(model_id, estimator, message))
         .sum();
     let estimated_tool_tokens = visible_tool_count * 96usize;
     let estimated_system_tokens = 384usize;
@@ -434,18 +496,30 @@ fn resolve_output_token_reserve(capabilities: &ContextBudgetCapabilities) -> usi
     capabilities.effective_output_limit().unwrap_or(384000usize)
 }
 
-/// Estimates one provider-visible message without consulting provider-specific tokenizers.
-/// 在不依赖 Provider 专用 tokenizer 的情况下估算一条 Provider 可见消息。
-fn estimate_core_message_tokens(message: &CoreConversationMessage) -> usize {
+/// Estimates one provider-visible message with an optional model-aware estimator.
+/// 使用可选模型感知估算器估算一条 Provider 可见消息。
+fn estimate_core_message_tokens(
+    model_id: &str,
+    estimator: Option<&dyn ContextTokenEstimator>,
+    message: &CoreConversationMessage,
+) -> usize {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
-            estimate_text_tokens(text)
+            estimate_text_tokens_for_model(model_id, estimator, text)
                 + attachments
                     .iter()
                     .map(|attachment| {
                         256usize
-                            + estimate_text_tokens(&attachment.file_name)
-                            + estimate_text_tokens(&attachment.mime_type)
+                            + estimate_text_tokens_for_model(
+                                model_id,
+                                estimator,
+                                &attachment.file_name,
+                            )
+                            + estimate_text_tokens_for_model(
+                                model_id,
+                                estimator,
+                                &attachment.mime_type,
+                            )
                     })
                     .sum::<usize>()
                 + 12usize
@@ -456,42 +530,59 @@ fn estimate_core_message_tokens(message: &CoreConversationMessage) -> usize {
             tool_calls,
             ..
         } => {
-            estimate_text_tokens(text)
-                + estimate_text_tokens(reasoning)
+            estimate_text_tokens_for_model(model_id, estimator, text)
+                + estimate_text_tokens_for_model(model_id, estimator, reasoning)
                 + tool_calls
                     .iter()
                     .map(|tool_call| {
-                        estimate_text_tokens(&tool_call.tool_name)
+                        estimate_text_tokens_for_model(model_id, estimator, &tool_call.tool_name)
                             + serde_json::to_string(&tool_call.arguments)
-                                .map(|arguments| estimate_text_tokens(&arguments))
+                                .map(|arguments| {
+                                    estimate_text_tokens_for_model(model_id, estimator, &arguments)
+                                })
                                 .unwrap_or_default()
                             + 24usize
                     })
                     .sum::<usize>()
                 + 16usize
         }
-        CoreConversationPayload::ToolResult { text, .. } => estimate_text_tokens(text) + 12usize,
+        CoreConversationPayload::ToolResult { text, .. } => {
+            estimate_text_tokens_for_model(model_id, estimator, text) + 12usize
+        }
     }
 }
 
-/// Estimates one provider-visible tool schema.
-/// 估算一条 Provider 可见工具 schema。
-fn estimate_tool_schema_tokens(definition: &CoreProviderRequestToolSchema) -> usize {
-    estimate_text_tokens(&definition.id)
-        + estimate_text_tokens(&definition.name)
-        + estimate_text_tokens(&definition.description)
+/// Estimates one provider-visible tool schema with an optional model-aware estimator.
+/// 使用可选模型感知估算器估算一条 Provider 可见工具 schema。
+fn estimate_tool_schema_tokens(
+    model_id: &str,
+    estimator: Option<&dyn ContextTokenEstimator>,
+    definition: &CoreProviderRequestToolSchema,
+) -> usize {
+    estimate_text_tokens_for_model(model_id, estimator, &definition.id)
+        + estimate_text_tokens_for_model(model_id, estimator, &definition.name)
+        + estimate_text_tokens_for_model(model_id, estimator, &definition.description)
         + serde_json::to_string(&definition.parameters_schema)
-            .map(|parameters| estimate_text_tokens(&parameters))
+            .map(|parameters| estimate_text_tokens_for_model(model_id, estimator, &parameters))
             .unwrap_or_default()
         + 32usize
 }
 
-/// Estimates text tokens with the local lightweight heuristic.
-/// 使用本地轻量启发式估算文本 Token。
-fn estimate_text_tokens(text: &str) -> usize {
+/// Estimates text tokens with a host estimator and falls back to the local lightweight heuristic.
+/// 使用宿主估算器估算文本 Token，并在不可用时回退到本地轻量启发式。
+fn estimate_text_tokens_for_model(
+    model_id: &str,
+    estimator: Option<&dyn ContextTokenEstimator>,
+    text: &str,
+) -> usize {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return 0;
+    }
+    if let Some(estimated_tokens) =
+        estimator.and_then(|estimator| estimator.estimate_text_tokens(model_id, trimmed))
+    {
+        return estimated_tokens.max(1usize);
     }
     estimate_mixed_language_text_tokens(trimmed).max(1usize)
 }
@@ -552,14 +643,20 @@ mod tests {
     /// 验证中文文本按接近每个可见字符一个 Token 估算。
     #[test]
     fn estimate_text_tokens_counts_chinese_characters_one_to_one() {
-        assert_eq!(estimate_text_tokens("你好世界"), 4);
+        assert_eq!(
+            estimate_text_tokens_for_model("test-model", None, "你好世界"),
+            4
+        );
     }
 
     /// Verifies ASCII text still uses the compact four-character heuristic.
     /// 验证 ASCII 文本仍使用紧凑的四字符启发式估算。
     #[test]
     fn estimate_text_tokens_keeps_ascii_four_to_one() {
-        assert_eq!(estimate_text_tokens("abcdefgh"), 2);
+        assert_eq!(
+            estimate_text_tokens_for_model("test-model", None, "abcdefgh"),
+            2
+        );
     }
 
     /// Verifies provider-observed usage overrides local mixed-language estimates.

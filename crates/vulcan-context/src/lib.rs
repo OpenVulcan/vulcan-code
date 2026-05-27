@@ -13,8 +13,10 @@ pub use assembly::{
 };
 pub use budget::{
     ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
-    ContextReasoningEffort, apply_context_budget_anchor_baseline, build_context_budget_fingerprint,
-    build_projected_session_context_budget_snapshot, build_request_context_budget_snapshot,
+    ContextReasoningEffort, ContextTokenEstimator, apply_context_budget_anchor_baseline,
+    build_context_budget_fingerprint, build_projected_session_context_budget_snapshot,
+    build_projected_session_context_budget_snapshot_with_estimator,
+    build_request_context_budget_snapshot, build_request_context_budget_snapshot_with_estimator,
     calibrated_input_token_estimate, estimate_mixed_language_text_tokens, is_cjk_character,
     observed_input_tokens_from_usage,
 };

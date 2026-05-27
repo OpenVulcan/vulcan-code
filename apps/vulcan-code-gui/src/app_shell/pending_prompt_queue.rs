@@ -984,6 +984,7 @@ impl VulcanWorkbench {
                 self.runtime_foundation.task_runtime(),
                 self.runtime_foundation.question_runtime(),
                 self.runtime_foundation.command_session_runtime(),
+                self.runtime_foundation.token_budget_runtime(),
                 request_for_run,
             ),
             move |event| Message::RunExecutionStreamEvent { run_id, event },

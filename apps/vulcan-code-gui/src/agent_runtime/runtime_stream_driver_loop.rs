@@ -108,6 +108,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let preparation = launch.preparation;
         let active_agent = launch.active_agent;
         let task_runtime = launch.task_runtime;
+        let token_budget_runtime = launch.token_budget_runtime;
         let tools_manager = launch.tools_manager;
         let resolved_tool_definitions = launch.resolved_tool_definitions;
         let discovery_rows = launch.discovery_rows;
@@ -197,6 +198,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                 discovery_errors,
                 warnings,
                 &mut stream_state,
+                token_budget_runtime.estimator(),
                 error,
             ) {
                 yield event;
@@ -211,6 +213,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             discovery_errors,
             warnings,
             &mut stream_state,
+            token_budget_runtime.estimator(),
         ) {
             yield event;
         }

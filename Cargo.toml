@@ -52,6 +52,7 @@ vulcan-context = { path = "crates/vulcan-context" }
 vulcan-context-compaction = { path = "crates/vulcan-context-compaction" }
 vulcan-prompt-composer = { path = "crates/vulcan-prompt-composer" }
 vulcan-file-watcher = { path = "crates/vulcan-file-watcher" }
+vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vldb-controller-client = "0.2.1"
 luaskills = "=0.4.4"
 async-trait = "0.1.89"

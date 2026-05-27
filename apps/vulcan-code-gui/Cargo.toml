@@ -41,6 +41,7 @@ vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-file-watcher.workspace = true
 vulcan-prompt-composer.workspace = true
+vulcan-token-counter.workspace = true
 vldb-controller-client.workspace = true
 luaskills.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }

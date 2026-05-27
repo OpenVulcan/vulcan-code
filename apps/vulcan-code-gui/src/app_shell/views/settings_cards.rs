@@ -1572,6 +1572,7 @@ impl VulcanWorkbench {
                     summary.delegate_tool_count
                 ))
                 .size(12),
+                text(summary.token_budget_status).size(12),
                 preparation_list,
             ]
             .spacing(12),

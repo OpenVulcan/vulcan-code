@@ -793,6 +793,7 @@ impl VulcanWorkbench {
             task_runtime: self.runtime_foundation.task_runtime(),
             question_runtime: self.runtime_foundation.question_runtime(),
             command_session_runtime: self.runtime_foundation.command_session_runtime(),
+            token_budget_runtime: self.runtime_foundation.token_budget_runtime(),
         };
 
         self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
@@ -1249,7 +1250,8 @@ impl VulcanWorkbench {
                 Some(&capabilities),
             );
 
-        let mut context_budget = build_projected_session_context_budget_snapshot(
+        let token_budget_runtime = self.runtime_foundation.token_budget_runtime();
+        let mut context_budget = build_projected_session_context_budget_snapshot_with_estimator(
             &provider_id,
             &model_id,
             api_family,
@@ -1262,6 +1264,7 @@ impl VulcanWorkbench {
                 .last_successful_provider_usage
                 .as_ref()
                 .or(runtime_state_snapshot.last_provider_usage.as_ref()),
+            token_budget_runtime.estimator(),
         );
         let has_anchor_baseline = runtime_state_snapshot.last_compaction_id.is_some()
             || runtime_state_snapshot.context_start_message_id.is_some()
