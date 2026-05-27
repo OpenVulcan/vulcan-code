@@ -1423,7 +1423,11 @@ impl VulcanWorkbench {
             .as_ref()
             .filter(|preparation| selected_session_id == Some(preparation.session_id));
         let context_budget = self.visible_context_budget_snapshot.as_ref();
-        let mut request_breakdown_rows = self.composer_context_layer_usage_rows();
+        let mut request_breakdown_rows = self.composer_context_layer_usage_rows(
+            context_budget
+                .map(|context_budget| context_budget.observed_usage.is_some())
+                .unwrap_or(false),
+        );
         let mut diagnostic_rows = Vec::new();
 
         if let Some(context_budget) = context_budget {
@@ -1453,6 +1457,10 @@ impl VulcanWorkbench {
                 diagnostic_rows.extend(Self::context_budget_breakdown_rows(context_budget));
             } else {
                 diagnostic_rows.append(&mut request_breakdown_rows);
+            }
+            if has_observed_usage {
+                diagnostic_rows
+                    .push(String::from("说明：API实测为准；拆分仅按本地估算定位大户。"));
             }
             diagnostic_rows.push(format!(
                 "预留：输出 {} · 推理 {} · 压缩 {}",
@@ -1631,7 +1639,7 @@ impl VulcanWorkbench {
 
     /// Builds aggregated request-layer estimate rows reused by the context-orb tooltip.
     /// 构建供上下文圆盘提示层复用的请求层聚合估算行。
-    fn composer_context_layer_usage_rows(&self) -> Vec<String> {
+    fn composer_context_layer_usage_rows(&self, has_observed_usage: bool) -> Vec<String> {
         let selected_session_id = self.selected_session().map(|session| session.id);
         let Some(context_assembly) = self
             .last_execution_preparation
@@ -1669,6 +1677,11 @@ impl VulcanWorkbench {
             parts.push((String::from("合计"), estimate_total));
         }
 
-        Self::context_usage_part_rows("请求拆分（本地估算）", parts)
+        let prefix = if has_observed_usage {
+            "请求拆分（本地参考）"
+        } else {
+            "请求拆分（本地估算）"
+        };
+        Self::context_usage_part_rows(prefix, parts)
     }
 }
