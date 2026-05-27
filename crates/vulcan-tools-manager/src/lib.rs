@@ -800,6 +800,7 @@ fn project_gemini_node(schema: &Value) -> Option<Value> {
     insert_projected_gemini_combinator(&mut projected, object, "anyOf");
     insert_projected_gemini_combinator(&mut projected, object, "oneOf");
     insert_optional_clone(&mut projected, object, "minLength");
+    hydrate_gemini_required_combinator_branch_properties(&mut projected);
 
     if projected.get("type").and_then(Value::as_str) == Some("object")
         && !projected.contains_key("properties")
@@ -926,6 +927,76 @@ fn insert_projected_gemini_combinator(
     if !projected_values.is_empty() {
         target.insert(key.to_string(), Value::Array(projected_values));
     }
+}
+
+/// Hydrates Gemini combinator branches with only the property schemas referenced by their own `required` list.
+/// 仅用组合分支自身 `required` 列表引用到的属性 Schema 补充分支，满足 Gemini 严格校验并控制 Token 膨胀。
+fn hydrate_gemini_required_combinator_branch_properties(schema: &mut Map<String, Value>) {
+    let Some(Value::Object(parent_properties)) = schema.get("properties").cloned() else {
+        return;
+    };
+
+    for key in ["allOf", "anyOf", "oneOf"] {
+        let Some(Value::Array(branches)) = schema.get_mut(key) else {
+            continue;
+        };
+        for branch in branches {
+            hydrate_gemini_required_branch_properties(branch, &parent_properties);
+        }
+    }
+}
+
+/// Hydrates one Gemini object branch with a minimal `properties` map matching its declared required fields.
+/// 使用与必填字段匹配的最小 `properties` 映射补充单个 Gemini 对象分支。
+fn hydrate_gemini_required_branch_properties(
+    branch: &mut Value,
+    parent_properties: &Map<String, Value>,
+) {
+    let Some(branch_object) = branch.as_object_mut() else {
+        return;
+    };
+    if branch_object.get("type").and_then(Value::as_str) != Some("object") {
+        return;
+    }
+    if branch_object.contains_key("properties") {
+        return;
+    }
+
+    let required_names = branch_object
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if required_names.is_empty() {
+        return;
+    }
+
+    let mut required_properties = Map::new();
+    let mut retained_required = Vec::new();
+    for required_name in required_names {
+        let Some(property_schema) = parent_properties.get(&required_name) else {
+            continue;
+        };
+        required_properties.insert(required_name.clone(), property_schema.clone());
+        retained_required.push(Value::String(required_name));
+    }
+
+    if required_properties.is_empty() {
+        branch_object.remove("required");
+        return;
+    }
+
+    branch_object.insert(String::from("required"), Value::Array(retained_required));
+    branch_object.insert(
+        String::from("properties"),
+        Value::Object(required_properties),
+    );
 }
 
 /// Recursively normalizes one OpenAI Responses JSON schema for strict tool mode.
@@ -1400,8 +1471,8 @@ mod tests {
         );
     }
 
-    /// Verifies the Gemini projection keeps mode selectors compact while marking required-only branches as object schemas.
-    /// 验证 Gemini 投影保持模式选择器紧凑，同时将仅含 required 的分支标记为对象 Schema。
+    /// Verifies the Gemini projection keeps mode selectors compact while hydrating only required branch properties.
+    /// 验证 Gemini 投影保持模式选择器紧凑，同时仅补充分支必填字段对应的属性 Schema。
     #[test]
     fn gemini_slim_projection_keeps_oneof_branches_required_only() {
         let schema = json!({
@@ -1436,15 +1507,38 @@ mod tests {
         assert_eq!(
             projected["oneOf"],
             json!([
-                { "type": "object", "required": ["file", "replacement"] },
-                { "type": "object", "required": ["patches"] }
+                {
+                    "type": "object",
+                    "required": ["file", "replacement"],
+                    "properties": {
+                        "file": { "type": "string", "description": "Target file." },
+                        "replacement": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["patches"],
+                    "properties": {
+                        "patches": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "file": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                },
+                                "required": ["file", "replacement"]
+                            }
+                        }
+                    }
+                }
             ])
         );
-        assert!(projected["oneOf"][0]["properties"].is_null());
+        assert!(projected["oneOf"][0]["properties"]["patches"].is_null());
     }
 
-    /// Verifies nested Gemini `anyOf` required-only aliases keep explicit object types without copying parent properties.
-    /// 验证嵌套 Gemini `anyOf` 必填别名分支会保留显式对象类型且不复制父级属性。
+    /// Verifies nested Gemini `anyOf` required-only aliases hydrate minimal required properties.
+    /// 验证嵌套 Gemini `anyOf` 必填别名分支会补充最小必填属性 Schema。
     #[test]
     fn gemini_slim_projection_marks_nested_required_only_anyof_branches_as_objects() {
         let schema = json!({
@@ -1475,13 +1569,41 @@ mod tests {
         assert_eq!(
             projected["properties"]["basic"]["anyOf"],
             json!([
-                { "type": "object", "required": ["username", "password"] },
-                { "type": "object", "required": ["username", "pass"] },
-                { "type": "object", "required": ["user", "password"] },
-                { "type": "object", "required": ["user", "pass"] }
+                {
+                    "type": "object",
+                    "required": ["username", "password"],
+                    "properties": {
+                        "username": { "type": "string" },
+                        "password": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["username", "pass"],
+                    "properties": {
+                        "username": { "type": "string" },
+                        "pass": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["user", "password"],
+                    "properties": {
+                        "user": { "type": "string" },
+                        "password": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["user", "pass"],
+                    "properties": {
+                        "user": { "type": "string" },
+                        "pass": { "type": "string" }
+                    }
+                }
             ])
         );
-        assert!(projected["properties"]["basic"]["anyOf"][0]["properties"].is_null());
+        assert!(projected["properties"]["basic"]["anyOf"][0]["properties"]["user"].is_null());
     }
 
     /// Verifies the Gemini projection collapses nullable multi-type arrays without expanding them into token-heavy `anyOf` branches.

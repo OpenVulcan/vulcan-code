@@ -2433,11 +2433,34 @@ mod tests {
         assert_eq!(
             parameters["oneOf"],
             json!([
-                { "type": "object", "required": ["file", "replacement"] },
-                { "type": "object", "required": ["patches"] }
+                {
+                    "type": "object",
+                    "required": ["file", "replacement"],
+                    "properties": {
+                        "file": { "type": "string" },
+                        "replacement": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["patches"],
+                    "properties": {
+                        "patches": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "file": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                },
+                                "required": ["file", "replacement"]
+                            }
+                        }
+                    }
+                }
             ])
         );
-        assert!(parameters["oneOf"][0]["properties"].is_null());
+        assert!(parameters["oneOf"][0]["properties"]["patches"].is_null());
     }
 
     /// Verifies OpenAI-compatible error augmentation maps Gemini-style function declaration indices back to the original host tool names.

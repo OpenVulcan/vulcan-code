@@ -1140,6 +1140,58 @@ mod tests {
         );
     }
 
+    /// Verifies Gemini function declarations hydrate `anyOf` required branches with their minimal property schemas.
+    /// 验证 Gemini 函数声明会为 `anyOf` 必填分支补充最小属性 Schema。
+    #[test]
+    fn gemini_function_declaration_hydrates_required_anyof_branch_properties() {
+        let declaration =
+            provider_tool_definition_to_gemini_function_declaration(&ProviderToolDefinition {
+                name: String::from("vulcan_curl_get"),
+                description: String::from("Execute one simple GET request"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "basic": {
+                            "type": "object",
+                            "properties": {
+                                "username": { "type": "string" },
+                                "password": { "type": "string" },
+                                "user": { "type": "string" },
+                                "pass": { "type": "string" }
+                            },
+                            "anyOf": [
+                                { "required": ["username", "password"] },
+                                { "required": ["user", "pass"] }
+                            ]
+                        }
+                    }
+                }),
+            });
+
+        let parameters = declaration.parameters.expect("parameters should exist");
+        let basic = &parameters["properties"]["basic"];
+        assert_eq!(basic["anyOf"][0]["type"], json!("object"));
+        assert_eq!(
+            basic["anyOf"][0]["properties"]["username"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            basic["anyOf"][0]["properties"]["password"]["type"],
+            json!("string")
+        );
+        assert!(basic["anyOf"][0]["properties"]["user"].is_null());
+        assert_eq!(basic["anyOf"][1]["type"], json!("object"));
+        assert_eq!(
+            basic["anyOf"][1]["properties"]["user"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            basic["anyOf"][1]["properties"]["pass"]["type"],
+            json!("string")
+        );
+        assert!(basic["anyOf"][1]["properties"]["username"].is_null());
+    }
+
     /// Verifies Gemini user content includes inline data parts for audio, video, and PDF attachments in addition to images.
     /// 验证 Gemini 用户内容除了图片外，也会为音频、视频与 PDF 附件生成内联数据 Part。
     #[test]
