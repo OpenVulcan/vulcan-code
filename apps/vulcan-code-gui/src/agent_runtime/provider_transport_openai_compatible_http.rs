@@ -2433,8 +2433,8 @@ mod tests {
         assert_eq!(
             parameters["oneOf"],
             json!([
-                { "required": ["file", "replacement"] },
-                { "required": ["patches"] }
+                { "type": "object", "required": ["file", "replacement"] },
+                { "type": "object", "required": ["patches"] }
             ])
         );
         assert!(parameters["oneOf"][0]["properties"].is_null());

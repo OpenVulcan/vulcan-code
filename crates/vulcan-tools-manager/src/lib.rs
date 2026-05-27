@@ -676,6 +676,7 @@ fn infer_gemini_container_type_without_mode_branch_expansion(object: &mut Map<St
     if object.contains_key("properties")
         || object.contains_key("additionalProperties")
         || object.contains_key("patternProperties")
+        || object.contains_key("required")
     {
         object.insert(String::from("type"), Value::String(String::from("object")));
         return;
@@ -802,6 +803,7 @@ fn project_gemini_node(schema: &Value) -> Option<Value> {
 
     if projected.get("type").and_then(Value::as_str) == Some("object")
         && !projected.contains_key("properties")
+        && !projected.contains_key("required")
     {
         return None;
     }
@@ -1398,8 +1400,8 @@ mod tests {
         );
     }
 
-    /// Verifies the Gemini projection keeps mode selectors compact instead of duplicating every parent property into each branch.
-    /// 验证 Gemini 投影保持模式选择器紧凑，而不会把每个父级属性复制进每个分支。
+    /// Verifies the Gemini projection keeps mode selectors compact while marking required-only branches as object schemas.
+    /// 验证 Gemini 投影保持模式选择器紧凑，同时将仅含 required 的分支标记为对象 Schema。
     #[test]
     fn gemini_slim_projection_keeps_oneof_branches_required_only() {
         let schema = json!({
@@ -1434,11 +1436,52 @@ mod tests {
         assert_eq!(
             projected["oneOf"],
             json!([
-                { "required": ["file", "replacement"] },
-                { "required": ["patches"] }
+                { "type": "object", "required": ["file", "replacement"] },
+                { "type": "object", "required": ["patches"] }
             ])
         );
         assert!(projected["oneOf"][0]["properties"].is_null());
+    }
+
+    /// Verifies nested Gemini `anyOf` required-only aliases keep explicit object types without copying parent properties.
+    /// 验证嵌套 Gemini `anyOf` 必填别名分支会保留显式对象类型且不复制父级属性。
+    #[test]
+    fn gemini_slim_projection_marks_nested_required_only_anyof_branches_as_objects() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "basic": {
+                    "type": "object",
+                    "description": "Optional basic auth shortcut object.",
+                    "properties": {
+                        "username": { "type": "string" },
+                        "password": { "type": "string" },
+                        "user": { "type": "string" },
+                        "pass": { "type": "string" }
+                    },
+                    "anyOf": [
+                        { "required": ["username", "password"] },
+                        { "required": ["username", "pass"] },
+                        { "required": ["user", "password"] },
+                        { "required": ["user", "pass"] }
+                    ]
+                }
+            }
+        });
+
+        let projected =
+            project_tool_parameters_schema(&schema, VulcanToolSchemaProjectionProfile::GeminiSlim);
+
+        assert_eq!(
+            projected["properties"]["basic"]["anyOf"],
+            json!([
+                { "type": "object", "required": ["username", "password"] },
+                { "type": "object", "required": ["username", "pass"] },
+                { "type": "object", "required": ["user", "password"] },
+                { "type": "object", "required": ["user", "pass"] }
+            ])
+        );
+        assert!(projected["properties"]["basic"]["anyOf"][0]["properties"].is_null());
     }
 
     /// Verifies the Gemini projection collapses nullable multi-type arrays without expanding them into token-heavy `anyOf` branches.
