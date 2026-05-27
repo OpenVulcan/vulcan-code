@@ -16,9 +16,7 @@ use crate::agent_runtime::provider_protocol_gemini::{
     GeminiTool, GeminiToolConfig, build_gemini_provider_message_state,
     parse_gemini_provider_message_state,
 };
-use crate::agent_runtime::provider_protocol_tool_definition::{
-    ProviderToolDefinition, normalize_provider_tool_parameters_schema,
-};
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_json_content_type, ensure_string_header,
     format_standard_error_response,
@@ -43,6 +41,7 @@ use vulcan_core::types::{
     ProviderTurnResponse as CoreProviderTurnResponse,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
 /// Default Google Gemini REST base URL used by the host-owned direct transport.
 /// 宿主自有直连传输使用的默认 Google Gemini REST 基础地址。
@@ -587,8 +586,10 @@ fn core_tool_call_to_gemini_function_call(
 fn provider_tool_definition_to_gemini_function_declaration(
     definition: &ProviderToolDefinition,
 ) -> GeminiFunctionDeclaration {
-    let mut parameters = definition.parameters.clone();
-    normalize_provider_tool_parameters_schema(&mut parameters);
+    let parameters = project_tool_parameters_schema(
+        &definition.parameters,
+        VulcanToolSchemaProjectionProfile::GeminiSlim,
+    );
 
     GeminiFunctionDeclaration {
         name: definition.name.clone(),

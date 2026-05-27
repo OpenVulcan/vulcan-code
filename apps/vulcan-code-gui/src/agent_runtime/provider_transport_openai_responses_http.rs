@@ -12,9 +12,7 @@ use crate::agent_runtime::provider_protocol_bridge::{
 use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
-use crate::agent_runtime::provider_protocol_tool_definition::{
-    ProviderToolDefinition, normalize_provider_tool_parameters_schema,
-};
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
     ensure_json_content_type, format_standard_error_response,
@@ -37,6 +35,7 @@ use vulcan_core::types::{
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
 /// Minimal OpenAI Responses top-level error payload decoded from one failed HTTP response or SSE error event.
 /// 从单个失败 HTTP 响应或 SSE 错误事件解码出的最小 OpenAI Responses 顶层错误载荷。
@@ -685,9 +684,10 @@ fn core_tool_call_to_openai_responses_item(tool_call: &CoreConversationToolCall)
 /// Converts one host-owned provider tool definition into one OpenAI Responses function-tool schema object with strict schema normalization.
 /// 将一条宿主自有 Provider 工具定义转换为一条启用严格 schema 规范化的 OpenAI Responses 函数工具对象。
 fn provider_tool_definition_to_openai_responses_tool(definition: &ProviderToolDefinition) -> Value {
-    let mut parameters = definition.parameters.clone();
-    normalize_provider_tool_parameters_schema(&mut parameters);
-    sanitize_openai_responses_schema(&mut parameters);
+    let parameters = project_tool_parameters_schema(
+        &definition.parameters,
+        VulcanToolSchemaProjectionProfile::OpenAiResponsesStrict,
+    );
 
     json!({
         "type": "function",
@@ -696,68 +696,6 @@ fn provider_tool_definition_to_openai_responses_tool(definition: &ProviderToolDe
         "parameters": parameters,
         "strict": true
     })
-}
-
-/// Recursively normalizes one OpenAI Responses JSON schema so strict tool mode satisfies OpenAI object restrictions.
-/// 递归规范化一份 OpenAI Responses JSON Schema，使严格工具模式满足 OpenAI 的对象限制。
-fn sanitize_openai_responses_schema(schema: &mut Value) {
-    if let Value::Object(object) = schema {
-        if object.contains_key("$ref") {
-            object.retain(|key, _| key == "$ref");
-            return;
-        }
-
-        let is_object_schema = object.get("type") == Some(&Value::String(String::from("object")))
-            || object.contains_key("properties");
-
-        if is_object_schema && !object.contains_key("additionalProperties") {
-            object.insert(String::from("additionalProperties"), Value::Bool(false));
-        }
-
-        if let Some(Value::Object(properties)) = object.get("properties") {
-            object.insert(
-                String::from("required"),
-                Value::Array(properties.keys().cloned().map(Value::String).collect()),
-            );
-        }
-
-        if let Some(Value::Object(definitions)) = object.get_mut("$defs") {
-            for value in definitions.values_mut() {
-                sanitize_openai_responses_schema(value);
-            }
-        }
-
-        if let Some(Value::Object(properties)) = object.get_mut("properties") {
-            for value in properties.values_mut() {
-                sanitize_openai_responses_schema(value);
-            }
-        }
-
-        if let Some(items) = object.get_mut("items") {
-            sanitize_openai_responses_schema(items);
-        }
-
-        if let Some(one_of) = object.remove("oneOf") {
-            match object.get_mut("anyOf") {
-                Some(Value::Array(existing)) => {
-                    if let Value::Array(mut incoming) = one_of {
-                        existing.append(&mut incoming);
-                    }
-                }
-                _ => {
-                    object.insert(String::from("anyOf"), one_of);
-                }
-            }
-        }
-
-        for key in ["anyOf", "oneOf", "allOf"] {
-            if let Some(Value::Array(variants)) = object.get_mut(key) {
-                for variant in variants {
-                    sanitize_openai_responses_schema(variant);
-                }
-            }
-        }
-    }
 }
 
 /// Serializes one tool-arguments JSON value into the string form expected inside OpenAI Responses function-call items.
@@ -990,7 +928,7 @@ where
 mod tests {
     use super::{
         build_openai_responses_request_payload, build_openai_responses_turn_response,
-        sanitize_openai_responses_schema, synthesize_openai_responses_fallback_response,
+        synthesize_openai_responses_fallback_response,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -1004,6 +942,7 @@ mod tests {
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
+    use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
     /// Builds one temporary attachment used by OpenAI Responses multimodal tests.
     /// 构建一条供 OpenAI Responses 多模态测试使用的临时附件。
@@ -1490,7 +1429,7 @@ mod tests {
     /// 验证 schema 规范化会递归补齐 OpenAI 严格工具要求，并保留 `$ref` 的独占性。
     #[test]
     fn sanitize_schema_adds_strict_openai_constraints() {
-        let mut schema = json!({
+        let schema = json!({
             "type": "object",
             "properties": {
                 "location": {
@@ -1508,7 +1447,10 @@ mod tests {
             }
         });
 
-        sanitize_openai_responses_schema(&mut schema);
+        let schema = project_tool_parameters_schema(
+            &schema,
+            VulcanToolSchemaProjectionProfile::OpenAiResponsesStrict,
+        );
 
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"][0], "location");

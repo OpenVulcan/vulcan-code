@@ -19,9 +19,7 @@ use crate::agent_runtime::provider_protocol_openai_compatible::{
     finalize_pending_tool_call, normalize_first_choice_chunk,
     should_evict_distinct_named_tool_call, tool_call_chunks,
 };
-use crate::agent_runtime::provider_protocol_tool_definition::{
-    ProviderToolDefinition, normalize_provider_tool_parameters_schema,
-};
+use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
     ensure_json_content_type, ensure_string_header, format_standard_error_response,
@@ -47,6 +45,10 @@ use vulcan_core::types::{
     ConversationToolCall as CoreConversationToolCall, CoreError as VulcanCoreError,
     ProviderTurnDelta as CoreProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
+};
+use vulcan_tools_manager::{
+    VulcanToolSchemaProjectionContext, VulcanToolSchemaProjectionProfile,
+    project_tool_parameters_schema, resolve_tool_schema_projection_profile,
 };
 
 /// Protocol tag stored inside provider_message_state for OpenAI-compatible native assistant payload replays.
@@ -669,6 +671,13 @@ fn build_openai_compatible_request_payload(
     } = request;
     let usage_policy =
         resolve_openai_compatible_streaming_usage_policy(snapshot.provider_id.as_str());
+    let schema_projection_profile =
+        resolve_tool_schema_projection_profile(&VulcanToolSchemaProjectionContext {
+            provider_id: snapshot.provider_id.as_str(),
+            api_family_key: "openai-chat-compatible",
+            model_id,
+            additional_params: snapshot.additional_params.as_ref(),
+        });
 
     let system_prompt = provider_fallback_system_prompt(&snapshot);
     let mut payload = match snapshot.additional_params {
@@ -717,11 +726,12 @@ fn build_openai_compatible_request_payload(
             .remove("tools")
             .and_then(|value| value.as_array().cloned())
             .unwrap_or_default();
-        tools.extend(
-            provider_tool_definitions
-                .iter()
-                .map(provider_tool_definition_to_openai_compatible_tool),
-        );
+        tools.extend(provider_tool_definitions.iter().map(|definition| {
+            provider_tool_definition_to_openai_compatible_tool(
+                definition,
+                schema_projection_profile,
+            )
+        }));
         payload.insert(String::from("tools"), Value::Array(tools));
     }
 
@@ -902,9 +912,10 @@ fn core_tool_call_to_openai_compatible_tool_call(tool_call: &CoreConversationToo
 /// 将一条宿主自有 Provider 工具定义转换为一条 OpenAI 兼容工具 schema 对象。
 fn provider_tool_definition_to_openai_compatible_tool(
     definition: &ProviderToolDefinition,
+    schema_projection_profile: VulcanToolSchemaProjectionProfile,
 ) -> Value {
-    let mut parameters = definition.parameters.clone();
-    normalize_provider_tool_parameters_schema(&mut parameters);
+    let parameters =
+        project_tool_parameters_schema(&definition.parameters, schema_projection_profile);
 
     json!({
         "type": "function",
@@ -1382,6 +1393,7 @@ mod tests {
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     };
+    use vulcan_tools_manager::VulcanToolSchemaProjectionProfile;
 
     /// Builds one temporary attachment used by multimodal transport tests.
     /// 构建一条供多模态传输测试使用的临时附件。
@@ -2318,24 +2330,27 @@ mod tests {
     /// 验证 OpenAI 兼容函数工具转换会补齐显式数组与嵌套对象类型，以便 Gemini 背后的代理路由能够校验宿主 schema。
     #[test]
     fn openai_compatible_tool_conversion_normalizes_nested_container_types() {
-        let tool = provider_tool_definition_to_openai_compatible_tool(&ProviderToolDefinition {
-            name: String::from("read_nodes"),
-            description: String::from("Read structured nodes"),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "nodes": {
-                        "items": {
-                            "properties": {
-                                "file": { "type": "string" },
-                                "selector": { "type": "string" }
-                            },
-                            "required": ["file", "selector"]
+        let tool = provider_tool_definition_to_openai_compatible_tool(
+            &ProviderToolDefinition {
+                name: String::from("read_nodes"),
+                description: String::from("Read structured nodes"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "nodes": {
+                            "items": {
+                                "properties": {
+                                    "file": { "type": "string" },
+                                    "selector": { "type": "string" }
+                                },
+                                "required": ["file", "selector"]
+                            }
                         }
                     }
-                }
-            }),
-        });
+                }),
+            },
+            VulcanToolSchemaProjectionProfile::StrictContainer,
+        );
 
         assert_eq!(
             tool["function"]["parameters"]["properties"]["nodes"]["type"],
@@ -2345,6 +2360,84 @@ mod tests {
             tool["function"]["parameters"]["properties"]["nodes"]["items"]["type"],
             json!("object")
         );
+    }
+
+    /// Verifies OpenRouter Gemini-family models use the compact Gemini schema projection in the final wire payload.
+    /// 验证 OpenRouter 的 Gemini 模型会在最终线协议载荷中使用紧凑 Gemini Schema 投影。
+    #[test]
+    fn openrouter_gemini_payload_uses_compact_schema_projection() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("openrouter"),
+                model_id: String::from("google/gemini-2.5-pro"),
+                system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt"),
+                ),
+                prompt: String::from("test request"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("test request"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload(
+            "google/gemini-2.5-pro",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("vulcan_codekit_patch"),
+                description: String::from("Patch function nodes"),
+                parameters: json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "file": { "type": "string" },
+                        "replacement": { "type": "string" },
+                        "patches": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "file": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                },
+                                "required": ["file", "replacement"]
+                            }
+                        }
+                    },
+                    "oneOf": [
+                        { "required": ["file", "replacement"] },
+                        { "required": ["patches"] }
+                    ]
+                }),
+            }],
+            true,
+        )
+        .expect("payload should build");
+
+        let parameters = &payload["tools"][0]["function"]["parameters"];
+        assert!(parameters["additionalProperties"].is_null());
+        assert_eq!(
+            parameters["oneOf"],
+            json!([
+                { "required": ["file", "replacement"] },
+                { "required": ["patches"] }
+            ])
+        );
+        assert!(parameters["oneOf"][0]["properties"].is_null());
     }
 
     /// Verifies OpenAI-compatible error augmentation maps Gemini-style function declaration indices back to the original host tool names.
