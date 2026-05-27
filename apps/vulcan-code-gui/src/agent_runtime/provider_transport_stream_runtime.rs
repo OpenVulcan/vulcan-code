@@ -11,6 +11,9 @@ use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender
 use crate::agent_runtime::provider_transport_request_budget::{
     BudgetCheckedStreamingAdapter, ProviderRequestBudgetGuard,
 };
+use crate::agent_runtime::provider_transport_retry::{
+    ProviderRetryPolicy, provider_delta_makes_retry_unsafe,
+};
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRuntimeContext;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -19,6 +22,7 @@ use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
 use async_stream::stream;
 use reqwest::header::HeaderMap;
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use vulcan_core::controller::VulcanCoreController;
@@ -62,6 +66,7 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
     provider_label: String,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
+    retry_policy: ProviderRetryPolicy,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<
@@ -75,65 +80,132 @@ where
 {
     Box::pin(stream! {
         let provider_factory = Arc::new(provider_factory);
-        let provider_label_for_task = provider_label.clone();
         let provider_label_for_join = provider_label.clone();
         let (live_sender, mut live_receiver) =
             unbounded_channel::<Result<ProviderStreamDelta, String>>();
         let task_sender = live_sender.clone();
-        let mut controller = VulcanCoreController::new(controller_config.clone(), core_snapshot);
-        let provider_adapter = BudgetCheckedStreamingAdapter::new(
-            provider_factory(live_sender.clone()),
-            request_budget_guard.clone(),
-        );
-        let tool_executor =
-            StreamingRuntimeToolExecutor::new(runtime_bridge, live_sender.clone());
-        let task_backend_guard = task_runtime.install_backend(
-            session_id,
-            build_task_execution_handler(
-                Arc::clone(&task_runtime),
-                Arc::clone(&provider_factory),
-                controller_config,
-                tools_manager,
-                resolved_tool_definitions,
-                live_sender.clone(),
-                provider_label.clone(),
-            ),
-        );
         let controller_prompt = prompt.clone();
         let controller_task = tokio::spawn(async move {
-            let _task_backend_guard = task_backend_guard;
-            let tool_policy = AllowAllToolPolicy;
-            match controller
-                .run_user_turn_streaming(
-                    &provider_adapter,
-                    &tool_executor,
-                    &tool_policy,
-                    controller_prompt,
-                )
-                .await
-            {
-                Ok(_) => {
-                    let last_successful_provider_usage =
-                        controller.last_successful_provider_usage().cloned();
-                    let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
-                        core_snapshot_to_session_conversation_state(controller.snapshot()),
-                        last_successful_provider_usage,
-                    )));
+            let mut completed_retries = 0u32;
+            loop {
+                let (attempt_sender, mut attempt_receiver) =
+                    unbounded_channel::<Result<ProviderStreamDelta, String>>();
+                let mut controller =
+                    VulcanCoreController::new(controller_config.clone(), core_snapshot.clone());
+                let provider_adapter = BudgetCheckedStreamingAdapter::new(
+                    provider_factory(attempt_sender.clone()),
+                    request_budget_guard.clone(),
+                );
+                let tool_executor =
+                    StreamingRuntimeToolExecutor::new(Arc::clone(&runtime_bridge), attempt_sender.clone());
+                let task_backend_guard = task_runtime.install_backend(
+                    session_id,
+                    build_task_execution_handler(
+                        Arc::clone(&task_runtime),
+                        Arc::clone(&provider_factory),
+                        controller_config.clone(),
+                        Arc::clone(&tools_manager),
+                        resolved_tool_definitions.clone(),
+                        attempt_sender.clone(),
+                        provider_label.clone(),
+                    ),
+                );
+                let tool_policy = AllowAllToolPolicy;
+                let mut unsafe_delta_seen = false;
+                let attempt_result = {
+                    let run_future = controller.run_user_turn_streaming(
+                        &provider_adapter,
+                        &tool_executor,
+                        &tool_policy,
+                        controller_prompt.clone(),
+                    );
+                    tokio::pin!(run_future);
+                    loop {
+                        tokio::select! {
+                            maybe_item = attempt_receiver.recv() => {
+                                if let Some(item) = maybe_item {
+                                    if let Ok(delta) = &item {
+                                        unsafe_delta_seen |= provider_delta_makes_retry_unsafe(delta);
+                                    }
+                                    let _ = task_sender.send(item);
+                                }
+                            }
+                            result = &mut run_future => {
+                                break result;
+                            }
+                        }
+                    }
+                };
+                drop(task_backend_guard);
+
+                while let Ok(item) = attempt_receiver.try_recv() {
+                    if let Ok(delta) = &item {
+                        unsafe_delta_seen |= provider_delta_makes_retry_unsafe(delta);
+                    }
+                    let _ = task_sender.send(item);
                 }
-                Err(error) => {
-                    let last_successful_provider_usage =
-                        controller.last_successful_provider_usage().cloned();
-                    // Preserve only the controller snapshot before the terminal error is reported.
-                    // 只保留终态错误上报前的控制器快照，避免把损坏调用的流式输出写入上下文。
-                    let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
-                        core_snapshot_to_session_conversation_state(controller.snapshot()),
-                        last_successful_provider_usage,
-                    )));
-                    let _ = task_sender.send(Err(format!(
-                        "{}流式执行失败：{}。",
-                        provider_label_for_task,
-                        error
-                    )));
+
+                match attempt_result {
+                    Ok(_) => {
+                        let last_successful_provider_usage =
+                            controller.last_successful_provider_usage().cloned();
+                        let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
+                            core_snapshot_to_session_conversation_state(controller.snapshot()),
+                            last_successful_provider_usage,
+                        )));
+                        break;
+                    }
+                    Err(error) => {
+                        if let Some(decision) =
+                            retry_policy.next_retry(&error, completed_retries, unsafe_delta_seen)
+                        {
+                            completed_retries += 1;
+                            let delay_ms = decision.delay.as_millis() as u64;
+                            let retry_event = crate::agent_runtime::events::RuntimeEvent::new(
+                                crate::agent_runtime::events::RuntimeEventKind::Retrying,
+                                "Provider 自动重试",
+                                format!(
+                                    "{} 第 {}/{} 次重试将在 {} ms 后开始：{}",
+                                    provider_label,
+                                    decision.retry_number,
+                                    decision.max_retries,
+                                    delay_ms,
+                                    decision.reason
+                                ),
+                            )
+                            .with_metadata(Some(json!({
+                                "attempt": decision.retry_number,
+                                "max_retries": decision.max_retries,
+                                "delay_ms": delay_ms,
+                                "reason": decision.reason,
+                            })));
+                            // Stop retrying when the GUI/runtime consumer has already dropped this stream.
+                            // 当 GUI/运行时消费端已经丢弃当前流时，停止继续后台重试。
+                            if task_sender
+                                .send(Ok(ProviderStreamDelta::RuntimeEvent(retry_event)))
+                                .is_err()
+                            {
+                                break;
+                            }
+                            tokio::time::sleep(decision.delay).await;
+                            continue;
+                        }
+
+                        let last_successful_provider_usage =
+                            controller.last_successful_provider_usage().cloned();
+                        // Preserve only the controller snapshot before the terminal error is reported.
+                        // 只保留终态错误上报前的控制器快照，避免把损坏调用的流式输出写入上下文。
+                        let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
+                            core_snapshot_to_session_conversation_state(controller.snapshot()),
+                            last_successful_provider_usage,
+                        )));
+                        let _ = task_sender.send(Err(format!(
+                            "{}流式执行失败：{}。",
+                            provider_label,
+                            error
+                        )));
+                        break;
+                    }
                 }
             }
         });
@@ -194,6 +266,7 @@ where
                 provider_tool_definitions,
             },
         request_budget_guard,
+        retry_policy,
     } = prepared_runtime_inputs;
 
     let adapter_inputs = PreparedProviderTransportAdapterInputs {
@@ -215,5 +288,6 @@ where
         runtime_bridge,
         provider_label,
         request_budget_guard,
+        retry_policy,
     )
 }

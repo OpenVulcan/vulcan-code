@@ -754,6 +754,13 @@ impl VulcanWorkbench {
         Ok(status_message)
     }
 
+    /// Persists the current provider retry configuration back into the shared configuration file.
+    /// 将当前 Provider 重试配置持久化回共享 Provider 配置文件。
+    pub(super) fn persist_provider_retry_configuration(&mut self) -> Result<(), String> {
+        provider_config::save_configuration_file(&self.provider_configuration)
+            .map_err(|error| format!("保存 Provider 重试配置失败：{error}"))
+    }
+
     /// Persists prompt-composer configuration back into the shared provider configuration file.
     /// 将提示词组合配置持久化回共享 Provider 配置文件。
     pub(super) fn persist_prompt_configuration(&mut self) -> Result<(), String> {

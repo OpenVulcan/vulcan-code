@@ -12,6 +12,7 @@ use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
+use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::provider_transport_wire_capture::{
     PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY, provider_request_dry_run_enabled,
 };
@@ -167,6 +168,11 @@ fn execute_provider_prompt_stream_with_capture_mode(
             token_budget_runtime,
         )
     });
+    let retry_policy = if capture_only {
+        ProviderRetryPolicy::disabled()
+    } else {
+        ProviderRetryPolicy::from_config(&config.retry)
+    };
 
     execute_provider_transport_stream(build_provider_transport_execution_request(
         preparation.model_blueprint.runtime_kind,
@@ -189,5 +195,6 @@ fn execute_provider_prompt_stream_with_capture_mode(
         additional_params,
         preparation.model_blueprint.interleaved_reasoning.clone(),
         request_budget_guard,
+        retry_policy,
     ))
 }

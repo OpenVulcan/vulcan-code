@@ -6,6 +6,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
     normalize_optional_base_url, prepare_provider_transport_runtime_inputs,
 };
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
+use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
@@ -38,6 +39,7 @@ pub(crate) fn execute_openai_responses_stream(
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
+    retry_policy: ProviderRetryPolicy,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let prepared_runtime_inputs = prepare_provider_transport_runtime_inputs(
@@ -54,6 +56,7 @@ pub(crate) fn execute_openai_responses_stream(
         session_id,
         task_runtime,
         request_budget_guard,
+        retry_policy,
     );
     let base_url = normalize_optional_base_url(base_url);
 

@@ -231,6 +231,64 @@ pub(crate) fn format_standard_error_response(status: StatusCode, body: &str) -> 
     segments.join(" | ")
 }
 
+/// Formats one provider HTTP error response and appends retry-related headers when present.
+/// 格式化单条 Provider HTTP 错误响应，并在存在时追加重试相关响应头。
+pub(crate) fn format_standard_error_response_with_headers(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &str,
+) -> String {
+    let mut message = format_standard_error_response(status, body);
+    if let Some(retry_after_ms) = retry_after_millis_from_headers(headers) {
+        message.push_str(&format!(" | retry_after_ms={retry_after_ms}"));
+    }
+    if let Some(request_id) = request_id_from_headers(headers) {
+        message.push_str(&format!(" | request_id={request_id}"));
+    }
+    message
+}
+
+/// Extracts a retry-after delay from provider response headers in milliseconds.
+/// 从 Provider 响应头中提取以毫秒为单位的 retry-after 等待时间。
+pub(crate) fn retry_after_millis_from_headers(headers: &HeaderMap) -> Option<u64> {
+    if let Some(value) = header_to_string(headers, "retry-after-ms")
+        && let Ok(parsed) = value.parse::<f64>()
+    {
+        return Some(parsed.max(0.0).round() as u64);
+    }
+    let value = header_to_string(headers, "retry-after")?;
+    if let Ok(seconds) = value.parse::<f64>() {
+        return Some((seconds.max(0.0) * 1000.0).ceil() as u64);
+    }
+    None
+}
+
+/// Extracts one provider request id from common response-header names.
+/// 从常见响应头名称中提取一条 Provider 请求标识。
+fn request_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    [
+        "x-request-id",
+        "request-id",
+        "x-amzn-requestid",
+        "x-amz-request-id",
+        "x-goog-request-id",
+        "cf-ray",
+    ]
+    .iter()
+    .find_map(|name| header_to_string(headers, name))
+}
+
+/// Converts one header value to a displayable string.
+/// 将单个响应头取值转换为可展示字符串。
+fn header_to_string(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 /// Converts one JSON error fragment into a single-line display string while preserving non-string values through compact JSON serialization.
 /// 将单个 JSON 错误片段转换为单行展示字符串，并通过紧凑 JSON 序列化保留非字符串取值。
 fn json_value_to_error_text(value: &Value) -> Option<String> {

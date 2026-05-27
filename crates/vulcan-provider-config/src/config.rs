@@ -1579,6 +1579,129 @@ pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS: [usize; 4] = [20, 30, 40, 5
 /// 当共享配置文件未指定覆盖值时使用的默认转录轮次分页大小。
 pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT: usize = 30;
 
+/// Persisted provider retry behavior shared by provider transports.
+/// 由 Provider 传输链路共享的持久化请求重试行为配置。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedProviderRetryConfiguration {
+    /// Whether automatic retry is enabled for retryable provider failures.
+    /// 是否为可重试的 Provider 失败启用自动重试。
+    #[serde(default = "default_provider_retry_enabled")]
+    pub enabled: bool,
+    /// Maximum number of retries after the initial request attempt.
+    /// 初始请求失败后允许追加重试的最大次数。
+    #[serde(rename = "maxRetries", default = "default_provider_retry_max_retries")]
+    pub max_retries: u32,
+    /// Initial retry delay in milliseconds before exponential backoff is applied.
+    /// 应用指数退避前的初始重试等待毫秒数。
+    #[serde(
+        rename = "initialDelayMs",
+        default = "default_provider_retry_initial_delay_ms"
+    )]
+    pub initial_delay_ms: u64,
+    /// Maximum retry delay in milliseconds when no provider header asks for a longer wait.
+    /// 在没有 Provider 响应头要求更久等待时使用的最大重试等待毫秒数。
+    #[serde(rename = "maxDelayMs", default = "default_provider_retry_max_delay_ms")]
+    pub max_delay_ms: u64,
+    /// Exponential backoff multiplier applied after each failed attempt.
+    /// 每次失败后应用的指数退避倍数。
+    #[serde(
+        rename = "backoffFactor",
+        default = "default_provider_retry_backoff_factor"
+    )]
+    pub backoff_factor: f64,
+    /// Deterministic jitter percentage used to avoid synchronized retry bursts.
+    /// 用于避免同步重试尖峰的确定性抖动百分比。
+    #[serde(
+        rename = "jitterPercent",
+        default = "default_provider_retry_jitter_percent"
+    )]
+    pub jitter_percent: u8,
+    /// Whether `Retry-After` style provider hints should override local backoff.
+    /// 是否允许 `Retry-After` 类型的 Provider 提示覆盖本地退避时间。
+    #[serde(
+        rename = "respectRetryAfter",
+        default = "default_provider_retry_respect_retry_after"
+    )]
+    pub respect_retry_after: bool,
+    /// Whether HTTP 429 should be retried when it is not a quota-depleted failure.
+    /// 当 HTTP 429 不是配额耗尽错误时是否允许重试。
+    #[serde(rename = "retry429", default = "default_provider_retry_429")]
+    pub retry_429: bool,
+}
+
+impl Default for PersistedProviderRetryConfiguration {
+    /// Builds the safe default provider retry configuration.
+    /// 构建安全的默认 Provider 重试配置。
+    fn default() -> Self {
+        Self {
+            enabled: default_provider_retry_enabled(),
+            max_retries: default_provider_retry_max_retries(),
+            initial_delay_ms: default_provider_retry_initial_delay_ms(),
+            max_delay_ms: default_provider_retry_max_delay_ms(),
+            backoff_factor: default_provider_retry_backoff_factor(),
+            jitter_percent: default_provider_retry_jitter_percent(),
+            respect_retry_after: default_provider_retry_respect_retry_after(),
+            retry_429: default_provider_retry_429(),
+        }
+    }
+}
+
+impl PersistedProviderRetryConfiguration {
+    /// Returns whether the persisted retry block is equal to the built-in default.
+    /// 返回当前持久化重试配置块是否等于内置默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Returns the default automatic provider retry enablement.
+/// 返回默认的 Provider 自动重试启用状态。
+fn default_provider_retry_enabled() -> bool {
+    true
+}
+
+/// Returns the default maximum provider retry count.
+/// 返回默认的 Provider 最大重试次数。
+fn default_provider_retry_max_retries() -> u32 {
+    5
+}
+
+/// Returns the default initial provider retry delay in milliseconds.
+/// 返回默认的 Provider 初始重试等待毫秒数。
+fn default_provider_retry_initial_delay_ms() -> u64 {
+    2_000
+}
+
+/// Returns the default maximum provider retry delay in milliseconds.
+/// 返回默认的 Provider 最大重试等待毫秒数。
+fn default_provider_retry_max_delay_ms() -> u64 {
+    30_000
+}
+
+/// Returns the default provider retry exponential backoff factor.
+/// 返回默认的 Provider 重试指数退避倍数。
+fn default_provider_retry_backoff_factor() -> f64 {
+    2.0
+}
+
+/// Returns the default deterministic provider retry jitter percentage.
+/// 返回默认的 Provider 重试确定性抖动百分比。
+fn default_provider_retry_jitter_percent() -> u8 {
+    20
+}
+
+/// Returns the default provider retry-after handling switch.
+/// 返回默认的 Provider Retry-After 处理开关。
+fn default_provider_retry_respect_retry_after() -> bool {
+    true
+}
+
+/// Returns the default provider HTTP 429 retry switch.
+/// 返回默认的 Provider HTTP 429 重试开关。
+fn default_provider_retry_429() -> bool {
+    true
+}
+
 /// Normalizes one persisted transcript turn-page size to the supported fixed presets.
 /// 将一条持久化转录轮次分页大小归一化为受支持的固定预设。
 pub fn normalize_session_transcript_turn_page_size(value: Option<usize>) -> usize {
@@ -1616,6 +1739,13 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_transcript_turn_page_size: Option<usize>,
+    /// Persisted provider retry behavior used by real provider dispatches.
+    /// 真实 Provider 分发使用的持久化请求重试行为。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedProviderRetryConfiguration::is_default"
+    )]
+    pub retry: PersistedProviderRetryConfiguration,
     /// Remembered default command shell selected by the user to override host-side `auto` resolution.
     /// 由用户选择并记忆、用于覆盖宿主侧 `auto` 解析的默认命令 shell。
     #[serde(

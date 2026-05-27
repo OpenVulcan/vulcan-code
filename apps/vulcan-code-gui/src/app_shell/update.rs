@@ -2477,6 +2477,163 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
+            Message::ProviderRetryEnabledToggled(enabled) => {
+                if self.provider_configuration.retry.enabled == enabled {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.enabled = enabled;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = if enabled {
+                            String::from("Provider 自动重试已启用。")
+                        } else {
+                            String::from("Provider 自动重试已关闭。")
+                        };
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetryMaxRetriesChanged(value) => {
+                let next = value.round().clamp(0.0, 20.0) as u32;
+                if self.provider_configuration.retry.max_retries == next {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.max_retries = next;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = format!("Provider 最大重试次数已调整为 {next} 次。");
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetryInitialDelaySecondsChanged(value) => {
+                let next_ms = (value.clamp(0.1, 30.0) * 1000.0).round() as u64;
+                if self.provider_configuration.retry.initial_delay_ms == next_ms {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.initial_delay_ms = next_ms;
+                if self.provider_configuration.retry.max_delay_ms < next_ms {
+                    self.provider_configuration.retry.max_delay_ms = next_ms;
+                }
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = format!(
+                            "Provider 初始重试等待已调整为 {:.1} 秒。",
+                            next_ms as f32 / 1000.0
+                        );
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetryMaxDelaySecondsChanged(value) => {
+                let min_seconds = (self.provider_configuration.retry.initial_delay_ms as f32
+                    / 1000.0)
+                    .clamp(0.1, 120.0);
+                let next_ms = (value.clamp(min_seconds, 120.0) * 1000.0).round() as u64;
+                if self.provider_configuration.retry.max_delay_ms == next_ms {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.max_delay_ms = next_ms;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = format!(
+                            "Provider 最大重试等待已调整为 {:.0} 秒。",
+                            next_ms as f32 / 1000.0
+                        );
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetryBackoffFactorChanged(value) => {
+                let next = ((value.clamp(1.0, 8.0) * 100.0).round() / 100.0) as f64;
+                if (self.provider_configuration.retry.backoff_factor - next).abs() < f64::EPSILON {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.backoff_factor = next;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = format!("Provider 重试退避倍数已调整为 {next:.2}。");
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetryJitterPercentChanged(value) => {
+                let next = value.round().clamp(0.0, 80.0) as u8;
+                if self.provider_configuration.retry.jitter_percent == next {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.jitter_percent = next;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = format!("Provider 重试抖动比例已调整为 {next}%。");
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetryRespectRetryAfterToggled(enabled) => {
+                if self.provider_configuration.retry.respect_retry_after == enabled {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.respect_retry_after = enabled;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = if enabled {
+                            String::from("Provider Retry-After 响应头处理已启用。")
+                        } else {
+                            String::from("Provider Retry-After 响应头处理已关闭。")
+                        };
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::ProviderRetry429Toggled(enabled) => {
+                if self.provider_configuration.retry.retry_429 == enabled {
+                    return Task::none();
+                }
+
+                self.provider_configuration.retry.retry_429 = enabled;
+                match self.persist_provider_retry_configuration() {
+                    Ok(()) => {
+                        self.status_message = if enabled {
+                            String::from("HTTP 429 限流重试已启用。")
+                        } else {
+                            String::from("HTTP 429 限流重试已关闭。")
+                        };
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+                Task::none()
+            }
             Message::PromptPersonalitySelected(choice) => {
                 if self.provider_configuration.prompt.personality == choice.selection {
                     return Task::none();

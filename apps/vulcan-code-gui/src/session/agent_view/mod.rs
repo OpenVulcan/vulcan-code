@@ -728,7 +728,7 @@ fn append_runtime_event_block(document: &mut AgentViewDocument, runtime_event: &
         RuntimeEventKind::DelegateStarted | RuntimeEventKind::DelegateFinished => {
             document.push_directive(build_runtime_notice_block(runtime_event, Some("delegate")));
         }
-        RuntimeEventKind::TokenDelta => {
+        RuntimeEventKind::TokenDelta | RuntimeEventKind::Retrying => {
             document.push_directive(build_runtime_notice_block(runtime_event, Some("status")));
         }
     }
@@ -810,6 +810,7 @@ fn runtime_event_kind_label(kind: RuntimeEventKind) -> &'static str {
         RuntimeEventKind::DelegateStarted => "delegate-started",
         RuntimeEventKind::DelegateFinished => "delegate-finished",
         RuntimeEventKind::Failed => "failed",
+        RuntimeEventKind::Retrying => "retrying",
     }
 }
 

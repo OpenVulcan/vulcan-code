@@ -523,6 +523,7 @@ pub(super) fn runtime_event_kind_label(kind: RuntimeEventKind) -> &'static str {
         RuntimeEventKind::DelegateStarted => "委派开始",
         RuntimeEventKind::DelegateFinished => "委派完成",
         RuntimeEventKind::Failed => "失败",
+        RuntimeEventKind::Retrying => "重试",
     }
 }
 

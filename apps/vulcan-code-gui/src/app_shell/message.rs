@@ -925,6 +925,30 @@ pub(super) enum Message {
     /// Default command shell policy selected from the settings pick list.
     /// 从设置下拉选择框中选中了默认命令 shell 策略。
     CommandShellPreferenceSelected(CommandShellPickerChoice),
+    /// Provider retry enablement toggled in runtime settings.
+    /// 在运行时设置中切换了 Provider 重试启用状态。
+    ProviderRetryEnabledToggled(bool),
+    /// Provider retry maximum retry count changed in runtime settings.
+    /// 在运行时设置中调整了 Provider 最大重试次数。
+    ProviderRetryMaxRetriesChanged(f32),
+    /// Provider retry initial delay changed in runtime settings.
+    /// 在运行时设置中调整了 Provider 初始重试等待时间。
+    ProviderRetryInitialDelaySecondsChanged(f32),
+    /// Provider retry maximum delay changed in runtime settings.
+    /// 在运行时设置中调整了 Provider 最大重试等待时间。
+    ProviderRetryMaxDelaySecondsChanged(f32),
+    /// Provider retry exponential backoff factor changed in runtime settings.
+    /// 在运行时设置中调整了 Provider 指数退避倍数。
+    ProviderRetryBackoffFactorChanged(f32),
+    /// Provider retry jitter percentage changed in runtime settings.
+    /// 在运行时设置中调整了 Provider 重试抖动比例。
+    ProviderRetryJitterPercentChanged(f32),
+    /// Provider retry-after handling toggled in runtime settings.
+    /// 在运行时设置中切换了 Provider Retry-After 处理。
+    ProviderRetryRespectRetryAfterToggled(bool),
+    /// Provider HTTP 429 retry handling toggled in runtime settings.
+    /// 在运行时设置中切换了 Provider HTTP 429 重试处理。
+    ProviderRetry429Toggled(bool),
     /// Prompt-composer personality selected from the settings pick list.
     /// 从设置下拉选择框中选择了提示词组合人格。
     PromptPersonalitySelected(PromptPersonalityChoice),

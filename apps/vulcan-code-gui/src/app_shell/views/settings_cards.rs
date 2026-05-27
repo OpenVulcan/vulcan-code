@@ -954,10 +954,87 @@ impl VulcanWorkbench {
                     self.t(I18nKey::SettingsTemperatureValueDefault)
                 }),
                 temperature_control,
+                self.view_provider_retry_settings_card(),
             ]
             .spacing(12),
         )
         .padding(16)
+        .style(container::bordered_box)
+        .into()
+    }
+
+    /// Renders the provider retry controls inside runtime settings.
+    /// 在运行时设置中渲染 Provider 重试控制项。
+    fn view_provider_retry_settings_card(&self) -> Element<'_, Message> {
+        let retry = &self.provider_configuration.retry;
+        let initial_delay_seconds = (retry.initial_delay_ms as f32 / 1000.0).clamp(0.1, 30.0);
+        let max_delay_seconds =
+            (retry.max_delay_ms as f32 / 1000.0).clamp(initial_delay_seconds.max(0.1), 120.0);
+        let backoff_factor = retry.backoff_factor.clamp(1.0, 8.0) as f32;
+        let jitter_percent = retry.jitter_percent.min(80) as f32;
+        let status_text = if retry.enabled {
+            "已启用：真实 Provider 请求遇到瞬态失败时会自动重试。"
+        } else {
+            "已关闭：Provider 请求失败后会直接返回错误。"
+        };
+
+        container(
+            iced::widget::column![
+                row![
+                    text("Provider 自动重试").size(14),
+                    space::horizontal(),
+                    text(status_text).size(11),
+                ]
+                .align_y(Center),
+                text("仅影响真实请求；请求捕获/模拟不会发送网络请求，也不会触发重试。").size(11),
+                checkbox(retry.enabled)
+                    .label("启用自动重试")
+                    .on_toggle(Message::ProviderRetryEnabledToggled),
+                text(format!("最大重试次数：{} 次", retry.max_retries)).size(12),
+                slider(
+                    0.0..=20.0,
+                    retry.max_retries.min(20) as f32,
+                    Message::ProviderRetryMaxRetriesChanged
+                )
+                .step(1.0),
+                text(format!("初始重试等待：{initial_delay_seconds:.1} 秒")).size(12),
+                slider(
+                    0.1..=30.0,
+                    initial_delay_seconds,
+                    Message::ProviderRetryInitialDelaySecondsChanged
+                )
+                .step(0.1),
+                text(format!("最大重试等待：{max_delay_seconds:.0} 秒")).size(12),
+                slider(
+                    initial_delay_seconds.max(0.1)..=120.0,
+                    max_delay_seconds,
+                    Message::ProviderRetryMaxDelaySecondsChanged
+                )
+                .step(1.0),
+                text(format!("指数退避倍数：{backoff_factor:.2}")).size(12),
+                slider(
+                    1.0..=8.0,
+                    backoff_factor,
+                    Message::ProviderRetryBackoffFactorChanged
+                )
+                .step(0.25),
+                text(format!("确定性抖动：{jitter_percent:.0}%")).size(12),
+                slider(
+                    0.0..=80.0,
+                    jitter_percent,
+                    Message::ProviderRetryJitterPercentChanged
+                )
+                .step(5.0),
+                checkbox(retry.respect_retry_after)
+                    .label("遵守 Provider Retry-After 响应头")
+                    .on_toggle(Message::ProviderRetryRespectRetryAfterToggled),
+                checkbox(retry.retry_429)
+                    .label("允许重试 HTTP 429 限流错误")
+                    .on_toggle(Message::ProviderRetry429Toggled),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
         .style(container::bordered_box)
         .into()
     }

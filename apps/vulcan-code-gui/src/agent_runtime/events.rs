@@ -29,6 +29,9 @@ pub enum RuntimeEventKind {
     /// Execution pipeline failed.
     /// 执行链路失败事件。
     Failed,
+    /// Provider execution is waiting before an automatic retry.
+    /// Provider 执行正在等待一次自动重试。
+    Retrying,
 }
 
 /// Structured runtime event record reserved for future telemetry surfaces.

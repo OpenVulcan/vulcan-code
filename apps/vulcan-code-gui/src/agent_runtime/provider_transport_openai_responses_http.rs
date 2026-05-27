@@ -15,7 +15,7 @@ use crate::agent_runtime::provider_protocol_content::{
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, build_rest_endpoint, ensure_bearer_authorization_header,
-    ensure_json_content_type, format_standard_error_response,
+    ensure_json_content_type, format_standard_error_response_with_headers,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -260,8 +260,9 @@ where
 
     if !response.status().is_success() {
         let status = response.status();
+        let headers = response.headers().clone();
         let body = response.text().await.unwrap_or_default();
-        let message = format_standard_error_response(status, &body);
+        let message = format_standard_error_response_with_headers(status, &headers, &body);
         return Err(VulcanCoreError::ProviderFailure {
             provider_id: provider_id.to_string(),
             message: format!("{provider_label} request failed: {message}"),

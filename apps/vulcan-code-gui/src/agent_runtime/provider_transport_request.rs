@@ -2,6 +2,7 @@
 //! 供宿主控制传输路由层与执行器共享的自有 Provider 传输请求模型。
 
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
+use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily, ProviderRuntimeKind};
@@ -80,6 +81,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional request-budget guard evaluated before the exact request is dispatched.
     /// 在精确请求分发前执行的可选请求预算守卫。
     pub(crate) request_budget_guard: Option<ProviderRequestBudgetGuard>,
+    /// Runtime retry policy applied around host-controlled provider attempts.
+    /// 包裹宿主控制 Provider 尝试的运行时重试策略。
+    pub(crate) retry_policy: ProviderRetryPolicy,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -105,6 +109,7 @@ pub(crate) fn build_provider_transport_execution_request(
     additional_params: Option<Value>,
     interleaved_reasoning: Option<ModelInterleavedCapability>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
+    retry_policy: ProviderRetryPolicy,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         api_family: runtime_kind.api_family(),
@@ -128,5 +133,6 @@ pub(crate) fn build_provider_transport_execution_request(
         additional_params,
         interleaved_reasoning,
         request_budget_guard,
+        retry_policy,
     }
 }

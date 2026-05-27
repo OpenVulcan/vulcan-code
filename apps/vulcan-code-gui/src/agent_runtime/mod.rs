@@ -65,6 +65,7 @@ pub mod provider_transport_openrouter;
 pub mod provider_transport_openrouter_adapter;
 pub mod provider_transport_request;
 pub mod provider_transport_request_budget;
+pub mod provider_transport_retry;
 pub mod provider_transport_router;
 pub mod provider_transport_stream_executor;
 pub mod provider_transport_stream_runtime;
