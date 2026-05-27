@@ -19,6 +19,9 @@ pub(super) enum Message {
     /// Applies the completed LuaSkills bootstrap report.
     /// 应用已完成的 LuaSkills 引导报告。
     LuaSkillsBootstrapFinished(Result<LuaSkillsBootstrapReport, String>),
+    /// Applies the completed token-budget runtime bootstrap result.
+    /// 应用已完成的 Token 预算运行时引导结果。
+    TokenBudgetRuntimeInitialized(std::sync::Arc<TokenBudgetRuntime>),
     /// Applies the completed MCP runtime bootstrap result.
     /// 应用已完成的 MCP 运行时引导结果。
     McpRuntimeBootstrapped(Result<McpRuntimeAccess, String>),

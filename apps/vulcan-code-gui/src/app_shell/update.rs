@@ -180,6 +180,10 @@ impl VulcanWorkbench {
                                     Message::McpRuntimeBootstrapped,
                                 ),
                                 Task::perform(
+                                    TokenBudgetRuntime::initialize_on_background_thread(),
+                                    Message::TokenBudgetRuntimeInitialized,
+                                ),
+                                Task::perform(
                                     luaskills_runtime::load_luaskills_catalog(luaskills_handle),
                                     Message::LuaSkillsCatalogLoaded,
                                 ),
@@ -203,6 +207,27 @@ impl VulcanWorkbench {
                         self.startup_lifecycle = StartupLifecycle::Failed { message: error };
                     }
                 }
+
+                Task::none()
+            }
+            Message::TokenBudgetRuntimeInitialized(token_budget_runtime) => {
+                let status = token_budget_runtime.status_row();
+                let level = if token_budget_runtime.is_available() {
+                    ActivityLevel::Success
+                } else {
+                    ActivityLevel::Warning
+                };
+                let title = if token_budget_runtime.is_available() {
+                    "Token 预算运行时就绪"
+                } else {
+                    "Token 预算运行时不可用"
+                };
+                self.refresh_runtime_foundation_with_token_budget_runtime(
+                    token_budget_runtime,
+                    false,
+                );
+                self.status_message = status.clone();
+                self.push_activity(level, title, status);
 
                 Task::none()
             }

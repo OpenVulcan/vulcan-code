@@ -2423,10 +2423,27 @@ impl VulcanWorkbench {
     /// Rebuilds the compose runtime foundation from the current shared configuration state.
     /// 根据当前共享配置状态重建 compose 运行时基础架构。
     pub(super) fn refresh_runtime_foundation(&mut self) {
+        let token_budget_runtime = self.runtime_foundation.token_budget_runtime();
+        self.refresh_runtime_foundation_with_token_budget_runtime(token_budget_runtime, true);
+    }
+
+    /// Rebuilds the compose runtime foundation while replacing the shared token-budget runtime.
+    /// 在替换共享 Token 预算运行时的同时重建 compose 运行时基础架构。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `token_budget_runtime` is the token-budget runtime that should be retained by the rebuilt foundation.
+    /// `token_budget_runtime` 是重建后的基础架构应保留的 Token 预算运行时。
+    /// `reset_execution_snapshots` controls whether cached preparation diagnostics are cleared.
+    /// `reset_execution_snapshots` 控制是否清理已缓存的执行准备诊断。
+    pub(super) fn refresh_runtime_foundation_with_token_budget_runtime(
+        &mut self,
+        token_budget_runtime: std::sync::Arc<TokenBudgetRuntime>,
+        reset_execution_snapshots: bool,
+    ) {
         let task_runtime = self.runtime_foundation.task_runtime();
         let question_runtime = self.runtime_foundation.question_runtime();
         let command_session_runtime = self.runtime_foundation.command_session_runtime();
-        let token_budget_runtime = self.runtime_foundation.token_budget_runtime();
         self.runtime_foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
             &self.provider_configuration,
             &self.agent_profile_catalog,
@@ -2437,9 +2454,11 @@ impl VulcanWorkbench {
             command_session_runtime,
             token_budget_runtime,
         );
-        self.last_execution_preparation = None;
-        self.last_mcp_discovery_rows.clear();
-        self.last_mcp_discovery_errors.clear();
+        if reset_execution_snapshots {
+            self.last_execution_preparation = None;
+            self.last_mcp_discovery_rows.clear();
+            self.last_mcp_discovery_errors.clear();
+        }
     }
 
     /// Restarts the long-lived MCP runtime after configuration changes and rebuilds the runtime foundation immediately.

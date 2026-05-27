@@ -1,6 +1,7 @@
 //! Shared token-budget runtime initialized during host startup.
 //! 在宿主启动期间初始化的共享 Token 预算运行时。
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,12 +17,55 @@ pub struct TokenBudgetRuntime {
     /// Shared model-aware token counter available after successful initialization.
     /// 初始化成功后可用的共享模型感知 Token 统计器。
     counter: Option<Arc<TokenCounter>>,
-    /// Human-readable initialization error retained for diagnostics.
-    /// 为诊断保留的人类可读初始化错误。
-    initialization_error: Option<String>,
+    /// Current initialization state retained for diagnostics and UI summaries.
+    /// 为诊断与界面摘要保留的当前初始化状态。
+    state: TokenBudgetRuntimeState,
+}
+
+/// Initialization state for the shared token budget runtime.
+/// 共享 Token 预算运行时的初始化状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TokenBudgetRuntimeState {
+    /// Tokenizer loading has not finished yet.
+    /// tokenizer 加载尚未完成。
+    Pending,
+    /// Tokenizer loading finished successfully.
+    /// tokenizer 加载已成功完成。
+    Ready,
+    /// Tokenizer loading failed with a diagnostic message.
+    /// tokenizer 加载失败并携带诊断信息。
+    Failed(String),
+}
+
+impl fmt::Debug for TokenBudgetRuntime {
+    /// Formats only lightweight diagnostics without expanding the tokenizer internals.
+    /// 只格式化轻量诊断信息，避免展开 tokenizer 内部结构。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TokenBudgetRuntime")
+            .field("resource_directory", &self.resource_directory)
+            .field("is_available", &self.is_available())
+            .field("state", &self.state)
+            .finish()
+    }
 }
 
 impl TokenBudgetRuntime {
+    /// Builds a lightweight pending runtime without loading tokenizer assets.
+    /// 构建不加载 tokenizer 资产的轻量待初始化运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A pending runtime wrapper that lets the UI reach the first frame before warm-up starts.
+    /// 一个待初始化运行时包装对象，使界面可在 warm-up 前进入首帧。
+    pub fn pending() -> Self {
+        Self {
+            resource_directory: vulcan_runtime_assets::resolve_tokenizer_resource_directory(),
+            counter: None,
+            state: TokenBudgetRuntimeState::Pending,
+        }
+    }
+
     /// Initializes the shared token budget runtime from the active runtime-assets directory.
     /// 从当前 runtime-assets 目录初始化共享 Token 预算运行时。
     ///
@@ -33,6 +77,23 @@ impl TokenBudgetRuntime {
         Self::initialize_from_resource_directory(
             vulcan_runtime_assets::resolve_tokenizer_resource_directory(),
         )
+    }
+
+    /// Initializes the shared token budget runtime on a blocking worker thread.
+    /// 在阻塞工作线程上初始化共享 Token 预算运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A shared runtime wrapper containing either the warmed counter or a retained failure state.
+    /// 一个共享运行时包装对象，包含已预热统计器或保留的失败状态。
+    pub async fn initialize_on_background_thread() -> Arc<Self> {
+        match tokio::task::spawn_blocking(Self::initialize).await {
+            Ok(runtime) => Arc::new(runtime),
+            Err(error) => Arc::new(Self::failed_with_error(
+                vulcan_runtime_assets::resolve_tokenizer_resource_directory(),
+                format!("Token 预算初始化任务异常结束：{error}"),
+            )),
+        }
     }
 
     /// Initializes the shared token budget runtime from one explicit resource directory.
@@ -56,13 +117,35 @@ impl TokenBudgetRuntime {
             Ok(counter) => Self {
                 resource_directory,
                 counter: Some(Arc::new(counter)),
-                initialization_error: None,
+                state: TokenBudgetRuntimeState::Ready,
             },
             Err(error) => Self {
-                resource_directory,
+                resource_directory: resource_directory.clone(),
                 counter: None,
-                initialization_error: Some(error.to_string()),
+                state: TokenBudgetRuntimeState::Failed(error.to_string()),
             },
+        }
+    }
+
+    /// Builds a failed runtime wrapper from one explicit diagnostic message.
+    /// 根据一条显式诊断信息构建失败状态的运行时包装对象。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `resource_directory` points at the tokenizer resource directory attempted by initialization.
+    /// `resource_directory` 指向初始化尝试使用的 tokenizer 资源目录。
+    /// `error` is the human-readable failure diagnostic.
+    /// `error` 是面向人的失败诊断信息。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A runtime wrapper that preserves the failure and keeps estimates on the fallback path.
+    /// 一个保留失败信息并让估算保持回退路径的运行时包装对象。
+    fn failed_with_error(resource_directory: impl Into<PathBuf>, error: impl Into<String>) -> Self {
+        Self {
+            resource_directory: resource_directory.into(),
+            counter: None,
+            state: TokenBudgetRuntimeState::Failed(error.into()),
         }
     }
 
@@ -88,17 +171,6 @@ impl TokenBudgetRuntime {
         &self.resource_directory
     }
 
-    /// Returns the initialization error when the counter is unavailable.
-    /// 当统计器不可用时返回初始化错误。
-    ///
-    /// # Returns
-    /// 返回值
-    /// An optional diagnostic string describing the initialization failure.
-    /// 描述初始化失败原因的可选诊断字符串。
-    pub fn initialization_error(&self) -> Option<&str> {
-        self.initialization_error.as_deref()
-    }
-
     /// Returns this runtime as a context token estimator when initialization succeeded.
     /// 当初始化成功时将该运行时作为上下文 Token 估算器返回。
     ///
@@ -119,14 +191,18 @@ impl TokenBudgetRuntime {
     /// A human-readable status string describing the active token budget runtime.
     /// 描述当前 Token 预算运行时状态的人类可读状态字符串。
     pub fn status_row(&self) -> String {
-        match self.initialization_error() {
-            Some(error) => format!(
-                "Token 预算计算器不可用：{}（资源目录：{}）",
-                error,
+        match &self.state {
+            TokenBudgetRuntimeState::Pending => format!(
+                "Token 预算计算器正在后台初始化：{}",
                 self.resource_directory().display()
             ),
-            None => format!(
+            TokenBudgetRuntimeState::Ready => format!(
                 "Token 预算计算器已初始化：{}",
+                self.resource_directory().display()
+            ),
+            TokenBudgetRuntimeState::Failed(error) => format!(
+                "Token 预算计算器不可用：{}（资源目录：{}）",
+                error,
                 self.resource_directory().display()
             ),
         }

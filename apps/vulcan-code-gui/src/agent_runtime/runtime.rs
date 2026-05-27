@@ -154,7 +154,7 @@ impl RuntimeFoundation {
             Arc::new(TaskRuntime::new()),
             Arc::new(QuestionRuntime::new()),
             Arc::new(CommandSessionRuntime::new()),
-            Arc::new(TokenBudgetRuntime::initialize()),
+            Arc::new(TokenBudgetRuntime::pending()),
         )
     }
 
