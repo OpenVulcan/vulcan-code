@@ -533,6 +533,24 @@ fn current_unix_millis_text() -> String {
 mod tests {
     use super::*;
 
+    fn test_context_message(
+        id: &str,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        body: &str,
+    ) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.to_string(),
+            kind,
+            record_kind,
+            visible: true,
+            title: String::new(),
+            body: body.to_string(),
+            metadata: None,
+            created_at: String::new(),
+        }
+    }
+
     /// Verifies prompt-shaped compaction results keep a compact preview separate from the injected continuation body.
     /// 验证提示词形态压缩结果会把紧凑预览与注入的续写正文分开保留。
     #[test]
@@ -561,6 +579,50 @@ mod tests {
                 .summary_record
                 .body
                 .contains("Earlier context summary:")
+        );
+    }
+
+    /// Verifies chained compaction keeps the previous continuation summary inside the next source window.
+    /// 验证链式压缩会把上一轮续写摘要保留在下一次源窗口内。
+    #[test]
+    fn plan_context_compaction_keeps_previous_summary_in_next_source_window() {
+        let previous_summary = test_context_message(
+            "summary-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::CompactionSummary,
+            "Earlier context summary:\n保留架构决策、预算策略和未完成项。",
+        );
+        let mut messages = vec![previous_summary.clone()];
+        for index in 0..8 {
+            messages.push(test_context_message(
+                &format!("user-{index}"),
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                &format!("新增用户上下文 {index}"),
+            ));
+            messages.push(test_context_message(
+                &format!("assistant-{index}"),
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                &format!("新增助手输出 {index}"),
+            ));
+        }
+
+        let plan = plan_context_compaction(CompactionPlanInput {
+            session_label: "test-session",
+            messages: &messages,
+            all_messages: &messages,
+            context_start_message_id: Some("summary-1"),
+            policy: ContextCompactionPolicy::default(),
+        })
+        .expect("chained context should still produce a compaction plan");
+
+        assert_eq!(plan.source_messages.first(), Some(&previous_summary));
+        assert!(
+            plan.source_messages
+                .iter()
+                .any(|message| message.id == "summary-1"
+                    && message.record_kind == SessionMessageRecordKind::CompactionSummary)
         );
     }
 }

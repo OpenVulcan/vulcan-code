@@ -1226,13 +1226,30 @@ impl VulcanWorkbench {
         let status_message_id = active_compaction.status_message_id.unwrap_or_else(|| {
             self.push_context_compaction_status_message(session_id, active_compaction.trigger, "")
         });
-        self.update_context_compaction_status_message(
-            session_id,
-            &status_message_id,
+        let status_body = VulcanWorkbench::build_context_compaction_status_body(
             active_compaction.trigger,
             ContextCompactionStatusPanelState::Stopped,
             "",
             None,
+        );
+        self.push_visible_session_record_message_with_metadata(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::CompactionStatus,
+            "上下文压缩已停止",
+            status_body,
+            Some(json!({
+                "context_compaction_status": true,
+                "context_compaction_section_id": status_message_id,
+                "context_compaction_role": "end",
+                "context_compaction_state": "stopped",
+            })),
+            false,
+        );
+        self.set_session_agent_view_block_collapsed(
+            session_id,
+            &format!("session-{session_id}-agent-view-context-compaction-{status_message_id}"),
+            false,
         );
 
         if let Some(session) = self

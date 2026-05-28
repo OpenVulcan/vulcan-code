@@ -17,6 +17,7 @@ use crate::model::{
 };
 use crate::{AppLocale, I18nArg, I18nKey, format_for_locale, text_for_locale};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use vulcan_agent_view::{
@@ -52,6 +53,9 @@ pub struct AgentViewBuildOptions {
     /// GUI locale used to localize transcript-owned labels while building directive metadata.
     /// 构建指令元数据时用于本地化转录自有标签的图形界面语言。
     pub locale: AppLocale,
+    /// Context-compaction section ids whose body records should be hidden from the current projection.
+    /// 当前投影中应隐藏正文记录的上下文压缩分段标识集合。
+    pub collapsed_context_compaction_sections: BTreeSet<String>,
 }
 
 /// Returns the final visible user-prompt message id that may host the safe edit action.
@@ -139,6 +143,15 @@ pub fn agent_view_block_id(
     {
         return format!("session-{session_id}-agent-view-tool-message-{message_id}");
     }
+    if let AgentViewBlock::Directive(directive) = block
+        && matches!(&directive.kind, AgentViewDirectiveKind::Custom(label) if label == "context-compaction-boundary")
+        && let Some(section_id) = directive
+            .attributes
+            .get("context-compaction-section-id")
+            .filter(|value| !value.trim().is_empty())
+    {
+        return format!("session-{session_id}-agent-view-context-compaction-{section_id}");
+    }
 
     let mut hasher = DefaultHasher::new();
     block.raw_source().hash(&mut hasher);
@@ -165,6 +178,27 @@ fn append_session_message_blocks(
     message: &SessionMessageEntry,
     options: &AgentViewBuildOptions,
 ) {
+    let compaction_role = context_compaction_role(message);
+    let compaction_section_id = context_compaction_section_id(message);
+    if compaction_role == Some("body")
+        && compaction_section_id.is_some_and(|section_id| {
+            options
+                .collapsed_context_compaction_sections
+                .contains(section_id)
+        })
+    {
+        return;
+    }
+    if compaction_role == Some("end")
+        && compaction_section_id.is_some_and(|section_id| {
+            options
+                .collapsed_context_compaction_sections
+                .contains(section_id)
+        })
+    {
+        return;
+    }
+
     match (message.kind, message.record_kind) {
         (SessionMessageKind::User, _) => {
             document.push_directive(build_user_prompt_block(message, options));
@@ -174,7 +208,26 @@ fn append_session_message_blocks(
         }
         (_, SessionMessageRecordKind::CompactionSummary)
         | (_, SessionMessageRecordKind::CompactionStatus) => {
-            document.push_directive(build_context_compaction_block(message));
+            if compaction_role == Some("start") || compaction_role == Some("end") {
+                document.push_directive(build_context_compaction_boundary_block(message, options));
+            } else {
+                let mut attributes = AgentViewAttributes::new();
+                if let Some(section_id) = compaction_section_id {
+                    attributes.insert(
+                        String::from("context-compaction-section-id"),
+                        section_id.to_string(),
+                    );
+                }
+                if let Some(role) = compaction_role {
+                    attributes.insert(String::from("context-compaction-role"), role.to_string());
+                }
+                append_parsed_markdown_document_with_attributes(
+                    document,
+                    &message.body,
+                    Some(&message.id),
+                    &attributes,
+                );
+            }
         }
         (_, SessionMessageRecordKind::ToolCallOutput) => {
             document.push_directive(build_tool_record_block(
@@ -303,6 +356,26 @@ fn append_parsed_markdown_document(
     document.blocks.extend(parsed_document.blocks);
 }
 
+/// Appends parsed Markdown blocks while preserving extra runtime attributes on every emitted block.
+/// 追加解析后的 Markdown 区块，并在每个产出区块上保留额外运行时属性。
+fn append_parsed_markdown_document_with_attributes(
+    document: &mut AgentViewDocument,
+    source: &str,
+    message_id: Option<&str>,
+    extra_attributes: &AgentViewAttributes,
+) {
+    let before_len = document.blocks.len();
+    append_parsed_markdown_document(document, source, message_id);
+    for block in document.blocks.iter_mut().skip(before_len) {
+        for (key, value) in extra_attributes {
+            block
+                .attributes_mut()
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+}
+
 /// Appends one actively streaming Markdown reply as sealed immutable segments plus one active tail segment so old blocks stop changing during token streaming.
 /// 将一条活跃流式 Markdown 回复追加为已封口不可变片段和一个活动尾片段，从而让旧区块在 token 流式过程中停止变化。
 fn append_streaming_markdown_document(
@@ -358,6 +431,28 @@ fn push_streaming_markdown_segment(
     document.blocks.push(AgentViewBlock::Markdown(
         AgentViewMarkdownBlock::new_with_attributes(raw_source, attributes),
     ));
+}
+
+/// Returns the context-compaction section id carried by one transcript message when present.
+/// 当转录消息携带上下文压缩分段标识时返回该标识。
+fn context_compaction_section_id(message: &SessionMessageEntry) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("context_compaction_section_id"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// Returns the context-compaction role carried by one transcript message when present.
+/// 当转录消息携带上下文压缩角色时返回该角色。
+fn context_compaction_role(message: &SessionMessageEntry) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("context_compaction_role"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Builds one user-prompt directive block from the visible session message.
@@ -467,19 +562,61 @@ fn build_thinking_block(
     )
 }
 
-/// Builds one context-summary directive block without reusing the model-thinking surface.
-/// 构建一条上下文总结指令区块，并避免复用模型思考表面。
-fn build_context_compaction_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
+/// Builds one context-compaction boundary directive that toggles the whole section body.
+/// 构建一条可切换整个分段正文的上下文压缩边界指令。
+fn build_context_compaction_boundary_block(
+    message: &SessionMessageEntry,
+    options: &AgentViewBuildOptions,
+) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
-    attributes.insert(String::from("title"), String::from("上下文总结"));
+    let section_id = context_compaction_section_id(message).unwrap_or(&message.id);
+    attributes.insert(
+        String::from("context-compaction-section-id"),
+        section_id.to_string(),
+    );
+    if let Some(role) = context_compaction_role(message) {
+        attributes.insert(String::from("context-compaction-role"), role.to_string());
+    }
+    let compaction_state = message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("context_compaction_state"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("completed");
+    attributes.insert(
+        String::from("context-compaction-state"),
+        compaction_state.to_string(),
+    );
+    let is_section_collapsed = options
+        .collapsed_context_compaction_sections
+        .contains(section_id);
+    let role = context_compaction_role(message).unwrap_or_default();
+    let title = if is_section_collapsed && role == "start" && compaction_state != "running" {
+        match compaction_state {
+            "fallback" => String::from("上下文已自动压缩（回退摘要）"),
+            "stopped" => String::from("上下文压缩已停止"),
+            _ => String::from("上下文已自动压缩"),
+        }
+    } else {
+        message.title.clone()
+    };
+    attributes.insert(String::from("title"), title);
+    attributes.insert(String::from("collapsed"), is_section_collapsed.to_string());
     if !message.created_at.trim().is_empty() {
         attributes.insert(String::from("created-at"), message.created_at.clone());
     }
-    let kind = AgentViewDirectiveKind::Custom(String::from("context-summary"));
+    let kind = AgentViewDirectiveKind::Custom(String::from("context-compaction-boundary"));
     let raw_source = render_directive_source(&kind, &attributes, &message.body);
 
-    AgentViewDirectiveBlock::new(kind, attributes, message.body.clone(), raw_source, false)
+    let collapsed_by_default = compaction_state != "running";
+    AgentViewDirectiveBlock::new(
+        kind,
+        attributes,
+        message.body.clone(),
+        raw_source,
+        collapsed_by_default,
+    )
 }
 
 /// Builds one tool-call or tool-result directive block from the visible session message.
@@ -872,6 +1009,7 @@ mod tests {
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use crate::model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
     use serde_json::json;
+    use std::collections::BTreeSet;
     use vulcan_agent_view::{
         AgentViewBlock, AgentViewDirectiveKind, AgentViewToolPresentationKind,
     };
@@ -935,18 +1073,22 @@ mod tests {
         ));
     }
 
-    /// Verifies context-compaction status rows render as a dedicated context-summary panel rather than thinking.
-    /// 验证上下文压缩状态行会渲染为专用上下文总结面板，而不是思考面板。
+    /// Verifies context-compaction boundaries render as dedicated section markers rather than thinking blocks.
+    /// 验证上下文压缩边界会渲染为专用分段标记，而不是思考区块。
     #[test]
-    fn builds_context_compaction_status_panel() {
+    fn builds_context_compaction_boundary_marker() {
         let messages = vec![SessionMessageEntry {
             id: String::from("compaction-status-1"),
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::CompactionStatus,
             visible: true,
-            title: String::from("上下文总结"),
-            body: String::from("压缩后的上下文摘要"),
-            metadata: None,
+            title: String::from("上下文已自动压缩"),
+            body: String::new(),
+            metadata: Some(json!({
+                "context_compaction_section_id": "compaction-status-1",
+                "context_compaction_role": "end",
+                "context_compaction_state": "completed",
+            })),
             created_at: String::from("100"),
         }];
 
@@ -962,17 +1104,102 @@ mod tests {
         };
         assert_eq!(
             directive.kind,
-            AgentViewDirectiveKind::Custom(String::from("context-summary"))
+            AgentViewDirectiveKind::Custom(String::from("context-compaction-boundary"))
         );
         assert_eq!(
             directive.attributes.get("title"),
-            Some(&String::from("上下文总结"))
+            Some(&String::from("上下文已自动压缩"))
+        );
+        assert_eq!(
+            directive.attributes.get("context-compaction-state"),
+            Some(&String::from("completed"))
+        );
+        assert_eq!(
+            directive.attributes.get("context-compaction-role"),
+            Some(&String::from("end"))
         );
         assert_eq!(
             directive.attributes.get("message-id"),
             Some(&String::from("compaction-status-1"))
         );
-        assert!(!directive.collapsed_by_default);
+        assert!(directive.collapsed_by_default);
+    }
+
+    /// Verifies collapsed context-compaction sections hide body records while retaining boundaries.
+    /// 验证折叠后的上下文压缩分段会隐藏正文记录并保留边界。
+    #[test]
+    fn collapsed_context_compaction_section_hides_body_blocks() {
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("section-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::CompactionStatus,
+                visible: true,
+                title: String::from("上下文正在压缩"),
+                body: String::new(),
+                metadata: Some(json!({
+                    "context_compaction_section_id": "section-1",
+                    "context_compaction_role": "start",
+                    "context_compaction_state": "completed",
+                })),
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("thinking-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ThinkingOutput,
+                visible: true,
+                title: String::from("思考"),
+                body: String::from("压缩思考"),
+                metadata: Some(json!({
+                    "context_compaction_section_id": "section-1",
+                    "context_compaction_role": "body",
+                })),
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("summary-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::CompactionStatus,
+                visible: true,
+                title: String::from("上下文总结"),
+                body: String::from("压缩摘要"),
+                metadata: Some(json!({
+                    "context_compaction_section_id": "section-1",
+                    "context_compaction_role": "body",
+                })),
+                created_at: String::from("3"),
+            },
+            SessionMessageEntry {
+                id: String::from("section-end-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::CompactionStatus,
+                visible: true,
+                title: String::from("上下文已自动压缩"),
+                body: String::new(),
+                metadata: Some(json!({
+                    "context_compaction_section_id": "section-1",
+                    "context_compaction_role": "end",
+                    "context_compaction_state": "completed",
+                })),
+                created_at: String::from("4"),
+            },
+        ];
+        let mut collapsed_sections = BTreeSet::new();
+        collapsed_sections.insert(String::from("section-1"));
+        let options = AgentViewBuildOptions {
+            collapsed_context_compaction_sections: collapsed_sections,
+            ..AgentViewBuildOptions::default()
+        };
+
+        let document = build_agent_view_document_with_options(&messages, &[], &options);
+
+        assert_eq!(document.blocks.len(), 1);
+        assert!(document.blocks.iter().all(|block| matches!(
+            block,
+            AgentViewBlock::Directive(directive)
+                if directive.kind == AgentViewDirectiveKind::Custom(String::from("context-compaction-boundary"))
+        )));
     }
 
     /// Verifies that runtime events no longer sink to the bottom of the unified transcript, even when tool-like payloads are passed directly into the adapter.

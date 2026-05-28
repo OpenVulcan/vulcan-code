@@ -171,7 +171,7 @@ impl VulcanWorkbench {
             return Task::none();
         }
 
-        let floating_thinking_message_id = if self.session_has_active_run(session_id)
+        let floating_thinking_message_id = if self.session_has_active_transcript_stream(session_id)
             && self
                 .floating_streaming_thinking_sessions
                 .contains(&session_id)
@@ -194,6 +194,8 @@ impl VulcanWorkbench {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
+        let collapsed_context_compaction_sections =
+            self.collapsed_context_compaction_sections_for_session(session_id);
         let locale = self.current_locale();
 
         Task::perform(
@@ -208,6 +210,7 @@ impl VulcanWorkbench {
                         visible_messages,
                         runtime_events,
                         active_streaming_output_message_id,
+                        collapsed_context_compaction_sections,
                         locale,
                     )
                 });
@@ -482,6 +485,11 @@ impl VulcanWorkbench {
             editable_user_prompt_message_id(&messages).as_deref(),
             self.current_locale(),
         );
+        let build_options = AgentViewBuildOptions {
+            collapsed_context_compaction_sections: self
+                .collapsed_context_compaction_sections_for_session(session_id),
+            ..build_options
+        };
         let document =
             build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
 
@@ -535,6 +543,17 @@ impl VulcanWorkbench {
             perf_trace.finish();
             return false;
         };
+        if message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_section_id"))
+            .is_some()
+        {
+            self.refresh_session_agent_view_buffers(session_id);
+            perf_trace.checkpoint("refresh_context_compaction_section", phase_started_at);
+            perf_trace.finish();
+            return true;
+        }
         let editable_message_id = editable_user_prompt_message_id(
             &self.visible_session_messages_for_agent_view(session_id),
         );
@@ -794,13 +813,33 @@ impl VulcanWorkbench {
         collapsed_entry.retain(|block_id, _| active_ids.contains(block_id));
     }
 
+    /// Returns the context-compaction sections that should hide their body records in the current projection.
+    /// 返回当前投影中应隐藏正文记录的上下文压缩分段集合。
+    fn collapsed_context_compaction_sections_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> BTreeSet<String> {
+        let Some(collapsed_entry) = self.session_agent_view_block_collapsed.get(&session_id) else {
+            return BTreeSet::new();
+        };
+        let prefix = format!("session-{session_id}-agent-view-context-compaction-");
+        collapsed_entry
+            .iter()
+            .filter_map(|(block_id, collapsed)| {
+                collapsed
+                    .then(|| block_id.strip_prefix(&prefix).map(str::to_string))
+                    .flatten()
+            })
+            .collect()
+    }
+
     /// Returns the visible session messages that should participate in the unified agent-view document for one session.
     /// 返回某个会话中应参与统一 agent-view 文档构建的可见消息集合。
     pub(super) fn visible_session_messages_for_agent_view(
         &self,
         session_id: SessionId,
     ) -> Vec<SessionMessageEntry> {
-        let floating_thinking_message_id = if self.session_has_active_run(session_id)
+        let floating_thinking_message_id = if self.session_has_active_transcript_stream(session_id)
             && self
                 .floating_streaming_thinking_sessions
                 .contains(&session_id)
@@ -953,7 +992,7 @@ impl VulcanWorkbench {
         &self,
         session_id: SessionId,
     ) -> Option<&SessionMessageEntry> {
-        if !self.session_has_active_run(session_id) {
+        if !self.session_has_active_transcript_stream(session_id) {
             return None;
         }
         if !self
@@ -1075,6 +1114,59 @@ impl VulcanWorkbench {
                 self.session_thinking_title(session_id, directive),
             );
         }
+
+        if matches!(
+            &directive.kind,
+            vulcan_agent_view::AgentViewDirectiveKind::Custom(label) if label == "context-compaction-boundary"
+        ) {
+            let is_collapsed = self
+                .session_agent_view_block_collapsed
+                .get(&session_id)
+                .and_then(|states| states.get(block_id))
+                .copied()
+                .unwrap_or(directive.collapsed_by_default);
+            directive.attributes.insert(
+                String::from("ui-inline-collapsed"),
+                is_collapsed.to_string(),
+            );
+            directive
+                .attributes
+                .insert(String::from("collapsed"), is_collapsed.to_string());
+        }
+    }
+
+    /// Updates one rendered agent-view block collapsed state and refreshes the cached render document.
+    /// 更新一个已渲染 agent-view 区块的折叠状态，并刷新缓存渲染文档。
+    pub(super) fn toggle_session_agent_view_block_collapsed(
+        &mut self,
+        session_id: SessionId,
+        block_id: &str,
+    ) -> Task<Message> {
+        let Some(collapsed_entry) = self.session_agent_view_block_collapsed.get_mut(&session_id)
+        else {
+            return Task::none();
+        };
+        let Some(collapsed) = collapsed_entry.get_mut(block_id) else {
+            return Task::none();
+        };
+        *collapsed = !*collapsed;
+        self.refresh_session_agent_view_buffers(session_id);
+        Task::none()
+    }
+
+    /// Sets one rendered agent-view block collapsed state and refreshes the cached render document.
+    /// 设置一个已渲染 agent-view 区块的折叠状态，并刷新缓存渲染文档。
+    pub(super) fn set_session_agent_view_block_collapsed(
+        &mut self,
+        session_id: SessionId,
+        block_id: &str,
+        collapsed: bool,
+    ) {
+        self.session_agent_view_block_collapsed
+            .entry(session_id)
+            .or_default()
+            .insert(block_id.to_string(), collapsed);
+        self.refresh_session_agent_view_buffers(session_id);
     }
 
     /// Overlays the latest live command-session snapshot onto one rendered block attribute map when the block belongs to a host-managed shell session, so transcript badges stay synchronized with the runtime.
@@ -1142,7 +1234,7 @@ impl VulcanWorkbench {
             })
             .and_then(|message| parse_unix_millis_text(&message.created_at))
             .or_else(|| {
-                if self.session_has_active_run(session_id)
+                if self.session_has_active_transcript_stream(session_id)
                     && self
                         .streaming_thinking_message_ids
                         .get(&session_id)

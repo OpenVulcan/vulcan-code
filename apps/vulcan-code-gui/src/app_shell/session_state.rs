@@ -111,9 +111,12 @@ pub(super) struct ActiveSessionCompactionState {
     /// Original trigger source used to label status updates consistently.
     /// 用于一致标记状态更新的原始触发来源。
     pub(super) trigger: SessionPromptCompactionTrigger,
-    /// Visible context-summary message created lazily when the compaction task first emits output.
-    /// 压缩任务首次输出时按需创建的可见上下文总结消息。
+    /// Visible context-compaction start boundary message that owns the section collapse state.
+    /// 拥有分段折叠状态的可见上下文压缩开始边界消息。
     pub(super) status_message_id: Option<String>,
+    /// Visible context-compaction body message that receives model-produced summary deltas.
+    /// 接收模型生成摘要增量的可见上下文压缩正文消息。
+    pub(super) output_message_id: Option<String>,
 }
 
 /// Trigger source used to label one prompt-based session compaction run.
@@ -132,6 +135,9 @@ pub(super) enum SessionPromptCompactionTrigger {
 /// 渲染在单个上下文压缩转录面板中的可见生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ContextCompactionStatusPanelState {
+    /// Prompt-based compaction completed with a model-produced summary.
+    /// 提示词式压缩已通过模型生成摘要完成。
+    Completed,
     /// Prompt-based compaction completed by falling back to the host-side legacy summary.
     /// 提示词式压缩已通过回退到宿主侧旧摘要完成。
     CompletedWithFallback,

@@ -2996,6 +2996,12 @@ impl VulcanWorkbench {
                 self.open_thinking_modal(session_id, block_id);
                 Task::none()
             }
+            Message::ToggleSelectedSessionAgentViewBlock(block_id) => {
+                let Some(session_id) = self.active_transcript_surface_session_id() else {
+                    return Task::none();
+                };
+                self.toggle_session_agent_view_block_collapsed(session_id, &block_id)
+            }
             Message::OpenSelectedSessionToolModal(block_id) => {
                 let Some(session_id) = self.active_transcript_surface_session_id() else {
                     return Task::none();

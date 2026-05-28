@@ -4,13 +4,13 @@ use super::workbench_model_state::{
 };
 use super::{
     ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand, Message,
-    SessionPromptCompactionTrigger, ToolModalPresentation, VulcanWorkbench,
-    anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
-    build_command_session_stop_result_metadata, build_composer_slash_command_state,
-    build_session_record_message_id, build_session_turn_stats_from_state,
-    clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
-    composer_text_has_submittable_content, composer_visible_line_count,
-    generated_attachments_from_tool_metadata,
+    PromptCompactionExecution, SessionPromptCompactionTrigger, ToolModalPresentation,
+    VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
+    build_background_legacy_maintenance_queue, build_command_session_stop_result_metadata,
+    build_composer_slash_command_state, build_session_record_message_id,
+    build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
+    compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
+    composer_visible_line_count, generated_attachments_from_tool_metadata,
     merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
     pending_prompt_dispatch_index, prune_session_messages_to_limit,
     sanitize_workspace_history_search_query_input, session_event_store_missing_error,
@@ -810,16 +810,17 @@ fn session_has_blocking_system_prompt_work_includes_active_compaction() {
             previous_phase: SessionRunPhase::Ready,
             trigger: SessionPromptCompactionTrigger::ManualSlash,
             status_message_id: Some(String::from("compaction-status-1")),
+            output_message_id: None,
         },
     );
 
     assert!(workbench.session_has_blocking_system_prompt_work(session_id));
 }
 
-/// Verifies streamed prompt-compaction output creates the visible context-summary panel lazily.
-/// 验证流式提示词压缩输出会按需创建可见上下文总结面板。
+/// Verifies streamed prompt-compaction output is appended into the visible running boundary row.
+/// 验证流式提示词压缩输出会追加到可见的运行中边界行。
 #[test]
-fn prompt_compaction_output_creates_visible_summary_panel_lazily() {
+fn prompt_compaction_output_appends_to_running_boundary_row() {
     let (mut workbench, _task) = VulcanWorkbench::new();
     let session_id = SessionId::from_u128(71003);
     workbench.sessions.clear();
@@ -827,6 +828,11 @@ fn prompt_compaction_output_creates_visible_summary_panel_lazily() {
         .sessions
         .push(test_session_summary(session_id, "压缩状态面板测试"));
     let (_task, handle) = Task::perform(async {}, |_| Message::Noop).abortable();
+    let status_message_id = workbench.push_context_compaction_status_message(
+        session_id,
+        SessionPromptCompactionTrigger::ManualSlash,
+        "测试预算",
+    );
     workbench.active_session_compactions.insert(
         session_id,
         ActiveSessionCompactionState {
@@ -834,25 +840,9 @@ fn prompt_compaction_output_creates_visible_summary_panel_lazily() {
             handle,
             previous_phase: SessionRunPhase::Ready,
             trigger: SessionPromptCompactionTrigger::ManualSlash,
-            status_message_id: None,
+            status_message_id: Some(status_message_id.clone()),
+            output_message_id: None,
         },
-    );
-
-    let status_message = workbench
-        .session_messages
-        .get(&session_id)
-        .and_then(|messages| {
-            messages
-                .iter()
-                .find(|message| message.record_kind == SessionMessageRecordKind::CompactionStatus)
-        });
-    assert!(status_message.is_none());
-
-    workbench.append_context_compaction_output_delta_for_active_run(
-        session_id,
-        SessionPromptCompactionTrigger::ManualSlash,
-        "测试预算",
-        "压缩后的摘要",
     );
 
     let status_message = workbench
@@ -863,11 +853,201 @@ fn prompt_compaction_output_creates_visible_summary_panel_lazily() {
                 .iter()
                 .find(|message| message.record_kind == SessionMessageRecordKind::CompactionStatus)
         })
-        .expect("compaction should append one visible context-summary message after output");
+        .expect("compaction should append one visible running boundary");
     assert!(status_message.visible);
-    assert_eq!(status_message.title, "上下文总结");
-    assert_eq!(status_message.body, "压缩后的摘要");
+    assert_eq!(status_message.title, "上下文正在压缩");
+    assert_eq!(status_message.body, "");
     assert!(!status_message.contributes_to_context());
+
+    workbench.append_context_compaction_output_delta_for_active_run(
+        session_id,
+        SessionPromptCompactionTrigger::ManualSlash,
+        "测试预算",
+        "压缩后的摘要",
+    );
+
+    let output_message = workbench
+        .session_messages
+        .get(&session_id)
+        .and_then(|messages| {
+            messages.iter().find(|message| {
+                message.id != status_message_id
+                    && message.record_kind == SessionMessageRecordKind::CompactionStatus
+            })
+        })
+        .expect("compaction should append one visible section body message after output");
+    assert!(output_message.visible);
+    assert_eq!(output_message.title, "上下文总结");
+    assert_eq!(output_message.body, "压缩后的摘要");
+    assert_eq!(
+        output_message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_section_id"))
+            .and_then(|value| value.as_str()),
+        Some(status_message_id.as_str())
+    );
+    assert_eq!(
+        output_message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_role"))
+            .and_then(|value| value.as_str()),
+        Some("body")
+    );
+    assert!(!output_message.contributes_to_context());
+}
+
+/// Verifies active prompt-compaction thinking still drives the floating thinking overlay.
+/// 验证活动提示词压缩中的思考内容仍会驱动浮动思考面板。
+#[test]
+fn active_prompt_compaction_thinking_is_available_for_floating_overlay() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(71005);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "压缩思考浮层测试"));
+    let (_task, handle) = Task::perform(async {}, |_| Message::Noop).abortable();
+    let status_message_id = workbench.push_context_compaction_status_message(
+        session_id,
+        SessionPromptCompactionTrigger::ManualSlash,
+        "测试预算",
+    );
+    workbench.active_session_compactions.insert(
+        session_id,
+        ActiveSessionCompactionState {
+            run_id: 44,
+            handle,
+            previous_phase: SessionRunPhase::Ready,
+            trigger: SessionPromptCompactionTrigger::ManualSlash,
+            status_message_id: Some(status_message_id.clone()),
+            output_message_id: None,
+        },
+    );
+
+    workbench.append_streaming_thinking_delta(session_id, "压缩前的思考内容");
+
+    let thinking_message = workbench
+        .streaming_thinking_message(session_id)
+        .expect("active compaction should expose streaming thinking to the overlay");
+    assert_eq!(thinking_message.body, "压缩前的思考内容");
+    assert_eq!(
+        thinking_message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_section_id"))
+            .and_then(|value| value.as_str()),
+        Some(status_message_id.as_str())
+    );
+    assert_eq!(
+        thinking_message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_role"))
+            .and_then(|value| value.as_str()),
+        Some("body")
+    );
+}
+
+/// Verifies completed prompt compaction turns the boundary row into a collapsed automatic-compression marker.
+/// 验证提示词压缩完成后会将边界行转换为默认折叠的自动压缩标记。
+#[test]
+fn finish_prompt_compaction_collapses_boundary_row() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(71004);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "压缩完成边界测试"));
+    let status_message_id = workbench.push_context_compaction_status_message(
+        session_id,
+        SessionPromptCompactionTrigger::BudgetAuto,
+        "测试预算",
+    );
+    let output_message_id = workbench.push_visible_session_record_message_with_metadata(
+        session_id,
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::CompactionStatus,
+        "上下文总结",
+        String::new(),
+        Some(json!({
+            "context_compaction_status": true,
+            "context_compaction_section_id": status_message_id,
+            "context_compaction_role": "body",
+        })),
+        false,
+    );
+    workbench.append_context_compaction_output_delta(
+        session_id,
+        &output_message_id,
+        "压缩后的摘要",
+    );
+    let execution = PromptCompactionExecution {
+        compaction_result: CompactionSkillResult::from_model_summary(
+            &CompactionPlan {
+                source_messages: Vec::new(),
+                source_until_message_id: None,
+                source_until_turn_index: None,
+                retained_tail_start_turn_index: None,
+                compaction_id: String::from("compaction-test-finish"),
+                created_at: String::from("1000"),
+                policy: ContextCompactionPolicy::default(),
+            },
+            "压缩后的摘要",
+        ),
+        fallback_used: false,
+        provider_request_count: 1,
+    };
+
+    let _task = workbench.finish_session_prompt_compaction(
+        session_id,
+        SessionPromptCompactionTrigger::BudgetAuto,
+        String::from("测试预算"),
+        SessionRunPhase::Ready,
+        execution,
+        Some(status_message_id.clone()),
+    );
+
+    let messages = workbench
+        .session_messages
+        .get(&session_id)
+        .expect("completed compaction should keep visible section messages");
+    let start_message = messages
+        .iter()
+        .find(|message| message.id == status_message_id)
+        .expect("completed compaction should keep the visible start boundary row");
+    assert_eq!(start_message.title, "上下文正在压缩");
+    assert_eq!(
+        start_message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_state"))
+            .and_then(|value| value.as_str()),
+        Some("completed")
+    );
+    let end_message = messages
+        .iter()
+        .find(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("context_compaction_role"))
+                .and_then(|value| value.as_str())
+                == Some("end")
+        })
+        .expect("completed compaction should append the visible end boundary row");
+    assert_eq!(end_message.title, "上下文已自动压缩");
+    let collapsed_block_id =
+        format!("session-{session_id}-agent-view-context-compaction-{status_message_id}");
+    assert_eq!(
+        workbench
+            .session_agent_view_block_collapsed
+            .get(&session_id)
+            .and_then(|states| states.get(&collapsed_block_id))
+            .copied(),
+        Some(true)
+    );
 }
 
 /// Verifies that the background legacy-maintenance queue includes visible and archived sessions once.

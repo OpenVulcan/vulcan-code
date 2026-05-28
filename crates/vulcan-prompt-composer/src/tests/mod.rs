@@ -59,6 +59,9 @@ fn context_compaction_prompt_helpers_share_one_source() {
     let developer_segment = build_context_compaction_developer_segment();
 
     assert!(request_prompt.contains("Summarize the earlier session context"));
+    assert!(request_prompt.contains("durable memory"));
+    assert!(request_prompt.contains("minimal rewriting"));
+    assert!(request_prompt.contains("context added after the previous summary"));
     assert!(
         developer_segment.contains("Internal host task: summarize earlier conversation context")
     );

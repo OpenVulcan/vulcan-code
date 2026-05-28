@@ -17,6 +17,9 @@ pub fn build_context_compaction_request_prompt() -> String {
         "Summarize the earlier session context into a compact continuation brief for an AI coding workflow.\n\
 \n\
 Requirements:\n\
+- If the input already contains an earlier compacted summary or continuation prompt, treat it as durable memory rather than ordinary dialogue.\n\
+- Preserve still-relevant details from earlier summaries by carrying them forward with minimal rewriting; only remove details that are clearly obsolete, contradicted, or duplicated by newer context.\n\
+- Focus new summarization effort on context added after the previous summary, then merge it into the carried-forward memory.\n\
 - Preserve the user's main goal, constraints, decisions, accepted tradeoffs, and unfinished work.\n\
 - Mention concrete file paths, symbols, commands, errors, and verification results when they still matter.\n\
 - Highlight any pending next steps or follow-up checks.\n\

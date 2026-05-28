@@ -22,6 +22,12 @@ impl VulcanWorkbench {
         self.active_session_compactions.contains_key(&session_id)
     }
 
+    /// Returns whether one specific session currently owns any active provider-backed transcript stream.
+    /// 返回某个指定会话当前是否拥有任一活动中的 Provider 转录流。
+    pub(super) fn session_has_active_transcript_stream(&self, session_id: SessionId) -> bool {
+        self.session_has_active_run(session_id) || self.session_has_active_compaction(session_id)
+    }
+
     /// Returns whether any lightweight runtime-progress animation still needs ticking.
     /// 返回当前是否仍有任一轻量运行进度动画需要继续 Tick。
     pub(super) fn has_runtime_progress_animation_work(&self) -> bool {

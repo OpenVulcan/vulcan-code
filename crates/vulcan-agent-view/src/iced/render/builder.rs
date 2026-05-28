@@ -497,11 +497,17 @@ impl RenderedTranscriptBuilder {
     /// Pushes one horizontal rule node and updates the separator state for following paragraphs.
     /// 推入一个水平分隔线节点，并为后续段落更新分隔状态。
     pub(super) fn push_rule(&mut self, color: Color) {
+        self.push_rule_with_gaps(color, 8.0, 8.0);
+    }
+
+    /// Pushes one horizontal rule node with caller-controlled vertical gaps.
+    /// 推入一个由调用方控制垂直间距的水平分隔线节点。
+    pub(super) fn push_rule_with_gaps(&mut self, color: Color, gap_before: f32, gap_after: f32) {
         self.nodes.push(RenderedTranscriptNode::Rule(
             super::scene::RenderedRuleNode {
-                signature_seed: rule_signature_seed(8.0, 8.0, color),
-                gap_before: 8.0,
-                gap_after: 8.0,
+                signature_seed: rule_signature_seed(gap_before, gap_after, color),
+                gap_before,
+                gap_after,
                 color,
             },
         ));

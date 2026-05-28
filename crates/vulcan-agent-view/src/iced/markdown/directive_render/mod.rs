@@ -379,6 +379,12 @@ pub(super) fn render_directive_block(
     markdown_settings: markdown::Settings,
     app_theme: &Theme,
 ) {
+    if matches!(&block.kind, AgentViewDirectiveKind::Custom(label) if label == "context-compaction-boundary")
+    {
+        render_context_compaction_boundary_block(builder, block, markdown_settings, app_theme);
+        return;
+    }
+
     if matches!(&block.kind, AgentViewDirectiveKind::Custom(label) if label == "turn-stats") {
         render_turn_stats_block(builder, block, markdown_settings, app_theme);
         return;
@@ -527,6 +533,111 @@ pub(super) fn render_directive_block(
             }
         }
     }
+}
+
+/// Renders one clickable context-compaction boundary as real horizontal rules plus a centered label.
+/// 将上下文压缩边界渲染为真实水平线与居中文案组成的可点击行。
+fn render_context_compaction_boundary_block(
+    builder: &mut RenderedTranscriptBuilder,
+    block: &AgentViewDirectiveBlock,
+    markdown_settings: markdown::Settings,
+    app_theme: &Theme,
+) {
+    let palette = app_theme.palette();
+    let block_id = block
+        .attributes
+        .get("ui-block-id")
+        .cloned()
+        .unwrap_or_else(|| block.selectable_title());
+    let is_collapsed = block
+        .attributes
+        .get("ui-inline-collapsed")
+        .or_else(|| block.attributes.get("collapsed"))
+        .map(|value| value == "true")
+        .unwrap_or(block.collapsed_by_default);
+    let state = block
+        .attributes
+        .get("context-compaction-state")
+        .map(String::as_str)
+        .unwrap_or("completed");
+    let role = block
+        .attributes
+        .get("context-compaction-role")
+        .map(String::as_str)
+        .unwrap_or("end");
+    let fallback_title = match state {
+        "running" => "上下文正在压缩",
+        "fallback" => "上下文已自动压缩（回退摘要）",
+        "stopped" => "上下文压缩已停止",
+        _ => "上下文已自动压缩",
+    };
+    let title = block
+        .attributes
+        .get("title")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback_title);
+    let toggle_link_target = format!("{BLOCK_TOGGLE_ACTION_PREFIX}{block_id}");
+    builder.register_link_action(
+        toggle_link_target.clone(),
+        RenderedTranscriptLinkAction::ToggleBlockInline(block_id.clone()),
+    );
+
+    let glyph = if is_collapsed { "▸" } else { "▾" };
+    let line_text = if role == "start" && !is_collapsed {
+        format!("{glyph} {title}")
+    } else {
+        format!("{glyph} {title}")
+    };
+    builder.push_rule_with_gaps(
+        palette
+            .background
+            .strong
+            .color
+            .scale_alpha(if is_collapsed { 0.50 } else { 0.34 }),
+        6.0,
+        2.0,
+    );
+    let mut summary_node = builder.build_rich_paragraph_node_with_layout(
+        build_agent_view_plain_text_spans(
+            &line_text,
+            Font {
+                weight: font::Weight::Medium,
+                ..theme::ui_font()
+            },
+            PlainTextRenderKind::Flow,
+            Some(palette.background.base.text.scale_alpha(0.68)),
+            app_theme,
+        ),
+        Pixels(markdown_settings.text_size.0 - 1.0),
+        text::LineHeight::default(),
+        text::Wrapping::Word,
+        0.0,
+        10.0,
+        if is_collapsed { 10.0 } else { 6.0 },
+        Padding::ZERO,
+        None,
+        0,
+        RenderedParagraphHorizontalPlacement::Center,
+        false,
+        None,
+    );
+    summary_node.background_action_link = Some(toggle_link_target);
+    builder
+        .nodes
+        .push(RenderedTranscriptNode::Paragraph(summary_node));
+    if role == "end" || is_collapsed {
+        builder.push_rule_with_gaps(
+            palette
+                .background
+                .strong
+                .color
+                .scale_alpha(if is_collapsed { 0.50 } else { 0.34 }),
+            2.0,
+            8.0,
+        );
+    }
+    builder.pending_separator = Some("\n");
 }
 
 /// Renders one compact per-turn statistics footer row so finished turns expose aggregated usage without duplicating every provider call.

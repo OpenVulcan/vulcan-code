@@ -1070,6 +1070,9 @@ pub(super) enum Message {
     /// Opens one inline thinking block in the centered modal surface.
     /// 在居中弹层表面中打开某个内联思考区块。
     OpenSelectedSessionThinkingModal(String),
+    /// Toggles one inline rendered agent-view block between collapsed and expanded states.
+    /// 在折叠与展开状态之间切换一个内联渲染 agent-view 区块。
+    ToggleSelectedSessionAgentViewBlock(String),
     /// Opens one inline tool block in the centered modal surface.
     /// 在居中弹层表面中打开某个内联工具区块。
     OpenSelectedSessionToolModal(String),

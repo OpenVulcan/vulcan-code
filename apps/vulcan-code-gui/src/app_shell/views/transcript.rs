@@ -80,7 +80,9 @@ fn map_selectable_transcript_interaction(
     open_tool: impl Fn(String) -> Message,
 ) -> Message {
     match interaction {
-        SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
+        SelectableTranscriptInteraction::ToggleBlockInline(block_id) => {
+            Message::ToggleSelectedSessionAgentViewBlock(block_id)
+        }
         SelectableTranscriptInteraction::OpenThinkingModal(block_id) => open_thinking(block_id),
         SelectableTranscriptInteraction::OpenToolModal(block_id) => open_tool(block_id),
         SelectableTranscriptInteraction::EditUserPrompt(message_id) => {

@@ -328,6 +328,7 @@ pub(super) fn agent_view_build_options_for_streaming_output(
         active_streaming_output_message_id: active_streaming_output_message_id.map(str::to_string),
         editable_user_prompt_message_id: editable_user_prompt_message_id.map(str::to_string),
         locale,
+        collapsed_context_compaction_sections: Default::default(),
     }
 }
 
@@ -338,6 +339,7 @@ pub(super) fn build_session_agent_view_projection_snapshot(
     messages: Vec<SessionMessageEntry>,
     runtime_events: Vec<RuntimeEvent>,
     active_streaming_output_message_id: Option<String>,
+    collapsed_context_compaction_sections: BTreeSet<String>,
     locale: AppLocale,
 ) -> SessionAgentViewProjectionSnapshot {
     let build_options = agent_view_build_options_for_streaming_output(
@@ -345,6 +347,10 @@ pub(super) fn build_session_agent_view_projection_snapshot(
         editable_user_prompt_message_id(&messages).as_deref(),
         locale,
     );
+    let build_options = AgentViewBuildOptions {
+        collapsed_context_compaction_sections,
+        ..build_options
+    };
     let document =
         build_agent_view_document_with_options(&messages, &runtime_events, &build_options);
     let selectable_document =
