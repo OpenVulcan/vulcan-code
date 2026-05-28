@@ -2,6 +2,7 @@
 //! 主工作台的会话转录运行态与规范会话辅助逻辑。
 
 use super::*;
+use vulcan_context::{ContextBudgetSeverity, observed_input_tokens_from_usage};
 use vulcan_core::types::ProviderUsageSnapshot;
 
 impl VulcanWorkbench {
@@ -1232,6 +1233,92 @@ impl VulcanWorkbench {
         Some(context_budget)
     }
 
+    /// Builds one historical context-usage snapshot from the last persisted provider usage when no live request budget is available.
+    /// 当没有实时请求预算可用时，根据最近一次持久化 Provider 用量构建历史上下文占用快照。
+    fn historical_context_budget_snapshot_from_runtime_state(
+        &self,
+        runtime_state_snapshot: &SessionRuntimeStateEntry,
+    ) -> Option<ContextBudgetSnapshot> {
+        let observed_usage = runtime_state_snapshot
+            .last_successful_provider_usage
+            .as_ref()
+            .or(runtime_state_snapshot.last_provider_usage.as_ref())
+            .filter(|usage| usage.has_any_tokens())?;
+        let provider_id = runtime_state_snapshot.active_provider_id.as_deref()?;
+        let model_id = runtime_state_snapshot.active_model_id.as_deref()?;
+        let capabilities = self.resolve_runtime_state_model_capabilities(runtime_state_snapshot);
+        let effective_input_limit = capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.input_limit.or(capabilities.context_limit));
+        let input_tokens = observed_input_tokens_from_usage(Some(observed_usage))
+            .or(observed_usage.total_tokens)
+            .unwrap_or_default();
+        let mut usage_ratio = effective_input_limit
+            .map(|limit| input_tokens as f32 / limit.max(1) as f32)
+            .unwrap_or(0.0);
+        if effective_input_limit.is_none() && input_tokens > 0 {
+            usage_ratio = 0.01;
+        }
+
+        Some(ContextBudgetSnapshot {
+            fingerprint: runtime_state_snapshot
+                .live_context_budget_fingerprint
+                .clone()
+                .unwrap_or_else(|| format!("historical:{provider_id}:{model_id}")),
+            context_limit: capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.context_limit),
+            effective_input_limit,
+            reserved_output_tokens: capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.output_limit)
+                .unwrap_or_default(),
+            reserved_reasoning_tokens: 0,
+            reserved_compaction_tokens: 0,
+            compaction_auto_enabled: false,
+            baseline_matches_active_runtime: true,
+            baseline_budget_fingerprint_matches: true,
+            baseline_assembly_fingerprint_matches: true,
+            baseline_mismatch_reason: None,
+            estimated_system_tokens: 0,
+            estimated_history_tokens: input_tokens,
+            estimated_prompt_tokens: 0,
+            estimated_tool_tokens: 0,
+            estimated_input_tokens: input_tokens,
+            estimated_total_tokens: observed_usage
+                .total_tokens
+                .unwrap_or_else(|| {
+                    input_tokens
+                        .saturating_add(observed_usage.output_tokens.unwrap_or_default())
+                        .saturating_add(observed_usage.reasoning_tokens.unwrap_or_default())
+                }),
+            usage_ratio,
+            observed_usage: Some(observed_usage.clone()),
+            severity: historical_context_budget_severity(usage_ratio),
+        })
+    }
+
+    /// Resolves the model capability snapshot associated with one restored session runtime state.
+    /// 解析一份恢复后的会话运行状态所关联的模型能力快照。
+    fn resolve_runtime_state_model_capabilities(
+        &self,
+        runtime_state_snapshot: &SessionRuntimeStateEntry,
+    ) -> Option<crate::provider_capabilities::ResolvedModelCapabilities> {
+        let provider_id = runtime_state_snapshot.active_provider_id.as_ref()?;
+        let model_id = runtime_state_snapshot.active_model_id.as_ref()?;
+        let definition = provider_config::supported_provider_by_id(provider_id)?;
+        let model = provider_config::effective_model_choices(provider_id, &self.provider_configuration)
+            .into_iter()
+            .find(|model| model.id == *model_id);
+        Some(resolve_effective_model_capabilities(
+            definition,
+            model.as_ref(),
+            &self.effective_ai_tool_configuration_for_runtime_options(
+                &self.current_pending_prompt_runtime_options(),
+            ),
+        ))
+    }
+
     /// Synchronizes the visible workbench context bar from the latest session-scoped budget snapshot after compaction or session switching.
     /// 在压缩或会话切换后，根据最新会话级预算快照同步可见工作台上下文条。
     pub(super) fn sync_context_usage_from_session_budget(&mut self, session_id: SessionId) {
@@ -1246,12 +1333,16 @@ impl VulcanWorkbench {
             .cloned()
             .unwrap_or_default();
         let messages = self.session_context_history(session_id);
-        let context_budget = self.resolve_session_context_budget_snapshot(
-            session_id,
-            &runtime_state_snapshot,
-            &messages,
-            false,
-        );
+        let context_budget = self
+            .resolve_session_context_budget_snapshot(
+                session_id,
+                &runtime_state_snapshot,
+                &messages,
+                false,
+            )
+            .or_else(|| {
+                self.historical_context_budget_snapshot_from_runtime_state(&runtime_state_snapshot)
+            });
 
         if let Some(context_budget) = context_budget {
             self.context_usage = context_budget.usage_percent();
@@ -1655,5 +1746,19 @@ impl VulcanWorkbench {
                 )
             })
             .unwrap_or_default()
+    }
+}
+
+/// Resolves one historical usage ratio into the same broad severity buckets used by live context budgets.
+/// 将一条历史占用比例解析为与实时上下文预算一致的粗粒度严重级别。
+fn historical_context_budget_severity(usage_ratio: f32) -> ContextBudgetSeverity {
+    if usage_ratio >= vulcan_context::CONTEXT_BUDGET_OVERFLOW_RATIO {
+        ContextBudgetSeverity::Overflow
+    } else if usage_ratio >= vulcan_context::CONTEXT_BUDGET_COMPACTION_RATIO {
+        ContextBudgetSeverity::CompactSoon
+    } else if usage_ratio >= vulcan_context::CONTEXT_BUDGET_WARNING_RATIO {
+        ContextBudgetSeverity::Warning
+    } else {
+        ContextBudgetSeverity::Healthy
     }
 }

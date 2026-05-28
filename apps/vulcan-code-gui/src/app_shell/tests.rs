@@ -31,7 +31,7 @@ use iced::widget::text_editor;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use vulcan_agent_view::AgentViewBlock;
-use vulcan_core::types::ConversationAttachmentKind;
+use vulcan_core::types::{ConversationAttachmentKind, ProviderUsageSnapshot};
 
 /// Builds a compact session summary for queue-related unit tests.
 /// 为队列相关单元测试构建一条紧凑会话摘要。
@@ -743,6 +743,51 @@ fn session_budget_snapshot_without_real_request_returns_none() {
         workbench.resolve_session_context_budget_snapshot(session_id, &runtime_state, &[], false);
 
     assert!(snapshot.is_none());
+}
+
+/// Verifies restored sessions show the last persisted provider usage while waiting for the next live request budget.
+/// 验证恢复会话在等待下一次实时请求预算时，会显示最近一次持久化 Provider 用量。
+#[test]
+fn restored_session_context_usage_uses_last_provider_usage() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(71011);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "历史用量恢复测试"));
+    workbench.selected_session = session_id;
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("deepseek")),
+            active_model_id: Some(String::from("deepseek-chat")),
+            last_provider_usage: Some(ProviderUsageSnapshot {
+                input_tokens: Some(14886),
+                output_tokens: Some(191),
+                reasoning_tokens: Some(17),
+                total_tokens: Some(15094),
+                cached_input_tokens: None,
+                cache_creation_input_tokens: None,
+            }),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+
+    workbench.sync_context_usage_from_session_budget(session_id);
+
+    let context_budget = workbench
+        .visible_context_budget_snapshot
+        .as_ref()
+        .expect("restored session should expose historical context usage");
+    assert_eq!(
+        context_budget
+            .observed_usage
+            .as_ref()
+            .and_then(|usage| usage.input_tokens),
+        Some(14886)
+    );
+    assert!(workbench.context_usage > 0.0);
+    assert!(workbench.context_usage_detail.contains("最近实测"));
 }
 
 /// Verifies active prompt-compaction state keeps the session on the blocking system-work lane so queued prompts do not auto-dispatch early.
