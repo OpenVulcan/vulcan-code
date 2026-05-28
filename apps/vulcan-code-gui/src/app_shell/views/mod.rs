@@ -81,16 +81,9 @@ fn composer_context_anchor_summary_preview(message: &SessionMessageEntry) -> Str
         return preview.to_string();
     }
 
-    let summary_body = message
-        .body
-        .split_once("Earlier context summary:\n")
-        .map(|(_, summary)| summary)
-        .unwrap_or_else(|| message.body.as_str());
-    let summary_body = summary_body
-        .split_once("\n\nContinue from the newer messages below")
-        .map(|(summary, _)| summary)
-        .unwrap_or(summary_body);
-    crate::agent_runtime::provider_stream_projection::truncate_preview(summary_body, 64)
+    let summary_body =
+        crate::context_compaction::extract_compaction_previous_summary(&message.body);
+    crate::agent_runtime::provider_stream_projection::truncate_preview(&summary_body, 64)
 }
 
 /// Builds one compact compaction-anchor row from the referenced summary message.
@@ -3973,7 +3966,7 @@ mod tests {
             visible: false,
             title: String::from("Context Continuation Prompt"),
             body: String::from(
-                "This session is being continued from earlier context that was compacted to fit the model context window.\n\nEarlier context summary:\n保留了目标、工具、未完成项和基线状态。\n\nContinue from the newer messages below without restarting the conversation, repeating this summary, or asking for the same information again.",
+                "This session is being continued from earlier context that was compacted to fit the model context window.\n\n<previous-summary>\n保留了目标、工具、未完成项和基线状态。\n</previous-summary>\n\nContinue from the newer messages below without restarting the conversation, repeating this summary, or asking for the same information again.",
             ),
             metadata: None,
             created_at: String::from("20"),

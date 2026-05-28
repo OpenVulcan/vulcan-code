@@ -6,6 +6,7 @@ mod rewrite;
 
 pub use planning::{
     CompactionPlan, CompactionPlanInput, CompactionResult, CompactionSummaryRecord,
-    build_compaction_continuation_prompt, build_compaction_request_prompt, plan_context_compaction,
+    build_compaction_continuation_prompt, build_compaction_request_prompt,
+    extract_compaction_previous_summary, plan_context_compaction,
 };
 pub use rewrite::{compact_conversation_records_after_summary, compact_conversation_with_summary};

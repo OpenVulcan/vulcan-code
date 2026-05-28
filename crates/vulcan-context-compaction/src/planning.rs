@@ -8,6 +8,11 @@ use vulcan_context::{
 };
 use vulcan_prompt_composer::build_context_compaction_request_prompt;
 
+const PREVIOUS_SUMMARY_START_TAG: &str = "<previous-summary>";
+const PREVIOUS_SUMMARY_END_TAG: &str = "</previous-summary>";
+const LEGACY_SUMMARY_PREFIX: &str = "Earlier context summary:\n";
+const LEGACY_SUMMARY_SUFFIX: &str = "\n\nContinue from the newer messages below";
+
 /// Stateless summary record returned by one compaction result before the GUI turns it into its own hidden-node shape.
 /// 单次压缩结果返回的无状态摘要记录，供图形界面在落地前转换为自身隐藏节点形态。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,17 +197,41 @@ pub fn build_compaction_continuation_prompt(summary_text: &str) -> String {
     format!(
         "This session is being continued from earlier context that was compacted to fit the model context window.\n\
 \n\
-Earlier context summary:\n\
+<previous-summary>\n\
 {normalized_summary}\n\
+</previous-summary>\n\
 \n\
 Continue from the newer messages below without restarting the conversation, repeating this summary, or asking for the same information again."
     )
 }
 
+/// Extracts the durable summary payload from either the current tagged form or the legacy continuation prompt form.
+/// 从当前带标签格式或旧版续写提示词格式中提取持久摘要正文。
+pub fn extract_compaction_previous_summary(summary_body: &str) -> String {
+    if let Some((_, after_start)) = summary_body.split_once(PREVIOUS_SUMMARY_START_TAG) {
+        let summary = after_start
+            .split_once(PREVIOUS_SUMMARY_END_TAG)
+            .map(|(summary, _)| summary)
+            .unwrap_or(after_start);
+        return summary.trim().to_string();
+    }
+
+    let summary_body = summary_body
+        .split_once(LEGACY_SUMMARY_PREFIX)
+        .map(|(_, summary)| summary)
+        .unwrap_or(summary_body);
+    let summary_body = summary_body
+        .split_once(LEGACY_SUMMARY_SUFFIX)
+        .map(|(summary, _)| summary)
+        .unwrap_or(summary_body);
+    summary_body.trim().to_string()
+}
+
 /// Normalizes one compaction summary into a non-empty plain-text block before it becomes the synthetic continuation prompt body.
 /// 在把压缩总结转换为合成续写提示词正文之前，将其规范化为非空纯文本块。
 fn normalize_compaction_summary_text(summary_text: &str) -> String {
-    let trimmed = summary_text.trim();
+    let extracted = extract_compaction_previous_summary(summary_text);
+    let trimmed = extracted.trim();
     if trimmed.is_empty() {
         String::from("No earlier context details were preserved.")
     } else {
@@ -216,14 +245,15 @@ fn build_compaction_result_from_summary_text(
     plan: &CompactionPlan,
     summary_text: String,
 ) -> CompactionResult {
-    let continuation_prompt = build_compaction_continuation_prompt(&summary_text);
+    let normalized_summary = normalize_compaction_summary_text(&summary_text);
+    let continuation_prompt = build_compaction_continuation_prompt(&normalized_summary);
     CompactionResult {
         summary_record: CompactionSummaryRecord {
             kind: SessionMessageKind::User,
             record_kind: SessionMessageRecordKind::CompactionSummary,
             title: String::from("Context Continuation Prompt"),
             body: continuation_prompt,
-            preview: truncate_preview_lines(&summary_text, 2, 88),
+            preview: truncate_preview_lines(&normalized_summary, 2, 88),
         },
         source_until_message_id: plan.source_until_message_id.clone(),
         source_until_turn_index: plan.source_until_turn_index,
@@ -397,7 +427,12 @@ fn compaction_summary_line_for_message(message: &SessionMessageEntry, prune_tool
         ) {
         String::from("Tool output was compacted into this placeholder.")
     } else {
-        truncate_preview_lines(&message.body, 1, 88)
+        let preview_body = if message.record_kind == SessionMessageRecordKind::CompactionSummary {
+            extract_compaction_previous_summary(&message.body)
+        } else {
+            message.body.clone()
+        };
+        truncate_preview_lines(&preview_body, 1, 88)
     };
 
     if title == label {
@@ -578,7 +613,55 @@ mod tests {
             result
                 .summary_record
                 .body
-                .contains("Earlier context summary:")
+                .contains("<previous-summary>\n保留目标、约束和未完成工作，同时不要重复工具说明。\n</previous-summary>")
+        );
+    }
+
+    /// Verifies previous summaries are persisted in the tagged cache-stable form used by later compactions.
+    /// 验证历史摘要会以供后续压缩复用的带标签缓存稳定格式持久化。
+    #[test]
+    fn compaction_result_persists_previous_summary_block() {
+        let plan = CompactionPlan {
+            source_messages: Vec::new(),
+            source_until_message_id: Some(String::from("m-1")),
+            source_until_turn_index: Some(1),
+            retained_tail_start_turn_index: Some(2),
+            compaction_id: String::from("cp-1"),
+            created_at: String::from("20"),
+            policy: ContextCompactionPolicy::default(),
+        };
+
+        let result = CompactionResult::from_model_summary(
+            &plan,
+            "<previous-summary>\n保留架构决策与预算策略。\n</previous-summary>",
+        );
+
+        assert_eq!(result.summary_record.preview, "保留架构决策与预算策略。");
+        assert_eq!(
+            result
+                .summary_record
+                .body
+                .matches("<previous-summary>")
+                .count(),
+            1
+        );
+        assert!(
+            result
+                .summary_record
+                .body
+                .contains("保留架构决策与预算策略。")
+        );
+    }
+
+    /// Verifies legacy continuation prompts still expose only their summary payload.
+    /// 验证旧版续写提示词仍然只会暴露其中的摘要正文。
+    #[test]
+    fn extract_compaction_previous_summary_supports_legacy_body() {
+        let body = "This session is being continued from earlier context.\n\nEarlier context summary:\n保留目标、约束和未完成项。\n\nContinue from the newer messages below without restarting.";
+
+        assert_eq!(
+            extract_compaction_previous_summary(body),
+            "保留目标、约束和未完成项。"
         );
     }
 
@@ -590,7 +673,7 @@ mod tests {
             "summary-1",
             SessionMessageKind::User,
             SessionMessageRecordKind::CompactionSummary,
-            "Earlier context summary:\n保留架构决策、预算策略和未完成项。",
+            "This session is being continued from earlier context.\n\n<previous-summary>\n保留架构决策、预算策略和未完成项。\n</previous-summary>\n\nContinue from the newer messages below without restarting.",
         );
         let mut messages = vec![previous_summary.clone()];
         for index in 0..8 {
