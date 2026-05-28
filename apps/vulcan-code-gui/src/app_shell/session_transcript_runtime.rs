@@ -823,8 +823,6 @@ impl VulcanWorkbench {
             SessionPromptCompactionTrigger::BudgetAuto => "上下文预算触发",
         };
         let status_label = match status {
-            ContextCompactionStatusPanelState::Running => "正在压缩上下文",
-            ContextCompactionStatusPanelState::Completed => "上下文压缩已完成",
             ContextCompactionStatusPanelState::CompletedWithFallback => {
                 "上下文压缩已完成（使用宿主侧回退摘要）"
             }
@@ -842,23 +840,23 @@ impl VulcanWorkbench {
             lines.push(format!("Provider 请求：{provider_request_count} 次"));
         }
         match status {
-            ContextCompactionStatusPanelState::Running => {
-                lines.push(String::from("说明：正在生成新的上下文锚点，完成前不会改写历史窗口。"));
-            }
-            ContextCompactionStatusPanelState::Completed
-            | ContextCompactionStatusPanelState::CompletedWithFallback => {
-                lines.push(String::from("说明：已建立新的上下文锚点，后续请求会从压缩后的窗口继续。"));
+            ContextCompactionStatusPanelState::CompletedWithFallback => {
+                lines.push(String::from(
+                    "说明：已建立新的上下文锚点，后续请求会从压缩后的窗口继续。",
+                ));
             }
             ContextCompactionStatusPanelState::Stopped => {
-                lines.push(String::from("说明：本次压缩未改写上下文锚点，后续请求仍沿用停止前的上下文窗口。"));
+                lines.push(String::from(
+                    "说明：本次压缩未改写上下文锚点，后续请求仍沿用停止前的上下文窗口。",
+                ));
             }
         }
         lines.join("\n")
     }
 
-    /// Appends one visible context-compaction status panel and returns its stable transcript id.
-    /// 追加一条可见上下文压缩状态面板，并返回其稳定转录标识。
-    fn push_context_compaction_status_message(
+    /// Appends one visible context-summary panel and returns its stable transcript id.
+    /// 追加一条可见上下文总结面板，并返回其稳定转录标识。
+    pub(super) fn push_context_compaction_status_message(
         &mut self,
         session_id: SessionId,
         trigger: SessionPromptCompactionTrigger,
@@ -868,18 +866,54 @@ impl VulcanWorkbench {
             session_id,
             SessionMessageKind::Assistant,
             SessionMessageRecordKind::CompactionStatus,
-            "上下文压缩",
-            Self::build_context_compaction_status_body(
-                trigger,
-                ContextCompactionStatusPanelState::Running,
-                budget_note,
-                None,
-            ),
+            "上下文总结",
+            String::new(),
             Some(json!({
                 "context_compaction_status": true,
+                "context_compaction_trigger": match trigger {
+                    SessionPromptCompactionTrigger::ManualSlash => "manual_slash",
+                    SessionPromptCompactionTrigger::BudgetAuto => "budget_auto",
+                },
+                "context_compaction_budget_note": budget_note,
             })),
             false,
         )
+    }
+
+    /// Appends one model-produced compaction summary delta into the visible compaction panel.
+    /// 将一段模型生成的压缩摘要增量追加到可见压缩面板。
+    pub(super) fn append_context_compaction_output_delta(
+        &mut self,
+        session_id: SessionId,
+        status_message_id: &str,
+        delta: &str,
+    ) {
+        self.append_stream_delta_to_session_message(session_id, status_message_id, delta);
+    }
+
+    /// Ensures one visible context-summary panel exists and appends one model-produced summary delta into it.
+    /// 确保可见上下文总结面板存在，并向其中追加一段模型生成的总结增量。
+    pub(super) fn append_context_compaction_output_delta_for_active_run(
+        &mut self,
+        session_id: SessionId,
+        trigger: SessionPromptCompactionTrigger,
+        budget_note: &str,
+        delta: &str,
+    ) {
+        let Some(existing_message_id) = self
+            .active_session_compactions
+            .get(&session_id)
+            .and_then(|state| state.status_message_id.clone())
+        else {
+            let message_id =
+                self.push_context_compaction_status_message(session_id, trigger, &budget_note);
+            if let Some(state) = self.active_session_compactions.get_mut(&session_id) {
+                state.status_message_id = Some(message_id.clone());
+            }
+            self.append_context_compaction_output_delta(session_id, &message_id, delta);
+            return;
+        };
+        self.append_context_compaction_output_delta(session_id, &existing_message_id, delta);
     }
 
     /// Updates one existing context-compaction status panel when the background task settles or is stopped.
@@ -974,18 +1008,22 @@ impl VulcanWorkbench {
             }
         };
 
-        let status_message_id =
-            self.push_context_compaction_status_message(session_id, trigger, &budget_note);
         let run_id = self.next_run_id;
         self.next_run_id = self.next_run_id.saturating_add(1);
-        let (run_task, run_handle) = Task::perform(execute_prompt_compaction_job(request), {
-            move |result| Message::SessionPromptCompactionFinished {
+        self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.replace_session_runtime_events(session_id, Vec::new());
+        let stream_trigger = trigger;
+        let stream_budget_note = budget_note.clone();
+        let stream_plan = plan.clone();
+        let (run_task, run_handle) = Task::run(stream_prompt_compaction_job(request), {
+            move |event| Message::SessionPromptCompactionStreamEvent {
                 run_id,
                 session_id,
-                trigger,
-                budget_note,
-                plan,
-                result,
+                trigger: stream_trigger,
+                budget_note: stream_budget_note.clone(),
+                plan: stream_plan.clone(),
+                event,
             }
         })
         .abortable();
@@ -996,7 +1034,7 @@ impl VulcanWorkbench {
                 handle: run_handle,
                 previous_phase,
                 trigger,
-                status_message_id,
+                status_message_id: None,
             },
         );
 
@@ -1050,16 +1088,15 @@ impl VulcanWorkbench {
             activity_title,
             activity_detail,
         );
-        if let Some(status_message_id) = status_message_id {
+        if execution.fallback_used {
+            let status_message_id = status_message_id.unwrap_or_else(|| {
+                self.push_context_compaction_status_message(session_id, trigger, &budget_note)
+            });
             self.update_context_compaction_status_message(
                 session_id,
                 &status_message_id,
                 trigger,
-                if execution.fallback_used {
-                    ContextCompactionStatusPanelState::CompletedWithFallback
-                } else {
-                    ContextCompactionStatusPanelState::Completed
-                },
+                ContextCompactionStatusPanelState::CompletedWithFallback,
                 &budget_note,
                 Some(execution.provider_request_count),
             );
@@ -1470,13 +1507,11 @@ impl VulcanWorkbench {
             estimated_prompt_tokens: 0,
             estimated_tool_tokens: 0,
             estimated_input_tokens: input_tokens,
-            estimated_total_tokens: observed_usage
-                .total_tokens
-                .unwrap_or_else(|| {
-                    input_tokens
-                        .saturating_add(observed_usage.output_tokens.unwrap_or_default())
-                        .saturating_add(observed_usage.reasoning_tokens.unwrap_or_default())
-                }),
+            estimated_total_tokens: observed_usage.total_tokens.unwrap_or_else(|| {
+                input_tokens
+                    .saturating_add(observed_usage.output_tokens.unwrap_or_default())
+                    .saturating_add(observed_usage.reasoning_tokens.unwrap_or_default())
+            }),
             usage_ratio,
             observed_usage: Some(observed_usage.clone()),
             severity: historical_context_budget_severity(usage_ratio),
@@ -1492,9 +1527,10 @@ impl VulcanWorkbench {
         let provider_id = runtime_state_snapshot.active_provider_id.as_ref()?;
         let model_id = runtime_state_snapshot.active_model_id.as_ref()?;
         let definition = provider_config::supported_provider_by_id(provider_id)?;
-        let model = provider_config::effective_model_choices(provider_id, &self.provider_configuration)
-            .into_iter()
-            .find(|model| model.id == *model_id);
+        let model =
+            provider_config::effective_model_choices(provider_id, &self.provider_configuration)
+                .into_iter()
+                .find(|model| model.id == *model_id);
         Some(resolve_effective_model_capabilities(
             definition,
             model.as_ref(),

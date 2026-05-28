@@ -579,10 +579,10 @@ mod tests {
         assert!(normalized.contains("```rust\nlet value = 1;\nlet next = 2;\n```"));
     }
 
-    /// Verifies completed inline thinking renders one custom note panel with a single left accent rule and no modal click action.
-    /// 验证已完成的内联思考会渲染为带单条左侧强调线的自定义备注面板，并且不会再挂接弹层点击动作。
+    /// Verifies completed inline thinking renders one custom note panel and keeps its title modal action.
+    /// 验证已完成的内联思考会渲染为自定义备注面板，并保留标题弹层动作。
     #[test]
-    fn inline_thinking_note_renders_custom_left_accent_panel() {
+    fn inline_thinking_note_renders_custom_left_accent_panel_with_modal_action() {
         let app_theme = Theme::Dark;
         let markdown_settings = theme::markdown_settings(&app_theme);
         let mut builder = RenderedTranscriptBuilder::new(
@@ -592,6 +592,10 @@ mod tests {
         let mut attributes = AgentViewAttributes::new();
         attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
         attributes.insert(String::from("ui-inline-collapsed"), String::from("true"));
+        attributes.insert(
+            String::from("ui-block-id"),
+            String::from("thinking-block-1"),
+        );
         attributes.insert(
             String::from("ui-thinking-title"),
             String::from("思考过程 · 1.2秒"),
@@ -626,7 +630,15 @@ mod tests {
         assert_eq!(header_node.indent_left, 14.0);
         assert_eq!(header_node.quote_depth, 0);
         assert_eq!(header_node.inner_padding, Padding::ZERO);
-        assert!(header_node.background_action_link.is_none());
+        assert_eq!(
+            header_node.background_action_link.as_deref(),
+            Some("vulcan-agent-view://open-thinking-modal/thinking-block-1")
+        );
+        assert!(
+            builder
+                .link_actions
+                .contains_key("vulcan-agent-view://open-thinking-modal/thinking-block-1")
+        );
         assert!(header_node.display_text.contains("思考过程"));
         assert!(panel_node.left_accent_rule.is_some());
     }

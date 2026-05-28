@@ -467,40 +467,19 @@ fn build_thinking_block(
     )
 }
 
-/// Builds one context-compaction directive block using the inline thinking-note surface without changing model-context semantics.
-/// 使用内联思考备注表面构建上下文压缩指令区块，同时不改变模型上下文语义。
+/// Builds one context-summary directive block without reusing the model-thinking surface.
+/// 构建一条上下文总结指令区块，并避免复用模型思考表面。
 fn build_context_compaction_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
-    attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
-    attributes.insert(
-        String::from("ui-render-thinking-header"),
-        String::from("true"),
-    );
-    attributes.insert(
-        String::from("ui-inline-thinking-title"),
-        String::from("上下文压缩"),
-    );
-    attributes.insert(
-        String::from("ui-thinking-title"),
-        String::from("上下文压缩"),
-    );
+    attributes.insert(String::from("title"), String::from("上下文总结"));
     if !message.created_at.trim().is_empty() {
         attributes.insert(String::from("created-at"), message.created_at.clone());
     }
-    let raw_source = render_directive_source(
-        &AgentViewDirectiveKind::Thinking,
-        &attributes,
-        &message.body,
-    );
+    let kind = AgentViewDirectiveKind::Custom(String::from("context-summary"));
+    let raw_source = render_directive_source(&kind, &attributes, &message.body);
 
-    AgentViewDirectiveBlock::new(
-        AgentViewDirectiveKind::Thinking,
-        attributes,
-        message.body.clone(),
-        raw_source,
-        false,
-    )
+    AgentViewDirectiveBlock::new(kind, attributes, message.body.clone(), raw_source, false)
 }
 
 /// Builds one tool-call or tool-result directive block from the visible session message.
@@ -574,7 +553,7 @@ fn localized_message_title(
             Some(text_for_locale(options.locale, I18nKey::TranscriptThinking))
         }
         (_, SessionMessageRecordKind::CompactionSummary)
-        | (_, SessionMessageRecordKind::CompactionStatus) => Some(String::from("上下文压缩")),
+        | (_, SessionMessageRecordKind::CompactionStatus) => Some(String::from("上下文总结")),
         (_, SessionMessageRecordKind::AssistantOutput) => {
             Some(text_for_locale(options.locale, I18nKey::TranscriptOutput))
         }
@@ -956,8 +935,8 @@ mod tests {
         ));
     }
 
-    /// Verifies context-compaction status rows render as a dedicated inline compaction panel rather than ordinary Markdown.
-    /// 验证上下文压缩状态行会渲染为专用内联压缩面板，而不是普通 Markdown。
+    /// Verifies context-compaction status rows render as a dedicated context-summary panel rather than thinking.
+    /// 验证上下文压缩状态行会渲染为专用上下文总结面板，而不是思考面板。
     #[test]
     fn builds_context_compaction_status_panel() {
         let messages = vec![SessionMessageEntry {
@@ -965,8 +944,8 @@ mod tests {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::CompactionStatus,
             visible: true,
-            title: String::from("上下文压缩"),
-            body: String::from("状态：正在压缩上下文"),
+            title: String::from("上下文总结"),
+            body: String::from("压缩后的上下文摘要"),
             metadata: None,
             created_at: String::from("100"),
         }];
@@ -981,10 +960,13 @@ mod tests {
         let AgentViewBlock::Directive(directive) = &document.blocks[0] else {
             panic!("compaction status should render as a directive block");
         };
-        assert_eq!(directive.kind, AgentViewDirectiveKind::Thinking);
         assert_eq!(
-            directive.attributes.get("ui-inline-thinking-title"),
-            Some(&String::from("上下文压缩"))
+            directive.kind,
+            AgentViewDirectiveKind::Custom(String::from("context-summary"))
+        );
+        assert_eq!(
+            directive.attributes.get("title"),
+            Some(&String::from("上下文总结"))
         );
         assert_eq!(
             directive.attributes.get("message-id"),

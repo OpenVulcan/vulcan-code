@@ -70,7 +70,8 @@ use self::oauth_flow::*;
 use self::perf::*;
 use self::session_projection_state::SessionAgentViewProjectionSnapshot;
 use self::session_prompt_compaction::{
-    PromptCompactionExecution, PromptCompactionJobRequest, execute_prompt_compaction_job,
+    PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionStreamEvent,
+    stream_prompt_compaction_job,
 };
 use self::turn_stats_state::{
     build_session_turn_stats_from_state, merge_projected_session_messages_into_existing_window,

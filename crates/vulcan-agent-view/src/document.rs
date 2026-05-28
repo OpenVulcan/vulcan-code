@@ -429,6 +429,7 @@ impl AgentViewDirectiveBlock {
             AgentViewDirectiveKind::ToolResult => "工具结果",
             AgentViewDirectiveKind::Diff => "文件差异",
             AgentViewDirectiveKind::Notice => "系统提示",
+            AgentViewDirectiveKind::Custom(label) if label == "context-summary" => "上下文总结",
             AgentViewDirectiveKind::Custom(label) => label.as_str(),
         };
 

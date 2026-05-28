@@ -20,7 +20,8 @@ use crate::provider_config::{
     PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
 };
 use crate::tooling::CommandSessionRuntime;
-use futures_util::StreamExt;
+use async_stream::stream;
+use futures_util::{StreamExt, stream::Stream};
 use std::sync::Arc;
 
 /// Immutable request payload required to execute one prompt-based compaction job.
@@ -89,63 +90,87 @@ pub(super) struct PromptCompactionExecution {
     pub provider_request_count: usize,
 }
 
-/// Executes one prompt-based compaction job and falls back to the legacy host-side summary only when the internal model request cannot complete successfully.
-/// 执行单次提示词式压缩任务，并且仅在内部模型请求无法成功完成时回退到旧版宿主侧总结。
-pub(super) async fn execute_prompt_compaction_job(
+/// Incremental event emitted while one prompt-compaction request is running.
+/// 单次提示词压缩请求运行期间发出的增量事件。
+#[derive(Debug, Clone)]
+pub(super) enum PromptCompactionStreamEvent {
+    /// A normal execution stream event that should be mirrored into the transcript UI.
+    /// 应镜像到转录界面的普通执行流事件。
+    Stream(crate::agent_runtime::ExecutionStreamEvent),
+    /// Terminal compaction result after the internal summary request settles.
+    /// 内部总结请求收敛后的终态压缩结果。
+    Finished(Result<PromptCompactionExecution, String>),
+}
+
+/// Streams one prompt-based compaction job and exposes the model's thinking/output before applying the final compaction result.
+/// 以流式方式执行单次提示词压缩任务，并在应用最终压缩结果前暴露模型思考与输出。
+pub(super) fn stream_prompt_compaction_job(
     request: PromptCompactionJobRequest,
-) -> Result<PromptCompactionExecution, String> {
-    let source_conversation_state =
-        conversation_state_from_session_messages(&request.plan.source_messages);
-    let launch_request = ExecutionPreparationRequest {
-        session_id: request.session_id,
-        session_title: request.session_title,
-        workspace_path: request.workspace_path,
-        prompt: build_compaction_request_prompt(),
-        conversation_state: source_conversation_state,
-        execution_mode: String::from("Compaction"),
-        temperature: None,
-        reasoning_effort: request.reasoning_effort,
-        ai_tool_configuration: request.ai_tool_configuration,
-        prompt_purpose: ExecutionPromptPurpose::ContextCompaction,
-    };
+) -> impl Stream<Item = PromptCompactionStreamEvent> + Send + 'static {
+    stream! {
+        let source_conversation_state =
+            conversation_state_from_session_messages(&request.plan.source_messages);
+        let launch_request = ExecutionPreparationRequest {
+            session_id: request.session_id,
+            session_title: request.session_title.clone(),
+            workspace_path: request.workspace_path.clone(),
+            prompt: build_compaction_request_prompt(),
+            conversation_state: source_conversation_state,
+            execution_mode: String::from("Compaction"),
+            temperature: None,
+            reasoning_effort: request.reasoning_effort,
+            ai_tool_configuration: request.ai_tool_configuration.clone(),
+            prompt_purpose: ExecutionPromptPurpose::ContextCompaction,
+        };
 
-    let launch = prepare_runtime_stream_launch(
-        &request.provider_configuration,
-        &request.agent_profile_catalog,
-        request.luaskills_runtime,
-        request.mcp_runtime_access,
-        request.task_runtime,
-        request.question_runtime,
-        request.command_session_runtime,
-        request.token_budget_runtime,
-        launch_request,
-    )
-    .await;
+        let launch = prepare_runtime_stream_launch(
+            &request.provider_configuration,
+            &request.agent_profile_catalog,
+            request.luaskills_runtime.clone(),
+            request.mcp_runtime_access.clone(),
+            request.task_runtime.clone(),
+            request.question_runtime.clone(),
+            request.command_session_runtime.clone(),
+            request.token_budget_runtime.clone(),
+            launch_request,
+        )
+        .await;
 
-    let launch = match launch {
-        Ok(launch) => launch,
-        Err(report) => {
-            return Ok(fallback_execution_from_report(&request.plan, &report));
+        let launch = match launch {
+            Ok(launch) => launch,
+            Err(report) => {
+                yield PromptCompactionStreamEvent::Finished(Ok(fallback_execution_from_report(
+                    &request.plan,
+                    &report,
+                )));
+                return;
+            }
+        };
+
+        let runtime_stream = drive_runtime_stream_launch(request.provider_configuration.clone(), launch);
+        futures_util::pin_mut!(runtime_stream);
+        while let Some(event) = runtime_stream.next().await {
+            match event {
+                crate::agent_runtime::ExecutionStreamEvent::Finished(report) => {
+                    yield PromptCompactionStreamEvent::Finished(finalize_prompt_compaction_report(
+                        &request.plan,
+                        request.model_reference.as_ref(),
+                        report,
+                    ));
+                    return;
+                }
+                event => {
+                    yield PromptCompactionStreamEvent::Stream(event);
+                }
+            }
         }
-    };
 
-    let runtime_stream = drive_runtime_stream_launch(request.provider_configuration, launch);
-    futures_util::pin_mut!(runtime_stream);
-    while let Some(event) = runtime_stream.next().await {
-        if let crate::agent_runtime::ExecutionStreamEvent::Finished(report) = event {
-            return finalize_prompt_compaction_report(
-                &request.plan,
-                request.model_reference.as_ref(),
-                report,
-            );
-        }
+        yield PromptCompactionStreamEvent::Finished(Ok(PromptCompactionExecution {
+            compaction_result: CompactionSkillResult::from_legacy_plan(&request.plan),
+            fallback_used: true,
+            provider_request_count: 0,
+        }));
     }
-
-    Ok(PromptCompactionExecution {
-        compaction_result: CompactionSkillResult::from_legacy_plan(&request.plan),
-        fallback_used: true,
-        provider_request_count: 0,
-    })
 }
 
 /// Finalizes one terminal execution report returned by the internal summary run into the prompt-based compaction result consumed by the workbench.

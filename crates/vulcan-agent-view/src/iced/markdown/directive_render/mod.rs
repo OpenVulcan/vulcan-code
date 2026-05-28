@@ -1178,19 +1178,35 @@ fn render_inline_thinking_note(
         .cloned()
         .unwrap_or_else(|| String::from("思考过程"));
     let title_color = app_theme.palette().background.base.text.scale_alpha(0.88);
+    let action_link_target = thinking_modal_action_link(block);
+
+    if let Some(action_link_target) = action_link_target.as_ref()
+        && let Some(block_id) = block.attributes.get("ui-block-id").map(String::as_str)
+    {
+        builder.register_link_action(
+            action_link_target.clone(),
+            RenderedTranscriptLinkAction::OpenThinkingModal(block_id.to_string()),
+        );
+    }
 
     if render_header {
+        let mut title_spans = build_agent_view_plain_text_spans(
+            &title,
+            Font {
+                weight: font::Weight::Semibold,
+                ..theme::ui_font()
+            },
+            PlainTextRenderKind::Flow,
+            Some(title_color),
+            app_theme,
+        );
+        if let Some(action_link_target) = action_link_target.as_ref() {
+            for span in &mut title_spans {
+                span.link = Some(action_link_target.clone().into());
+            }
+        }
         builder.push_rich_paragraph(
-            build_agent_view_plain_text_spans(
-                &title,
-                Font {
-                    weight: font::Weight::Semibold,
-                    ..theme::ui_font()
-                },
-                PlainTextRenderKind::Flow,
-                Some(title_color),
-                app_theme,
-            ),
+            title_spans,
             markdown_settings.text_size,
             text::LineHeight::default(),
             text::Wrapping::Word,
@@ -1205,6 +1221,9 @@ fn render_inline_thinking_note(
             None,
             0,
         );
+        if let Some(RenderedTranscriptNode::Paragraph(header_node)) = builder.nodes.last_mut() {
+            header_node.background_action_link = action_link_target.clone();
+        }
     }
 
     let body_node_start = builder.node_count();

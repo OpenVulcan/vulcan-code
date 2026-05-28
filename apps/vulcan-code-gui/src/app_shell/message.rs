@@ -1359,11 +1359,11 @@ pub(super) enum Message {
         /// 由异步运行时流发出的具体增量事件。
         event: ExecutionStreamEvent,
     },
-    /// Applies the terminal result returned by one internal prompt-based session-compaction task.
-    /// 应用单次内部提示词式会话压缩任务返回的终态结果。
-    SessionPromptCompactionFinished {
-        /// Monotonic compaction-task identifier used to discard stale completions after stop or restart.
-        /// 用于在停止或重启后丢弃过期完成回调的单调压缩任务标识。
+    /// Applies one streamed event returned by one internal prompt-based session-compaction task.
+    /// 应用单次内部提示词式会话压缩任务返回的一条流式事件。
+    SessionPromptCompactionStreamEvent {
+        /// Monotonic compaction-task identifier used to discard stale events after stop or restart.
+        /// 用于在停止或重启后丢弃过期事件的单调压缩任务标识。
         run_id: u64,
         /// Session identifier that owns the compaction task.
         /// 拥有该压缩任务的会话标识。
@@ -1377,9 +1377,9 @@ pub(super) enum Message {
         /// Planned compaction window used to build a fallback result when the model summary is unavailable.
         /// 当模型总结不可用时用于构建回退结果的已规划压缩窗口。
         plan: CompactionPlan,
-        /// Terminal compaction execution result returned by the internal summary task.
-        /// 由内部总结任务返回的终态压缩执行结果。
-        result: Result<PromptCompactionExecution, String>,
+        /// Incremental compaction event returned by the internal summary task.
+        /// 由内部总结任务返回的增量压缩事件。
+        event: PromptCompactionStreamEvent,
     },
     /// Applies one detached background subagent event emitted after the parent run has already resumed or finished.
     /// 应用一条在父运行恢复或结束之后发出的分离后台子代理事件。

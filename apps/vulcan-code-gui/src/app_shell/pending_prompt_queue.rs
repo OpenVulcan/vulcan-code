@@ -1223,9 +1223,12 @@ impl VulcanWorkbench {
         };
 
         active_compaction.handle.abort();
+        let status_message_id = active_compaction.status_message_id.unwrap_or_else(|| {
+            self.push_context_compaction_status_message(session_id, active_compaction.trigger, "")
+        });
         self.update_context_compaction_status_message(
             session_id,
-            &active_compaction.status_message_id,
+            &status_message_id,
             active_compaction.trigger,
             ContextCompactionStatusPanelState::Stopped,
             "",

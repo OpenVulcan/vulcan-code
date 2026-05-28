@@ -642,6 +642,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::MainDisplayPanelSelected(panel) => {
+                let previous_panel = self.active_main_panel;
                 self.active_main_panel = panel;
                 self.composer_drag_hover_labels.clear();
                 self.status_message = self.tf(
@@ -664,6 +665,13 @@ impl VulcanWorkbench {
                             Message::LuaSkillsCatalogLoaded,
                         );
                     }
+                }
+
+                if panel == MainDisplayPanel::Main
+                    && previous_panel != MainDisplayPanel::Main
+                    && let Some(session_id) = self.selected_session().map(|session| session.id)
+                {
+                    return self.restore_selected_session_transcript_scroll_position(session_id);
                 }
 
                 Task::none()
@@ -868,6 +876,12 @@ impl VulcanWorkbench {
             Message::WindowMaximizedStateChanged(window_id, maximized) => {
                 if self.main_window_id == Some(window_id) {
                     self.main_window_maximized = maximized;
+                    if self.active_main_panel == MainDisplayPanel::Main
+                        && let Some(session_id) = self.selected_session().map(|session| session.id)
+                    {
+                        return self
+                            .restore_selected_session_transcript_scroll_position(session_id);
+                    }
                 }
 
                 if self.diff_window_id == Some(window_id) {
@@ -4104,13 +4118,13 @@ impl VulcanWorkbench {
                     }
                 }
             }
-            Message::SessionPromptCompactionFinished {
+            Message::SessionPromptCompactionStreamEvent {
                 run_id,
                 session_id,
                 trigger,
                 budget_note,
                 plan,
-                result,
+                event,
             } => {
                 let Some(active_session_id) = self.active_compaction_session_id_for_run_id(run_id)
                 else {
@@ -4119,39 +4133,108 @@ impl VulcanWorkbench {
                 if active_session_id != session_id {
                     return Task::none();
                 }
-                let Some(active_state) = self.take_active_compaction_state(session_id) else {
-                    return Task::none();
-                };
 
-                match result {
-                    Ok(execution) => self.finish_session_prompt_compaction(
-                        session_id,
-                        trigger,
-                        budget_note,
-                        active_state.previous_phase,
-                        execution,
-                        Some(active_state.status_message_id),
-                    ),
-                    Err(error) => {
-                        self.push_activity(
-                            ActivityLevel::Warning,
-                            "提示词压缩回退",
-                            format!(
-                                "会话 #{session_id} 的提示词式压缩未返回可用总结，已回退到宿主侧摘要：{error}"
+                match event {
+                    PromptCompactionStreamEvent::Stream(event) => match event {
+                        ExecutionStreamEvent::Prepared(preparation) => {
+                            let detail = preparation.summary_rows().join(" | ");
+                            self.replace_session_last_api_request_from_preparation(
+                                preparation.session_id,
+                                &preparation,
+                            );
+                            self.refresh_prompt_composer_inspector_buffer();
+                            self.sync_context_usage_from_preparation(Some(&preparation));
+                            self.update_session_runtime_identity_from_preparation(
+                                preparation.session_id,
+                                &preparation,
+                            );
+                            self.last_execution_preparation = Some(preparation);
+                            self.status_message =
+                                String::from("上下文压缩请求已开始，正在流式写入压缩面板。");
+                            self.push_activity(ActivityLevel::Info, "上下文压缩请求已准备", detail);
+                            Task::none()
+                        }
+                        ExecutionStreamEvent::RequestStarted { session_id } => {
+                            self.mark_session_pending_provider_response(session_id);
+                            Task::none()
+                        }
+                        ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                            self.clear_session_pending_provider_response(session_id);
+                            self.append_streaming_thinking_delta(session_id, &delta);
+                            self.request_selected_session_transcript_tail_follow(session_id);
+                            self.request_selected_session_thinking_overlay_tail_follow(session_id);
+                            Task::none()
+                        }
+                        ExecutionStreamEvent::ThinkingCompleted { session_id } => {
+                            self.dock_streaming_thinking_message(session_id);
+                            self.maybe_follow_selected_session_transcript_tail(session_id)
+                        }
+                        ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                            self.clear_session_pending_provider_response(session_id);
+                            self.append_context_compaction_output_delta_for_active_run(
+                                session_id,
+                                trigger,
+                                &budget_note,
+                                &delta,
+                            );
+                            self.request_selected_session_transcript_tail_follow(session_id);
+                            Task::none()
+                        }
+                        ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                            self.clear_session_pending_provider_response(session_id);
+                            if is_provider_tool_boundary_runtime_event(&event) {
+                                self.dock_streaming_thinking_message(session_id);
+                            }
+                            self.push_session_runtime_event(session_id, event);
+                            Task::batch([
+                                self.maybe_follow_selected_session_transcript_tail(session_id),
+                                self.maybe_start_next_pending_prompt(session_id, false),
+                            ])
+                        }
+                        ExecutionStreamEvent::ConversationCheckpoint { .. } => Task::none(),
+                        ExecutionStreamEvent::Finished(_) => Task::none(),
+                    },
+                    PromptCompactionStreamEvent::Finished(result) => {
+                        let Some(active_state) = self.take_active_compaction_state(session_id)
+                        else {
+                            return Task::none();
+                        };
+                        self.clear_session_pending_provider_response(session_id);
+                        self.dock_streaming_thinking_message(session_id);
+
+                        match result {
+                            Ok(execution) => self.finish_session_prompt_compaction(
+                                session_id,
+                                trigger,
+                                budget_note,
+                                active_state.previous_phase,
+                                execution,
+                                active_state.status_message_id,
                             ),
-                        );
-                        self.finish_session_prompt_compaction(
-                            session_id,
-                            trigger,
-                            budget_note,
-                            active_state.previous_phase,
-                            PromptCompactionExecution {
-                                compaction_result: CompactionSkillResult::from_legacy_plan(&plan),
-                                fallback_used: true,
-                                provider_request_count: 0,
-                            },
-                            Some(active_state.status_message_id),
-                        )
+                            Err(error) => {
+                                self.push_activity(
+                                    ActivityLevel::Warning,
+                                    "提示词压缩回退",
+                                    format!(
+                                        "会话 #{session_id} 的提示词式压缩未返回可用总结，已回退到宿主侧摘要：{error}"
+                                    ),
+                                );
+                                self.finish_session_prompt_compaction(
+                                    session_id,
+                                    trigger,
+                                    budget_note,
+                                    active_state.previous_phase,
+                                    PromptCompactionExecution {
+                                        compaction_result: CompactionSkillResult::from_legacy_plan(
+                                            &plan,
+                                        ),
+                                        fallback_used: true,
+                                        provider_request_count: 0,
+                                    },
+                                    active_state.status_message_id,
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -225,6 +225,31 @@ impl VulcanWorkbench {
         operation::snap_to_end(transcript_scrollable_id(session_id))
     }
 
+    /// Restores the last reported transcript scroll offset when the scrollable surface is remounted without a session switch.
+    /// 当转录滚动表面在未切换会话的情况下重新挂载时，恢复最后一次回传的滚动偏移。
+    pub(super) fn restore_selected_session_transcript_scroll_position(
+        &self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        if self.active_transcript_surface_session_id() != Some(session_id) {
+            return Task::none();
+        }
+
+        if self.session_agent_view_should_follow_tail(session_id) {
+            return self.maybe_follow_selected_session_transcript_tail(session_id);
+        }
+
+        let Some(offset) = self
+            .session_agent_view_viewports
+            .get(&session_id)
+            .map(scrollable::Viewport::absolute_offset)
+        else {
+            return Task::none();
+        };
+
+        operation::scroll_to(transcript_scrollable_id(session_id), offset)
+    }
+
     /// Updates the active drag auto-scroll state for the main rendered transcript surface.
     /// 更新主渲染转录表面的当前拖拽自动滚动状态。
     pub(super) fn update_transcript_drag_auto_scroll_state(
