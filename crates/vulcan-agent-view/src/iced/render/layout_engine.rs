@@ -3,6 +3,7 @@
 
 use super::RendererParagraph;
 use super::SelectableTranscriptState;
+use super::perf::TranscriptPerfTrace;
 use super::scene::{
     CachedTableLayout, LaidOutFlowNode, LaidOutMediaCardNode, LaidOutPanelNode,
     MeasuredRenderedCollapsibleDirectiveNode, MeasuredRenderedTableNode,
@@ -17,8 +18,43 @@ use iced::{Background, Border, Color, Point, Rectangle, Size};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 const TRANSCRIPT_VIEWPORT_OVERSCAN_Y: f32 = 240.0;
+
+/// Tracks renderer-paragraph cache behavior during one layout rebuild.
+/// 跟踪单次布局重建期间渲染段落缓存的行为。
+#[derive(Debug, Default)]
+pub(super) struct ParagraphCacheStats {
+    /// Number of paragraph slots rebuilt from spans because their shape signature changed.
+    /// 因成形签名变化而从片段重新构建的段落槽位数量。
+    builds: usize,
+    /// Number of paragraph slots resized while reusing their existing renderer paragraph.
+    /// 复用已有渲染段落并仅调整尺寸的段落槽位数量。
+    resizes: usize,
+    /// Total time spent rebuilding renderer paragraphs from styled spans.
+    /// 从样式片段重建渲染段落所花费的总时间。
+    build_time: Duration,
+    /// Total time spent resizing existing renderer paragraphs.
+    /// 调整已有渲染段落尺寸所花费的总时间。
+    resize_time: Duration,
+}
+
+impl ParagraphCacheStats {
+    /// Records one renderer-paragraph rebuild duration.
+    /// 记录一次渲染段落重建耗时。
+    fn record_build(&mut self, elapsed: Duration) {
+        self.builds += 1;
+        self.build_time += elapsed;
+    }
+
+    /// Records one renderer-paragraph resize duration.
+    /// 记录一次渲染段落尺寸调整耗时。
+    fn record_resize(&mut self, elapsed: Duration) {
+        self.resizes += 1;
+        self.resize_time += elapsed;
+    }
+}
 
 /// Returns the number of renderer paragraph slots needed by the whole rendered transcript document.
 /// 返回整份渲染转录文档需要的渲染器段落槽位数量。
@@ -113,15 +149,10 @@ fn flow_node_layout_signature(
 /// 将单个段落会影响布局的输入写入给定哈希状态。
 fn hash_paragraph_flow_layout_signature(
     paragraph_node: &RenderedParagraphNode,
-    local_widget_bounds: Rectangle,
+    _local_widget_bounds: Rectangle,
     hasher: &mut DefaultHasher,
 ) {
-    let text_bounds = Size::new(
-        paragraph_measurement_width(local_widget_bounds, paragraph_node),
-        f32::INFINITY,
-    );
-    renderer_paragraph_signature(paragraph_node, text_bounds, text::Alignment::Default)
-        .hash(hasher);
+    renderer_paragraph_shape_signature(paragraph_node, text::Alignment::Default).hash(hasher);
     paragraph_node.gap_before.to_bits().hash(hasher);
     paragraph_node.gap_after.to_bits().hash(hasher);
     paragraph_node.fit_width_to_content.hash(hasher);
@@ -144,13 +175,29 @@ pub(super) fn rebuild_layout_cache(
     local_widget_bounds: Rectangle,
     available_width: f32,
 ) -> f32 {
+    let mut perf_trace = TranscriptPerfTrace::begin(
+        "rebuild_layout_cache",
+        format!(
+            "nodes={} width={:.1} signature={:016x}",
+            document.nodes.len(),
+            available_width,
+            document.layout_signature
+        ),
+    );
+    let mut phase_started_at = Instant::now();
     let render_cache = &mut state.render_cache;
+    let active_width_differs =
+        render_cache.layout_ready && (render_cache.cached_width - available_width).abs() > 0.5;
+    perf_trace.checkpoint("stash_alternate_width_layout", phase_started_at);
+    phase_started_at = Instant::now();
     let paragraph_count = count_rendered_paragraph_slots(document);
     let table_count = document
         .nodes
         .iter()
         .filter(|node| matches!(node, RenderedTranscriptNode::Table(_)))
         .count();
+    perf_trace.checkpoint("scan_nodes", phase_started_at);
+    phase_started_at = Instant::now();
     let width_matches =
         render_cache.layout_ready && (render_cache.cached_width - available_width).abs() <= 0.5;
     let new_flow_layout_signatures =
@@ -163,6 +210,8 @@ pub(super) fn rebuild_layout_cache(
     } else {
         0
     };
+    perf_trace.checkpoint("flow_layout_signatures", phase_started_at);
+    phase_started_at = Instant::now();
 
     if render_cache.paragraphs.len() != paragraph_count {
         render_cache
@@ -181,11 +230,20 @@ pub(super) fn rebuild_layout_cache(
 
     let previous_flow_layouts = std::mem::take(&mut render_cache.flow_layouts);
     render_cache.panel_layouts.clear();
+    perf_trace.checkpoint("resize_caches", phase_started_at);
+    phase_started_at = Instant::now();
 
     let mut paragraph_index = 0usize;
     let mut table_index = 0usize;
     let mut flow_index = 0usize;
     let mut current_y = 0.0f32;
+    let mut reused_flow_count = 0usize;
+    let mut paragraph_layout_time = Duration::ZERO;
+    let mut collapsible_layout_time = Duration::ZERO;
+    let mut media_layout_time = Duration::ZERO;
+    let mut table_layout_time = Duration::ZERO;
+    let mut rule_layout_time = Duration::ZERO;
+    let mut paragraph_cache_stats = ParagraphCacheStats::default();
 
     for (node_index, node) in document.nodes.iter().enumerate() {
         match node {
@@ -197,34 +255,40 @@ pub(super) fn rebuild_layout_cache(
                         render_cache.flow_layouts.push(reused_layout);
                         paragraph_index += 1 + usize::from(collapsible_node.body.is_some());
                         flow_index += 1;
+                        reused_flow_count += 1;
                         continue;
                     }
                 }
 
+                let node_started_at = Instant::now();
                 let summary_paragraph_index = paragraph_index;
+                let summary_text_bounds = Size::new(
+                    paragraph_measurement_width(local_widget_bounds, &collapsible_node.summary),
+                    f32::INFINITY,
+                );
                 ensure_cached_renderer_paragraph(
                     &mut render_cache.paragraphs,
                     &mut render_cache.paragraph_signatures,
+                    &mut paragraph_cache_stats,
                     summary_paragraph_index,
                     &collapsible_node.summary,
-                    Size::new(
-                        paragraph_measurement_width(local_widget_bounds, &collapsible_node.summary),
-                        f32::INFINITY,
-                    ),
+                    summary_text_bounds,
                     text::Alignment::Default,
                 );
 
                 let body_paragraph_index = collapsible_node.body.as_ref().map(|body_node| {
                     let body_index = summary_paragraph_index + 1;
+                    let text_bounds = Size::new(
+                        paragraph_measurement_width(local_widget_bounds, body_node),
+                        f32::INFINITY,
+                    );
                     ensure_cached_renderer_paragraph(
                         &mut render_cache.paragraphs,
                         &mut render_cache.paragraph_signatures,
+                        &mut paragraph_cache_stats,
                         body_index,
                         body_node,
-                        Size::new(
-                            paragraph_measurement_width(local_widget_bounds, body_node),
-                            f32::INFINITY,
-                        ),
+                        text_bounds,
                         text::Alignment::Default,
                     );
                     body_index
@@ -263,6 +327,7 @@ pub(super) fn rebuild_layout_cache(
                 current_y = flow_end_y;
                 paragraph_index += 1 + usize::from(body_paragraph_index.is_some());
                 flow_index += 1;
+                collapsible_layout_time += node_started_at.elapsed();
             }
             RenderedTranscriptNode::Paragraph(paragraph_node) => {
                 if flow_index < reusable_flow_prefix_count {
@@ -271,19 +336,23 @@ pub(super) fn rebuild_layout_cache(
                         render_cache.flow_layouts.push(reused_layout);
                         paragraph_index += 1;
                         flow_index += 1;
+                        reused_flow_count += 1;
                         continue;
                     }
                 }
 
+                let node_started_at = Instant::now();
+                let text_bounds = Size::new(
+                    paragraph_measurement_width(local_widget_bounds, paragraph_node),
+                    f32::INFINITY,
+                );
                 ensure_cached_renderer_paragraph(
                     &mut render_cache.paragraphs,
                     &mut render_cache.paragraph_signatures,
+                    &mut paragraph_cache_stats,
                     paragraph_index,
                     paragraph_node,
-                    Size::new(
-                        paragraph_measurement_width(local_widget_bounds, paragraph_node),
-                        f32::INFINITY,
-                    ),
+                    text_bounds,
                     text::Alignment::Default,
                 );
                 let outer_bounds = resolve_paragraph_outer_bounds(
@@ -299,6 +368,7 @@ pub(super) fn rebuild_layout_cache(
                         node_index,
                         paragraph_index,
                         outer_bounds,
+                        text_bounds,
                         flow_end_y,
                     },
                 ));
@@ -306,6 +376,7 @@ pub(super) fn rebuild_layout_cache(
                 current_y = flow_end_y;
                 paragraph_index += 1;
                 flow_index += 1;
+                paragraph_layout_time += node_started_at.elapsed();
             }
             RenderedTranscriptNode::MediaCard(media_card_node) => {
                 if flow_index < reusable_flow_prefix_count {
@@ -313,10 +384,12 @@ pub(super) fn rebuild_layout_cache(
                         current_y = reused_layout.bottom_y();
                         render_cache.flow_layouts.push(reused_layout);
                         flow_index += 1;
+                        reused_flow_count += 1;
                         continue;
                     }
                 }
 
+                let node_started_at = Instant::now();
                 let measured_media_card = measure_rendered_media_card_node(
                     node_index,
                     media_card_node,
@@ -328,6 +401,7 @@ pub(super) fn rebuild_layout_cache(
                     .push(LaidOutFlowNode::MediaCard(measured_media_card));
                 current_y = measured_media_card.flow_end_y;
                 flow_index += 1;
+                media_layout_time += node_started_at.elapsed();
             }
             RenderedTranscriptNode::Table(table_node) => {
                 if flow_index < reusable_flow_prefix_count {
@@ -337,13 +411,17 @@ pub(super) fn rebuild_layout_cache(
                         paragraph_index += table_node.cells.len();
                         table_index += 1;
                         flow_index += 1;
+                        reused_flow_count += 1;
                         continue;
                     }
                 }
 
+                let node_started_at = Instant::now();
                 let (table_layout, _) = layout_rendered_table_node(
                     table_node,
                     &mut render_cache.paragraphs,
+                    &mut render_cache.paragraph_signatures,
+                    &mut paragraph_cache_stats,
                     paragraph_index,
                     available_width,
                 );
@@ -360,11 +438,6 @@ pub(super) fn rebuild_layout_cache(
 
                 paragraph_index = table_layout.paragraph_range.end;
                 render_cache.table_layouts[table_index] = table_layout;
-                for signature in &mut render_cache.paragraph_signatures
-                    [paragraph_index - table_node.cells.len()..paragraph_index]
-                {
-                    *signature = 0;
-                }
                 render_cache.flow_layouts.push(LaidOutFlowNode::Table(
                     super::scene::LaidOutTableNode {
                         node_index,
@@ -377,6 +450,7 @@ pub(super) fn rebuild_layout_cache(
                 current_y = flow_end_y;
                 table_index += 1;
                 flow_index += 1;
+                table_layout_time += node_started_at.elapsed();
             }
             RenderedTranscriptNode::Rule(rule_node) => {
                 if flow_index < reusable_flow_prefix_count {
@@ -384,10 +458,12 @@ pub(super) fn rebuild_layout_cache(
                         current_y = reused_layout.bottom_y();
                         render_cache.flow_layouts.push(reused_layout);
                         flow_index += 1;
+                        reused_flow_count += 1;
                         continue;
                     }
                 }
 
+                let node_started_at = Instant::now();
                 let rule_y = current_y + rule_node.gap_before;
                 let outer_bounds = Rectangle::new(
                     Point::new(0.0, rule_y),
@@ -405,9 +481,12 @@ pub(super) fn rebuild_layout_cache(
 
                 current_y = flow_end_y;
                 flow_index += 1;
+                rule_layout_time += node_started_at.elapsed();
             }
         }
     }
+    perf_trace.checkpoint("layout_flow_nodes", phase_started_at);
+    phase_started_at = Instant::now();
 
     render_cache.panel_layouts = document
         .nodes
@@ -425,12 +504,40 @@ pub(super) fn rebuild_layout_cache(
             )
         })
         .collect();
+    perf_trace.checkpoint("layout_panel_nodes", phase_started_at);
+    phase_started_at = Instant::now();
 
     render_cache.layout_ready = true;
     render_cache.cached_width = available_width;
     render_cache.cached_signature = document.layout_signature;
     render_cache.flow_layout_signatures = new_flow_layout_signatures;
     render_cache.cached_height = current_y.max(1.0);
+    perf_trace.checkpoint("commit_layout_cache", phase_started_at);
+    perf_trace.note(format!(
+        "width_matches={} active_width_differs={} reusable_prefix={} reused={} paragraphs={} tables={}",
+        width_matches,
+        active_width_differs,
+        reusable_flow_prefix_count,
+        reused_flow_count,
+        paragraph_count,
+        table_count
+    ));
+    perf_trace.note(format!(
+        "node_kind_ms=collapsible:{:.2} paragraph:{:.2} media:{:.2} table:{:.2} rule:{:.2}",
+        collapsible_layout_time.as_secs_f64() * 1000.0,
+        paragraph_layout_time.as_secs_f64() * 1000.0,
+        media_layout_time.as_secs_f64() * 1000.0,
+        table_layout_time.as_secs_f64() * 1000.0,
+        rule_layout_time.as_secs_f64() * 1000.0
+    ));
+    perf_trace.note(format!(
+        "paragraph_cache=builds:{} resizes:{} build_ms:{:.2} resize_ms:{:.2}",
+        paragraph_cache_stats.builds,
+        paragraph_cache_stats.resizes,
+        paragraph_cache_stats.build_time.as_secs_f64() * 1000.0,
+        paragraph_cache_stats.resize_time.as_secs_f64() * 1000.0
+    ));
+    perf_trace.finish();
 
     render_cache.cached_height
 }
@@ -835,37 +942,40 @@ pub(super) fn build_renderer_paragraph(
     })
 }
 
-/// Reuses one renderer paragraph when its text, style, and measurement bounds are unchanged.
-/// 当段落文本、样式与测量边界未变化时复用已有渲染器段落。
+/// Reuses one renderer paragraph when its text and style are unchanged, resizing bounds without reshaping.
+/// 当段落文本与样式未变化时复用已有渲染器段落，仅调整边界而不重新排版成形。
 fn ensure_cached_renderer_paragraph(
     paragraphs: &mut [RendererParagraph],
     paragraph_signatures: &mut [u64],
+    paragraph_cache_stats: &mut ParagraphCacheStats,
     paragraph_index: usize,
     paragraph_node: &RenderedParagraphNode,
     text_bounds: Size,
     alignment: text::Alignment,
 ) {
-    let paragraph_signature = renderer_paragraph_signature(paragraph_node, text_bounds, alignment);
+    let paragraph_signature = renderer_paragraph_shape_signature(paragraph_node, alignment);
     if paragraph_signatures[paragraph_index] == paragraph_signature {
+        let started_at = Instant::now();
+        paragraphs[paragraph_index].resize(text_bounds);
+        paragraph_cache_stats.record_resize(started_at.elapsed());
         return;
     }
 
+    let started_at = Instant::now();
     paragraphs[paragraph_index] = build_renderer_paragraph(paragraph_node, text_bounds, alignment);
     paragraph_signatures[paragraph_index] = paragraph_signature;
+    paragraph_cache_stats.record_build(started_at.elapsed());
 }
 
-/// Computes the cache signature for one renderer paragraph slot.
-/// 计算单个渲染器段落槽位的缓存签名。
-fn renderer_paragraph_signature(
+/// Computes the shape-only cache signature for one renderer paragraph slot.
+/// 计算单个渲染器段落槽位的仅成形缓存签名。
+fn renderer_paragraph_shape_signature(
     paragraph_node: &RenderedParagraphNode,
-    text_bounds: Size,
     alignment: text::Alignment,
 ) -> u64 {
     let mut hasher = DefaultHasher::new();
 
     paragraph_node.signature_seed.hash(&mut hasher);
-    text_bounds.width.to_bits().hash(&mut hasher);
-    text_bounds.height.to_bits().hash(&mut hasher);
     format!("{:?}", alignment).hash(&mut hasher);
 
     hasher.finish()
@@ -1063,6 +1173,8 @@ pub(super) fn measure_rendered_collapsible_directive_node(
 pub(super) fn layout_rendered_table_node(
     table_node: &RenderedTableNode,
     paragraphs: &mut [RendererParagraph],
+    paragraph_signatures: &mut [u64],
+    paragraph_cache_stats: &mut ParagraphCacheStats,
     paragraph_start: usize,
     available_width: f32,
 ) -> (CachedTableLayout, f32) {
@@ -1095,12 +1207,15 @@ pub(super) fn layout_rendered_table_node(
     let mut natural_column_widths = vec![0.0_f32; table_node.column_count];
 
     for (cell_index, cell_node) in table_node.cells.iter().enumerate() {
-        let paragraph = build_renderer_paragraph(
+        ensure_cached_renderer_paragraph(
+            paragraphs,
+            paragraph_signatures,
+            paragraph_cache_stats,
+            paragraph_start + cell_index,
             &cell_node.paragraph,
             Size::new(measurement_text_width, f32::INFINITY),
             table_cell_text_alignment(cell_node.alignment),
         );
-        paragraphs[paragraph_start + cell_index] = paragraph;
         natural_column_widths[cell_node.column_index] = natural_column_widths
             [cell_node.column_index]
             .max(paragraphs[paragraph_start + cell_index].min_bounds().width + horizontal_padding);
@@ -1115,10 +1230,12 @@ pub(super) fn layout_rendered_table_node(
             .get(cell_node.column_index)
             .copied()
             .unwrap_or(usable_width / table_node.column_count as f32);
+        let resize_started_at = Instant::now();
         paragraphs[paragraph_start + cell_index].resize(Size::new(
             (column_width - horizontal_padding).max(1.0),
             f32::INFINITY,
         ));
+        paragraph_cache_stats.record_resize(resize_started_at.elapsed());
         row_heights[cell_node.row_index] = row_heights[cell_node.row_index]
             .max(paragraphs[paragraph_start + cell_index].min_bounds().height + vertical_padding);
     }
@@ -1166,7 +1283,7 @@ fn resolve_rendered_table_column_widths(natural_widths: &[f32], available_width:
 
 /// Returns the text alignment used by one rendered table cell based on the parsed Markdown alignment marker.
 /// 根据解析得到的 Markdown 对齐标记返回某个渲染表格单元格使用的文本对齐方式。
-fn table_cell_text_alignment(alignment: SelectableTableAlignment) -> text::Alignment {
+pub(super) fn table_cell_text_alignment(alignment: SelectableTableAlignment) -> text::Alignment {
     match alignment {
         SelectableTableAlignment::Left => text::Alignment::Default,
         SelectableTableAlignment::Center => text::Alignment::Center,
@@ -1196,6 +1313,7 @@ pub(super) fn measure_rendered_table_node(
 
     let mut cell_bounds = Vec::with_capacity(table_node.cells.len());
     let mut cell_text_origins = Vec::with_capacity(table_node.cells.len());
+    let mut cell_text_bounds = Vec::with_capacity(table_node.cells.len());
     let mut current_row_y = outer_y + table_layout.border_thickness;
 
     for row_index in 0..table_node.row_count {
@@ -1213,6 +1331,11 @@ pub(super) fn measure_rendered_table_node(
                 cell_bounds_rect.x + table_node.cell_padding.left,
                 cell_bounds_rect.y + table_node.cell_padding.top,
             ));
+            cell_text_bounds.push(Size::new(
+                (cell_width - table_node.cell_padding.left - table_node.cell_padding.right)
+                    .max(1.0),
+                f32::INFINITY,
+            ));
             current_column_x += cell_width + table_layout.border_thickness;
         }
 
@@ -1225,6 +1348,7 @@ pub(super) fn measure_rendered_table_node(
         outer_bounds,
         cell_bounds,
         cell_text_origins,
+        cell_text_bounds,
     }
 }
 
@@ -1335,5 +1459,6 @@ pub(super) fn translate_measured_table_node(
             .iter()
             .map(|point| translate_point(*point, origin))
             .collect(),
+        cell_text_bounds: measured_table.cell_text_bounds.clone(),
     }
 }

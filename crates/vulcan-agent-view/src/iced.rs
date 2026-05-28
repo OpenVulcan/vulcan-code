@@ -335,10 +335,21 @@ impl<'a, Message> Widget<Message, Theme, Renderer> for SelectableTranscript<'a, 
             Size::new(available_width, max_size.height.max(1.0)),
         );
 
-        if state
+        let restored_layout_slot = state
             .render_cache
-            .matches_layout(rendered_document.layout_signature, available_width)
-        {
+            .restore_layout_slot(rendered_document.layout_signature, available_width);
+        let layout_cached = state
+            .render_cache
+            .matches_layout(rendered_document.layout_signature, available_width);
+        perf_trace.note(format!(
+            "surface_cache={} layout_cached={} restored_layout_slot={} cached_width={:.1} available_width={:.1}",
+            state.bound_surface_cache_key.as_deref().unwrap_or("none"),
+            layout_cached,
+            restored_layout_slot,
+            state.render_cache.cached_width,
+            available_width
+        ));
+        if layout_cached {
             state.render_cache.rendered_document = Some(rendered_document);
             perf_trace.finish();
             return layout::Node::new(Size::new(
@@ -1067,6 +1078,7 @@ mod tests {
             signature_seed: 0,
             display_text: String::from("[思考过程]"),
             spans: vec![Span::<markdown::Uri, iced::Font>::new("[思考过程]")],
+            selection_spans: vec![Span::<markdown::Uri, iced::Font>::new("[思考过程]")],
             global_char_range: Range { start: 0, end: 6 },
             local_grapheme_ranges: vec![0..6],
             text_size: Pixels(16.0),

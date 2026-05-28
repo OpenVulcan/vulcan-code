@@ -6,7 +6,8 @@ use super::interaction::{
     clamp_hit_test_point_to_paragraph_text_bounds, paragraph_hit_test_to_byte_offset,
 };
 use super::layout_engine::{
-    paragraph_local_origin, translate_measured_table_node, translate_rectangle,
+    build_renderer_paragraph, paragraph_local_origin, translate_measured_table_node,
+    translate_rectangle,
 };
 use super::scene::{
     LaidOutFlowNode, LaidOutMediaCardNode, MeasuredRenderedTableNode, RenderedMediaCardNode,
@@ -28,7 +29,7 @@ pub(super) fn draw_paragraph_selection(
     renderer: &mut Renderer,
     document: &RenderedTranscriptDocument,
     paragraph_node: &RenderedParagraphNode,
-    paragraph: &RendererParagraph,
+    selection_paragraph: &RendererParagraph,
     selection_start: usize,
     selection_end: usize,
     paragraph_origin: Point,
@@ -52,7 +53,7 @@ pub(super) fn draw_paragraph_selection(
             continue;
         }
 
-        for bounds in paragraph.span_bounds(grapheme_index) {
+        for bounds in selection_paragraph.span_bounds(grapheme_index) {
             let translated_bounds = Rectangle::new(
                 bounds.position() + (paragraph_origin - Point::ORIGIN),
                 bounds.size(),
@@ -69,6 +70,20 @@ pub(super) fn draw_paragraph_selection(
             }
         }
     }
+}
+
+/// Builds a temporary grapheme-span paragraph for precise selection painting without slowing normal layout.
+/// 构建一个临时字素级段落用于精确选区绘制，避免拖慢常规布局。
+fn build_selection_renderer_paragraph(
+    paragraph_node: &RenderedParagraphNode,
+    text_bounds: Size,
+    alignment: text::Alignment,
+) -> RendererParagraph {
+    let mut selection_node = paragraph_node.clone();
+    selection_node
+        .spans
+        .clone_from(&paragraph_node.selection_spans);
+    build_renderer_paragraph(&selection_node, text_bounds, alignment)
 }
 
 /// Draws one rendered table node, including cell fills, grid lines, selections, and text.
@@ -116,11 +131,16 @@ pub(super) fn draw_rendered_table_node(
         );
 
         if let Some((selection_start, selection_end)) = selection {
+            let selection_paragraph = build_selection_renderer_paragraph(
+                &cell_node.paragraph,
+                measured_table.cell_text_bounds[cell_index],
+                super::layout_engine::table_cell_text_alignment(cell_node.alignment),
+            );
             draw_paragraph_selection(
                 renderer,
                 document,
                 &cell_node.paragraph,
-                &paragraphs[cell_index],
+                &selection_paragraph,
                 selection_start,
                 selection_end,
                 measured_table.cell_text_origins[cell_index],
@@ -760,11 +780,16 @@ pub(super) fn draw_visible_transcript_content(
                 }
 
                 if let Some((selection_start, selection_end)) = scene.selection {
+                    let selection_paragraph = build_selection_renderer_paragraph(
+                        paragraph_node,
+                        layout_node.text_bounds,
+                        text::Alignment::Default,
+                    );
                     draw_paragraph_selection(
                         renderer,
                         scene.document,
                         paragraph_node,
-                        paragraph,
+                        &selection_paragraph,
                         selection_start,
                         selection_end,
                         paragraph_local_origin(outer_bounds, paragraph_node),

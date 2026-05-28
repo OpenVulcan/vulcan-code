@@ -21,6 +21,8 @@ thread_local! {
         RefCell::new(BTreeMap::new());
 }
 
+const MAX_LAYOUT_CACHE_SLOTS: usize = 4;
+
 /// Clears all stashed surface-scoped render caches so future transcript widgets must rebuild from fresh state.
 /// 清空所有按表面归属暂存的渲染缓存，使后续转录组件必须从全新状态重建。
 pub(super) fn clear_stashed_surface_render_caches() {
@@ -65,6 +67,41 @@ pub(super) struct CachedRenderedTranscriptBlock {
     pub(super) markdown_parse: Option<CachedRenderedMarkdownParse>,
 }
 
+/// Stores one complete reusable layout snapshot for a specific rendered-document signature and width.
+/// 存储针对特定渲染文档签名与宽度的一份完整可复用布局快照。
+pub(super) struct TranscriptLayoutCacheSlot {
+    /// Stable rendered-document signature associated with this layout.
+    /// 与该布局关联的稳定渲染文档签名。
+    signature: u64,
+    /// Rounded width key used to tolerate sub-pixel width noise while keeping distinct layout widths apart.
+    /// 用于容忍亚像素宽度噪声、同时区分不同布局宽度的舍入宽度键。
+    width_key: i32,
+    /// Exact width used by the original layout build.
+    /// 原始布局构建时使用的精确宽度。
+    width: f32,
+    /// Cached paragraphs aligned with text-bearing nodes.
+    /// 与文本节点对齐的缓存段落集合。
+    paragraphs: Vec<RendererParagraph>,
+    /// Stable paragraph-render signatures aligned with paragraph slots.
+    /// 与段落槽位对齐的稳定段落渲染签名。
+    paragraph_signatures: Vec<u64>,
+    /// Cached table layouts aligned with rendered table nodes.
+    /// 与渲染表格节点对齐的缓存表格布局集合。
+    table_layouts: Vec<CachedTableLayout>,
+    /// Cached flow-node layout metrics in visual order.
+    /// 按可视顺序保存的流式节点布局指标缓存。
+    flow_layouts: Vec<LaidOutFlowNode>,
+    /// Stable layout signatures aligned with flow nodes.
+    /// 与流式节点对齐的稳定布局签名。
+    flow_layout_signatures: Vec<u64>,
+    /// Cached background-panel layouts.
+    /// 缓存的背景面板布局。
+    panel_layouts: Vec<LaidOutPanelNode>,
+    /// Height produced by this cached layout.
+    /// 该缓存布局产出的高度。
+    height: f32,
+}
+
 /// Stores the heavy layout and paragraph caches used to render long transcript surfaces efficiently.
 /// 存储用于高效渲染长转录表面的重型布局与段落缓存。
 pub(super) struct TranscriptRenderCache {
@@ -107,6 +144,9 @@ pub(super) struct TranscriptRenderCache {
     /// Height produced by the last successful layout-cache build.
     /// 最近一次成功构建布局缓存时产出的高度。
     pub(super) cached_height: f32,
+    /// Recently built alternate layout snapshots for the same surface, keyed by document signature and width.
+    /// 同一表面最近构建过的备用布局快照，按文档签名与宽度区分。
+    layout_slots: Vec<TranscriptLayoutCacheSlot>,
 }
 
 impl TranscriptRenderCache {
@@ -176,6 +216,85 @@ impl TranscriptRenderCache {
             && self.cached_signature == layout_signature
             && (self.cached_width - available_width).abs() <= 0.5
     }
+
+    /// Restores a previously built alternate-width layout into the active cache when available.
+    /// 如果存在匹配的备用宽度布局，则将其恢复为当前活动缓存。
+    pub(super) fn restore_layout_slot(
+        &mut self,
+        layout_signature: u64,
+        available_width: f32,
+    ) -> bool {
+        let Some(slot_index) = self.layout_slots.iter().position(|slot| {
+            slot.signature == layout_signature
+                && slot.width_key == layout_width_key(available_width)
+        }) else {
+            return false;
+        };
+
+        self.stash_active_layout_slot();
+        let slot = self.layout_slots.remove(slot_index);
+        self.paragraphs = slot.paragraphs;
+        self.paragraph_signatures = slot.paragraph_signatures;
+        self.table_layouts = slot.table_layouts;
+        self.flow_layouts = slot.flow_layouts;
+        self.flow_layout_signatures = slot.flow_layout_signatures;
+        self.panel_layouts = slot.panel_layouts;
+        self.layout_ready = true;
+        self.cached_width = slot.width;
+        self.cached_signature = slot.signature;
+        self.cached_height = slot.height;
+        true
+    }
+
+    /// Moves the currently active layout into the alternate-width slot list before it is replaced.
+    /// 在当前活动布局被替换之前，将其移动到备用宽度槽列表中。
+    pub(super) fn stash_active_layout_slot(&mut self) {
+        if !self.layout_ready || self.cached_signature == 0 || self.flow_layouts.is_empty() {
+            return;
+        }
+
+        let slot = TranscriptLayoutCacheSlot {
+            signature: self.cached_signature,
+            width_key: layout_width_key(self.cached_width),
+            width: self.cached_width,
+            paragraphs: std::mem::take(&mut self.paragraphs),
+            paragraph_signatures: std::mem::take(&mut self.paragraph_signatures),
+            table_layouts: std::mem::take(&mut self.table_layouts),
+            flow_layouts: std::mem::take(&mut self.flow_layouts),
+            flow_layout_signatures: std::mem::take(&mut self.flow_layout_signatures),
+            panel_layouts: std::mem::take(&mut self.panel_layouts),
+            height: self.cached_height,
+        };
+        self.layout_ready = false;
+        self.cached_width = 0.0;
+        self.cached_signature = 0;
+        self.cached_height = 1.0;
+        self.push_layout_slot(slot);
+    }
+
+    /// Adds one alternate layout slot while keeping only a small most-recent set.
+    /// 添加一个备用布局槽，并仅保留少量最近使用的槽位。
+    fn push_layout_slot(&mut self, slot: TranscriptLayoutCacheSlot) {
+        self.layout_slots.retain(|existing| {
+            existing.signature != slot.signature || existing.width_key != slot.width_key
+        });
+        self.layout_slots.push(slot);
+        while self.layout_slots.len() > MAX_LAYOUT_CACHE_SLOTS {
+            self.layout_slots.remove(0);
+        }
+    }
+
+    /// Returns a small quality score describing how useful this cache is for a future surface restore.
+    /// 返回一个描述该缓存对后续表面恢复有多大复用价值的小型质量分数。
+    fn reuse_score(&self) -> u8 {
+        if self.layout_ready && self.cached_signature != 0 && !self.flow_layouts.is_empty() {
+            2
+        } else if self.rendered_document.is_some() || !self.rendered_blocks.is_empty() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 impl Default for TranscriptRenderCache {
@@ -196,8 +315,15 @@ impl Default for TranscriptRenderCache {
             cached_width: 0.0,
             cached_signature: 0,
             cached_height: 1.0,
+            layout_slots: Vec::new(),
         }
     }
+}
+
+/// Converts a logical width into a stable half-pixel bucket for alternate layout-cache lookup.
+/// 将逻辑宽度转换为稳定的半像素桶，用于备用布局缓存查找。
+fn layout_width_key(width: f32) -> i32 {
+    (width * 2.0).round() as i32
 }
 
 /// Rebinds one live render cache to the provided surface key, stashing the previous cache and restoring any matching cached payload for the new surface.
@@ -215,7 +341,11 @@ pub(super) fn rebind_stashed_surface_render_cache(
     STASHED_SURFACE_RENDER_CACHES.with(|stashed_caches| {
         let mut stashed_caches = stashed_caches.borrow_mut();
         if let Some(previous_surface_cache_key) = bound_surface_cache_key.take() {
-            stashed_caches.insert(previous_surface_cache_key, std::mem::take(render_cache));
+            stash_render_cache_if_reusable(
+                &mut stashed_caches,
+                previous_surface_cache_key,
+                std::mem::take(render_cache),
+            );
         }
 
         if let Some(ref next_surface_cache_key) = next_surface_cache_key {
@@ -240,10 +370,32 @@ pub(super) fn stash_surface_render_cache(
     };
 
     STASHED_SURFACE_RENDER_CACHES.with(|stashed_caches| {
-        stashed_caches
-            .borrow_mut()
-            .insert(surface_cache_key, std::mem::take(render_cache));
+        stash_render_cache_if_reusable(
+            &mut stashed_caches.borrow_mut(),
+            surface_cache_key,
+            std::mem::take(render_cache),
+        );
     });
+}
+
+/// Stores one cache only when it contains reusable render or layout payload and does not downgrade an existing warm cache.
+/// 仅在缓存包含可复用渲染或布局载荷时保存，并避免用低质量缓存覆盖已有热缓存。
+fn stash_render_cache_if_reusable(
+    stashed_caches: &mut BTreeMap<String, TranscriptRenderCache>,
+    surface_cache_key: String,
+    render_cache: TranscriptRenderCache,
+) {
+    let incoming_score = render_cache.reuse_score();
+    if incoming_score == 0 {
+        return;
+    }
+    let existing_score = stashed_caches
+        .get(&surface_cache_key)
+        .map(TranscriptRenderCache::reuse_score)
+        .unwrap_or(0);
+    if incoming_score >= existing_score {
+        stashed_caches.insert(surface_cache_key, render_cache);
+    }
 }
 
 #[cfg(test)]
@@ -252,6 +404,8 @@ mod tests {
         TranscriptRenderCache, clear_stashed_surface_render_caches,
         rebind_stashed_surface_render_cache, stash_surface_render_cache,
     };
+    use crate::iced::scene::LaidOutRuleNode;
+    use std::collections::BTreeMap;
 
     /// Verifies one stashed surface render cache can be restored by a later widget instance bound to the same surface identifier.
     /// 验证一份已暂存的表面渲染缓存可以被后续绑定到相同表面标识的组件实例恢复出来。
@@ -261,6 +415,17 @@ mod tests {
         let mut original_cache = TranscriptRenderCache::default();
         original_cache.cached_signature = 42;
         original_cache.cached_width = 777.0;
+        original_cache.rendered_blocks.insert(
+            42,
+            super::CachedRenderedTranscriptBlock {
+                signature: 42,
+                nodes: Vec::new(),
+                full_text: String::from("cached"),
+                full_text_char_count: 6,
+                link_actions: BTreeMap::new(),
+                markdown_parse: None,
+            },
+        );
         let mut original_surface_key = Some(unique_surface_id.clone());
 
         stash_surface_render_cache(&mut original_cache, &mut original_surface_key);
@@ -308,5 +473,89 @@ mod tests {
             Some(unique_surface_id.as_str())
         );
         assert_eq!(restored_cache.cached_signature, 0);
+    }
+
+    /// Verifies a cold teardown cache cannot overwrite an already warm stashed layout cache.
+    /// 验证冷销毁缓存不能覆盖已经暂存的热布局缓存。
+    #[test]
+    fn stashed_surface_render_cache_keeps_warm_cache_when_cold_cache_arrives() {
+        clear_stashed_surface_render_caches();
+        let unique_surface_id = String::from("surface:test:warm-not-overwritten");
+        let mut warm_cache = TranscriptRenderCache::default();
+        warm_cache.layout_ready = true;
+        warm_cache.cached_signature = 123;
+        warm_cache.cached_width = 640.0;
+        warm_cache
+            .flow_layouts
+            .push(super::LaidOutFlowNode::Rule(LaidOutRuleNode {
+                node_index: 0,
+                outer_bounds: iced::Rectangle::new(
+                    iced::Point::ORIGIN,
+                    iced::Size::new(640.0, 8.0),
+                ),
+                flow_end_y: 8.0,
+            }));
+        let mut warm_surface_key = Some(unique_surface_id.clone());
+        stash_surface_render_cache(&mut warm_cache, &mut warm_surface_key);
+
+        let mut cold_cache = TranscriptRenderCache::default();
+        let mut cold_surface_key = Some(unique_surface_id.clone());
+        stash_surface_render_cache(&mut cold_cache, &mut cold_surface_key);
+
+        let mut restored_cache = TranscriptRenderCache::default();
+        let mut restored_surface_key = None;
+        rebind_stashed_surface_render_cache(
+            &mut restored_cache,
+            &mut restored_surface_key,
+            Some(unique_surface_id.as_str()),
+        );
+
+        assert_eq!(restored_cache.cached_signature, 123);
+        assert_eq!(restored_cache.cached_width, 640.0);
+        assert!(restored_cache.layout_ready);
+    }
+
+    /// Verifies alternate width layout slots can be restored after width jitter swaps the active cache.
+    /// 验证宽度抖动切换活动缓存后，可以恢复备用宽度布局槽。
+    #[test]
+    fn alternate_width_layout_slots_round_trip() {
+        let mut cache = TranscriptRenderCache::default();
+        cache.layout_ready = true;
+        cache.cached_signature = 55;
+        cache.cached_width = 1119.0;
+        cache.cached_height = 200.0;
+        cache
+            .flow_layouts
+            .push(super::LaidOutFlowNode::Rule(LaidOutRuleNode {
+                node_index: 0,
+                outer_bounds: iced::Rectangle::new(
+                    iced::Point::ORIGIN,
+                    iced::Size::new(1119.0, 8.0),
+                ),
+                flow_end_y: 200.0,
+            }));
+
+        cache.stash_active_layout_slot();
+        cache.layout_ready = true;
+        cache.cached_signature = 55;
+        cache.cached_width = 1143.0;
+        cache.cached_height = 240.0;
+        cache
+            .flow_layouts
+            .push(super::LaidOutFlowNode::Rule(LaidOutRuleNode {
+                node_index: 0,
+                outer_bounds: iced::Rectangle::new(
+                    iced::Point::ORIGIN,
+                    iced::Size::new(1143.0, 8.0),
+                ),
+                flow_end_y: 240.0,
+            }));
+
+        assert!(cache.restore_layout_slot(55, 1119.0));
+        assert_eq!(cache.cached_width, 1119.0);
+        assert_eq!(cache.cached_height, 200.0);
+        assert!(cache.restore_layout_slot(55, 1143.0));
+        assert_eq!(cache.cached_width, 1143.0);
+        assert_eq!(cache.cached_height, 240.0);
     }
 }

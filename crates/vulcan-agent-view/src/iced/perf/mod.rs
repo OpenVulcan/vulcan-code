@@ -35,6 +35,9 @@ pub(super) struct TranscriptPerfTrace {
     /// Ordered phase timing samples collected during execution.
     /// 执行过程中按顺序收集的阶段耗时样本。
     phases: Vec<(&'static str, Duration)>,
+    /// Extra contextual notes appended by the measured operation.
+    /// 由被测操作追加的额外上下文备注。
+    notes: Vec<String>,
     /// Whether the trace should stay silent.
     /// 当前追踪是否应保持静默。
     enabled: bool,
@@ -50,6 +53,7 @@ impl TranscriptPerfTrace {
             context: context.into(),
             started_at: Instant::now(),
             phases: Vec::new(),
+            notes: Vec::new(),
             enabled: config.enabled,
         }
     }
@@ -62,6 +66,16 @@ impl TranscriptPerfTrace {
         }
 
         self.phases.push((phase_label, phase_started_at.elapsed()));
+    }
+
+    /// Appends one free-form diagnostic note that will be printed if this trace crosses the slow-path threshold.
+    /// 追加一条自由格式诊断备注；如果该追踪超过慢路径阈值则会输出。
+    pub(super) fn note(&mut self, note: impl Into<String>) {
+        if !self.enabled {
+            return;
+        }
+
+        self.notes.push(note.into());
     }
 
     /// Finishes the trace and prints one stdout summary only when the configured slow-path threshold is exceeded.
@@ -85,8 +99,13 @@ impl TranscriptPerfTrace {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let notes = if self.notes.is_empty() {
+            String::new()
+        } else {
+            format!(" notes=[{}]", self.notes.join(", "))
+        };
         println!(
-            "[transcript-prof][agent-view][{}] total={:.2}ms {}{}",
+            "[transcript-prof][agent-view][{}] total={:.2}ms {}{}{}",
             self.label,
             total.as_secs_f64() * 1000.0,
             self.context,
@@ -94,7 +113,8 @@ impl TranscriptPerfTrace {
                 String::new()
             } else {
                 format!(" phases=[{phases}]")
-            }
+            },
+            notes
         );
     }
 }

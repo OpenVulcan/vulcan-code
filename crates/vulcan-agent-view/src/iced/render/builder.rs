@@ -166,19 +166,15 @@ impl RenderedTranscriptBuilder {
         let paragraph_start = self.full_text.chars().count();
         self.full_text.push_str(&paragraph_text);
         let paragraph_end = self.full_text.chars().count();
-        let (grapheme_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
-        let signature_seed = paragraph_signature_seed(
-            &paragraph_text,
-            &grapheme_spans,
-            text_size,
-            line_height,
-            wrapping,
-        );
+        let (selection_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
+        let signature_seed =
+            paragraph_signature_seed(&paragraph_text, &spans, text_size, line_height, wrapping);
 
         super::scene::RenderedParagraphNode {
             signature_seed,
             display_text: paragraph_text,
-            spans: grapheme_spans,
+            spans,
+            selection_spans,
             global_char_range: paragraph_start..paragraph_end,
             local_grapheme_ranges,
             text_size,
@@ -542,10 +538,10 @@ fn build_table_cell_paragraph_node(
             app_theme,
         )
     };
-    let (grapheme_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
+    let (selection_spans, local_grapheme_ranges) = explode_spans_to_graphemes(&spans);
     let signature_seed = paragraph_signature_seed(
         &cell_text,
-        &grapheme_spans,
+        &spans,
         text_size,
         text::LineHeight::default(),
         text::Wrapping::Word,
@@ -554,7 +550,8 @@ fn build_table_cell_paragraph_node(
     RenderedParagraphNode {
         signature_seed,
         display_text: cell_text,
-        spans: grapheme_spans,
+        spans,
+        selection_spans,
         global_char_range,
         local_grapheme_ranges,
         text_size,

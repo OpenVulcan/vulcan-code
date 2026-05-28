@@ -3,7 +3,7 @@
 
 use iced::advanced::text;
 use iced::widget::text::Span;
-use iced::{Background, Border, Color, Font, Padding, Pixels, Point, Rectangle};
+use iced::{Background, Border, Color, Font, Padding, Pixels, Point, Rectangle, Size};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use vulcan_markdown as markdown;
@@ -183,7 +183,7 @@ fn paragraph_link_at_char_offset(
     let local_char_offset =
         global_char_offset.saturating_sub(paragraph_node.global_char_range.start);
     for (span, local_range) in paragraph_node
-        .spans
+        .selection_spans
         .iter()
         .zip(&paragraph_node.local_grapheme_ranges)
     {
@@ -293,14 +293,17 @@ pub(super) struct RenderedParagraphNode {
     /// Visible display text mirrored into the global copy buffer.
     /// 被镜像到全局复制缓冲区中的可见显示文本。
     pub(super) display_text: String,
-    /// Grapheme-level styled spans used to render the paragraph and derive selection bounds.
-    /// 用于渲染段落并推导选择边界的字素级样式片段。
+    /// Visual styled spans used for normal paragraph rendering and layout.
+    /// 用于常规段落渲染与布局的可视样式片段。
     pub(super) spans: Vec<Span<'static, markdown::Uri, Font>>,
+    /// Grapheme-level styled spans used only when precise selection rectangles are needed.
+    /// 仅在需要精确选区矩形时使用的字素级样式片段。
+    pub(super) selection_spans: Vec<Span<'static, markdown::Uri, Font>>,
     /// Character range of this paragraph inside the global rendered transcript text buffer.
     /// 当前段落在全局渲染转录文本缓冲区中的字符范围。
     pub(super) global_char_range: Range<usize>,
-    /// Character ranges of every grapheme-level span inside the paragraph-local text.
-    /// 每个字素级片段在段落局部文本中的字符范围。
+    /// Character ranges aligned with every grapheme-level selection span inside the paragraph-local text.
+    /// 与段落局部文本内每个字素级选区片段对齐的字符范围。
     pub(super) local_grapheme_ranges: Vec<Range<usize>>,
     /// Text size used by the paragraph.
     /// 当前段落使用的文本字号。
@@ -739,6 +742,9 @@ pub(super) struct MeasuredRenderedTableNode {
     /// Text origins resolved for every cell in row-major order.
     /// 按行优先顺序为每个单元格解析得到的文本起点集合。
     pub(super) cell_text_origins: Vec<Point>,
+    /// Text bounds used when shaping every cell paragraph in row-major order.
+    /// 按行优先顺序保存每个单元格段落排版时使用的文本边界。
+    pub(super) cell_text_bounds: Vec<Size>,
 }
 
 /// Cached local layout metrics for one inline generated-media card flow node.
@@ -838,6 +844,9 @@ pub(super) struct LaidOutParagraphNode {
     /// Local outer bounds of the paragraph box.
     /// 当前段落盒子的本地外部边界。
     pub(super) outer_bounds: Rectangle,
+    /// Text bounds used when shaping this paragraph.
+    /// 对当前段落进行文本排版时使用的文本边界。
+    pub(super) text_bounds: Size,
     /// Local bottom edge after the paragraph and its trailing gap.
     /// 包含段落及其尾部间距的本地底边。
     pub(super) flow_end_y: f32,
