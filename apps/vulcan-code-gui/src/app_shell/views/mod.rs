@@ -530,6 +530,9 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_workbench_question_modal() {
             layered_surfaces.push(overlay);
         }
+        if let Some(overlay) = self.view_last_user_message_edit_modal() {
+            layered_surfaces.push(overlay);
+        }
         if let Some(overlay) = self.view_workbench_notice_modal() {
             layered_surfaces.push(overlay);
         }
@@ -1000,6 +1003,183 @@ impl VulcanWorkbench {
             .padding([20, 22])
             .width(WORKBENCH_NOTICE_MODAL_WIDTH)
             .height(WORKBENCH_NOTICE_MODAL_HEIGHT)
+            .style(style::startup_overlay_card_style);
+        let backdrop =
+            mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Noop);
+
+        Some(
+            opaque(
+                stack([
+                    container(backdrop)
+                        .width(Fill)
+                        .height(Fill)
+                        .style(style::startup_overlay_backdrop_style)
+                        .into(),
+                    container(mouse_area(modal_card).on_press(Message::Noop))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into(),
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .into(),
+        )
+    }
+
+    /// Builds the blocking last-user-message edit modal; closing it never mutates conversation history.
+    /// 构建最后用户消息编辑阻塞弹窗；关闭该弹窗永远不会修改会话历史。
+    pub(super) fn view_last_user_message_edit_modal(&self) -> Option<Element<'_, Message>> {
+        let modal = self.last_user_message_edit_modal.as_ref()?;
+        let palette = self.app_theme.extended_palette();
+        let close_button = button(
+            container(
+                codicon::chrome_close()
+                    .size(14)
+                    .line_height(1.0)
+                    .color(palette.background.base.text.scale_alpha(0.72)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill),
+        )
+        .width(28)
+        .height(28)
+        .padding(0)
+        .style(style::workbench_notice_modal_close_button_style)
+        .on_press(Message::CancelLastUserMessageEdit);
+        let can_submit =
+            composer_input_has_submittable_content(&modal.draft_buffer.text(), &modal.attachments);
+        let editor = text_editor(&modal.draft_buffer)
+            .height(LAST_USER_MESSAGE_EDIT_EDITOR_HEIGHT)
+            .size(COMPOSER_EDITOR_TEXT_SIZE)
+            .line_height(iced::widget::text::LineHeight::Absolute(Pixels(
+                COMPOSER_EDITOR_LINE_HEIGHT,
+            )))
+            .wrapping(iced::advanced::text::Wrapping::WordOrGlyph)
+            .padding([10, 12])
+            .placeholder("输入编辑后的用户消息")
+            .style(style::workbench_composer_editor_style)
+            .key_binding(move |key_press| match key_press.key.as_ref() {
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+                    if !key_press.modifiers.shift() =>
+                {
+                    if can_submit {
+                        Some(text_editor::Binding::Custom(
+                            Message::SubmitLastUserMessageEdit,
+                        ))
+                    } else {
+                        Some(text_editor::Binding::Sequence(Vec::new()))
+                    }
+                }
+                _ => text_editor::Binding::from_key_press(key_press),
+            })
+            .on_action(Message::LastUserMessageEditAction);
+        let scrollbar_overlay: Element<'_, Message> =
+            if let Some(layout) = self.last_user_message_edit_scrollbar_layout() {
+                let thumb_bottom_space =
+                    (layout.track_height - layout.thumb_top - layout.thumb_height).max(0.0);
+                let scrollbar_track = mouse_area(
+                    container(
+                        iced::widget::column![
+                            space().height(layout.thumb_top),
+                            container(space())
+                                .width(6)
+                                .height(layout.thumb_height)
+                                .style(style::workbench_composer_editor_scrollbar_style),
+                            space().height(thumb_bottom_space),
+                        ]
+                        .spacing(0)
+                        .width(6)
+                        .height(layout.track_height)
+                        .align_x(iced::Alignment::End),
+                    )
+                    .width(10)
+                    .height(layout.track_height),
+                )
+                .interaction(if modal.scrollbar_drag_grab_offset.is_some() {
+                    iced::mouse::Interaction::Grabbing
+                } else {
+                    iced::mouse::Interaction::Grab
+                })
+                .on_move(|position| Message::LastUserMessageEditScrollbarPointerMoved(position.y))
+                .on_press(Message::StartLastUserMessageEditScrollbarDrag);
+
+                container(scrollbar_track)
+                    .padding(iced::Padding {
+                        top: 8.0,
+                        right: 4.0,
+                        bottom: 8.0,
+                        left: 0.0,
+                    })
+                    .width(Fill)
+                    .height(LAST_USER_MESSAGE_EDIT_EDITOR_HEIGHT)
+                    .align_x(iced::Alignment::End)
+                    .center_y(Fill)
+                    .into()
+            } else {
+                container(space::vertical().height(0)).into()
+            };
+        let editor_surface = container(stack([
+            container(editor).width(Fill).into(),
+            scrollbar_overlay,
+        ]))
+        .width(Fill)
+        .height(LAST_USER_MESSAGE_EDIT_EDITOR_HEIGHT)
+        .clip(true);
+        let attachment_summary = if modal.attachments.is_empty() {
+            String::from("无附件")
+        } else {
+            format!("保留原消息附件：{} 个", modal.attachments.len())
+        };
+        let cancel_button = button(container(text("取消").size(14)).width(Fill).center(Fill))
+            .width(WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH)
+            .padding([9, 14])
+            .style(style::workbench_notice_modal_secondary_button_style)
+            .on_press(Message::CancelLastUserMessageEdit);
+        let submit_button = button(
+            container(text("发送编辑版").size(14))
+                .width(Fill)
+                .center(Fill),
+        )
+        .width(138)
+        .padding([9, 14])
+        .style(style::workbench_notice_modal_confirm_button_style)
+        .on_press(Message::SubmitLastUserMessageEdit);
+        let action_row = row![space::horizontal(), cancel_button, submit_button]
+            .spacing(10)
+            .align_y(Center);
+        let hint_text = if modal.draft_buffer.text() == modal.original_prompt {
+            "确认前不会撤销历史；只有点击“发送编辑版”才会回滚上一轮并重新执行。"
+        } else {
+            "已检测到内容变更。发送后会用编辑版替换最后一条用户消息并重新执行。"
+        };
+        let modal_body = column![
+            row![
+                text("编辑最后一条用户消息").size(18),
+                space::horizontal(),
+                close_button,
+            ]
+            .spacing(10)
+            .align_y(Center)
+            .height(WORKBENCH_NOTICE_MODAL_HEADER_HEIGHT),
+            text(hint_text)
+                .size(13)
+                .color(palette.background.base.text.scale_alpha(0.70))
+                .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+            editor_surface,
+            text(attachment_summary)
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.58)),
+            action_row,
+        ]
+        .spacing(14)
+        .height(Fill);
+        let modal_card = container(modal_body)
+            .padding([20, 22])
+            .width(LAST_USER_MESSAGE_EDIT_MODAL_WIDTH)
+            .height(LAST_USER_MESSAGE_EDIT_MODAL_HEIGHT)
             .style(style::startup_overlay_card_style);
         let backdrop =
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Noop);
@@ -1951,7 +2131,6 @@ impl VulcanWorkbench {
                 button
             }
         };
-
         row![detail_mode_button, raw_mode_button, request_mode_button]
             .spacing(8)
             .align_y(Center)

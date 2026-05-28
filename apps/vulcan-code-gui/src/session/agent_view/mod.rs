@@ -46,9 +46,26 @@ pub struct AgentViewBuildOptions {
     /// Visible assistant-output message id that is still actively receiving streaming deltas and should therefore keep only its last Markdown block mutable.
     /// 当前仍在接收流式增量、因此只应让其最后一个 Markdown 区块保持可变的可见助手输出消息标识。
     pub active_streaming_output_message_id: Option<String>,
+    /// Visible user-prompt message id that may expose a host-side edit action in transcript chrome.
+    /// 可在转录外框中暴露宿主侧编辑动作的可见用户提示词消息标识。
+    pub editable_user_prompt_message_id: Option<String>,
     /// GUI locale used to localize transcript-owned labels while building directive metadata.
     /// 构建指令元数据时用于本地化转录自有标签的图形界面语言。
     pub locale: AppLocale,
+}
+
+/// Returns the final visible user-prompt message id that may host the safe edit action.
+/// 返回可承载安全编辑动作的最后一条可见用户提示词消息标识。
+pub fn editable_user_prompt_message_id(messages: &[SessionMessageEntry]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.is_visible_to_user()
+                && message.kind == SessionMessageKind::User
+                && message.record_kind == SessionMessageRecordKind::Transcript
+        })
+        .map(|message| message.id.clone())
 }
 
 /// Builds one unified agent-view document from the visible session transcript and runtime events.
@@ -347,6 +364,13 @@ fn build_user_prompt_block(
 ) -> AgentViewDirectiveBlock {
     let mut attributes = AgentViewAttributes::new();
     attributes.insert(String::from("message-id"), message.id.clone());
+    if options
+        .editable_user_prompt_message_id
+        .as_deref()
+        .is_some_and(|message_id| message_id == message.id.as_str())
+    {
+        attributes.insert(String::from("can-edit"), String::from("true"));
+    }
     if !message.created_at.trim().is_empty() {
         attributes.insert(String::from("created-at"), message.created_at.clone());
     }
@@ -821,6 +845,7 @@ mod tests {
 
     use super::{
         AgentViewBuildOptions, build_agent_view_document, build_agent_view_document_with_options,
+        editable_user_prompt_message_id,
     };
     use crate::AppLocale;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
@@ -1320,6 +1345,66 @@ mod tests {
                         .attributes
                         .get("streaming-segment")
                         .is_some_and(|value| value == "active-tail")
+        ));
+    }
+
+    /// Verifies only the final visible user prompt receives the host-editable transcript attribute.
+    /// 验证只有最后一条可见用户提示词会获得宿主可编辑转录属性。
+    #[test]
+    fn final_user_prompt_is_marked_editable_when_requested() {
+        let messages = vec![
+            SessionMessageEntry {
+                id: String::from("user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("first"),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionMessageEntry {
+                id: String::from("assistant-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("done"),
+                metadata: None,
+                created_at: String::from("2"),
+            },
+            SessionMessageEntry {
+                id: String::from("user-2"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("second"),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+        ];
+        let editable_id = editable_user_prompt_message_id(&messages);
+        let options = AgentViewBuildOptions {
+            editable_user_prompt_message_id: editable_id,
+            ..AgentViewBuildOptions::default()
+        };
+        let document = build_agent_view_document_with_options(&messages, &[], &options);
+
+        assert!(matches!(
+            &document.blocks[0],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::UserPrompt
+                    && !block.attributes.contains_key("can-edit")
+        ));
+        assert!(matches!(
+            &document.blocks[2],
+            AgentViewBlock::Directive(block)
+                if block.kind == AgentViewDirectiveKind::UserPrompt
+                    && block
+                        .attributes
+                        .get("can-edit")
+                        .is_some_and(|value| value == "true")
         ));
     }
 

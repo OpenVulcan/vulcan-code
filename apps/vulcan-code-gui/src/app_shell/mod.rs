@@ -15,6 +15,7 @@ mod diff_state;
 mod helpers;
 mod integration_form_state;
 mod interaction_state;
+mod last_user_message_edit;
 mod luaskills_progress_state;
 mod luaskills_update;
 mod mcp_update;
@@ -151,6 +152,7 @@ use crate::agent_runtime::{
 use crate::agent_view::{
     AgentViewBuildOptions, agent_view_block_collapsed_by_default, agent_view_block_id,
     agent_view_document_raw_source, build_agent_view_document_with_options,
+    editable_user_prompt_message_id,
 };
 use crate::ai_tool_configuration::{self, AiToolConfigurationLoadSource};
 use crate::attachment_asset_index::{
@@ -170,10 +172,11 @@ use crate::context_compaction::{
     plan_compaction,
 };
 use crate::conversation_protocol::{
-    SessionConversationRecord, SessionConversationState, append_assistant_text_message,
-    append_record, append_record_body_delta, append_user_text_message,
-    compact_conversation_records_after_summary, compact_conversation_with_summary,
-    conversation_state_to_context_records, conversation_state_to_session_messages,
+    SessionConversationPayload, SessionConversationRecord, SessionConversationState,
+    append_assistant_text_message, append_record, append_record_body_delta,
+    append_user_text_message, compact_conversation_records_after_summary,
+    compact_conversation_with_summary, conversation_state_to_context_records,
+    conversation_state_to_session_messages,
 };
 use crate::data_plane::{self, ControllerBootstrapReport, ControllerRuntimeHandle};
 use crate::diff::{DiffFile, WorkspaceDiffPanel};
@@ -215,6 +218,8 @@ use crate::skills::{
     TitleAgentInput,
 };
 use crate::style;
+
+use self::last_user_message_edit::LastUserMessageEditModalState;
 use crate::theme::{self, ThemePaletteExt};
 use crate::tooling::change_set::{
     ChangeSetFileChangeKind, ChangeSetFileSummary, ChangeSetModalSummary, ChangeSetMode,
@@ -757,6 +762,22 @@ const WORKBENCH_NOTICE_MODAL_HEADER_HEIGHT: f32 = 36.0;
 /// 可复用阻塞提示弹窗每个操作按钮使用的共享固定宽度。
 const WORKBENCH_NOTICE_MODAL_ACTION_BUTTON_WIDTH: f32 = 118.0;
 
+/// Shared fixed width used by the last-user-message edit modal card.
+/// 最后用户消息编辑弹窗卡片使用的共享固定宽度。
+const LAST_USER_MESSAGE_EDIT_MODAL_WIDTH: f32 = 620.0;
+
+/// Shared fixed height used by the last-user-message edit modal card.
+/// 最后用户消息编辑弹窗卡片使用的共享固定高度。
+const LAST_USER_MESSAGE_EDIT_MODAL_HEIGHT: f32 = 390.0;
+
+/// Shared fixed height used by the last-user-message edit modal editor viewport.
+/// 最后用户消息编辑弹窗输入视口使用的共享固定高度。
+const LAST_USER_MESSAGE_EDIT_EDITOR_HEIGHT: f32 = 176.0;
+
+/// Shared estimated text surface width used to measure the last-user-message edit modal editor.
+/// 用于测量最后用户消息编辑弹窗输入区的共享估算文本表面宽度。
+const LAST_USER_MESSAGE_EDIT_EDITOR_SURFACE_WIDTH: f32 = LAST_USER_MESSAGE_EDIT_MODAL_WIDTH - 44.0;
+
 /// Shared fixed width used by the About-page license detail modal card.
 /// 关于页面许可证详情弹窗卡片使用的共享固定宽度。
 const WORKBENCH_ABOUT_LICENSE_MODAL_WIDTH: f32 = 920.0;
@@ -1200,6 +1221,9 @@ pub struct VulcanWorkbench {
     /// Blocking image preview modal currently opened from one staged composer attachment.
     /// 当前从某个已暂存提示词附件打开的阻塞式图片预览弹窗。
     workbench_image_preview_modal: Option<WorkbenchImagePreviewModalState>,
+    /// Blocking editor modal for safely rewriting the final user-prompt message before rerun.
+    /// 用于在重跑前安全改写最后用户提示词消息的阻塞式编辑弹窗。
+    last_user_message_edit_modal: Option<LastUserMessageEditModalState>,
     /// Host-side generated-audio playback state used by transcript media strips and tool-modal preview cards.
     /// 供转录媒体条与工具弹层预览卡片使用的宿主侧生成音频播放状态。
     generated_audio_playback: Option<GeneratedAudioPlaybackState>,
@@ -2161,6 +2185,7 @@ impl VulcanWorkbench {
             workbench_notice_modal: None,
             active_question_modal: None,
             workbench_image_preview_modal: None,
+            last_user_message_edit_modal: None,
             generated_audio_playback: None,
             composer_drag_hover_labels: Vec::new(),
             composer_undo_history: Vec::new(),

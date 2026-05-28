@@ -122,6 +122,9 @@ pub enum SelectableTranscriptInteraction {
     /// Opens one tool block in the dedicated centered modal surface.
     /// 在专用居中弹层中打开某个工具区块。
     OpenToolModal(String),
+    /// Requests host-side editing for the final user-prompt message when the host marks it editable.
+    /// 当宿主标记某条最终用户提示词可编辑时，请求宿主侧打开编辑。
+    EditUserPrompt(String),
     /// Opens one generated image preview through the host application.
     /// 通过宿主应用打开一张生成图片的预览。
     OpenImagePreview {

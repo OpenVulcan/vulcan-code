@@ -108,6 +108,9 @@ pub(super) enum RenderedTranscriptLinkAction {
     /// Copies the provided payload into the clipboard instead of copying the synthetic link string itself.
     /// 将提供的载荷复制到剪贴板，而不是复制合成链接字符串本身。
     CopyText(String),
+    /// Requests host-side editing for one user-prompt transcript message.
+    /// 请求宿主侧编辑某条用户提示词转录消息。
+    EditUserPrompt(String),
     /// Opens one inline thinking block inside the dedicated centered modal surface.
     /// 在专用居中弹层表面中打开某个内联思考区块。
     OpenThinkingModal(String),

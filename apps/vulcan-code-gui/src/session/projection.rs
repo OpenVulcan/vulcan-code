@@ -479,6 +479,7 @@ impl VulcanWorkbench {
             self.streaming_output_message_ids
                 .get(&session_id)
                 .map(String::as_str),
+            editable_user_prompt_message_id(&messages).as_deref(),
             self.current_locale(),
         );
         let document =
@@ -534,6 +535,9 @@ impl VulcanWorkbench {
             perf_trace.finish();
             return false;
         };
+        let editable_message_id = editable_user_prompt_message_id(
+            &self.visible_session_messages_for_agent_view(session_id),
+        );
         perf_trace.checkpoint("load_message_entry", phase_started_at);
         phase_started_at = Instant::now();
         let build_options = agent_view_build_options_for_streaming_output(
@@ -541,6 +545,7 @@ impl VulcanWorkbench {
                 .get(&session_id)
                 .filter(|active_message_id| active_message_id.as_str() == message_id)
                 .map(String::as_str),
+            editable_message_id.as_deref(),
             self.current_locale(),
         );
         let replacement_document = build_agent_view_document_with_options(
@@ -859,7 +864,7 @@ impl VulcanWorkbench {
         }
 
         let build_options =
-            agent_view_build_options_for_streaming_output(None, self.current_locale());
+            agent_view_build_options_for_streaming_output(None, None, self.current_locale());
         let mut document = build_agent_view_document_with_options(&messages, &[], &build_options);
         for (block_index, block) in document.blocks.iter_mut().enumerate() {
             let block_id = agent_view_block_id(state.task_id, block_index, block);

@@ -3943,6 +3943,20 @@ impl VulcanWorkbench {
             Message::PendingPromptQueueRemove(entry_id) => {
                 self.remove_pending_prompt_entry(&entry_id)
             }
+            Message::OpenLastUserMessageEdit(message_id) => {
+                self.open_last_user_message_edit_modal(message_id)
+            }
+            Message::LastUserMessageEditAction(action) => {
+                self.apply_last_user_message_edit_action(action)
+            }
+            Message::LastUserMessageEditScrollbarPointerMoved(pointer_y) => {
+                self.update_last_user_message_edit_scrollbar_pointer(pointer_y)
+            }
+            Message::StartLastUserMessageEditScrollbarDrag => {
+                self.start_last_user_message_edit_scrollbar_drag()
+            }
+            Message::CancelLastUserMessageEdit => self.cancel_last_user_message_edit(),
+            Message::SubmitLastUserMessageEdit => self.submit_last_user_message_edit(),
             Message::StartPendingPromptQueueDrag(entry_id) => {
                 let Some(session_id) = self.selected_session().map(|session| session.id) else {
                     return Task::none();

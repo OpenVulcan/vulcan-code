@@ -83,6 +83,9 @@ fn map_selectable_transcript_interaction(
         SelectableTranscriptInteraction::ToggleBlockInline(_) => Message::Noop,
         SelectableTranscriptInteraction::OpenThinkingModal(block_id) => open_thinking(block_id),
         SelectableTranscriptInteraction::OpenToolModal(block_id) => open_tool(block_id),
+        SelectableTranscriptInteraction::EditUserPrompt(message_id) => {
+            Message::OpenLastUserMessageEdit(message_id)
+        }
         SelectableTranscriptInteraction::OpenImagePreview {
             file_name,
             local_path,

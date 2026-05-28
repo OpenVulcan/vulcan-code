@@ -321,10 +321,12 @@ pub(super) fn visible_session_messages_for_agent_view_projection(
 /// 为单个会话构建图形界面侧 agent-view 投影选项，并仅让当前活跃流式输出保持可变。
 pub(super) fn agent_view_build_options_for_streaming_output(
     active_streaming_output_message_id: Option<&str>,
+    editable_user_prompt_message_id: Option<&str>,
     locale: AppLocale,
 ) -> AgentViewBuildOptions {
     AgentViewBuildOptions {
         active_streaming_output_message_id: active_streaming_output_message_id.map(str::to_string),
+        editable_user_prompt_message_id: editable_user_prompt_message_id.map(str::to_string),
         locale,
     }
 }
@@ -340,6 +342,7 @@ pub(super) fn build_session_agent_view_projection_snapshot(
 ) -> SessionAgentViewProjectionSnapshot {
     let build_options = agent_view_build_options_for_streaming_output(
         active_streaming_output_message_id.as_deref(),
+        editable_user_prompt_message_id(&messages).as_deref(),
         locale,
     );
     let document =

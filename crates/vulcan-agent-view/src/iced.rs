@@ -509,6 +509,7 @@ mod tests {
         prepare_markdown_source_for_rendering, raw_source_contains_markdown_table,
         render_markdown_items, render_markdown_source_with_table_fallback, render_thinking_block,
         rendered_table_style, user_prompt_copy_action_link, user_prompt_created_at_label,
+        user_prompt_edit_action_link,
     };
     use crate::iced_theme as theme;
     use crate::{AgentViewAttributes, AgentViewDirectiveBlock, AgentViewDirectiveKind};
@@ -1161,13 +1162,14 @@ mod tests {
         );
     }
 
-    /// Verifies user-prompt metadata lines expose a readable timestamp plus a synthetic copy action link tied to the prompt body.
-    /// 验证用户提示词元信息行会暴露可读时间戳以及绑定到提示词正文的合成复制动作链接。
+    /// Verifies user-prompt metadata lines expose readable timestamp, copy, and optional edit action links.
+    /// 验证用户提示词元信息行会暴露可读时间戳、复制动作以及可选编辑动作链接。
     #[test]
-    fn user_prompt_meta_spans_include_timestamp_and_copy_action() {
+    fn user_prompt_meta_spans_include_timestamp_copy_and_edit_actions() {
         let mut attributes = AgentViewAttributes::new();
         attributes.insert(String::from("message-id"), String::from("message-1"));
         attributes.insert(String::from("created-at"), String::from("1715251200000"));
+        attributes.insert(String::from("can-edit"), String::from("true"));
         let block = AgentViewDirectiveBlock::new(
             AgentViewDirectiveKind::UserPrompt,
             attributes,
@@ -1177,10 +1179,12 @@ mod tests {
         );
 
         let copy_action_link = user_prompt_copy_action_link(&block);
+        let edit_action_link = user_prompt_edit_action_link(&block);
         let timestamp_label = user_prompt_created_at_label(&block);
         let spans = build_user_prompt_meta_spans(
             &block,
             copy_action_link.as_deref(),
+            edit_action_link.as_deref(),
             Color::from_rgb8(90, 90, 90),
             Color::from_rgb8(20, 120, 220),
             &Theme::Dark,
@@ -1201,11 +1205,21 @@ mod tests {
             copy_action_link.as_deref(),
             Some("vulcan-agent-view://copy-user-prompt/message-1")
         );
+        assert_eq!(
+            edit_action_link.as_deref(),
+            Some("vulcan-agent-view://edit-user-prompt/message-1")
+        );
         assert!(spans.iter().any(|span| span.text.contains('复')));
+        assert!(spans.iter().any(|span| span.text.contains('编')));
         assert!(spans.iter().any(|span| {
             span.link
                 .as_ref()
                 .is_some_and(|link| link == "vulcan-agent-view://copy-user-prompt/message-1")
+        }));
+        assert!(spans.iter().any(|span| {
+            span.link
+                .as_ref()
+                .is_some_and(|link| link == "vulcan-agent-view://edit-user-prompt/message-1")
         }));
     }
 }

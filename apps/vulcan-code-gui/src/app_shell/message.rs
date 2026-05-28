@@ -1322,6 +1322,24 @@ pub(super) enum Message {
     /// Removes one queued prompt from the selected session queue without dispatching it.
     /// 从当前选中会话队列中移除某条已排队提示词且不再发送。
     PendingPromptQueueRemove(String),
+    /// Opens the blocking editor modal for the final sent user-prompt message.
+    /// 打开最后一条已发送用户提示词的阻塞式编辑弹窗。
+    OpenLastUserMessageEdit(String),
+    /// Applies one text-editor action inside the final-user-message edit modal.
+    /// 在最后用户消息编辑弹窗内应用一次文本编辑器动作。
+    LastUserMessageEditAction(text_editor::Action),
+    /// Updates the edit-modal scrollbar drag preview from a local pointer y position.
+    /// 使用局部指针纵向位置更新编辑弹窗滚动条拖拽预览。
+    LastUserMessageEditScrollbarPointerMoved(f32),
+    /// Starts one drag interaction on the edit-modal scrollbar.
+    /// 在编辑弹窗滚动条上启动一次拖拽交互。
+    StartLastUserMessageEditScrollbarDrag,
+    /// Closes the final-user-message edit modal without mutating conversation history.
+    /// 关闭最后用户消息编辑弹窗且不修改会话历史。
+    CancelLastUserMessageEdit,
+    /// Confirms the edited final user message, then rolls back and re-dispatches that turn.
+    /// 确认编辑后的最后用户消息，然后回滚并重新派发该轮输入。
+    SubmitLastUserMessageEdit,
     /// Starts one click-or-drag interaction from a pending-prompt queue handle.
     /// 从某条待发送队列拖拽柄启动一次点击或拖拽交互。
     StartPendingPromptQueueDrag(String),

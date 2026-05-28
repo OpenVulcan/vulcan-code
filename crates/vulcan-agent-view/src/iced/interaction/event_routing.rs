@@ -458,6 +458,12 @@ fn dispatch_clicked_link_target<Message>(
             RenderedTranscriptLinkAction::CopyText(copy_payload) => {
                 shell.write_clipboard(copy_payload.clone().into());
             }
+            RenderedTranscriptLinkAction::EditUserPrompt(message_id) => {
+                shell.publish(on_interaction(
+                    SelectableTranscriptInteraction::EditUserPrompt(message_id.clone()),
+                ));
+                record_link_click(state, link_target);
+            }
             RenderedTranscriptLinkAction::OpenThinkingModal(block_id) => {
                 shell.publish(on_interaction(
                     SelectableTranscriptInteraction::OpenThinkingModal(block_id.clone()),

@@ -48,6 +48,10 @@ const USER_PROMPT_BUBBLE_MAX_WIDTH_RATIO: f32 = 0.70;
 /// 可选择转录用于识别复制用户提示词交互的链接动作前缀。
 const USER_PROMPT_COPY_ACTION_PREFIX: &str = "vulcan-agent-view://copy-user-prompt/";
 
+/// Link-action prefix used by the selectable transcript to identify host-side user-prompt editing interactions.
+/// 可选择转录用于识别宿主侧用户提示词编辑交互的链接动作前缀。
+const USER_PROMPT_EDIT_ACTION_PREFIX: &str = "vulcan-agent-view://edit-user-prompt/";
+
 /// Resolves the icon, summary color, body background, body text color, and fallback title used by one tool directive block.
 /// 解析单个工具指令区块所使用的图标、摘要颜色、正文背景、正文文字颜色以及兜底标题。
 fn resolve_tool_directive_visuals(
@@ -1340,10 +1344,20 @@ fn render_user_prompt_block(
             RenderedTranscriptLinkAction::CopyText(block.body.clone()),
         );
     }
+    let edit_action_link = user_prompt_edit_action_link(block);
+    if let (Some(edit_action_link), Some(message_id)) =
+        (edit_action_link.as_ref(), user_prompt_message_id(block))
+    {
+        builder.register_link_action(
+            edit_action_link.clone(),
+            RenderedTranscriptLinkAction::EditUserPrompt(message_id.to_string()),
+        );
+    }
 
     let meta_spans = build_user_prompt_meta_spans(
         block,
         copy_action_link.as_deref(),
+        edit_action_link.as_deref(),
         bubble_meta_color,
         bubble_action_color,
         app_theme,
@@ -1466,11 +1480,12 @@ fn user_prompt_image_descriptors_from_attributes(
         .collect()
 }
 
-/// Builds the timestamp and copy-action spans shown under one right-aligned user-prompt bubble.
-/// 构建显示在右对齐用户提示词气泡下方的时间戳与复制动作片段。
+/// Builds the timestamp and action spans shown under one right-aligned user-prompt bubble.
+/// 构建显示在右对齐用户提示词气泡下方的时间戳与动作片段。
 pub(super) fn build_user_prompt_meta_spans(
     block: &AgentViewDirectiveBlock,
     copy_action_link: Option<&str>,
+    edit_action_link: Option<&str>,
     meta_text_color: Color,
     action_text_color: Color,
     app_theme: &Theme,
@@ -1511,6 +1526,30 @@ pub(super) fn build_user_prompt_meta_spans(
         spans.extend(copy_spans);
     }
 
+    if let Some(edit_action_link) = edit_action_link {
+        if !spans.is_empty() {
+            spans.extend(build_agent_view_plain_text_spans(
+                "   ",
+                theme::ui_font(),
+                PlainTextRenderKind::Flow,
+                Some(meta_text_color.scale_alpha(0.72)),
+                app_theme,
+            ));
+        }
+
+        let mut edit_spans = build_agent_view_plain_text_spans(
+            "✎ 编辑",
+            theme::ui_font(),
+            PlainTextRenderKind::Flow,
+            Some(action_text_color),
+            app_theme,
+        );
+        for span in &mut edit_spans {
+            span.link = Some(edit_action_link.into());
+        }
+        spans.extend(edit_spans);
+    }
+
     spans
 }
 
@@ -1537,8 +1576,31 @@ pub(super) fn user_prompt_created_at_label(block: &AgentViewDirectiveBlock) -> O
 /// Returns the synthetic link target used by the user-prompt copy action, if the directive carries a stable message identifier.
 /// 返回用户提示词复制动作使用的合成链接目标；若指令携带稳定消息标识则返回该目标。
 pub(super) fn user_prompt_copy_action_link(block: &AgentViewDirectiveBlock) -> Option<String> {
-    let message_id = block.attributes.get("message-id")?.trim();
-    (!message_id.is_empty()).then(|| format!("{USER_PROMPT_COPY_ACTION_PREFIX}{message_id}"))
+    let message_id = user_prompt_message_id(block)?;
+    Some(format!("{USER_PROMPT_COPY_ACTION_PREFIX}{message_id}"))
+}
+
+/// Returns the synthetic link target used by the user-prompt edit action when the host marks this prompt editable.
+/// 当宿主将该用户提示词标记为可编辑时，返回编辑动作使用的合成链接目标。
+pub(super) fn user_prompt_edit_action_link(block: &AgentViewDirectiveBlock) -> Option<String> {
+    let can_edit = block
+        .attributes
+        .get("can-edit")
+        .map(String::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let message_id = user_prompt_message_id(block)?;
+    can_edit.then(|| format!("{USER_PROMPT_EDIT_ACTION_PREFIX}{message_id}"))
+}
+
+/// Returns the stable user-prompt message id carried by one directive block.
+/// 返回单个指令区块携带的稳定用户提示词消息标识。
+fn user_prompt_message_id(block: &AgentViewDirectiveBlock) -> Option<&str> {
+    block
+        .attributes
+        .get("message-id")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|message_id| !message_id.is_empty())
 }
 
 /// Builds the linked title-line spans used by one inline thinking header.
