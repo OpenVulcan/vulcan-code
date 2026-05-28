@@ -66,6 +66,7 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         preparation.conversation_attachments.clone(),
         foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
+        foundation.resolved_luaskills_dispatch_tools_for_agent(&active_agent_tool_id),
         foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
         ai_tool_configuration,
         resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),

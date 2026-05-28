@@ -6512,6 +6512,7 @@ dependencies = [
  "vulcan-provider-config",
  "vulcan-runtime-assets",
  "vulcan-token-counter",
+ "vulcan-tools-luaskills-call",
  "vulcan-tools-manager",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
@@ -6638,6 +6639,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tokie",
  "wordchipper",
+]
+
+[[package]]
+name = "vulcan-tools-luaskills-call"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

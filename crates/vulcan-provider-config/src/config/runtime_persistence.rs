@@ -114,28 +114,80 @@ pub struct PersistedToolPolicyEntry {
     pub mcp_tools: Vec<String>,
 }
 
-/// Host-managed LuaSkills tool visibility configuration persisted independently from package lifecycle state.
-/// 与技能包生命周期状态独立持久化的宿主管理 LuaSkills 工具可见性配置。
+/// Persisted registration mode for one LuaSkills runtime tool.
+/// 单个 LuaSkills 运行时工具的持久化注册模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistedLuaSkillToolRegistrationState {
+    /// The tool is enabled and registered as an ordinary provider-visible function tool.
+    /// 工具已启用，并作为普通 Provider 可见函数工具注册。
+    Explicit,
+    /// The tool is enabled for host-side dispatch but hidden from provider-visible function schemas.
+    /// 工具已启用供宿主侧调度，但不暴露到 Provider 可见函数 Schema。
+    Implicit,
+    /// The tool is disabled for both direct provider registration and host-side dispatch.
+    /// 工具对直接 Provider 注册与宿主侧调度均禁用。
+    Disabled,
+}
+
+impl Default for PersistedLuaSkillToolRegistrationState {
+    fn default() -> Self {
+        Self::Explicit
+    }
+}
+
+impl fmt::Display for PersistedLuaSkillToolRegistrationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Explicit => "显式启用",
+            Self::Implicit => "隐式启用",
+            Self::Disabled => "禁用",
+        };
+        formatter.write_str(label)
+    }
+}
+
+impl PersistedLuaSkillToolRegistrationState {
+    /// Returns whether this state should register the tool as a provider-visible function tool.
+    /// 返回该状态是否应将工具注册为 Provider 可见函数工具。
+    pub fn is_explicit(self) -> bool {
+        matches!(self, Self::Explicit)
+    }
+
+    /// Returns whether this state still allows host-side deferred dispatch.
+    /// 返回该状态是否仍允许宿主侧延迟调度。
+    pub fn allows_host_dispatch(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
+/// Host-managed LuaSkills tool registration configuration persisted independently from package lifecycle state.
+/// 与技能包生命周期状态独立持久化的宿主管理 LuaSkills 工具注册配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedLuaSkillsConfiguration {
-    /// Disabled LuaSkills local tool names grouped by stable skill identifier.
-    /// 按稳定技能标识分组保存的已禁用 LuaSkills 本地工具名称集合。
+    /// Non-default LuaSkills registration states grouped by stable skill identifier and local tool name.
+    /// 按稳定技能标识与本地工具名分组保存的非默认 LuaSkills 注册状态。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_registration_by_skill:
+        BTreeMap<String, BTreeMap<String, PersistedLuaSkillToolRegistrationState>>,
+    /// Legacy hidden LuaSkills local tool names grouped by stable skill identifier.
+    /// 按稳定技能标识分组保存的旧版隐藏 LuaSkills 本地工具名称集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub disabled_tools_by_skill: BTreeMap<String, Vec<String>>,
 }
 
 impl PersistedLuaSkillsConfiguration {
-    /// Returns whether the current LuaSkills visibility configuration is still empty.
-    /// 返回当前 LuaSkills 可见性配置是否仍为空。
+    /// Returns whether the current LuaSkills registration configuration is still empty.
+    /// 返回当前 LuaSkills 注册配置是否仍为空。
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
 
-    /// Normalizes the persisted LuaSkills visibility map by trimming identifiers, dropping empty entries, and deduplicating tool names.
-    /// 通过裁剪标识、移除空条目并去重工具名来归一化持久化的 LuaSkills 可见性映射。
+    /// Normalizes the persisted LuaSkills registration map and migrates legacy hidden tools to implicit registration.
+    /// 归一化持久化的 LuaSkills 注册映射，并将旧版隐藏工具迁移为隐式注册。
     pub fn normalize(&mut self) -> bool {
-        let normalized_map = self
+        let legacy_implicit_map = self
             .disabled_tools_by_skill
             .iter()
             .filter_map(|(skill_id, local_names)| {
@@ -160,56 +212,151 @@ impl PersistedLuaSkillsConfiguration {
                 }
             })
             .collect::<BTreeMap<_, _>>();
-        let changed = normalized_map != self.disabled_tools_by_skill;
-        self.disabled_tools_by_skill = normalized_map;
+
+        let mut normalized_registration = self
+            .tool_registration_by_skill
+            .iter()
+            .filter_map(|(skill_id, local_states)| {
+                let stable_skill_id = skill_id.trim();
+                if stable_skill_id.is_empty() {
+                    return None;
+                }
+
+                let normalized_states = local_states
+                    .iter()
+                    .filter_map(|(local_name, state)| {
+                        let stable_local_name = local_name.trim();
+                        if stable_local_name.is_empty()
+                            || *state == PersistedLuaSkillToolRegistrationState::Explicit
+                        {
+                            None
+                        } else {
+                            Some((stable_local_name.to_string(), *state))
+                        }
+                    })
+                    .collect::<BTreeMap<_, _>>();
+
+                if normalized_states.is_empty() {
+                    None
+                } else {
+                    Some((stable_skill_id.to_string(), normalized_states))
+                }
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for (skill_id, local_names) in legacy_implicit_map {
+            let registration_entry = normalized_registration.entry(skill_id).or_default();
+            for local_name in local_names {
+                registration_entry
+                    .entry(local_name)
+                    .or_insert(PersistedLuaSkillToolRegistrationState::Implicit);
+            }
+        }
+
+        normalized_registration.retain(|_, local_states| !local_states.is_empty());
+        let changed = normalized_registration != self.tool_registration_by_skill
+            || !self.disabled_tools_by_skill.is_empty();
+        self.tool_registration_by_skill = normalized_registration;
+        self.disabled_tools_by_skill.clear();
         changed
     }
 
-    /// Returns whether one LuaSkills local tool name is currently hidden for the given skill package.
-    /// 返回给定技能包下某个 LuaSkills 本地工具名称当前是否处于隐藏状态。
-    pub fn is_tool_disabled(&self, skill_id: &str, local_name: &str) -> bool {
+    /// Returns the effective registration state for one LuaSkills local tool.
+    /// 返回单个 LuaSkills 本地工具的有效注册状态。
+    pub fn tool_registration_state(
+        &self,
+        skill_id: &str,
+        local_name: &str,
+    ) -> PersistedLuaSkillToolRegistrationState {
         let stable_skill_id = skill_id.trim();
         let stable_local_name = local_name.trim();
         if stable_skill_id.is_empty() || stable_local_name.is_empty() {
-            return false;
+            return PersistedLuaSkillToolRegistrationState::Explicit;
         }
 
-        self.disabled_tools_by_skill
+        if let Some(state) = self
+            .tool_registration_by_skill
             .get(stable_skill_id)
-            .map(|local_names| local_names.iter().any(|name| name == stable_local_name))
-            .unwrap_or(false)
+            .and_then(|local_states| local_states.get(stable_local_name))
+            .copied()
+        {
+            return state;
+        }
+
+        if self
+            .disabled_tools_by_skill
+            .get(stable_skill_id)
+            .is_some_and(|local_names| local_names.iter().any(|name| name == stable_local_name))
+        {
+            return PersistedLuaSkillToolRegistrationState::Implicit;
+        }
+
+        PersistedLuaSkillToolRegistrationState::Explicit
     }
 
-    /// Updates one LuaSkills local tool visibility entry while persisting only disabled items.
-    /// 更新单个 LuaSkills 本地工具的可见性条目，并且只持久化禁用项。
-    pub fn set_tool_disabled(&mut self, skill_id: &str, local_name: &str, disabled: bool) -> bool {
+    /// Returns whether one LuaSkills local tool is disabled for all host invocation paths.
+    /// 返回单个 LuaSkills 本地工具是否已对所有宿主调用路径禁用。
+    pub fn is_tool_disabled(&self, skill_id: &str, local_name: &str) -> bool {
+        self.tool_registration_state(skill_id, local_name)
+            == PersistedLuaSkillToolRegistrationState::Disabled
+    }
+
+    /// Returns whether one LuaSkills local tool should be registered as a provider-visible function tool.
+    /// 返回单个 LuaSkills 本地工具是否应注册为 Provider 可见函数工具。
+    pub fn is_tool_explicitly_registered(&self, skill_id: &str, local_name: &str) -> bool {
+        self.tool_registration_state(skill_id, local_name)
+            .is_explicit()
+    }
+
+    /// Updates one LuaSkills local tool registration state while persisting only non-default states.
+    /// 更新单个 LuaSkills 本地工具的注册状态，并且只持久化非默认状态。
+    pub fn set_tool_registration_state(
+        &mut self,
+        skill_id: &str,
+        local_name: &str,
+        state: PersistedLuaSkillToolRegistrationState,
+    ) -> bool {
         let stable_skill_id = skill_id.trim();
         let stable_local_name = local_name.trim();
         if stable_skill_id.is_empty() || stable_local_name.is_empty() {
             return false;
         }
 
-        let mut changed = false;
-        if disabled {
-            let entry = self
-                .disabled_tools_by_skill
-                .entry(stable_skill_id.to_string())
-                .or_default();
-            if !entry.iter().any(|name| name == stable_local_name) {
-                entry.push(stable_local_name.to_string());
-                changed = true;
+        let previous = self.tool_registration_state(stable_skill_id, stable_local_name);
+        if state == PersistedLuaSkillToolRegistrationState::Explicit {
+            if let Some(entry) = self.tool_registration_by_skill.get_mut(stable_skill_id) {
+                entry.remove(stable_local_name);
+                if entry.is_empty() {
+                    self.tool_registration_by_skill.remove(stable_skill_id);
+                }
             }
-        } else if let Some(entry) = self.disabled_tools_by_skill.get_mut(stable_skill_id) {
-            let original_len = entry.len();
+        } else {
+            self.tool_registration_by_skill
+                .entry(stable_skill_id.to_string())
+                .or_default()
+                .insert(stable_local_name.to_string(), state);
+        }
+
+        if let Some(entry) = self.disabled_tools_by_skill.get_mut(stable_skill_id) {
             entry.retain(|name| name != stable_local_name);
-            changed = original_len != entry.len();
             if entry.is_empty() {
                 self.disabled_tools_by_skill.remove(stable_skill_id);
             }
         }
 
-        changed |= self.normalize();
-        changed
+        let changed = previous != state;
+        changed | self.normalize()
+    }
+
+    /// Updates one legacy LuaSkills hidden-tool entry, mapping hidden to implicit registration for compatibility.
+    /// 更新单个旧版 LuaSkills 隐藏工具条目，并为了兼容将隐藏映射为隐式注册。
+    pub fn set_tool_disabled(&mut self, skill_id: &str, local_name: &str, disabled: bool) -> bool {
+        let state = if disabled {
+            PersistedLuaSkillToolRegistrationState::Implicit
+        } else {
+            PersistedLuaSkillToolRegistrationState::Explicit
+        };
+        self.set_tool_registration_state(skill_id, local_name, state)
     }
 }
 

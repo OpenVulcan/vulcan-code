@@ -2,7 +2,14 @@
 //! LuaSkills 管理面板视图组合逻辑。
 
 use super::*;
+use crate::provider_config::PersistedLuaSkillToolRegistrationState;
 use iced::widget::column;
+
+const LUASKILL_TOOL_REGISTRATION_OPTIONS: [PersistedLuaSkillToolRegistrationState; 3] = [
+    PersistedLuaSkillToolRegistrationState::Disabled,
+    PersistedLuaSkillToolRegistrationState::Explicit,
+    PersistedLuaSkillToolRegistrationState::Implicit,
+];
 
 impl VulcanWorkbench {
     /// Builds the LuaSkills management panel backed by the embedded host runtime and its live skill catalog.
@@ -22,17 +29,24 @@ impl VulcanWorkbench {
         let summary_lines = if let Some(catalog) = &self.luaskills_catalog {
             let enabled_skill_count = catalog.skills.iter().filter(|skill| skill.enabled).count();
             let managed_skill_count = catalog.skills.iter().filter(|skill| skill.managed).count();
-            let hidden_tool_count = catalog
+            let (explicit_tool_count, implicit_tool_count, disabled_tool_count) = catalog
                 .skills
                 .iter()
                 .flat_map(|skill| {
-                    skill.tools.iter().filter(|tool| {
+                    skill.tools.iter().map(|tool| {
                         self.provider_configuration
                             .luaskills
-                            .is_tool_disabled(&skill.skill_id, &tool.local_name)
+                            .tool_registration_state(&skill.skill_id, &tool.local_name)
                     })
                 })
-                .count();
+                .fold((0usize, 0usize, 0usize), |mut counts, state| {
+                    match state {
+                        PersistedLuaSkillToolRegistrationState::Explicit => counts.0 += 1,
+                        PersistedLuaSkillToolRegistrationState::Implicit => counts.1 += 1,
+                        PersistedLuaSkillToolRegistrationState::Disabled => counts.2 += 1,
+                    }
+                    counts
+                });
             column![
                 text(format!("运行时根：{}", catalog.runtime_root.display())).size(12),
                 text(format!(
@@ -41,12 +55,14 @@ impl VulcanWorkbench {
                 ))
                 .size(12),
                 text(format!(
-                    "可见技能 {} · 已启用 {} · 受管安装 {} · 运行时入口 {} · 宿主隐藏工具 {}",
+                    "可见技能 {} · 已启用 {} · 受管安装 {} · 运行时入口 {} · 显式 {} · 隐式 {} · 禁用 {}",
                     catalog.skills.len(),
                     enabled_skill_count,
                     managed_skill_count,
                     catalog.entry_count,
-                    hidden_tool_count
+                    explicit_tool_count,
+                    implicit_tool_count,
+                    disabled_tool_count
                 ))
                 .size(12),
             ]
@@ -200,40 +216,44 @@ impl VulcanWorkbench {
             .into()
     }
 
-    /// Builds one LuaSkills runtime tool row with host-managed visibility controls while keeping package lifecycle state unchanged.
-    /// 构建带宿主管理可见性控件的单条 LuaSkills 运行时工具行，同时保持技能包生命周期状态不变。
+    /// Builds one LuaSkills runtime tool row with host-managed registration controls while keeping package lifecycle state unchanged.
+    /// 构建带宿主管理注册控件的单条 LuaSkills 运行时工具行，同时保持技能包生命周期状态不变。
     pub(super) fn view_luaskills_tool_row<'a>(
         &'a self,
         skill: &'a LuaSkillsCatalogSkill,
         tool: &'a crate::luaskills_runtime::LuaSkillsCatalogTool,
     ) -> Element<'a, Message> {
-        let hidden = self
+        let registration_state = self
             .provider_configuration
             .luaskills
-            .is_tool_disabled(&skill.skill_id, &tool.local_name);
-        let status_text = if hidden { "已隐藏" } else { "已显示" };
-        let mut toggle_button = if hidden {
-            button("显示").padding([6, 10])
-        } else {
-            button("隐藏").padding([6, 10]).style(button::secondary)
-        };
-        toggle_button = toggle_button.on_press(Message::SetLuaSkillToolVisibility {
-            skill_id: skill.skill_id.clone(),
-            local_name: tool.local_name.clone(),
-            hidden: !hidden,
-        });
+            .tool_registration_state(&skill.skill_id, &tool.local_name);
+        let state_help_text = luaskills_tool_registration_state_help(registration_state);
+        let state_picker = pick_list(
+            LUASKILL_TOOL_REGISTRATION_OPTIONS,
+            Some(registration_state),
+            {
+                let skill_id = skill.skill_id.clone();
+                let local_name = tool.local_name.clone();
+                move |state| Message::SetLuaSkillToolRegistrationState {
+                    skill_id: skill_id.clone(),
+                    local_name: local_name.clone(),
+                    state,
+                }
+            },
+        )
+        .placeholder("注册状态");
 
         let description = tool.description.trim();
         let mut body = column![
             row![
                 text(&tool.local_name).size(14),
                 space::horizontal().width(Fill),
-                text(status_text).size(11),
-                toggle_button,
+                state_picker,
             ]
             .spacing(10)
             .align_y(Center),
             text(format!("规范名：{}", tool.canonical_name)).size(12),
+            text(state_help_text).size(12),
         ]
         .spacing(4);
         if !description.is_empty() {
@@ -276,16 +296,22 @@ impl VulcanWorkbench {
             "已停用"
         };
         let manage_text = if skill.managed { "受管" } else { "非受管" };
-        let hidden_tool_count = skill
+        let (explicit_tool_count, implicit_tool_count, disabled_tool_count) = skill
             .tools
             .iter()
-            .filter(|tool| {
+            .map(|tool| {
                 self.provider_configuration
                     .luaskills
-                    .is_tool_disabled(&skill.skill_id, &tool.local_name)
+                    .tool_registration_state(&skill.skill_id, &tool.local_name)
             })
-            .count();
-        let visible_tool_count = skill.tools.len().saturating_sub(hidden_tool_count);
+            .fold((0usize, 0usize, 0usize), |mut counts, state| {
+                match state {
+                    PersistedLuaSkillToolRegistrationState::Explicit => counts.0 += 1,
+                    PersistedLuaSkillToolRegistrationState::Implicit => counts.1 += 1,
+                    PersistedLuaSkillToolRegistrationState::Disabled => counts.2 += 1,
+                }
+                counts
+            });
         let active_progress = self
             .luaskills_operation_progress
             .as_ref()
@@ -336,13 +362,14 @@ impl VulcanWorkbench {
 
         let mut detail_rows = column![
             text(format!(
-                "{} · {} · 根 {} · 运行时入口 {} · 当前可见 {} · 宿主隐藏 {}",
+                "{} · {} · 根 {} · 运行时入口 {} · 显式 {} · 隐式 {} · 禁用 {}",
                 status_text,
                 manage_text,
                 skill.root_name,
                 skill.entry_count,
-                visible_tool_count,
-                hidden_tool_count
+                explicit_tool_count,
+                implicit_tool_count,
+                disabled_tool_count
             ))
             .size(12),
             text(format!("来源：{source_text}")).size(12),
@@ -386,7 +413,7 @@ impl VulcanWorkbench {
             container(
                 column![
                     text("工具列表").size(13),
-                    text("隐藏只影响宿主对模型暴露，不会修改技能包内容。").size(12),
+                    text("显式启用会注册到模型工具 Schema；隐式启用保留宿主调用能力但不暴露独立 Schema；禁用会关闭该工具调用。").size(12),
                     tool_rows,
                 ]
                 .spacing(8),
@@ -421,5 +448,23 @@ impl VulcanWorkbench {
         .style(container::rounded_box)
         .width(Fill)
         .into()
+    }
+}
+
+/// Returns the short explanatory text for one LuaSkills tool registration state.
+/// 返回单个 LuaSkills 工具注册状态的简短说明文本。
+fn luaskills_tool_registration_state_help(
+    state: PersistedLuaSkillToolRegistrationState,
+) -> &'static str {
+    match state {
+        PersistedLuaSkillToolRegistrationState::Explicit => {
+            "显式启用：工具会作为独立函数 Schema 暴露给模型，适合高频或参数复杂的核心工具。"
+        }
+        PersistedLuaSkillToolRegistrationState::Implicit => {
+            "隐式启用：工具不进入独立 Schema，后续可通过 LuaSkills 调度工具按需调用。"
+        }
+        PersistedLuaSkillToolRegistrationState::Disabled => {
+            "禁用：工具不会注册给模型，也不应被宿主调度调用。"
+        }
     }
 }

@@ -44,6 +44,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_tools_luaskills_call::{
+    CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
+    parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
+    restore_call_luaskill_args_for_entry,
+};
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
@@ -96,6 +101,7 @@ pub fn build_vulcan_tools_manager(
     conversation_attachments: Vec<ConversationAttachment>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
+    candidate_luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
     ai_tool_configuration: PersistedAiToolConfiguration,
     ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
@@ -156,6 +162,16 @@ pub fn build_vulcan_tools_manager(
                 })
             }),
         });
+    }
+
+    if !candidate_luaskills_dispatch_tools.is_empty() {
+        let dispatcher_candidate = build_luaskills_dispatch_candidate(
+            luaskills_runtime.clone(),
+            workspace_root.clone(),
+            candidate_luaskills_dispatch_tools,
+        );
+        occupied_public_tool_ids.insert(dispatcher_candidate.descriptor.id.clone());
+        candidates.push(dispatcher_candidate);
     }
 
     let mut candidate_luaskills_tools = candidate_luaskills_tools;
@@ -702,6 +718,152 @@ fn luaskills_descriptor_to_vulcan(
         name: public_id,
         description: entry.description.clone(),
         source: VulcanToolSourceKind::LuaSkills,
+    }
+}
+
+/// Builds the AI-visible LuaSkills dispatcher used for host-side implicit entry calls.
+/// 构建 AI 可见的 LuaSkills 调度器，用于宿主侧隐式入口调用。
+fn build_luaskills_dispatch_candidate(
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    workspace_root: Option<PathBuf>,
+    mut dispatch_entries: Vec<RuntimeEntryDescriptor>,
+) -> VulcanToolCandidate {
+    dispatch_entries.sort_by(|left, right| {
+        left.skill_id
+            .cmp(&right.skill_id)
+            .then_with(|| left.local_name.cmp(&right.local_name))
+            .then_with(|| left.canonical_name.cmp(&right.canonical_name))
+    });
+    let dispatch_entries = Arc::new(dispatch_entries);
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from(CALL_LUASKILL_TOOL_NAME),
+            name: String::from(CALL_LUASKILL_TOOL_NAME),
+            description: String::from(
+                "Call one enabled LuaSkills entry by its complete canonical tool name with compact argument pairs. Use this dispatcher for implicit LuaSkills entries that are not registered as direct function tools.",
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: call_luaskill_args_schema(),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "call_luaskill LuaSkills implicit entry dispatcher",
+        )),
+        invoke: Arc::new(move |args, session_id| {
+            let runtime = luaskills_runtime.clone();
+            let workspace_root = workspace_root.clone();
+            let dispatch_entries = Arc::clone(&dispatch_entries);
+            Box::pin(async move {
+                execute_luaskills_dispatch_tool(
+                    runtime,
+                    workspace_root,
+                    dispatch_entries,
+                    args,
+                    session_id,
+                )
+                .await
+            })
+        }),
+    }
+}
+
+/// Executes one LuaSkills entry through the compact host-side dispatcher.
+/// 通过紧凑的宿主侧调度器执行单个 LuaSkills 入口。
+async fn execute_luaskills_dispatch_tool(
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    workspace_root: Option<PathBuf>,
+    dispatch_entries: Arc<Vec<RuntimeEntryDescriptor>>,
+    args: Value,
+    session_id: Option<String>,
+) -> Result<VulcanToolInvocationResult, String> {
+    let Some(handle) = luaskills_runtime else {
+        return Err(String::from(
+            "The LuaSkills runtime is currently unavailable, so `call_luaskill` cannot invoke entries.",
+        ));
+    };
+    let request = parse_call_luaskill_request(args)?;
+    let entry_views = dispatch_entries
+        .iter()
+        .map(luaskills_entry_to_call_view)
+        .collect::<Vec<_>>();
+    let Some(entry_view) = resolve_call_luaskill_entry_by_name(&entry_views, &request.name) else {
+        return Err(format!(
+            "LuaSkills entry `{}` is not available for host dispatch. It may be disabled, not installed, or not enabled in the current runtime.",
+            request.name
+        ));
+    };
+    let Some(entry) = dispatch_entries
+        .iter()
+        .find(|entry| entry.canonical_name == entry_view.canonical_name)
+    else {
+        return Err(format!(
+            "LuaSkills entry `{}` disappeared from the dispatch snapshot.",
+            request.name
+        ));
+    };
+
+    let request_args = restore_call_luaskill_args_for_entry(request.args, entry_view)?;
+    let entry_declares_luaskill_sid = entry_declares_luaskill_sid(entry);
+    let entry_declares_pwd = entry_declares_pwd(entry);
+    let call_args = inject_host_managed_luaskill_sid_if_needed(
+        request_args,
+        entry_declares_luaskill_sid,
+        session_id.as_deref(),
+        &entry.canonical_name,
+    )?;
+    let call_args = inject_host_managed_pwd_if_needed(
+        call_args,
+        entry_declares_pwd,
+        workspace_root.as_deref(),
+        &entry.canonical_name,
+    )?;
+    let parsed_session_id = session_id
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let invocation_context = build_luaskills_tool_invocation_context(
+        parsed_session_id,
+        "call-luaskill",
+        &entry.canonical_name,
+    );
+    let result = call_luaskills_tool_entry(
+        handle.clone(),
+        entry.canonical_name.clone(),
+        call_args,
+        Some(invocation_context),
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "LuaSkills entry `{}` in skill `{}` failed: {}.",
+            entry.local_name, entry.skill_id, error
+        )
+    })?;
+    let model_output = Value::String(render_luaskills_invocation_result_text(
+        &handle,
+        &entry.canonical_name,
+        Some(&entry.skill_id),
+        &result,
+        workspace_root.as_deref(),
+    ));
+    let invocation_result = if let Some(host_result) = result.host_result.as_ref() {
+        VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
+            VulcanToolHostResult {
+                kind: host_result.kind.clone(),
+                payload: host_result.payload.clone(),
+            },
+        )
+    } else {
+        VulcanToolInvocationResult::from_model_output(model_output)
+    };
+    Ok(invocation_result)
+}
+
+/// Converts one LuaSkills runtime entry into the shared dispatcher entry view.
+/// 将单个 LuaSkills 运行时入口转换为共享调度器入口视图。
+fn luaskills_entry_to_call_view(entry: &RuntimeEntryDescriptor) -> LuaSkillCallEntryView<'_> {
+    LuaSkillCallEntryView {
+        canonical_name: &entry.canonical_name,
+        input_schema: &entry.input_schema,
     }
 }
 

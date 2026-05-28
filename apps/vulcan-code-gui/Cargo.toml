@@ -32,6 +32,7 @@ vulcan-host-tools.workspace = true
 vulcan-markdown.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-tools-manager.workspace = true
+vulcan-tools-luaskills-call.workspace = true
 vulcan-core.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true

@@ -501,7 +501,7 @@ impl VulcanWorkbench {
             | Message::EnableLuaSkill(_)
             | Message::DisableLuaSkill(_)
             | Message::UninstallLuaSkill(_)
-            | Message::SetLuaSkillToolVisibility { .. }
+            | Message::SetLuaSkillToolRegistrationState { .. }
             | Message::LuaSkillsManagementFinished(_)) => {
                 self.update_luaskills_message(luaskills_message)
             }

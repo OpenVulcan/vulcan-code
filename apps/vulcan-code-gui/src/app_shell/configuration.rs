@@ -2215,25 +2215,25 @@ impl VulcanWorkbench {
         Ok(())
     }
 
-    /// Persists one host-managed LuaSkills tool visibility override and refreshes the runtime foundation only when the visibility state actually changed.
-    /// 持久化单个宿主管理的 LuaSkills 工具可见性覆盖，并且仅在状态真实变化时刷新运行时基础架构。
-    pub(super) fn persist_luaskills_tool_visibility(
+    /// Persists one host-managed LuaSkills tool registration state and refreshes the runtime foundation only when the state actually changed.
+    /// 持久化单个宿主管理的 LuaSkills 工具注册状态，并且仅在状态真实变化时刷新运行时基础架构。
+    pub(super) fn persist_luaskills_tool_registration_state(
         &mut self,
         skill_id: &str,
         local_name: &str,
-        hidden: bool,
+        state: crate::provider_config::PersistedLuaSkillToolRegistrationState,
     ) -> Result<bool, String> {
-        let previous_visibility = self.provider_configuration.luaskills.clone();
+        let previous_registration = self.provider_configuration.luaskills.clone();
         let changed = self
             .provider_configuration
             .luaskills
-            .set_tool_disabled(skill_id, local_name, hidden);
+            .set_tool_registration_state(skill_id, local_name, state);
         if !changed {
             return Ok(false);
         }
 
         if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
-            self.provider_configuration.luaskills = previous_visibility;
+            self.provider_configuration.luaskills = previous_registration;
             return Err(error);
         }
 

@@ -235,22 +235,18 @@ impl VulcanWorkbench {
                     Message::LuaSkillsManagementFinished,
                 )
             }
-            Message::SetLuaSkillToolVisibility {
+            Message::SetLuaSkillToolRegistrationState {
                 skill_id,
                 local_name,
-                hidden,
+                state,
             } => {
-                match self.persist_luaskills_tool_visibility(&skill_id, &local_name, hidden) {
+                match self.persist_luaskills_tool_registration_state(&skill_id, &local_name, state)
+                {
                     Ok(true) => {
-                        self.luaskills_notice = if hidden {
-                            format!(
-                                "已隐藏技能 `{skill_id}` 的工具 `{local_name}`，仅影响宿主对模型暴露。"
-                            )
-                        } else {
-                            format!(
-                                "已恢复技能 `{skill_id}` 的工具 `{local_name}`，宿主会重新向模型暴露它。"
-                            )
-                        };
+                        self.luaskills_notice = format!(
+                            "已将技能 `{skill_id}` 的工具 `{local_name}` 设置为{}。",
+                            luaskills_tool_registration_state_notice_label(state)
+                        );
                         self.status_message = self.luaskills_notice.clone();
                     }
                     Ok(false) => {}
@@ -296,6 +292,24 @@ impl VulcanWorkbench {
                 Task::none()
             }
             _ => Task::none(),
+        }
+    }
+}
+
+/// Returns the user-facing Chinese label for one LuaSkills registration state notice.
+/// 返回单个 LuaSkills 注册状态提示使用的中文标签。
+fn luaskills_tool_registration_state_notice_label(
+    state: crate::provider_config::PersistedLuaSkillToolRegistrationState,
+) -> &'static str {
+    match state {
+        crate::provider_config::PersistedLuaSkillToolRegistrationState::Explicit => {
+            "显式启用（会注册到工具 Schema）"
+        }
+        crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit => {
+            "隐式启用（可调用但不注册到工具 Schema）"
+        }
+        crate::provider_config::PersistedLuaSkillToolRegistrationState::Disabled => {
+            "禁用（不注册且不可调用）"
         }
     }
 }

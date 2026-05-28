@@ -78,6 +78,7 @@ pub(crate) fn prepare_execution(
         conversation_attachments.clone(),
         foundation.resolved_native_tools_for_agent(&active_agent.id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
+        foundation.resolved_luaskills_dispatch_tools_for_agent(&active_agent.id),
         foundation.resolved_mcp_tools_for_agent(&active_agent.id),
         request.ai_tool_configuration.clone(),
         ai_tool_fallback_aliases.clone(),

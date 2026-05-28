@@ -77,6 +77,9 @@ pub struct RuntimeFoundation {
     /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
     /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
+    /// LuaSkills-backed runtime tool descriptors allowed through the host-side dispatcher.
+    /// 允许通过宿主侧调度器调用的 LuaSkills 运行时工具描述集合。
+    luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
     /// Unified MCP runtime access surface that hides live-versus-configured source selection.
     /// 隐藏实时与配置来源选择细节的统一 MCP 运行时访问面。
     mcp_runtime_access: McpRuntimeAccess,
@@ -177,21 +180,28 @@ impl RuntimeFoundation {
             Arc::clone(&command_session_runtime),
         );
         let mut warnings = Vec::new();
-        let luaskills_tools = match luaskills_runtime.as_ref() {
+        let (luaskills_tools, luaskills_dispatch_tools) = match luaskills_runtime.as_ref() {
             Some(handle) => match list_luaskills_tool_entries(handle) {
-                Ok(entries) => filter_luaskills_entries_by_visibility(entries, &config.luaskills),
+                Ok(entries) => (
+                    filter_luaskills_entries_by_explicit_registration(
+                        entries.clone(),
+                        &config.luaskills,
+                    ),
+                    filter_luaskills_entries_by_host_dispatch(entries, &config.luaskills),
+                ),
                 Err(error) => {
                     warnings.push(format!("加载 LuaSkills 工具表失败：{error}"));
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 }
             },
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         };
 
         Self {
             config: runtime_config,
             native_tools,
             luaskills_tools,
+            luaskills_dispatch_tools,
             mcp_runtime_access,
             warnings,
             task_runtime,
@@ -427,6 +437,25 @@ impl RuntimeFoundation {
         self.luaskills_tools.clone()
     }
 
+    /// Resolves the LuaSkills runtime tools callable through the host-side dispatcher for one agent.
+    /// 解析当前允许某个代理通过宿主侧调度器调用的 LuaSkills 运行时工具集合。
+    pub fn resolved_luaskills_dispatch_tools_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Vec<RuntimeEntryDescriptor> {
+        let Some(definition) = self
+            .config
+            .agents
+            .iter()
+            .find(|definition| definition.id == agent_id)
+        else {
+            return Vec::new();
+        };
+
+        let _ = definition;
+        self.luaskills_dispatch_tools.clone()
+    }
+
     /// Resolves the MCP runtime tools currently visible to one agent.
     /// 解析当前对某个代理可见的 MCP 运行时工具集合。
     pub fn resolved_mcp_tools_for_agent(&self, agent_id: &str) -> Vec<McpRuntimeToolBinding> {
@@ -524,21 +553,42 @@ fn optional_non_empty_string_set(values: &[String]) -> Option<BTreeSet<String>> 
     }
 }
 
-/// Filters LuaSkills runtime entries through the host-managed visibility overrides while keeping unrecorded tools visible by default.
-/// 通过宿主管理的可见性覆盖配置过滤 LuaSkills 运行时入口，并保持未记录工具默认可见。
-fn filter_luaskills_entries_by_visibility(
+/// Filters LuaSkills runtime entries so only explicitly registered tools enter provider-visible schemas.
+/// 过滤 LuaSkills 运行时入口，使只有显式注册工具进入 Provider 可见 Schema。
+fn filter_luaskills_entries_by_explicit_registration(
     entries: Vec<RuntimeEntryDescriptor>,
-    visibility: &PersistedLuaSkillsConfiguration,
+    registration: &PersistedLuaSkillsConfiguration,
 ) -> Vec<RuntimeEntryDescriptor> {
     entries
         .into_iter()
-        .filter(|entry| !visibility.is_tool_disabled(&entry.skill_id, &entry.local_name))
+        .filter(|entry| {
+            registration.is_tool_explicitly_registered(&entry.skill_id, &entry.local_name)
+        })
+        .collect()
+}
+
+/// Filters LuaSkills runtime entries so disabled tools cannot be reached through host dispatch.
+/// 过滤 LuaSkills 运行时入口，确保禁用工具不能通过宿主调度路径访问。
+fn filter_luaskills_entries_by_host_dispatch(
+    entries: Vec<RuntimeEntryDescriptor>,
+    registration: &PersistedLuaSkillsConfiguration,
+) -> Vec<RuntimeEntryDescriptor> {
+    entries
+        .into_iter()
+        .filter(|entry| {
+            registration
+                .tool_registration_state(&entry.skill_id, &entry.local_name)
+                .allows_host_dispatch()
+        })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_luaskills_entries_by_visibility, resolve_agent_native_tools};
+    use super::{
+        filter_luaskills_entries_by_explicit_registration,
+        filter_luaskills_entries_by_host_dispatch, resolve_agent_native_tools,
+    };
     use crate::agent_runtime::config::{
         RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
     };
@@ -584,19 +634,19 @@ mod tests {
         assert!(warnings[0].contains("不会暴露任何原生工具"));
     }
 
-    /// Verifies that host-managed LuaSkills visibility overrides hide only the recorded tool names and leave newly added tools visible by default.
-    /// 验证宿主管理的 LuaSkills 可见性覆盖只会隐藏已记录工具名，并让新增工具默认保持可见。
+    /// Verifies that only explicitly registered LuaSkills tools enter provider-visible schemas while implicit tools remain host-dispatchable later.
+    /// 验证只有显式注册的 LuaSkills 工具会进入 Provider 可见 Schema，而隐式工具保留给后续宿主调度。
     #[test]
-    fn luaskills_visibility_filters_only_recorded_disabled_tools() {
+    fn luaskills_registration_filters_only_explicit_tools() {
         let entries = vec![
             build_test_luaskills_entry("skill-a", "tool-a"),
             build_test_luaskills_entry("skill-a", "tool-b"),
             build_test_luaskills_entry("skill-b", "tool-a"),
         ];
-        let mut visibility = PersistedLuaSkillsConfiguration::default();
-        assert!(visibility.set_tool_disabled("skill-a", "tool-a", true));
+        let mut registration = PersistedLuaSkillsConfiguration::default();
+        assert!(registration.set_tool_disabled("skill-a", "tool-a", true));
 
-        let filtered = filter_luaskills_entries_by_visibility(entries, &visibility);
+        let filtered = filter_luaskills_entries_by_explicit_registration(entries, &registration);
         let remaining = filtered
             .iter()
             .map(|entry| entry.canonical_name.as_str())
@@ -605,6 +655,39 @@ mod tests {
         assert_eq!(
             remaining,
             BTreeSet::from(["skill-a-tool-b", "skill-b-tool-a"])
+        );
+    }
+
+    /// Verifies disabled LuaSkills tools are not callable through the host-side dispatcher while implicit tools remain callable.
+    /// 验证禁用的 LuaSkills 工具不能通过宿主侧调度器调用，而隐式工具仍然可以调用。
+    #[test]
+    fn luaskills_dispatch_filters_only_disabled_tools() {
+        let entries = vec![
+            build_test_luaskills_entry("skill-a", "tool-a"),
+            build_test_luaskills_entry("skill-a", "tool-b"),
+            build_test_luaskills_entry("skill-b", "tool-a"),
+        ];
+        let mut registration = PersistedLuaSkillsConfiguration::default();
+        assert!(registration.set_tool_registration_state(
+            "skill-a",
+            "tool-a",
+            crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit,
+        ));
+        assert!(registration.set_tool_registration_state(
+            "skill-b",
+            "tool-a",
+            crate::provider_config::PersistedLuaSkillToolRegistrationState::Disabled,
+        ));
+
+        let filtered = filter_luaskills_entries_by_host_dispatch(entries, &registration);
+        let remaining = filtered
+            .iter()
+            .map(|entry| entry.canonical_name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            remaining,
+            BTreeSet::from(["skill-a-tool-a", "skill-a-tool-b"])
         );
     }
 

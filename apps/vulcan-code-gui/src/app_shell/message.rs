@@ -896,12 +896,12 @@ pub(super) enum Message {
     /// Requests uninstalling one ordinary LuaSkills package through the embedded host runtime.
     /// 请求通过嵌入式宿主运行时卸载一个普通 LuaSkills 包。
     UninstallLuaSkill(String),
-    /// Updates one host-managed LuaSkills runtime tool visibility override without mutating the package lifecycle state itself.
-    /// 更新单个宿主管理的 LuaSkills 运行时工具可见性覆盖，而不会改动技能包自身生命周期状态。
-    SetLuaSkillToolVisibility {
+    /// Updates one host-managed LuaSkills runtime tool registration state without mutating the package lifecycle state itself.
+    /// 更新单个宿主管理的 LuaSkills 运行时工具注册状态，而不会改动技能包自身生命周期状态。
+    SetLuaSkillToolRegistrationState {
         skill_id: String,
         local_name: String,
-        hidden: bool,
+        state: crate::provider_config::PersistedLuaSkillToolRegistrationState,
     },
     /// Applies the finished result of one host-side LuaSkills management action.
     /// 应用单次宿主侧 LuaSkills 管理动作的完成结果。

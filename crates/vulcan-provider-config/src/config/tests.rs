@@ -2,17 +2,18 @@ use super::{
     AiCapabilityVendorConnectionMode, AiToolDeclaration, AiToolKind, ModelChoice,
     ModelInterleavedCapability, ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
     PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedAiToolConfiguration, PersistedLuaSkillsConfiguration, PersistedPromptSkillState,
-    PersistedPromptSkillsConfiguration, PersistedProviderEntry, PersistedWebSearchConfiguration,
-    PersistedWebSearchProviderEntry, ProjectVulcanCodeConfigurationFile, ProviderApiFamily,
-    ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
-    ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
-    ProviderUsageCaptureConfig, ReasoningCapabilityKind, ReasoningEffortLevel,
-    ReasoningProfileConfig, SupportedProviderDefinition, WebSearchProviderDispatchMode,
-    WebSearchProviderKind, WebSearchRoutingMode, apply_provider_reasoning_model_overrides,
-    catalog_model_choices, effective_model_choices, extract_models_from_array,
-    filter_remote_model_choices, load_project_configuration_file, merge_embedded_model_metadata,
-    merge_refreshed_models, normalize_provider_configuration_for_save, persist_remote_models,
+    PersistedAiToolConfiguration, PersistedLuaSkillToolRegistrationState,
+    PersistedLuaSkillsConfiguration, PersistedPromptSkillState, PersistedPromptSkillsConfiguration,
+    PersistedProviderEntry, PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
+    ProjectVulcanCodeConfigurationFile, ProviderApiFamily, ProviderBaseUrlConfig,
+    ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
+    ProviderModelDiscoveryKind, ProviderRuntimeKind, ProviderUsageCaptureConfig,
+    ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
+    SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
+    WebSearchRoutingMode, apply_provider_reasoning_model_overrides, catalog_model_choices,
+    effective_model_choices, extract_models_from_array, filter_remote_model_choices,
+    load_project_configuration_file, merge_embedded_model_metadata, merge_refreshed_models,
+    normalize_provider_configuration_for_save, persist_remote_models,
     project_configuration_file_path, remote_models_url, save_project_configuration_file,
     supported_provider_by_id,
 };
@@ -479,24 +480,38 @@ fn provider_configuration_round_trips_web_search_routing_configuration() {
     assert!(restored.ai_tools.web_search.providers[0].enabled);
 }
 
-/// Verifies the provider configuration file round-trips the dedicated host-managed LuaSkills visibility block.
-/// 验证供应商配置文件可以完整往返独立的宿主管理 LuaSkills 可见性配置块。
+/// Verifies the provider configuration file round-trips the dedicated host-managed LuaSkills registration block.
+/// 验证供应商配置文件可以完整往返独立的宿主管理 LuaSkills 注册配置块。
 #[test]
-fn provider_configuration_round_trips_luaskills_visibility_configuration() {
+fn provider_configuration_round_trips_luaskills_registration_configuration() {
     let config = ProviderConfigurationFile {
         luaskills: PersistedLuaSkillsConfiguration {
-            disabled_tools_by_skill: BTreeMap::from([(
+            tool_registration_by_skill: BTreeMap::from([(
                 String::from("skill-a"),
-                vec![String::from("tool-a"), String::from("tool-b")],
+                BTreeMap::from([
+                    (
+                        String::from("tool-a"),
+                        PersistedLuaSkillToolRegistrationState::Implicit,
+                    ),
+                    (
+                        String::from("tool-b"),
+                        PersistedLuaSkillToolRegistrationState::Disabled,
+                    ),
+                ]),
             )]),
+            disabled_tools_by_skill: BTreeMap::new(),
         },
         ..ProviderConfigurationFile::default()
     };
 
     let value = serde_json::to_value(&config).expect("provider configuration must serialize");
     assert_eq!(
-        value["luaskills"]["disabledToolsBySkill"]["skill-a"],
-        json!(["tool-a", "tool-b"])
+        value["luaskills"]["toolRegistrationBySkill"]["skill-a"]["tool-a"],
+        json!("implicit")
+    );
+    assert_eq!(
+        value["luaskills"]["toolRegistrationBySkill"]["skill-a"]["tool-b"],
+        json!("disabled")
     );
 
     let restored: ProviderConfigurationFile =
@@ -504,11 +519,11 @@ fn provider_configuration_round_trips_luaskills_visibility_configuration() {
     assert_eq!(
         restored
             .luaskills
-            .disabled_tools_by_skill
+            .tool_registration_by_skill
             .get("skill-a")
-            .cloned()
-            .unwrap_or_default(),
-        vec![String::from("tool-a"), String::from("tool-b")]
+            .and_then(|tools| tools.get("tool-a"))
+            .copied(),
+        Some(PersistedLuaSkillToolRegistrationState::Implicit)
     );
 }
 
@@ -547,11 +562,18 @@ fn provider_configuration_round_trips_prompt_skills_configuration() {
     );
 }
 
-/// Verifies the dedicated LuaSkills visibility configuration keeps only disabled tool entries and removes empty duplicates during normalization.
-/// 验证独立 LuaSkills 可见性配置只保留禁用工具条目，并会在归一化时移除空值与重复项。
+/// Verifies the dedicated LuaSkills registration configuration keeps only non-default tool entries and migrates legacy hidden entries to implicit mode.
+/// 验证独立 LuaSkills 注册配置只保留非默认工具条目，并会将旧版隐藏条目迁移为隐式模式。
 #[test]
-fn luaskills_visibility_configuration_only_persists_disabled_tools() {
+fn luaskills_registration_configuration_only_persists_non_default_tools() {
     let mut configuration = PersistedLuaSkillsConfiguration {
+        tool_registration_by_skill: BTreeMap::from([(
+            String::from("skill-a"),
+            BTreeMap::from([(
+                String::from("tool-c"),
+                PersistedLuaSkillToolRegistrationState::Disabled,
+            )]),
+        )]),
         disabled_tools_by_skill: BTreeMap::from([
             (
                 String::from(" skill-a "),
@@ -566,20 +588,42 @@ fn luaskills_visibility_configuration_only_persists_disabled_tools() {
     };
 
     assert!(configuration.normalize());
-    assert!(configuration.is_tool_disabled("skill-a", "tool-a"));
-    assert!(!configuration.is_tool_disabled("skill-a", "tool-b"));
+    assert_eq!(
+        configuration.tool_registration_state("skill-a", "tool-a"),
+        PersistedLuaSkillToolRegistrationState::Implicit
+    );
+    assert!(configuration.is_tool_explicitly_registered("skill-a", "tool-b"));
     assert!(configuration.set_tool_disabled("skill-a", "tool-b", true));
-    assert!(configuration.is_tool_disabled("skill-a", "tool-b"));
+    assert_eq!(
+        configuration.tool_registration_state("skill-a", "tool-b"),
+        PersistedLuaSkillToolRegistrationState::Implicit
+    );
     assert!(configuration.set_tool_disabled("skill-a", "tool-a", false));
-    assert!(!configuration.is_tool_disabled("skill-a", "tool-a"));
+    assert!(configuration.is_tool_explicitly_registered("skill-a", "tool-a"));
+    assert!(configuration.set_tool_registration_state(
+        "skill-a",
+        "tool-b",
+        PersistedLuaSkillToolRegistrationState::Disabled
+    ));
+    assert!(configuration.is_tool_disabled("skill-a", "tool-b"));
     assert_eq!(
         configuration
-            .disabled_tools_by_skill
+            .tool_registration_by_skill
             .get("skill-a")
             .cloned()
             .unwrap_or_default(),
-        vec![String::from("tool-b")]
+        BTreeMap::from([
+            (
+                String::from("tool-b"),
+                PersistedLuaSkillToolRegistrationState::Disabled,
+            ),
+            (
+                String::from("tool-c"),
+                PersistedLuaSkillToolRegistrationState::Disabled,
+            ),
+        ])
     );
+    assert!(configuration.disabled_tools_by_skill.is_empty());
 }
 
 /// Verifies MiniMax web-search hints stay aligned with the official Token Plan CLI naming.
