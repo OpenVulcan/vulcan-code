@@ -6505,6 +6505,7 @@ dependencies = [
  "vulcan-core",
  "vulcan-file-watcher",
  "vulcan-host-tools",
+ "vulcan-luaskills-prompt",
  "vulcan-markdown",
  "vulcan-mcp-runtime",
  "vulcan-prompt-composer",
@@ -6573,6 +6574,14 @@ name = "vulcan-iced-widget"
 version = "0.1.0"
 dependencies = [
  "iced",
+]
+
+[[package]]
+name = "vulcan-luaskills-prompt"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "vulcan-tools-luaskills-call",
 ]
 
 [[package]]

@@ -151,6 +151,7 @@ mod tests {
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             prompt_skills: Vec::new(),
             prompt_skill_user_root: None,
+            implicit_luaskill_prompt_entries: Vec::new(),
             prompt_skill_developer_segment: None,
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),

@@ -44,6 +44,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_luaskills_prompt::{
+    LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
+};
 use vulcan_tools_luaskills_call::{
     CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
     parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
@@ -107,6 +110,7 @@ pub fn build_vulcan_tools_manager(
     ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
     enabled_prompt_skill_names: Vec<String>,
     prompt_skill_user_root: Option<PathBuf>,
+    implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
@@ -165,6 +169,10 @@ pub fn build_vulcan_tools_manager(
     }
 
     if !candidate_luaskills_dispatch_tools.is_empty() {
+        let luaskill_help_candidate =
+            build_luaskills_help_candidate(implicit_luaskill_prompt_entries);
+        occupied_public_tool_ids.insert(luaskill_help_candidate.descriptor.id.clone());
+        candidates.push(luaskill_help_candidate);
         let dispatcher_candidate = build_luaskills_dispatch_candidate(
             luaskills_runtime.clone(),
             workspace_root.clone(),
@@ -721,6 +729,31 @@ fn luaskills_descriptor_to_vulcan(
     }
 }
 
+/// Builds the AI-visible LuaSkill help tool paired with the implicit dispatcher.
+/// 构建与隐式调度器配对的 AI 可见 LuaSkill 帮助工具。
+fn build_luaskills_help_candidate(entries: Vec<LuaSkillPromptEntry>) -> VulcanToolCandidate {
+    let entries = Arc::new(entries);
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from(LUASKILL_HELP_TOOL_NAME),
+            name: String::from(LUASKILL_HELP_TOOL_NAME),
+            description: String::from(
+                "Return full prompt help and structured Markdown argument schema help for one enabled implicit LuaSkills entry by complete canonical name.",
+            ),
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: luaskill_help_args_schema(),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
+            "luaskill implicit LuaSkills help and Markdown schema",
+        )),
+        invoke: Arc::new(move |args, _session_id| {
+            let entries = Arc::clone(&entries);
+            Box::pin(async move { execute_luaskills_help_tool(entries, args).await })
+        }),
+    }
+}
+
 /// Builds the AI-visible LuaSkills dispatcher used for host-side implicit entry calls.
 /// 构建 AI 可见的 LuaSkills 调度器，用于宿主侧隐式入口调用。
 fn build_luaskills_dispatch_candidate(
@@ -765,6 +798,42 @@ fn build_luaskills_dispatch_candidate(
             })
         }),
     }
+}
+
+/// Builds the compact JSON schema accepted by the `luaskill` help tool.
+/// 构建 `luaskill` 帮助工具接受的紧凑 JSON Schema。
+fn luaskill_help_args_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Complete canonical LuaSkills tool name, such as vulcan-codekit-ast-tree."
+            }
+        },
+        "required": ["name"]
+    })
+}
+
+/// Executes the LuaSkill help lookup tool from one implicit dispatch snapshot.
+/// 基于单份隐式调度快照执行 LuaSkill 帮助查询工具。
+async fn execute_luaskills_help_tool(
+    entries: Arc<Vec<LuaSkillPromptEntry>>,
+    args: Value,
+) -> Result<VulcanToolInvocationResult, String> {
+    let Value::Object(mut object) = args else {
+        return Err(String::from("`luaskill` arguments must be a JSON object."));
+    };
+    let name = object
+        .remove("name")
+        .and_then(|value| value.as_str().map(str::trim).map(str::to_string))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("`luaskill.name` must be a non-empty string."))?;
+    let output = render_luaskill_help_output(&name, &entries)?;
+    Ok(VulcanToolInvocationResult::from_model_output(
+        Value::String(output),
+    ))
 }
 
 /// Executes one LuaSkills entry through the compact host-side dispatcher.
@@ -1075,13 +1144,18 @@ mod tests {
     //! 面向语义 AI 回退别名的 GUI 桥接层测试。
 
     use super::{
-        AiToolFallbackAlias, append_ai_tool_fallback_aliases, inject_host_managed_pwd_if_needed,
+        AiToolFallbackAlias, append_ai_tool_fallback_aliases, build_luaskills_dispatch_candidate,
+        build_luaskills_help_candidate, inject_host_managed_pwd_if_needed,
+        luaskills_entry_to_call_view,
     };
     use crate::luaskills_runtime::PWD_PARAMETER_NAME;
     use crate::provider_config::AiToolKind;
+    use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
     use std::path::Path;
     use std::sync::Arc;
+    use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
+    use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
     use vulcan_tools_manager::{
         VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
         VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
@@ -1179,5 +1253,65 @@ mod tests {
         .expect("pwd injection should preserve explicit value");
 
         assert_eq!(injected[PWD_PARAMETER_NAME], "/caller/path");
+    }
+
+    /// Verifies implicit LuaSkills expose help and call tools as one paired tool group.
+    /// 验证隐式 LuaSkills 会以帮助与调用工具成组暴露。
+    #[test]
+    fn implicit_luaskills_expose_help_and_call_tool_pair() {
+        let entry = RuntimeEntryDescriptor {
+            canonical_name: String::from("vulcan-codekit-ast-tree"),
+            skill_id: String::from("vulcan-codekit"),
+            local_name: String::from("ast-tree"),
+            root_name: String::from("USER"),
+            skill_dir: String::from(r"C:\skills\vulcan-codekit"),
+            description: String::from("Inspect source tree structure."),
+            parameters: Vec::new(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "paths": { "type": "string" }
+                },
+                "required": ["paths"]
+            }),
+        };
+        let manager = VulcanToolsManager::new(vec![
+            build_luaskills_help_candidate(vec![LuaSkillPromptEntry::new(
+                "vulcan-codekit-ast-tree",
+                "Inspect source tree structure.",
+            )]),
+            build_luaskills_dispatch_candidate(None, None, vec![entry]),
+        ]);
+
+        let resolved = manager.resolve_for_execution_mode("Build");
+        let ids = resolved
+            .descriptors
+            .iter()
+            .map(|descriptor| descriptor.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&LUASKILL_HELP_TOOL_NAME));
+        assert!(ids.contains(&CALL_LUASKILL_TOOL_NAME));
+    }
+
+    /// Verifies implicit LuaSkills dispatch uses LuaSkills canonical names rather than public tool aliases.
+    /// 验证隐式 LuaSkills 调度使用 LuaSkills canonical 名称，而不是 public tool 别名。
+    #[test]
+    fn implicit_luaskills_dispatch_uses_canonical_name() {
+        let input_schema = json!({ "type": "object" });
+        let entry = RuntimeEntryDescriptor {
+            canonical_name: String::from("vulcan-codekit-ast-tree"),
+            skill_id: String::from("vulcan-codekit"),
+            local_name: String::from("ast-tree"),
+            root_name: String::from("USER"),
+            skill_dir: String::from(r"C:\skills\vulcan-codekit"),
+            description: String::from("Inspect source tree structure."),
+            parameters: Vec::new(),
+            input_schema,
+        };
+
+        let view = luaskills_entry_to_call_view(&entry);
+
+        assert_eq!(view.canonical_name, "vulcan-codekit-ast-tree");
     }
 }

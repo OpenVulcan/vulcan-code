@@ -1,0 +1,14 @@
+[package]
+name = "vulcan-luaskills-prompt"
+description = "Prompt rendering helpers for implicit LuaSkills dispatch in VulcanCode."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json.workspace = true
+vulcan-tools-luaskills-call.workspace = true

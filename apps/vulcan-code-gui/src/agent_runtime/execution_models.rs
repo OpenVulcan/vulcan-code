@@ -16,6 +16,7 @@ use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
 use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent, ProviderUsageSnapshot,
 };
+use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 
@@ -160,8 +161,11 @@ pub struct ExecutionPreparation {
     /// User prompt-skill root captured for this run.
     /// 为本次运行捕获的用户提示词技能根目录。
     pub prompt_skill_user_root: Option<PathBuf>,
+    /// Prompt entries for LuaSkills enabled through implicit host dispatch in this run.
+    /// 本次运行中通过隐式宿主调度启用的 LuaSkills 提示词入口集合。
+    pub implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
     /// Optional developer prompt segment advertising the enabled prompt skills.
-    /// 向模型说明已启用提示词技能的可选开发者提示词片段。
+    /// 向模型说明已启用提示词技能与隐式 LuaSkills 的可选开发者提示词片段。
     pub prompt_skill_developer_segment: Option<String>,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。

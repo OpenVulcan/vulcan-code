@@ -13,6 +13,7 @@ use crate::provider_config::ProviderConfigurationFile;
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
+use vulcan_luaskills_prompt::{LuaSkillPromptEntry, render_luaskills_prompt_segment};
 use vulcan_prompt_skills::{
     PromptSkillsProjectConfig, PromptSkillsSessionConfig, render_prompt_skills_instructions,
     resolve_prompt_skills,
@@ -65,8 +66,15 @@ pub(crate) fn prepare_execution(
         &prompt_skills_project_config_from_request(request),
         &prompt_skills_session_config_from_request(request),
     );
-    let prompt_skill_developer_segment =
-        build_prompt_skill_developer_segment(request.prompt_purpose, &prompt_skills);
+    let implicit_luaskills =
+        foundation.resolved_luaskills_dispatch_tools_for_agent(&active_agent.id);
+    let implicit_luaskill_prompt_entries =
+        foundation.resolved_luaskills_prompt_entries_for_agent(&active_agent.id);
+    let prompt_skill_developer_segment = build_skill_developer_segment(
+        request.prompt_purpose,
+        &prompt_skills,
+        &implicit_luaskill_prompt_entries,
+    );
     let enabled_prompt_skill_names = vulcan_prompt_skills::enabled_skill_names(&prompt_skills);
     let ai_tool_fallback_aliases = resolve_ai_tool_fallback_aliases(&model_blueprint);
     let tools_manager = build_vulcan_tools_manager(
@@ -78,15 +86,18 @@ pub(crate) fn prepare_execution(
         conversation_attachments.clone(),
         foundation.resolved_native_tools_for_agent(&active_agent.id),
         foundation.resolved_luaskills_tools_for_agent(&active_agent.id),
-        foundation.resolved_luaskills_dispatch_tools_for_agent(&active_agent.id),
+        implicit_luaskills,
         foundation.resolved_mcp_tools_for_agent(&active_agent.id),
         request.ai_tool_configuration.clone(),
         ai_tool_fallback_aliases.clone(),
         enabled_prompt_skill_names,
         prompt_skill_user_root.clone(),
+        implicit_luaskill_prompt_entries.clone(),
     );
     let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
-    if prompt_skill_developer_segment.is_none() {
+    let prompt_skill_tool_available = request.prompt_purpose == ExecutionPromptPurpose::UserTurn
+        && render_prompt_skills_instructions(&prompt_skills).is_some();
+    if !prompt_skill_tool_available {
         remove_resolved_tool(&mut resolved_tools, "skill");
     }
     if request.prompt_purpose.disables_provider_tools() {
@@ -164,6 +175,7 @@ pub(crate) fn prepare_execution(
         prompt_purpose: request.prompt_purpose,
         prompt_skills,
         prompt_skill_user_root,
+        implicit_luaskill_prompt_entries,
         prompt_skill_developer_segment,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors: resolved_tools.descriptors,
@@ -180,17 +192,25 @@ pub(crate) fn prepare_execution(
     })
 }
 
-/// Builds the AI-visible prompt-skill developer segment only for ordinary user turns.
-/// 仅为普通用户回合构建 AI 可见的提示词技能开发者片段。
-fn build_prompt_skill_developer_segment(
+/// Builds the AI-visible skill developer segment only for ordinary user turns.
+/// 仅为普通用户回合构建 AI 可见的技能开发者片段。
+fn build_skill_developer_segment(
     purpose: ExecutionPromptPurpose,
     prompt_skills: &[vulcan_prompt_skills::ResolvedPromptSkill],
+    implicit_luaskills: &[LuaSkillPromptEntry],
 ) -> Option<String> {
     if purpose != ExecutionPromptPurpose::UserTurn {
         return None;
     }
 
-    render_prompt_skills_instructions(prompt_skills)
+    let mut segments = Vec::new();
+    if let Some(segment) = render_prompt_skills_instructions(prompt_skills) {
+        segments.push(segment);
+    }
+    if let Some(segment) = render_luaskills_prompt_segment(implicit_luaskills) {
+        segments.push(segment);
+    }
+    (!segments.is_empty()).then(|| segments.join("\n\n"))
 }
 
 /// Builds project-level prompt-skill resolver input from one preparation request.

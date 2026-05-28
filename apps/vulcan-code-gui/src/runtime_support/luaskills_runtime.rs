@@ -743,6 +743,69 @@ pub fn list_luaskills_tool_entries(
     Ok(list_host_visible_luaskills_entries(&engine))
 }
 
+/// One compact LuaSkills help summary matched to a runtime entry.
+/// 匹配到单个运行时入口的一份紧凑 LuaSkills 帮助摘要。
+#[derive(Debug, Clone)]
+pub struct LuaSkillsEntryHelpSummary {
+    /// Resolved help flow name used for the entry.
+    /// 当前入口使用的已解析帮助流程名称。
+    pub flow_name: String,
+    /// Human-readable help node description.
+    /// 帮助节点的人类可读说明。
+    pub description: String,
+    /// Rendered help body returned by LuaSkills.
+    /// LuaSkills 返回的已渲染帮助正文。
+    pub content: String,
+}
+
+/// Render the best matching LuaSkills help text for one runtime entry.
+/// 为单个运行时入口渲染最匹配的 LuaSkills 帮助文本。
+pub fn render_luaskills_entry_help_summary(
+    handle: &LuaSkillsRuntimeHandle,
+    entry: &RuntimeEntryDescriptor,
+) -> Result<Option<LuaSkillsEntryHelpSummary>, String> {
+    let engine = lock_runtime_engine(handle)?;
+    let help_descriptors =
+        engine.list_skill_help_for_authority(SkillManagementAuthority::DelegatedTool);
+    let flow_name = help_descriptors
+        .iter()
+        .find(|help| help.skill_id == entry.skill_id)
+        .and_then(|help| {
+            std::iter::once(&help.main)
+                .chain(help.flows.iter())
+                .find(|node| {
+                    node.related_entries
+                        .iter()
+                        .any(|related| related == &entry.canonical_name)
+                })
+                .map(|node| node.flow_name.clone())
+        });
+    let Some(flow_name) = flow_name else {
+        return Ok(None);
+    };
+    let Some(detail) = engine
+        .render_skill_help_detail_for_authority(
+            SkillManagementAuthority::DelegatedTool,
+            &entry.skill_id,
+            &flow_name,
+            None,
+        )
+        .map_err(|error| {
+            format!(
+                "渲染 LuaSkills `{}` 的 help `{}` 失败：{}",
+                entry.canonical_name, flow_name, error
+            )
+        })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(LuaSkillsEntryHelpSummary {
+        flow_name: detail.flow_name,
+        description: detail.description,
+        content: detail.content,
+    }))
+}
+
 /// Call one LuaSkills runtime entry on a dedicated blocking thread and return the structured result.
 /// 在专用阻塞线程上调用单个 LuaSkills 运行时入口，并返回结构化结果。
 pub async fn call_luaskills_tool_entry(

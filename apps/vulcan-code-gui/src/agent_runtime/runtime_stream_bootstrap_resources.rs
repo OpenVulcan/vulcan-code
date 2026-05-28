@@ -72,11 +72,16 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),
         vulcan_prompt_skills::enabled_skill_names(&preparation.prompt_skills),
         preparation.prompt_skill_user_root.clone(),
+        preparation.implicit_luaskill_prompt_entries.clone(),
     );
     let mut resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)
         .definitions;
-    if preparation.prompt_skill_developer_segment.is_none() {
+    let prompt_skill_tool_available = preparation.prompt_purpose
+        == crate::agent_runtime::execution_models::ExecutionPromptPurpose::UserTurn
+        && vulcan_prompt_skills::render_prompt_skills_instructions(&preparation.prompt_skills)
+            .is_some();
+    if !prompt_skill_tool_available {
         resolved_tool_definitions.retain(|definition| definition.descriptor.id != "skill");
     }
     if preparation.prompt_purpose.disables_provider_tools() {

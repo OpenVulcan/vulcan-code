@@ -538,7 +538,7 @@ struct ShellCommandToolArgs {
 #[derive(Debug, Clone, Deserialize)]
 struct PromptSkillDetailToolArgs {
     /// Prompt skill name listed in the runtime prompt-skill catalog.
-    /// 运行时提示词技能目录中列出的提示词技能名称。
+    /// 运行时技能目录中列出的技能名称。
     name: String,
 }
 

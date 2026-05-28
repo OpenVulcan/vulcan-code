@@ -20,6 +20,7 @@ members = [
     "crates/vulcan-core",
     "crates/vulcan-token-counter",
     "crates/vulcan-tools-luaskills-call",
+    "crates/vulcan-luaskills-prompt",
 ]
 exclude = [
     "third_party/iced",
@@ -57,6 +58,7 @@ vulcan-prompt-skills = { path = "crates/vulcan-prompt-skills" }
 vulcan-file-watcher = { path = "crates/vulcan-file-watcher" }
 vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
+vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vldb-controller-client = "0.2.1"
 luaskills = "=0.4.4"
 async-trait = "0.1.89"
