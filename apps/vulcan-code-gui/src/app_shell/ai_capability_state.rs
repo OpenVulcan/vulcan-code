@@ -35,12 +35,15 @@ pub(super) enum WorkbenchAiCapabilitySection {
     /// Music-cover capability routing.
     /// 音乐翻唱能力路由。
     MusicCover,
+    /// Prompt Skills runtime instruction packages.
+    /// 提示词技能运行时指令包。
+    PromptSkills,
 }
 
 impl WorkbenchAiCapabilitySection {
     /// Returns all quick-panel sections in stable order.
     /// 返回快捷能力面板按稳定顺序展示的全部分区。
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::WebSearch,
         Self::UnderstandImage,
         Self::UnderstandVideo,
@@ -50,6 +53,7 @@ impl WorkbenchAiCapabilitySection {
         Self::SpeechSynthesis,
         Self::MusicGeneration,
         Self::MusicCover,
+        Self::PromptSkills,
     ];
 
     /// Returns the compact function label rendered in the quick capability panel.
@@ -65,6 +69,7 @@ impl WorkbenchAiCapabilitySection {
             Self::SpeechSynthesis => "语音合成",
             Self::MusicGeneration => "音乐生成",
             Self::MusicCover => "音乐翻唱",
+            Self::PromptSkills => "提示词技能",
         }
     }
 
@@ -81,6 +86,7 @@ impl WorkbenchAiCapabilitySection {
             Self::SpeechSynthesis => Some(AiToolKind::SpeechSynthesis),
             Self::MusicGeneration => Some(AiToolKind::MusicGeneration),
             Self::MusicCover => Some(AiToolKind::MusicCover),
+            Self::PromptSkills => None,
         }
     }
 

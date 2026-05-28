@@ -14,12 +14,24 @@ pub(super) enum ComposerSlashCommand {
     /// Opens the existing workbench reasoning-effort picker.
     /// 打开现有工作台思考级别选择器。
     Reasoning,
+    /// Inserts a prompt-skill loading hint into the composer.
+    /// 向输入框插入提示词技能加载提示。
+    Skill,
+    /// Opens the Prompt Skills management panel.
+    /// 打开提示词技能管理面板。
+    Skills,
 }
 
 impl ComposerSlashCommand {
     /// Returns every supported slash command in stable display order.
     /// 返回按稳定显示顺序排列的全部受支持 slash 指令。
-    pub(super) const ALL: [Self; 3] = [Self::Model, Self::Compact, Self::Reasoning];
+    pub(super) const ALL: [Self; 5] = [
+        Self::Model,
+        Self::Compact,
+        Self::Reasoning,
+        Self::Skill,
+        Self::Skills,
+    ];
 
     /// Returns the canonical slash trigger text used by exact activation checks and list rendering.
     /// 返回供精确激活检查与列表渲染使用的规范 slash 触发文本。
@@ -28,6 +40,8 @@ impl ComposerSlashCommand {
             Self::Model => "/model",
             Self::Compact => "/compact",
             Self::Reasoning => "/reasoning",
+            Self::Skill => "/skill",
+            Self::Skills => "/skills",
         }
     }
 
@@ -38,6 +52,8 @@ impl ComposerSlashCommand {
             Self::Model => "model",
             Self::Compact => "compact",
             Self::Reasoning => "reasoning",
+            Self::Skill => "skill",
+            Self::Skills => "skills",
         }
     }
 
@@ -48,6 +64,8 @@ impl ComposerSlashCommand {
             Self::Model => "选择当前模型",
             Self::Compact => "立即压缩当前会话上下文",
             Self::Reasoning => "选择当前思考级别",
+            Self::Skill => "插入提示词技能加载指令",
+            Self::Skills => "打开提示词技能面板",
         }
     }
 

@@ -1,0 +1,16 @@
+[package]
+name = "vulcan-prompt-skills"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+dirs.workspace = true
+include_dir = "0.7.4"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9.34"
+
+[lints]
+workspace = true

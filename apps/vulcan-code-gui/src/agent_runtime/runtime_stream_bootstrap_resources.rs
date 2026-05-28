@@ -69,10 +69,15 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
         ai_tool_configuration,
         resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),
+        vulcan_prompt_skills::enabled_skill_names(&preparation.prompt_skills),
+        preparation.prompt_skill_user_root.clone(),
     );
     let mut resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)
         .definitions;
+    if preparation.prompt_skill_developer_segment.is_none() {
+        resolved_tool_definitions.retain(|definition| definition.descriptor.id != "skill");
+    }
     if preparation.prompt_purpose.disables_provider_tools() {
         resolved_tool_definitions.clear();
     }

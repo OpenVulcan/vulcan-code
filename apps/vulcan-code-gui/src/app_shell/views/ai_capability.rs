@@ -39,23 +39,24 @@ impl VulcanWorkbench {
                 }),
         )
         .height(420);
-        let right_panel: Element<'_, Message> = match selected_section.capability_kind() {
-            Some(capability_kind) => {
+        let right_panel: Element<'_, Message> =
+            if selected_section == WorkbenchAiCapabilitySection::PromptSkills {
+                self.view_workbench_prompt_skills_quick_panel()
+            } else if let Some(capability_kind) = selected_section.capability_kind() {
                 self.view_ai_capability_management_panel(capability_kind, false, false, true)
-            }
-            None if selected_section.supports_routing_strategy() => self
-                .view_ai_capability_unavailable_page(
+            } else if selected_section.supports_routing_strategy() {
+                self.view_ai_capability_unavailable_page(
                     selected_section.label(),
                     "当前能力入口已预留；后续接通后，这里会提供原生优先与工具理解等路由策略选项。",
                 )
-                .into(),
-            None => self
-                .view_ai_capability_unavailable_page(
+                .into()
+            } else {
+                self.view_ai_capability_unavailable_page(
                     selected_section.label(),
                     "当前能力入口已预留，但还没有接通可配置的目标与执行工具。",
                 )
-                .into(),
-        };
+                .into()
+            };
         let modal_card = container(
             column![
                 container(
@@ -204,6 +205,11 @@ impl VulcanWorkbench {
                 .line_height(1.0)
                 .color(color)
                 .into(),
+            WorkbenchAiCapabilitySection::PromptSkills => lucide::sparkles()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
         };
 
         container(icon).width(18).center_y(Fill).into()
@@ -218,7 +224,13 @@ impl VulcanWorkbench {
         let toggle_available = self.workbench_ai_capability_is_available(section);
         let toggle_enabled = self.workbench_ai_capability_is_enabled(section);
         let toggle: Element<'_, Message> =
-            if section.capability_kind().is_some() {
+            if section == WorkbenchAiCapabilitySection::PromptSkills {
+                checkbox(self.provider_configuration.prompt_skills.enabled)
+                    .spacing(0)
+                    .size(16)
+                    .on_toggle(Message::SetPromptSkillsEnabled)
+                    .into()
+            } else if section.capability_kind().is_some() {
                 let checkbox = checkbox(toggle_enabled).spacing(0).size(16);
                 if toggle_available {
                     checkbox
@@ -235,7 +247,9 @@ impl VulcanWorkbench {
         self.view_tree_navigation_button_row_with_leading(
             Some(toggle),
             self.view_workbench_ai_capability_section_icon(section),
-            if section.capability_kind().is_some() {
+            if section == WorkbenchAiCapabilitySection::PromptSkills
+                || section.capability_kind().is_some()
+            {
                 section.label().to_string()
             } else {
                 format!("{}（待开放）", section.label())
@@ -247,6 +261,127 @@ impl VulcanWorkbench {
             Message::WorkbenchAiCapabilitySectionSelected(section),
         )
     }
+
+    /// Builds the quick Prompt Skills panel shown inside the workbench capability modal.
+    /// 构建工作台能力弹窗中的快捷 Prompt Skills 面板。
+    pub(super) fn view_workbench_prompt_skills_quick_panel(&self) -> Element<'_, Message> {
+        let enabled = self.provider_configuration.prompt_skills.enabled;
+        let catalog_summary = self
+            .prompt_skills_catalog
+            .as_ref()
+            .map(|catalog| {
+                let system_count = catalog
+                    .skills
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::System)
+                    .count();
+                let user_count = catalog.skills.len().saturating_sub(system_count);
+                format!("已扫描系统 {system_count} 个、用户 {user_count} 个")
+            })
+            .unwrap_or_else(|| String::from("尚未扫描系统与用户技能目录"));
+        let mut refresh_button = button("刷新技能目录")
+            .padding([8, 12])
+            .style(button::secondary);
+        refresh_button = refresh_button.on_press(Message::RefreshPromptSkillsCatalog);
+
+        let skill_rows = match &self.prompt_skills_catalog {
+            Some(catalog) if catalog.skills.is_empty() => {
+                column![text("当前没有可用提示词技能，可先同步系统技能。").size(12)].spacing(6)
+            }
+            Some(catalog) => catalog
+                .skills
+                .iter()
+                .fold(column![].spacing(6), |list, skill| {
+                    list.push(self.view_workbench_prompt_skill_session_row(skill))
+                }),
+            None => column![text("刷新后可在这里按当前会话启停具体技能。").size(12)].spacing(6),
+        };
+
+        container(
+            column![
+                text("提示词技能").size(18),
+                text("启用后，请求会只注入技能名称、描述与路径；AI 需要完整内容时再调用 `skill` 工具加载。")
+                    .size(12),
+                row![
+                    checkbox(enabled)
+                        .label("启用全局 Prompt Skills")
+                        .on_toggle(Message::SetPromptSkillsEnabled),
+                    space::horizontal().width(Fill),
+                    refresh_button,
+                ]
+                .spacing(10)
+                .align_y(Center),
+                text(catalog_summary).size(12),
+                text(&self.prompt_skills_notice).size(12),
+                scrollable(skill_rows).height(170),
+                button("打开完整技能面板")
+                    .padding([8, 12])
+                    .on_press(Message::MainDisplayPanelSelected(MainDisplayPanel::PromptSkills)),
+            ]
+            .spacing(12),
+        )
+        .padding(16)
+        .style(container::bordered_box)
+        .width(Fill)
+        .into()
+    }
+
+    /// Builds one session-scoped Prompt Skill override row for the quick capability panel.
+    /// 为快捷能力面板构建单条会话级 Prompt Skill 覆盖行。
+    fn view_workbench_prompt_skill_session_row<'a>(
+        &'a self,
+        skill: &'a vulcan_prompt_skills::PromptSkill,
+    ) -> Element<'a, Message> {
+        let session_override = self
+            .session_runtime_state(self.selected_session)
+            .and_then(|state| state.prompt_skill_overrides.get(&skill.name))
+            .copied();
+        let global_enabled = self
+            .provider_configuration
+            .prompt_skills
+            .skill_overrides
+            .get(&skill.name)
+            .copied()
+            .unwrap_or(
+                self.provider_configuration
+                    .prompt_skills
+                    .default_skill_state,
+            )
+            .is_enabled();
+        let effective_enabled = session_override
+            .map(|state| state.is_enabled())
+            .unwrap_or(global_enabled);
+        let display_name = prompt_skill_display_name(skill);
+        container(
+            row![
+                column![
+                    text(display_name).size(13),
+                    text(if session_override.is_some() {
+                        "当前会话覆盖"
+                    } else {
+                        "继承全局/项目规则"
+                    })
+                    .size(11),
+                ]
+                .spacing(2)
+                .width(Fill),
+                checkbox(effective_enabled).spacing(0).size(16).on_toggle({
+                    let name = skill.name.clone();
+                    move |enabled| Message::SetPromptSkillSessionState {
+                        name: name.clone(),
+                        enabled,
+                    }
+                }),
+            ]
+            .spacing(10)
+            .align_y(Center),
+        )
+        .padding([8, 10])
+        .style(container::rounded_box)
+        .width(Fill)
+        .into()
+    }
+
     /// Renders the shared AI capability vendor page where one provider instance is configured only once and later reused by multiple capability tabs.
     /// 渲染共享 AI 能力供应商页面，使同一供应商实例只配置一次并复用于多个能力分页。
     pub(super) fn view_ai_tool_configuration_card(&self) -> Element<'_, Message> {

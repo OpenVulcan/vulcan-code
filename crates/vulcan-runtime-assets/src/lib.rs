@@ -27,6 +27,14 @@ const AI_CAPABILITY_PROVIDERS_DIR_NAME: &str = "ai-capability-providers";
 /// 位于打包资源根目录下的相对 tokenizer 资源目录名称。
 const TOKENIZERS_DIR_NAME: &str = "tokenizers";
 
+/// Relative prompt skills resource directory name nested below the packaged resources root.
+/// 位于打包资源根目录下的相对提示词技能资源目录名称。
+const PROMPT_SKILLS_DIR_NAME: &str = "prompt-skills";
+
+/// Relative system prompt skills resource directory name nested below prompt skills resources.
+/// 位于提示词技能资源目录下的相对系统提示词技能目录名称。
+const SYSTEM_PROMPT_SKILLS_DIR_NAME: &str = "system";
+
 /// Relative Lua runtime packages directory name bundled into the output root.
 /// 打包到 output 根目录中的 Lua 运行时包目录名称。
 const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
@@ -66,6 +74,14 @@ pub fn resolve_ai_capability_provider_catalog_directory() -> PathBuf {
 /// 返回当前进程使用的生效 tokenizer 资源目录路径。
 pub fn resolve_tokenizer_resource_directory() -> PathBuf {
     resolve_app_resources_directory().join(TOKENIZERS_DIR_NAME)
+}
+
+/// Returns the effective packaged system prompt skills directory for the current process.
+/// 返回当前进程使用的生效打包系统提示词技能目录。
+pub fn resolve_system_prompt_skills_resource_directory() -> PathBuf {
+    resolve_app_resources_directory()
+        .join(PROMPT_SKILLS_DIR_NAME)
+        .join(SYSTEM_PROMPT_SKILLS_DIR_NAME)
 }
 
 /// Returns the effective application resource directory for the current process.

@@ -48,6 +48,7 @@ if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Ru
 $AppResourcesRoot = Join-Path $ProjectDir "apps\vulcan-code-gui\resources"
 $AppLicenseResourcesRoot = Join-Path $AppResourcesRoot "licenses"
 $RuntimeAssetsResourcesRoot = Join-Path $ProjectDir "crates\vulcan-runtime-assets\resources"
+$PromptSystemSkillsRoot = Join-Path $ProjectDir "crates\vulcan-prompt-skills\src\assets\system"
 
 if ($Release -or ($args.Count -gt 0 -and $args[0] -eq "release")) {
     $OutDir = Join-Path $BaseOutDir "bin"
@@ -367,6 +368,15 @@ if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "system-prompts")) {
 }
 else {
     Write-Host "==> No runtime system prompt catalog directory found"
+}
+
+if (Test-Path -LiteralPath $PromptSystemSkillsRoot) {
+    $PromptSystemSkillsOut = Join-Path (Join-Path $ResourcesOut "prompt-skills") "system"
+    Copy-DirectoryContents -Source $PromptSystemSkillsRoot -Destination $PromptSystemSkillsOut | Out-Null
+    Write-Host "==> System prompt skills synced to $PromptSystemSkillsOut\"
+}
+else {
+    Write-Host "==> No system prompt skills source directory found"
 }
 
 if (Test-Path (Join-Path $RuntimeAssetsResourcesRoot "tokenizers")) {

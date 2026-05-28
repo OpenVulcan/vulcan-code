@@ -28,6 +28,7 @@ mod pending_prompt_queue;
 mod perf;
 mod project_settings_update;
 mod prompt_composer_inspector;
+mod prompt_skills_update;
 mod question_modal;
 mod session_live_runtime;
 #[path = "../session/loading.rs"]
@@ -1632,6 +1633,15 @@ pub struct VulcanWorkbench {
     /// Local panel-scoped LuaSkills feedback message shown near the management widgets.
     /// 展示在 LuaSkills 管理控件附近的面板局部反馈消息。
     luaskills_notice: String,
+    /// Latest prompt-skill catalog loaded from the configured user skill directory.
+    /// 从已配置系统与用户技能目录载入的最新提示词技能清单。
+    prompt_skills_catalog: Option<vulcan_prompt_skills::PromptSkillCatalog>,
+    /// Local panel-scoped prompt-skill feedback message shown near management widgets.
+    /// 展示在提示词技能管理控件附近的面板局部反馈消息。
+    prompt_skills_notice: String,
+    /// Optional prompt skill currently expanded for SKILL.md detail preview.
+    /// 当前展开用于预览 SKILL.md 详情的可选提示词技能名称。
+    selected_prompt_skill_name: Option<String>,
     /// Install source choice currently selected in the LuaSkills management panel.
     /// 当前在 LuaSkills 管理面板中选中的安装来源类型。
     luaskills_install_source_choice: LuaSkillsInstallSourceChoice,
@@ -2326,6 +2336,9 @@ impl VulcanWorkbench {
             mcp_runtime: None,
             luaskills_catalog: None,
             luaskills_notice: String::from("LuaSkills 面板尚未加载技能目录。"),
+            prompt_skills_catalog: None,
+            prompt_skills_notice: String::from("提示词技能面板尚未加载系统与用户目录。"),
+            selected_prompt_skill_name: None,
             luaskills_install_source_choice: LuaSkillsInstallSourceChoice::Github,
             luaskills_install_skill_id: String::new(),
             luaskills_install_source: String::new(),
@@ -2769,6 +2782,15 @@ impl VulcanWorkbench {
                 self.execute_manual_selected_session_history_compaction()
             }
             ComposerSlashCommand::Reasoning => Task::done(Message::OpenWorkbenchReasoningPicker),
+            ComposerSlashCommand::Skill => {
+                self.replace_composer_text_preserving_attachments(String::from(
+                    "请根据当前任务判断是否需要调用 `skill` 工具加载已启用的提示词技能详情。",
+                ));
+                Task::none()
+            }
+            ComposerSlashCommand::Skills => Task::done(Message::MainDisplayPanelSelected(
+                MainDisplayPanel::PromptSkills,
+            )),
         };
         let persist_task = self.persist_workspace_snapshot_task();
 

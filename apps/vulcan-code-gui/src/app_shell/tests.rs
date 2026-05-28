@@ -516,6 +516,8 @@ fn composer_slash_command_state_lists_all_commands_for_root_trigger() {
             ComposerSlashCommand::Model,
             ComposerSlashCommand::Compact,
             ComposerSlashCommand::Reasoning,
+            ComposerSlashCommand::Skill,
+            ComposerSlashCommand::Skills,
         ]
     );
     assert_eq!(state.highlighted_index, Some(0));

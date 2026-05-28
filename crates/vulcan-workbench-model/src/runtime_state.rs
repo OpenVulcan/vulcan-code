@@ -2,9 +2,10 @@
 //! 在 GUI、持久化与运行时层之间复用的共享会话运行时状态与排队提示词模型。
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_context::SessionConversationState;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
+use vulcan_provider_config::config::PersistedPromptSkillState;
 use vulcan_provider_config::config::{
     AiToolKind, OpenRouterEndpointRouteSelection, ReasoningEffortLevel,
 };
@@ -287,6 +288,18 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次被该会话锁定使用的 OpenRouter 端点路由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_openrouter_endpoint_route: Option<OpenRouterEndpointRouteSelection>,
+    /// Last reasoning-effort preset selected while this session was active.
+    /// 最近一次该会话激活时选择的推理档位预设。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_reasoning_effort: Option<ReasoningEffortLevel>,
+    /// Last optional temperature override selected while this session was active.
+    /// 最近一次该会话激活时选择的可选温度覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_temperature: Option<f32>,
+    /// Session-level prompt skill state overrides.
+    /// 会话级提示词技能状态覆盖。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prompt_skill_overrides: BTreeMap<String, PersistedPromptSkillState>,
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,

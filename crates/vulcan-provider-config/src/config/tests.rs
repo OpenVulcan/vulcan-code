@@ -2,23 +2,24 @@ use super::{
     AiCapabilityVendorConnectionMode, AiToolDeclaration, AiToolKind, ModelChoice,
     ModelInterleavedCapability, ModelInterleavedField, PersistedAiCapabilityRouteConfiguration,
     PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedAiToolConfiguration, PersistedLuaSkillsConfiguration, PersistedProviderEntry,
-    PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry,
-    ProjectVulcanCodeConfigurationFile, ProviderApiFamily, ProviderBaseUrlConfig,
-    ProviderBaseUrlKind, ProviderConfigurationFile, ProviderModelDiscoveryConfig,
-    ProviderModelDiscoveryKind, ProviderRuntimeKind, ProviderUsageCaptureConfig,
-    ReasoningCapabilityKind, ReasoningEffortLevel, ReasoningProfileConfig,
-    SupportedProviderDefinition, WebSearchProviderDispatchMode, WebSearchProviderKind,
-    WebSearchRoutingMode, apply_provider_reasoning_model_overrides, catalog_model_choices,
-    effective_model_choices, extract_models_from_array, filter_remote_model_choices,
-    load_project_configuration_file, merge_embedded_model_metadata, merge_refreshed_models,
-    normalize_provider_configuration_for_save, persist_remote_models,
+    PersistedAiToolConfiguration, PersistedLuaSkillsConfiguration, PersistedPromptSkillState,
+    PersistedPromptSkillsConfiguration, PersistedProviderEntry, PersistedWebSearchConfiguration,
+    PersistedWebSearchProviderEntry, ProjectVulcanCodeConfigurationFile, ProviderApiFamily,
+    ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderConfigurationFile,
+    ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
+    ProviderUsageCaptureConfig, ReasoningCapabilityKind, ReasoningEffortLevel,
+    ReasoningProfileConfig, SupportedProviderDefinition, WebSearchProviderDispatchMode,
+    WebSearchProviderKind, WebSearchRoutingMode, apply_provider_reasoning_model_overrides,
+    catalog_model_choices, effective_model_choices, extract_models_from_array,
+    filter_remote_model_choices, load_project_configuration_file, merge_embedded_model_metadata,
+    merge_refreshed_models, normalize_provider_configuration_for_save, persist_remote_models,
     project_configuration_file_path, remote_models_url, save_project_configuration_file,
     supported_provider_by_id,
 };
 use serde_json::{Map as JsonMap, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Builds a unique temporary directory path for provider configuration tests.
@@ -508,6 +509,41 @@ fn provider_configuration_round_trips_luaskills_visibility_configuration() {
             .cloned()
             .unwrap_or_default(),
         vec![String::from("tool-a"), String::from("tool-b")]
+    );
+}
+
+/// Verifies prompt skills configuration round-trips independently from LuaSkills.
+/// 验证提示词技能配置可以独立于 LuaSkills 完整往返。
+#[test]
+fn provider_configuration_round_trips_prompt_skills_configuration() {
+    let config = ProviderConfigurationFile {
+        prompt_skills: PersistedPromptSkillsConfiguration {
+            enabled: true,
+            user_skill_root: Some(PathBuf::from("C:/Users/example/.vulcan/skills")),
+            default_skill_state: PersistedPromptSkillState::Enabled,
+            skill_overrides: BTreeMap::from([(
+                String::from("demo-skill"),
+                PersistedPromptSkillState::Disabled,
+            )]),
+        },
+        ..ProviderConfigurationFile::default()
+    };
+
+    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+    assert_eq!(
+        value["promptSkills"]["skillOverrides"]["demo-skill"],
+        json!("disabled")
+    );
+
+    let restored: ProviderConfigurationFile =
+        serde_json::from_value(value).expect("provider configuration must deserialize");
+    assert_eq!(
+        restored
+            .prompt_skills
+            .skill_overrides
+            .get("demo-skill")
+            .copied(),
+        Some(PersistedPromptSkillState::Disabled)
     );
 }
 
@@ -1390,6 +1426,7 @@ fn project_configuration_file_roundtrips_prompt_settings() {
             project_prompt_path: String::from(".vulcan/code/local-prompt.md"),
             ..super::PersistedPromptConfiguration::default()
         }),
+        prompt_skills: Default::default(),
     };
 
     save_project_configuration_file(&root, &config).expect("save project config");

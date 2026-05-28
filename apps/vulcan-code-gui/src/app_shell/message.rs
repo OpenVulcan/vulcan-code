@@ -834,6 +834,35 @@ pub(super) enum Message {
     /// Applies the latest OAuth status summary loaded for one selected MCP server.
     /// 应用为某个选中 MCP 服务器载入的最新 OAuth 状态摘要。
     SelectedMcpServerOAuthStatusLoaded(String, Result<String, String>),
+    /// Applies one freshly loaded prompt skills catalog from configured system and user roots.
+    /// 应用一份从已配置系统与用户根目录载入的最新提示词技能目录。
+    PromptSkillsCatalogLoaded(Result<vulcan_prompt_skills::PromptSkillCatalog, String>),
+    /// Requests reloading the prompt skills catalog from configured system and user roots.
+    /// 请求从已配置系统与用户根目录重新载入提示词技能目录。
+    RefreshPromptSkillsCatalog,
+    /// Requests installing or refreshing embedded VulcanCode system prompt skills.
+    /// 请求安装或刷新内置 VulcanCode 系统提示词技能。
+    InstallSystemPromptSkills,
+    /// Applies the finished embedded system prompt skills install report.
+    /// 应用内置系统提示词技能安装完成报告。
+    SystemPromptSkillsInstalled(
+        Result<vulcan_prompt_skills::SystemPromptSkillsInstallReport, String>,
+    ),
+    /// Toggles the global prompt skills master switch.
+    /// 切换提示词技能全局总开关。
+    SetPromptSkillsEnabled(bool),
+    /// Updates one global prompt skill state override.
+    /// 更新单个全局提示词技能状态覆盖。
+    SetPromptSkillGlobalState { name: String, enabled: bool },
+    /// Updates one session prompt skill state override.
+    /// 更新单个会话级提示词技能状态覆盖。
+    SetPromptSkillSessionState { name: String, enabled: bool },
+    /// Updates one project prompt skill state override.
+    /// 更新单个项目级提示词技能状态覆盖。
+    SetPromptSkillProjectState { name: String, enabled: bool },
+    /// Toggles one prompt skill detail preview card.
+    /// 切换单个提示词技能详情预览卡片。
+    TogglePromptSkillDetails(String),
     /// Applies one freshly loaded LuaSkills catalog snapshot from the embedded host runtime.
     /// 应用一份来自嵌入式宿主运行时的最新 LuaSkills 技能目录快照。
     LuaSkillsCatalogLoaded(Result<LuaSkillsCatalog, String>),

@@ -500,6 +500,15 @@ async fn hydrate_session_runtime_state(
     runtime_state.active_openrouter_endpoint_route = runtime_state_cache
         .active_openrouter_endpoint_route
         .or(runtime_state.active_openrouter_endpoint_route);
+    runtime_state.active_reasoning_effort = runtime_state_cache
+        .active_reasoning_effort
+        .or(runtime_state.active_reasoning_effort);
+    runtime_state.active_temperature = runtime_state_cache
+        .active_temperature
+        .or(runtime_state.active_temperature);
+    if !runtime_state_cache.prompt_skill_overrides.is_empty() {
+        runtime_state.prompt_skill_overrides = runtime_state_cache.prompt_skill_overrides;
+    }
     runtime_state.last_compaction_id = runtime_state_cache
         .last_compaction_id
         .or(runtime_state.last_compaction_id);

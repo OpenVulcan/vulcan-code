@@ -105,6 +105,18 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// 最近一次被该会话锁定使用的 OpenRouter 端点路由。
     pub active_openrouter_endpoint_route:
         Option<crate::provider_config::OpenRouterEndpointRouteSelection>,
+    /// Last reasoning-effort preset selected while this session was active.
+    /// 最近一次该会话激活时选择的推理档位预设。
+    #[serde(default)]
+    pub active_reasoning_effort: Option<crate::provider_config::ReasoningEffortLevel>,
+    /// Last optional temperature override selected while this session was active.
+    /// 最近一次该会话激活时选择的可选温度覆盖。
+    #[serde(default)]
+    pub active_temperature: Option<f32>,
+    /// Session-level prompt skill state overrides.
+    /// 会话级提示词技能状态覆盖。
+    #[serde(default)]
+    pub prompt_skill_overrides: BTreeMap<String, crate::provider_config::PersistedPromptSkillState>,
     /// Latest active compaction identifier retained by the session runtime.
     /// 被会话运行时保留的最近活动压缩标识。
     pub last_compaction_id: Option<String>,
@@ -673,6 +685,9 @@ fn runtime_state_to_store_document(
         active_provider_id: runtime_state.active_provider_id.clone(),
         active_model_id: runtime_state.active_model_id.clone(),
         active_openrouter_endpoint_route: runtime_state.active_openrouter_endpoint_route.clone(),
+        active_reasoning_effort: runtime_state.active_reasoning_effort,
+        active_temperature: runtime_state.active_temperature,
+        prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
         live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),

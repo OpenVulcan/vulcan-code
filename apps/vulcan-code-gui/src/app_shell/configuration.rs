@@ -11,8 +11,8 @@ use crate::provider_capabilities::{
 };
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
-    ProjectVulcanCodeConfigurationFile, normalize_session_transcript_turn_page_size,
+    PersistedPromptConfiguration, PersistedPromptPersonalitySelection, PersistedPromptSkillState,
+    normalize_session_transcript_turn_page_size,
 };
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
 use std::path::PathBuf;
@@ -852,9 +852,9 @@ impl VulcanWorkbench {
             project_prompt_enabled: self.project_prompt_settings_draft.enabled,
             project_prompt_path: normalized_prompt_path.clone(),
         };
-        let project_config = ProjectVulcanCodeConfigurationFile {
-            prompt: Some(project_prompt),
-        };
+        let mut project_config =
+            provider_config::load_project_configuration_file(&workspace_path).unwrap_or_default();
+        project_config.prompt = Some(project_prompt);
         provider_config::save_project_configuration_file(&workspace_path, &project_config)?;
         let normalized_prompt_path_for_cache = normalized_prompt_path.clone();
         self.project_prompt_settings_draft.path = normalized_prompt_path;
@@ -1146,6 +1146,9 @@ impl VulcanWorkbench {
         &self,
         section: super::WorkbenchAiCapabilitySection,
     ) -> bool {
+        if section == super::WorkbenchAiCapabilitySection::PromptSkills {
+            return true;
+        }
         let Some(capability_kind) = section.capability_kind() else {
             return false;
         };
@@ -1159,6 +1162,9 @@ impl VulcanWorkbench {
         &self,
         section: super::WorkbenchAiCapabilitySection,
     ) -> bool {
+        if section == super::WorkbenchAiCapabilitySection::PromptSkills {
+            return self.provider_configuration.prompt_skills.enabled;
+        }
         let Some(capability_kind) = section.capability_kind() else {
             return false;
         };
@@ -1460,6 +1466,20 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Loads project-level prompt-skill overrides for the selected session workspace.
+    /// 为选中会话工作区载入项目级提示词技能覆盖。
+    pub(super) fn current_project_prompt_skills_configuration(
+        &self,
+        session_id: SessionId,
+    ) -> crate::provider_config::ProjectPromptSkillsConfiguration {
+        let Some(workspace_path) = self.workspace_path_for_session_id(session_id) else {
+            return crate::provider_config::ProjectPromptSkillsConfiguration::default();
+        };
+        provider_config::load_project_configuration_file(&PathBuf::from(workspace_path))
+            .map(|config| config.prompt_skills)
+            .unwrap_or_default()
+    }
+
     /// Resolves the capability snapshot for a queued prompt's locked provider/model identity.
     /// 根据排队提示词锁定的供应商与模型身份解析能力快照。
     pub(super) fn resolve_pending_prompt_model_capabilities(
@@ -1721,6 +1741,10 @@ impl VulcanWorkbench {
             self.selected_provider = provider_choice;
             self.reload_selected_provider_form();
         }
+        self.remember_active_session_runtime_controls(Some((
+            &choice.provider_id,
+            &choice.model_id,
+        )));
 
         self.refresh_runtime_foundation();
         let reasoning_note = self.reconcile_workbench_reasoning_effort_for_active_model();
@@ -1754,6 +1778,86 @@ impl VulcanWorkbench {
             )
         };
         Task::none()
+    }
+
+    /// Stores the current workbench model and runtime controls on the selected session.
+    /// 将当前工作台模型与运行参数记录到选中会话。
+    pub(super) fn remember_active_session_runtime_controls(
+        &mut self,
+        explicit_model: Option<(&str, &str)>,
+    ) {
+        let session_id = self.selected_session;
+        if session_id.is_nil() {
+            return;
+        }
+        let (provider_id, model_id) = explicit_model
+            .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()))
+            .or_else(|| {
+                self.provider_configuration
+                    .model
+                    .as_deref()
+                    .and_then(provider_config::parse_active_model_reference)
+                    .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()))
+            })
+            .unwrap_or_default();
+        if provider_id.is_empty() || model_id.is_empty() {
+            return;
+        }
+
+        let active_openrouter_endpoint_route = (provider_id == "openrouter")
+            .then(|| {
+                provider_config::openrouter_endpoint_route_for_model(
+                    &self.provider_configuration,
+                    &model_id,
+                )
+            })
+            .flatten();
+        let active_reasoning_effort = self.workbench_reasoning_effort_preference;
+        let active_temperature = self.temperature_enabled.then_some(self.temperature);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.active_provider_id = Some(provider_id);
+        runtime_state.active_model_id = Some(model_id);
+        runtime_state.active_openrouter_endpoint_route = active_openrouter_endpoint_route;
+        runtime_state.active_reasoning_effort = Some(active_reasoning_effort);
+        runtime_state.active_temperature = active_temperature;
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+
+    /// Restores remembered model and runtime controls when switching to a session.
+    /// 切换到会话时恢复其记住的模型与运行参数。
+    pub(super) fn restore_runtime_controls_for_session(&mut self, session_id: SessionId) {
+        let Some(runtime_state) = self.session_runtime_state(session_id).cloned() else {
+            return;
+        };
+        if let (Some(provider_id), Some(model_id)) = (
+            runtime_state.active_provider_id.as_deref(),
+            runtime_state.active_model_id.as_deref(),
+        ) {
+            self.provider_configuration.model = Some(format!("{provider_id}/{model_id}"));
+            if let Some(provider_choice) = provider_config::supported_provider_choices()
+                .into_iter()
+                .find(|provider_choice| provider_choice.id == provider_id)
+            {
+                self.selected_provider = provider_choice;
+                self.reload_selected_provider_form();
+            }
+            self.refresh_runtime_foundation();
+        }
+
+        if let Some(reasoning_effort) = runtime_state.active_reasoning_effort {
+            self.workbench_reasoning_effort_preference = reasoning_effort;
+            self.workbench_reasoning_effort = reasoning_effort;
+            let _ = self.reconcile_workbench_reasoning_effort_for_active_model();
+        }
+        match runtime_state.active_temperature {
+            Some(temperature) => {
+                self.temperature_enabled = true;
+                self.temperature = temperature;
+            }
+            None => {
+                self.temperature_enabled = false;
+            }
+        }
     }
 
     /// Returns the resolved endpoint summary for the currently selected provider form state.
@@ -2133,6 +2237,92 @@ impl VulcanWorkbench {
             return Err(error);
         }
 
+        self.refresh_runtime_foundation();
+        Ok(true)
+    }
+
+    /// Persists the global prompt skills master switch and refreshes runtime prompt assembly.
+    /// 持久化提示词技能全局总开关并刷新运行时提示词装配。
+    pub(super) fn persist_prompt_skills_enabled(&mut self, enabled: bool) -> Result<bool, String> {
+        if self.provider_configuration.prompt_skills.enabled == enabled {
+            return Ok(false);
+        }
+
+        let previous = self.provider_configuration.prompt_skills.clone();
+        self.provider_configuration.prompt_skills.enabled = enabled;
+        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
+            self.provider_configuration.prompt_skills = previous;
+            return Err(error);
+        }
+
+        self.prompt_skills_catalog = None;
+        self.refresh_runtime_foundation();
+        Ok(true)
+    }
+
+    /// Persists one global prompt-skill override and refreshes runtime prompt assembly.
+    /// 持久化单个全局提示词技能覆盖并刷新运行时提示词装配。
+    pub(super) fn persist_prompt_skill_global_state(
+        &mut self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<bool, String> {
+        let previous = self.provider_configuration.prompt_skills.clone();
+        let state = if enabled {
+            PersistedPromptSkillState::Enabled
+        } else {
+            PersistedPromptSkillState::Disabled
+        };
+        let changed = self
+            .provider_configuration
+            .prompt_skills
+            .set_skill_state(name, Some(state));
+        if !changed {
+            return Ok(false);
+        }
+
+        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
+            self.provider_configuration.prompt_skills = previous;
+            return Err(error);
+        }
+
+        self.refresh_runtime_foundation();
+        Ok(true)
+    }
+
+    /// Persists one project prompt-skill override for the currently opened project settings modal.
+    /// 为当前打开的项目设置弹窗持久化单个项目级提示词技能覆盖。
+    pub(super) fn persist_prompt_skill_project_state(
+        &mut self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<bool, String> {
+        let Some(project) = self.project_settings_task_project() else {
+            return Err(String::from(
+                "当前没有打开的项目设置，无法保存项目级技能开关。",
+            ));
+        };
+        let workspace_path = PathBuf::from(project.path.clone());
+        let state = if enabled {
+            PersistedPromptSkillState::Enabled
+        } else {
+            PersistedPromptSkillState::Disabled
+        };
+        let mut project_config =
+            provider_config::load_project_configuration_file(&workspace_path).unwrap_or_default();
+        let previous = project_config.prompt_skills.clone();
+        let stable_name = name.trim();
+        if stable_name.is_empty() {
+            return Ok(false);
+        }
+        project_config
+            .prompt_skills
+            .skill_overrides
+            .insert(stable_name.to_string(), state);
+        if project_config.prompt_skills == previous {
+            return Ok(false);
+        }
+        provider_config::save_project_configuration_file(&workspace_path, &project_config)?;
         self.refresh_runtime_foundation();
         Ok(true)
     }

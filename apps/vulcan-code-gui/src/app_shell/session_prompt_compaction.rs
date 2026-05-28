@@ -121,6 +121,8 @@ pub(super) fn stream_prompt_compaction_job(
             reasoning_effort: request.reasoning_effort,
             ai_tool_configuration: request.ai_tool_configuration.clone(),
             prompt_purpose: ExecutionPromptPurpose::ContextCompaction,
+            project_prompt_skills: Default::default(),
+            session_prompt_skill_overrides: Default::default(),
         };
 
         let launch = prepare_runtime_stream_launch(

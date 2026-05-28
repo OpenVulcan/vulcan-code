@@ -1,6 +1,7 @@
 //! Workbench message dispatch loop extracted from the main application module.
 //! 从主应用模块中抽取的工作台消息分发循环。
 
+use super::prompt_skills_update::load_prompt_skills_catalog_task;
 use super::*;
 
 impl VulcanWorkbench {
@@ -22,6 +23,9 @@ impl VulcanWorkbench {
                 }
                 self.luaskills_catalog = None;
                 self.luaskills_notice = String::from("LuaSkills 面板尚未加载技能目录。");
+                self.prompt_skills_catalog = None;
+                self.prompt_skills_notice = String::from("提示词技能面板尚未加载系统与用户目录。");
+                self.selected_prompt_skill_name = None;
                 self.luaskills_install_source_choice = LuaSkillsInstallSourceChoice::Github;
                 self.luaskills_install_skill_id.clear();
                 self.luaskills_install_source.clear();
@@ -241,6 +245,12 @@ impl VulcanWorkbench {
                     Task::perform(
                         luaskills_runtime::load_luaskills_catalog(luaskills_handle),
                         Message::LuaSkillsCatalogLoaded,
+                    ),
+                    Task::perform(
+                        super::prompt_skills_update::install_system_prompt_skills_task(
+                            self.provider_configuration.prompt_skills.clone(),
+                        ),
+                        Message::SystemPromptSkillsInstalled,
                     ),
                 ])
             }
@@ -495,6 +505,16 @@ impl VulcanWorkbench {
             | Message::LuaSkillsManagementFinished(_)) => {
                 self.update_luaskills_message(luaskills_message)
             }
+            prompt_skills_message @ (Message::PromptSkillsCatalogLoaded(_)
+            | Message::RefreshPromptSkillsCatalog
+            | Message::InstallSystemPromptSkills
+            | Message::SystemPromptSkillsInstalled(_)
+            | Message::SetPromptSkillsEnabled(_)
+            | Message::SetPromptSkillGlobalState { .. }
+            | Message::SetPromptSkillSessionState { .. }
+            | Message::TogglePromptSkillDetails(_)) => {
+                self.update_prompt_skills_message(prompt_skills_message)
+            }
             Message::McpRuntimeBootstrapped(result) => {
                 mark_startup_trace("message:McpRuntimeBootstrapped");
                 match result {
@@ -665,6 +685,16 @@ impl VulcanWorkbench {
                             Message::LuaSkillsCatalogLoaded,
                         );
                     }
+                }
+
+                if panel == MainDisplayPanel::PromptSkills && self.prompt_skills_catalog.is_none() {
+                    self.prompt_skills_notice = String::from("正在载入系统与用户提示词技能。");
+                    return Task::perform(
+                        load_prompt_skills_catalog_task(
+                            self.provider_configuration.prompt_skills.clone(),
+                        ),
+                        Message::PromptSkillsCatalogLoaded,
+                    );
                 }
 
                 if panel == MainDisplayPanel::Main
@@ -2402,6 +2432,7 @@ impl VulcanWorkbench {
             }
             project_settings_message @ (Message::OpenTaskProjectSettings(_)
             | Message::CloseTaskProjectSettings
+            | Message::SetPromptSkillProjectState { .. }
             | Message::OpenProjectAttachmentCleanupDatePicker
             | Message::CancelProjectAttachmentCleanupDatePicker
             | Message::ProjectAttachmentCleanupDateSelected(_)
@@ -2824,6 +2855,7 @@ impl VulcanWorkbench {
                 self.workbench_reasoning_picker_open = false;
                 self.workbench_reasoning_effort_preference = option.effort;
                 self.workbench_reasoning_effort = option.effort;
+                self.remember_active_session_runtime_controls(None);
                 match self.persist_workbench_reasoning_effort_preference() {
                     Ok(()) => {
                         self.status_message = format!("思考模式已切换为 {}。", option.label);
@@ -2854,10 +2886,12 @@ impl VulcanWorkbench {
             }
             Message::TemperatureChanged(value) => {
                 self.temperature = value;
+                self.remember_active_session_runtime_controls(None);
                 Task::none()
             }
             Message::TemperatureEnabledToggled(enabled) => {
                 self.temperature_enabled = enabled;
+                self.remember_active_session_runtime_controls(None);
                 self.status_message = if enabled {
                     format!("已开启显式温度参数，当前值为 {:.2}。", self.temperature)
                 } else {
@@ -2903,6 +2937,7 @@ impl VulcanWorkbench {
                 self.hovered_task_session = Some(session_id);
                 self.clear_pending_prompt_drag_state();
                 self.sync_workspace_path_with_selected_session();
+                self.restore_runtime_controls_for_session(session_id);
                 self.reload_project_prompt_settings_draft();
                 self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
                 self.clear_transcript_drag_auto_scrolls();

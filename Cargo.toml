@@ -10,6 +10,7 @@ members = [
     "crates/vulcan-context",
     "crates/vulcan-context-compaction",
     "crates/vulcan-prompt-composer",
+    "crates/vulcan-prompt-skills",
     "crates/vulcan-file-watcher",
     "crates/vulcan-mcp-runtime",
     "crates/vulcan-agent-view",
@@ -51,6 +52,7 @@ vulcan-provider-config = { path = "crates/vulcan-provider-config" }
 vulcan-context = { path = "crates/vulcan-context" }
 vulcan-context-compaction = { path = "crates/vulcan-context-compaction" }
 vulcan-prompt-composer = { path = "crates/vulcan-prompt-composer" }
+vulcan-prompt-skills = { path = "crates/vulcan-prompt-skills" }
 vulcan-file-watcher = { path = "crates/vulcan-file-watcher" }
 vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vldb-controller-client = "0.2.1"

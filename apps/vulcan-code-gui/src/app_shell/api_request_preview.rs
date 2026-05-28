@@ -65,6 +65,11 @@ impl VulcanWorkbench {
             reasoning_effort: runtime_options.reasoning_effort,
             ai_tool_configuration,
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            project_prompt_skills: self.current_project_prompt_skills_configuration(session_id),
+            session_prompt_skill_overrides: self
+                .session_runtime_state(session_id)
+                .map(|state| state.prompt_skill_overrides.clone())
+                .unwrap_or_default(),
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

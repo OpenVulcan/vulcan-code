@@ -1585,6 +1585,9 @@ impl VulcanWorkbench {
             .model_blueprint
             .openrouter_endpoint_route
             .clone();
+        runtime_state.active_reasoning_effort =
+            Some(preparation.model_blueprint.reasoning.requested_effort);
+        runtime_state.active_temperature = preparation.temperature;
         runtime_state.live_context_budget_fingerprint = preparation
             .context_budget
             .as_ref()

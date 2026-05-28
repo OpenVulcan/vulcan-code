@@ -120,6 +120,9 @@ mod tests {
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            prompt_skill_developer_segment: None,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("read_file"),
@@ -253,6 +256,9 @@ mod tests {
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            prompt_skill_developer_segment: None,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("read_file"),
@@ -593,6 +599,9 @@ mod tests {
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            prompt_skill_developer_segment: None,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("read_file"),
@@ -660,6 +669,9 @@ mod tests {
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            prompt_skill_developer_segment: None,
             skill_names: vec![String::from("codekit")],
             tool_descriptors: vec![VulcanToolDescriptor {
                 id: String::from("shell_command"),

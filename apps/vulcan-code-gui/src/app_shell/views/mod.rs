@@ -16,6 +16,7 @@ mod composer;
 mod diff;
 mod luaskills;
 mod project_settings;
+mod prompt_skills;
 mod question_modal;
 mod settings_cards;
 mod settings_navigation;
@@ -65,6 +66,26 @@ fn prompt_composer_inspector_layer_preview(text: &str) -> String {
 /// 为紧凑诊断展示格式化一个提示词组合指纹。
 fn prompt_composer_inspector_fingerprint(fingerprint: u64) -> String {
     format!("{fingerprint:016x}")
+}
+
+/// Returns the UI display name for one prompt skill with metadata fallback.
+/// 返回单个提示词技能的界面展示名称，并在缺少元数据时回退。
+fn prompt_skill_display_name(skill: &vulcan_prompt_skills::PromptSkill) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .unwrap_or(&skill.name)
+}
+
+/// Returns the UI short description for one prompt skill with metadata fallback.
+/// 返回单个提示词技能的界面短描述，并在缺少元数据时回退。
+fn prompt_skill_short_description(skill: &vulcan_prompt_skills::PromptSkill) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.as_deref())
+        .unwrap_or(&skill.description)
 }
 
 /// Extracts one short summary preview from compaction metadata or the summary body as a fallback.
@@ -1624,9 +1645,7 @@ impl VulcanWorkbench {
     pub(super) fn view_active_main_panel(&self) -> Element<'_, Message> {
         match self.active_main_panel {
             MainDisplayPanel::Main => self.view_empty_main_panel(),
-            MainDisplayPanel::PromptSkills => {
-                self.view_placeholder_main_panel(MainDisplayPanel::PromptSkills)
-            }
+            MainDisplayPanel::PromptSkills => self.view_prompt_skills_panel(),
             MainDisplayPanel::LuaSkills => self.view_luaskills_panel(),
             MainDisplayPanel::Automation => {
                 self.view_placeholder_main_panel(MainDisplayPanel::Automation)

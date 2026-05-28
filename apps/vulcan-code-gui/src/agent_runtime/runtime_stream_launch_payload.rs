@@ -149,6 +149,9 @@ mod tests {
             temperature: Some(0.2),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            prompt_skill_developer_segment: None,
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             delegate_agents: Vec::new(),
@@ -178,6 +181,8 @@ mod tests {
             reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
             ai_tool_configuration: PersistedAiToolConfiguration::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
+            project_prompt_skills: Default::default(),
+            session_prompt_skill_overrides: Default::default(),
         }
     }
 

@@ -6,12 +6,17 @@ use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
-use crate::provider_config::{PersistedPromptConfiguration, PersistedPromptPersonalitySelection};
+use crate::provider_config::{
+    PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
+    ProjectPromptSkillsConfiguration,
+};
 use serde_json::Value;
+use std::path::PathBuf;
 use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
 use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent, ProviderUsageSnapshot,
 };
+use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 
 /// Minimal execution request captured from the current GUI state.
@@ -48,6 +53,13 @@ pub struct ExecutionPreparationRequest {
     /// Prompt purpose used to choose runtime prompt assembly and tool exposure.
     /// 用于选择运行时提示词装配与工具暴露策略的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,
+    /// Project-level prompt-skill overrides captured for the current workspace.
+    /// 为当前工作区捕获的项目级提示词技能覆盖。
+    pub project_prompt_skills: ProjectPromptSkillsConfiguration,
+    /// Session-level prompt-skill overrides captured for the current conversation.
+    /// 为当前会话捕获的会话级提示词技能覆盖。
+    pub session_prompt_skill_overrides:
+        std::collections::BTreeMap<String, crate::provider_config::PersistedPromptSkillState>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -142,6 +154,15 @@ pub struct ExecutionPreparation {
     /// Prompt purpose captured for this run.
     /// 为本次运行捕获的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,
+    /// Prompt skills resolved for this run after global/project/session overrides.
+    /// 为本次运行按全局、项目与会话覆盖解析出的提示词技能集合。
+    pub prompt_skills: Vec<ResolvedPromptSkill>,
+    /// User prompt-skill root captured for this run.
+    /// 为本次运行捕获的用户提示词技能根目录。
+    pub prompt_skill_user_root: Option<PathBuf>,
+    /// Optional developer prompt segment advertising the enabled prompt skills.
+    /// 向模型说明已启用提示词技能的可选开发者提示词片段。
+    pub prompt_skill_developer_segment: Option<String>,
     /// Resolved skill names attached to the active agent.
     /// 附着在当前代理上的技能名称集合。
     pub skill_names: Vec<String>,
@@ -314,6 +335,16 @@ impl ExecutionPreparation {
 
         if !self.skill_names.is_empty() {
             rows.push(format!("技能：{}", self.skill_names.join("、")));
+        }
+
+        let enabled_prompt_skills = self
+            .prompt_skills
+            .iter()
+            .filter(|skill| skill.is_enabled())
+            .map(|skill| skill.skill.name.as_str())
+            .collect::<Vec<_>>();
+        if !enabled_prompt_skills.is_empty() {
+            rows.push(format!("提示词技能：{}", enabled_prompt_skills.join("、")));
         }
 
         if !self.tool_descriptors.is_empty() {

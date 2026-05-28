@@ -99,6 +99,8 @@ pub fn build_vulcan_tools_manager(
     candidate_mcp_tools: Vec<McpRuntimeToolBinding>,
     ai_tool_configuration: PersistedAiToolConfiguration,
     ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
+    enabled_prompt_skill_names: Vec<String>,
+    prompt_skill_user_root: Option<PathBuf>,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
@@ -119,6 +121,8 @@ pub fn build_vulcan_tools_manager(
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
+        let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
+        let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema: definition.args_schema.clone(),
@@ -128,6 +132,8 @@ pub fn build_vulcan_tools_manager(
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
+                let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
+                let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
                 Box::pin(async move {
                     catalog
                         .invoke(
@@ -141,6 +147,8 @@ pub fn build_vulcan_tools_manager(
                                     project_temp_maintenance::ensure_project_temp_dir(path).ok()
                                 }),
                                 workspace_root,
+                                enabled_prompt_skill_names,
+                                prompt_skill_user_root,
                             },
                         )
                         .await

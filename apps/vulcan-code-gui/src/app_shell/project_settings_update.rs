@@ -27,6 +27,23 @@ impl VulcanWorkbench {
                 self.project_attachment_cleanup_date_picker_open = false;
                 Task::none()
             }
+            Message::SetPromptSkillProjectState { name, enabled } => {
+                match self.persist_prompt_skill_project_state(&name, enabled) {
+                    Ok(true) => {
+                        self.project_attachment_cleanup_notice =
+                            format!("已更新项目级提示词技能 `{name}` 的启用状态。");
+                    }
+                    Ok(false) => {
+                        self.project_attachment_cleanup_notice =
+                            format!("项目级提示词技能 `{name}` 的启用状态未变化。");
+                    }
+                    Err(error) => {
+                        self.project_attachment_cleanup_notice =
+                            format!("保存项目级提示词技能 `{name}` 失败：{error}");
+                    }
+                }
+                Task::none()
+            }
             Message::OpenProjectAttachmentCleanupDatePicker => {
                 self.project_attachment_cleanup_date_picker_open = true;
                 Task::none()

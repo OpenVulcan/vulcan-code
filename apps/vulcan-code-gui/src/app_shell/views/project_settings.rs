@@ -51,6 +51,7 @@ impl VulcanWorkbench {
                 ]
                 .align_y(Center),
                 project_summary,
+                self.view_project_prompt_skills_card(project),
                 self.view_project_attachment_cleanup_card(project),
             ]
             .spacing(14),
@@ -80,6 +81,97 @@ impl VulcanWorkbench {
             )
             .into(),
         )
+    }
+
+    /// Renders the project-level Prompt Skills override card inside the project settings modal.
+    /// 渲染项目设置弹窗内部的项目级 Prompt Skills 覆盖卡片。
+    pub(super) fn view_project_prompt_skills_card<'a>(
+        &'a self,
+        project: &'a TaskProjectSummary,
+    ) -> Element<'a, Message> {
+        let project_config =
+            provider_config::load_project_configuration_file(&PathBuf::from(project.path.clone()))
+                .map(|config| config.prompt_skills)
+                .unwrap_or_default();
+        let mut skill_rows = column![].spacing(8);
+        match &self.prompt_skills_catalog {
+            Some(catalog) if catalog.skills.is_empty() => {
+                skill_rows = skill_rows.push(text("系统与用户目录暂未发现提示词技能。").size(12));
+            }
+            Some(catalog) => {
+                for skill in &catalog.skills {
+                    let inherited_enabled = self
+                        .provider_configuration
+                        .prompt_skills
+                        .skill_overrides
+                        .get(&skill.name)
+                        .copied()
+                        .unwrap_or(
+                            self.provider_configuration
+                                .prompt_skills
+                                .default_skill_state,
+                        )
+                        .is_enabled();
+                    let project_enabled = project_config
+                        .skill_overrides
+                        .get(&skill.name)
+                        .copied()
+                        .map(|state| state.is_enabled())
+                        .unwrap_or(inherited_enabled);
+                    let label = if project_config.skill_overrides.contains_key(&skill.name) {
+                        if project_enabled {
+                            "项目启用"
+                        } else {
+                            "项目关闭"
+                        }
+                    } else if inherited_enabled {
+                        "继承启用"
+                    } else {
+                        "继承关闭"
+                    };
+                    let display_name = prompt_skill_display_name(skill);
+                    let description = prompt_skill_short_description(skill);
+                    skill_rows = skill_rows.push(
+                        row![
+                            column![text(display_name).size(13), text(description).size(11)]
+                                .spacing(2)
+                                .width(Fill),
+                            text(label).size(11),
+                            checkbox(project_enabled).on_toggle({
+                                let name = skill.name.clone();
+                                move |enabled| Message::SetPromptSkillProjectState {
+                                    name: name.clone(),
+                                    enabled,
+                                }
+                            }),
+                        ]
+                        .spacing(10)
+                        .align_y(Center),
+                    );
+                }
+            }
+            None => {
+                skill_rows = skill_rows
+                    .push(text("提示词技能目录尚未载入，可先到提示词技能面板刷新。").size(12));
+            }
+        }
+
+        container(
+            column![
+                row![
+                    text("项目级提示词技能").size(14),
+                    space::horizontal(),
+                    button("刷新技能").on_press(Message::RefreshPromptSkillsCatalog),
+                ]
+                .align_y(Center),
+                text("这里覆盖当前项目对系统与用户技能的启停；未设置时继承全局规则。").size(12),
+                skill_rows,
+            ]
+            .spacing(10),
+        )
+        .padding(12)
+        .style(container::bordered_box)
+        .into()
     }
 
     /// Renders the project-scoped historical attachment cleanup card used inside the project settings modal.

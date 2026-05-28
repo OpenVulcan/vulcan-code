@@ -5,6 +5,7 @@ use super::default_true;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::path::PathBuf;
 /// Persisted skill family used by the runtime foundation.
 /// 运行时基础架构使用的持久化技能类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +211,133 @@ impl PersistedLuaSkillsConfiguration {
         changed |= self.normalize();
         changed
     }
+}
+
+/// Persisted on/off state for one prompt skill.
+/// 单个提示词技能的持久化开关状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PersistedPromptSkillState {
+    /// The prompt skill is visible and loadable.
+    /// 提示词技能可见且可加载。
+    Enabled,
+    /// The prompt skill is hidden and cannot be loaded.
+    /// 提示词技能隐藏且不可加载。
+    Disabled,
+}
+
+impl PersistedPromptSkillState {
+    /// Returns whether this persisted state enables one prompt skill.
+    /// 返回该持久化状态是否启用某个提示词技能。
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+/// Host-managed prompt skills configuration stored independently from LuaSkills.
+/// 独立于 LuaSkills 存储的宿主管理提示词技能配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedPromptSkillsConfiguration {
+    /// Whether the prompt skills system is globally enabled.
+    /// 是否全局启用提示词技能系统。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Optional user-level prompt skill root directory.
+    /// 可选的用户级提示词技能根目录。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_skill_root: Option<PathBuf>,
+    /// Default state used when no per-skill override exists.
+    /// 不存在单技能覆盖时使用的默认状态。
+    #[serde(default = "default_prompt_skill_state")]
+    pub default_skill_state: PersistedPromptSkillState,
+    /// Global per-skill state overrides.
+    /// 全局单技能状态覆盖。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skill_overrides: BTreeMap<String, PersistedPromptSkillState>,
+}
+
+impl Default for PersistedPromptSkillsConfiguration {
+    /// Builds the default prompt skills configuration.
+    /// 构建默认提示词技能配置。
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            user_skill_root: None,
+            default_skill_state: PersistedPromptSkillState::Enabled,
+            skill_overrides: BTreeMap::new(),
+        }
+    }
+}
+
+/// Project-local prompt skills configuration that only stores per-skill overrides.
+/// 仅存储单技能覆盖的项目级提示词技能配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPromptSkillsConfiguration {
+    /// Project-level per-skill state overrides.
+    /// 项目级单技能状态覆盖。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skill_overrides: BTreeMap<String, PersistedPromptSkillState>,
+}
+
+impl ProjectPromptSkillsConfiguration {
+    /// Returns whether the current project prompt skills configuration is empty.
+    /// 返回当前项目级提示词技能配置是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.skill_overrides.is_empty()
+    }
+}
+
+impl PersistedPromptSkillsConfiguration {
+    /// Returns whether the current prompt skills configuration is still default.
+    /// 返回当前提示词技能配置是否仍为默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Normalizes the persisted prompt skill overrides by trimming names and dropping empty entries.
+    /// 通过裁剪名称并移除空条目来归一化持久化提示词技能覆盖配置。
+    pub fn normalize(&mut self) -> bool {
+        let normalized = self
+            .skill_overrides
+            .iter()
+            .filter_map(|(name, state)| {
+                let stable_name = name.trim();
+                (!stable_name.is_empty()).then(|| (stable_name.to_string(), *state))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let changed = normalized != self.skill_overrides;
+        self.skill_overrides = normalized;
+        changed
+    }
+
+    /// Updates one global prompt skill state override.
+    /// 更新单个全局提示词技能状态覆盖。
+    pub fn set_skill_state(
+        &mut self,
+        name: &str,
+        state: Option<PersistedPromptSkillState>,
+    ) -> bool {
+        let stable_name = name.trim();
+        if stable_name.is_empty() {
+            return false;
+        }
+
+        let changed = match state {
+            Some(state) => {
+                self.skill_overrides.insert(stable_name.to_string(), state) != Some(state)
+            }
+            None => self.skill_overrides.remove(stable_name).is_some(),
+        };
+        changed | self.normalize()
+    }
+}
+
+/// Returns the default prompt skill state.
+/// 返回默认提示词技能状态。
+fn default_prompt_skill_state() -> PersistedPromptSkillState {
+    PersistedPromptSkillState::Enabled
 }
 
 /// One persisted agent entry stored in the shared Vulcan configuration file.
@@ -594,6 +722,13 @@ pub struct ProjectVulcanCodeConfigurationFile {
     /// 可选的项目级提示词设置，仅覆盖项目提示词注入相关字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<PersistedPromptConfiguration>,
+    /// Optional project-local prompt skills overrides.
+    /// 可选的项目级提示词技能覆盖配置。
+    #[serde(
+        default,
+        skip_serializing_if = "ProjectPromptSkillsConfiguration::is_empty"
+    )]
+    pub prompt_skills: ProjectPromptSkillsConfiguration,
 }
 
 /// Returns the default workspace-relative project prompt path.

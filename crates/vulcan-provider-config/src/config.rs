@@ -1788,6 +1788,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedLuaSkillsConfiguration::is_default"
     )]
     pub luaskills: PersistedLuaSkillsConfiguration,
+    /// Host-managed Prompt Skills configuration persisted independently from LuaSkills.
+    /// 与 LuaSkills 独立持久化的宿主管理提示词技能配置。
+    #[serde(
+        default,
+        rename = "promptSkills",
+        skip_serializing_if = "PersistedPromptSkillsConfiguration::is_default"
+    )]
+    pub prompt_skills: PersistedPromptSkillsConfiguration,
     /// Legacy embedded AI tool routing and compatibility configuration kept only as a migration fallback for the standalone AI capability file.
     /// 仅作为独立 AI 能力配置文件迁移回退而保留的旧版内嵌 AI 工具路由与兼容配置。
     #[serde(

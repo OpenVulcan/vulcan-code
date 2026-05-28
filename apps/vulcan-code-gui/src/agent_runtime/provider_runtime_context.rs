@@ -122,8 +122,11 @@ fn build_runtime_prompt_assembly_input(
         "Current workspace: {}\nCurrent execution mode: {}",
         preparation.workspace_path, preparation.execution_mode
     ));
-    let custom_developer_segments =
+    let mut custom_developer_segments =
         build_prompt_purpose_developer_segments(preparation.prompt_purpose);
+    if let Some(segment) = preparation.prompt_skill_developer_segment.clone() {
+        custom_developer_segments.push(segment);
+    }
 
     PromptAssemblyInput {
         mode: match preparation.prompt_purpose {
@@ -531,6 +534,7 @@ mod tests {
         fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
         fs::write(prompt_dir.join("prompt.md"), "Project prompt").expect("write project prompt");
         let project_config = ProjectVulcanCodeConfigurationFile {
+            prompt_skills: Default::default(),
             prompt: Some(PersistedPromptConfiguration {
                 personality: PersistedPromptPersonalitySelection::Default,
                 project_prompt_enabled: true,
@@ -642,6 +646,9 @@ mod tests {
             temperature: None,
             prompt_configuration,
             prompt_purpose: ExecutionPromptPurpose::UserTurn,
+            prompt_skills: Vec::new(),
+            prompt_skill_user_root: None,
+            prompt_skill_developer_segment: None,
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
             delegate_agents: Vec::new(),
