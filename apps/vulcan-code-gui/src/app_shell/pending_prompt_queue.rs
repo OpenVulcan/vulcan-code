@@ -1223,6 +1223,14 @@ impl VulcanWorkbench {
         };
 
         active_compaction.handle.abort();
+        self.update_context_compaction_status_message(
+            session_id,
+            &active_compaction.status_message_id,
+            active_compaction.trigger,
+            ContextCompactionStatusPanelState::Stopped,
+            "",
+            None,
+        );
 
         if let Some(session) = self
             .sessions

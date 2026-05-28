@@ -172,6 +172,10 @@ fn append_session_message_blocks(
         (_, SessionMessageRecordKind::ThinkingOutput) => {
             document.push_directive(build_thinking_block(message, options));
         }
+        (_, SessionMessageRecordKind::CompactionSummary)
+        | (_, SessionMessageRecordKind::CompactionStatus) => {
+            document.push_directive(build_context_compaction_block(message));
+        }
         (_, SessionMessageRecordKind::ToolCallOutput) => {
             document.push_directive(build_tool_record_block(
                 AgentViewDirectiveKind::ToolCall,
@@ -463,6 +467,42 @@ fn build_thinking_block(
     )
 }
 
+/// Builds one context-compaction directive block using the inline thinking-note surface without changing model-context semantics.
+/// 使用内联思考备注表面构建上下文压缩指令区块，同时不改变模型上下文语义。
+fn build_context_compaction_block(message: &SessionMessageEntry) -> AgentViewDirectiveBlock {
+    let mut attributes = AgentViewAttributes::new();
+    attributes.insert(String::from("message-id"), message.id.clone());
+    attributes.insert(String::from("ui-thinking-surface"), String::from("inline"));
+    attributes.insert(
+        String::from("ui-render-thinking-header"),
+        String::from("true"),
+    );
+    attributes.insert(
+        String::from("ui-inline-thinking-title"),
+        String::from("上下文压缩"),
+    );
+    attributes.insert(
+        String::from("ui-thinking-title"),
+        String::from("上下文压缩"),
+    );
+    if !message.created_at.trim().is_empty() {
+        attributes.insert(String::from("created-at"), message.created_at.clone());
+    }
+    let raw_source = render_directive_source(
+        &AgentViewDirectiveKind::Thinking,
+        &attributes,
+        &message.body,
+    );
+
+    AgentViewDirectiveBlock::new(
+        AgentViewDirectiveKind::Thinking,
+        attributes,
+        message.body.clone(),
+        raw_source,
+        false,
+    )
+}
+
 /// Builds one tool-call or tool-result directive block from the visible session message.
 /// 根据可见会话消息构建一条工具调用或工具返回指令区块。
 fn build_tool_record_block(
@@ -533,6 +573,8 @@ fn localized_message_title(
         (_, SessionMessageRecordKind::ThinkingOutput) => {
             Some(text_for_locale(options.locale, I18nKey::TranscriptThinking))
         }
+        (_, SessionMessageRecordKind::CompactionSummary)
+        | (_, SessionMessageRecordKind::CompactionStatus) => Some(String::from("上下文压缩")),
         (_, SessionMessageRecordKind::AssistantOutput) => {
             Some(text_for_locale(options.locale, I18nKey::TranscriptOutput))
         }
@@ -912,6 +954,43 @@ mod tests {
                     .get("message-id")
                     .is_some_and(|value| value == "assistant-1")
         ));
+    }
+
+    /// Verifies context-compaction status rows render as a dedicated inline compaction panel rather than ordinary Markdown.
+    /// 验证上下文压缩状态行会渲染为专用内联压缩面板，而不是普通 Markdown。
+    #[test]
+    fn builds_context_compaction_status_panel() {
+        let messages = vec![SessionMessageEntry {
+            id: String::from("compaction-status-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::CompactionStatus,
+            visible: true,
+            title: String::from("上下文压缩"),
+            body: String::from("状态：正在压缩上下文"),
+            metadata: None,
+            created_at: String::from("100"),
+        }];
+
+        let document = build_agent_view_document_with_options(
+            &messages,
+            &[],
+            &AgentViewBuildOptions::default(),
+        );
+
+        assert_eq!(document.blocks.len(), 1);
+        let AgentViewBlock::Directive(directive) = &document.blocks[0] else {
+            panic!("compaction status should render as a directive block");
+        };
+        assert_eq!(directive.kind, AgentViewDirectiveKind::Thinking);
+        assert_eq!(
+            directive.attributes.get("ui-inline-thinking-title"),
+            Some(&String::from("上下文压缩"))
+        );
+        assert_eq!(
+            directive.attributes.get("message-id"),
+            Some(&String::from("compaction-status-1"))
+        );
+        assert!(!directive.collapsed_by_default);
     }
 
     /// Verifies that runtime events no longer sink to the bottom of the unified transcript, even when tool-like payloads are passed directly into the adapter.

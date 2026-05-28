@@ -105,8 +105,8 @@ use self::panel_navigation_state::{
 };
 use self::session_state::{
     ActiveSessionCompactionState, ActiveSessionRunState, ActiveTranscriptDragAutoScroll,
-    SelectedSubagentTaskPanel, SessionPromptCompactionTrigger, SubagentTaskPanelState,
-    SubagentTaskRunState,
+    ContextCompactionStatusPanelState, SelectedSubagentTaskPanel, SessionPromptCompactionTrigger,
+    SubagentTaskPanelState, SubagentTaskRunState,
 };
 use self::task_tree::TaskTreeActionIcon;
 use self::tool_projection::*;

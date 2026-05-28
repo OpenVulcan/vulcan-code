@@ -473,6 +473,77 @@ impl VulcanWorkbench {
         perf_trace.finish();
     }
 
+    /// Replaces one visible transcript record body and refreshes its canonical and rendered projections.
+    /// 替换一条可见转录记录正文，并刷新其规范记录与渲染投影。
+    pub(super) fn replace_visible_session_record_body(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+        body: String,
+    ) -> bool {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let updated_at = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        let Some(record) = runtime_state
+            .conversation_state
+            .records
+            .iter_mut()
+            .find(|record| record.id == message_id)
+        else {
+            return false;
+        };
+        record.body = body.clone();
+        runtime_state.updated_at = updated_at;
+        self.dirty_session_message_ids.insert(session_id);
+        self.session_message_raw_buffers.insert(
+            message_id.to_string(),
+            text_editor::Content::with_text(&body),
+        );
+        let (markdown_content, markdown_buffer) =
+            parse_selectable_markdown_body(&body, &self.app_theme);
+        self.session_message_markdown
+            .insert(message_id.to_string(), markdown_content);
+        self.session_message_markdown_buffers
+            .insert(message_id.to_string(), markdown_buffer);
+
+        if !self.replace_projected_session_message_body(session_id, message_id, body) {
+            self.sync_session_messages_from_conversation_state(session_id);
+        }
+        if self.session_owns_active_transcript_surface(session_id) {
+            if !self.refresh_session_agent_view_message_blocks(session_id, message_id) {
+                self.refresh_session_agent_view_buffers(session_id);
+            }
+        } else {
+            self.invalidate_hidden_session_streaming_view_caches(session_id, message_id);
+        }
+        true
+    }
+
+    /// Replaces one already projected visible transcript row body without rebuilding the whole session window.
+    /// 替换一条已投影可见转录行正文，避免重建完整会话窗口。
+    fn replace_projected_session_message_body(
+        &mut self,
+        session_id: SessionId,
+        message_id: &str,
+        body: String,
+    ) -> bool {
+        if let Some(messages) = self.session_messages.get_mut(&session_id)
+            && let Some(message) = messages.iter_mut().find(|message| message.id == message_id)
+        {
+            message.body = body;
+            return true;
+        }
+
+        if let Some(messages) = self.archived_session_messages.get_mut(&session_id)
+            && let Some(message) = messages.iter_mut().find(|message| message.id == message_id)
+        {
+            message.body = body;
+            return true;
+        }
+
+        false
+    }
+
     /// Ensures the session owns one visible thinking message and appends the incoming delta to it.
     /// 确保会话拥有一条可见思考消息，并将当前增量追加进去。
     pub(super) fn append_streaming_thinking_delta(&mut self, session_id: SessionId, delta: &str) {
@@ -739,6 +810,98 @@ impl VulcanWorkbench {
         self.sync_context_usage_from_session_budget(session_id);
     }
 
+    /// Builds the Markdown body shown inside one context-compaction status panel.
+    /// 构建上下文压缩状态面板内部展示的 Markdown 正文。
+    fn build_context_compaction_status_body(
+        trigger: SessionPromptCompactionTrigger,
+        status: ContextCompactionStatusPanelState,
+        budget_note: &str,
+        provider_request_count: Option<usize>,
+    ) -> String {
+        let trigger_label = match trigger {
+            SessionPromptCompactionTrigger::ManualSlash => "手动触发",
+            SessionPromptCompactionTrigger::BudgetAuto => "上下文预算触发",
+        };
+        let status_label = match status {
+            ContextCompactionStatusPanelState::Running => "正在压缩上下文",
+            ContextCompactionStatusPanelState::Completed => "上下文压缩已完成",
+            ContextCompactionStatusPanelState::CompletedWithFallback => {
+                "上下文压缩已完成（使用宿主侧回退摘要）"
+            }
+            ContextCompactionStatusPanelState::Stopped => "上下文压缩已停止",
+        };
+        let mut lines = vec![
+            format!("状态：{status_label}"),
+            format!("触发：{trigger_label}"),
+        ];
+        let trimmed_budget_note = budget_note.trim();
+        if !trimmed_budget_note.is_empty() {
+            lines.push(format!("预算：{trimmed_budget_note}"));
+        }
+        if let Some(provider_request_count) = provider_request_count {
+            lines.push(format!("Provider 请求：{provider_request_count} 次"));
+        }
+        match status {
+            ContextCompactionStatusPanelState::Running => {
+                lines.push(String::from("说明：正在生成新的上下文锚点，完成前不会改写历史窗口。"));
+            }
+            ContextCompactionStatusPanelState::Completed
+            | ContextCompactionStatusPanelState::CompletedWithFallback => {
+                lines.push(String::from("说明：已建立新的上下文锚点，后续请求会从压缩后的窗口继续。"));
+            }
+            ContextCompactionStatusPanelState::Stopped => {
+                lines.push(String::from("说明：本次压缩未改写上下文锚点，后续请求仍沿用停止前的上下文窗口。"));
+            }
+        }
+        lines.join("\n")
+    }
+
+    /// Appends one visible context-compaction status panel and returns its stable transcript id.
+    /// 追加一条可见上下文压缩状态面板，并返回其稳定转录标识。
+    fn push_context_compaction_status_message(
+        &mut self,
+        session_id: SessionId,
+        trigger: SessionPromptCompactionTrigger,
+        budget_note: &str,
+    ) -> String {
+        self.push_visible_session_record_message_with_metadata(
+            session_id,
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::CompactionStatus,
+            "上下文压缩",
+            Self::build_context_compaction_status_body(
+                trigger,
+                ContextCompactionStatusPanelState::Running,
+                budget_note,
+                None,
+            ),
+            Some(json!({
+                "context_compaction_status": true,
+            })),
+            false,
+        )
+    }
+
+    /// Updates one existing context-compaction status panel when the background task settles or is stopped.
+    /// 当后台任务收敛或被停止时，更新既有上下文压缩状态面板。
+    pub(super) fn update_context_compaction_status_message(
+        &mut self,
+        session_id: SessionId,
+        status_message_id: &str,
+        trigger: SessionPromptCompactionTrigger,
+        status: ContextCompactionStatusPanelState,
+        budget_note: &str,
+        provider_request_count: Option<usize>,
+    ) {
+        let body = Self::build_context_compaction_status_body(
+            trigger,
+            status,
+            budget_note,
+            provider_request_count,
+        );
+        let _ = self.replace_visible_session_record_body(session_id, status_message_id, body);
+    }
+
     /// Starts one prompt-based session compaction task or immediately falls back to the legacy host-side summary when internal execution prerequisites are unavailable.
     /// 启动一次提示词式会话压缩任务；若内部执行前提缺失，则立即回退到旧版宿主侧摘要。
     pub(super) fn start_session_prompt_compaction(
@@ -767,6 +930,8 @@ impl VulcanWorkbench {
         let ai_tool_configuration =
             self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
         let Some(mcp_runtime_access) = self.mcp_runtime.clone() else {
+            let status_message_id =
+                self.push_context_compaction_status_message(session_id, trigger, &budget_note);
             return self.finish_session_prompt_compaction(
                 session_id,
                 trigger,
@@ -777,6 +942,7 @@ impl VulcanWorkbench {
                     fallback_used: true,
                     provider_request_count: 0,
                 },
+                Some(status_message_id),
             );
         };
 
@@ -808,6 +974,8 @@ impl VulcanWorkbench {
             }
         };
 
+        let status_message_id =
+            self.push_context_compaction_status_message(session_id, trigger, &budget_note);
         let run_id = self.next_run_id;
         self.next_run_id = self.next_run_id.saturating_add(1);
         let (run_task, run_handle) = Task::perform(execute_prompt_compaction_job(request), {
@@ -827,6 +995,8 @@ impl VulcanWorkbench {
                 run_id,
                 handle: run_handle,
                 previous_phase,
+                trigger,
+                status_message_id,
             },
         );
 
@@ -842,6 +1012,7 @@ impl VulcanWorkbench {
         budget_note: String,
         previous_phase: SessionRunPhase,
         execution: PromptCompactionExecution,
+        status_message_id: Option<String>,
     ) -> Task<Message> {
         let activity_title = match trigger {
             SessionPromptCompactionTrigger::ManualSlash => "手动触发上下文压缩",
@@ -879,6 +1050,20 @@ impl VulcanWorkbench {
             activity_title,
             activity_detail,
         );
+        if let Some(status_message_id) = status_message_id {
+            self.update_context_compaction_status_message(
+                session_id,
+                &status_message_id,
+                trigger,
+                if execution.fallback_used {
+                    ContextCompactionStatusPanelState::CompletedWithFallback
+                } else {
+                    ContextCompactionStatusPanelState::Completed
+                },
+                &budget_note,
+                Some(execution.provider_request_count),
+            );
+        }
         self.set_session_run_phase(session_id, previous_phase);
         self.status_message = match (trigger, execution.fallback_used) {
             (SessionPromptCompactionTrigger::ManualSlash, false) => {

@@ -4,9 +4,10 @@ use super::workbench_model_state::{
 };
 use super::{
     ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand, Message,
-    ToolModalPresentation, VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
-    build_background_legacy_maintenance_queue, build_command_session_stop_result_metadata,
-    build_composer_slash_command_state, build_session_record_message_id,
+    SessionPromptCompactionTrigger, ToolModalPresentation, VulcanWorkbench,
+    anthropic_pending_prompt_dispatch_is_blocked, build_background_legacy_maintenance_queue,
+    build_command_session_stop_result_metadata, build_composer_slash_command_state,
+    build_session_record_message_id,
     build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
     compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
     composer_visible_line_count, generated_attachments_from_tool_metadata,
@@ -807,10 +808,54 @@ fn session_has_blocking_system_prompt_work_includes_active_compaction() {
             run_id: 42,
             handle,
             previous_phase: SessionRunPhase::Ready,
+            trigger: SessionPromptCompactionTrigger::ManualSlash,
+            status_message_id: String::from("compaction-status-1"),
         },
     );
 
     assert!(workbench.session_has_blocking_system_prompt_work(session_id));
+}
+
+/// Verifies starting prompt compaction appends one visible status panel that does not participate in future model context.
+/// 验证启动提示词压缩会追加一条可见状态面板，且该面板不参与后续模型上下文。
+#[test]
+fn start_prompt_compaction_appends_visible_status_panel_outside_context() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(71003);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "压缩状态面板测试"));
+    let plan = CompactionPlan {
+        source_messages: Vec::new(),
+        source_until_message_id: None,
+        source_until_turn_index: None,
+        retained_tail_start_turn_index: None,
+        compaction_id: String::from("compaction-test"),
+        created_at: String::from("1000"),
+        policy: ContextCompactionPolicy::default(),
+    };
+
+    let _task = workbench.start_session_prompt_compaction(
+        session_id,
+        SessionPromptCompactionTrigger::ManualSlash,
+        plan,
+        String::from("测试预算"),
+    );
+
+    let status_message = workbench
+        .session_messages
+        .get(&session_id)
+        .and_then(|messages| {
+            messages.iter().find(|message| {
+                message.record_kind == SessionMessageRecordKind::CompactionStatus
+            })
+        })
+        .expect("compaction should append one visible status message");
+    assert!(status_message.visible);
+    assert_eq!(status_message.title, "上下文压缩");
+    assert!(status_message.body.contains("状态："));
+    assert!(!status_message.contributes_to_context());
 }
 
 /// Verifies that the background legacy-maintenance queue includes visible and archived sessions once.

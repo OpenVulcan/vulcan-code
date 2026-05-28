@@ -4130,6 +4130,7 @@ impl VulcanWorkbench {
                         budget_note,
                         active_state.previous_phase,
                         execution,
+                        Some(active_state.status_message_id),
                     ),
                     Err(error) => {
                         self.push_activity(
@@ -4149,6 +4150,7 @@ impl VulcanWorkbench {
                                 fallback_used: true,
                                 provider_request_count: 0,
                             },
+                            Some(active_state.status_message_id),
                         )
                     }
                 }

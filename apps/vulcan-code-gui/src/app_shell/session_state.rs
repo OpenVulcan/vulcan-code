@@ -108,6 +108,12 @@ pub(super) struct ActiveSessionCompactionState {
     /// Session phase that should be restored after the compaction task settles normally.
     /// 压缩任务正常收敛后应恢复的会话阶段。
     pub(super) previous_phase: SessionRunPhase,
+    /// Original trigger source used to label status updates consistently.
+    /// 用于一致标记状态更新的原始触发来源。
+    pub(super) trigger: SessionPromptCompactionTrigger,
+    /// Visible status-panel message that should be updated when the compaction task settles.
+    /// 压缩任务收敛时应更新的可见状态面板消息。
+    pub(super) status_message_id: String,
 }
 
 /// Trigger source used to label one prompt-based session compaction run.
@@ -120,4 +126,22 @@ pub(super) enum SessionPromptCompactionTrigger {
     /// Context budget policy automatically triggered compaction after a normal run finished.
     /// 上下文预算策略在普通运行结束后自动触发了压缩。
     BudgetAuto,
+}
+
+/// Visible lifecycle state rendered inside one context-compaction transcript panel.
+/// 渲染在单个上下文压缩转录面板中的可见生命周期状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ContextCompactionStatusPanelState {
+    /// Prompt-based compaction is currently running in the internal system lane.
+    /// 提示词式压缩当前正在内部系统通道中运行。
+    Running,
+    /// Prompt-based compaction completed with a model-produced summary.
+    /// 提示词式压缩已通过模型生成摘要完成。
+    Completed,
+    /// Prompt-based compaction completed by falling back to the host-side legacy summary.
+    /// 提示词式压缩已通过回退到宿主侧旧摘要完成。
+    CompletedWithFallback,
+    /// Prompt-based compaction was stopped before it could rewrite the context anchor.
+    /// 提示词式压缩在改写上下文锚点前被停止。
+    Stopped,
 }
