@@ -4087,6 +4087,17 @@ impl VulcanWorkbench {
                             self.maybe_start_next_pending_prompt(session_id, false),
                         ])
                     }
+                    ExecutionStreamEvent::ConversationCheckpoint {
+                        session_id,
+                        conversation_state,
+                        last_successful_provider_usage,
+                        provider_request_count,
+                    } => self.apply_execution_conversation_checkpoint(
+                        session_id,
+                        conversation_state,
+                        last_successful_provider_usage,
+                        provider_request_count,
+                    ),
                     ExecutionStreamEvent::Finished(report) => {
                         self.clear_active_run_tracking(session_id);
                         self.apply_execution_run_report(report)
@@ -4174,6 +4185,17 @@ impl VulcanWorkbench {
                         self.push_session_runtime_event(session_id, event);
                         self.maybe_follow_selected_session_transcript_tail(session_id)
                     }
+                    ExecutionStreamEvent::ConversationCheckpoint {
+                        session_id,
+                        conversation_state,
+                        last_successful_provider_usage,
+                        provider_request_count,
+                    } => self.apply_execution_conversation_checkpoint(
+                        session_id,
+                        conversation_state,
+                        last_successful_provider_usage,
+                        provider_request_count,
+                    ),
                     ExecutionStreamEvent::Finished(report) => {
                         self.apply_execution_run_report(report)
                     }

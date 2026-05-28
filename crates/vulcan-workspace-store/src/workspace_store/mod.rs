@@ -762,6 +762,7 @@ pub async fn load_workspace_snapshot(
             ),
             last_provider_usage: provider_usage.clone(),
             last_successful_provider_usage: provider_usage,
+            last_safe_provider_request_count: None,
             updated_at: row.updated_at,
         };
 
@@ -1376,6 +1377,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         ),
         last_provider_usage: provider_usage.clone(),
         last_successful_provider_usage: provider_usage,
+        last_safe_provider_request_count: None,
         updated_at: row.updated_at,
     }
 }

@@ -2017,6 +2017,148 @@ fn turn_stats_do_not_require_record_message_id_alignment() {
     assert_eq!(stats.cached_input_tokens, Some(32));
 }
 
+/// Verifies stopped turns still report completed safe-checkpoint tool calls and usage.
+/// 验证已停止轮次仍会统计已完成安全检查点中的工具调用与用量。
+#[test]
+fn stopped_turn_stats_preserve_safe_checkpoint_tool_usage() {
+    let mut conversation_state = crate::conversation_protocol::SessionConversationState {
+        messages: vec![
+            crate::conversation_protocol::SessionConversationMessage {
+                id: String::from("protocol-user-1"),
+                payload: crate::conversation_protocol::SessionConversationPayload::UserText {
+                    text: String::from("随便调用两个工具"),
+                    attachments: Vec::new(),
+                },
+            },
+            crate::conversation_protocol::SessionConversationMessage {
+                id: String::from("provider-assistant-1"),
+                payload: crate::conversation_protocol::SessionConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::from("准备调用工具。"),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                        input_tokens: Some(100),
+                        output_tokens: Some(20),
+                        reasoning_tokens: Some(5),
+                        total_tokens: Some(125),
+                        cached_input_tokens: None,
+                        cache_creation_input_tokens: None,
+                    }),
+                    tool_calls: vec![
+                        crate::conversation_protocol::SessionConversationToolCall {
+                            id: String::from("tool-call-1"),
+                            tool_call_id: Some(String::from("call-1")),
+                            tool_name: String::from("web_search"),
+                            arguments: json!({"query": "test"}),
+                        },
+                        crate::conversation_protocol::SessionConversationToolCall {
+                            id: String::from("tool-call-2"),
+                            tool_call_id: Some(String::from("call-2")),
+                            tool_name: String::from("vulcan_file_list"),
+                            arguments: json!({"path": "."}),
+                        },
+                    ],
+                },
+            },
+            crate::conversation_protocol::SessionConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: crate::conversation_protocol::SessionConversationPayload::ToolResult {
+                    tool_result_id: String::from("tool-result-call-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("搜索完成"),
+                },
+            },
+            crate::conversation_protocol::SessionConversationMessage {
+                id: String::from("tool-result-2"),
+                payload: crate::conversation_protocol::SessionConversationPayload::ToolResult {
+                    tool_result_id: String::from("tool-result-call-2"),
+                    tool_call_id: Some(String::from("call-2")),
+                    text: String::from("列出文件完成"),
+                },
+            },
+        ],
+        records: vec![
+            crate::conversation_protocol::SessionConversationRecord {
+                id: String::from("record-user-1"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户"),
+                body: String::from("随便调用两个工具"),
+                metadata: None,
+                created_at: String::from("1000"),
+            },
+            crate::conversation_protocol::SessionConversationRecord {
+                id: String::from("record-tool-call-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::from("调用 web_search 工具"),
+                body: String::from("{}"),
+                metadata: Some(json!({"tool_call_id": "call-1"})),
+                created_at: String::from("1100"),
+            },
+            crate::conversation_protocol::SessionConversationRecord {
+                id: String::from("record-tool-result-1"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回 web_search"),
+                body: String::from("搜索完成"),
+                metadata: Some(json!({"tool_call_id": "call-1"})),
+                created_at: String::from("1200"),
+            },
+            crate::conversation_protocol::SessionConversationRecord {
+                id: String::from("record-tool-call-2"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: String::from("调用 vulcan_file_list 工具"),
+                body: String::from("{}"),
+                metadata: Some(json!({"tool_call_id": "call-2"})),
+                created_at: String::from("1300"),
+            },
+            crate::conversation_protocol::SessionConversationRecord {
+                id: String::from("record-tool-result-2"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title: String::from("工具返回 vulcan_file_list"),
+                body: String::from("列出文件完成"),
+                metadata: Some(json!({"tool_call_id": "call-2"})),
+                created_at: String::from("1400"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+    conversation_state
+        .records
+        .push(crate::conversation_protocol::SessionConversationRecord {
+            id: String::from("terminated-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnTerminated,
+            visible: false,
+            title: String::from("Turn Terminated"),
+            body: String::from("stopped"),
+            metadata: None,
+            created_at: String::from("1500"),
+        });
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        "terminated-1",
+        SessionTurnStatsStatus::Stopped,
+        Some(1),
+    )
+    .expect("stopped turn stats should build from checkpoint state");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 2);
+    assert_eq!(stats.total_tokens, 125);
+    assert_eq!(stats.status, SessionTurnStatsStatus::Stopped);
+}
+
 /// Verifies turn statistics prefer the exact provider request count captured by the runtime report instead of counting assistant payload segments.
 /// 验证轮次统计会优先采用运行时报告捕获到的精确 Provider 请求次数，而不是按助手载荷片段数量计数。
 #[test]

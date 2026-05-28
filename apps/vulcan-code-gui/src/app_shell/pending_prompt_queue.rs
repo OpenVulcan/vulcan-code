@@ -841,6 +841,11 @@ impl VulcanWorkbench {
             return Task::none();
         }
         self.ensure_session_conversation_state_loaded(session_id);
+        {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state.last_safe_provider_request_count = None;
+            runtime_state.updated_at = current_unix_millis_text();
+        }
         let owning_project_id = self
             .session_by_id(session_id)
             .and_then(|session| session.project_id.clone())
@@ -1105,6 +1110,7 @@ impl VulcanWorkbench {
             "执行已停止",
             "已按用户请求停止当前会话的子代理与系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。",
         );
+        let provider_request_count = self.safe_provider_request_count_for_stopped_turn(session_id);
         let terminated_message_id = self.append_session_turn_terminated(
             session_id,
             "The run was stopped manually before a summary could be produced.",
@@ -1113,7 +1119,7 @@ impl VulcanWorkbench {
             session_id,
             &terminated_message_id,
             SessionTurnStatsStatus::Stopped,
-            None,
+            provider_request_count,
         );
         self.push_activity(
             ActivityLevel::Warning,
@@ -1173,6 +1179,8 @@ impl VulcanWorkbench {
                 "执行已停止",
                 "已按用户请求停止当前 AI 调用、运行中的子代理以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。",
             );
+            let provider_request_count =
+                self.safe_provider_request_count_for_stopped_turn(session_id);
             let terminated_message_id = self.append_session_turn_terminated(
                 session_id,
                 "The run was stopped manually before a summary could be produced.",
@@ -1181,7 +1189,7 @@ impl VulcanWorkbench {
                 session_id,
                 &terminated_message_id,
                 SessionTurnStatsStatus::Stopped,
-                None,
+                provider_request_count,
             );
             self.push_activity(
                 ActivityLevel::Warning,

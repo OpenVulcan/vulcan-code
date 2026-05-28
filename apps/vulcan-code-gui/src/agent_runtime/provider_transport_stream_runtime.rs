@@ -113,11 +113,20 @@ where
                 let tool_policy = AllowAllToolPolicy;
                 let mut unsafe_delta_seen = false;
                 let attempt_result = {
-                    let run_future = controller.run_user_turn_streaming(
+                    let checkpoint_sender = attempt_sender.clone();
+                    let run_future = controller.run_user_turn_streaming_with_checkpoints(
                         &provider_adapter,
                         &tool_executor,
                         &tool_policy,
                         controller_prompt.clone(),
+                        move |snapshot, usage| {
+                            let _ = checkpoint_sender.send(Ok(
+                                ProviderStreamDelta::FinalConversationState(
+                                    core_snapshot_to_session_conversation_state(snapshot),
+                                    usage.cloned(),
+                                ),
+                            ));
+                        },
                     );
                     tokio::pin!(run_future);
                     loop {

@@ -257,11 +257,16 @@ pub(crate) fn process_provider_stream_delta(
             conversation_state,
             last_successful_provider_usage,
         )) => {
-            state.final_conversation_state = Some(conversation_state);
+            state.final_conversation_state = Some(conversation_state.clone());
             if let Some(usage) = last_successful_provider_usage {
-                state.last_successful_provider_usage = Some(usage);
+                state.last_successful_provider_usage = Some(usage.clone());
             }
-            Vec::new()
+            vec![ExecutionStreamEvent::ConversationCheckpoint {
+                session_id,
+                conversation_state,
+                last_successful_provider_usage: state.last_successful_provider_usage.clone(),
+                provider_request_count: state.provider_request_count(),
+            }]
         }
         Err(error) => {
             state.terminal_error = Some(error);
@@ -298,6 +303,27 @@ mod tests {
             },
             ConversationSnapshot::default(),
         ))
+    }
+
+    /// Builds one minimal request snapshot so provider-request counting uses the real event shape.
+    /// 构建一份最小请求快照，让 Provider 请求计数使用真实事件形态。
+    fn build_request_snapshot() -> CoreProviderRequestSnapshot {
+        CoreProviderRequestSnapshot {
+            provider_id: String::from("mock-provider"),
+            model_id: String::from("mock-model"),
+            system_prompt: String::from("system"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("system"),
+            ),
+            prompt: String::from("prompt"),
+            history: Vec::new(),
+            temperature: Some(0.1),
+            max_turns: 4,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: vulcan_core::types::ProviderContinuation::default(),
+        }
     }
 
     /// Emits the pending thinking-completed event before the first visible output delta once reasoning has already become visible.
@@ -376,13 +402,20 @@ mod tests {
         ));
     }
 
-    /// Captures terminal errors and final conversation state without emitting immediate GUI events from the delta processor itself.
-    /// 捕获终态错误与最终会话状态时，增量处理器自身不会立刻额外发出 GUI 事件。
+    /// Captures terminal errors while final conversation states also emit a safe GUI checkpoint.
+    /// 捕获终态错误，同时让最终会话状态额外发出安全 GUI 检查点。
     #[test]
-    fn terminal_error_and_final_state_are_buffered_for_finalization() {
+    fn terminal_error_is_buffered_and_final_state_emits_checkpoint() {
         let session_id = Uuid::nil();
         let mut state = build_delta_state();
 
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
         let final_state_events = process_provider_stream_delta(
             session_id,
             &mut state,
@@ -391,7 +424,13 @@ mod tests {
                 None,
             )),
         );
-        assert!(final_state_events.is_empty());
+        assert!(matches!(
+            final_state_events.as_slice(),
+            [ExecutionStreamEvent::ConversationCheckpoint {
+                provider_request_count,
+                ..
+            }] if *provider_request_count == 1
+        ));
         assert!(state.take_final_conversation_state().is_some());
 
         let error_events = process_provider_stream_delta(

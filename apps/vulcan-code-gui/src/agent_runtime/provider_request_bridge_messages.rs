@@ -122,78 +122,195 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
     api_family: Option<ProviderApiFamily>,
     capabilities: Option<&ResolvedModelCapabilities>,
 ) -> Vec<CoreConversationMessage> {
-    let mut active_tool_call_ids = BTreeSet::new();
-    messages
-        .iter()
-        .map(|message| {
-            let payload = match &message.payload {
-                CoreConversationPayload::UserText { text, attachments } => match api_family {
-                    Some(api_family) => {
-                        active_tool_call_ids.clear();
-                        let normalized = normalize_provider_user_input_for_model(
-                            api_family,
-                            capabilities,
-                            text,
-                            attachments,
-                        );
-                        CoreConversationPayload::UserText {
-                            text: normalized.text,
-                            attachments: normalized.attachments,
-                        }
-                    }
-                    None => {
-                        active_tool_call_ids.clear();
-                        CoreConversationPayload::UserText {
-                            text: text.clone(),
-                            attachments: attachments.clone(),
-                        }
-                    }
-                },
-                CoreConversationPayload::Assistant {
-                    text,
-                    reasoning: _,
-                    provider_message_id,
-                    provider_message_state,
-                    usage,
-                    tool_calls,
-                } => {
-                    active_tool_call_ids = replayable_tool_call_ids(tool_calls);
-                    CoreConversationPayload::Assistant {
-                        text: text.clone(),
-                        reasoning: String::new(),
-                        provider_message_id: provider_message_id.clone(),
-                        provider_message_state: provider_message_state.clone(),
-                        usage: usage.clone(),
-                        tool_calls: tool_calls.clone(),
-                    }
-                }
-                CoreConversationPayload::ToolResult {
-                    tool_result_id,
-                    tool_call_id,
-                    text,
-                } => {
-                    let tool_call_key = tool_call_id.as_deref().unwrap_or_default().trim();
-                    if !tool_call_key.is_empty() && active_tool_call_ids.remove(tool_call_key) {
-                        CoreConversationPayload::ToolResult {
-                            tool_result_id: tool_result_id.clone(),
-                            tool_call_id: tool_call_id.clone(),
-                            text: text.clone(),
-                        }
-                    } else {
-                        CoreConversationPayload::UserText {
-                            text: orphan_tool_result_text(tool_result_id, tool_call_id, text),
-                            attachments: Vec::new(),
-                        }
-                    }
-                }
-            };
+    let mut projected = Vec::with_capacity(messages.len());
+    let mut index = 0usize;
 
-            CoreConversationMessage {
-                id: message.id.clone(),
-                payload,
+    while index < messages.len() {
+        let message = &messages[index];
+        match &message.payload {
+            CoreConversationPayload::UserText { text, attachments } => {
+                projected.push(CoreConversationMessage {
+                    id: message.id.clone(),
+                    payload: normalized_user_text_payload(
+                        text,
+                        attachments,
+                        api_family,
+                        capabilities,
+                    ),
+                });
+                index += 1;
             }
-        })
-        .collect()
+            CoreConversationPayload::Assistant {
+                text,
+                reasoning,
+                provider_message_id,
+                provider_message_state,
+                usage,
+                tool_calls,
+            } => {
+                if tool_calls.is_empty() {
+                    projected.push(CoreConversationMessage {
+                        id: message.id.clone(),
+                        payload: CoreConversationPayload::Assistant {
+                            text: text.clone(),
+                            reasoning: String::new(),
+                            provider_message_id: provider_message_id.clone(),
+                            provider_message_state: provider_message_state.clone(),
+                            usage: usage.clone(),
+                            tool_calls: Vec::new(),
+                        },
+                    });
+                    index += 1;
+                    continue;
+                }
+
+                let (result_end, completed_tool_call_ids) =
+                    consecutive_tool_result_span(messages, index + 1);
+                if result_end == index + 1 {
+                    projected.push(CoreConversationMessage {
+                        id: message.id.clone(),
+                        payload: CoreConversationPayload::Assistant {
+                            text: text.clone(),
+                            reasoning: String::new(),
+                            provider_message_id: provider_message_id.clone(),
+                            provider_message_state: provider_message_state.clone(),
+                            usage: usage.clone(),
+                            tool_calls: tool_calls.clone(),
+                        },
+                    });
+                } else if tool_calls_are_fully_completed(tool_calls, &completed_tool_call_ids) {
+                    let replayable_tool_call_ids = replayable_tool_call_ids(tool_calls);
+                    {
+                        projected.push(CoreConversationMessage {
+                            id: message.id.clone(),
+                            payload: CoreConversationPayload::Assistant {
+                                text: text.clone(),
+                                reasoning: String::new(),
+                                provider_message_id: provider_message_id.clone(),
+                                provider_message_state: provider_message_state.clone(),
+                                usage: usage.clone(),
+                                tool_calls: tool_calls.clone(),
+                            },
+                        });
+                        let mut active_tool_call_ids = replayable_tool_call_ids;
+                        for result_message in &messages[index + 1..result_end] {
+                            projected.push(project_tool_result_message(
+                                result_message,
+                                &mut active_tool_call_ids,
+                            ));
+                        }
+                    }
+                } else {
+                    projected.push(CoreConversationMessage {
+                        id: message.id.clone(),
+                        payload: CoreConversationPayload::UserText {
+                            text: partial_tool_batch_text(
+                                text,
+                                reasoning,
+                                tool_calls,
+                                &messages[index + 1..result_end],
+                            ),
+                            attachments: Vec::new(),
+                        },
+                    });
+                }
+                index = result_end;
+            }
+            CoreConversationPayload::ToolResult { .. } => {
+                let mut active_tool_call_ids = BTreeSet::new();
+                projected.push(project_tool_result_message(
+                    message,
+                    &mut active_tool_call_ids,
+                ));
+                index += 1;
+            }
+        }
+    }
+
+    projected
+}
+
+/// Normalizes one user-text payload for the selected provider API family and model capabilities.
+/// 根据所选 Provider API 族与模型能力规范化一条用户文本载荷。
+fn normalized_user_text_payload(
+    text: &str,
+    attachments: &[vulcan_core::types::ConversationAttachment],
+    api_family: Option<ProviderApiFamily>,
+    capabilities: Option<&ResolvedModelCapabilities>,
+) -> CoreConversationPayload {
+    match api_family {
+        Some(api_family) => {
+            let normalized = normalize_provider_user_input_for_model(
+                api_family,
+                capabilities,
+                text,
+                attachments,
+            );
+            CoreConversationPayload::UserText {
+                text: normalized.text,
+                attachments: normalized.attachments,
+            }
+        }
+        None => CoreConversationPayload::UserText {
+            text: text.to_string(),
+            attachments: attachments.to_vec(),
+        },
+    }
+}
+
+/// Returns the consecutive tool-result span after one assistant message and the completed tool-call ids inside that span.
+/// 返回某条助手消息后的连续工具结果区间，以及该区间内已完成的工具调用标识集合。
+fn consecutive_tool_result_span(
+    messages: &[CoreConversationMessage],
+    start: usize,
+) -> (usize, BTreeSet<String>) {
+    let mut completed_tool_call_ids = BTreeSet::new();
+    let mut index = start;
+    while let Some(message) = messages.get(index) {
+        let CoreConversationPayload::ToolResult { tool_call_id, .. } = &message.payload else {
+            break;
+        };
+        if let Some(tool_call_id) = tool_call_id.as_deref().map(str::trim)
+            && !tool_call_id.is_empty()
+        {
+            completed_tool_call_ids.insert(tool_call_id.to_string());
+        }
+        index += 1;
+    }
+    (index, completed_tool_call_ids)
+}
+
+/// Projects one tool-result message either as a native provider tool response or as plain fallback text.
+/// 将一条工具结果消息投影为原生 Provider 工具响应，或投影为普通文本回退。
+fn project_tool_result_message(
+    message: &CoreConversationMessage,
+    active_tool_call_ids: &mut BTreeSet<String>,
+) -> CoreConversationMessage {
+    let CoreConversationPayload::ToolResult {
+        tool_result_id,
+        tool_call_id,
+        text,
+    } = &message.payload
+    else {
+        return message.clone();
+    };
+    let tool_call_key = tool_call_id.as_deref().unwrap_or_default().trim();
+    let payload = if !tool_call_key.is_empty() && active_tool_call_ids.remove(tool_call_key) {
+        CoreConversationPayload::ToolResult {
+            tool_result_id: tool_result_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            text: text.clone(),
+        }
+    } else {
+        CoreConversationPayload::UserText {
+            text: orphan_tool_result_text(tool_result_id, tool_call_id, text),
+            attachments: Vec::new(),
+        }
+    };
+    CoreConversationMessage {
+        id: message.id.clone(),
+        payload,
+    }
 }
 
 /// Builds all provider-replayable identifiers for one assistant tool-call batch.
@@ -216,6 +333,36 @@ fn replayable_tool_call_ids(tool_calls: &[CoreConversationToolCall]) -> BTreeSet
         .collect()
 }
 
+/// Returns whether each tool call in one assistant batch has at least one completed result id.
+/// 判断某个助手工具调用批次中的每个调用是否至少有一个已完成结果标识。
+fn tool_calls_are_fully_completed(
+    tool_calls: &[CoreConversationToolCall],
+    completed_tool_call_ids: &BTreeSet<String>,
+) -> bool {
+    tool_calls.iter().all(|tool_call| {
+        tool_call_identifiers(tool_call)
+            .iter()
+            .any(|identifier| completed_tool_call_ids.contains(identifier))
+    })
+}
+
+/// Builds the provider and local identifiers that may match one tool result.
+/// 构建一个工具结果可能匹配到的 Provider 与本地标识。
+fn tool_call_identifiers(tool_call: &CoreConversationToolCall) -> Vec<String> {
+    [
+        (!tool_call.id.trim().is_empty()).then(|| tool_call.id.clone()),
+        tool_call
+            .tool_call_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 /// Builds a provider-visible plain-text fallback for a tool result whose matching tool call was compacted away.
 /// 为匹配工具调用已被压缩移除的工具结果构建 Provider 可见的纯文本回退内容。
 fn orphan_tool_result_text(
@@ -232,6 +379,60 @@ fn orphan_tool_result_text(
         "ERROR: Tool result `{}` cannot be replayed as a tool response because matching assistant tool call `{}` is no longer present in context. Treat the following as historical text only.\n\n{}",
         tool_result_id, call_label, text
     )
+}
+
+/// Builds plain provider-visible history text for a partially completed assistant tool-call batch.
+/// 为一批未完整完成的助手工具调用构建 Provider 可见的普通历史文本。
+fn partial_tool_batch_text(
+    text: &str,
+    reasoning: &str,
+    tool_calls: &[CoreConversationToolCall],
+    result_messages: &[CoreConversationMessage],
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(String::from(
+        "NOTE: A previous assistant tool-call batch was interrupted before every requested tool returned. Treat this block as historical text only, not as live tool protocol state.",
+    ));
+    if !reasoning.trim().is_empty() {
+        lines.push(format!("Assistant reasoning: {}", reasoning.trim()));
+    }
+    if !text.trim().is_empty() {
+        lines.push(format!("Assistant text: {}", text.trim()));
+    }
+    lines.push(String::from("Requested tools:"));
+    for tool_call in tool_calls {
+        let call_label = tool_call
+            .tool_call_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| tool_call.id.trim());
+        lines.push(format!("- {} ({})", tool_call.tool_name, call_label));
+    }
+    if !result_messages.is_empty() {
+        lines.push(String::from("Completed tool results:"));
+        for result_message in result_messages {
+            if let CoreConversationPayload::ToolResult {
+                tool_result_id,
+                tool_call_id,
+                text,
+            } = &result_message.payload
+            {
+                let call_label = tool_call_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("unknown");
+                lines.push(format!(
+                    "- result={} call={}: {}",
+                    tool_result_id,
+                    call_label,
+                    text.trim()
+                ));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 /// Converts one session-owned canonical tool-call entry into the `vulcan-core` tool-call shape.
@@ -396,5 +597,61 @@ mod tests {
         assert!(attachments.is_empty());
         assert!(text.contains("cannot be replayed"));
         assert!(text.contains("orphan body"));
+    }
+
+    /// Verifies partially completed parallel tool batches are downgraded before provider replay.
+    /// 验证部分完成的并行工具批次会在 Provider 回放前降级。
+    #[test]
+    fn provider_visible_history_downgrades_partial_tool_batch() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::from("call two tools"),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![
+                        CoreConversationToolCall {
+                            id: String::from("local-call-1"),
+                            tool_call_id: Some(String::from("provider-call-1")),
+                            tool_name: String::from("first_tool"),
+                            arguments: serde_json::json!({"step": 1}),
+                        },
+                        CoreConversationToolCall {
+                            id: String::from("local-call-2"),
+                            tool_call_id: Some(String::from("provider-call-2")),
+                            tool_name: String::from("second_tool"),
+                            arguments: serde_json::json!({"step": 2}),
+                        },
+                    ],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    text: String::from("first done"),
+                },
+            },
+        ];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        assert_eq!(projected.len(), 1);
+        let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
+            panic!("partial tool batch should downgrade to text");
+        };
+        assert!(attachments.is_empty());
+        assert!(text.contains("interrupted before every requested tool returned"));
+        assert!(text.contains("first_tool"));
+        assert!(text.contains("second_tool"));
+        assert!(text.contains("first done"));
     }
 }

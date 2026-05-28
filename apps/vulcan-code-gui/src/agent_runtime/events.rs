@@ -2,8 +2,10 @@
 //! 供后续代理执行界面使用的运行时事件定义。
 
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionRunReport};
+use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
+use vulcan_core::types::ProviderUsageSnapshot as CoreProviderUsageSnapshot;
 
 /// High-level runtime event kinds emitted by the compose foundation.
 /// compose 基础架构发出的高层运行时事件类型。
@@ -106,6 +108,22 @@ pub enum ExecutionStreamEvent {
     RuntimeEvent {
         session_id: SessionId,
         event: RuntimeEvent,
+    },
+    /// Safe canonical context checkpoint emitted after one provider/tool cycle becomes replayable.
+    /// 在一次 Provider/工具循环已经可回放后发出的安全规范上下文检查点。
+    ConversationCheckpoint {
+        /// Session identifier owning the checkpoint.
+        /// 拥有该检查点的会话标识。
+        session_id: SessionId,
+        /// Canonical conversation state that can be used by the next request.
+        /// 可供下一次请求使用的规范会话状态。
+        conversation_state: SessionConversationState,
+        /// Latest successful provider usage captured at this checkpoint.
+        /// 该检查点捕获到的最近一次成功 Provider 用量。
+        last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
+        /// Number of provider requests observed by this run when the checkpoint was emitted.
+        /// 发出该检查点时本轮已观测到的 Provider 请求次数。
+        provider_request_count: usize,
     },
     /// Terminal execution report emitted exactly once at the end of the run.
     /// 在运行结束时恰好发出一次的最终执行报告。

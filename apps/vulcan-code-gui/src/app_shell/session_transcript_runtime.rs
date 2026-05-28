@@ -2,6 +2,7 @@
 //! 主工作台的会话转录运行态与规范会话辅助逻辑。
 
 use super::*;
+use vulcan_core::types::ProviderUsageSnapshot;
 
 impl VulcanWorkbench {
     /// Pushes a new activity entry while keeping the most recent items first.
@@ -1130,6 +1131,17 @@ impl VulcanWorkbench {
         ))
     }
 
+    /// Returns the latest safe provider-request count for a manually stopped turn.
+    /// 返回手动停止轮次可使用的最近安全 Provider 请求次数。
+    pub(super) fn safe_provider_request_count_for_stopped_turn(
+        &self,
+        session_id: SessionId,
+    ) -> Option<usize> {
+        self.session_runtime_state(session_id)
+            .and_then(|runtime_state| runtime_state.last_safe_provider_request_count)
+            .filter(|count| *count > 0)
+    }
+
     /// Updates the runtime-state snapshot for the session from the latest execution preparation.
     /// 根据最近一次执行准备结果更新该会话的运行时状态快照。
     pub(super) fn update_session_runtime_identity_from_preparation(
@@ -1348,6 +1360,9 @@ impl VulcanWorkbench {
                 runtime_state.last_provider_usage = Some(successful_usage.clone());
                 runtime_state.last_successful_provider_usage = Some(successful_usage);
             }
+            if provider_request_count > 0 {
+                runtime_state.last_safe_provider_request_count = Some(provider_request_count);
+            }
             runtime_state.updated_at = current_unix_millis_text();
             self.sync_session_messages_from_conversation_state(session_id);
         }
@@ -1477,6 +1492,41 @@ impl VulcanWorkbench {
             persist_task,
             self.maybe_follow_selected_session_transcript_tail(session_id),
             self.maybe_start_next_pending_prompt(session_id, false),
+        ])
+    }
+
+    /// Applies one safe in-flight conversation checkpoint without closing the current run.
+    /// 应用一份运行中的安全会话检查点，但不结束当前执行。
+    pub(super) fn apply_execution_conversation_checkpoint(
+        &mut self,
+        session_id: SessionId,
+        next_conversation_state: SessionConversationState,
+        last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+        provider_request_count: usize,
+    ) -> Task<Message> {
+        self.ensure_session_conversation_state_loaded(session_id);
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        let preserved_records = runtime_state.conversation_state.records.clone();
+        runtime_state.conversation_state = next_conversation_state;
+        runtime_state.conversation_state.records = preserved_records;
+        let latest_successful_provider_usage = last_successful_provider_usage.or_else(|| {
+            crate::provider_usage::latest_provider_usage_from_conversation_state(
+                &runtime_state.conversation_state,
+            )
+        });
+        if let Some(successful_usage) = latest_successful_provider_usage {
+            runtime_state.last_provider_usage = Some(successful_usage.clone());
+            runtime_state.last_successful_provider_usage = Some(successful_usage);
+        }
+        if provider_request_count > 0 {
+            runtime_state.last_safe_provider_request_count = Some(provider_request_count);
+        }
+        runtime_state.updated_at = current_unix_millis_text();
+        self.sync_session_messages_from_conversation_state(session_id);
+        self.sync_context_usage_from_session_budget(session_id);
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
         ])
     }
 

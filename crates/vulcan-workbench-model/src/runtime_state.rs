@@ -333,6 +333,10 @@ pub struct SessionRuntimeStateEntry {
     /// Latest successful provider usage snapshot captured from the final real provider turn.
     /// 从最终真实 Provider 回合中捕获到的最近一次成功用量快照。
     pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+    /// Provider request count captured at the latest safe runtime checkpoint.
+    /// 最近一次安全运行时检查点捕获到的 Provider 请求次数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_safe_provider_request_count: Option<usize>,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,

@@ -419,6 +419,32 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
     {
+        self.run_user_turn_streaming_with_checkpoints(
+            adapter,
+            executor,
+            policy,
+            user_prompt,
+            |_, _| {},
+        )
+        .await
+    }
+
+    /// Runs one streaming user-authored turn and calls the provided hook whenever the canonical snapshot reaches a replay-safe boundary.
+    /// 运行一次流式用户回合，并在规范快照到达可回放安全边界时调用给定钩子。
+    pub async fn run_user_turn_streaming_with_checkpoints<A, E, P, F>(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        user_prompt: impl Into<String>,
+        mut on_safe_checkpoint: F,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+        F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+    {
         let user_prompt = user_prompt.into();
         let trimmed_prompt = user_prompt.trim();
         if trimmed_prompt.is_empty() {
@@ -487,6 +513,7 @@ impl VulcanCoreController {
                 };
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
+                on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             }
         }
     }
@@ -1073,7 +1100,7 @@ mod tests {
     struct MockToolExecutor {
         /// Pre-planned tool outcomes keyed by tool name.
         /// 按工具名称索引的预先规划工具结果。
-        outcomes_by_tool: BTreeMap<String, (String, Option<Value>, bool)>,
+        outcomes_by_tool: BTreeMap<String, Result<(String, Option<Value>, bool), String>>,
         /// Recorded tool invocation requests received by the executor.
         /// 被执行器收到并记录下来的工具调用请求集合。
         executed_requests: Arc<Mutex<Vec<ToolInvocationRequest>>>,
@@ -1097,8 +1124,16 @@ mod tests {
         ) -> Self {
             self.outcomes_by_tool.insert(
                 tool_name.to_string(),
-                (model_output.to_string(), host_result, is_error),
+                Ok((model_output.to_string(), host_result, is_error)),
             );
+            self
+        }
+
+        /// Registers one pre-planned tool failure for a specific tool name.
+        /// 为指定工具名称注册一条预先规划的工具失败。
+        fn with_failure(mut self, tool_name: &str, message: &str) -> Self {
+            self.outcomes_by_tool
+                .insert(tool_name.to_string(), Err(message.to_string()));
             self
         }
 
@@ -1130,6 +1165,10 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| CoreError::InvalidState {
                     message: format!("未找到工具 `{}` 的模拟结果。", request.tool_name),
+                })?
+                .map_err(|message| CoreError::ToolFailure {
+                    tool_name: request.tool_name.clone(),
+                    message,
                 })?;
             Ok(ToolInvocationResult {
                 tool_call_id: request.tool_call_id.clone(),
@@ -1341,6 +1380,92 @@ mod tests {
                     && provider_message_id.as_deref() == Some("resp-stream-1")
                     && tool_calls.is_empty()
             ));
+        });
+    }
+
+    /// Emits safe checkpoints after completed streaming tool results even when a later tool fails.
+    /// 即使后续工具失败，也会在已完成流式工具结果后发出安全检查点。
+    #[test]
+    fn run_user_turn_streaming_checkpoint_preserves_completed_tool_before_later_failure() {
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let adapter = MockStreamingProviderAdapter::new(vec![(
+                vec![ProviderTurnDelta::Thinking {
+                    delta: String::from("先调用两个工具。"),
+                }],
+                ProviderTurnResponse {
+                    assistant_text: String::new(),
+                    assistant_reasoning: String::from("先调用两个工具。"),
+                    provider_message_id: Some(String::from("resp-tools-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![
+                        ConversationToolCall {
+                            id: String::from("tool-item-1"),
+                            tool_call_id: Some(String::from("call-1")),
+                            tool_name: String::from("first_tool"),
+                            arguments: json!({"step": 1}),
+                        },
+                        ConversationToolCall {
+                            id: String::from("tool-item-2"),
+                            tool_call_id: Some(String::from("call-2")),
+                            tool_name: String::from("second_tool"),
+                            arguments: json!({"step": 2}),
+                        },
+                    ],
+                    continuation: Some(ProviderContinuation {
+                        provider_id: Some(String::from("mock-openai-streaming")),
+                        model_id: Some(String::from("mock-model")),
+                        last_provider_message_id: Some(String::from("resp-tools-1")),
+                        updated_at: Some(String::from("3001")),
+                    }),
+                    usage: Some(ProviderUsageSnapshot {
+                        input_tokens: Some(10),
+                        output_tokens: Some(2),
+                        reasoning_tokens: Some(1),
+                        total_tokens: Some(13),
+                        cached_input_tokens: None,
+                        cache_creation_input_tokens: None,
+                    }),
+                },
+            )]);
+            let executor = MockToolExecutor::new()
+                .with_outcome(
+                    "first_tool",
+                    "第一个工具已完成。",
+                    Some(json!({"tool": "first"})),
+                    false,
+                )
+                .with_failure("second_tool", "第二个工具模拟失败");
+            let mut controller =
+                VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            let mut checkpoints =
+                Vec::<(ConversationSnapshot, Option<ProviderUsageSnapshot>)>::new();
+
+            let result = controller
+                .run_user_turn_streaming_with_checkpoints(
+                    &adapter,
+                    &executor,
+                    &AllowAllToolPolicy,
+                    "请先调用两个工具",
+                    |snapshot, usage| checkpoints.push((snapshot.clone(), usage.cloned())),
+                )
+                .await;
+
+            assert!(result.is_err());
+            assert_eq!(checkpoints.len(), 1);
+            let (checkpoint, usage) = checkpoints.pop().expect("checkpoint should exist");
+            assert_eq!(usage.and_then(|usage| usage.total_tokens), Some(13));
+            assert!(checkpoint.messages.iter().any(|message| matches!(
+                &message.payload,
+                ConversationPayload::ToolResult { text, tool_call_id, .. }
+                    if text == "第一个工具已完成。"
+                        && tool_call_id.as_deref() == Some("call-1")
+            )));
+            assert!(!checkpoint.messages.iter().any(|message| matches!(
+                &message.payload,
+                ConversationPayload::ToolResult { tool_call_id, .. }
+                    if tool_call_id.as_deref() == Some("call-2")
+            )));
         });
     }
 
