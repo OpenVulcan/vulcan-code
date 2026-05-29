@@ -221,6 +221,42 @@ function Merge-DirectoryContents {
     return $true
 }
 
+function Merge-DirectoryContentsSkippingInstallMarkers {
+    <#
+    .SYNOPSIS
+    Copy direct directory contents into a destination without clearing runtime-managed state or install markers.
+    将目录直属内容复制到目标目录，且不清空运行期状态或复制安装标记。
+
+    .PARAMETER Source
+    Source directory.
+    来源目录。
+
+    .PARAMETER Destination
+    Destination directory.
+    目标目录。
+    #>
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source)) {
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
+
+    Get-ChildItem -Force -LiteralPath $Source | ForEach-Object {
+        if (-not $_.PSIsContainer -and $_.Name -like ".installed-*") {
+            return
+        }
+        Copy-Item -Recurse -Force -LiteralPath $_.FullName -Destination $Destination
+    }
+    return $true
+}
+
 # Sync-ApplicationLicenseResources refreshes static app license files while preserving dynamically generated Rust notices in output.
 # Sync-ApplicationLicenseResources 用于刷新应用静态许可证文件，同时保留 output 中动态生成的 Rust 声明文件。
 # Source points at the source-tree static license directory.
@@ -347,7 +383,9 @@ Write-Host "==> Binary copied to $OutDir\"
 # Cross-platform validation is intentionally omitted because forks may replace lua_packages/runtime payloads with custom layouts.
 # 这里有意不做跨平台校验，因为 fork 方可能会用自定义布局替换 lua_packages/runtime 载荷。
 if (Test-Path -LiteralPath $LuaSkillsRuntimeRoot) {
-    Copy-DirectoryContents -Source $LuaSkillsRuntimeRoot -Destination $LuaRuntimeOut | Out-Null
+    Merge-DirectoryContentsSkippingInstallMarkers `
+        -Source $LuaSkillsRuntimeRoot `
+        -Destination $LuaRuntimeOut | Out-Null
     Write-Host "==> LuaSkills runtime package synced to $LuaRuntimeOut\"
 }
 else {
@@ -481,7 +519,7 @@ else {
 # Sync runtime Lua skills to output/lua_runtime/skills/
 # 同步运行时 Lua 技能到 output/lua_runtime/skills/
 if (Test-Path "runtime\skills") {
-    Copy-DirectoryContents -Source "runtime\skills" -Destination $SkillsOut | Out-Null
+    Merge-DirectoryContents -Source "runtime\skills" -Destination $SkillsOut | Out-Null
     Write-Host "==> Runtime Lua skills synced to $SkillsOut\"
 }
 else {

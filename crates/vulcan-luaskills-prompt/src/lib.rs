@@ -160,9 +160,9 @@ pub fn render_luaskills_prompt_segment(entries: &[LuaSkillPromptEntry]) -> Optio
     output.push_str("Some LuaSkills are enabled as implicit dispatch targets. They are not exposed as direct function tools, so call them only through `");
     output.push_str(CALL_LUASKILL_TOOL_NAME);
     output.push_str("`.\n\n");
-    output.push_str("Read the LuaSkills help summaries and argument summaries below before calling a hidden LuaSkill. If the compact summary is not enough, call `");
+    output.push_str("The list below is discovery-only and intentionally omits argument details. Before calling any hidden LuaSkill, first call `");
     output.push_str(LUASKILL_HELP_TOOL_NAME);
-    output.push_str("` with the complete canonical LuaSkill name to get the full LuaSkills help text and the compact schema summary, then call `");
+    output.push_str("` with the complete canonical LuaSkill name to get its complete usage help and structured Markdown schema, then call `");
     output.push_str(CALL_LUASKILL_TOOL_NAME);
     output.push_str("`.\n\n");
     output.push_str(CALL_LUASKILL_USAGE_MD.trim());
@@ -177,9 +177,6 @@ pub fn render_luaskills_prompt_segment(entries: &[LuaSkillPromptEntry]) -> Optio
         }
         if let Some(help_summary) = entry.help_summary.as_deref() {
             push_non_empty_field(&mut output, "LuaSkills help", help_summary);
-        }
-        if let Some(argument_summary) = entry.argument_summary.as_deref() {
-            push_non_empty_field(&mut output, "Arguments", argument_summary);
         }
     }
     Some(output)
@@ -234,8 +231,6 @@ pub fn render_luaskill_help_output(
         output.push_str(argument_summary);
         output.push('\n');
     }
-    output.push_str("\n## Dispatch Rule\n\n");
-    output.push_str(CALL_LUASKILL_USAGE_MD.trim());
     Ok(output)
 }
 
@@ -505,8 +500,8 @@ mod tests {
         assert!(render_luaskills_prompt_segment(&[]).is_none());
     }
 
-    /// Verifies the prompt segment advertises names, help summaries, arguments, and dispatcher usage.
-    /// 验证提示词片段会说明名称、帮助摘要、参数和调度器用法。
+    /// Verifies the prompt segment advertises discovery data but omits argument details.
+    /// 验证提示词片段会说明发现信息但省略参数详情。
     #[test]
     fn render_segment_lists_implicit_entries() {
         let rendered = render_luaskills_prompt_segment(&[LuaSkillPromptEntry::new(
@@ -518,9 +513,10 @@ mod tests {
         .expect("segment should render");
 
         assert!(rendered.contains("call_luaskill"));
+        assert!(rendered.contains("first call `luaskill`"));
         assert!(rendered.contains("vulcan-codekit-ast-tree"));
         assert!(rendered.contains("Pick candidate source files first."));
-        assert!(rendered.contains("paths: string, required."));
+        assert!(!rendered.contains("paths: string, required."));
     }
 
     /// Verifies compact schema summaries hide JSON shape noise.
@@ -558,6 +554,7 @@ mod tests {
             render_luaskill_help_output("vulcan-curl-get", &entries).expect("help should render");
         assert!(output.contains("## Schema"));
         assert!(output.contains("Target URL"));
+        assert!(!output.contains("## Dispatch Rule"));
         assert!(render_luaskill_help_output("missing", &entries).is_err());
     }
 
